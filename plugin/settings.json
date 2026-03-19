@@ -1,3 +1,4 @@
 {
+  "name": "harness",
   "agent": "harness-orchestrator"
 }
