@@ -1,0 +1,62 @@
+version: 1
+
+persist:
+  auto:
+    - explicit_user_constraint
+    - explicit_user_approval_rule
+    - verified_bug_root_cause
+    - verified_architecture_fact
+    - verified_runtime_fact
+    - repeated_project_pattern
+
+  ask_first:
+    - business_rule_interpretation
+    - architecture_principle
+    - ownership_assignment
+    - external_contract_meaning
+    - breaking_behavior_policy
+
+  never:
+    - transient_chat
+    - emotional_comment
+    - unverified_guess_as_fact
+    - duplicate_memory
+    - repo_irrelevant_preference
+
+promotion:
+  - from: hypothesis
+    to: observed_fact
+    when:
+      - code_evidence
+      - test_or_runtime_evidence
+
+  - from: observed_fact
+    to: confirmed
+    when:
+      - user_confirmation
+      - explicit_repo_rule
+
+  - from: confirmed
+    to: enforced
+    when:
+      - test_added
+      - validation_script_added
+      - config_assertion_added
+
+retrieval:
+  always_load:
+    - global_constraints
+    - approval_rules
+    - scope_recent_decisions
+
+  scope_priority:
+    - exact_path_match
+    - same_domain
+    - same_api_surface
+    - recent_related_bugfixes
+
+  load_hypotheses_last: true
+
+cleanup:
+  dedupe: true
+  require_last_verified_at: true

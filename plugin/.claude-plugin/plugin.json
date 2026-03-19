@@ -1,0 +1,19 @@
+{
+  "name": "harness",
+  "version": "1.0.0",
+  "description": "One-command repo operating system for Claude Code: setup once, then work in plain language with repo-local memory, workflow routing, validation loops, and brownfield-safe execution.",
+  "author": {
+    "name": "harness"
+  },
+  "license": "MIT",
+  "skills": "./skills/",
+  "keywords": [
+    "workflow",
+    "memory",
+    "brownfield",
+    "validation",
+    "documentation",
+    "routing",
+    "repo-local"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "harness",
+  "description": "One-command repo operating system — persistent memory, workflow routing, validation loops, brownfield safety",
+  "owner": {
+    "name": "harness"
+  },
+  "plugins": [
+    {
+      "name": "harness",
+      "description": "Turn any repository into an AI operating system with one command. Setup once, then work in plain language with repo-local memory, automatic workflow routing, validation loops, and brownfield-safe execution.",
+      "version": "1.0.0",
+      "author": {
+        "name": "harness"
+      },
+      "source": "./",
+      "category": "workflow",
+      "tags": [
+        "workflow",
+        "memory",
+        "brownfield",
+        "validation",
+        "routing",
+        "architecture"
+      ]
+    }
+  ],
+  "version": "1.0.0"
+}

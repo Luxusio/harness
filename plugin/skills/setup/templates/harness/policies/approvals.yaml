@@ -1,0 +1,59 @@
+version: 1
+
+always_ask_before:
+  - kind: auth_change
+    paths:
+      - "src/auth/**"
+      - "auth/**"
+    reason: "Authentication and authorization logic"
+
+  - kind: db_schema_change
+    paths:
+      - "db/**"
+      - "migrations/**"
+      - "schema/**"
+    reason: "Database schema and migration risk"
+
+  - kind: public_contract_change
+    paths:
+      - "api/**"
+      - "contracts/**"
+      - "openapi/**"
+    reason: "Public or inter-service contract risk"
+
+  - kind: infra_change
+    paths:
+      - ".github/**"
+      - "infra/**"
+      - "terraform/**"
+      - "deploy/**"
+    reason: "Deployment and infrastructure changes"
+
+  - kind: dependency_upgrade
+    paths:
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "package-lock.json"
+      - "poetry.lock"
+      - "requirements*.txt"
+      - "go.mod"
+      - "Cargo.toml"
+    reason: "Versioning and transitive behavior risk"
+
+  - kind: billing_payment_change
+    paths:
+      - "billing/**"
+      - "payments/**"
+      - "stripe/**"
+      - "checkout/**"
+    reason: "Billing and payment logic — financial risk"
+
+auto_ok_examples:
+  - docs_only_change
+  - targeted_test_addition
+  - small_internal_refactor_with_no_behavior_change
+
+ask_when:
+  requirements_ambiguous: true
+  blast_radius_unknown: true
+  existing_rule_conflicts: true

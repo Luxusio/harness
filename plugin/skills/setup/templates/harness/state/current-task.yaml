@@ -1,0 +1,21 @@
+# Current task state — updated by the orchestrator during the runtime loop.
+# Created at Step 1 (classify), updated at Steps 6 (validate) and 7 (sync).
+
+intent: ""           # from router categories: feature, bugfix, tests, refactor, docs, decision, brownfield, validation, architecture, memory
+scope: []            # files or domains involved
+risk_level: "auto"   # auto (no confirmation needed) | ask (requires user confirmation)
+status: "idle"       # idle | active | validating | syncing | complete
+
+validated: []
+# List of validation checks performed:
+# - check: "npm test"
+#   result: "passed"
+# - check: "lint"
+#   result: "3 warnings, 0 errors"
+
+memory_updates: []
+# List of memory files updated during sync:
+# - file: "harness/docs/constraints/project-constraints.md"
+#   action: "appended new constraint"
+# - file: "harness/state/recent-decisions.md"
+#   action: "added entry"
