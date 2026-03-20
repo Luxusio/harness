@@ -148,6 +148,7 @@ If `harness/manifest.yaml` already exists:
    - `harness/policies/memory-policy.yaml` — copy from template as-is; do NOT skip this file
    - `harness/state/recent-decisions.md`
    - `harness/state/unknowns.md`
+   - `harness/state/recent-decisions-archive.md`
    - `harness/docs/index.md` — generated dynamically (see **Generate harness/docs/index.md dynamically** below)
    - `harness/docs/constraints/project-constraints.md`
    - `harness/docs/decisions/ADR-0001-harness-bootstrap.md`
@@ -156,6 +157,7 @@ If `harness/manifest.yaml` already exists:
    - `harness/scripts/validate.sh`
    - `harness/scripts/smoke.sh`
    - `harness/scripts/arch-check.sh`
+   - `harness/arch-rules.yaml`
 
    #### Dynamic approvals population
 
@@ -206,6 +208,7 @@ If `harness/manifest.yaml` already exists:
    ## State
    - `harness/state/recent-decisions.md` — chronological decision log
    - `harness/state/unknowns.md` — open questions and hypotheses
+   - `harness/state/recent-decisions-archive.md` — archived decision log entries
 
    ## Knowledge
    - `harness/docs/constraints/project-constraints.md` — confirmed project rules
@@ -222,6 +225,7 @@ If `harness/manifest.yaml` already exists:
    - `harness/scripts/validate.sh` — validation checks
    - `harness/scripts/smoke.sh` — smoke tests
    - `harness/scripts/arch-check.sh` — architecture guardrail checks
+   - `harness/arch-rules.yaml` — architecture rule definitions
    ```
 
    Rules:
@@ -249,13 +253,24 @@ If `harness/manifest.yaml` already exists:
    ```
    If `.gitignore` does not exist, create it with these entries.
 
-10. **Finish cleanly**
+10. **Activate harness-orchestrator as main agent**
+
+   Read `.claude/settings.json` (create if missing). Add or merge the `"agent"` field:
+   ```json
+   {
+     "agent": "harness:harness-orchestrator"
+   }
+   ```
+   Preserve any existing fields in the file (e.g., `enabledPlugins`, `extraKnownMarketplaces`).
+   This makes the harness orchestrator the default main-thread agent for all future sessions in this project.
+
+11. **Finish cleanly**
    End with:
    - files created or updated
    - which approval rules were kept and which were removed (from dynamic approvals scan)
    - what was inferred vs confirmed
    - remaining unknowns
-   - a short reminder that the user can now work in plain language
+   - a short reminder that the user can now work in plain language — the orchestrator is now active
 
 ## Guardrails
 

@@ -1,7 +1,7 @@
 ---
 name: refactor-engineer
 description: Perform behavior-preserving structural changes with guardrails. Use proactively for cleanup, simplification, and dependency untangling.
-tools: Read, Glob, Grep, Bash, Write, Edit, LSP
+tools: Read, Glob, Grep, Bash, Write, Edit
 model: sonnet
 maxTurns: 32
 ---

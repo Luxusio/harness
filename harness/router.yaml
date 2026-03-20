@@ -1,0 +1,49 @@
+version: 1
+
+intents:
+  - name: answer
+    examples: ["why", "how", "what", "where", "explain"]
+    primary_agents: ["requirements-curator"]
+
+  - name: requirements
+    examples: ["document", "spec", "requirements", "plan", "clarify"]
+    primary_agents: ["requirements-curator", "docs-scribe"]
+
+  - name: feature
+    examples: ["build", "implement", "add", "feature", "create"]
+    primary_agents: ["implementation-engineer", "test-engineer", "docs-scribe"]
+
+  - name: bugfix
+    examples: ["fix", "broken", "regression", "bug", "error"]
+    primary_agents: ["implementation-engineer", "test-engineer", "docs-scribe"]
+
+  - name: tests
+    examples: ["test", "coverage", "regression", "case"]
+    primary_agents: ["test-engineer"]
+
+  - name: refactor
+    examples: ["refactor", "cleanup", "simplify", "untangle"]
+    primary_agents: ["refactor-engineer", "test-engineer", "docs-scribe"]
+
+  - name: brownfield
+    examples: ["legacy", "old code", "unknown area", "unfamiliar", "map"]
+    primary_agents: ["brownfield-mapper", "docs-scribe"]
+
+  - name: docs
+    examples: ["document", "update docs", "write guide", "readme"]
+    primary_agents: ["docs-scribe"]
+
+  - name: decision_capture
+    examples: ["from now on", "always", "must", "policy", "constraint"]
+    primary_agents: ["requirements-curator", "docs-scribe"]
+
+execution_contract:
+  standard_steps:
+    - classify
+    - load_scoped_context
+    - assess_risk
+    - ask_if_needed
+    - execute
+    - validate
+    - sync_docs_and_memory
+    - summarize

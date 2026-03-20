@@ -1,7 +1,7 @@
 ---
 name: validation-loop
 description: Use when code or behavior changes need evidence. Applies narrow-to-wide validation and records any remaining gaps honestly.
-allowed-tools: Read, Glob, Grep, Bash
+allowed-tools: Read, Glob, Grep, Bash, Agent
 user-invocable: false
 ---
 

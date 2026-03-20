@@ -17,7 +17,7 @@ For every substantial request, execute this loop internally:
 
 Map the request to one or more intent categories:
 
-| Intent | Signal words | Primary workflow |
+| Intent | Signal words | Skill |
 |--------|-------------|------------------|
 | answer / explain | "why", "how", "what", "explain" | Direct answer with context |
 | requirements | "document", "spec", "clarify", "plan" | `requirements-curator` → `docs-scribe` |
@@ -28,6 +28,10 @@ Map the request to one or more intent categories:
 | brownfield | "legacy", "unfamiliar", "old code", "map" | `brownfield-adoption` |
 | decision | "from now on", "always", "never", "policy", "rule" | `decision-capture` |
 | docs | "document", "update docs", "write guide" | `docs-sync` |
+| validation | "validate", "verify", "prove", "evidence" | `validation-loop` |
+| architecture | "boundary", "dependency", "layer", "module" | `architecture-guardrails` |
+| memory | "remember", "record", "capture", "store" | `repo-memory-policy` |
+| other | (no match) | Direct response with manifest context |
 
 If the request spans multiple intents, execute them in dependency order.
 

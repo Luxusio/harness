@@ -1,7 +1,7 @@
 ---
 name: test-engineer
 description: Add or expand tests, regression coverage, and validation scripts. Use proactively after code changes, bug fixes, and whenever regression risk is nontrivial.
-tools: Read, Glob, Grep, Bash, Write, Edit, LSP
+tools: Read, Glob, Grep, Bash, Write, Edit
 model: sonnet
 maxTurns: 28
 ---

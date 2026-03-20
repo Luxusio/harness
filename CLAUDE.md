@@ -1,4 +1,4 @@
-# {{PROJECT_NAME}} AI Operating Manual
+# harness AI Operating Manual
 
 This file is the primary instruction surface for AI-assisted work in this repository. It provides **reference data** for the runtime loop. The orchestrator agent handles the step-by-step procedure — this file tells it where to find things and what rules to follow.
 
@@ -26,7 +26,6 @@ Follow the orchestrator's runtime loop for every substantial request. This secti
 | validation | validate, verify, prove, evidence | validation-loop |
 | architecture | boundary, dependency, layer, module | architecture-guardrails |
 | memory | remember, record, capture, store | repo-memory-policy |
-| other | (no match) | Direct response with manifest context |
 
 ### 3. Memory files for sync
 - Recent decisions: `harness/state/recent-decisions.md`
@@ -63,20 +62,21 @@ After every substantial task, report:
 
 ## Validation commands
 
-- build: `{{BUILD_COMMAND}}`
-- test: `{{TEST_COMMAND}}`
-- lint/typecheck: `{{LINT_COMMAND}}`
-- dev: `{{DEV_COMMAND}}`
+- build: (none — plugin is config/docs only)
+- test: `claude --plugin-dir ./plugin --print "list harness skills"`
+- lint/typecheck: (none)
+- dev: `claude --plugin-dir ./plugin`
 
 ## Project info
 
-- mode: `{{PROJECT_MODE}}`
-- type: `{{PROJECT_TYPE}}`
+- mode: `greenfield`
+- type: `library`
 
 ## Key journeys
 
-{{KEY_JOURNEYS_BULLETS}}
+- Plugin development: modify skills/agents/hooks → test with `--plugin-dir ./plugin` → verify skills load and behave correctly
+- Marketplace deployment: push to GitHub → `/plugin marketplace add` → `/plugin install` → verify in fresh session
 
 ## Brownfield guidance
 
-{{BROWNFIELD_SECTION}}
+This is a greenfield project. Consider creating `src/`, `tests/`, `docs/` as the codebase grows. See `harness/docs/architecture/README.md` for scaffold hints.

@@ -1,7 +1,7 @@
 ---
 name: docs-sync
 description: Use after meaningful changes to keep repo-local memory, indexes, and durable notes aligned with the codebase.
-allowed-tools: Read, Glob, Grep, Write, Edit
+allowed-tools: Read, Glob, Grep, Write, Edit, Bash
 user-invocable: false
 ---
 

@@ -1,0 +1,19 @@
+version: 1
+
+# Dynamic approvals — only rules with existing paths are included.
+# Removed: auth_change, db_schema_change, public_contract_change, infra_change,
+#           dependency_upgrade, billing_payment_change (no matching paths in repo)
+
+always_ask_before: []
+# No high-risk directories detected in this greenfield plugin repo.
+# Add rules here as the project grows.
+
+auto_ok_examples:
+  - docs_only_change
+  - targeted_test_addition
+  - small_internal_refactor_with_no_behavior_change
+
+ask_when:
+  requirements_ambiguous: true
+  blast_radius_unknown: true
+  existing_rule_conflicts: true

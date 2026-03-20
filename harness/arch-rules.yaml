@@ -1,0 +1,5 @@
+# Architecture boundary rules — added by architecture-guardrails skill when rules are confirmed.
+# arch-rules.yaml is a FALLBACK for repos without native lint boundary rules configured.
+# Native ESLint/ruff/go-vet rules take precedence when available.
+
+boundaries: []

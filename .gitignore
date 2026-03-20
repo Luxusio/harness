@@ -1,1 +1,5 @@
 .omc
+
+# harness — per-session state (not shared)
+harness/state/current-task.yaml
+harness/state/last-session-summary.md

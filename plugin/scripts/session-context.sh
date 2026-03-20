@@ -7,12 +7,10 @@ if [[ -f "harness/manifest.yaml" ]]; then
 
   # === MANIFEST ===
   echo "=== MANIFEST ==="
-  if [[ -f "harness/manifest.yaml" ]]; then
-    head -100 "harness/manifest.yaml"
-    MANIFEST_LINES=$(wc -l < "harness/manifest.yaml")
-    if [[ "$MANIFEST_LINES" -gt 100 ]]; then
-      echo "... (truncated at 100 lines, read full file for details)"
-    fi
+  head -100 "harness/manifest.yaml"
+  MANIFEST_LINES=$(wc -l < "harness/manifest.yaml")
+  if [[ "$MANIFEST_LINES" -gt 100 ]]; then
+    echo "... (truncated at 100 lines, read full file for details)"
   fi
   echo ""
 

@@ -1,7 +1,7 @@
 ---
 name: implementation-engineer
 description: Implement features and bug fixes with small coherent diffs and targeted validation. Use proactively once scope is clear.
-tools: Read, Glob, Grep, Bash, Write, Edit, LSP
+tools: Read, Glob, Grep, Bash, Write, Edit
 model: sonnet
 maxTurns: 40
 ---

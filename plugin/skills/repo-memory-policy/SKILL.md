@@ -99,13 +99,30 @@ Compaction prevents unbounded growth of state files. Run during orchestrator Ste
 
 ### recent-decisions.md
 - **Threshold**: 50 non-comment, non-blank entries
-- **Action**: When exceeded, move older entries (beyond the most recent 50) to `harness/state/recent-decisions-archive.md` (append to archive, then remove from active file)
-- **Archive format**: same as active file, append-only, not loaded at session start
 - **Rule**: count only lines matching `^- \[` (actual entries, not comments or blanks)
+- **Compaction procedure** (in order):
+  1. **Promote**: For each entry being removed, check if it is already reflected in a permanent document. If not, write it to the appropriate location:
+     - `constraint` / `approval_rule` → `harness/docs/constraints/project-constraints.md` or `harness/policies/approvals.yaml`
+     - `decision` → create `harness/docs/decisions/ADR-NNNN-*.md` if significant enough
+     - `observed_fact` / `architecture` → `harness/docs/architecture/README.md` or `harness/docs/runbooks/`
+     - `risk_zone` → `harness/manifest.yaml` risk_zones section
+  2. **Archive**: Move promoted entries to `harness/state/recent-decisions-archive.md` (append-only, not loaded at session start)
+  3. **Trim**: Remove archived entries from active file, keeping the most recent 50
 
 ### unknowns.md
 - **Resolved items**: Items in the `## Resolved` section older than 30 days can be pruned (deleted entirely — they have served their purpose)
 - **Active items**: Never automatically deleted. Only moved to Resolved by explicit confirmation.
+
+### constraints/project-constraints.md
+- **Never delete**: constraints are permanent unless the user explicitly revokes them.
+- **Deduplicate**: merge entries that say the same thing in different words.
+- **Group by scope**: when the file exceeds 30 entries, reorganize into scope-based sections (e.g., `## Repo structure`, `## Plugin UX`, `## Memory`, `## Workflows`).
+- **Conflict resolution**: if two constraints conflict, flag to the user — do not silently remove either.
+
+### decisions/ (ADR files)
+- **Never delete**: ADRs are permanent historical records.
+- **Superseded**: when a newer decision replaces an older one, mark the old ADR status as `superseded by ADR-NNNN`. Do not delete it.
+- **No compaction**: ADR files do not compact or merge. Each decision stays as its own file.
 
 ### Trigger
 Check file sizes during knowledge sync (orchestrator Step 7). Only compact when the threshold is exceeded — do not check on every turn.

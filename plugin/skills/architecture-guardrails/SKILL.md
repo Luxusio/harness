@@ -1,7 +1,7 @@
 ---
 name: architecture-guardrails
 description: Use when editing structure, moving code, introducing dependencies, or reasoning about boundaries.
-allowed-tools: Read, Glob, Grep
+allowed-tools: Read, Glob, Grep, Write, Edit
 user-invocable: false
 ---
 
