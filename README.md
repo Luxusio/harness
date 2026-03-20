@@ -32,9 +32,17 @@ harness works with **any single-root project**. Setup auto-detects languages, fr
 
 ### 1. Install
 
+**Option A — Marketplace (recommended)**
+
+```
+/plugin marketplace add https://github.com/Luxusio/harness.git
+/plugin install harness@harness
+```
+
+**Option B — Local development**
+
 ```bash
-claude marketplace add <harness-marketplace-url>
-claude plugin install harness
+claude --plugin-dir ./plugin
 ```
 
 ### 2. Run setup
