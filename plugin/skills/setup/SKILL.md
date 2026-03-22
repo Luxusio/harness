@@ -176,6 +176,8 @@ If `harness/manifest.yaml` already exists:
       - `infra_change`: check for `.github/`, `infra/`, `terraform/`, `deploy/`, `k8s/`, `.circleci/`
       - `dependency_upgrade`: check for `package.json`, `pnpm-lock.yaml`, `package-lock.json`, `poetry.lock`, `requirements*.txt`, `go.mod`, `Cargo.toml`, `pyproject.toml`
       - `billing_payment_change`: check for `billing/`, `payments/`, `stripe/`, `checkout/`
+      - `submodule_change`: check for `.gitmodules` file; if present, parse it to extract submodule paths
+      - `env_secrets_change`: check for `.env`, `.env.*`, `.env.local`, `.env.dev`, `.env.prod`, `.env.example` files at root and in service directories
    3. **Remove any approval rule** whose scanned paths list is empty (i.e., none of the candidate paths exist in the repo). Do not emit rules that reference phantom directories.
    4. **Keep any rule** where at least one path exists or is a file that is present (e.g., `package.json`).
    5. **Log which rules were kept and which were removed** in the finish summary so the user knows what was detected.
@@ -185,6 +187,28 @@ If `harness/manifest.yaml` already exists:
    - `harness/docs/brownfield/inventory.md`
    - `harness/docs/brownfield/findings.md`
    - initial unknowns in `harness/state/unknowns.md`
+
+   Additionally, scan for operational scripts at the repository root and in common script directories:
+   - Root-level scripts: `run.sh`, `start.sh`, `deploy.sh`, `Makefile`, `Taskfile.yml`, `justfile`
+   - Script directories: `scripts/`, `bin/`, `tools/`
+
+   For each discovered script:
+   1. Read and summarize its purpose in `harness/docs/brownfield/inventory.md`.
+   2. Document relevant commands in `harness/docs/runbooks/development.md`.
+   3. Flag any scripts that modify infrastructure, deploy, or handle secrets as risk zones in `manifest.yaml`.
+
+   #### Migrate existing domain knowledge
+
+   After brownfield inventory, check for pre-existing knowledge files that contain domain facts:
+   - `MEMORY.md`, `AGENTS.md`, `AI_CONTEXT.md`, `.cursorrules`, `.clinerules`
+   - Any `docs/` directory with domain-specific documentation
+
+   If found:
+   1. Read each file and identify verified domain facts (not hypotheses or preferences).
+   2. For each distinct domain area discovered, create a corresponding file in `harness/docs/domains/` (e.g., `data-fetcher.md`, `auth.md`, `payments.md`).
+   3. Transfer only factual, verified knowledge — parsing rules, API contracts, architectural patterns, naming conventions, known limitations.
+   4. Do NOT transfer: personal preferences, IDE settings, temporary workarounds, or unverified hypotheses (those go to `harness/state/unknowns.md`).
+   5. Log which source files were processed and what was migrated in the finish summary.
 
 6. **Bootstrap memory**
    Record:
@@ -241,6 +265,8 @@ If `harness/manifest.yaml` already exists:
    - Remove the "Brownfield (if applicable)" section entirely if the project is greenfield.
    - Remove any other section that ends up with no bullets.
    - Do not reference the template version of `harness/docs/index.md` for content; generate from the actual file list.
+   - If domain knowledge files were created (from the migration step), include them in a "Domain knowledge" sub-section under Knowledge.
+   - If brownfield inventory includes operational scripts, reference them in the Brownfield section.
 
 8. **Ensure scripts are executable and use LF line endings**
 

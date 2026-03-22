@@ -63,6 +63,17 @@ LOW values are not written — they become questions for the user.
 | `{{RISK_REASON_2}}` | Derived from path type | MEDIUM | (none) |
 | `{{SETUP_DATE}}` | Current date | HIGH | Today's date |
 
+### Approval Signal Detection
+
+These signals are used during dynamic approvals population (not placeholders — they directly affect `approvals.yaml` content):
+
+| Signal | Detection Method | Approval Kind |
+|--------|-----------------|---------------|
+| Git submodules | `.gitmodules` file exists → parse for submodule paths | `submodule_change` |
+| Environment files | `.env*` files at root or in service directories | `env_secrets_change` |
+| CI/CD configs | `.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile` | `infra_change` |
+| Docker configs | `Dockerfile*`, `docker-compose*.yml` | `infra_change` |
+
 ## Decision Rules
 
 1. **If a config file has an explicit field** (e.g., `scripts.test` in `package.json`), use it at HIGH confidence.
@@ -75,5 +86,10 @@ LOW values are not written — they become questions for the user.
 
 ## Scope Limitations
 
-- **Monorepo**: Not supported in Phase 2. If multiple `package.json` files exist at different levels, or workspace config is detected (`workspaces`, `nx.json`, `turbo.json`, `lerna.json`), treat all inferences as LOW and ask the user.
+- **Monorepo**: If multiple build config files exist at different levels (`package.json`, `build.gradle.kts`, `pyproject.toml`), or workspace config is detected (`workspaces`, `nx.json`, `turbo.json`, `lerna.json`), or `services/`/`packages/`/`apps/` directories contain independent projects:
+  - Set `project.type: monorepo` in manifest.
+  - Detect each service's language and framework independently.
+  - Generate `validate.sh`, `smoke.sh`, and `arch-check.sh` with per-service scope iteration.
+  - Treat root-level command inferences as LOW (ask user which service is primary).
+  - Per-service command inferences follow normal confidence rules within each service directory.
 - **Polyglot**: If 2+ languages are detected with roughly equal presence, infer the primary from the root config file. If ambiguous, treat as LOW.

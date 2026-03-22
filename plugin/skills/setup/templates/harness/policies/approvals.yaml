@@ -50,6 +50,16 @@ always_ask_before:
       - "checkout/**"
     reason: "Billing and payment logic — financial risk"
 
+  - kind: submodule_change
+    paths:
+      - "submodules/**"
+    reason: "Git submodule — changes affect a separate repository"
+
+  - kind: env_secrets_change
+    paths:
+      - ".env*"
+    reason: "Environment variables and secrets — changes may affect all services"
+
 auto_ok_examples:
   - docs_only_change
   - targeted_test_addition
