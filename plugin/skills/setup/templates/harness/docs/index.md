@@ -13,6 +13,9 @@
 - `harness/docs/domains/README.md`
 - `harness/docs/runbooks/development.md`
 
+## Requirements
+- `harness/docs/requirements/README.md`
+
 ## Brownfield
 - `harness/docs/brownfield/inventory.md`
 - `harness/docs/brownfield/findings.md`

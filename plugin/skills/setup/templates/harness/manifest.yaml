@@ -34,17 +34,19 @@ risk_zones:
 
 approval_defaults:
   always_ask_for:
-    - db_schema
-    - api_contract
-    - auth
-    - infra
+    - auth_change
+    - db_schema_change
+    - public_contract_change
+    - infra_change
     - dependency_upgrade
+    - billing_payment_change
     - large_delete_or_move
 
 memory:
   system_of_record:
     - "harness/docs/constraints/"
     - "harness/docs/decisions/"
+    - "harness/docs/requirements/"
     - "harness/docs/domains/"
     - "harness/docs/runbooks/"
     - "harness/state/"

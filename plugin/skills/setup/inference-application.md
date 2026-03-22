@@ -39,7 +39,7 @@ LOW values are not written — they become questions for the user.
 |-------------|-------------|-----------|----------|
 | `{{LANGUAGE_1}}` | Config files present (`package.json`→JS/TS, `pyproject.toml`→Python, `Cargo.toml`→Rust, `go.mod`→Go, **`build.gradle`/`build.gradle.kts`→Java/Kotlin**, `pom.xml`→Java) | HIGH | (ask user) |
 | `{{FRAMEWORK_1}}` | Dependencies list (e.g., `next` in deps→Next.js, `flask` in deps→Flask, `gin` in deps→Gin) | MEDIUM | (none) |
-| `{{PACKAGE_MANAGER}}` | Lockfile present: `package-lock.json`→npm, `yarn.lock`→yarn, `pnpm-lock.yaml`→pnpm, `poetry.lock`→poetry, `Cargo.lock`→cargo, **`gradlew`→gradle, `pom.xml`→maven** | HIGH | (ask user if ambiguous) |
+| `{{PACKAGE_MANAGER}}` | Lockfile present: `package-lock.json`→npm, `yarn.lock`→yarn, `pnpm-lock.yaml`→pnpm, `poetry.lock`→poetry, `Cargo.lock`→cargo, `Cargo.toml`→cargo, **`gradlew`→gradle, `pom.xml`→maven** | HIGH | (ask user if ambiguous) |
 
 ### Commands
 

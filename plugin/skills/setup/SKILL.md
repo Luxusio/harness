@@ -66,6 +66,8 @@ Read and adapt these supporting templates:
 - [templates/harness/docs/brownfield/inventory.md](templates/harness/docs/brownfield/inventory.md)
 - [templates/harness/docs/brownfield/findings.md](templates/harness/docs/brownfield/findings.md)
 - [templates/harness/docs/architecture/README.md](templates/harness/docs/architecture/README.md)
+- [templates/harness/docs/requirements/README.md](templates/harness/docs/requirements/README.md)
+- [templates/harness/docs/requirements/REQ-0000-template.md](templates/harness/docs/requirements/REQ-0000-template.md)
 - [templates/harness/scripts/validate.sh](templates/harness/scripts/validate.sh)
 - [templates/harness/scripts/smoke.sh](templates/harness/scripts/smoke.sh)
 - [templates/harness/scripts/arch-check.sh](templates/harness/scripts/arch-check.sh)
@@ -149,10 +151,13 @@ If `harness/manifest.yaml` already exists:
    - `harness/state/recent-decisions.md`
    - `harness/state/unknowns.md`
    - `harness/state/recent-decisions-archive.md`
+   - `harness/state/current-task.yaml`
+   - `harness/state/last-session-summary.md`
    - `harness/docs/index.md` — generated dynamically (see **Generate harness/docs/index.md dynamically** below)
    - `harness/docs/constraints/project-constraints.md`
    - `harness/docs/decisions/ADR-0001-harness-bootstrap.md`
    - `harness/docs/domains/README.md`
+   - `harness/docs/requirements/README.md`
    - `harness/docs/runbooks/development.md`
    - `harness/scripts/validate.sh`
    - `harness/scripts/smoke.sh`
@@ -217,6 +222,9 @@ If `harness/manifest.yaml` already exists:
    - `harness/docs/architecture/README.md` — architecture boundaries and patterns
    - `harness/docs/runbooks/development.md` — development procedures and debugging notes
 
+   ## Requirements
+   - `harness/docs/requirements/README.md` — requirement specifications index
+
    ## Brownfield (if applicable)
    - `harness/docs/brownfield/inventory.md` — structural map of existing code
    - `harness/docs/brownfield/findings.md` — verified observations
@@ -234,7 +242,17 @@ If `harness/manifest.yaml` already exists:
    - Remove any other section that ends up with no bullets.
    - Do not reference the template version of `harness/docs/index.md` for content; generate from the actual file list.
 
-8. **Final consistency check**
+8. **Ensure scripts are executable and use LF line endings**
+
+   After creating all scripts, run:
+   ```bash
+   sed -i 's/\r$//' harness/scripts/*.sh
+   chmod +x harness/scripts/*.sh
+   ```
+   - `sed` strips any CRLF line endings that may have been introduced by the Write tool on some platforms. Shell scripts with `\r` in the shebang line will fail with cryptic errors.
+   - `chmod` ensures the scripts can be invoked directly. The validate skill checks for execute permissions and will report warnings if missing.
+
+9. **Final consistency check**
 
    Before completing setup, verify:
    1. Every file path listed in `harness/docs/index.md` actually exists on disk.
@@ -243,7 +261,7 @@ If `harness/manifest.yaml` already exists:
    4. No `{{...}}` placeholders remain in any generated file — scan all created files and replace or remove any unresolved placeholder.
    5. If any dangling reference is found, log a warning in the finish summary and remove it from the file that references it.
 
-9. **Update .gitignore**
+10. **Update .gitignore**
 
    Append the following entries to `.gitignore` if they are not already present:
    ```
@@ -253,7 +271,7 @@ If `harness/manifest.yaml` already exists:
    ```
    If `.gitignore` does not exist, create it with these entries.
 
-10. **Activate harness-orchestrator as main agent**
+11. **Activate harness-orchestrator as main agent**
 
    Read `.claude/settings.json` (create if missing). Add or merge the `"agent"` field:
    ```json
@@ -264,7 +282,7 @@ If `harness/manifest.yaml` already exists:
    Preserve any existing fields in the file (e.g., `enabledPlugins`, `extraKnownMarketplaces`).
    This makes the harness orchestrator the default main-thread agent for all future sessions in this project.
 
-11. **Finish cleanly**
+12. **Finish cleanly**
    End with:
    - files created or updated
    - which approval rules were kept and which were removed (from dynamic approvals scan)

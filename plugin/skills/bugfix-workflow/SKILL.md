@@ -26,26 +26,28 @@ Activate when the orchestrator classifies intent as `bugfix` — the user report
 
 ### 3. Root cause analysis
 - Read relevant code, recent changes (git log/diff), and related tests
-- If the area is unfamiliar, delegate to `brownfield-mapper` first
+- If the area is unfamiliar, delegate to `harness:brownfield-mapper` first
 - Distinguish between:
   - **root cause**: the actual defect
   - **symptom**: what the user sees
   - **trigger**: what sequence exposes it
 - Fix the root cause, not just the symptom
+- If standard analysis is insufficient, escalate to `oh-my-claudecode:debugger` for deeper root-cause analysis
+- For bugs with unclear causality or intermittent behavior, escalate to `oh-my-claudecode:tracer` for evidence-driven causal tracing
 
 ### 4. Risk gate
 - If the fix touches `always_ask_before` zones, get confirmation
 - If the root cause is in a shared/critical path, assess blast radius before fixing
 
 ### 5. Fix
-Delegate to `implementation-engineer` with:
+Delegate to `harness:implementation-engineer` with:
 - Root cause analysis
 - Specific fix scope
 - Relevant constraints
 Make the smallest correct fix.
 
 ### 6. Regression protection
-Delegate to `test-engineer` to:
+Delegate to `harness:test-engineer` to:
 - Add a test that fails without the fix and passes with it
 - This is mandatory for bugs — every fix must have a regression test
 
@@ -55,7 +57,7 @@ Delegate to `test-engineer` to:
 - Run broader tests to check for regressions
 
 ### 8. Knowledge capture
-If the bug reveals durable knowledge, pass to `docs-sync` with:
+If the bug reveals durable knowledge, pass to `harness:docs-sync` with:
 ```
 Handoff:
   from: bugfix-workflow

@@ -16,13 +16,15 @@ Activate when the orchestrator classifies intent as `feature` — the user wants
 
 ## Procedure
 
-### 1. Scope clarification
-- If the request is ambiguous, delegate to `requirements-curator` to produce:
-  - requested outcome
-  - non-goals
-  - acceptance criteria
-  - risk flags
-- If the request is clear enough, skip this step.
+### 1. Scope clarification and requirement capture
+- If the request is ambiguous, delegate to `harness:requirements-curator` to produce scope, criteria, and non-goals.
+- The curator persists these as `harness/docs/requirements/REQ-NNNN-<slug>.md` with status `draft`.
+- The curator checks for conflicts against all existing `accepted`/`implemented` requirements.
+  - If conflicts are found: present them to the user and wait for resolution before proceeding.
+  - If no conflicts: the curator sets status to `accepted`.
+- If the request is clear enough, create the REQ file directly with status `accepted` (skip the curator), but still run the conflict check.
+- **Do NOT proceed to Step 2 until the REQ file has status `accepted` (conflict-free).**
+- Pass the REQ file path forward as context for subsequent steps.
 
 ### 2. Context loading
 Read the smallest relevant set:
@@ -33,7 +35,7 @@ Read the smallest relevant set:
 - `harness/state/recent-decisions.md` for recent context
 
 ### 3. Brownfield check
-If the target area has no documentation or tests, delegate to `brownfield-mapper` with:
+If the target area has no documentation or tests, delegate to `harness:brownfield-mapper` with:
 ```
 Handoff:
   from: feature-workflow
@@ -54,14 +56,17 @@ Also ask if:
 - An existing rule might conflict
 
 ### 5. Implementation
-Delegate to `implementation-engineer` with:
-- Clear scope and acceptance criteria
+Delegate to `harness:implementation-engineer` with:
+- Clear scope and acceptance criteria (from the REQ file)
+- REQ file path for reference
 - Relevant context files
 - Specific constraints from approvals/policies
 The engineer makes the smallest coherent diff.
 
+If the feature involves UI/frontend work, also delegate to `oh-my-claudecode:designer` for design-quality implementation.
+
 ### 6. Test coverage
-Delegate to `test-engineer` to:
+Delegate to `harness:test-engineer` to:
 - Add tests that prove the new behavior works
 - Add edge case coverage if domain rules suggest it
 - Ensure regression safety
@@ -74,8 +79,11 @@ Run the narrowest validation that proves the change:
 4. browser validation (for UI changes, if tooling available)
 If validation cannot be completed, state the exact gap.
 
+For security-sensitive changes (auth, payment, user-input), delegate to `oh-my-claudecode:security-reviewer` before completing.
+For complex changes (>10 files), delegate to `oh-my-claudecode:code-reviewer` for a quality check.
+
 ### 8. Knowledge sync
-If durable knowledge changed, pass to `docs-sync` with:
+If durable knowledge changed, pass to `harness:docs-sync` with:
 ```
 Handoff:
   from: feature-workflow
@@ -84,7 +92,11 @@ Handoff:
   constraints: <which rules were applied>
   next_action: Update relevant docs and recent-decisions.md
 ```
-If a durable rule was confirmed during this work, also pass to `decision-capture` with the rule text, type, and evidence.
+If a durable rule was confirmed during this work, also pass to `harness:decision-capture` with the rule text, type, and evidence.
+
+Update the REQ file status based on workflow progress:
+- After implementation completes (Step 5): set status to `implemented`, append history entry
+- After validation passes (Step 7): set status to `verified`, tick acceptance criteria checkboxes, append history entry
 
 ### 9. Summary
 Report:

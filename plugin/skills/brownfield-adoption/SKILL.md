@@ -17,7 +17,7 @@ Activate when:
 ## Procedure
 
 ### 1. Inventory
-Delegate to `brownfield-mapper` to produce:
+Delegate to `harness:brownfield-mapper` to produce:
 - Entry points and exit points
 - Data flow through the area
 - Side effects (DB writes, API calls, file I/O, message publishing)
@@ -29,7 +29,7 @@ Delegate to `brownfield-mapper` to produce:
 Before making any changes:
 - Identify the 1-3 most critical behaviors in the area
 - Verify existing tests cover them
-- If not, delegate to `test-engineer` to add characterization tests
+- If not, delegate to `harness:test-engineer` to add characterization tests
 - These tests protect against unknown regressions
 
 ### 3. Document findings

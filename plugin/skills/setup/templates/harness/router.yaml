@@ -3,7 +3,7 @@ version: 1
 intents:
   - name: answer
     examples: ["why", "how", "what", "where", "explain"]
-    primary_agents: ["requirements-curator"]
+    primary_agents: []  # Direct answer with context — no agent delegation needed
 
   - name: requirements
     examples: ["document", "spec", "requirements", "plan", "clarify"]
@@ -14,11 +14,11 @@ intents:
     primary_agents: ["implementation-engineer", "test-engineer", "docs-scribe"]
 
   - name: bugfix
-    examples: ["fix", "broken", "regression", "bug", "error"]
+    examples: ["fix", "broken", "regression", "bug", "error", "failing"]
     primary_agents: ["implementation-engineer", "test-engineer", "docs-scribe"]
 
   - name: tests
-    examples: ["test", "coverage", "regression", "case"]
+    examples: ["test", "coverage", "case", "prove"]
     primary_agents: ["test-engineer"]
 
   - name: refactor
@@ -33,9 +33,21 @@ intents:
     examples: ["document", "update docs", "write guide", "readme"]
     primary_agents: ["docs-scribe"]
 
-  - name: decision_capture
-    examples: ["from now on", "always", "must", "policy", "constraint"]
+  - name: decision
+    examples: ["from now on", "always", "never", "must", "policy", "constraint"]
     primary_agents: ["requirements-curator", "docs-scribe"]
+
+  - name: validation
+    examples: ["validate", "verify", "prove", "evidence"]
+    primary_agents: ["test-engineer"]
+
+  - name: architecture
+    examples: ["boundary", "dependency", "layer", "module"]
+    primary_agents: ["refactor-engineer", "docs-scribe"]
+
+  - name: memory
+    examples: ["remember", "record", "capture", "store"]
+    primary_agents: ["docs-scribe"]
 
 execution_contract:
   standard_steps:

@@ -17,9 +17,9 @@
         "hooks": [
           {
             "type": "agent",
-            "timeout": 60,
+            "timeout": 20,
             "statusMessage": "Verifying harness state",
-            "prompt": "You are a stop verifier for the harness plugin. Input: $ARGUMENTS\n\nRules:\n1. If stop_hook_active is true, return {\"ok\": true}.\n2. If harness/manifest.yaml does not exist, return {\"ok\": true}.\n3. Read harness/state/current-task.yaml if it exists. Check:\n   - Is status set to complete?\n   - Is the validated list populated (at least one check)?\n   - Is memory_updates populated if durable changes were made?\n4. If all checks pass, return {\"ok\": true}.\n5. If any check fails, return {\"ok\": false, \"reason\": \"<one concrete next action>\"}.\n6. If harness/state/last-session-summary.md is missing and substantial work was done, return {\"ok\": false, \"reason\": \"Write session summary to harness/state/last-session-summary.md before stopping.\"}.\n\nReturn JSON only. Do not write files."
+            "prompt": "You are a stop verifier for the harness plugin.\n\nRules:\n1. If harness/manifest.yaml does not exist, return {\"ok\": true}.\n2. Read harness/state/current-task.yaml if it exists. If status is idle and no files were modified in this session, return {\"ok\": true}.\n3. If substantial work was done (status is not idle, or files were modified):\n   a. Check: was harness/state/last-session-summary.md written with actual content (not just the template comment)? If not, return {\"ok\": false, \"reason\": \"Write session summary to harness/state/last-session-summary.md before stopping.\"}.\n   b. Check: if recordable knowledge emerged (rule confirmed, root cause found, architecture clarified, risk zone identified, workflow modified), was harness/state/recent-decisions.md updated? If recordable knowledge exists but no entry was added, return {\"ok\": false, \"reason\": \"Append recordable findings to harness/state/recent-decisions.md before stopping.\"}.\n   c. Routine code changes (typos, formatting, simple additions) do NOT require a recent-decisions entry.\n4. If all checks pass, return {\"ok\": true}.\n\nReturn JSON only. Do not write files."
           }
         ]
       }

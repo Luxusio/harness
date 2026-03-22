@@ -7,21 +7,13 @@ if [[ -f "harness/manifest.yaml" ]]; then
 
   # === MANIFEST ===
   echo "=== MANIFEST ==="
-  head -100 "harness/manifest.yaml"
-  MANIFEST_LINES=$(wc -l < "harness/manifest.yaml")
-  if [[ "$MANIFEST_LINES" -gt 100 ]]; then
-    echo "... (truncated at 100 lines, read full file for details)"
-  fi
+  cat "harness/manifest.yaml"
   echo ""
 
   # === APPROVALS ===
   echo "=== APPROVALS ==="
   if [[ -f "harness/policies/approvals.yaml" ]]; then
-    head -100 "harness/policies/approvals.yaml"
-    APPROVALS_LINES=$(wc -l < "harness/policies/approvals.yaml")
-    if [[ "$APPROVALS_LINES" -gt 100 ]]; then
-      echo "... (truncated at 100 lines, read full file for details)"
-    fi
+    cat "harness/policies/approvals.yaml"
   else
     echo "(no approvals policy found)"
   fi
@@ -45,7 +37,7 @@ if [[ -f "harness/manifest.yaml" ]]; then
   echo "=== LAST SESSION ==="
   if [[ -f "harness/state/last-session-summary.md" ]]; then
     if grep -q '^[^#]' "harness/state/last-session-summary.md" 2>/dev/null; then
-      grep -v '^#' "harness/state/last-session-summary.md" | grep -v '^\s*$' | grep -v '^<!--' | head -20
+      { grep -v '^<!-- ' "harness/state/last-session-summary.md" | grep -v '^\s*$' | head -20; } || true
     else
       echo "(no session summary recorded)"
     fi
@@ -54,8 +46,24 @@ if [[ -f "harness/manifest.yaml" ]]; then
   fi
   echo ""
 
-  # === CLAUDE.MD REMINDER ===
+  # === CURRENT TASK ===
+  if [[ -f "harness/state/current-task.yaml" ]]; then
+    TASK_STATUS=$(grep '^status:' "harness/state/current-task.yaml" 2>/dev/null | head -1 | sed 's/status: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
+    if [[ -n "$TASK_STATUS" && "$TASK_STATUS" != "idle" && "$TASK_STATUS" != "complete" ]]; then
+      echo "=== INTERRUPTED TASK ==="
+      cat "harness/state/current-task.yaml"
+      echo ""
+      echo "WARNING: Previous session ended with task status '$TASK_STATUS'. Review and resume or reset."
+      echo ""
+    fi
+  fi
+
+  # === VALIDATION COMMANDS ===
   if [[ -f "CLAUDE.md" ]]; then
+    echo "=== VALIDATION COMMANDS ==="
+    # Extract the validation commands block from CLAUDE.md (handles both LF and CRLF)
+    sed 's/\r$//' "CLAUDE.md" | sed -n '/^## Validation commands/,/^## /{ /^## Validation commands/d; /^## /d; p; }' | head -10
+    echo ""
     echo "CLAUDE.md is present -- follow its instructions for request handling."
   fi
 

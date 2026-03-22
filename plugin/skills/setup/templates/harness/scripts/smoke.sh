@@ -5,6 +5,7 @@ set -euo pipefail
 # Auto-detects available tools. Override by editing this file.
 #
 # Usage: harness/scripts/smoke.sh [scope]
+# Note: scope filtering is reserved for future use; currently runs all checks.
 
 SCOPE="${1:-all}"
 

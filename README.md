@@ -91,6 +91,7 @@ your-repo/
         ├── constraints/                # Confirmed project rules
         ├── decisions/                  # Architecture Decision Records
         ├── domains/                    # Domain knowledge
+        ├── requirements/              # Requirement specs (REQ files)
         ├── architecture/               # Boundaries and patterns
         ├── runbooks/                   # Development procedures
         └── brownfield/                 # Legacy code maps (brownfield only)
@@ -112,7 +113,7 @@ You speak naturally. The orchestrator automatically:
 
 | Procedure | Triggers on | What it does |
 |-----------|-------------|-------------|
-| Feature | "build", "add", "create", "implement" | Scope → brownfield check → risk gate → implement → test → validate → sync |
+| Feature | "build", "add", "create", "implement" | Scope → REQ capture → conflict check → brownfield check → risk gate → implement → test → validate → sync |
 | Bugfix | "fix", "broken", "error", "regression" | Reproduce → root cause → risk gate → fix → regression test → validate |
 | Test expansion | "test", "coverage", "prove" | Assess gaps → prioritize → write tests → validate → report |
 | Refactor | "refactor", "cleanup", "simplify" | Preservation contract → characterize → refactor in steps → validate |
@@ -128,13 +129,22 @@ You speak naturally. The orchestrator automatically:
 | Agent | Role |
 |-------|------|
 | `harness-orchestrator` | Main runtime loop — classifies, routes, validates, syncs |
-| `requirements-curator` | Scope clarification and acceptance criteria |
+| `requirements-curator` | Scope clarification, acceptance criteria, requirement persistence, conflict checking |
 | `brownfield-mapper` | Maps legacy code before risky edits |
 | `implementation-engineer` | Code changes with small coherent diffs |
 | `test-engineer` | Test writing and coverage |
 | `refactor-engineer` | Behavior-preserving structural improvements |
 | `docs-scribe` | Documentation and memory updates |
 | `browser-validator` | Web UI validation (when tooling available) |
+
+### OMC agent escalation
+
+When the [oh-my-claudecode](https://github.com/anthropics/oh-my-claudecode) plugin is installed, harness automatically escalates to OMC agents for deeper work:
+- Complex architecture → `oh-my-claudecode:architect`
+- Code review → `oh-my-claudecode:code-reviewer`
+- Security review → `oh-my-claudecode:security-reviewer`
+- Deep debugging → `oh-my-claudecode:debugger` / `oh-my-claudecode:tracer`
+- UI/UX design → `oh-my-claudecode:designer`
 
 ## Diagnostic
 
@@ -156,6 +166,7 @@ When the architecture-guardrails procedure confirms a boundary rule, it appends 
 - Decisions auto-archive after 50 entries
 - Resolved unknowns are pruned after 30 days
 - Session summaries provide continuity between sessions
+- Requirements track lifecycle: draft → accepted → implemented → verified
 
 ## Known limitations
 
@@ -172,7 +183,7 @@ When the architecture-guardrails procedure confirms a boundary rule, it appends 
 - `skills/` — 12 skills (setup + validate + 10 hidden procedures)
 - `hooks/` — SessionStart (context injection) and Stop (verification)
 - `scripts/` — SessionStart hook script
-- `skills/setup/templates/` — 22 template files for control plane generation
+- `skills/setup/templates/` — 24 template files for control plane generation
 - `skills/setup/inference-application.md` — Inference confidence tiers and rules
 
 ## License

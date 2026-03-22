@@ -6,14 +6,14 @@ First stable release. harness is a Claude Code plugin that turns any single-root
 
 ### Phase 1: Plugin skeleton
 - 8 specialized agents (orchestrator, requirements-curator, brownfield-mapper, implementation-engineer, test-engineer, refactor-engineer, docs-scribe, browser-validator)
-- 11 skills (setup + 10 hidden procedures: feature, bugfix, test-expansion, refactor, docs-sync, decision-capture, brownfield-adoption, validation-loop, architecture-guardrails, repo-memory-policy)
+- 12 skills (setup + validate + 10 hidden procedures: feature, bugfix, test-expansion, refactor, docs-sync, decision-capture, brownfield-adoption, validation-loop, architecture-guardrails, repo-memory-policy)
 - SessionStart hook for context injection and Stop hook for session verification
 - Plugin manifest, settings, and directory conventions
 
 ### Phase 2: Setup outputs
 - Inference-application guide with 3 confidence tiers (HIGH/MEDIUM/LOW)
 - Greenfield/brownfield detection and branching
-- 32 template files for control plane generation
+- 24 template files for control plane generation
 - Dynamic approvals population from actual project structure
 - Dynamic docs/index.md generation
 - Idempotency handling (initial/overwrite/incremental modes)

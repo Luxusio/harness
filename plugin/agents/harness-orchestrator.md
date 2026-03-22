@@ -35,20 +35,32 @@ Map the request to one or more intent categories:
 
 If the request spans multiple intents, execute them in dependency order.
 
-After classifying, create or update `harness/state/current-task.yaml` with: intent, scope (files/domains involved), risk_level (auto or ask based on approvals check), status: active.
+**Short-circuit for `answer` / `other`:** If the intent is `answer` or `other`, skip Steps 3–7. Load only the context needed to answer well (see Step 2 below), respond directly, and go to Step 8. Do NOT update `current-task.yaml` for simple Q&A.
+
+**For all other intents:** Create or update `harness/state/current-task.yaml` with: intent, scope (files/domains involved), risk_level (auto or ask based on approvals check), status: active.
 
 ### 2. Load scoped context
 
 Read only the smallest relevant set — do not load everything.
 
-**Always load first:**
+**For `answer` / `other` intents (no file changes):**
+- `harness/manifest.yaml` (project shape — always useful for context)
+- Relevant `harness/docs/domains/` if the question is about a specific area
+- Relevant `harness/docs/constraints/` if the question is about rules
+- `harness/docs/architecture/` if the question is about structure or boundaries
+- Do NOT load approvals, unknowns, or recent-decisions unless the question is about them
+
+**For workflow intents (file changes expected):**
+
+Always load first:
 - `harness/manifest.yaml` (project shape, commands)
 - `harness/policies/approvals.yaml` (what needs confirmation)
 
-**Load based on scope:**
+Load based on scope:
 - Relevant `harness/docs/domains/` for the target area
 - Relevant `harness/docs/constraints/` for rules that apply
 - Relevant `harness/docs/decisions/` for recent choices
+- Relevant `harness/docs/requirements/` for active requirements in the area
 - `harness/state/recent-decisions.md` for recent context
 - `harness/state/unknowns.md` for unresolved questions in the area
 
@@ -106,21 +118,52 @@ The orchestrator manages the overall runtime loop. Each skill defines the detail
 
 ### 5. Delegate to specialists
 
-Use the right agent for each step:
+Use the right agent for each step. Harness agents carry harness-specific context (approvals, memory sync). OMC agents provide deeper specialized capabilities. Prefer harness agents for standard work; escalate to OMC agents when the task needs deeper analysis or specialized review.
 
-| Agent | Role | Model |
-|-------|------|-------|
-| `requirements-curator` | Scope clarification, acceptance criteria | sonnet |
-| `brownfield-mapper` | Map legacy code before editing | haiku |
-| `implementation-engineer` | Code changes, feature work, fixes | sonnet |
-| `test-engineer` | Test writing and coverage | sonnet |
-| `refactor-engineer` | Structural improvements | sonnet |
-| `docs-scribe` | Documentation and memory updates | sonnet |
-| `browser-validator` | Web UI validation | sonnet |
+#### Harness agents (standard delegation)
 
-Agents are invoked using the Agent tool with `subagent_type` set to the agent name. For example:
-- `Agent(subagent_type="brownfield-mapper", prompt="Map the auth module...")`
-- `Agent(subagent_type="implementation-engineer", prompt="Implement input validation...")`
+| Agent | Role | Model | When to use |
+|-------|------|-------|-------------|
+| `harness:requirements-curator` | Scope, acceptance criteria, conflict check | sonnet | Feature requests, requirement capture |
+| `harness:brownfield-mapper` | Map legacy code before editing | haiku | Unfamiliar code areas |
+| `harness:implementation-engineer` | Code changes, feature work, fixes | sonnet | Standard implementation |
+| `harness:test-engineer` | Test writing and coverage | sonnet | Test additions, regression coverage |
+| `harness:refactor-engineer` | Structural improvements | sonnet | Cleanup, simplification |
+| `harness:docs-scribe` | Documentation and memory updates | sonnet | Docs sync, memory writes |
+| `harness:browser-validator` | Web UI validation | sonnet | UI smoke checks |
+
+#### OMC agents (escalation for deeper work)
+
+| Agent | Role | Model | When to escalate |
+|-------|------|-------|------------------|
+| `oh-my-claudecode:architect` | Architecture analysis, debugging strategy | opus | Complex architecture decisions, deep debugging |
+| `oh-my-claudecode:analyst` | Pre-planning requirements analysis | opus | Ambiguous or large-scope requests |
+| `oh-my-claudecode:code-reviewer` | Severity-rated code review | sonnet | After implementation, before completion |
+| `oh-my-claudecode:security-reviewer` | Security vulnerability detection | sonnet | Auth, payment, or user-input changes |
+| `oh-my-claudecode:verifier` | Evidence-based completion verification | sonnet | Final verification before claiming done |
+| `oh-my-claudecode:debugger` | Root-cause analysis, stack traces | sonnet | Complex bugs, build errors |
+| `oh-my-claudecode:tracer` | Causal tracing with competing hypotheses | sonnet | Intermittent bugs, unclear causality |
+| `oh-my-claudecode:designer` | UI/UX design and implementation | sonnet | Frontend work, styling, components |
+| `oh-my-claudecode:git-master` | Git operations, atomic commits | sonnet | Complex git operations, rebasing |
+
+#### Routing rules
+
+1. **Always start with harness agents** for standard workflow steps (implement, test, refactor, docs)
+2. **Escalate to OMC agents** when:
+   - The task requires Opus-level reasoning (architect, analyst)
+   - Specialized review is needed (code-reviewer, security-reviewer)
+   - Standard debugging fails (debugger, tracer)
+   - Final verification is needed before completion (verifier)
+3. **Use OMC agents directly** for capabilities harness agents don't have:
+   - Code review → `oh-my-claudecode:code-reviewer`
+   - Security review → `oh-my-claudecode:security-reviewer`
+   - UI/UX design → `oh-my-claudecode:designer`
+   - Git operations → `oh-my-claudecode:git-master`
+
+Agents are invoked using the Agent tool with `subagent_type`. For example:
+- `Agent(subagent_type="harness:implementation-engineer", prompt="Implement...")`
+- `Agent(subagent_type="oh-my-claudecode:architect", prompt="Analyze the architecture of...")`
+- `Agent(subagent_type="oh-my-claudecode:code-reviewer", prompt="Review the changes in...")`
 
 ### Handoff protocol
 
@@ -162,23 +205,42 @@ Update `current-task.yaml`: set `validated` list with each check performed and i
 
 ### 7. Sync repo-local memory
 
-After validated work, use `docs-sync` and `repo-memory-policy` to:
-- Record confirmed rules and decisions
-- Update domain docs if knowledge changed
-- Update unknowns if questions were resolved or discovered
-- Append to recent decisions
-- Prefer executable memory (tests, scripts) over docs
+After validated work, check whether recordable knowledge emerged. Not every change is recordable — only knowledge that affects future work.
+
+**Record if any of these are true:**
+- A project rule or constraint was confirmed or changed
+- A non-obvious bug root cause was discovered
+- An architecture boundary or pattern was clarified
+- A risk zone was identified or changed
+- A workflow, convention, or approval rule was added or modified
+- An unknown was resolved or a new one was discovered
+
+**Do NOT record:**
+- Routine code changes (typo fix, formatting, simple feature addition)
+- One-off answers to questions
+- Intermediate debugging steps
+- Changes that are fully self-evident from the code diff
+
+**When recording, use the right destination:**
+- Rule/constraint → `harness/docs/constraints/project-constraints.md`
+- Significant decision → `harness/docs/decisions/ADR-NNNN-*.md`
+- Operational insight → `harness/docs/runbooks/`
+- Unresolved question → `harness/state/unknowns.md`
+- Requirement spec → `harness/docs/requirements/REQ-NNNN-*.md`
+- Any recordable item → also append one-liner to `harness/state/recent-decisions.md`
+
+Prefer executable memory (tests, scripts) over docs when possible.
 
 After memory writes, check if `recent-decisions.md` exceeds 50 entries (lines matching `^- \[`). If so, follow the compaction procedure in `skills/repo-memory-policy/SKILL.md` § Compaction.
 
-Update `current-task.yaml`: set `memory_updates` list with each file modified during sync. Set status to `syncing`, then `complete` when done.
+Update `current-task.yaml`: set `memory_updates` list with each file modified during sync. Set status to `syncing`, then `complete` when done. If nothing was recordable, set `memory_updates: []` and status to `complete` directly.
 
 ### 8. Summarize
 
 Always end with:
 - **Changed**: what was modified
 - **Validated**: what evidence proves the change works
-- **Recorded**: what durable knowledge was captured
+- **Recorded**: what durable knowledge was captured (if nothing, state "nothing recordable — routine change")
 - **Unknown**: what remains unresolved
 - **Follow-up**: what needs attention next (if anything)
 

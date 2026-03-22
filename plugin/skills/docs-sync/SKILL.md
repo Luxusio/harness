@@ -23,9 +23,10 @@ Review the work just completed:
 - Bug fixed → runbook or findings update
 - Architecture changed → architecture docs update
 - Risk discovered → unknowns or approvals update
+- New feature requested → requirement spec created or status updated
 
 ### 2. Update the right files
-Delegate to `docs-scribe` with specific instructions:
+Delegate to `harness:docs-scribe` with specific instructions:
 
 **Domain knowledge changes:**
 - Update or create the relevant `harness/docs/domains/` file
@@ -43,9 +44,16 @@ Delegate to `docs-scribe` with specific instructions:
 - Update `harness/docs/architecture/` if boundaries or patterns changed
 - Mark inferred patterns as hypotheses
 
+**Requirement status changes:**
+- If a feature was implemented, update the REQ file status from `accepted` to `implemented`
+- If validation passed, update from `implemented` to `verified` and tick acceptance criteria
+- Update the `## History` section with a timestamped status transition entry
+
 ### 3. Update the index
 - Review `harness/docs/index.md` — add new files, remove stale ones
 - Keep the index navigable (grouped by purpose)
+- Include all files in `harness/` that a future session might need to find, including gitignored runtime files (`current-task.yaml`, `last-session-summary.md`) — mark them as "(gitignored)" in the index
+- Do NOT include template files from `plugin/skills/setup/templates/`
 
 ### 4. Update recent decisions
 - Append to `harness/state/recent-decisions.md` for any durable change

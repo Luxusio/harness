@@ -30,7 +30,7 @@ Determine what kind of memory this is:
 - Is this inferred from code/tests? → record as `observed_fact`, not `confirmed`
 
 ### 3. Record in the right place
-Delegate to `docs-scribe` to:
+Delegate to `harness:docs-scribe` to:
 
 **For constraints:**
 - Append to `harness/docs/constraints/project-constraints.md`

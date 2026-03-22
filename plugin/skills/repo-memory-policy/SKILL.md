@@ -24,6 +24,7 @@ Every candidate memory item must be classified:
 | `approval_rule` | `harness/policies/approvals.yaml` | "auth changes need confirmation" |
 | `observed_fact` | `harness/docs/runbooks/` or `harness/docs/architecture/` | "service X calls Y synchronously" |
 | `runbook_note` | `harness/docs/runbooks/` | "restart worker after config change" |
+| `requirement` | `harness/docs/requirements/REQ-*.md` | "user wants CSV export with filtering" |
 | `hypothesis` | `harness/state/unknowns.md` | "billing module may have race condition" |
 | `open_question` | `harness/state/unknowns.md` | "who owns the legacy auth middleware?" |
 
@@ -106,6 +107,7 @@ Compaction prevents unbounded growth of state files. Run during orchestrator Ste
      - `decision` → create `harness/docs/decisions/ADR-NNNN-*.md` if significant enough
      - `observed_fact` / `architecture` → `harness/docs/architecture/README.md` or `harness/docs/runbooks/`
      - `risk_zone` → `harness/manifest.yaml` risk_zones section
+     - `requirement` → `harness/docs/requirements/REQ-NNNN-*.md` if not already captured
   2. **Archive**: Move promoted entries to `harness/state/recent-decisions-archive.md` (append-only, not loaded at session start)
   3. **Trim**: Remove archived entries from active file, keeping the most recent 50
 
@@ -123,6 +125,11 @@ Compaction prevents unbounded growth of state files. Run during orchestrator Ste
 - **Never delete**: ADRs are permanent historical records.
 - **Superseded**: when a newer decision replaces an older one, mark the old ADR status as `superseded by ADR-NNNN`. Do not delete it.
 - **No compaction**: ADR files do not compact or merge. Each decision stays as its own file.
+
+### requirements/ (REQ files)
+- **Never delete**: requirements are permanent records of what was asked for.
+- **Status-only updates**: the only mutation is status progression (draft → accepted → implemented → verified) and history appends.
+- **No compaction**: REQ files do not compact or merge. Each requirement stays as its own file.
 
 ### Trigger
 Check file sizes during knowledge sync (orchestrator Step 7). Only compact when the threshold is exceeded — do not check on every turn.

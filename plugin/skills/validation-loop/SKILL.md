@@ -33,7 +33,7 @@ Run the `lint` command from manifest. If it fails, fix before proceeding.
 **Level 3: Smoke / key journey checks** (run when change could affect user flows)
 - Run `harness/scripts/smoke.sh` if it exists and is project-specific
 - Or manually verify the key journeys from manifest
-- For UI changes: delegate to `browser-validator` if tooling is available
+- For UI changes: delegate to `harness:browser-validator` if tooling is available
 
 **Level 4: Runtime evidence** (run when behavior is hard to prove statically)
 - Check logs for errors

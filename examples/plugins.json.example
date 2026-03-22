@@ -1,0 +1,10 @@
+{
+  "// HOW TO USE": "Copy this file to your project's .claude/plugins.json and update the path below.",
+  "// PATH": "Use the absolute path to where you cloned the repo-os plugin.",
+  "mcpServers": {},
+  "plugins": [
+    {
+      "path": "/home/you/plugins/repo-os"
+    }
+  ]
+}

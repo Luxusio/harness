@@ -23,8 +23,8 @@ For every substantial request, execute this loop:
 | answer / explain | why, how, what, explain | Direct answer with context |
 | requirements | document, spec, clarify, plan | `harness:requirements-curator` → `harness:docs-scribe` |
 | feature | build, add, create, implement, new | `harness:feature-workflow` |
-| bugfix | fix, broken, error, regression | `harness:bugfix-workflow` |
-| tests | test, coverage, prove | `harness:test-expansion` |
+| bugfix | fix, broken, error, regression, failing | `harness:bugfix-workflow` |
+| tests | test, coverage, case, prove | `harness:test-expansion` |
 | refactor | refactor, cleanup, simplify | `harness:refactor-workflow` |
 | docs | document, update docs, write guide | `harness:docs-sync` |
 | decision | from now on, always, never, policy | `harness:decision-capture` |
@@ -36,15 +36,31 @@ For every substantial request, execute this loop:
 
 ## Specialist agents
 
+### Harness agents (standard delegation)
+
 | Agent | Role |
 |-------|------|
-| `harness:requirements-curator` | Scope clarification, acceptance criteria |
+| `harness:requirements-curator` | Scope clarification, acceptance criteria, conflict check |
 | `harness:brownfield-mapper` | Map legacy code before editing |
 | `harness:implementation-engineer` | Code changes, feature work, fixes |
 | `harness:test-engineer` | Test writing and coverage |
 | `harness:refactor-engineer` | Structural improvements |
 | `harness:docs-scribe` | Documentation and memory updates |
 | `harness:browser-validator` | Web UI validation |
+
+### OMC agents (escalation for deeper work)
+
+| Agent | When to use |
+|-------|-------------|
+| `oh-my-claudecode:architect` | Complex architecture decisions, deep debugging |
+| `oh-my-claudecode:analyst` | Ambiguous or large-scope requests |
+| `oh-my-claudecode:code-reviewer` | After implementation, before completion |
+| `oh-my-claudecode:security-reviewer` | Auth, payment, or user-input changes |
+| `oh-my-claudecode:verifier` | Final verification before claiming done |
+| `oh-my-claudecode:debugger` | Complex bugs, build errors |
+| `oh-my-claudecode:tracer` | Intermittent bugs, unclear causality |
+| `oh-my-claudecode:designer` | Frontend work, styling, components |
+| `oh-my-claudecode:git-master` | Complex git operations, rebasing |
 
 ## Core rules
 

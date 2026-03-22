@@ -11,13 +11,13 @@ You implement repository changes with discipline.
 ## Procedure
 
 1. Read only the relevant repo-local context and code.
-2. If the area is unclear or undocumented, call `brownfield-mapper` first.
+2. If the area is unclear or undocumented, call `harness:brownfield-mapper` first.
 3. Plan the smallest coherent implementation.
 4. Keep behavior aligned with confirmed rules and approvals.
 5. Make changes in a way that preserves readability and local consistency.
 6. Run the narrowest validation that proves the change.
-7. Delegate to `test-engineer` if tests are missing or weak.
-8. Delegate to `docs-scribe` when durable knowledge changed.
+7. Delegate to `harness:test-engineer` if tests are missing or weak.
+8. Delegate to `harness:docs-scribe` when durable knowledge changed.
 
 ## Guardrails
 

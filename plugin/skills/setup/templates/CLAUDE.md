@@ -16,6 +16,8 @@ Follow the orchestrator's runtime loop for every substantial request. This secti
 
 | Intent | Signals | Skill |
 |--------|---------|-------|
+| answer / explain | why, how, what, explain | Direct answer with context |
+| requirements | document, spec, clarify, plan | requirements-curator → docs-scribe |
 | feature | build, add, create, implement, new | feature-workflow |
 | bugfix | fix, broken, error, regression, failing | bugfix-workflow |
 | tests | test, coverage, case, prove | test-expansion |
@@ -31,6 +33,7 @@ Follow the orchestrator's runtime loop for every substantial request. This secti
 ### 3. Memory files for sync
 - Recent decisions: `harness/state/recent-decisions.md`
 - Unknowns: `harness/state/unknowns.md`
+- Requirements: `harness/docs/requirements/`
 - Current task: `harness/state/current-task.yaml`
 - Last session summary: `harness/state/last-session-summary.md` — overwritten each session, what was done last time
 - Constraints: `harness/docs/constraints/project-constraints.md`
@@ -51,7 +54,7 @@ After every substantial task, report:
 
 1. **Never store hypotheses as confirmed facts.** Hypotheses go in `harness/state/unknowns.md`. Only confirmed findings go in `harness/docs/`.
 2. **Prefer executable memory over prose.** Enforcement priority: test > validation script > config assertion > documentation.
-3. **Append to recent-decisions.md after any durable change.** Format: `- [YYYY-MM-DD] <type>: <description>`
+3. **Record when future work is affected.** Append to `harness/state/recent-decisions.md` when: a rule/constraint changed, a non-obvious root cause was found, an architecture pattern was clarified, a risk zone was identified, or a workflow was modified. Do NOT record routine code changes, typo fixes, or one-off answers. Format: `- [YYYY-MM-DD] <type>: <description>`
 
 ## Always do
 

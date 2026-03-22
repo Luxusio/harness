@@ -35,9 +35,11 @@ always_ask_before:
       - "pnpm-lock.yaml"
       - "package-lock.json"
       - "poetry.lock"
+      - "pyproject.toml"
       - "requirements*.txt"
       - "go.mod"
       - "Cargo.toml"
+      - "Cargo.lock"
     reason: "Versioning and transitive behavior risk"
 
   - kind: billing_payment_change

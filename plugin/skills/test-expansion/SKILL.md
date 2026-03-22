@@ -29,7 +29,7 @@ Order of priority:
 5. **Boundary conditions** for inputs, state transitions, permissions
 
 ### 3. Write tests
-Delegate to `test-engineer` with:
+Delegate to `harness:test-engineer` with:
 ```
 Handoff:
   from: test-expansion

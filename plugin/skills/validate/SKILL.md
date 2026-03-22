@@ -30,6 +30,7 @@ Verify each file exists and report PASS/FAIL:
 | `harness/docs/decisions/ADR-0001-harness-bootstrap.md` | yes |
 | `harness/docs/domains/README.md` | yes |
 | `harness/docs/architecture/README.md` | yes |
+| `harness/docs/requirements/README.md` | yes |
 | `harness/docs/runbooks/development.md` | yes |
 | `harness/scripts/validate.sh` | yes |
 | `harness/scripts/smoke.sh` | yes |
@@ -59,6 +60,11 @@ For each script in `harness/scripts/`:
 - Read `harness/manifest.yaml`
 - Check that `memory.system_of_record` paths exist
 - `[PASS] manifest path <path> exists` or `[WARN] manifest path <path> not found`
+
+**requirements/ status validation:**
+- Read all `harness/docs/requirements/REQ-*.md` files
+- For each, verify the `**Status:**` line contains one of: `draft`, `accepted`, `implemented`, `verified`
+- `[PASS] <file> has valid status: <status>` or `[WARN] <file> has invalid status: <value>`
 
 ### 4. Check for stale placeholders
 

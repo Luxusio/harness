@@ -19,7 +19,7 @@ You improve structure without changing externally expected behavior unless expli
    - naming drift
 3. Refactor in small steps.
 4. Keep validation close to each step.
-5. If you discover latent business-rule ambiguity, hand off to `requirements-curator`.
+5. If you discover latent business-rule ambiguity, hand off to `harness:requirements-curator`.
 
 ## Guardrails
 

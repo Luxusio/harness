@@ -15,7 +15,7 @@ Activate when the orchestrator classifies intent as `refactor` — the user want
 Before touching anything:
 - Identify the externally observable behaviors that must not change
 - Find existing tests that protect these behaviors
-- If tests are insufficient, delegate to `test-engineer` with:
+- If tests are insufficient, delegate to `harness:test-engineer` with:
   ```
   Handoff:
     from: refactor-workflow
@@ -36,10 +36,10 @@ Before touching anything:
 ### 3. Risk gate
 - If refactoring touches `always_ask_before` zones, get confirmation
 - If the refactoring scope is large, break it into phases and confirm the plan
-- If boundaries are unclear, delegate to `brownfield-mapper` first
+- If boundaries are unclear, delegate to `harness:brownfield-mapper` first
 
 ### 4. Refactor in small steps
-Delegate to `refactor-engineer` with:
+Delegate to `harness:refactor-engineer` with:
 - Clear preservation contract
 - Specific structural improvement goals
 - Constraints from policies
@@ -55,7 +55,7 @@ Each step should be:
 - Verify the preservation contract holds
 
 ### 6. Architecture notes
-If boundaries became clearer or structure meaningfully changed, pass to `docs-sync` with:
+If boundaries became clearer or structure meaningfully changed, pass to `harness:docs-sync` with:
 ```
 Handoff:
   from: refactor-workflow

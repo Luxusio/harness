@@ -59,9 +59,11 @@ if [[ -f "package.json" ]]; then
   if [[ -n "$ARCH_RULES" ]]; then
     echo ">> arch-rules.yaml boundary checks (Node.js)"
     # Parse boundaries for typescript/javascript and check forbidden imports
+    RULE_SOURCE=""
     while IFS= read -r line; do
       if [[ "$line" =~ source:\ *\"(.+)\" ]]; then
         RULE_SOURCE="${BASH_REMATCH[1]}"
+        READING_FORBIDDEN=false
       fi
       if [[ "$line" =~ forbidden_imports: ]]; then
         READING_FORBIDDEN=true
@@ -134,6 +136,31 @@ if [[ -f "go.mod" ]]; then
   fi
 fi
 
+# Rust
+if [[ -f "Cargo.toml" ]]; then
+  echo ""
+  echo "--- Rust ---"
+
+  if command -v cargo &>/dev/null; then
+    echo ">> cargo clippy"
+    if ! cargo clippy -- -D warnings 2>/dev/null; then
+      echo "VIOLATION: cargo clippy reported errors"
+      VIOLATIONS=$((VIOLATIONS + 1))
+    else
+      echo "   pass: cargo clippy clean"
+    fi
+    CHECKS_RUN=$((CHECKS_RUN + 1))
+  else
+    echo "SKIP: cargo not available"
+  fi
+
+  # Fallback: arch-rules.yaml boundary checks for Rust
+  if [[ -n "$ARCH_RULES" ]]; then
+    echo ">> arch-rules.yaml boundary checks (Rust)"
+    CHECKS_RUN=$((CHECKS_RUN + 1))
+  fi
+fi
+
 # Java / Kotlin
 if [[ -x "gradlew" ]] && { [[ -f "build.gradle" ]] || [[ -f "build.gradle.kts" ]]; }; then
   echo ""
@@ -141,6 +168,7 @@ if [[ -x "gradlew" ]] && { [[ -f "build.gradle" ]] || [[ -f "build.gradle.kts" ]
 
   # Probe available tasks once
   GRADLE_TASKS=$(./gradlew tasks --all 2>/dev/null || true)
+  JVM_CHECKS=0
 
   # Detekt (Kotlin static analysis)
   if echo "$GRADLE_TASKS" | grep -q "^detekt "; then
@@ -152,6 +180,7 @@ if [[ -x "gradlew" ]] && { [[ -f "build.gradle" ]] || [[ -f "build.gradle.kts" ]
       echo "   pass: detekt clean"
     fi
     CHECKS_RUN=$((CHECKS_RUN + 1))
+    JVM_CHECKS=$((JVM_CHECKS + 1))
   fi
 
   # Checkstyle (Java static analysis)
@@ -164,9 +193,10 @@ if [[ -x "gradlew" ]] && { [[ -f "build.gradle" ]] || [[ -f "build.gradle.kts" ]
       echo "   pass: checkstyle clean"
     fi
     CHECKS_RUN=$((CHECKS_RUN + 1))
+    JVM_CHECKS=$((JVM_CHECKS + 1))
   fi
 
-  if [[ $CHECKS_RUN -eq 0 ]]; then
+  if [[ $JVM_CHECKS -eq 0 ]]; then
     echo "SKIP: no detekt or checkstyle tasks configured"
   fi
 elif [[ -f "pom.xml" ]] && command -v mvn &>/dev/null; then
@@ -183,7 +213,7 @@ echo "violations: $VIOLATIONS"
 
 if [[ $CHECKS_RUN -eq 0 ]]; then
   echo ""
-  echo "arch-check: no tools available for checking. Install eslint, madge, ruff, or go for boundary enforcement."
+  echo "arch-check: no tools available for checking. Install eslint, madge, ruff, cargo, or go for boundary enforcement."
   exit 0
 fi
 
