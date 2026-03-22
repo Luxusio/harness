@@ -1,6 +1,8 @@
 # harness AI Operating Manual
 
-This file is the primary instruction surface for AI-assisted work in this repository. It provides **reference data** for the runtime loop. The orchestrator agent handles the step-by-step procedure — this file tells it where to find things and what rules to follow.
+This file is the primary instruction surface for AI-assisted work in **this repository** (i.e., the harness plugin repo itself). It provides **reference data** for the runtime loop. The orchestrator agent handles the step-by-step procedure — this file tells it where to find things and what rules to follow.
+
+> **Source of truth:** The shipped plugin source lives under `plugin/`. No parallel prompt tree exists at the root. Plugin development modifies `plugin/agents`, `plugin/skills`, `plugin/hooks`, and `plugin/scripts`.
 
 ## How to handle requests
 
@@ -78,8 +80,14 @@ After every substantial task, report:
 
 ## Key journeys
 
-- Plugin development: modify skills/agents/hooks → test with `--plugin-dir ./plugin` → verify skills load and behave correctly
+- Plugin development: modify `plugin/skills`, `plugin/agents`, `plugin/hooks`, `plugin/scripts` → test with `claude --plugin-dir ./plugin` → verify shipped behavior loads and runs correctly
 - Marketplace deployment: push to GitHub → `/plugin marketplace add` → `/plugin install` → verify in fresh session
+
+## Command surface
+
+- `/harness:setup` — bootstrap a project (run once)
+- `/harness:validate` — optional diagnostic to check control plane health
+- Daily work proceeds in plain language; no slash commands are required after setup
 
 ## Brownfield guidance
 

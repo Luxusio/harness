@@ -1,7 +1,8 @@
 ---
 name: validate
-description: Check harness control plane health. Reports missing files, dangling references, stale placeholders, and consistency issues.
+description: Checks the harness control plane for missing files, dangling references, stale placeholders, permissions issues, and drift between expected and actual repo-local state.
 argument-hint: ""
+disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash
 ---
 
@@ -86,6 +87,7 @@ If Y > 0, list the warnings with suggested actions.
 
 ## Notes
 
-- This skill does NOT auto-fix. It reports only.
+- This is a diagnostic command. It reports only; it does not mutate files.
 - Run after `/harness:setup` to verify the control plane, or anytime files may have drifted.
+- Normal feature/bugfix/refactor work should not auto-route into this skill.
 - The `--fix` flag is reserved for future use and currently has no effect.

@@ -96,10 +96,12 @@ Load based on scope:
 
 ### How workflows work
 
-Hidden skills are **procedure documents**, not invocable commands. To "activate" a workflow:
+Workflow skills define the governing procedure for the current task. Select the matching workflow, follow its procedure, and delegate execution to specialists as needed. Treat skill file paths as plugin-internal references only; do not rely on any second root-level prompt tree.
+
+To activate a workflow:
 1. Read the skill's `SKILL.md` file at the path listed in the routing table
-2. Follow the procedure steps in order
-3. Delegate to the specialist agents listed in each step using the Agent tool
+2. Follow the procedure steps in order, driving execution through specialist delegation and current-task management
+3. Delegate each step to the appropriate specialist agent using the Agent tool
 
 The orchestrator manages the overall runtime loop. Each skill defines the detailed procedure for one phase of work. Workflows can chain: a feature may trigger brownfield-adoption first, then implementation, then test-expansion, then docs-sync.
 
@@ -132,7 +134,9 @@ Use the right agent for each step. Harness agents carry harness-specific context
 | `harness:docs-scribe` | Documentation and memory updates | sonnet | Docs sync, memory writes |
 | `harness:browser-validator` | Web UI validation | sonnet | UI smoke checks |
 
-#### OMC agents (escalation for deeper work)
+#### OMC agents (optional escalation for deeper work)
+
+OMC agents are optional capabilities. Before delegating to any `oh-my-claudecode:*` agent, verify it is available in the current session. If unavailable, fall back to harness agents or main-thread reasoning. Report the missing capability only when it materially affected the depth or quality of the result.
 
 | Agent | Role | Model | When to escalate |
 |-------|------|-------|------------------|
@@ -148,17 +152,19 @@ Use the right agent for each step. Harness agents carry harness-specific context
 
 #### Routing rules
 
-1. **Always start with harness agents** for standard workflow steps (implement, test, refactor, docs)
-2. **Escalate to OMC agents** when:
+1. **The orchestrator is the only component that decides cross-specialty delegation.** Specialist agents execute their assigned slice and return results. If a specialist needs another specialty, it must return a handoff request to the orchestrator instead of delegating on its own.
+2. **Always start with harness agents** for standard workflow steps (implement, test, refactor, docs)
+3. **Escalate to OMC agents** when:
    - The task requires Opus-level reasoning (architect, analyst)
    - Specialized review is needed (code-reviewer, security-reviewer)
    - Standard debugging fails (debugger, tracer)
    - Final verification is needed before completion (verifier)
-3. **Use OMC agents directly** for capabilities harness agents don't have:
+4. **Use OMC agents directly** for capabilities harness agents don't have:
    - Code review → `oh-my-claudecode:code-reviewer`
    - Security review → `oh-my-claudecode:security-reviewer`
    - UI/UX design → `oh-my-claudecode:designer`
    - Git operations → `oh-my-claudecode:git-master`
+5. **Before delegating to any `oh-my-claudecode:*` agent**, verify the agent is available in the current session. If unavailable, continue with harness agents or main-thread reasoning. Report the missing capability only when it materially affected the depth or quality of the result.
 
 Agents are invoked using the Agent tool with `subagent_type`. For example:
 - `Agent(subagent_type="harness:implementation-engineer", prompt="Implement...")`
@@ -189,7 +195,11 @@ Result:
   findings: <new facts discovered>
   validation: <what was checked and result>
   unknowns: <unresolved questions>
+  needs_handoff: <optional next specialist, e.g. test-engineer, docs-scribe, requirements-curator, brownfield-mapper>
+  recordable_knowledge: <yes/no + short reason>
 ```
+
+The orchestrator inspects `needs_handoff` after each result and initiates the indicated specialist delegation if present. It inspects `recordable_knowledge` to decide whether Step 7 (memory sync) is needed.
 
 ### 6. Validate
 
@@ -233,7 +243,7 @@ Prefer executable memory (tests, scripts) over docs when possible.
 
 After memory writes, check if `recent-decisions.md` exceeds 50 entries (lines matching `^- \[`). If so, follow the compaction procedure in `skills/repo-memory-policy/SKILL.md` § Compaction.
 
-Update `current-task.yaml`: set `memory_updates` list with each file modified during sync. Set status to `syncing`, then `complete` when done. If nothing was recordable, set `memory_updates: []` and status to `complete` directly.
+Update `current-task.yaml`: set `memory_updates` list with each file modified during sync. Set status to `syncing`, then `complete` when done. If nothing was recordable, set `memory_updates: []` and status to `complete` directly — do not leave status as `syncing`.
 
 ### 8. Summarize
 

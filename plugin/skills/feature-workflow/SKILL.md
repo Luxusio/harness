@@ -1,6 +1,6 @@
 ---
 name: feature-workflow
-description: Use when the user wants new functionality, a new endpoint, a new screen, or a nontrivial behavior addition.
+description: Captures requirements, checks conflicts and approvals, coordinates implementation and tests, and syncs durable docs for new features, endpoints, UI flows, or behavior additions.
 allowed-tools: Read, Glob, Grep, Bash, Write, Edit, Agent
 user-invocable: false
 ---
@@ -63,7 +63,7 @@ Delegate to `harness:implementation-engineer` with:
 - Specific constraints from approvals/policies
 The engineer makes the smallest coherent diff.
 
-If the feature involves UI/frontend work, also delegate to `oh-my-claudecode:designer` for design-quality implementation.
+If the feature involves UI/frontend work, delegate to `oh-my-claudecode:designer` for design-quality implementation if it is available in the current session. Otherwise continue with the harness implementation flow and report that the optional design capability was unavailable.
 
 ### 6. Test coverage
 Delegate to `harness:test-engineer` to:
@@ -79,8 +79,8 @@ Run the narrowest validation that proves the change:
 4. browser validation (for UI changes, if tooling available)
 If validation cannot be completed, state the exact gap.
 
-For security-sensitive changes (auth, payment, user-input), delegate to `oh-my-claudecode:security-reviewer` before completing.
-For complex changes (>10 files), delegate to `oh-my-claudecode:code-reviewer` for a quality check.
+For security-sensitive changes (auth, payment, user-input), delegate to `oh-my-claudecode:security-reviewer` before completing if it is available in the current session. Otherwise continue with harness flow and report that the optional security review capability was unavailable.
+For complex changes (>10 files), delegate to `oh-my-claudecode:code-reviewer` for a quality check if it is available in the current session. Otherwise continue with harness flow and report that the optional code review capability was unavailable.
 
 ### 8. Knowledge sync
 If durable knowledge changed, pass to `harness:docs-sync` with:

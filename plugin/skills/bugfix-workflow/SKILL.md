@@ -1,6 +1,6 @@
 ---
 name: bugfix-workflow
-description: Use when a failure, regression, or incorrect behavior must be diagnosed and fixed.
+description: Reproduces failures, captures before-state evidence, identifies root cause, coordinates the fix and regression tests, and records durable debugging knowledge.
 allowed-tools: Read, Glob, Grep, Bash, Write, Edit, Agent
 user-invocable: false
 ---
@@ -32,8 +32,8 @@ Activate when the orchestrator classifies intent as `bugfix` — the user report
   - **symptom**: what the user sees
   - **trigger**: what sequence exposes it
 - Fix the root cause, not just the symptom
-- If standard analysis is insufficient, escalate to `oh-my-claudecode:debugger` for deeper root-cause analysis
-- For bugs with unclear causality or intermittent behavior, escalate to `oh-my-claudecode:tracer` for evidence-driven causal tracing
+- If standard analysis is insufficient, escalate to `oh-my-claudecode:debugger` for deeper root-cause analysis if it is available in the current session. Otherwise continue with harness agents and main-thread reasoning.
+- For bugs with unclear causality or intermittent behavior, escalate to `oh-my-claudecode:tracer` for evidence-driven causal tracing if it is available in the current session. Otherwise continue with harness agents and main-thread reasoning.
 
 ### 4. Risk gate
 - If the fix touches `always_ask_before` zones, get confirmation

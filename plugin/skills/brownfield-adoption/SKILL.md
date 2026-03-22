@@ -1,6 +1,6 @@
 ---
 name: brownfield-adoption
-description: Use when work touches an unfamiliar or poorly documented existing codebase area. Creates enough understanding and safety nets to work without guesswork.
+description: Maps unfamiliar code, identifies risk zones, installs minimal safety nets, and documents verified findings before risky edits in brownfield areas.
 allowed-tools: Read, Glob, Grep, Bash, Agent
 user-invocable: false
 ---

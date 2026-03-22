@@ -17,7 +17,7 @@ harness works with **any single-root project**. Setup auto-detects languages, fr
 
 **Also works with** any other language — setup will ask for commands it can't infer.
 
-> **Not yet supported:** Monorepos (workspaces, Nx, Turborepo, Lerna) and polyglot projects. See [Known limitations](#known-limitations).
+> **Monorepos (workspaces, Nx, Turborepo, Lerna):** experimental / low-confidence support. Setup detects workspace structure but treats the project as a single root. Manual review of inferred commands is recommended. See [Known limitations](#known-limitations).
 
 ## What harness does
 
@@ -62,7 +62,7 @@ Just talk naturally:
 - "Refactor the payment module"
 - "From now on, all API responses must include a request_id"
 
-The orchestrator handles classification, routing, validation, and memory automatically. No slash commands needed.
+The orchestrator handles classification, routing, validation, and memory automatically. No slash commands are needed for normal work after setup. `/harness:validate` remains available as an optional diagnostic command.
 
 ## What setup creates
 
@@ -139,12 +139,14 @@ You speak naturally. The orchestrator automatically:
 
 ### OMC agent escalation
 
-When the [oh-my-claudecode](https://github.com/anthropics/oh-my-claudecode) plugin is installed, harness automatically escalates to OMC agents for deeper work:
+OMC escalation is optional. When the [oh-my-claudecode](https://github.com/anthropics/oh-my-claudecode) plugin is installed, harness automatically escalates to OMC agents for deeper work:
 - Complex architecture → `oh-my-claudecode:architect`
 - Code review → `oh-my-claudecode:code-reviewer`
 - Security review → `oh-my-claudecode:security-reviewer`
 - Deep debugging → `oh-my-claudecode:debugger` / `oh-my-claudecode:tracer`
 - UI/UX design → `oh-my-claudecode:designer`
+
+Without OMC installed, harness agents and the normal validation flow continue without interruption. OMC absence is not a failure — it is an optional enhancement.
 
 ## Diagnostic
 
@@ -170,7 +172,7 @@ When the architecture-guardrails procedure confirms a boundary rule, it appends 
 
 ## Known limitations
 
-1. **Monorepo/polyglot projects** — Setup assumes a single project root. Workspaces, Nx, Turborepo, and Lerna configurations are detected but treated as low-confidence.
+1. **Monorepo/polyglot projects** — Experimental / low-confidence support. Setup detects workspace structure but treats the project as a single root. Inferred commands and risk zones should be reviewed manually before trusting them.
 2. **Browser validation** — The `browser-validator` agent exists but requires external browser tooling (not included). Falls back to smoke checks.
 3. **Memory promotion** — The hypothesis → confirmed → enforced ladder is manual. No automated promotion based on evidence accumulation.
 4. **Prompt-driven** — The entire system runs via Claude Code's agent/skill infrastructure. Behavior depends on model capability and prompt adherence.
@@ -178,13 +180,16 @@ When the architecture-guardrails procedure confirms a boundary rule, it appends 
 
 ## Development
 
+The shipped prompt system lives under `plugin/`. Root-level documentation exists to help develop this repository, not as a second runtime prompt tree.
+
 ### Key files
-- `agents/` — 8 agent definitions (orchestrator + 7 specialists)
-- `skills/` — 12 skills (setup + validate + 10 hidden procedures)
-- `hooks/` — SessionStart (context injection) and Stop (verification)
-- `scripts/` — SessionStart hook script
-- `skills/setup/templates/` — 24 template files for control plane generation
-- `skills/setup/inference-application.md` — Inference confidence tiers and rules
+- `plugin/agents/` — shipped agent definitions
+- `plugin/skills/` — shipped skills
+- `plugin/hooks/` — shipped hooks
+- `plugin/scripts/` — hook support scripts
+- `plugin/skills/setup/templates/` — generated control plane templates
+- `plugin/.claude-plugin/plugin.json` — plugin manifest
+- Root `CLAUDE.md` — this repository's development manual
 
 ## License
 

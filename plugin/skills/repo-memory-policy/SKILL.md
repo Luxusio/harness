@@ -1,6 +1,6 @@
 ---
 name: repo-memory-policy
-description: Use when a user states a durable rule or when work reveals a lasting fact that should be captured in repo-local memory.
+description: Classifies lasting findings into constraints, decisions, requirements, runbooks, or unknowns and applies memory promotion, deduplication, and compaction rules.
 allowed-tools: Read, Glob, Grep, Write, Edit
 user-invocable: false
 ---

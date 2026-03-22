@@ -1,6 +1,6 @@
 ---
 name: architecture-guardrails
-description: Use when editing structure, moving code, introducing dependencies, or reasoning about boundaries.
+description: Checks boundary, dependency, and layering constraints before structural changes and records any newly confirmed architecture rules or violations.
 allowed-tools: Read, Glob, Grep, Write, Edit
 user-invocable: false
 ---

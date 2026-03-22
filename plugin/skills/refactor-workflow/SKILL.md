@@ -1,6 +1,6 @@
 ---
 name: refactor-workflow
-description: Use when the request is cleanup, simplification, modularization, or dependency untangling without intended behavior changes.
+description: Defines the preservation contract, adds characterization coverage when needed, coordinates behavior-preserving structural cleanup, and validates that external behavior did not change.
 allowed-tools: Read, Glob, Grep, Bash, Write, Edit, Agent
 user-invocable: false
 ---

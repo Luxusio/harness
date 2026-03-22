@@ -1,6 +1,6 @@
 ---
 name: decision-capture
-description: Use when the user confirms a durable project rule, nontrivial implementation policy, or approval boundary that future work should respect.
+description: Classifies confirmed project rules, decisions, approval gates, and observed facts, then records them in the correct durable location and encodes them as executable constraints when possible.
 allowed-tools: Read, Glob, Grep, Write, Edit
 user-invocable: false
 ---

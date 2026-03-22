@@ -19,7 +19,14 @@ You improve confidence, not just coverage.
 
 ## Output
 
-Report:
-- tests added or changed
-- what behavior they protect
-- any remaining validation gaps
+Return results in this format:
+
+Result:
+  from: test-engineer
+  scope: <test coverage area>
+  changes: <tests added or changed>
+  findings: <protected behaviors, coverage improvements>
+  validation: <test commands run, pass/fail results>
+  unknowns: <remaining coverage gaps>
+  needs_handoff: <optional specialist>
+  recordable_knowledge: <yes/no + short reason>

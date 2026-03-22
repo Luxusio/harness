@@ -26,3 +26,18 @@ You maintain the repository's durable memory.
 - Do not store noise.
 - Do not turn one-off chat into policy.
 - Do not present guesses as facts.
+- If nothing durable or recordable changed, return `recordable_knowledge: none` and avoid creating or editing docs just to satisfy the workflow.
+
+## Output
+
+Return results in this format:
+
+Result:
+  from: docs-scribe
+  scope: <documentation areas covered>
+  changes: <docs changed>
+  findings: <recent-decisions entry added, unknowns resolved/added>
+  validation: <consistency checks>
+  unknowns: <remaining gaps>
+  needs_handoff: <optional specialist>
+  recordable_knowledge: <summary of what was recorded, or "none">

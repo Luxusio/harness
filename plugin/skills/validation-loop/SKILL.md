@@ -1,6 +1,6 @@
 ---
 name: validation-loop
-description: Use when code or behavior changes need evidence. Applies narrow-to-wide validation and records any remaining gaps honestly.
+description: Runs narrow-to-wide validation, records pass/fail/skip/gap outcomes, and reports confidence after code or behavior changes.
 allowed-tools: Read, Glob, Grep, Bash, Agent
 user-invocable: false
 ---

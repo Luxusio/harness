@@ -8,7 +8,7 @@ allowed-tools: AskUserQuestion, Read, Glob, Grep, Write, Edit, Bash
 
 You are initializing the repo-local operating system in the current repository.
 
-This is the only user-invocable command in this plugin. After setup, the user should work in plain language without invoking more plugin commands.
+/harness:setup is the bootstrap command. /harness:validate is a separate diagnostic command. After setup, ordinary work should happen in plain language.
 
 Optional setup focus from the user: `$ARGUMENTS`
 
@@ -339,6 +339,15 @@ If `harness/manifest.yaml` already exists:
    - what was inferred vs confirmed
    - remaining unknowns
    - a short reminder that the user can now work in plain language — the orchestrator is now active
+
+## Monorepo and polyglot projects
+
+Harness detects multiple languages and services in the same repository. This detection is best-effort:
+
+- Service boundary inference (which service owns which code) may be low-confidence in deeply nested or unconventionally structured monorepos.
+- Command inference (build, test, dev commands per service) may be low-confidence when scripts are generated, aliased, or rely on CI tooling not visible in the repo.
+
+When confidence is low, ask rather than guess. A wrong inferred command that silently writes risky config is worse than a clarifying question. Signal low-confidence inferences with `inferred` markers in `manifest.yaml` and surface them in the finish summary so the user can confirm or correct them.
 
 ## Guardrails
 

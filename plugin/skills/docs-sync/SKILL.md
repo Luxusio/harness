@@ -1,6 +1,6 @@
 ---
 name: docs-sync
-description: Use after meaningful changes to keep repo-local memory, indexes, and durable notes aligned with the codebase.
+description: Updates constraints, ADRs, runbooks, domain docs, unknowns, requirement status, and the docs index after meaningful code, architecture, or policy changes.
 allowed-tools: Read, Glob, Grep, Write, Edit, Bash
 user-invocable: false
 ---
@@ -53,7 +53,7 @@ Delegate to `harness:docs-scribe` with specific instructions:
 - Review `harness/docs/index.md` — add new files, remove stale ones
 - Keep the index navigable (grouped by purpose)
 - Include all files in `harness/` that a future session might need to find, including gitignored runtime files (`current-task.yaml`, `last-session-summary.md`) — mark them as "(gitignored)" in the index
-- Do NOT include template files from `plugin/skills/setup/templates/`
+- Do not include setup templates.
 
 ### 4. Update recent decisions
 - Append to `harness/state/recent-decisions.md` for any durable change
@@ -64,7 +64,10 @@ Delegate to `harness:docs-scribe` with specific instructions:
 - Add new unknowns discovered during work
 - Keep unknowns scoped and actionable
 
-### 6. Verify sync quality
+### 6. No-op case
+If nothing recordable changed, report that explicitly and skip all doc edits. Do not create empty or placeholder entries.
+
+### 7. Verify sync quality
 - No stale references
 - No hypotheses recorded as facts
 - No duplicate entries

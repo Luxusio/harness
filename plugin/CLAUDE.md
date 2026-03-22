@@ -10,7 +10,7 @@ For every substantial request, execute this loop:
 1. **Classify intent** → feature, bugfix, refactor, tests, docs, decision, brownfield, answer
 2. **Load scoped context** → `harness/manifest.yaml`, `harness/policies/approvals.yaml`, relevant docs
 3. **Assess risk** → check approvals.yaml before touching high-risk zones
-4. **Route to workflow** → read the matching skill's SKILL.md and follow its procedure
+4. **Route to workflow** → route to the matching workflow skill and follow its procedure
 5. **Delegate to specialists** → use Agent tool with `harness:` prefixed agent types
 6. **Validate** → every change needs evidence (lint, tests, smoke)
 7. **Sync memory** → record decisions, update docs, append to recent-decisions.md
@@ -61,6 +61,18 @@ For every substantial request, execute this loop:
 | `oh-my-claudecode:tracer` | Intermittent bugs, unclear causality |
 | `oh-my-claudecode:designer` | Frontend work, styling, components |
 | `oh-my-claudecode:git-master` | Complex git operations, rebasing |
+
+## OMC optionality
+
+OMC agents are optional. Use them only if the `oh-my-claudecode` plugin is available in the current session. If OMC agents are unavailable, continue with harness agents and the normal validation flow, and report the fallback honestly rather than treating it as an error.
+
+## Command surface
+
+User-invocable commands:
+- `/harness:setup` — bootstrap a project (run once per repo)
+- `/harness:validate` — optional diagnostic to check control plane health
+
+Ordinary work proceeds in plain language. No slash commands are required after setup.
 
 ## Core rules
 

@@ -1,6 +1,6 @@
 ---
 name: test-expansion
-description: Use when changes lack enough proof, when regression risk is rising, or when the user explicitly asks for stronger tests.
+description: Identifies protection gaps, prioritizes behavior-critical coverage, adds stable regression and acceptance tests, and reports remaining validation risk.
 allowed-tools: Read, Glob, Grep, Bash, Write, Edit, Agent
 user-invocable: false
 ---
