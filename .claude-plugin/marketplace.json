@@ -13,11 +13,7 @@
       "author": {
         "name": "harness"
       },
-      "source": {
-        "source": "git-subdir",
-        "url": "https://github.com/Luxusio/harness.git",
-        "path": "plugin"
-      },
+      "source": "./plugin",
       "category": "workflow",
       "tags": [
         "workflow",
