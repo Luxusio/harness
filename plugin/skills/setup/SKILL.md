@@ -171,7 +171,7 @@ If `harness/manifest.yaml` already exists:
    1. **Scan the repo** for directories and files that correspond to each rule's default paths.
    2. **For each approval rule**, replace the template path list with only the paths that exist (or are reasonable globs for existing directories). Use the following mapping as a guide:
       - `auth_change`: check for `auth/`, `src/auth/`, `lib/auth/`, `app/auth/` etc.
-      - `db_schema_change`: check for `migrations/`, `db/`, `schema/`, `prisma/`, `alembic/`
+      - `db_schema_change`: check for `migrations/`, `db/`, `schema/`, `prisma/`, `alembic/`; also scan `compose.yaml`/`docker-compose.yaml` for volume mounts to `docker-entrypoint-initdb.d` — the source path contains SQL schema init files that should be protected
       - `public_contract_change`: check for `api/`, `contracts/`, `openapi/`, `graphql/`, `proto/`
       - `infra_change`: check for `.github/`, `infra/`, `terraform/`, `deploy/`, `k8s/`, `.circleci/`
       - `dependency_upgrade`: check for `package.json`, `pnpm-lock.yaml`, `package-lock.json`, `poetry.lock`, `requirements*.txt`, `go.mod`, `Cargo.toml`, `pyproject.toml`
@@ -192,23 +192,47 @@ If `harness/manifest.yaml` already exists:
    - Root-level scripts: `run.sh`, `start.sh`, `deploy.sh`, `Makefile`, `Taskfile.yml`, `justfile`
    - Script directories: `scripts/`, `bin/`, `tools/`
 
+   Also scan for existing documentation directories:
+   - `docs/`, `doc/`, `documentation/`
+   - Look for infrastructure docs (`infrastructure.md`, `deployment.md`, `architecture.md`), API docs, and runbooks.
+
+   For each discovered documentation file:
+   1. Add it to `harness/docs/brownfield/inventory.md` with a summary of its content.
+   2. If it contains architecture information (environments, deployment patterns, auth flows), incorporate key facts into `harness/docs/architecture/README.md`.
+   3. If it contains operational procedures (setup, troubleshooting, debugging), add reference links to `harness/docs/runbooks/development.md`.
+   4. Do NOT duplicate the full content — reference the original file and extract only durable facts that affect how the AI agent should work.
+
    For each discovered script:
    1. Read and summarize its purpose in `harness/docs/brownfield/inventory.md`.
    2. Document relevant commands in `harness/docs/runbooks/development.md`.
    3. Flag any scripts that modify infrastructure, deploy, or handle secrets as risk zones in `manifest.yaml`.
+
+   #### Detect cross-service dependencies
+
+   In monorepo projects, scan for coupling between services:
+
+   1. **Database coupling via compose.yaml**: Read `compose.yaml`/`docker-compose.yaml` and look for volume mounts from one service into database init directories (e.g., `docker-entrypoint-initdb.d`). This reveals which service owns the DB schema and which services share the same database.
+   2. **Shared database pattern**: If service A provides SQL init scripts and service B connects to the same database (via shared environment variables like `DB_HOST`, `POSTGRES_*`), document this in `harness/docs/architecture/README.md` under a "Cross-service dependencies" section:
+      - Which service owns the schema
+      - Which services read/write to the same DB
+      - The risk: schema changes in the owner service can break dependent services
+   3. **Add to risk zones**: Add the schema source path to `manifest.yaml` risk zones with reason "DB schema source — changes affect all services sharing this database".
+   4. **Architecture doc update**: In `harness/docs/architecture/README.md`, add a "System Boundaries" or "Cross-service Dependencies" section documenting discovered coupling patterns.
 
    #### Migrate existing domain knowledge
 
    After brownfield inventory, check for pre-existing knowledge files that contain domain facts:
    - `MEMORY.md`, `AGENTS.md`, `AI_CONTEXT.md`, `.cursorrules`, `.clinerules`
    - Any `docs/` directory with domain-specific documentation
+   - **Service-level instruction files** in monorepos: check each service directory for `CLAUDE.md`, `AGENTS.md`, `README.md`, or similar files that contain domain-specific technical facts (frameworks, test strategies, build patterns)
 
    If found:
    1. Read each file and identify verified domain facts (not hypotheses or preferences).
    2. For each distinct domain area discovered, create a corresponding file in `harness/docs/domains/` (e.g., `data-fetcher.md`, `auth.md`, `payments.md`).
    3. Transfer only factual, verified knowledge — parsing rules, API contracts, architectural patterns, naming conventions, known limitations.
-   4. Do NOT transfer: personal preferences, IDE settings, temporary workarounds, or unverified hypotheses (those go to `harness/state/unknowns.md`).
-   5. Log which source files were processed and what was migrated in the finish summary.
+   4. For service-level files (e.g., `services/catchy-api/CLAUDE.md`), create a dedicated domain doc per service (e.g., `harness/docs/domains/catchy-api.md`) and update `manifest.yaml` service entries with confirmed technical details (framework versions, test tools, build commands) replacing any `inferred` markers.
+   5. Do NOT transfer: personal preferences, IDE settings, temporary workarounds, or unverified hypotheses (those go to `harness/state/unknowns.md`).
+   6. Log which source files were processed and what was migrated in the finish summary.
 
 6. **Bootstrap memory**
    Record:

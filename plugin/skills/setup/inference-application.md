@@ -73,6 +73,7 @@ These signals are used during dynamic approvals population (not placeholders —
 | Environment files | `.env*` files at root or in service directories | `env_secrets_change` |
 | CI/CD configs | `.github/workflows/`, `.gitlab-ci.yml`, `Jenkinsfile` | `infra_change` |
 | Docker configs | `Dockerfile*`, `docker-compose*.yml` | `infra_change` |
+| DB init scripts | `compose.yaml`/`docker-compose.yaml` volumes → `docker-entrypoint-initdb.d` source paths (e.g., `**/init/*.sql`) | `db_schema_change` |
 
 ## Decision Rules
 
@@ -93,3 +94,16 @@ These signals are used during dynamic approvals population (not placeholders —
   - Treat root-level command inferences as LOW (ask user which service is primary).
   - Per-service command inferences follow normal confidence rules within each service directory.
 - **Polyglot**: If 2+ languages are detected with roughly equal presence, infer the primary from the root config file. If ambiguous, treat as LOW.
+
+## Brownfield Knowledge Sources
+
+During brownfield setup, these existing files are scanned for domain knowledge to migrate into `harness/docs/`:
+
+| Source | What to extract | Target |
+|--------|----------------|--------|
+| `MEMORY.md`, `AGENTS.md`, `AI_CONTEXT.md` | Domain facts, constraints, patterns | `harness/docs/domains/<area>.md` |
+| `.cursorrules`, `.clinerules` | Project rules, coding conventions | `harness/docs/constraints/project-constraints.md` |
+| `docs/infrastructure.md`, `docs/architecture.md` | Environment structure, deployment patterns, auth flows | `harness/docs/architecture/README.md` |
+| `docs/*.md` (other) | Operational procedures, troubleshooting | `harness/docs/runbooks/development.md` |
+| `<service>/CLAUDE.md`, `<service>/AGENTS.md` | Service-specific tech stack, test strategy, build patterns | `harness/docs/domains/<service>.md` |
+| `compose.yaml`, `docker-compose.yaml` | Service topology, DB coupling, volume mounts | `harness/docs/architecture/README.md` |
