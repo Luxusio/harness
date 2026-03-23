@@ -1,0 +1,53 @@
+{
+  "canonical_subject_key": "unknown.be.committe",
+  "has_conflict": false,
+  "latest_active_record_id": null,
+  "record_count": 1,
+  "records": [
+    {
+      "authority": "observed",
+      "canonical_subject_key": "unknown.be.committe",
+      "id": "mem:open_question:unknown.harness.should.compiled.memory.index.be.committe:8e3d4a14",
+      "index_status": "resolved",
+      "kind": "open_question",
+      "provenance": {
+        "locator": "Resolved",
+        "source_path": "harness/state/unknowns.md",
+        "source_section": "Resolved",
+        "source_type": "state"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [
+          "mem:decision:adr.0002.adr.0002.shared.compiled.memory.index.architecture:42b1595b"
+        ],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "harness",
+          "unknowns"
+        ],
+        "paths": [
+          "harness/state/unknowns.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Should compiled memory index be committed to git for cross-session sharing?",
+      "subject_key": "unknown.harness.should.compiled.memory.index.be.committe",
+      "tags": [
+        "harness",
+        "open_question",
+        "state",
+        "unknowns"
+      ],
+      "temporal": {
+        "documented_at": "2026-03-24",
+        "effective_at": null,
+        "last_verified_at": "2026-03-24"
+      }
+    }
+  ]
+}

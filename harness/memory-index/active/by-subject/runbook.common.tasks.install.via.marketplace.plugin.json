@@ -2,6 +2,7 @@
   "records": [
     {
       "authority": "confirmed",
+      "canonical_subject_key": "runbook.marketplace.plugin",
       "id": "mem:runbook_note:runbook.common.tasks.install.via.marketplace.plugin:f9b1a771",
       "index_status": "active",
       "kind": "runbook_note",
@@ -29,7 +30,11 @@
       "source_status": null,
       "statement": "Install via marketplace: `/plugin marketplace add https://github.com/Luxusio/harness.git` then `/plugin install harness@harness`",
       "subject_key": "runbook.common.tasks.install.via.marketplace.plugin",
-      "tags": [],
+      "tags": [
+        "doc",
+        "runbook_note",
+        "runbooks"
+      ],
       "temporal": {
         "documented_at": null,
         "effective_at": null,

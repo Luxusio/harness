@@ -62,11 +62,21 @@ Each record has:
 - `relations` — supersedes, extends, resolves, conflicts_with links
 - `tags` — free-form labels
 
+## Query capabilities
+
+- **Structured query parsing**: operator tokens (before, after, latest), identifier references (ADR-NNNN, REQ-NNNN), path filters, and lexical content are separated before shard selection — operators do not pollute lexical scoring
+- **Targeted shard loading**: by-source-path and by-identifier shards are loaded for precise queries; full index scan is avoided by default; lexical rescue activates only when targeted recall is weak
+- **Admission gate**: a positive match signal is required for a record to be included; authority is a rank modifier, not an entry gate
+- **Pack output**: `--format pack` returns structured JSON with `facts` (pre-scored records with all fields), `source_files_to_verify`, and `unresolved_conflicts` for orchestrator consumption
+- **Explain mode**: `--explain` shows per-result admission reason and score breakdown for debugging
+
 ## Scope indexing
 
-`active/by-domain/` and `active/by-path/` are populated on every rebuild.
+`active/by-domain/`, `active/by-path/`, `active/by-source-path/`, and `active/by-identifier/` are populated on every rebuild.
 - `by-domain/<domain>.json` — all active records scoped to a domain (e.g., `plugin`, `harness`, `memory`)
 - `by-path/<encoded-path>.json` — all active records scoped to a specific file or directory path
+- `by-source-path/<encoded-path>.json` — all active records grouped by provenance source file
+- `by-identifier/<identifier>.json` — all active records referencing a specific ADR or REQ identifier
 
 Use `--paths` flag in `query-memory.sh` to filter by path scope.
 
@@ -118,13 +128,17 @@ Subject keys are derived per source type to ensure stable, collision-free identi
 ## Current limitations
 
 **What works:**
-- Scope indexing (by-domain, by-path) is active on every rebuild
+- Scope indexing (by-domain, by-path, by-source-path, by-identifier) is active on every rebuild
 - Supersession edges populated for ADRs with `supersedes` frontmatter
 - Resolved unknowns generate `resolves` edges
-- Query planner loads only relevant shards (not full index)
-- Admission gate filters out unrelated high-authority records
+- Targeted shard loading (by-source-path, by-identifier) — not full index scan by default
+- Admission gate requires match signal; authority is rank modifier only
+- Operator tokens (before, after, latest) are separated from lexical scoring
 
-**What is planned but not yet active:**
+**What is partial or not yet active:**
+- Canonical subject grouping is incremental — not all related facts share a canonical key yet; coverage grows with each rebuild
+- Temporal comparators (before/after IDENTIFIER) work for explicit identifiers (ADR-NNNN, REQ-NNNN) but not for freeform date ranges
+- Conflict detection is basic: same subject_key with different authority levels triggers a conflict; semantic contradiction detection is not implemented
 - Freeform docs (runbooks, constraints, requirements) do not automatically generate cross-reference edges
 - `extends` and `conflicts_with` edges are sparse — only populated when explicitly declared in source frontmatter
 - Full-text semantic similarity across shards is not implemented; scoring is keyword + authority-weighted

@@ -2,6 +2,7 @@
   "records": [
     {
       "authority": "observed",
+      "canonical_subject_key": "recent.code.plug",
       "id": "mem:observed_fact:recent.2026-03-20.observed_fact.project.is.greenfield.claude.code.plug:01189315",
       "index_status": "active",
       "kind": "observed_fact",
@@ -29,7 +30,11 @@
       "source_status": null,
       "statement": "Project is greenfield \u2014 Claude Code plugin with no source code",
       "subject_key": "recent.2026-03-20.observed_fact.project.is.greenfield.claude.code.plug",
-      "tags": [],
+      "tags": [
+        "observed_fact",
+        "recent-context",
+        "state"
+      ],
       "temporal": {
         "documented_at": "2026-03-20",
         "effective_at": null,

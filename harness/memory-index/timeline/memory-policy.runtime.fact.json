@@ -1,0 +1,49 @@
+{
+  "canonical_subject_key": "memory-policy.runtime.fact",
+  "has_conflict": false,
+  "latest_active_record_id": "mem:constraint:memory-policy.persist.auto.verified.runtime.fact:baf4755f",
+  "record_count": 1,
+  "records": [
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.runtime.fact",
+      "id": "mem:constraint:memory-policy.persist.auto.verified.runtime.fact:baf4755f",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.auto",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.auto",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "auto-record: verified_runtime_fact",
+      "subject_key": "memory-policy.persist.auto.verified.runtime.fact",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ]
+}

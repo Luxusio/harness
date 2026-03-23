@@ -1,0 +1,49 @@
+{
+  "canonical_subject_key": "memory-policy.rule.interpretation",
+  "has_conflict": false,
+  "latest_active_record_id": "mem:constraint:memory-policy.persist.ask.business.rule.interpretation:d48bcc78",
+  "record_count": 1,
+  "records": [
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.rule.interpretation",
+      "id": "mem:constraint:memory-policy.persist.ask.business.rule.interpretation:d48bcc78",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.ask_first",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.ask_first",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "ask-first before recording: business_rule_interpretation",
+      "subject_key": "memory-policy.persist.ask.business.rule.interpretation",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ]
+}

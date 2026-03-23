@@ -2,6 +2,7 @@
   "records": [
     {
       "authority": "observed",
+      "canonical_subject_key": "arch.approvals.mem",
       "id": "mem:observed_fact:arch.source.of.truth.dura.harness.policies.approvals.mem:040bc7e4",
       "index_status": "active",
       "kind": "observed_fact",
@@ -22,12 +23,18 @@
         "domains": [
           "architecture"
         ],
-        "paths": []
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
       },
       "source_status": null,
       "statement": "`harness/policies/*` \u2014 approvals, memory policy",
       "subject_key": "arch.source.of.truth.dura.harness.policies.approvals.mem",
-      "tags": [],
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
       "temporal": {
         "documented_at": null,
         "effective_at": null,

@@ -1,0 +1,49 @@
+{
+  "canonical_subject_key": "arch.by.do",
+  "has_conflict": false,
+  "latest_active_record_id": "mem:observed_fact:arch.compiled.index.gener.scope.indexing.is.active.by.do:03dbfd2f",
+  "record_count": 1,
+  "records": [
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.by.do",
+      "id": "mem:observed_fact:arch.compiled.index.gener.scope.indexing.is.active.by.do:03dbfd2f",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Compiled index (generated, machine-optimized)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Compiled index (generated, machine-optimized)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Scope indexing is active: `by-domain/` and `by-path/` are populated on each rebuild",
+      "subject_key": "arch.compiled.index.gener.scope.indexing.is.active.by.do",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ]
+}

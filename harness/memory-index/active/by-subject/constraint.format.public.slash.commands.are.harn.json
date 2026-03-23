@@ -2,6 +2,7 @@
   "records": [
     {
       "authority": "confirmed",
+      "canonical_subject_key": "constraint.are.harn",
       "id": "mem:constraint:constraint.format.public.slash.commands.are.harn:0fe6618c",
       "index_status": "active",
       "kind": "constraint",
@@ -29,7 +30,11 @@
       "source_status": null,
       "statement": "Public slash commands are `/harness:setup` and `/harness:validate`. Ordinary work should proceed in plain language; workflow skills remain hidden and auto-routed. Scope: plugin UX. Reason: users should not memorize workflow commands, but diagnostics remain explicit.",
       "subject_key": "constraint.format.public.slash.commands.are.harn",
-      "tags": [],
+      "tags": [
+        "constraint",
+        "constraints",
+        "doc"
+      ],
       "temporal": {
         "documented_at": "2026-03-20",
         "effective_at": null,

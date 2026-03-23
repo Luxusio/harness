@@ -2,6 +2,7 @@
   "records": [
     {
       "authority": "observed",
+      "canonical_subject_key": "recent.generates.entire",
       "id": "mem:observed_fact:recent.2026-03-20.risk_zone.plugin.skills.setup.generates.entire:c564f82e",
       "index_status": "active",
       "kind": "observed_fact",
@@ -29,7 +30,11 @@
       "source_status": null,
       "statement": "plugin/skills/setup/ \u2014 generates entire control plane for new repos",
       "subject_key": "recent.2026-03-20.risk_zone.plugin.skills.setup.generates.entire",
-      "tags": [],
+      "tags": [
+        "observed_fact",
+        "recent-context",
+        "state"
+      ],
       "temporal": {
         "documented_at": "2026-03-20",
         "effective_at": null,

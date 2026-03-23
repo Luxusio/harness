@@ -1,0 +1,743 @@
+{
+  "path_key": "harness.policies.memory.policy.yaml",
+  "records": [
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.architecture.principle",
+      "id": "mem:constraint:memory-policy.persist.ask.architecture.principle:55f37892",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.ask_first",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.ask_first",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "ask-first before recording: architecture_principle",
+      "subject_key": "memory-policy.persist.ask.architecture.principle",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.behavior.policy",
+      "id": "mem:constraint:memory-policy.persist.ask.breaking.behavior.policy:403f2d00",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.ask_first",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.ask_first",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "ask-first before recording: breaking_behavior_policy",
+      "subject_key": "memory-policy.persist.ask.breaking.behavior.policy",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.rule.interpretation",
+      "id": "mem:constraint:memory-policy.persist.ask.business.rule.interpretation:d48bcc78",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.ask_first",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.ask_first",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "ask-first before recording: business_rule_interpretation",
+      "subject_key": "memory-policy.persist.ask.business.rule.interpretation",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.contract.meaning",
+      "id": "mem:constraint:memory-policy.persist.ask.external.contract.meaning:76ce5edb",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.ask_first",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.ask_first",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "ask-first before recording: external_contract_meaning",
+      "subject_key": "memory-policy.persist.ask.external.contract.meaning",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.ownership.assignment",
+      "id": "mem:constraint:memory-policy.persist.ask.ownership.assignment:4b9d3792",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.ask_first",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.ask_first",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "ask-first before recording: ownership_assignment",
+      "subject_key": "memory-policy.persist.ask.ownership.assignment",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.approval.rule",
+      "id": "mem:constraint:memory-policy.persist.auto.explicit.user.approval.rule:1bfc5e86",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.auto",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.auto",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "auto-record: explicit_user_approval_rule",
+      "subject_key": "memory-policy.persist.auto.explicit.user.approval.rule",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.user.constraint",
+      "id": "mem:constraint:memory-policy.persist.auto.explicit.user.constraint:a4c1b75a",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.auto",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.auto",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "auto-record: explicit_user_constraint",
+      "subject_key": "memory-policy.persist.auto.explicit.user.constraint",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.project.pattern",
+      "id": "mem:constraint:memory-policy.persist.auto.repeated.project.pattern:3c2d9ae5",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.auto",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.auto",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "auto-record: repeated_project_pattern",
+      "subject_key": "memory-policy.persist.auto.repeated.project.pattern",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.architecture.fact",
+      "id": "mem:constraint:memory-policy.persist.auto.verified.architecture.fact:dbfe791e",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.auto",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.auto",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "auto-record: verified_architecture_fact",
+      "subject_key": "memory-policy.persist.auto.verified.architecture.fact",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.root.cause",
+      "id": "mem:constraint:memory-policy.persist.auto.verified.bug.root.cause:cc876610",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.auto",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.auto",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "auto-record: verified_bug_root_cause",
+      "subject_key": "memory-policy.persist.auto.verified.bug.root.cause",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.runtime.fact",
+      "id": "mem:constraint:memory-policy.persist.auto.verified.runtime.fact:baf4755f",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.auto",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.auto",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "auto-record: verified_runtime_fact",
+      "subject_key": "memory-policy.persist.auto.verified.runtime.fact",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.duplicate.memory",
+      "id": "mem:constraint:memory-policy.persist.never.duplicate.memory:5bd0732b",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.never",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.never",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "never record: duplicate_memory",
+      "subject_key": "memory-policy.persist.never.duplicate.memory",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.emotional.comment",
+      "id": "mem:constraint:memory-policy.persist.never.emotional.comment:55f60754",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.never",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.never",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "never record: emotional_comment",
+      "subject_key": "memory-policy.persist.never.emotional.comment",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.irrelevant.preference",
+      "id": "mem:constraint:memory-policy.persist.never.repo.irrelevant.preference:289301a8",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.never",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.never",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "never record: repo_irrelevant_preference",
+      "subject_key": "memory-policy.persist.never.repo.irrelevant.preference",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.transient.chat",
+      "id": "mem:constraint:memory-policy.persist.never.transient.chat:4995a8b7",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.never",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.never",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "never record: transient_chat",
+      "subject_key": "memory-policy.persist.never.transient.chat",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.as.fact",
+      "id": "mem:constraint:memory-policy.persist.never.unverified.guess.as.fact:34f6fa20",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.never",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.never",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "never record: unverified_guess_as_fact",
+      "subject_key": "memory-policy.persist.never.unverified.guess.as.fact",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.to.enforced",
+      "id": "mem:constraint:memory-policy.promotion.confirmed.to.enforced:65e7a84f",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "promotion",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "promotion",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "promotion: confirmed\u2192enforced requires test_added, validation_script_added, config_assertion_added",
+      "subject_key": "memory-policy.promotion.confirmed.to.enforced",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "canonical_subject_key": "memory-policy.observed.fact",
+      "id": "mem:constraint:memory-policy.promotion.hypothesis.to.observed.fact:a3ef31a1",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "promotion",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "promotion",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
+      },
+      "source_status": null,
+      "statement": "promotion: hypothesis\u2192observed_fact requires code_evidence, test_or_runtime_evidence, from:",
+      "subject_key": "memory-policy.promotion.hypothesis.to.observed.fact",
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ]
+}

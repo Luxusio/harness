@@ -1,0 +1,49 @@
+{
+  "canonical_subject_key": "arch.via.inclu",
+  "has_conflict": false,
+  "latest_active_record_id": "mem:observed_fact:arch.local.overlay.per.se.merged.at.query.time.via.inclu:087eafe4",
+  "record_count": 1,
+  "records": [
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.via.inclu",
+      "id": "mem:observed_fact:arch.local.overlay.per.se.merged.at.query.time.via.inclu:087eafe4",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Local overlay (per-session, gitignored)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Local overlay (per-session, gitignored)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Merged at query time via `--include-overlay` flag, overrides compiled index for same subject",
+      "subject_key": "arch.local.overlay.per.se.merged.at.query.time.via.inclu",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ]
+}

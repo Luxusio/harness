@@ -1,0 +1,252 @@
+{
+  "records": [
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "constraint.inventory.pr",
+      "id": "mem:constraint:constraint.format.brownfield.always.inventory.pr:3fd91327",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "Format",
+        "source_path": "harness/docs/constraints/project-constraints.md",
+        "source_section": "Format",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "harness/docs/constraints/project-constraints.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Brownfield: always inventory \u2192 protect \u2192 encode \u2192 constrain \u2192 operate. Never jump to editing. Scope: brownfield-adoption. Reason: prevents dangerous modifications in unfamiliar code.",
+      "subject_key": "constraint.format.brownfield.always.inventory.pr",
+      "tags": [
+        "constraint",
+        "constraints",
+        "doc"
+      ],
+      "temporal": {
+        "documented_at": "2026-03-20",
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "constraint.close.a",
+      "id": "mem:constraint:constraint.format.every.code.change.must.close.a:7d46ca1d",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "Format",
+        "source_path": "harness/docs/constraints/project-constraints.md",
+        "source_section": "Format",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "harness/docs/constraints/project-constraints.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Every code change must close a validation loop with evidence. Scope: all workflows. Reason: \"code was written\" is not proof \u2014 \"change was verified\" is.",
+      "subject_key": "constraint.format.every.code.change.must.close.a",
+      "tags": [
+        "constraint",
+        "constraints",
+        "doc"
+      ],
+      "temporal": {
+        "documented_at": "2026-03-20",
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "constraint.unverified.guesses",
+      "id": "mem:constraint:constraint.format.never.store.unverified.guesses:c50bd6db",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "Format",
+        "source_path": "harness/docs/constraints/project-constraints.md",
+        "source_section": "Format",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "harness/docs/constraints/project-constraints.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Never store unverified guesses as confirmed facts. Memory promotion: hypothesis \u2192 observed_fact \u2192 confirmed \u2192 enforced. Scope: all memory operations. Reason: core product principle.",
+      "subject_key": "constraint.format.never.store.unverified.guesses",
+      "tags": [
+        "constraint",
+        "constraints",
+        "doc"
+      ],
+      "temporal": {
+        "documented_at": "2026-03-20",
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "constraint.structure.plu",
+      "id": "mem:constraint:constraint.format.plugin.directory.structure.plu:9e5eaf8d",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "Format",
+        "source_path": "harness/docs/constraints/project-constraints.md",
+        "source_section": "Format",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "plugin",
+          "harness/docs/constraints/project-constraints.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Plugin directory structure (`plugin/`) must be preserved as-is. Scope: repo structure. Reason: user requirement \u2014 do not flatten into root.",
+      "subject_key": "constraint.format.plugin.directory.structure.plu",
+      "tags": [
+        "constraint",
+        "constraints",
+        "doc"
+      ],
+      "temporal": {
+        "documented_at": "2026-03-20",
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "constraint.enforcement.",
+      "id": "mem:constraint:constraint.format.prefer.executable.enforcement.:ae3df3a2",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "Format",
+        "source_path": "harness/docs/constraints/project-constraints.md",
+        "source_section": "Format",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "harness/docs/constraints/project-constraints.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Prefer executable enforcement over documentation: test > lint rule > config assertion > docs. Scope: decision capture and rule encoding. Reason: docs alone don't prevent violations.",
+      "subject_key": "constraint.format.prefer.executable.enforcement.",
+      "tags": [
+        "constraint",
+        "constraints",
+        "doc"
+      ],
+      "temporal": {
+        "documented_at": "2026-03-20",
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "constraint.are.harn",
+      "id": "mem:constraint:constraint.format.public.slash.commands.are.harn:0fe6618c",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "Format",
+        "source_path": "harness/docs/constraints/project-constraints.md",
+        "source_section": "Format",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "harness/docs/constraints/project-constraints.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Public slash commands are `/harness:setup` and `/harness:validate`. Ordinary work should proceed in plain language; workflow skills remain hidden and auto-routed. Scope: plugin UX. Reason: users should not memorize workflow commands, but diagnostics remain explicit.",
+      "subject_key": "constraint.format.public.slash.commands.are.harn",
+      "tags": [
+        "constraint",
+        "constraints",
+        "doc"
+      ],
+      "temporal": {
+        "documented_at": "2026-03-20",
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ],
+  "source_path_key": "harness__docs__constraints__project-constraints_md"
+}

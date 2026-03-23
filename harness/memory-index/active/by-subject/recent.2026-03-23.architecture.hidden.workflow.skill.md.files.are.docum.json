@@ -2,6 +2,7 @@
   "records": [
     {
       "authority": "observed",
+      "canonical_subject_key": "recent.are.docum",
       "id": "mem:observed_fact:recent.2026-03-23.architecture.hidden.workflow.skill.md.files.are.docum:94cde3b0",
       "index_status": "active",
       "kind": "observed_fact",
@@ -29,7 +30,11 @@
       "source_status": null,
       "statement": "hidden workflow SKILL.md files are documented as internal procedure docs read by the orchestrator",
       "subject_key": "recent.2026-03-23.architecture.hidden.workflow.skill.md.files.are.docum",
-      "tags": [],
+      "tags": [
+        "observed_fact",
+        "recent-context",
+        "state"
+      ],
       "temporal": {
         "documented_at": "2026-03-23",
         "effective_at": null,

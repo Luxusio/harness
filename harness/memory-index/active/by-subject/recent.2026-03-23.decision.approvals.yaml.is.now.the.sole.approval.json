@@ -2,6 +2,7 @@
   "records": [
     {
       "authority": "observed",
+      "canonical_subject_key": "recent.sole.approval",
       "id": "mem:decision:recent.2026-03-23.decision.approvals.yaml.is.now.the.sole.approval:e91327e9",
       "index_status": "active",
       "kind": "decision",
@@ -29,7 +30,11 @@
       "source_status": null,
       "statement": "approvals.yaml is now the sole approval-gate source; manifest no longer carries approval defaults",
       "subject_key": "recent.2026-03-23.decision.approvals.yaml.is.now.the.sole.approval",
-      "tags": [],
+      "tags": [
+        "decision",
+        "recent-context",
+        "state"
+      ],
       "temporal": {
         "documented_at": "2026-03-23",
         "effective_at": null,

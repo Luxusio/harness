@@ -1,6 +1,6 @@
 {
-  "multi_record_subjects": 0,
-  "record_count": 87,
+  "multi_record_subjects": 1,
+  "record_count": 94,
   "schema_version": 1,
   "sources": [
     "docs/architecture/README",

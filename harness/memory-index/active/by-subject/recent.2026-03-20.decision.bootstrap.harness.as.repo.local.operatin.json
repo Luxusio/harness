@@ -2,6 +2,7 @@
   "records": [
     {
       "authority": "observed",
+      "canonical_subject_key": "recent.local.operatin",
       "id": "mem:decision:recent.2026-03-20.decision.bootstrap.harness.as.repo.local.operatin:90e135b1",
       "index_status": "active",
       "kind": "decision",
@@ -29,7 +30,11 @@
       "source_status": null,
       "statement": "Bootstrap harness as repo-local operating system",
       "subject_key": "recent.2026-03-20.decision.bootstrap.harness.as.repo.local.operatin",
-      "tags": [],
+      "tags": [
+        "decision",
+        "recent-context",
+        "state"
+      ],
       "temporal": {
         "documented_at": "2026-03-20",
         "effective_at": null,

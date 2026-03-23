@@ -2,6 +2,7 @@
   "records": [
     {
       "authority": "enforced",
+      "canonical_subject_key": "memory-policy.rule.interpretation",
       "id": "mem:constraint:memory-policy.persist.ask.business.rule.interpretation:d48bcc78",
       "index_status": "active",
       "kind": "constraint",
@@ -22,12 +23,18 @@
         "domains": [
           "memory-policy"
         ],
-        "paths": []
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
       },
       "source_status": null,
       "statement": "ask-first before recording: business_rule_interpretation",
       "subject_key": "memory-policy.persist.ask.business.rule.interpretation",
-      "tags": [],
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
       "temporal": {
         "documented_at": null,
         "effective_at": null,

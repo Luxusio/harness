@@ -1,0 +1,49 @@
+{
+  "canonical_subject_key": "runbook.plugin.",
+  "has_conflict": false,
+  "latest_active_record_id": "mem:runbook_note:runbook.commands.test.claude.plugin.dir.plugin.:624ed93a",
+  "record_count": 1,
+  "records": [
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "runbook.plugin.",
+      "id": "mem:runbook_note:runbook.commands.test.claude.plugin.dir.plugin.:624ed93a",
+      "index_status": "active",
+      "kind": "runbook_note",
+      "provenance": {
+        "locator": "Commands",
+        "source_path": "harness/docs/runbooks/development.md",
+        "source_section": "Commands",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Test: `claude --plugin-dir ./plugin --print 'list harness skills'`",
+      "subject_key": "runbook.commands.test.claude.plugin.dir.plugin.",
+      "tags": [
+        "doc",
+        "runbook_note",
+        "runbooks"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ]
+}

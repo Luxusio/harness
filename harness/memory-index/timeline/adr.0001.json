@@ -1,0 +1,52 @@
+{
+  "canonical_subject_key": "adr.0001",
+  "has_conflict": false,
+  "latest_active_record_id": null,
+  "record_count": 1,
+  "records": [
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "adr.0001",
+      "id": "mem:decision:adr.0001.adr.0001.harness.bootstrap:a92bb49b",
+      "index_status": "superseded",
+      "kind": "decision",
+      "provenance": {
+        "locator": "ADR-0001: harness bootstrap",
+        "source_path": "harness/docs/decisions/ADR-0001-harness-bootstrap.md",
+        "source_section": "ADR-0001: harness bootstrap",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "decisions"
+        ],
+        "paths": [
+          "harness",
+          "harness/docs",
+          "harness/scripts",
+          "harness/docs/decisions/ADR-0001-harness-bootstrap.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Bootstrap harness as the repo-local operating system: `harness/` for routing, policies, and working state `harness/docs/` for durable knowledge (constraints, decisions, domains, runbooks) `harness/scripts/` for validation and architecture checks",
+      "subject_key": "adr.0001.adr.0001.harness.bootstrap",
+      "tags": [
+        "decision",
+        "decisions",
+        "doc"
+      ],
+      "temporal": {
+        "documented_at": "2026-03-20",
+        "effective_at": "2026-03-20",
+        "last_verified_at": null
+      }
+    }
+  ]
+}

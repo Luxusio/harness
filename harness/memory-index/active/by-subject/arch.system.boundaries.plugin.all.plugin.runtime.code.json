@@ -2,6 +2,7 @@
   "records": [
     {
       "authority": "confirmed",
+      "canonical_subject_key": "arch.runtime.code",
       "id": "mem:constraint:arch.system.boundaries.plugin.all.plugin.runtime.code:2fddb8f0",
       "index_status": "active",
       "kind": "constraint",
@@ -22,12 +23,18 @@
         "domains": [
           "architecture"
         ],
-        "paths": []
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
       },
       "source_status": null,
       "statement": "`plugin/` \u2014 all plugin runtime code (skills, agents, hooks, scripts)",
       "subject_key": "arch.system.boundaries.plugin.all.plugin.runtime.code",
-      "tags": [],
+      "tags": [
+        "architecture",
+        "constraint",
+        "doc"
+      ],
       "temporal": {
         "documented_at": null,
         "effective_at": null,

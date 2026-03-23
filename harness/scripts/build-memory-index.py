@@ -77,6 +77,15 @@ def slugify(text: str) -> str:
     return text[:80]  # cap length
 
 
+def normalize_path_key(path: str) -> str:
+    """Normalize a file path to a deterministic, reversible index key.
+    Used by both build and query to match path-based shards."""
+    path = path.strip("/")
+    # Replace / with __ and . with _ for filesystem-safe keys
+    key = path.replace("/", "__").replace(".", "_")
+    return key[:80]
+
+
 def write_json(path: Path, obj) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     content = json.dumps(obj, indent=2, sort_keys=True) + "\n"
@@ -151,6 +160,44 @@ def apply_default_scope(rec: dict) -> None:
         src = rec["provenance"].get("source_path", "")
         if src:
             rec["scope"]["paths"] = [src]
+
+
+def ensure_source_path_in_scope(rec: dict) -> None:
+    """Ensure the record's provenance source_path is in scope.paths."""
+    src = rec.get("provenance", {}).get("source_path", "")
+    if src and src not in rec["scope"]["paths"]:
+        rec["scope"]["paths"].append(src)
+
+
+def generate_tags(rec: dict) -> list:
+    """Generate tags from kind, domains, and source_type."""
+    tags = [rec["kind"]]
+    for d in rec.get("scope", {}).get("domains", []):
+        tags.append(d)
+    src_type = rec.get("provenance", {}).get("source_type", "")
+    if src_type:
+        tags.append(src_type)
+    return sorted(set(tags))
+
+
+def compute_canonical_key(rec: dict) -> str:
+    """Compute a canonical subject key for timeline grouping."""
+    sk = rec.get("subject_key", "")
+    # ADR/REQ: use just the number
+    m = re.match(r"(adr|req)\.(\d+)", sk)
+    if m:
+        return f"{m.group(1)}.{m.group(2)}"
+    # Approvals: already stable
+    if sk.startswith("approval."):
+        return sk
+    # For topic-based facts, take first prefix + last 2 significant parts
+    parts = sk.split(".")
+    if len(parts) >= 3:
+        return f"{parts[0]}.{'.'.join(parts[-2:])}"
+    return sk
+
+
+IDENT_RE = re.compile(r'\b(ADR-\d+|REQ-\d+)\b', re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -507,6 +554,10 @@ def parse_approvals(src: str, rel_path: str) -> list:
             rec["scope"]["paths"] = extracted
             records.append(rec)
 
+    # Ensure every approval record includes the source file in scope.paths
+    for rec in records:
+        ensure_source_path_in_scope(rec)
+
     return records
 
 
@@ -672,6 +723,10 @@ def parse_memory_policy(src: str, rel_path: str) -> list:
         rec["authority"] = "enforced"
         rec["scope"]["domains"] = ["memory-policy"]
         records.append(rec)
+
+    # Ensure every memory-policy record includes the source file in scope.paths
+    for rec in records:
+        ensure_source_path_in_scope(rec)
 
     return records
 
@@ -917,6 +972,12 @@ def build_index(repo_root: Path, output_dir: Path) -> None:
     # Third pass: cross-source deduplication (near-duplicates link via extends)
     deduplicate_cross_source(all_records)
 
+    # Enrich all records: tags, source-path scope, canonical_subject_key
+    for rec in all_records:
+        ensure_source_path_in_scope(rec)
+        rec["tags"] = generate_tags(rec)
+        rec["canonical_subject_key"] = compute_canonical_key(rec)
+
     # Stable sort by id
     all_records.sort(key=lambda r: r["id"])
 
@@ -959,22 +1020,76 @@ def build_index(repo_root: Path, output_dir: Path) -> None:
         write_json(output_dir / "active" / "by-path" / f"{path_key}.json",
                    {"path_key": path_key, "records": sorted(recs, key=lambda r: r["id"])})
 
-    # Build timeline/ — group all records by subject_key across time
+    # Build active/by-source-path/ — group active records by provenance.source_path
+    by_source_path: dict = {}
+    for rec in all_records:
+        if rec["index_status"] != "active":
+            continue
+        src = rec.get("provenance", {}).get("source_path", "")
+        if src:
+            key = normalize_path_key(src)
+            by_source_path.setdefault(key, []).append(rec)
+
+    for key, recs in sorted(by_source_path.items()):
+        write_json(output_dir / "active" / "by-source-path" / f"{key}.json",
+                   {"records": sorted(recs, key=lambda r: r["id"]), "source_path_key": key})
+
+    # Build active/by-identifier/ — index by ADR-NNNN / REQ-NNNN identifiers
+    SUBJ_ADR_RE = re.compile(r'^(adr|req)\.(\d+)')
+    by_identifier: dict = {}
+    for rec in all_records:
+        if rec["index_status"] != "active":
+            continue
+        # Synthesize identifier from subject_key pattern adr.NNNN / req.NNNN
+        sm = SUBJ_ADR_RE.match(rec.get("subject_key", ""))
+        if sm:
+            ident = f"{sm.group(1).upper()}-{sm.group(2).zfill(4)}"
+            by_identifier.setdefault(ident, []).append(rec)
+        # Also scan subject_key and statement text for literal ADR-/REQ- references
+        text = f"{rec['subject_key']} {rec['statement']}"
+        for m in IDENT_RE.finditer(text):
+            ident = m.group(1).upper()
+            by_identifier.setdefault(ident, []).append(rec)
+        for rel_type in ("supersedes", "resolves", "extends", "conflicts_with"):
+            for rel_id in rec.get("relations", {}).get(rel_type, []):
+                for m in IDENT_RE.finditer(rel_id):
+                    by_identifier.setdefault(m.group(1).upper(), []).append(rec)
+
+    for ident, recs in sorted(by_identifier.items()):
+        seen: set = set()
+        deduped = []
+        for r in recs:
+            if r["id"] not in seen:
+                seen.add(r["id"])
+                deduped.append(r)
+        write_json(output_dir / "active" / "by-identifier" / f"{ident}.json",
+                   {"identifier": ident, "records": sorted(deduped, key=lambda r: r["id"])})
+
+    # Build timeline/ — group all records by canonical_subject_key
     timeline: dict = {}
     for rec in all_records:
-        sk = rec["subject_key"]
-        timeline.setdefault(sk, []).append(rec)
+        csk = rec.get("canonical_subject_key", rec["subject_key"])
+        timeline.setdefault(csk, []).append(rec)
 
-    for sk, recs in sorted(timeline.items()):
-        write_json(output_dir / "timeline" / f"{sk}.json",
-                   {"records": sorted(recs, key=lambda r: r["id"]), "subject_key": sk})
+    for csk, recs in sorted(timeline.items()):
+        sorted_recs = sorted(recs, key=lambda r: (r.get("temporal", {}).get("documented_at", "") or "", r["id"]))
+        active_recs = [r for r in sorted_recs if r["index_status"] == "active"]
+        latest_id = active_recs[-1]["id"] if active_recs else None
+        has_conflict = len(active_recs) > 1 and len(set(r["authority"] for r in active_recs)) > 1
+        write_json(output_dir / "timeline" / f"{csk}.json", {
+            "canonical_subject_key": csk,
+            "has_conflict": has_conflict,
+            "latest_active_record_id": latest_id,
+            "record_count": len(sorted_recs),
+            "records": sorted_recs,
+        })
 
-    # Count multi-record subjects (same subject_key, 2+ records across ALL records including superseded)
-    subject_count: dict = {}
+    # Count multi-record subjects using canonical_subject_key
+    canonical_count: dict = {}
     for rec in all_records:
-        sk = rec["subject_key"]
-        subject_count[sk] = subject_count.get(sk, 0) + 1
-    multi_record_subjects = sum(1 for c in subject_count.values() if c >= 2)
+        csk = rec.get("canonical_subject_key", rec["subject_key"])
+        canonical_count[csk] = canonical_count.get(csk, 0) + 1
+    multi_record_subjects = sum(1 for c in canonical_count.values() if c >= 2)
     # Also count subjects that have a supersedes relation (old + new = 2+ logical records)
     superseded_subjects = sum(
         1 for rec in all_records if rec["relations"]["supersedes"]

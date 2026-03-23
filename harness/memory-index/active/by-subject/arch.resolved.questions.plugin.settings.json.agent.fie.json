@@ -2,6 +2,7 @@
   "records": [
     {
       "authority": "observed",
+      "canonical_subject_key": "arch.agent.fie",
       "id": "mem:observed_fact:arch.resolved.questions.plugin.settings.json.agent.fie:663b8b37",
       "index_status": "active",
       "kind": "observed_fact",
@@ -22,12 +23,18 @@
         "domains": [
           "architecture"
         ],
-        "paths": []
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
       },
       "source_status": null,
       "statement": "`plugin/settings.json` `\"agent\"` field sets the shipped plugin default main agent. Resolved: 2026-03-22. Outcome: `plugin/settings.json` sets the plugin's default main-thread agent for all users. Project `.claude/settings.json` can override this for local development (e.g., activating `harness:harness-orchestrator` explicitly). These are different configuration levels, not competing settings.",
       "subject_key": "arch.resolved.questions.plugin.settings.json.agent.fie",
-      "tags": [],
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
       "temporal": {
         "documented_at": "2026-03-22",
         "effective_at": null,

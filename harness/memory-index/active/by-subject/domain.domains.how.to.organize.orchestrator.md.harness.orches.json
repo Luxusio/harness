@@ -2,6 +2,7 @@
   "records": [
     {
       "authority": "observed",
+      "canonical_subject_key": "domain.harness.orches",
       "id": "mem:observed_fact:domain.domains.how.to.organize.orchestrator.md.harness.orches:00cbae5e",
       "index_status": "active",
       "kind": "observed_fact",
@@ -22,12 +23,18 @@
         "domains": [
           "domains"
         ],
-        "paths": []
+        "paths": [
+          "harness/docs/domains/README.md"
+        ]
       },
       "source_status": null,
       "statement": "`orchestrator.md` \u2014 harness-orchestrator runtime loop and routing",
       "subject_key": "domain.domains.how.to.organize.orchestrator.md.harness.orches",
-      "tags": [],
+      "tags": [
+        "doc",
+        "domains",
+        "observed_fact"
+      ],
       "temporal": {
         "documented_at": null,
         "effective_at": null,

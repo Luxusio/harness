@@ -2,6 +2,7 @@
   "records": [
     {
       "authority": "confirmed",
+      "canonical_subject_key": "runbook.config.do",
       "id": "mem:runbook_note:runbook.commands.build.none.plugin.is.config.do:4591dd57",
       "index_status": "active",
       "kind": "runbook_note",
@@ -29,7 +30,11 @@
       "source_status": null,
       "statement": "**Build:** (none \u2014 plugin is config/docs only)",
       "subject_key": "runbook.commands.build.none.plugin.is.config.do",
-      "tags": [],
+      "tags": [
+        "doc",
+        "runbook_note",
+        "runbooks"
+      ],
       "temporal": {
         "documented_at": null,
         "effective_at": null,

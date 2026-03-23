@@ -2,6 +2,7 @@
   "records": [
     {
       "authority": "enforced",
+      "canonical_subject_key": "memory-policy.project.pattern",
       "id": "mem:constraint:memory-policy.persist.auto.repeated.project.pattern:3c2d9ae5",
       "index_status": "active",
       "kind": "constraint",
@@ -22,12 +23,18 @@
         "domains": [
           "memory-policy"
         ],
-        "paths": []
+        "paths": [
+          "harness/policies/memory-policy.yaml"
+        ]
       },
       "source_status": null,
       "statement": "auto-record: repeated_project_pattern",
       "subject_key": "memory-policy.persist.auto.repeated.project.pattern",
-      "tags": [],
+      "tags": [
+        "constraint",
+        "memory-policy",
+        "policy"
+      ],
       "temporal": {
         "documented_at": null,
         "effective_at": null,
