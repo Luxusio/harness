@@ -19,8 +19,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
       },
       "source_status": null,
       "statement": "**Build:** (none \u2014 plugin is config/docs only)",
@@ -51,8 +55,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
       },
       "source_status": null,
       "statement": "Dev server: `claude --plugin-dir ./plugin`",
@@ -83,8 +91,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
       },
       "source_status": null,
       "statement": "Install via marketplace: `/plugin marketplace add https://github.com/Luxusio/harness.git` then `/plugin install harness@harness`",
@@ -115,8 +127,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
       },
       "source_status": null,
       "statement": "**Lint:** (none)",
@@ -147,8 +163,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "./plugin"
+        ]
       },
       "source_status": null,
       "statement": "Marketplace install: This repo uses Git-based marketplace add (`/plugin marketplace add <git-url>`). The relative plugin source (`./plugin`) in `marketplace.json` works with Git-based installs. Raw `marketplace.json` URL-based installs are not compatible with this repo's distribution shape.",
@@ -179,8 +199,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
       },
       "source_status": null,
       "statement": "Test: `claude --plugin-dir ./plugin --print 'list harness skills'`",
@@ -211,8 +235,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
       },
       "source_status": null,
       "statement": "Test plugin locally: `claude --plugin-dir ./plugin` then invoke `/harness:setup`",
@@ -243,8 +271,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
       },
       "source_status": null,
       "statement": "Update marketplace clone: `cd ~/.claude/plugins/marketplaces/harness && git fetch origin master && git reset --hard origin/master`",
@@ -275,8 +307,13 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/scripts/smoke.sh",
+          "harness/scripts/validate.sh"
+        ]
       },
       "source_status": null,
       "statement": "Validation scripts: `harness/scripts/validate.sh` and `harness/scripts/smoke.sh` use manifest commands (`harness/manifest.yaml > commands.*`) as their primary source. Auto-detect fallback is used only when a manifest command is empty.",

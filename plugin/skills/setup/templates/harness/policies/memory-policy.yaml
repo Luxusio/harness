@@ -56,25 +56,6 @@ retrieval:
     - recent_related_bugfixes
 
   load_hypotheses_last: true
-
-cleanup:
-  dedupe: true
-  require_last_verified_at: true
-
-compiled_index:
-  root: harness/memory-index
-  is_generated_artifact: true
-  source_of_truth: false
-  manual_edit: never
-  rebuild_after:
-    - harness/docs/**
-    - harness/state/recent-decisions.md
-    - harness/state/unknowns.md
-    - harness/policies/approvals.yaml
-  rebuild_command: "bash harness/scripts/build-memory-index.sh"
-  check_command: "bash harness/scripts/check-memory-index.sh"
-
-retrieval:
   mode: hybrid
   shared_compiled_index_root: harness/memory-index
   local_overlay_root: .harness-cache/memory-overlay
@@ -103,3 +84,20 @@ retrieval:
       - superseded
     conflict_candidate_threshold: 2
     related_unknowns_trigger: true
+
+cleanup:
+  dedupe: true
+  require_last_verified_at: true
+
+compiled_index:
+  root: harness/memory-index
+  is_generated_artifact: true
+  source_of_truth: false
+  manual_edit: never
+  rebuild_after:
+    - harness/docs/**
+    - harness/state/recent-decisions.md
+    - harness/state/unknowns.md
+    - harness/policies/approvals.yaml
+  rebuild_command: "bash harness/scripts/build-memory-index.sh"
+  check_command: "bash harness/scripts/check-memory-index.sh"

@@ -19,7 +19,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "approval-gates"
+        ],
         "paths": []
       },
       "source_status": null,

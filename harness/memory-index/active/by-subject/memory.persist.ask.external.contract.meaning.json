@@ -1,0 +1,39 @@
+{
+  "records": [
+    {
+      "authority": "enforced",
+      "id": "mem:constraint:memory.persist.ask.external.contract.meaning:ca575f5d",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "persist.ask_first",
+        "source_path": "harness/policies/memory-policy.yaml",
+        "source_section": "persist.ask_first",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "memory-policy"
+        ],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "ask-first before recording: external_contract_meaning",
+      "subject_key": "memory.persist.ask.external.contract.meaning",
+      "tags": [],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ],
+  "subject_key": "memory.persist.ask.external.contract.meaning"
+}

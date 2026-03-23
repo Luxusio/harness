@@ -19,8 +19,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "./plugin"
+        ]
       },
       "source_status": null,
       "statement": "Marketplace install: This repo uses Git-based marketplace add (`/plugin marketplace add <git-url>`). The relative plugin source (`./plugin`) in `marketplace.json` works with Git-based installs. Raw `marketplace.json` URL-based installs are not compatible with this repo's distribution shape.",

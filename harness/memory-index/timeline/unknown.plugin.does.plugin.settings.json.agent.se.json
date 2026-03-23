@@ -1,0 +1,40 @@
+{
+  "records": [
+    {
+      "authority": "observed",
+      "id": "mem:open_question:unknown.plugin.does.plugin.settings.json.agent.se:067a3ecb",
+      "index_status": "resolved",
+      "kind": "open_question",
+      "provenance": {
+        "locator": "Resolved",
+        "source_path": "harness/state/unknowns.md",
+        "source_section": "Resolved",
+        "source_type": "state"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "plugin",
+          "unknowns"
+        ],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "Does plugin `settings.json` `\"agent\"` set the main agent prompt?",
+      "subject_key": "unknown.plugin.does.plugin.settings.json.agent.se",
+      "tags": [],
+      "temporal": {
+        "documented_at": "2026-03-20",
+        "effective_at": null,
+        "last_verified_at": "2026-03-22"
+      }
+    }
+  ],
+  "subject_key": "unknown.plugin.does.plugin.settings.json.agent.se"
+}

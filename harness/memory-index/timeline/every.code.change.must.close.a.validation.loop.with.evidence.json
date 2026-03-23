@@ -19,8 +19,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "harness/docs/constraints/project-constraints.md"
+        ]
       },
       "source_status": null,
       "statement": "Every code change must close a validation loop with evidence. Scope: all workflows. Reason: \"code was written\" is not proof \u2014 \"change was verified\" is.",

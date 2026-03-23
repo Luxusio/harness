@@ -60,12 +60,17 @@ Load based on scope:
 **Index-first retrieval (when memory index is available):**
 
 Before opening raw doc files, check if `harness/memory-index/manifest.json` exists:
-1. Run `harness/scripts/query-memory.sh --query "<user query>" --paths "<relevant paths>" --domains "<relevant domains>" --top 8 --format markdown`
-2. Use the returned memory pack as primary context
-3. Open at most the top 4 raw source files for verification (not all docs)
-4. If the index is missing or corrupt, fall back to the existing raw-docs approach
+0. If `harness/scripts/build-memory-overlay.sh` exists, run it first to refresh the overlay from current session state:
+   `bash harness/scripts/build-memory-overlay.sh`
+1. If `.harness-cache/memory-overlay/` exists, include overlay in query:
+   `harness/scripts/query-memory.sh --query "<user query>" --paths "<relevant paths>" --domains "<relevant domains>" --top 8 --include-overlay --format markdown`
+2. If overlay is missing or build failed, query without it:
+   `harness/scripts/query-memory.sh --query "<user query>" --paths "<relevant paths>" --domains "<relevant domains>" --top 8 --format markdown`
+3. Use the returned memory pack as primary context
+4. Open at most the top 4 raw source files for verification (not all docs)
+5. If the index is missing or corrupt, fall back to the existing raw-docs approach
 
-This reduces context loading cost while maintaining accuracy through source verification.
+This reduces context loading cost while maintaining accuracy through source verification. The overlay injects current session state (active task, last session summary) so queries automatically reflect the most recent context.
 
 **Heavy retrieval trigger:**
 

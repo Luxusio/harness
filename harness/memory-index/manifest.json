@@ -1,12 +1,14 @@
 {
-  "record_count": 61,
+  "record_count": 85,
   "schema_version": 1,
   "sources": [
     "docs/architecture/README",
     "docs/constraints/project-constraints",
     "docs/decisions/ADR-0001-harness-bootstrap",
+    "docs/domains/README",
     "docs/runbooks/development",
     "policies/approvals",
+    "policies/memory-policy",
     "state/recent-decisions",
     "state/unknowns"
   ],

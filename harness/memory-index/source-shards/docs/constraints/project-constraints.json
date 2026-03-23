@@ -19,8 +19,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "harness/docs/constraints/project-constraints.md"
+        ]
       },
       "source_status": null,
       "statement": "Brownfield: always inventory \u2192 protect \u2192 encode \u2192 constrain \u2192 operate. Never jump to editing. Scope: brownfield-adoption. Reason: prevents dangerous modifications in unfamiliar code.",
@@ -51,8 +55,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "harness/docs/constraints/project-constraints.md"
+        ]
       },
       "source_status": null,
       "statement": "Every code change must close a validation loop with evidence. Scope: all workflows. Reason: \"code was written\" is not proof \u2014 \"change was verified\" is.",
@@ -83,8 +91,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "harness/docs/constraints/project-constraints.md"
+        ]
       },
       "source_status": null,
       "statement": "Never store unverified guesses as confirmed facts. Memory promotion: hypothesis \u2192 observed_fact \u2192 confirmed \u2192 enforced. Scope: all memory operations. Reason: core product principle.",
@@ -115,8 +127,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "plugin"
+        ]
       },
       "source_status": null,
       "statement": "Plugin directory structure (`plugin/`) must be preserved as-is. Scope: repo structure. Reason: user requirement \u2014 do not flatten into root.",
@@ -147,8 +163,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "harness/docs/constraints/project-constraints.md"
+        ]
       },
       "source_status": null,
       "statement": "Prefer executable enforcement over documentation: test > lint rule > config assertion > docs. Scope: decision capture and rule encoding. Reason: docs alone don't prevent violations.",
@@ -179,8 +199,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "harness/docs/constraints/project-constraints.md"
+        ]
       },
       "source_status": null,
       "statement": "Public slash commands are `/harness:setup` and `/harness:validate`. Ordinary work should proceed in plain language; workflow skills remain hidden and auto-routed. Scope: plugin UX. Reason: users should not memorize workflow commands, but diagnostics remain explicit.",

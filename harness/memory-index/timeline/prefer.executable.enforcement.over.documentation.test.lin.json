@@ -19,8 +19,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "harness/docs/constraints/project-constraints.md"
+        ]
       },
       "source_status": null,
       "statement": "Prefer executable enforcement over documentation: test > lint rule > config assertion > docs. Scope: decision capture and rule encoding. Reason: docs alone don't prevent violations.",

@@ -19,7 +19,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -51,7 +53,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -83,7 +87,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -115,7 +121,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -147,7 +155,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -179,7 +189,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -211,7 +223,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -243,7 +257,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -258,7 +274,7 @@
     },
     {
       "authority": "observed",
-      "id": "mem:observed_fact:cleaned.up.when.changes.are.committed:0be2b801",
+      "id": "mem:observed_fact:built.by.harness.scripts.build.memory.overlay.sh.from.curr:400ccc72",
       "index_status": "active",
       "kind": "observed_fact",
       "provenance": {
@@ -275,12 +291,48 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
-      "statement": "Cleaned up when changes are committed",
-      "subject_key": "cleaned.up.when.changes.are.committed",
+      "statement": "Built by `harness/scripts/build-memory-overlay.sh` from current session state",
+      "subject_key": "built.by.harness.scripts.build.memory.overlay.sh.from.curr",
+      "tags": [],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "id": "mem:observed_fact:cleaned.up.when.changes.are.committed.gitignored.per.sess:c918ee36",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Local overlay (per-session, gitignored)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Local overlay (per-session, gitignored)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "Cleaned up when changes are committed; gitignored \u2014 per-session only",
+      "subject_key": "cleaned.up.when.changes.are.committed.gitignored.per.sess",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -307,7 +359,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -339,7 +393,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -371,7 +427,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -403,7 +461,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -435,7 +495,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -467,7 +529,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -499,7 +563,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -531,7 +597,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -563,7 +631,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -595,7 +665,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -627,7 +699,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -659,7 +733,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -674,7 +750,7 @@
     },
     {
       "authority": "observed",
-      "id": "mem:observed_fact:merged.at.query.time.overrides.compiled.index.for.same.subj:e0de6711",
+      "id": "mem:observed_fact:merged.at.query.time.via.include.overlay.flag.overrides:5cc65d02",
       "index_status": "active",
       "kind": "observed_fact",
       "provenance": {
@@ -691,12 +767,14 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
-      "statement": "Merged at query time, overrides compiled index for same subject",
-      "subject_key": "merged.at.query.time.overrides.compiled.index.for.same.subj",
+      "statement": "Merged at query time via `--include-overlay` flag, overrides compiled index for same subject",
+      "subject_key": "merged.at.query.time.via.include.overlay.flag.overrides",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -723,7 +801,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -755,7 +835,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -787,7 +869,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -819,7 +903,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -851,7 +937,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -883,7 +971,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -915,7 +1005,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -947,12 +1039,48 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
       "statement": "`resolves`: this record answers an open question",
       "subject_key": "resolves.this.record.answers.an.open.question",
+      "tags": [],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "id": "mem:observed_fact:scope.indexing.is.active.by.domain.and.by.path.are.po:c355ee19",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Compiled index (generated, machine-optimized)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Compiled index (generated, machine-optimized)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "Scope indexing is active: `by-domain/` and `by-path/` are populated on each rebuild",
+      "subject_key": "scope.indexing.is.active.by.domain.and.by.path.are.po",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -979,12 +1107,48 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
       "statement": "`supersedes`: this record replaces an older one",
       "subject_key": "supersedes.this.record.replaces.an.older.one",
+      "tags": [],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "id": "mem:observed_fact:temporal.relations.are.populated.from.adr.supersession.chain:4c495dc8",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Compiled index (generated, machine-optimized)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Compiled index (generated, machine-optimized)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "Temporal relations are populated from ADR supersession chains in `relations` fields",
+      "subject_key": "temporal.relations.are.populated.from.adr.supersession.chain",
       "tags": [],
       "temporal": {
         "documented_at": null,

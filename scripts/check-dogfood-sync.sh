@@ -28,6 +28,9 @@ declare -a PAIRS=(
   "harness/scripts/check-memory-index.sh"
   "harness/scripts/query-memory.sh"
   "harness/scripts/query-memory.py"
+  "harness/scripts/build-memory-overlay.sh"
+  "harness/scripts/build-memory-overlay.py"
+  "harness/scripts/test-memory-index.sh"
   "harness/docs/requirements/README.md"
 )
 

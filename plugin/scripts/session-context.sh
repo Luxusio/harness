@@ -284,9 +284,17 @@ if [[ -f "harness/memory-index/manifest.json" ]]; then
   echo "records: ${RECORD_COUNT}"
 
   # Check overlay
-  if [[ -d ".harness-cache/memory-overlay" ]]; then
+  if [[ -f ".harness-cache/memory-overlay/manifest.json" ]]; then
+    OVERLAY_COUNT=$(python3 -c "import json; m=json.load(open('.harness-cache/memory-overlay/manifest.json')); print(m.get('record_count', 0))" 2>/dev/null || wc -l < ".harness-cache/memory-overlay/records.jsonl" 2>/dev/null || echo "0")
+    OVERLAY_BUILT=$(python3 -c "import json; m=json.load(open('.harness-cache/memory-overlay/manifest.json')); print(m.get('built_at', '')[:16])" 2>/dev/null || echo "")
+    if [[ -n "$OVERLAY_BUILT" ]]; then
+      echo "overlay: ${OVERLAY_COUNT} records (built ${OVERLAY_BUILT} UTC)"
+    else
+      echo "overlay: ${OVERLAY_COUNT} records"
+    fi
+  elif [[ -d ".harness-cache/memory-overlay" ]]; then
     OVERLAY_COUNT=$(wc -l < ".harness-cache/memory-overlay/records.jsonl" 2>/dev/null || echo "0")
-    echo "overlay: ${OVERLAY_COUNT} records"
+    echo "overlay: ${OVERLAY_COUNT} records (no manifest)"
   else
     echo "overlay: none"
   fi

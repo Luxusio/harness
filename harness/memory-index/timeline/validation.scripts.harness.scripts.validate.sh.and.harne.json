@@ -19,8 +19,13 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/scripts/smoke.sh",
+          "harness/scripts/validate.sh"
+        ]
       },
       "source_status": null,
       "statement": "Validation scripts: `harness/scripts/validate.sh` and `harness/scripts/smoke.sh` use manifest commands (`harness/manifest.yaml > commands.*`) as their primary source. Auto-detect fallback is used only when a manifest command is empty.",

@@ -19,8 +19,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
       },
       "source_status": null,
       "statement": "**Build:** (none \u2014 plugin is config/docs only)",

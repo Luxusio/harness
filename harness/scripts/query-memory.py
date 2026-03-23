@@ -33,6 +33,9 @@ AUTHORITY_SCORE = {
     "hypothesis": 1,
 }
 
+# Temporal recency bonus weights
+RECENCY_BONUS = 0.5  # per year of recency, applied to documented_at
+
 
 # ── Tokenizer ────────────────────────────────────────────────────────────────
 
@@ -50,8 +53,10 @@ def tokenize(text: str) -> set:
 
 # ── Scoring ──────────────────────────────────────────────────────────────────
 
-def score_record(record: dict, query_tokens: set, boost_paths: list, boost_domains: list) -> float:
+def score_record(record: dict, query_tokens: set, boost_paths: list, boost_domains: list,
+                 reference_date: str = "") -> float:
     """Compute relevance score for a single record."""
+    import datetime
     score = 0.0
 
     # Authority boost
@@ -59,8 +64,23 @@ def score_record(record: dict, query_tokens: set, boost_paths: list, boost_domai
     score += AUTHORITY_SCORE.get(authority, 0)
 
     # Active records score higher than resolved
-    if record.get("state", record.get("lifecycle_state", "")) == "active":
+    if record.get("index_status", "") == "active":
         score += 0.5
+
+    # Temporal recency bonus: more recently documented records score higher
+    temporal = record.get("temporal", {})
+    documented_at = temporal.get("documented_at") or temporal.get("last_verified_at")
+    if documented_at and reference_date:
+        try:
+            doc_date = datetime.date.fromisoformat(documented_at)
+            ref_date = datetime.date.fromisoformat(reference_date)
+            delta_years = (ref_date - doc_date).days / 365.25
+            # Bonus decays: records from the last year get up to RECENCY_BONUS
+            if delta_years >= 0:
+                recency = max(0.0, RECENCY_BONUS * (1.0 - delta_years))
+                score += recency
+        except (ValueError, TypeError):
+            pass
 
     # Token overlap: query tokens vs subject_key + statement + tags
     subject_key = record.get("subject_key", "")
@@ -92,6 +112,23 @@ def score_record(record: dict, query_tokens: set, boost_paths: list, boost_domai
 
 # ── Loading ──────────────────────────────────────────────────────────────────
 
+def iter_records_from_json(data) -> list:
+    """Flatten a JSON value into a flat list of record dicts.
+
+    Handles three shapes:
+    - {"records": [...], ...}  — wrapper object (by-subject format)
+    - [...]                    — bare list of records
+    - {...}                    — single record dict
+    """
+    if isinstance(data, dict):
+        if "records" in data and isinstance(data["records"], list):
+            return data["records"]
+        return [data]
+    if isinstance(data, list):
+        return data
+    return []
+
+
 def load_index_records() -> list:
     """Load all active records from the index by-subject directory."""
     records = []
@@ -101,11 +138,7 @@ def load_index_records() -> list:
         try:
             with json_file.open("r", encoding="utf-8") as f:
                 data = json.load(f)
-            # File may be a single record or a list of records
-            if isinstance(data, list):
-                records.extend(data)
-            elif isinstance(data, dict):
-                records.append(data)
+            records.extend(iter_records_from_json(data))
         except (json.JSONDecodeError, OSError) as exc:
             print(f"WARNING: Could not load {json_file}: {exc}", file=sys.stderr)
     return records
@@ -156,18 +189,19 @@ def format_markdown(results: list) -> str:
         statement = record.get("statement", "")
         kind = record.get("kind", record.get("type", ""))
         authority = record.get("authority", record.get("status", ""))
-        domain = record.get("domain", "")
-        state = record.get("state", record.get("lifecycle_state", ""))
+        index_status = record.get("index_status", "")
+        domains = record.get("scope", {}).get("domains", [])
+        domain_str = ", ".join(domains) if domains else ""
 
         meta_parts = []
         if kind:
             meta_parts.append(f"kind:{kind}")
         if authority:
             meta_parts.append(f"authority:{authority}")
-        if domain:
-            meta_parts.append(f"domain:{domain}")
-        if state:
-            meta_parts.append(f"state:{state}")
+        if domain_str:
+            meta_parts.append(f"domains:{domain_str}")
+        if index_status:
+            meta_parts.append(f"status:{index_status}")
         meta_parts.append(f"score:{score:.1f}")
         meta = "  |  ".join(meta_parts)
 
@@ -177,16 +211,12 @@ def format_markdown(results: list) -> str:
             lines.append(statement)
             lines.append("")
 
-        # Additional fields of interest
-        rationale = record.get("rationale", "")
-        if rationale:
-            lines.append(f"**Rationale:** {rationale}\n")
-
-        source = record.get("source", {})
-        if source and isinstance(source, dict):
-            src_file = source.get("file", "")
-            if src_file:
-                lines.append(f"**Source:** `{src_file}`\n")
+        # Source provenance
+        provenance = record.get("provenance", {})
+        if isinstance(provenance, dict):
+            src_path = provenance.get("source_path", "")
+            if src_path:
+                lines.append(f"**Source:** `{src_path}`\n")
 
     return "\n".join(lines)
 
@@ -254,15 +284,17 @@ def main():
             records = merge_overlay(records, overlay)
 
     # Exclude superseded records
-    records = [r for r in records if not r.get("superseded", False)]
+    records = [r for r in records if r.get("index_status") != "superseded"]
 
     # Parse boost lists
     boost_paths = [p.strip() for p in args.paths.split(",") if p.strip()]
     boost_domains = [d.strip() for d in args.domains.split(",") if d.strip()]
     query_tokens = tokenize(args.query)
 
-    # Score and rank
-    scored = [(r, score_record(r, query_tokens, boost_paths, boost_domains)) for r in records]
+    # Score and rank (use today's date for temporal recency)
+    import datetime
+    today = datetime.date.today().isoformat()
+    scored = [(r, score_record(r, query_tokens, boost_paths, boost_domains, today)) for r in records]
     scored.sort(key=lambda x: x[1], reverse=True)
 
     # Take top N (only include records with non-zero score if query was provided)

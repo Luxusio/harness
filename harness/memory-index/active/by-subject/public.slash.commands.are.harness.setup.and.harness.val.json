@@ -19,8 +19,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "harness/docs/constraints/project-constraints.md"
+        ]
       },
       "source_status": null,
       "statement": "Public slash commands are `/harness:setup` and `/harness:validate`. Ordinary work should proceed in plain language; workflow skills remain hidden and auto-routed. Scope: plugin UX. Reason: users should not memorize workflow commands, but diagnostics remain explicit.",

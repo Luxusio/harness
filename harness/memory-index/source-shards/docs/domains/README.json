@@ -1,0 +1,107 @@
+{
+  "records": [
+    {
+      "authority": "observed",
+      "id": "mem:observed_fact:orchestrator.md.harness.orchestrator.runtime.loop.and.ro:c8ac495f",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "How to organize",
+        "source_path": "harness/docs/domains/README.md",
+        "source_section": "How to organize",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "domains"
+        ],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "`orchestrator.md` \u2014 harness-orchestrator runtime loop and routing",
+      "subject_key": "orchestrator.md.harness.orchestrator.runtime.loop.and.ro",
+      "tags": [],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "id": "mem:observed_fact:plugin.system.md.claude.code.plugin.architecture.market:b019ba13",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "How to organize",
+        "source_path": "harness/docs/domains/README.md",
+        "source_section": "How to organize",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "domains"
+        ],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "`plugin-system.md` \u2014 Claude Code plugin architecture, marketplace, skills/agents/hooks",
+      "subject_key": "plugin.system.md.claude.code.plugin.architecture.market",
+      "tags": [],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "id": "mem:observed_fact:setup.skill.md.setup.procedure.templates.placeholder.s:0b3401bd",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "How to organize",
+        "source_path": "harness/docs/domains/README.md",
+        "source_section": "How to organize",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "domains"
+        ],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "`setup-skill.md` \u2014 setup procedure, templates, placeholder system",
+      "subject_key": "setup.skill.md.setup.procedure.templates.placeholder.s",
+      "tags": [],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ],
+  "source_shard": "docs/domains/README"
+}

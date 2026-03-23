@@ -62,6 +62,40 @@ Each record has:
 - `relations` — supersedes, extends, resolves, conflicts_with links
 - `tags` — free-form labels
 
+## Scope indexing
+
+`active/by-domain/` and `active/by-path/` are populated on every rebuild.
+- `by-domain/<domain>.json` — all active records scoped to a domain (e.g., `plugin`, `harness`, `memory`)
+- `by-path/<encoded-path>.json` — all active records scoped to a specific file or directory path
+
+Use `--paths` flag in `query-memory.sh` to filter by path scope.
+
+## Temporal relations
+
+Records track supersession chains through `relations` fields:
+- `supersedes`: this record replaces an older one (e.g., new ADR supersedes prior decision)
+- `extends`: this record builds on another
+- `resolves`: this record answers an open question
+- `conflicts_with`: this record contradicts another (needs resolution)
+
+Superseded records are not deleted — they remain in `timeline/<subject>.json` for historical queries.
+Temporal relations are populated automatically from ADR `supersedes` frontmatter during index build.
+
+## Overlay integration
+
+The local overlay (`.harness-cache/memory-overlay/records.jsonl`) is a per-session, gitignored supplement:
+- Built by `bash harness/scripts/build-memory-overlay.sh` from `current-task.yaml` and `last-session-summary.md`
+- Merged at query time with `--include-overlay` flag — overlay records override compiled index for same subject
+- Not committed to git; cleaned up when session changes are committed
+
+## Regression test suite
+
+Run automated checks against the compiled index:
+```bash
+bash harness/scripts/test-memory-index.sh
+```
+Checks include: schema validity, determinism (two consecutive builds produce zero diff), scope coverage (by-domain and by-path populated), temporal relations present, query output format correctness.
+
 ## Determinism guarantee
 
 Two consecutive runs with no source changes produce zero git diff.

@@ -19,8 +19,14 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "decisions"
+        ],
+        "paths": [
+          "harness",
+          "harness/docs",
+          "harness/scripts"
+        ]
       },
       "source_status": null,
       "statement": "Bootstrap harness as the repo-local operating system: `harness/` for routing, policies, and working state `harness/docs/` for durable knowledge (constraints, decisions, domains, runbooks) `harness/scripts/` for validation and architecture checks",

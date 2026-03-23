@@ -19,8 +19,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "harness/docs/constraints/project-constraints.md"
+        ]
       },
       "source_status": null,
       "statement": "Never store unverified guesses as confirmed facts. Memory promotion: hypothesis \u2192 observed_fact \u2192 confirmed \u2192 enforced. Scope: all memory operations. Reason: core product principle.",

@@ -19,7 +19,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,
@@ -51,7 +53,9 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "architecture"
+        ],
         "paths": []
       },
       "source_status": null,

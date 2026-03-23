@@ -19,8 +19,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
       },
       "source_status": null,
       "statement": "Update marketplace clone: `cd ~/.claude/plugins/marketplaces/harness && git fetch origin master && git reset --hard origin/master`",

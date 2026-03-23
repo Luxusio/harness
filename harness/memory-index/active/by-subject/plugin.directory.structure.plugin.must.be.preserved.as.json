@@ -19,8 +19,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "constraints"
+        ],
+        "paths": [
+          "plugin"
+        ]
       },
       "source_status": null,
       "statement": "Plugin directory structure (`plugin/`) must be preserved as-is. Scope: repo structure. Reason: user requirement \u2014 do not flatten into root.",

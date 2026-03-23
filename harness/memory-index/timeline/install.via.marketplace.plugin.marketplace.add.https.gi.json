@@ -19,8 +19,12 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
-        "paths": []
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
       },
       "source_status": null,
       "statement": "Install via marketplace: `/plugin marketplace add https://github.com/Luxusio/harness.git` then `/plugin install harness@harness`",

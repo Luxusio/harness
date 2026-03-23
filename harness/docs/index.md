@@ -34,6 +34,9 @@
 - `harness/scripts/check-memory-index.sh` — memory index staleness checker
 - `harness/scripts/query-memory.sh` — memory index query prefilter
 - `harness/scripts/query-memory.py` — query logic (Python 3)
+- `harness/scripts/build-memory-overlay.sh` — local overlay builder (session-scoped, gitignored)
+- `harness/scripts/build-memory-overlay.py` — overlay build logic (Python 3)
+- `harness/scripts/test-memory-index.sh` — memory index regression tests
 
 ## Memory Index
 - `harness/memory-index/README.md` — shared compiled memory index documentation

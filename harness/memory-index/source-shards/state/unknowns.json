@@ -2,7 +2,7 @@
   "records": [
     {
       "authority": "observed",
-      "id": "mem:open_question:does.plugin.settings.json.agent.set.the.main.agent.pro:108b3cfc",
+      "id": "mem:open_question:unknown.plugin.does.plugin.settings.json.agent.se:067a3ecb",
       "index_status": "resolved",
       "kind": "open_question",
       "provenance": {
@@ -19,12 +19,15 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "plugin",
+          "unknowns"
+        ],
         "paths": []
       },
       "source_status": null,
       "statement": "Does plugin `settings.json` `\"agent\"` set the main agent prompt?",
-      "subject_key": "does.plugin.settings.json.agent.set.the.main.agent.pro",
+      "subject_key": "unknown.plugin.does.plugin.settings.json.agent.se",
       "tags": [],
       "temporal": {
         "documented_at": "2026-03-20",
@@ -34,7 +37,7 @@
     },
     {
       "authority": "observed",
-      "id": "mem:open_question:how.does.claude.code.resolve.plugin.paths.in.marketplace.rel:d3dfb437",
+      "id": "mem:open_question:unknown.plugin.how.does.claude.code.resolve.plugin.path:cdc42d9e",
       "index_status": "resolved",
       "kind": "open_question",
       "provenance": {
@@ -51,12 +54,15 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "plugin",
+          "unknowns"
+        ],
         "paths": []
       },
       "source_status": null,
       "statement": "How does Claude Code resolve plugin paths in marketplace-relative installations?",
-      "subject_key": "how.does.claude.code.resolve.plugin.paths.in.marketplace.rel",
+      "subject_key": "unknown.plugin.how.does.claude.code.resolve.plugin.path",
       "tags": [],
       "temporal": {
         "documented_at": "2026-03-20",
@@ -66,7 +72,7 @@
     },
     {
       "authority": "observed",
-      "id": "mem:open_question:skill.paths.in.plugin.json.are.resolved.relative.to.the.plug:7a7fc533",
+      "id": "mem:open_question:unknown.plugin.skill.paths.in.plugin.json.are.resolved:bd0b6ed1",
       "index_status": "resolved",
       "kind": "open_question",
       "provenance": {
@@ -83,12 +89,15 @@
       },
       "scope": {
         "api_surfaces": [],
-        "domains": [],
+        "domains": [
+          "plugin",
+          "unknowns"
+        ],
         "paths": []
       },
       "source_status": null,
       "statement": "Skill paths in plugin.json are resolved relative to the plugin root directory",
-      "subject_key": "skill.paths.in.plugin.json.are.resolved.relative.to.the.plug",
+      "subject_key": "unknown.plugin.skill.paths.in.plugin.json.are.resolved",
       "tags": [],
       "temporal": {
         "documented_at": "2026-03-20",

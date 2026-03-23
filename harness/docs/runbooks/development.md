@@ -43,6 +43,24 @@ bash harness/scripts/check-memory-index.sh
 ### Never edit generated files
 Files under `harness/memory-index/source-shards/`, `active/`, and `timeline/` are generated. Edit the source documents instead, then rebuild.
 
+## Overlay operations
+
+### Build the local overlay
+```bash
+bash harness/scripts/build-memory-overlay.sh
+```
+Generates `.harness-cache/memory-overlay/records.jsonl` from current session state (current-task.yaml, last-session-summary.md). Overlay is gitignored — per-session only.
+
+### Query with overlay
+```bash
+bash harness/scripts/query-memory.sh --query "current task" --include-overlay --format markdown
+```
+
+### Run regression tests
+```bash
+bash harness/scripts/test-memory-index.sh
+```
+
 ## Debugging notes
 
 <!-- Add debugging insights from bug fixes -->

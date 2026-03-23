@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -82,6 +83,76 @@ def write_json(path: Path, obj) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+PATH_LIKE_RE = re.compile(r'`([a-zA-Z0-9_./-]+/[a-zA-Z0-9_./-]*)`')
+
+
+def extract_paths_from_text(text: str) -> list:
+    """Extract path-like references from text (backtick-quoted paths with /)."""
+    paths = []
+    for m in PATH_LIKE_RE.finditer(text):
+        p = m.group(1).rstrip("/")
+        # Filter out very short or unlikely paths
+        if len(p) > 3 and not p.startswith("http"):
+            paths.append(p)
+    return sorted(set(paths))
+
+
+def default_scope_for_source(source_path: str) -> dict:
+    """Derive default scope from source file path."""
+    domains = []
+    paths = [source_path] if source_path else []
+    if "policies/approvals" in source_path:
+        domains = ["approval-gates"]
+    elif "docs/architecture" in source_path:
+        domains = ["architecture"]
+    elif "docs/constraints" in source_path:
+        domains = ["constraints"]
+    elif "docs/runbooks" in source_path:
+        domains = ["runbooks"]
+    elif "docs/decisions" in source_path:
+        domains = ["decisions"]
+    elif "docs/requirements" in source_path:
+        domains = ["requirements"]
+    elif "docs/domains" in source_path:
+        # domain = filename stem
+        m = re.search(r"docs/domains/([^/]+)\.md", source_path)
+        if m:
+            stem = m.group(1)
+            domains = [stem] if stem.lower() != "readme" else ["domains"]
+        else:
+            domains = ["domains"]
+    elif "state/recent-decisions" in source_path:
+        domains = ["recent-context"]
+    elif "state/unknowns" in source_path:
+        domains = ["unknowns"]
+    elif "policies/memory-policy" in source_path:
+        domains = ["memory-policy"]
+    return {"domains": domains, "paths": paths, "api_surfaces": []}
+
+
+def apply_default_scope(rec: dict) -> None:
+    """Fill empty scope from source path, and extract paths from statement."""
+    # Always try to extract paths from statement text
+    if not rec["scope"]["paths"]:
+        extracted = extract_paths_from_text(rec.get("statement", ""))
+        if extracted:
+            rec["scope"]["paths"] = extracted
+    # Fill domain/paths fallback from source path
+    if not rec["scope"]["domains"] and not rec["scope"]["paths"]:
+        default = default_scope_for_source(rec["provenance"]["source_path"])
+        rec["scope"]["domains"] = default["domains"]
+        rec["scope"]["paths"] = default["paths"]
+        rec["scope"]["api_surfaces"] = default["api_surfaces"]
+    elif not rec["scope"]["domains"]:
+        default = default_scope_for_source(rec["provenance"]["source_path"])
+        rec["scope"]["domains"] = default["domains"]
+    elif not rec["scope"]["paths"]:
+        # Add source path as minimal path reference
+        src = rec["provenance"].get("source_path", "")
+        if src:
+            rec["scope"]["paths"] = [src]
+
+
 # ---------------------------------------------------------------------------
 # Parsers
 # ---------------------------------------------------------------------------
@@ -116,6 +187,7 @@ def parse_constraints(src: str, rel_path: str) -> list:
                            current_section, "doc")
         rec["authority"] = "confirmed"
         rec["temporal"]["documented_at"] = documented_at
+        apply_default_scope(rec)
         records.append(rec)
     return records
 
@@ -128,16 +200,22 @@ def parse_adr(src: str, rel_path: str, filename: str) -> list:
     date = None
     decision_text_lines = []
     in_decision = False
+    superseded_by_adr = None
 
     for line in lines:
         if line.startswith("# "):
             title = line[2:].strip()
         sm = re.match(r"^\*\*Status:\*\*\s*(.*)", line)
         if sm:
-            status_raw = sm.group(1).strip().lower()
-            if status_raw == "superseded":
+            status_raw = sm.group(1).strip()
+            status_lower = status_raw.lower()
+            sup_match = re.match(r"superseded\s+by\s+(ADR-\d+)", status_raw, re.IGNORECASE)
+            if sup_match:
                 status = "superseded"
-            elif status_raw in ("accepted", "approved", "done"):
+                superseded_by_adr = sup_match.group(1).upper()
+            elif status_lower == "superseded":
+                status = "superseded"
+            elif status_lower in ("accepted", "approved", "done"):
                 status = "active"
         dm = re.match(r"^\*\*Date:\*\*\s*(\d{4}-\d{2}-\d{2})", line)
         if dm:
@@ -165,6 +243,10 @@ def parse_adr(src: str, rel_path: str, filename: str) -> list:
     rec["index_status"] = status
     rec["temporal"]["documented_at"] = date
     rec["temporal"]["effective_at"] = date
+    # Stash superseded_by for second pass resolution
+    if superseded_by_adr:
+        rec["_superseded_by_adr"] = superseded_by_adr
+    apply_default_scope(rec)
     return [rec]
 
 
@@ -203,6 +285,7 @@ def parse_requirements(src: str, rel_path: str, filename: str) -> list:
     rec = empty_record("requirement", subject_key, statement, rel_path, title, "doc")
     rec["authority"] = "confirmed"
     rec["source_status"] = status
+    apply_default_scope(rec)
     return [rec]
 
 
@@ -245,11 +328,25 @@ def parse_architecture(src: str, rel_path: str) -> list:
         if not statement:
             continue
 
+        # Derive scope from section name
+        section_lower = current_section.lower()
+        domains = ["architecture"]
+        paths = []
+        if "validation" in section_lower:
+            domains = ["validation"]
+        elif "system boundaries" in section_lower or "boundaries" in section_lower:
+            domains = ["architecture"]
+            # Extract path-like strings from statement
+            paths = re.findall(r"(?:^|[\s,])(\w[\w/.-]+/)", statement)
+            paths = [p.strip() for p in paths if len(p.strip()) > 2]
+
         subject_key = slugify(statement[:60])
         rec = empty_record(kind, subject_key, statement, rel_path,
                            current_section, "doc")
         rec["authority"] = authority
         rec["temporal"]["documented_at"] = documented_at
+        rec["scope"]["domains"] = domains
+        rec["scope"]["paths"] = paths
         records.append(rec)
     return records
 
@@ -289,6 +386,7 @@ def parse_runbook(src: str, rel_path: str) -> list:
         rec = empty_record("runbook_note", subject_key, statement, rel_path,
                            current_section, "doc")
         rec["authority"] = "confirmed"
+        apply_default_scope(rec)
         records.append(rec)
     return records
 
@@ -297,14 +395,10 @@ def parse_approvals(src: str, rel_path: str) -> list:
     records = []
 
     # Parse always_ask_before rules
-    always_block_re = re.compile(
-        r"always_ask_before:\s*\n((?:[ \t]+-[^\n]*\n(?:[ \t]+[^\n]*\n)*)*)",
-        re.MULTILINE
-    )
-    # Simpler approach: find each - kind: block
     kind_re = re.compile(r"-\s+kind:\s+(\S+)")
     reason_re = re.compile(r"reason:\s+[\"']?([^\"'\n]+)[\"']?")
     min_files_re = re.compile(r"min_files:\s+(\d+)")
+    paths_re = re.compile(r"paths:\s*\n((?:[ \t]+-[^\n]*\n)*)", re.MULTILINE)
 
     in_always = False
     current_kind = None
@@ -328,6 +422,7 @@ def parse_approvals(src: str, rel_path: str) -> list:
                     rec = empty_record("approval_rule", subject_key, statement,
                                       rel_path, "always_ask_before", "policy")
                     rec["authority"] = "enforced"
+                    rec["scope"]["domains"] = ["approval-gates"]
                     records.append(rec)
                 in_always = False
                 current_kind = None
@@ -344,6 +439,7 @@ def parse_approvals(src: str, rel_path: str) -> list:
                     rec = empty_record("approval_rule", subject_key, statement,
                                       rel_path, "always_ask_before", "policy")
                     rec["authority"] = "enforced"
+                    rec["scope"]["domains"] = ["approval-gates"]
                     records.append(rec)
                 current_kind = km.group(1)
                 current_reason = None
@@ -365,6 +461,7 @@ def parse_approvals(src: str, rel_path: str) -> list:
         rec = empty_record("approval_rule", subject_key, statement,
                            rel_path, "always_ask_before", "policy")
         rec["authority"] = "enforced"
+        rec["scope"]["domains"] = ["approval-gates"]
         records.append(rec)
 
     # Parse ask_when flags
@@ -386,7 +483,23 @@ def parse_approvals(src: str, rel_path: str) -> list:
                 rec = empty_record("approval_rule", subject_key, statement,
                                    rel_path, "ask_when", "policy")
                 rec["authority"] = "enforced"
+                rec["scope"]["domains"] = ["approval-gates"]
                 records.append(rec)
+
+    # Parse path-based rules and extract scope.paths
+    for m in paths_re.finditer(src):
+        path_block = m.group(1)
+        extracted = re.findall(r"-\s+(.+)", path_block)
+        extracted = [p.strip().strip("'\"") for p in extracted if p.strip()]
+        if extracted:
+            statement = f"Approval gate paths: {', '.join(extracted)}"
+            subject_key = f"approval.paths.{slugify(','.join(extracted)[:60])}"
+            rec = empty_record("approval_rule", subject_key, statement,
+                               rel_path, "paths", "policy")
+            rec["authority"] = "enforced"
+            rec["scope"]["domains"] = ["approval-gates"]
+            rec["scope"]["paths"] = extracted
+            records.append(rec)
 
     return records
 
@@ -410,11 +523,13 @@ def parse_recent_decisions(src: str, rel_path: str) -> list:
             "risk_zone": "observed_fact",
         }
         kind = kind_map.get(rtype, "observed_fact")
-        subject_key = slugify(desc[:60])
+        # Stable subject key using date + type + slug of description
+        subject_key = f"recent.{date}.{rtype}.{slugify(desc[:40])}"
         rec = empty_record(kind, subject_key, desc, rel_path,
                            "Recent decisions", "state")
         rec["authority"] = "observed"  # lower authority — state file
         rec["temporal"]["documented_at"] = date
+        apply_default_scope(rec)
         records.append(rec)
     return records
 
@@ -452,13 +567,19 @@ def parse_unknowns(src: str, rel_path: str) -> list:
 
         # Try to parse outcome date from extra
         resolved_date = None
+        resolves_adr = None
         if extra:
             rd = re.search(r"resolved:\s*(\d{4}-\d{2}-\d{2})", extra)
             if rd:
                 resolved_date = rd.group(1)
+            # Check if extra mentions an ADR resolution
+            adr_ref = re.search(r"(ADR-\d+)", extra, re.IGNORECASE)
+            if adr_ref:
+                resolves_adr = adr_ref.group(1).upper()
 
         statement = text
-        subject_key = slugify(text[:60])
+        # Stable subject key: unknown.<scope>.<slug-of-text[:40]>
+        subject_key = f"unknown.{slugify(scope)}.{slugify(text[:40])}"
         rec = empty_record(kind, subject_key, statement, rel_path,
                            current_section, "state")
         rec["authority"] = authority
@@ -466,8 +587,186 @@ def parse_unknowns(src: str, rel_path: str) -> list:
         rec["temporal"]["documented_at"] = date
         if resolved_date:
             rec["temporal"]["last_verified_at"] = resolved_date
+
+        # Derive scope from [scope] tag
+        if re.search(r"[/\\]", scope) or scope.endswith("/"):
+            rec["scope"]["paths"] = [scope]
+            rec["scope"]["domains"] = ["unknowns"]
+        else:
+            rec["scope"]["domains"] = [scope, "unknowns"]
+
+        # Stash ADR reference for second pass
+        if resolves_adr:
+            rec["_resolves_adr"] = resolves_adr
+
         records.append(rec)
     return records
+
+
+def parse_memory_policy(src: str, rel_path: str) -> list:
+    """Parse memory-policy.yaml into constraint records."""
+    records = []
+
+    # Parse persist.auto items
+    auto_block_re = re.compile(r"persist:\s*\n\s+auto:\s*\n((?:\s+-[^\n]*\n)+)", re.MULTILINE)
+    ask_block_re = re.compile(r"ask_first:\s*\n((?:\s+-[^\n]*\n)+)", re.MULTILINE)
+    never_block_re = re.compile(r"never:\s*\n((?:\s+-[^\n]*\n)+)", re.MULTILINE)
+    promotion_block_re = re.compile(
+        r"-\s+from:\s+(\S+)\s*\n\s+to:\s+(\S+)\s*\n\s+when:\s*\n((?:\s+-[^\n]*\n)+)",
+        re.MULTILINE
+    )
+
+    item_re = re.compile(r"-\s+(\S+)")
+
+    auto_match = auto_block_re.search(src)
+    if auto_match:
+        for item_m in item_re.finditer(auto_match.group(1)):
+            item = item_m.group(1)
+            statement = f"auto-record: {item}"
+            subject_key = f"memory.persist.auto.{slugify(item)}"
+            rec = empty_record("constraint", subject_key, statement, rel_path,
+                               "persist.auto", "policy")
+            rec["authority"] = "enforced"
+            rec["scope"]["domains"] = ["memory-policy"]
+            records.append(rec)
+
+    ask_match = ask_block_re.search(src)
+    if ask_match:
+        for item_m in item_re.finditer(ask_match.group(1)):
+            item = item_m.group(1)
+            statement = f"ask-first before recording: {item}"
+            subject_key = f"memory.persist.ask.{slugify(item)}"
+            rec = empty_record("constraint", subject_key, statement, rel_path,
+                               "persist.ask_first", "policy")
+            rec["authority"] = "enforced"
+            rec["scope"]["domains"] = ["memory-policy"]
+            records.append(rec)
+
+    never_match = never_block_re.search(src)
+    if never_match:
+        for item_m in item_re.finditer(never_match.group(1)):
+            item = item_m.group(1)
+            statement = f"never record: {item}"
+            subject_key = f"memory.persist.never.{slugify(item)}"
+            rec = empty_record("constraint", subject_key, statement, rel_path,
+                               "persist.never", "policy")
+            rec["authority"] = "enforced"
+            rec["scope"]["domains"] = ["memory-policy"]
+            records.append(rec)
+
+    for prom_m in promotion_block_re.finditer(src):
+        from_status = prom_m.group(1)
+        to_status = prom_m.group(2)
+        conditions = [c.strip() for c in item_re.findall(prom_m.group(3))]
+        cond_str = ", ".join(conditions)
+        statement = f"promotion: {from_status}→{to_status} requires {cond_str}"
+        subject_key = f"memory.promotion.{slugify(from_status)}.to.{slugify(to_status)}"
+        rec = empty_record("constraint", subject_key, statement, rel_path,
+                           "promotion", "policy")
+        rec["authority"] = "enforced"
+        rec["scope"]["domains"] = ["memory-policy"]
+        records.append(rec)
+
+    return records
+
+
+def parse_domain_doc(src: str, rel_path: str, filename: str) -> list:
+    """Parse a domains/*.md file into observed_fact records."""
+    records = []
+    # Determine domain from filename
+    stem = filename.lower()
+    if stem == "readme":
+        domain = "domains"
+    else:
+        domain = stem
+
+    current_section = domain
+    for line in src.splitlines():
+        h = re.match(r"^#{1,6}\s+(.*)", line)
+        if h:
+            current_section = h.group(1).strip()
+            continue
+        m = re.match(r"^[-*]\s+(.*)", line)
+        if not m:
+            continue
+        text = m.group(1).strip()
+        if not text or text.startswith("<!--") or text.startswith("<!--"):
+            continue
+        # Skip pure meta/template lines
+        if re.match(r"^`[^`]+`\s+—", text):
+            # these are file reference lines like "`plugin-system.md` — desc"
+            statement = text
+        else:
+            statement = text
+
+        if not statement.strip():
+            continue
+
+        dm = DATE_RE.search(statement)
+        documented_at = dm.group(1) if dm else None
+        statement = DATE_RE.sub("", statement).strip().lstrip("]").strip()
+        if not statement:
+            continue
+
+        subject_key = slugify(statement[:60])
+        rec = empty_record("observed_fact", subject_key, statement, rel_path,
+                           current_section, "doc")
+        rec["authority"] = "observed"
+        rec["temporal"]["documented_at"] = documented_at
+        rec["scope"]["domains"] = [domain]
+        records.append(rec)
+    return records
+
+
+# ---------------------------------------------------------------------------
+# Second pass: relation resolution
+# ---------------------------------------------------------------------------
+
+def resolve_relations(all_records: list) -> None:
+    """Second pass: resolve ADR cross-references and unknown resolutions."""
+    # Build lookup: ADR-NNNN -> record id
+    by_adr_ref = {}
+    for rec in all_records:
+        m = re.match(r"adr\.(\d+)\.", rec.get("subject_key", ""))
+        if m:
+            adr_ref = f"ADR-{m.group(1).zfill(4)}"
+            by_adr_ref[adr_ref] = rec["id"]
+
+    # Build lookup: id -> record
+    by_id = {rec["id"]: rec for rec in all_records}
+
+    for rec in all_records:
+        # Handle superseded-by ADR on the OLD record
+        superseded_by = rec.pop("_superseded_by_adr", None)
+        if superseded_by and superseded_by in by_adr_ref:
+            # The NEW ADR supersedes this (old) record
+            new_rec_id = by_adr_ref[superseded_by]
+            new_rec = by_id.get(new_rec_id)
+            if new_rec:
+                if rec["id"] not in new_rec["relations"]["supersedes"]:
+                    new_rec["relations"]["supersedes"].append(rec["id"])
+
+        # Handle resolves_adr on unknown records
+        resolves_adr = rec.pop("_resolves_adr", None)
+        if resolves_adr and resolves_adr in by_adr_ref:
+            adr_id = by_adr_ref[resolves_adr]
+            if adr_id not in rec["relations"]["resolves"]:
+                rec["relations"]["resolves"].append(adr_id)
+
+
+# ---------------------------------------------------------------------------
+# Clean rebuild
+# ---------------------------------------------------------------------------
+
+def clean_generated(output_dir: Path) -> None:
+    """Remove generated subtrees, preserve README.md and VERSION."""
+    for subdir in ["source-shards", "active", "timeline"]:
+        target = output_dir / subdir
+        if target.exists():
+            shutil.rmtree(target)
+    manifest = output_dir / "manifest.json"
+    if manifest.exists():
+        manifest.unlink()
 
 
 # ---------------------------------------------------------------------------
@@ -519,6 +818,18 @@ def collect_records(repo_root: Path) -> dict:
     if p.exists():
         add("policies/approvals", parse_approvals(p.read_text(), str(p.relative_to(repo_root))))
 
+    # Memory policy
+    p = repo_root / "harness/policies/memory-policy.yaml"
+    if p.exists():
+        add("policies/memory-policy", parse_memory_policy(p.read_text(), str(p.relative_to(repo_root))))
+
+    # Domain docs
+    domains_dir = repo_root / "harness/docs/domains"
+    if domains_dir.exists():
+        for f in sorted(domains_dir.glob("*.md")):
+            rel = str(f.relative_to(repo_root))
+            add(f"docs/domains/{f.stem}", parse_domain_doc(f.read_text(), rel, f.stem))
+
     # State: recent decisions
     p = repo_root / "harness/state/recent-decisions.md"
     if p.exists():
@@ -533,12 +844,18 @@ def collect_records(repo_root: Path) -> dict:
 
 
 def build_index(repo_root: Path, output_dir: Path) -> None:
+    # Clean before rebuild
+    clean_generated(output_dir)
+
     all_shards = collect_records(repo_root)
 
     # Flatten all records
     all_records = []
     for recs in all_shards.values():
         all_records.extend(recs)
+
+    # Second pass: resolve cross-references
+    resolve_relations(all_records)
 
     # Stable sort by id
     all_records.sort(key=lambda r: r["id"])
