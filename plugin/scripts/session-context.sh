@@ -272,6 +272,29 @@ else
 fi
 echo ""
 
+# ── MEMORY INDEX ────────────────────────────────────────────────────────────
+
+echo "=== MEMORY INDEX ==="
+if [[ -f "harness/memory-index/manifest.json" ]]; then
+  # Extract record count and version from manifest
+  RECORD_COUNT=$(python3 -c "import json; m=json.load(open('harness/memory-index/manifest.json')); print(m.get('record_count', 'unknown'))" 2>/dev/null || echo "unknown")
+  INDEX_VERSION=$(cat "harness/memory-index/VERSION" 2>/dev/null || echo "unknown")
+  echo "status: active"
+  echo "version: ${INDEX_VERSION}"
+  echo "records: ${RECORD_COUNT}"
+
+  # Check overlay
+  if [[ -d ".harness-cache/memory-overlay" ]]; then
+    OVERLAY_COUNT=$(wc -l < ".harness-cache/memory-overlay/records.jsonl" 2>/dev/null || echo "0")
+    echo "overlay: ${OVERLAY_COUNT} records"
+  else
+    echo "overlay: none"
+  fi
+else
+  echo "status: not built (run harness/scripts/build-memory-index.sh)"
+fi
+echo ""
+
 # ── LAST SESSION ─────────────────────────────────────────────────────────────
 
 echo "=== LAST SESSION ==="
@@ -325,3 +348,5 @@ echo "- harness/router.yaml"
 echo "- harness/policies/memory-policy.yaml"
 echo "- harness/state/unknowns.md"
 echo "- harness/docs/index.md"
+echo "- harness/memory-index/manifest.json"
+echo "- harness/scripts/query-memory.sh"

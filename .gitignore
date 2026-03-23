@@ -3,3 +3,6 @@
 # harness — per-session state (not shared)
 harness/state/current-task.yaml
 harness/state/last-session-summary.md
+
+# harness — local memory overlay (not shared)
+.harness-cache/

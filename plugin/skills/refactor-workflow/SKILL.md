@@ -74,6 +74,10 @@ Handoff:
   next_action: Update docs/architecture/ and record any confirmed structural rules
 ```
 
+After docs sync, rebuild the compiled memory index:
+1. Run `bash harness/scripts/build-memory-index.sh`
+2. Run `bash harness/scripts/check-memory-index.sh` to verify consistency
+
 ### 7. Summary
 Report:
 - What structural pain was addressed

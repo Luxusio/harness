@@ -126,6 +126,20 @@ run_step "lint"   "lint"  fallback_lint
 run_step "build"  "build" fallback_build
 run_step "tests"  "test"  fallback_test
 
+# ── memory index check ──────────────────────────────────────────────────
+echo ""
+echo ">> memory index consistency"
+if [[ -f "harness/scripts/check-memory-index.sh" ]]; then
+  if bash harness/scripts/check-memory-index.sh; then
+    echo "PASS: memory index is up to date"
+  else
+    echo "FAIL: memory index is stale"
+    FAILURES=$((FAILURES + 1))
+  fi
+else
+  echo "SKIP: check-memory-index.sh not found"
+fi
+
 echo ""
 if [[ $FAILURES -gt 0 ]]; then
   echo "FAIL: $FAILURES validation step(s) failed."

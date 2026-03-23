@@ -1,0 +1,37 @@
+{
+  "records": [
+    {
+      "authority": "observed",
+      "id": "mem:observed_fact:harness.policies.approvals.memory.policy:87bd722e",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Source of truth (durable, human-editable)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Source of truth (durable, human-editable)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "`harness/policies/*` \u2014 approvals, memory policy",
+      "subject_key": "harness.policies.approvals.memory.policy",
+      "tags": [],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ],
+  "subject_key": "harness.policies.approvals.memory.policy"
+}

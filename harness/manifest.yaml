@@ -52,3 +52,5 @@ memory:
     - code_and_test_evidence
     - runtime_evidence
     - hypothesis
+  shared_compiled_index: "harness/memory-index/"
+  local_overlay: ".harness-cache/memory-overlay/"

@@ -72,6 +72,14 @@ Read and adapt these supporting templates:
 - [templates/harness/scripts/smoke.sh](templates/harness/scripts/smoke.sh)
 - [templates/harness/scripts/arch-check.sh](templates/harness/scripts/arch-check.sh)
 - [templates/harness/scripts/check-approvals.sh](templates/harness/scripts/check-approvals.sh)
+- [templates/harness/scripts/build-memory-index.sh](templates/harness/scripts/build-memory-index.sh)
+- [templates/harness/scripts/build-memory-index.py](templates/harness/scripts/build-memory-index.py)
+- [templates/harness/scripts/check-memory-index.sh](templates/harness/scripts/check-memory-index.sh)
+- [templates/harness/scripts/query-memory.sh](templates/harness/scripts/query-memory.sh)
+- [templates/harness/scripts/query-memory.py](templates/harness/scripts/query-memory.py)
+- [templates/harness/memory-index/README.md](templates/harness/memory-index/README.md)
+- [templates/harness/memory-index/VERSION](templates/harness/memory-index/VERSION)
+- [templates/harness/policies/memory-policy.yaml](templates/harness/policies/memory-policy.yaml)
 - [templates/harness/arch-rules.yaml](templates/harness/arch-rules.yaml)
 
 ## Goals
@@ -164,6 +172,13 @@ If `harness/manifest.yaml` already exists:
    - `harness/scripts/smoke.sh`
    - `harness/scripts/arch-check.sh`
    - `harness/scripts/check-approvals.sh`
+   - `harness/scripts/build-memory-index.sh`
+   - `harness/scripts/build-memory-index.py`
+   - `harness/scripts/check-memory-index.sh`
+   - `harness/scripts/query-memory.sh`
+   - `harness/scripts/query-memory.py`
+   - `harness/memory-index/README.md`
+   - `harness/memory-index/VERSION`
    - `harness/arch-rules.yaml`
 
    #### Dynamic approvals population
@@ -292,7 +307,16 @@ If `harness/manifest.yaml` already exists:
    - `harness/scripts/smoke.sh` — smoke tests
    - `harness/scripts/arch-check.sh` — architecture guardrail checks
    - `harness/scripts/check-approvals.sh` — deterministic approval gate checker
+   - `harness/scripts/build-memory-index.sh` — deterministic memory index compiler
+   - `harness/scripts/build-memory-index.py` — memory index build logic
+   - `harness/scripts/check-memory-index.sh` — memory index staleness checker
+   - `harness/scripts/query-memory.sh` — memory index query prefilter
+   - `harness/scripts/query-memory.py` — query logic
    - `harness/arch-rules.yaml` — architecture rule definitions
+
+   ## Memory Index
+   - `harness/memory-index/README.md` — shared compiled memory index documentation
+   - `harness/memory-index/VERSION` — index schema version
    ```
 
    Rules:
@@ -313,7 +337,16 @@ If `harness/manifest.yaml` already exists:
    - `sed` strips any CRLF line endings that may have been introduced by the Write tool on some platforms. Shell scripts with `\r` in the shebang line will fail with cryptic errors.
    - `chmod` ensures the scripts can be invoked directly. The validate skill checks for execute permissions and will report warnings if missing.
 
-9. **Final consistency check**
+9. **Build initial memory index**
+
+   After creating all harness files including the memory scripts, build the initial compiled memory index:
+   ```bash
+   bash harness/scripts/build-memory-index.sh
+   bash harness/scripts/check-memory-index.sh
+   ```
+   This generates the `harness/memory-index/` compiled artifacts from the newly created source files. The index is committed alongside the other harness files.
+
+10. **Final consistency check**
 
    Before completing setup, verify:
    1. Every file path listed in `harness/docs/index.md` actually exists on disk.

@@ -75,6 +75,10 @@ Handoff:
   next_action: Record in the appropriate location (runbooks, architecture, approvals)
 ```
 
+After knowledge capture, rebuild the compiled memory index:
+1. Run `bash harness/scripts/build-memory-index.sh`
+2. Run `bash harness/scripts/check-memory-index.sh` to verify consistency
+
 ### 9. Summary
 Report:
 - Root cause (one sentence)

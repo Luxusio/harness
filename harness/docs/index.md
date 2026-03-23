@@ -29,3 +29,16 @@
 - `harness/scripts/smoke.sh` — smoke tests
 - `harness/scripts/arch-check.sh` — architecture guardrail checks
 - `harness/scripts/check-approvals.sh` — deterministic approval gate checker
+- `harness/scripts/build-memory-index.sh` — deterministic memory index compiler
+- `harness/scripts/build-memory-index.py` — memory index build logic (Python 3)
+- `harness/scripts/check-memory-index.sh` — memory index staleness checker
+- `harness/scripts/query-memory.sh` — memory index query prefilter
+- `harness/scripts/query-memory.py` — query logic (Python 3)
+
+## Memory Index
+- `harness/memory-index/README.md` — shared compiled memory index documentation
+- `harness/memory-index/VERSION` — index schema version
+- `harness/memory-index/manifest.json` — index metadata (generated)
+- `harness/memory-index/source-shards/` — per-source compiled records (generated)
+- `harness/memory-index/active/` — active records indexed by subject/domain/path (generated)
+- `harness/memory-index/timeline/` — temporal evolution of records (generated)

@@ -37,6 +37,11 @@ Verify each file exists and report PASS/FAIL:
 | `harness/scripts/smoke.sh` | yes |
 | `harness/scripts/arch-check.sh` | yes |
 | `harness/scripts/check-approvals.sh` | yes |
+| `harness/memory-index/README.md` | yes |
+| `harness/memory-index/VERSION` | yes |
+| `harness/scripts/build-memory-index.sh` | yes |
+| `harness/scripts/check-memory-index.sh` | yes |
+| `harness/scripts/query-memory.sh` | yes |
 
 For each: `[PASS] <file> exists` or `[FAIL] <file> missing`
 
@@ -45,6 +50,11 @@ For each: `[PASS] <file> exists` or `[FAIL] <file> missing`
 For each script in `harness/scripts/`:
 - Check if file has execute permission
 - `[PASS] <script> is executable` or `[WARN] <script> is not executable`
+
+### 2.5. Check memory index consistency
+
+Run `bash harness/scripts/check-memory-index.sh` and report:
+- `[PASS] memory index is up to date` or `[FAIL] memory index is stale — run build-memory-index.sh`
 
 ### 3. Check referential integrity
 

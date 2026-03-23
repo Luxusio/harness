@@ -13,6 +13,36 @@
 - **Install via marketplace:** `/plugin marketplace add https://github.com/Luxusio/harness.git` then `/plugin install harness@harness`
 - **Update marketplace clone:** `cd ~/.claude/plugins/marketplaces/harness && git fetch origin master && git reset --hard origin/master`
 
+## Memory index operations
+
+### Build the compiled memory index
+```bash
+bash harness/scripts/build-memory-index.sh
+```
+Regenerates `harness/memory-index/` from all durable source files. Deterministic — same input always produces same output. Run after modifying any file in `harness/docs/`, `harness/state/`, or `harness/policies/`.
+
+### Check for stale index
+```bash
+bash harness/scripts/check-memory-index.sh
+```
+Rebuilds to a temp directory and diffs against committed index. Exit 0 = up to date, exit 1 = stale.
+
+### Query the memory index
+```bash
+bash harness/scripts/query-memory.sh --query "approval rules" --format markdown
+bash harness/scripts/query-memory.sh --query "plugin structure" --paths "plugin/" --top 5 --format json
+```
+
+### Rebuild after source changes
+After modifying durable memory sources, always run:
+```bash
+bash harness/scripts/build-memory-index.sh
+bash harness/scripts/check-memory-index.sh
+```
+
+### Never edit generated files
+Files under `harness/memory-index/source-shards/`, `active/`, and `timeline/` are generated. Edit the source documents instead, then rebuild.
+
 ## Debugging notes
 
 <!-- Add debugging insights from bug fixes -->

@@ -60,3 +60,46 @@ retrieval:
 cleanup:
   dedupe: true
   require_last_verified_at: true
+
+compiled_index:
+  root: harness/memory-index
+  is_generated_artifact: true
+  source_of_truth: false
+  manual_edit: never
+  rebuild_after:
+    - harness/docs/**
+    - harness/state/recent-decisions.md
+    - harness/state/unknowns.md
+    - harness/policies/approvals.yaml
+  rebuild_command: "bash harness/scripts/build-memory-index.sh"
+  check_command: "bash harness/scripts/check-memory-index.sh"
+
+retrieval:
+  mode: hybrid
+  shared_compiled_index_root: harness/memory-index
+  local_overlay_root: .harness-cache/memory-overlay
+  prefer_index_first: true
+  include_raw_source_verification: true
+  max_pack_items: 12
+  raw_verify_top_n: 4
+  prefer_status_order:
+    - active
+    - resolved
+    - superseded
+  prefer_authority_order:
+    - enforced
+    - confirmed
+    - observed
+    - hypothesis
+  heavy_triggers:
+    temporal_terms:
+      - latest
+      - current
+      - changed
+      - still
+      - now
+      - before
+      - after
+      - superseded
+    conflict_candidate_threshold: 2
+    related_unknowns_trigger: true

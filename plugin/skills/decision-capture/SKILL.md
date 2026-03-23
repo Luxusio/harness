@@ -90,12 +90,27 @@ Prefer this order of enforcement:
 
 If a test or script can enforce the rule, create it.
 
+### 5.5. Record temporal relations
+
+When recording decisions that affect existing records:
+- If this decision **supersedes** an older one: add `superseded by ADR-NNNN` to the old ADR's Status field
+- If this decision **resolves** an open question: move the question from active to resolved in `harness/state/unknowns.md` with a link to the ADR
+- If this decision **conflicts with** an existing rule: flag the conflict explicitly before recording
+
+These relations are reflected in the compiled memory index through `relations.supersedes`, `relations.resolves`, and `relations.conflicts_with` fields.
+
 ### 6. Summary
 Report:
 - What was captured
 - Where it was recorded
 - Whether it was encoded as executable constraint
 - Confidence level: user-confirmed vs inferred
+
+### 7. Rebuild compiled memory index
+
+After recording decisions:
+1. Run `bash harness/scripts/build-memory-index.sh`
+2. Run `bash harness/scripts/check-memory-index.sh`
 
 ## Guardrails
 

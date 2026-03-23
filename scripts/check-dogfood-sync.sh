@@ -23,6 +23,11 @@ declare -a PAIRS=(
   "harness/scripts/smoke.sh"
   "harness/scripts/arch-check.sh"
   "harness/scripts/check-approvals.sh"
+  "harness/scripts/build-memory-index.sh"
+  "harness/scripts/build-memory-index.py"
+  "harness/scripts/check-memory-index.sh"
+  "harness/scripts/query-memory.sh"
+  "harness/scripts/query-memory.py"
   "harness/docs/requirements/README.md"
 )
 

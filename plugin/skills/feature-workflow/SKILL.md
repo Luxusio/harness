@@ -95,6 +95,10 @@ Handoff:
 ```
 Note: `harness:docs-sync` (docs-sync) does NOT modify REQ file status. REQ status transitions are owned exclusively by this workflow (see below).
 
+After docs sync completes, rebuild the compiled memory index:
+1. Run `bash harness/scripts/build-memory-index.sh`
+2. Run `bash harness/scripts/check-memory-index.sh` to verify consistency
+
 If a durable rule was confirmed during this work, also pass to `harness:decision-capture` with the rule text, type, and evidence.
 
 **REQ status transitions (this workflow's responsibility):**

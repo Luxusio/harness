@@ -1,0 +1,37 @@
+{
+  "records": [
+    {
+      "authority": "confirmed",
+      "id": "mem:runbook_note:marketplace.install.this.repo.uses.git.based.marketplace.ad:c2ec75d7",
+      "index_status": "active",
+      "kind": "runbook_note",
+      "provenance": {
+        "locator": "Debugging notes",
+        "source_path": "harness/docs/runbooks/development.md",
+        "source_section": "Debugging notes",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "Marketplace install: This repo uses Git-based marketplace add (`/plugin marketplace add <git-url>`). The relative plugin source (`./plugin`) in `marketplace.json` works with Git-based installs. Raw `marketplace.json` URL-based installs are not compatible with this repo's distribution shape.",
+      "subject_key": "marketplace.install.this.repo.uses.git.based.marketplace.ad",
+      "tags": [],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ],
+  "subject_key": "marketplace.install.this.repo.uses.git.based.marketplace.ad"
+}

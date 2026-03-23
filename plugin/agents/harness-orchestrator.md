@@ -57,6 +57,33 @@ Load based on scope:
 - `harness/docs/brownfield/inventory.md`
 - `harness/docs/brownfield/findings.md`
 
+**Index-first retrieval (when memory index is available):**
+
+Before opening raw doc files, check if `harness/memory-index/manifest.json` exists:
+1. Run `harness/scripts/query-memory.sh --query "<user query>" --paths "<relevant paths>" --domains "<relevant domains>" --top 8 --format markdown`
+2. Use the returned memory pack as primary context
+3. Open at most the top 4 raw source files for verification (not all docs)
+4. If the index is missing or corrupt, fall back to the existing raw-docs approach
+
+This reduces context loading cost while maintaining accuracy through source verification.
+
+**Heavy retrieval trigger:**
+
+If any of these conditions are met, use expanded retrieval:
+- Query contains temporal terms: `latest`, `current`, `changed`, `still`, `now`, `before`, `after`, `superseded`
+- Same `subject_key` has 2+ active candidates that may conflict
+- Related unknowns exist for the query domain
+- Query asks "why this decision", "is this still valid", "what changed"
+
+When heavy trigger fires and the memory search agents are available:
+1. Delegate to `memory-search-facts` for direct facts and explicit statements
+2. Delegate to `memory-search-context` for related rules, nearby decisions, implied constraints
+3. Delegate to `memory-search-timeline` for latest-valid fact, supersession, resolution tracing
+4. Aggregate into a single authoritative memory pack
+5. The pack is ephemeral — do NOT commit it
+
+If memory search agents are unavailable, fall back to loading more raw source files.
+
 ### 3. Assess risk
 
 **Auto-proceed** (no confirmation needed):
@@ -220,6 +247,13 @@ After validated work, check whether recordable knowledge emerged. Not every chan
 Prefer executable memory (tests, scripts) over docs when possible.
 
 After memory writes, check if `recent-decisions.md` exceeds 50 entries (lines matching `^- \[`). If the threshold is exceeded, perform sync-time threshold-based compaction by following the procedure in `skills/repo-memory-policy/SKILL.md` § Compaction. Compaction runs during this sync step when the threshold is exceeded — it is not triggered by background automation.
+
+**Compiled index refresh:**
+
+If any durable source was modified during this sync (docs, state, or policies files), rebuild the compiled memory index:
+1. Run `bash harness/scripts/build-memory-index.sh`
+2. Run `bash harness/scripts/check-memory-index.sh` to verify consistency
+3. Include the regenerated index files in the memory_updates list
 
 Update `current-task.yaml`: set `memory_updates` list with each file modified during sync. Set status to `syncing`, then `complete` when done. If nothing was recordable, set `memory_updates: []` and status to `complete` directly — do not leave status as `syncing`.
 

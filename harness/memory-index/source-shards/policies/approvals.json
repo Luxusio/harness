@@ -1,0 +1,133 @@
+{
+  "records": [
+    {
+      "authority": "enforced",
+      "id": "mem:approval_rule:approval.always.large.delete.or.move:eb674f50",
+      "index_status": "active",
+      "kind": "approval_rule",
+      "provenance": {
+        "locator": "always_ask_before",
+        "source_path": "harness/policies/approvals.yaml",
+        "source_section": "always_ask_before",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "Always ask before: large_delete_or_move. Reason: Large structural deletes or moves have broad blast radius. Min files: 10",
+      "subject_key": "approval.always.large.delete.or.move",
+      "tags": [],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "id": "mem:approval_rule:approval.ask_when.blast.radius.unknown:bd1569f0",
+      "index_status": "active",
+      "kind": "approval_rule",
+      "provenance": {
+        "locator": "ask_when",
+        "source_path": "harness/policies/approvals.yaml",
+        "source_section": "ask_when",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "Ask when: blast_radius_unknown",
+      "subject_key": "approval.ask_when.blast.radius.unknown",
+      "tags": [],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "id": "mem:approval_rule:approval.ask_when.existing.rule.conflicts:2d4db79d",
+      "index_status": "active",
+      "kind": "approval_rule",
+      "provenance": {
+        "locator": "ask_when",
+        "source_path": "harness/policies/approvals.yaml",
+        "source_section": "ask_when",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "Ask when: existing_rule_conflicts",
+      "subject_key": "approval.ask_when.existing.rule.conflicts",
+      "tags": [],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "enforced",
+      "id": "mem:approval_rule:approval.ask_when.requirements.ambiguous:5ad4b1b1",
+      "index_status": "active",
+      "kind": "approval_rule",
+      "provenance": {
+        "locator": "ask_when",
+        "source_path": "harness/policies/approvals.yaml",
+        "source_section": "ask_when",
+        "source_type": "policy"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "Ask when: requirements_ambiguous",
+      "subject_key": "approval.ask_when.requirements.ambiguous",
+      "tags": [],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ],
+  "source_shard": "policies/approvals"
+}

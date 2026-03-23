@@ -1,0 +1,37 @@
+{
+  "records": [
+    {
+      "authority": "confirmed",
+      "id": "mem:constraint:every.code.change.must.close.a.validation.loop.with.evidence:a87edf4c",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "Format",
+        "source_path": "harness/docs/constraints/project-constraints.md",
+        "source_section": "Format",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "Every code change must close a validation loop with evidence. Scope: all workflows. Reason: \"code was written\" is not proof \u2014 \"change was verified\" is.",
+      "subject_key": "every.code.change.must.close.a.validation.loop.with.evidence",
+      "tags": [],
+      "temporal": {
+        "documented_at": "2026-03-20",
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ],
+  "subject_key": "every.code.change.must.close.a.validation.loop.with.evidence"
+}

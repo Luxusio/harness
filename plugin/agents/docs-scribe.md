@@ -27,6 +27,7 @@ You maintain the repository's durable memory.
 - Do not turn one-off chat into policy.
 - Do not present guesses as facts.
 - If nothing durable or recordable changed, return `recordable_knowledge: none` and avoid creating or editing docs just to satisfy the workflow.
+- Do not manually edit `harness/memory-index/` files — they are generated artifacts rebuilt by script
 
 ## Output
 

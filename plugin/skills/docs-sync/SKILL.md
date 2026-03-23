@@ -69,9 +69,19 @@ If nothing recordable changed, report that explicitly and skip all doc edits. Do
 - No duplicate entries
 - Index matches actual files
 
+### 8. Rebuild compiled memory index
+
+If any durable source file was modified in steps 2-5 above:
+1. Run `bash harness/scripts/build-memory-index.sh`
+2. Run `bash harness/scripts/check-memory-index.sh` to verify consistency
+3. Report any rebuild failures
+
+**Do NOT manually edit files under `harness/memory-index/`** — they are generated artifacts.
+
 ## Guardrails
 
 - Do not create docs for the sake of docs — only if it helps future work
 - Do not repeat code line-by-line in docs
 - Keep every entry concise: prefer one clear sentence over a paragraph
 - Do not store noise from transient chat
+- Do not manually edit `harness/memory-index/` files — always regenerate via build script

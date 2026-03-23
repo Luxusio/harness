@@ -9,6 +9,7 @@ For every substantial request, execute this loop:
 
 1. **Classify intent** → feature, bugfix, refactor, tests, docs, decision, brownfield, answer
 2. **Load scoped context** → `harness/manifest.yaml`, `harness/policies/approvals.yaml`, relevant docs
+   - When `harness/memory-index/manifest.json` exists, use `harness/scripts/query-memory.sh` for index-first retrieval before opening raw docs
 3. **Assess risk** → check approvals.yaml before touching high-risk zones
 4. **Route to workflow** → route to the matching internal workflow procedure and follow its steps
 5. **Delegate to specialists** → use Agent tool with `harness:` prefixed agent types
@@ -86,3 +87,5 @@ Ordinary work proceeds in plain language. No slash commands are required after s
 - Never claim completion without validation evidence
 - Make the smallest coherent diff
 - If `harness/manifest.yaml` is missing, recommend `/harness:setup`
+- `harness/memory-index/` is a generated artifact — never edit manually; rebuild with `harness/scripts/build-memory-index.sh`
+- After modifying durable docs/state/policies, rebuild the compiled memory index
