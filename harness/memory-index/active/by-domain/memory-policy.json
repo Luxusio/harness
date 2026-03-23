@@ -3,7 +3,7 @@
   "records": [
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.ask.architecture.principle:caea1f51",
+      "id": "mem:constraint:memory-policy.persist.ask.architecture.principle:55f37892",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -27,7 +27,7 @@
       },
       "source_status": null,
       "statement": "ask-first before recording: architecture_principle",
-      "subject_key": "memory.persist.ask.architecture.principle",
+      "subject_key": "memory-policy.persist.ask.architecture.principle",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -37,7 +37,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.ask.breaking.behavior.policy:75a8e2b0",
+      "id": "mem:constraint:memory-policy.persist.ask.breaking.behavior.policy:403f2d00",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -61,7 +61,7 @@
       },
       "source_status": null,
       "statement": "ask-first before recording: breaking_behavior_policy",
-      "subject_key": "memory.persist.ask.breaking.behavior.policy",
+      "subject_key": "memory-policy.persist.ask.breaking.behavior.policy",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -71,7 +71,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.ask.business.rule.interpretation:dd8dfa63",
+      "id": "mem:constraint:memory-policy.persist.ask.business.rule.interpretation:d48bcc78",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -95,7 +95,7 @@
       },
       "source_status": null,
       "statement": "ask-first before recording: business_rule_interpretation",
-      "subject_key": "memory.persist.ask.business.rule.interpretation",
+      "subject_key": "memory-policy.persist.ask.business.rule.interpretation",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -105,7 +105,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.ask.external.contract.meaning:ca575f5d",
+      "id": "mem:constraint:memory-policy.persist.ask.external.contract.meaning:76ce5edb",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -129,7 +129,7 @@
       },
       "source_status": null,
       "statement": "ask-first before recording: external_contract_meaning",
-      "subject_key": "memory.persist.ask.external.contract.meaning",
+      "subject_key": "memory-policy.persist.ask.external.contract.meaning",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -139,7 +139,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.ask.ownership.assignment:9168e6d1",
+      "id": "mem:constraint:memory-policy.persist.ask.ownership.assignment:4b9d3792",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -163,7 +163,7 @@
       },
       "source_status": null,
       "statement": "ask-first before recording: ownership_assignment",
-      "subject_key": "memory.persist.ask.ownership.assignment",
+      "subject_key": "memory-policy.persist.ask.ownership.assignment",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -173,7 +173,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.auto.explicit.user.approval.rule:ae2a1355",
+      "id": "mem:constraint:memory-policy.persist.auto.explicit.user.approval.rule:1bfc5e86",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -197,7 +197,7 @@
       },
       "source_status": null,
       "statement": "auto-record: explicit_user_approval_rule",
-      "subject_key": "memory.persist.auto.explicit.user.approval.rule",
+      "subject_key": "memory-policy.persist.auto.explicit.user.approval.rule",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -207,7 +207,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.auto.explicit.user.constraint:45b9be9c",
+      "id": "mem:constraint:memory-policy.persist.auto.explicit.user.constraint:a4c1b75a",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -231,7 +231,7 @@
       },
       "source_status": null,
       "statement": "auto-record: explicit_user_constraint",
-      "subject_key": "memory.persist.auto.explicit.user.constraint",
+      "subject_key": "memory-policy.persist.auto.explicit.user.constraint",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -241,7 +241,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.auto.repeated.project.pattern:d29dbdb3",
+      "id": "mem:constraint:memory-policy.persist.auto.repeated.project.pattern:3c2d9ae5",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -265,7 +265,7 @@
       },
       "source_status": null,
       "statement": "auto-record: repeated_project_pattern",
-      "subject_key": "memory.persist.auto.repeated.project.pattern",
+      "subject_key": "memory-policy.persist.auto.repeated.project.pattern",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -275,7 +275,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.auto.verified.architecture.fact:98eb5b74",
+      "id": "mem:constraint:memory-policy.persist.auto.verified.architecture.fact:dbfe791e",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -299,7 +299,7 @@
       },
       "source_status": null,
       "statement": "auto-record: verified_architecture_fact",
-      "subject_key": "memory.persist.auto.verified.architecture.fact",
+      "subject_key": "memory-policy.persist.auto.verified.architecture.fact",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -309,7 +309,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.auto.verified.bug.root.cause:b4b90662",
+      "id": "mem:constraint:memory-policy.persist.auto.verified.bug.root.cause:cc876610",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -333,7 +333,7 @@
       },
       "source_status": null,
       "statement": "auto-record: verified_bug_root_cause",
-      "subject_key": "memory.persist.auto.verified.bug.root.cause",
+      "subject_key": "memory-policy.persist.auto.verified.bug.root.cause",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -343,7 +343,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.auto.verified.runtime.fact:d6245681",
+      "id": "mem:constraint:memory-policy.persist.auto.verified.runtime.fact:baf4755f",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -367,7 +367,7 @@
       },
       "source_status": null,
       "statement": "auto-record: verified_runtime_fact",
-      "subject_key": "memory.persist.auto.verified.runtime.fact",
+      "subject_key": "memory-policy.persist.auto.verified.runtime.fact",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -377,7 +377,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.never.duplicate.memory:a70e8e84",
+      "id": "mem:constraint:memory-policy.persist.never.duplicate.memory:5bd0732b",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -401,7 +401,7 @@
       },
       "source_status": null,
       "statement": "never record: duplicate_memory",
-      "subject_key": "memory.persist.never.duplicate.memory",
+      "subject_key": "memory-policy.persist.never.duplicate.memory",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -411,7 +411,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.never.emotional.comment:277d68ae",
+      "id": "mem:constraint:memory-policy.persist.never.emotional.comment:55f60754",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -435,7 +435,7 @@
       },
       "source_status": null,
       "statement": "never record: emotional_comment",
-      "subject_key": "memory.persist.never.emotional.comment",
+      "subject_key": "memory-policy.persist.never.emotional.comment",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -445,7 +445,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.never.repo.irrelevant.preference:b1c99f59",
+      "id": "mem:constraint:memory-policy.persist.never.repo.irrelevant.preference:289301a8",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -469,7 +469,7 @@
       },
       "source_status": null,
       "statement": "never record: repo_irrelevant_preference",
-      "subject_key": "memory.persist.never.repo.irrelevant.preference",
+      "subject_key": "memory-policy.persist.never.repo.irrelevant.preference",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -479,7 +479,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.never.transient.chat:003ebd1f",
+      "id": "mem:constraint:memory-policy.persist.never.transient.chat:4995a8b7",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -503,7 +503,7 @@
       },
       "source_status": null,
       "statement": "never record: transient_chat",
-      "subject_key": "memory.persist.never.transient.chat",
+      "subject_key": "memory-policy.persist.never.transient.chat",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -513,7 +513,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.persist.never.unverified.guess.as.fact:d14cc794",
+      "id": "mem:constraint:memory-policy.persist.never.unverified.guess.as.fact:34f6fa20",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -537,7 +537,7 @@
       },
       "source_status": null,
       "statement": "never record: unverified_guess_as_fact",
-      "subject_key": "memory.persist.never.unverified.guess.as.fact",
+      "subject_key": "memory-policy.persist.never.unverified.guess.as.fact",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -547,7 +547,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.promotion.confirmed.to.enforced:bef6987d",
+      "id": "mem:constraint:memory-policy.promotion.confirmed.to.enforced:65e7a84f",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -571,7 +571,7 @@
       },
       "source_status": null,
       "statement": "promotion: confirmed\u2192enforced requires test_added, validation_script_added, config_assertion_added",
-      "subject_key": "memory.promotion.confirmed.to.enforced",
+      "subject_key": "memory-policy.promotion.confirmed.to.enforced",
       "tags": [],
       "temporal": {
         "documented_at": null,
@@ -581,7 +581,7 @@
     },
     {
       "authority": "enforced",
-      "id": "mem:constraint:memory.promotion.hypothesis.to.observed.fact:eb7395ab",
+      "id": "mem:constraint:memory-policy.promotion.hypothesis.to.observed.fact:a3ef31a1",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -605,7 +605,7 @@
       },
       "source_status": null,
       "statement": "promotion: hypothesis\u2192observed_fact requires code_evidence, test_or_runtime_evidence, from:",
-      "subject_key": "memory.promotion.hypothesis.to.observed.fact",
+      "subject_key": "memory-policy.promotion.hypothesis.to.observed.fact",
       "tags": [],
       "temporal": {
         "documented_at": null,

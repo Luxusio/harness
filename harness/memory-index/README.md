@@ -96,6 +96,39 @@ bash harness/scripts/test-memory-index.sh
 ```
 Checks include: schema validity, determinism (two consecutive builds produce zero diff), scope coverage (by-domain and by-path populated), temporal relations present, query output format correctness.
 
+## Path key encoding
+
+`active/by-path/<encoded-path>.json` uses filesystem-safe encoding:
+- Forward slashes (`/`) are replaced with `__`
+- Leading path separators are stripped
+- Example: `harness/docs/constraints/` → `harness__docs__constraints__.json`
+
+Use the `--paths` flag in `query-memory.sh` with the original path (encoding is handled internally).
+
+## Canonical subject key strategy
+
+Subject keys are derived per source type to ensure stable, collision-free identifiers:
+- **ADR / decisions**: `adr-<slug>` derived from filename (e.g., `adr-0001-harness-bootstrap`)
+- **Constraints**: `constraint-<slug>` derived from section heading
+- **Requirements**: `req-<id>-<slug>` derived from filename
+- **Approval rules**: `approval-<rule-slug>` derived from rule name or path pattern
+- **Observed facts / runbook notes**: `fact-<source-slug>-<hash8>` — hash prevents collisions for multiple facts per file
+- **Unknowns / hypotheses**: `unknown-<slug>` or `hypothesis-<slug>` derived from question text
+
+## Current limitations
+
+**What works:**
+- Scope indexing (by-domain, by-path) is active on every rebuild
+- Supersession edges populated for ADRs with `supersedes` frontmatter
+- Resolved unknowns generate `resolves` edges
+- Query planner loads only relevant shards (not full index)
+- Admission gate filters out unrelated high-authority records
+
+**What is planned but not yet active:**
+- Freeform docs (runbooks, constraints, requirements) do not automatically generate cross-reference edges
+- `extends` and `conflicts_with` edges are sparse — only populated when explicitly declared in source frontmatter
+- Full-text semantic similarity across shards is not implemented; scoring is keyword + authority-weighted
+
 ## Determinism guarantee
 
 Two consecutive runs with no source changes produce zero git diff.

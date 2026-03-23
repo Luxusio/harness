@@ -3,7 +3,7 @@
     {
       "authority": "confirmed",
       "id": "mem:decision:adr.0001.adr.0001.harness.bootstrap:a92bb49b",
-      "index_status": "active",
+      "index_status": "superseded",
       "kind": "decision",
       "provenance": {
         "locator": "ADR-0001: harness bootstrap",

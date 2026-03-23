@@ -60,25 +60,23 @@ Load based on scope:
 **Index-first retrieval (when memory index is available):**
 
 Before opening raw doc files, check if `harness/memory-index/manifest.json` exists:
-0. If `harness/scripts/build-memory-overlay.sh` exists, run it first to refresh the overlay from current session state:
+0. If `harness/scripts/build-memory-overlay.sh` exists, run it to refresh session overlay:
    `bash harness/scripts/build-memory-overlay.sh`
-1. If `.harness-cache/memory-overlay/` exists, include overlay in query:
-   `harness/scripts/query-memory.sh --query "<user query>" --paths "<relevant paths>" --domains "<relevant domains>" --top 8 --include-overlay --format markdown`
-2. If overlay is missing or build failed, query without it:
-   `harness/scripts/query-memory.sh --query "<user query>" --paths "<relevant paths>" --domains "<relevant domains>" --top 8 --format markdown`
-3. Use the returned memory pack as primary context
-4. Open at most the top 4 raw source files for verification (not all docs)
-5. If the index is missing or corrupt, fall back to the existing raw-docs approach
+1. Run query planner: `harness/scripts/query-memory.sh --query "<query>" --domains "<domains>" --paths "<paths>" --include-overlay --top 8 --format pack`
+2. The planner loads only relevant index shards (by-domain, by-path) — not the entire index
+3. Use the returned memory pack: `facts` for context, `source_files_to_verify` for raw verification
+4. Open at most 4 source files from `source_files_to_verify` for verification
+5. If the pack has `unresolved_conflicts`, consider heavy retrieval
+6. If the index is missing or corrupt, fall back to raw-docs approach
 
 This reduces context loading cost while maintaining accuracy through source verification. The overlay injects current session state (active task, last session summary) so queries automatically reflect the most recent context.
 
 **Heavy retrieval trigger:**
 
-If any of these conditions are met, use expanded retrieval:
-- Query contains temporal terms: `latest`, `current`, `changed`, `still`, `now`, `before`, `after`, `superseded`
-- Same `subject_key` has 2+ active candidates that may conflict
-- Related unknowns exist for the query domain
-- Query asks "why this decision", "is this still valid", "what changed"
+Triggered when the memory pack contains:
+- `unresolved_conflicts` is non-empty
+- Query contains temporal terms and timeline data exists
+- Multiple records for same subject with different statuses
 
 When heavy trigger fires and the memory search agents are available:
 1. Delegate to `memory-search-facts` for direct facts and explicit statements

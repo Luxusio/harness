@@ -1,0 +1,39 @@
+{
+  "records": [
+    {
+      "authority": "observed",
+      "id": "mem:observed_fact:domain.domains.how.to.organize.setup.skill.md.setup.procedure:3d1a5905",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "How to organize",
+        "source_path": "harness/docs/domains/README.md",
+        "source_section": "How to organize",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "domains"
+        ],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "`setup-skill.md` \u2014 setup procedure, templates, placeholder system",
+      "subject_key": "domain.domains.how.to.organize.setup.skill.md.setup.procedure",
+      "tags": [],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ],
+  "subject_key": "domain.domains.how.to.organize.setup.skill.md.setup.procedure"
+}

@@ -1,0 +1,39 @@
+{
+  "records": [
+    {
+      "authority": "observed",
+      "id": "mem:observed_fact:arch.observed.facts.plugin.json.does.not.support.a:d4c32cd4",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Observed Facts",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Observed Facts",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "`plugin.json` does not support `\"agents\"` or `\"hooks\"` fields \u2014 validation error. Evidence: install failed with \"agents: Invalid input\".",
+      "subject_key": "arch.observed.facts.plugin.json.does.not.support.a",
+      "tags": [],
+      "temporal": {
+        "documented_at": "2026-03-20",
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ],
+  "subject_key": "arch.observed.facts.plugin.json.does.not.support.a"
+}

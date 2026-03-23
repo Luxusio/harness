@@ -1,0 +1,39 @@
+{
+  "records": [
+    {
+      "authority": "observed",
+      "id": "mem:observed_fact:arch.local.overlay.per.se.harness.cache.memory.overlay.u:b7d6b9e4",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Local overlay (per-session, gitignored)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Local overlay (per-session, gitignored)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "`.harness-cache/memory-overlay/` \u2014 uncommitted working memory",
+      "subject_key": "arch.local.overlay.per.se.harness.cache.memory.overlay.u",
+      "tags": [],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ],
+  "subject_key": "arch.local.overlay.per.se.harness.cache.memory.overlay.u"
+}

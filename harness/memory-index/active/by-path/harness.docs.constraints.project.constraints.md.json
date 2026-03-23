@@ -3,7 +3,7 @@
   "records": [
     {
       "authority": "confirmed",
-      "id": "mem:constraint:brownfield.always.inventory.protect.encode.constrain:df2df3d9",
+      "id": "mem:constraint:constraint.format.brownfield.always.inventory.pr:3fd91327",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -29,7 +29,7 @@
       },
       "source_status": null,
       "statement": "Brownfield: always inventory \u2192 protect \u2192 encode \u2192 constrain \u2192 operate. Never jump to editing. Scope: brownfield-adoption. Reason: prevents dangerous modifications in unfamiliar code.",
-      "subject_key": "brownfield.always.inventory.protect.encode.constrain",
+      "subject_key": "constraint.format.brownfield.always.inventory.pr",
       "tags": [],
       "temporal": {
         "documented_at": "2026-03-20",
@@ -39,7 +39,7 @@
     },
     {
       "authority": "confirmed",
-      "id": "mem:constraint:every.code.change.must.close.a.validation.loop.with.evidence:a87edf4c",
+      "id": "mem:constraint:constraint.format.every.code.change.must.close.a:7d46ca1d",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -65,7 +65,7 @@
       },
       "source_status": null,
       "statement": "Every code change must close a validation loop with evidence. Scope: all workflows. Reason: \"code was written\" is not proof \u2014 \"change was verified\" is.",
-      "subject_key": "every.code.change.must.close.a.validation.loop.with.evidence",
+      "subject_key": "constraint.format.every.code.change.must.close.a",
       "tags": [],
       "temporal": {
         "documented_at": "2026-03-20",
@@ -75,7 +75,7 @@
     },
     {
       "authority": "confirmed",
-      "id": "mem:constraint:never.store.unverified.guesses.as.confirmed.facts.memory.pr:cd79d580",
+      "id": "mem:constraint:constraint.format.never.store.unverified.guesses:c50bd6db",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -101,7 +101,7 @@
       },
       "source_status": null,
       "statement": "Never store unverified guesses as confirmed facts. Memory promotion: hypothesis \u2192 observed_fact \u2192 confirmed \u2192 enforced. Scope: all memory operations. Reason: core product principle.",
-      "subject_key": "never.store.unverified.guesses.as.confirmed.facts.memory.pr",
+      "subject_key": "constraint.format.never.store.unverified.guesses",
       "tags": [],
       "temporal": {
         "documented_at": "2026-03-20",
@@ -111,7 +111,7 @@
     },
     {
       "authority": "confirmed",
-      "id": "mem:constraint:prefer.executable.enforcement.over.documentation.test.lin:fd3436da",
+      "id": "mem:constraint:constraint.format.prefer.executable.enforcement.:ae3df3a2",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -137,7 +137,7 @@
       },
       "source_status": null,
       "statement": "Prefer executable enforcement over documentation: test > lint rule > config assertion > docs. Scope: decision capture and rule encoding. Reason: docs alone don't prevent violations.",
-      "subject_key": "prefer.executable.enforcement.over.documentation.test.lin",
+      "subject_key": "constraint.format.prefer.executable.enforcement.",
       "tags": [],
       "temporal": {
         "documented_at": "2026-03-20",
@@ -147,7 +147,7 @@
     },
     {
       "authority": "confirmed",
-      "id": "mem:constraint:public.slash.commands.are.harness.setup.and.harness.val:eab84d66",
+      "id": "mem:constraint:constraint.format.public.slash.commands.are.harn:0fe6618c",
       "index_status": "active",
       "kind": "constraint",
       "provenance": {
@@ -173,7 +173,7 @@
       },
       "source_status": null,
       "statement": "Public slash commands are `/harness:setup` and `/harness:validate`. Ordinary work should proceed in plain language; workflow skills remain hidden and auto-routed. Scope: plugin UX. Reason: users should not memorize workflow commands, but diagnostics remain explicit.",
-      "subject_key": "public.slash.commands.are.harness.setup.and.harness.val",
+      "subject_key": "constraint.format.public.slash.commands.are.harn",
       "tags": [],
       "temporal": {
         "documented_at": "2026-03-20",

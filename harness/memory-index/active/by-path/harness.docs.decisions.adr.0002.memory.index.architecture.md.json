@@ -1,0 +1,43 @@
+{
+  "path_key": "harness.docs.decisions.adr.0002.memory.index.architecture.md",
+  "records": [
+    {
+      "authority": "confirmed",
+      "id": "mem:decision:adr.0002.adr.0002.shared.compiled.memory.index.architecture:42b1595b",
+      "index_status": "active",
+      "kind": "decision",
+      "provenance": {
+        "locator": "ADR-0002: Shared compiled memory index architecture",
+        "source_path": "harness/docs/decisions/ADR-0002-memory-index-architecture.md",
+        "source_section": "ADR-0002: Shared compiled memory index architecture",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": [
+          "mem:decision:adr.0001.adr.0001.harness.bootstrap:a92bb49b"
+        ]
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "decisions"
+        ],
+        "paths": [
+          "harness/docs/decisions/ADR-0002-memory-index-architecture.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Introduce a deterministic compiled memory index under harness/memory-index/ that is committed to git.",
+      "subject_key": "adr.0002.adr.0002.shared.compiled.memory.index.architecture",
+      "tags": [],
+      "temporal": {
+        "documented_at": "2026-03-24",
+        "effective_at": "2026-03-24",
+        "last_verified_at": null
+      }
+    }
+  ]
+}

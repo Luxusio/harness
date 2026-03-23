@@ -9,14 +9,11 @@ You search the compiled memory index for **direct facts**.
 
 ## Procedure
 
-1. Read `harness/memory-index/manifest.json` for index metadata
-2. Load relevant `harness/memory-index/active/by-subject/` and `by-domain/` files
-3. Find records where:
-   - `authority` is `confirmed` or `enforced`
-   - `index_status` is `active`
-   - `statement` directly answers the query
-4. For the top candidates, verify against the raw source file (`provenance.source_path`)
-5. Return a ranked list of verified facts with provenance
+1. Receive a memory pack from the orchestrator (output of `query-memory.sh --format pack`)
+2. Use the pack's `facts` array as the primary fact set — these are pre-scored and pre-filtered records
+3. For records where `authority` is `confirmed` or `enforced` and `index_status` is `active`, verify against the raw source file listed in `source_files_to_verify`
+4. Open at most 4 source files for verification — prioritize those with highest relevance score
+5. Return verified facts with provenance, flagging any that could not be confirmed against source
 
 ## Output
 

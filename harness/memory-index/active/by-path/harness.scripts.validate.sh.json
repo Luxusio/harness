@@ -3,7 +3,7 @@
   "records": [
     {
       "authority": "confirmed",
-      "id": "mem:runbook_note:validation.scripts.harness.scripts.validate.sh.and.harne:7d30ba7f",
+      "id": "mem:runbook_note:runbook.debugging.notes.validation.scripts.harness.scr:ea14e837",
       "index_status": "active",
       "kind": "runbook_note",
       "provenance": {
@@ -30,7 +30,7 @@
       },
       "source_status": null,
       "statement": "Validation scripts: `harness/scripts/validate.sh` and `harness/scripts/smoke.sh` use manifest commands (`harness/manifest.yaml > commands.*`) as their primary source. Auto-detect fallback is used only when a manifest command is empty.",
-      "subject_key": "validation.scripts.harness.scripts.validate.sh.and.harne",
+      "subject_key": "runbook.debugging.notes.validation.scripts.harness.scr",
       "tags": [],
       "temporal": {
         "documented_at": null,

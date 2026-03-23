@@ -9,13 +9,12 @@ You search the compiled memory index for **contextual information** around a que
 
 ## Procedure
 
-1. Read relevant `harness/memory-index/active/` index files
-2. Find records that are **related but not direct answers**:
-   - Same domain but different subject
-   - Records that `extend` or reference the same scope
-   - Approval rules that affect the same paths
-   - Constraints that apply to the same domain
-3. Check `relations` fields for connections (`extends`, `conflicts_with`)
+1. Receive a memory pack from the orchestrator (output of `query-memory.sh --format pack`)
+2. Starting from the pack's `facts` array, expand to related records using `relations` fields on each fact:
+   - Follow `extends` links to find records this fact builds on
+   - Follow `conflicts_with` links to surface contradictions
+   - Scan the same domain for approval rules and constraints that apply to the same paths
+3. For related records not already in the pack, load them from `harness/memory-index/active/by-domain/<domain>.json` or `by-path/<path>.json`
 4. Return contextual records grouped by relationship type
 
 ## Output

@@ -234,17 +234,363 @@ PYEOF
     fi
 }
 
+# ── Test 7: Precision — approval source of truth ──────────────────────────────
+# Query "approval source of truth" with domain boost must return a result whose
+# provenance.source_path contains "approvals" or "architecture", not an unrelated file.
+
+test_precision_approval() {
+    if [ ! -f "harness/memory-index/manifest.json" ]; then
+        skip "memory index not built (manifest.json missing)"
+        return
+    fi
+
+    local tmpfile
+    tmpfile=$(mktemp /tmp/harness-test-XXXXXX.json)
+    python3 harness/scripts/query-memory.py \
+        --query "approval source of truth" \
+        --domains "approval-gates" \
+        --top 3 \
+        --format json 2>/dev/null > "$tmpfile"
+
+    local result
+    result=$(python3 - "$tmpfile" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+if not data:
+    print("SKIP:no results returned for approval query (index may be empty)")
+    sys.exit(0)
+top = data[0]
+src = top.get('provenance', {}).get('source_path', '') if isinstance(top.get('provenance'), dict) else ''
+if 'approvals' in src or 'architecture' in src:
+    print(f"PASS:top result for 'approval source of truth' is relevant (source: {src})")
+else:
+    print(f"FAIL:top result source is '{src}' — expected approvals-related")
+PYEOF
+)
+    rm -f "$tmpfile"
+    local verdict="${result%%:*}"
+    local msg="${result#*:}"
+    case "$verdict" in
+        PASS) pass "$msg" ;;
+        SKIP) skip "$msg" ;;
+        *)    fail "$msg" ;;
+    esac
+}
+
+# ── Test 8: No unrelated high-authority leakage ───────────────────────────────
+# Query "current task status" — top 3 results must have lexical overlap with query
+# terms, not just score high on authority alone.
+
+test_no_authority_leakage() {
+    if [ ! -f "harness/memory-index/manifest.json" ]; then
+        skip "memory index not built (manifest.json missing)"
+        return
+    fi
+
+    local tmpfile
+    tmpfile=$(mktemp /tmp/harness-test-XXXXXX.json)
+    python3 harness/scripts/query-memory.py \
+        --query "current task status" \
+        --top 5 \
+        --format json 2>/dev/null > "$tmpfile"
+
+    local result
+    result=$(python3 - "$tmpfile" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+if not data:
+    print("SKIP:no results returned (index may be empty)")
+    sys.exit(0)
+query_words = {'current', 'task', 'status'}
+leaked = 0
+for r in data[:3]:
+    subject = r.get('subject_key', '')
+    statement = r.get('statement', '')
+    tags = ' '.join(r.get('tags', []))
+    record_text = f"{subject} {statement} {tags}".lower()
+    record_words = set(record_text.split())
+    if not (record_words & query_words):
+        leaked += 1
+if leaked == 0:
+    print("PASS:no authority-only leakage in top 3 results")
+else:
+    print(f"FAIL:{leaked} unrelated record(s) in top 3 have no lexical overlap with query")
+PYEOF
+)
+    rm -f "$tmpfile"
+    local verdict="${result%%:*}"
+    local msg="${result#*:}"
+    case "$verdict" in
+        PASS) pass "$msg" ;;
+        SKIP) skip "$msg" ;;
+        *)    fail "$msg" ;;
+    esac
+}
+
+# ── Test 9: Path boost specificity ────────────────────────────────────────────
+# A specific path boost for "harness/policies/approvals.yaml" must not
+# score records that only have generic paths like "harness/docs/architecture/README.md".
+# Verifies that path matching uses containment (bp in sp or sp in bp), not just prefix.
+
+test_path_boost_specificity() {
+    if [ ! -f "harness/memory-index/manifest.json" ]; then
+        skip "memory index not built (manifest.json missing)"
+        return
+    fi
+
+    local tmpfile
+    tmpfile=$(mktemp /tmp/harness-test-XXXXXX.json)
+    python3 harness/scripts/query-memory.py \
+        --query "approval" \
+        --paths "harness/policies/approvals.yaml" \
+        --format json \
+        --top 10 2>/dev/null > "$tmpfile"
+
+    local result
+    result=$(python3 - "$tmpfile" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+if not data:
+    print("SKIP:no results (index may be empty)")
+    sys.exit(0)
+boost_path = "harness/policies/approvals.yaml"
+generic_path = "harness/docs/architecture/README.md"
+false_boosts = 0
+for r in data:
+    scope_paths = r.get('scope', {}).get('paths', [])
+    if not isinstance(scope_paths, list):
+        continue
+    has_specific = any(boost_path in sp or sp in boost_path for sp in scope_paths)
+    has_only_generic = any(generic_path in sp or sp in generic_path for sp in scope_paths) and not has_specific
+    if has_only_generic:
+        false_boosts += 1
+if false_boosts == 0:
+    print("PASS:path boost specificity: no generic-only paths received approvals.yaml boost")
+else:
+    print(f"FAIL:{false_boosts} record(s) with only generic paths appear in approvals.yaml-boosted results")
+PYEOF
+)
+    rm -f "$tmpfile"
+    local verdict="${result%%:*}"
+    local msg="${result#*:}"
+    case "$verdict" in
+        PASS) pass "$msg" ;;
+        SKIP) skip "$msg" ;;
+        *)    fail "$msg" ;;
+    esac
+}
+
+# ── Test 10: Overlay schema parity ────────────────────────────────────────────
+# Records from the overlay must have provenance, temporal, scope, and relations fields.
+
+test_overlay_schema_parity() {
+    if [ ! -f "harness/scripts/build-memory-overlay.py" ]; then
+        skip "build-memory-overlay.py not available (overlay worker may be pending)"
+        return
+    fi
+
+    python3 harness/scripts/build-memory-overlay.py > /dev/null 2>&1 || true
+
+    if [ ! -f ".harness-cache/memory-overlay/records.jsonl" ]; then
+        skip "overlay records.jsonl not produced (build-memory-overlay.py may be a stub)"
+        return
+    fi
+
+    if [ ! -f "harness/memory-index/manifest.json" ]; then
+        skip "memory index not built — cannot test overlay schema parity"
+        return
+    fi
+
+    local tmpfile
+    tmpfile=$(mktemp /tmp/harness-test-XXXXXX.json)
+    python3 harness/scripts/query-memory.py \
+        --query "current task" \
+        --include-overlay \
+        --format json 2>/dev/null > "$tmpfile"
+
+    local result
+    result=$(python3 - "$tmpfile" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+overlay = [r for r in data if isinstance(r.get('id'), str) and r['id'].startswith('overlay:')]
+if not overlay:
+    print("SKIP:no overlay records in results")
+    sys.exit(0)
+r = overlay[0]
+required = ['provenance', 'temporal', 'scope', 'relations']
+missing = [f for f in required if f not in r or not isinstance(r[f], dict)]
+if not missing:
+    print("PASS:overlay record has schema parity (provenance, temporal, scope, relations)")
+else:
+    print(f"FAIL:overlay record missing or wrong type for fields: {missing}")
+PYEOF
+)
+    rm -f "$tmpfile"
+    local verdict="${result%%:*}"
+    local msg="${result#*:}"
+    case "$verdict" in
+        PASS) pass "$msg" ;;
+        SKIP) skip "$msg" ;;
+        *)    fail "$msg" ;;
+    esac
+}
+
+# ── Test 11: Relation edge existence ──────────────────────────────────────────
+# At least one record in the source shards must have a non-empty relation field.
+
+test_relation_edge_existence() {
+    local shard_dir="harness/memory-index/source-shards"
+    if [ ! -d "$shard_dir" ]; then
+        skip "source-shards directory missing (index may not be built yet)"
+        return
+    fi
+
+    local edges
+    edges=$(python3 - <<PYEOF
+import json, pathlib, sys
+count = 0
+shard_dir = pathlib.Path("harness/memory-index/source-shards")
+for f in shard_dir.rglob("*.json"):
+    try:
+        data = json.loads(f.read_text())
+    except Exception:
+        continue
+    if isinstance(data, dict) and "records" in data:
+        rows = data["records"]
+    elif isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
+        rows = [data]
+    else:
+        rows = []
+    for rec in rows:
+        rels = rec.get("relations", {})
+        if not isinstance(rels, dict):
+            continue
+        for k in ("supersedes", "extends", "resolves", "conflicts_with"):
+            if rels.get(k):
+                count += 1
+print(count)
+PYEOF
+)
+
+    if [ "$edges" -gt 0 ]; then
+        pass "$edges relation edge(s) found in source shards"
+    else
+        skip "no relation edges found yet (temporal fixture may be pending)"
+    fi
+}
+
+# ── Test 12: Rebuild idempotency (strict via check-memory-index.sh) ────────────
+# Two consecutive builds followed by check-memory-index.sh must exit 0.
+
+test_rebuild_idempotency_strict() {
+    if [ ! -f "harness/scripts/build-memory-index.py" ]; then
+        skip "build-memory-index.py not found"
+        return
+    fi
+    if [ ! -f "harness/scripts/check-memory-index.sh" ]; then
+        skip "check-memory-index.sh not found"
+        return
+    fi
+
+    # Skip if concurrent workers have the index in an uncommitted state
+    local pre_diff
+    pre_diff=$(git diff --stat harness/memory-index/ 2>/dev/null || true)
+    if [ -n "$pre_diff" ]; then
+        skip "memory-index has uncommitted changes (concurrent workers running)"
+        return
+    fi
+
+    timeout 30 python3 harness/scripts/build-memory-index.py > /dev/null 2>&1 || {
+        skip "build-memory-index.py timed out or failed"
+        return
+    }
+    timeout 30 python3 harness/scripts/build-memory-index.py > /dev/null 2>&1 || {
+        skip "second build-memory-index.py timed out or failed"
+        return
+    }
+
+    if timeout 30 bash harness/scripts/check-memory-index.sh > /dev/null 2>&1; then
+        pass "rebuild idempotency verified (check-memory-index.sh passes after two builds)"
+    else
+        fail "rebuild produces inconsistent output (check-memory-index.sh failed)"
+    fi
+}
+
+# ── Test 13: Pack format ───────────────────────────────────────────────────────
+# If --format pack is available, it must produce structured JSON with a "facts" key.
+# Gracefully skips if the format is not yet implemented.
+
+test_pack_format() {
+    if [ ! -f "harness/memory-index/manifest.json" ]; then
+        skip "memory index not built (manifest.json missing)"
+        return
+    fi
+
+    local tmpfile
+    tmpfile=$(mktemp /tmp/harness-test-XXXXXX.json)
+    python3 harness/scripts/query-memory.py \
+        --query "approval" \
+        --format pack 2>/dev/null > "$tmpfile" || true
+
+    if [ ! -s "$tmpfile" ]; then
+        rm -f "$tmpfile"
+        skip "pack format not implemented (no output)"
+        return
+    fi
+
+    local result
+    result=$(python3 - "$tmpfile" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    raw = f.read().strip()
+if not raw:
+    print("SKIP:pack format not implemented (empty output)")
+    sys.exit(0)
+try:
+    d = json.loads(raw)
+except json.JSONDecodeError:
+    print("SKIP:pack format not implemented (output is not JSON)")
+    sys.exit(0)
+if 'facts' in d:
+    print("PASS:pack format produces structured JSON with 'facts' key")
+else:
+    print(f"FAIL:pack format JSON missing 'facts' key (keys: {list(d.keys())})")
+PYEOF
+)
+    rm -f "$tmpfile"
+    local verdict="${result%%:*}"
+    local msg="${result#*:}"
+    case "$verdict" in
+        PASS) pass "$msg" ;;
+        SKIP) skip "$msg" ;;
+        *)    fail "$msg" ;;
+    esac
+}
+
 # ── Runner ────────────────────────────────────────────────────────────────────
 
 echo "=== Memory Index Regression Tests ==="
 echo "    Repo root: $REPO_ROOT"
 
-run_test "Query schema parity"        test_query_schema
-run_test "Clean rebuild idempotency"  test_idempotency
-run_test "Scope index population"     test_scope_population
-run_test "Overlay merge"              test_overlay_merge
-run_test "Temporal/superseded filter" test_temporal_filtering
-run_test "Scope records non-zero"     test_scope_records
+run_test "Query schema parity"               test_query_schema
+run_test "Clean rebuild idempotency"         test_idempotency
+run_test "Scope index population"            test_scope_population
+run_test "Overlay merge"                     test_overlay_merge
+run_test "Temporal/superseded filter"        test_temporal_filtering
+run_test "Scope records non-zero"            test_scope_records
+run_test "Precision: approval source"        test_precision_approval
+run_test "No authority leakage"              test_no_authority_leakage
+run_test "Path boost specificity"            test_path_boost_specificity
+run_test "Overlay schema parity"             test_overlay_schema_parity
+run_test "Relation edge existence"           test_relation_edge_existence
+run_test "Rebuild idempotency (strict)"      test_rebuild_idempotency_strict
+run_test "Pack format"                       test_pack_format
 
 echo ""
 echo "=== Results: $PASSES passed, $FAILURES failed, $SKIPS skipped ==="

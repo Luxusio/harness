@@ -67,14 +67,17 @@ The repository uses a two-tier memory system — confirmed:
 
 ### Retrieval flow
 ```
-query → compiled index (fast prefilter) → top candidates
+query → query planner (loads relevant shards by-domain/by-path, not entire index)
      → optional: local overlay merge (session-specific overrides)
-     → raw source verification (top 4 files)
-     → optional: agentic fan-out (temporal/conflict queries only)
+     → memory pack (facts + source_files_to_verify)
+     → raw source verification (top 4 files from pack)
+     → optional: agentic fan-out (when pack has unresolved_conflicts)
      → single authoritative memory pack → orchestrator
 ```
 
-### Temporal relations — confirmed
+The planner-first approach avoids loading the full index on every query. Admission gate prevents unrelated high-authority records from leaking into results through strict domain/path filtering.
+
+### Temporal relations — partial
 Records track supersession chains through `relations`:
 - `supersedes`: this record replaces an older one
 - `extends`: this record builds on another
@@ -82,6 +85,8 @@ Records track supersession chains through `relations`:
 - `conflicts_with`: this record contradicts another (needs resolution)
 
 Superseded records are not deleted — they remain in `timeline/` for historical queries.
+
+**Current state:** Relation edges are populated for ADR supersession and resolved unknowns. Freeform docs (runbooks, constraints, requirements) do not yet generate cross-references automatically.
 
 ### Regression tests
 ```bash

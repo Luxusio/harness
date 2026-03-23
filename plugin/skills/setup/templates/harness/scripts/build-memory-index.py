@@ -182,7 +182,9 @@ def parse_constraints(src: str, rel_path: str) -> list:
         statement = DATE_RE.sub("", text).strip().lstrip("]").strip()
         if not statement:
             continue
-        subject_key = slugify(statement[:60])
+        section_slug = slugify(current_section)[:20]
+        item_slug = slugify(statement)[:30]
+        subject_key = f"constraint.{section_slug}.{item_slug}"
         rec = empty_record("constraint", subject_key, statement, rel_path,
                            current_section, "doc")
         rec["authority"] = "confirmed"
@@ -340,7 +342,9 @@ def parse_architecture(src: str, rel_path: str) -> list:
             paths = re.findall(r"(?:^|[\s,])(\w[\w/.-]+/)", statement)
             paths = [p.strip() for p in paths if len(p.strip()) > 2]
 
-        subject_key = slugify(statement[:60])
+        section_slug = slugify(current_section)[:20]
+        item_slug = slugify(statement)[:30]
+        subject_key = f"arch.{section_slug}.{item_slug}"
         rec = empty_record(kind, subject_key, statement, rel_path,
                            current_section, "doc")
         rec["authority"] = authority
@@ -382,7 +386,9 @@ def parse_runbook(src: str, rel_path: str) -> list:
         if not statement.strip():
             continue
 
-        subject_key = slugify(statement[:60])
+        section_slug = slugify(current_section)[:20]
+        item_slug = slugify(statement)[:30]
+        subject_key = f"runbook.{section_slug}.{item_slug}"
         rec = empty_record("runbook_note", subject_key, statement, rel_path,
                            current_section, "doc")
         rec["authority"] = "confirmed"
@@ -623,7 +629,7 @@ def parse_memory_policy(src: str, rel_path: str) -> list:
         for item_m in item_re.finditer(auto_match.group(1)):
             item = item_m.group(1)
             statement = f"auto-record: {item}"
-            subject_key = f"memory.persist.auto.{slugify(item)}"
+            subject_key = f"memory-policy.persist.auto.{slugify(item)[:30]}"
             rec = empty_record("constraint", subject_key, statement, rel_path,
                                "persist.auto", "policy")
             rec["authority"] = "enforced"
@@ -635,7 +641,7 @@ def parse_memory_policy(src: str, rel_path: str) -> list:
         for item_m in item_re.finditer(ask_match.group(1)):
             item = item_m.group(1)
             statement = f"ask-first before recording: {item}"
-            subject_key = f"memory.persist.ask.{slugify(item)}"
+            subject_key = f"memory-policy.persist.ask.{slugify(item)[:30]}"
             rec = empty_record("constraint", subject_key, statement, rel_path,
                                "persist.ask_first", "policy")
             rec["authority"] = "enforced"
@@ -647,7 +653,7 @@ def parse_memory_policy(src: str, rel_path: str) -> list:
         for item_m in item_re.finditer(never_match.group(1)):
             item = item_m.group(1)
             statement = f"never record: {item}"
-            subject_key = f"memory.persist.never.{slugify(item)}"
+            subject_key = f"memory-policy.persist.never.{slugify(item)[:30]}"
             rec = empty_record("constraint", subject_key, statement, rel_path,
                                "persist.never", "policy")
             rec["authority"] = "enforced"
@@ -660,7 +666,7 @@ def parse_memory_policy(src: str, rel_path: str) -> list:
         conditions = [c.strip() for c in item_re.findall(prom_m.group(3))]
         cond_str = ", ".join(conditions)
         statement = f"promotion: {from_status}→{to_status} requires {cond_str}"
-        subject_key = f"memory.promotion.{slugify(from_status)}.to.{slugify(to_status)}"
+        subject_key = f"memory-policy.promotion.{slugify(from_status)[:15]}.to.{slugify(to_status)[:15]}"
         rec = empty_record("constraint", subject_key, statement, rel_path,
                            "promotion", "policy")
         rec["authority"] = "enforced"
@@ -708,7 +714,9 @@ def parse_domain_doc(src: str, rel_path: str, filename: str) -> list:
         if not statement:
             continue
 
-        subject_key = slugify(statement[:60])
+        section_slug = slugify(current_section)[:20]
+        item_slug = slugify(statement)[:30]
+        subject_key = f"domain.{domain}.{section_slug}.{item_slug}"
         rec = empty_record("observed_fact", subject_key, statement, rel_path,
                            current_section, "doc")
         rec["authority"] = "observed"
@@ -752,6 +760,55 @@ def resolve_relations(all_records: list) -> None:
             adr_id = by_adr_ref[resolves_adr]
             if adr_id not in rec["relations"]["resolves"]:
                 rec["relations"]["resolves"].append(adr_id)
+
+
+def token_overlap(a: str, b: str) -> float:
+    """Return Jaccard token overlap between two statements (0.0–1.0)."""
+    ta = set(re.findall(r"[a-z0-9]+", a.lower()))
+    tb = set(re.findall(r"[a-z0-9]+", b.lower()))
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+# Authority ranking: higher = more authoritative
+AUTHORITY_RANK = {
+    "enforced": 4,
+    "confirmed": 3,
+    "observed": 2,
+    "hypothesis": 1,
+}
+
+
+def deduplicate_cross_source(all_records: list) -> None:
+    """Detect near-duplicate records from different sources and link via extends."""
+    # Only consider active records
+    active = [r for r in all_records if r["index_status"] == "active"]
+
+    for i, rec_a in enumerate(active):
+        for rec_b in active[i + 1:]:
+            # Must be different sources
+            src_a = rec_a["provenance"]["source_path"]
+            src_b = rec_b["provenance"]["source_path"]
+            if src_a == src_b:
+                continue
+            # Must have same kind
+            if rec_a["kind"] != rec_b["kind"]:
+                continue
+            # Check token overlap threshold
+            overlap = token_overlap(rec_a["statement"], rec_b["statement"])
+            if overlap < 0.80:
+                continue
+            # Determine which is higher authority
+            rank_a = AUTHORITY_RANK.get(rec_a["authority"], 0)
+            rank_b = AUTHORITY_RANK.get(rec_b["authority"], 0)
+            if rank_a >= rank_b:
+                higher, lower = rec_a, rec_b
+            else:
+                higher, lower = rec_b, rec_a
+            # Lower-authority record extends higher-authority record
+            if higher["id"] not in lower["relations"]["extends"]:
+                lower["relations"]["extends"].append(higher["id"])
 
 
 # ---------------------------------------------------------------------------
@@ -857,6 +914,9 @@ def build_index(repo_root: Path, output_dir: Path) -> None:
     # Second pass: resolve cross-references
     resolve_relations(all_records)
 
+    # Third pass: cross-source deduplication (near-duplicates link via extends)
+    deduplicate_cross_source(all_records)
+
     # Stable sort by id
     all_records.sort(key=lambda r: r["id"])
 
@@ -909,12 +969,25 @@ def build_index(repo_root: Path, output_dir: Path) -> None:
         write_json(output_dir / "timeline" / f"{sk}.json",
                    {"records": sorted(recs, key=lambda r: r["id"]), "subject_key": sk})
 
+    # Count multi-record subjects (same subject_key, 2+ records across ALL records including superseded)
+    subject_count: dict = {}
+    for rec in all_records:
+        sk = rec["subject_key"]
+        subject_count[sk] = subject_count.get(sk, 0) + 1
+    multi_record_subjects = sum(1 for c in subject_count.values() if c >= 2)
+    # Also count subjects that have a supersedes relation (old + new = 2+ logical records)
+    superseded_subjects = sum(
+        1 for rec in all_records if rec["relations"]["supersedes"]
+    )
+
     # Write manifest
     sources = sorted(all_shards.keys())
     manifest = {
+        "multi_record_subjects": multi_record_subjects,
         "record_count": len(all_records),
         "schema_version": 1,
         "sources": sources,
+        "superseded_subjects": superseded_subjects,
         "version": 1,
     }
     write_json(output_dir / "manifest.json", manifest)

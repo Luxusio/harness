@@ -14,7 +14,9 @@
       "relations": {
         "conflicts_with": [],
         "extends": [],
-        "resolves": [],
+        "resolves": [
+          "mem:decision:adr.0001.adr.0001.harness.bootstrap:a92bb49b"
+        ],
         "supersedes": []
       },
       "scope": {

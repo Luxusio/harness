@@ -1,0 +1,39 @@
+{
+  "records": [
+    {
+      "authority": "observed",
+      "id": "mem:observed_fact:arch.observed.facts.relative.plugin.source.plugin.:f9a57432",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Observed Facts",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Observed Facts",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": []
+      },
+      "source_status": null,
+      "statement": "Relative plugin source (`./plugin`) is supported for Git-based marketplaces. Path resolves from the marketplace root. URL-based marketplace catalogs should use external plugin sources instead of relative paths. Evidence: Git-based marketplace add works with relative source.",
+      "subject_key": "arch.observed.facts.relative.plugin.source.plugin.",
+      "tags": [],
+      "temporal": {
+        "documented_at": "2026-03-22",
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ],
+  "subject_key": "arch.observed.facts.relative.plugin.source.plugin."
+}

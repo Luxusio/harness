@@ -1,6 +1,6 @@
 # ADR-0001: harness bootstrap
 
-**Status:** accepted
+**Status:** superseded by ADR-0002
 **Date:** 2026-03-20
 
 ## Context

@@ -40,17 +40,42 @@ def short_hash(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:8]
 
 
-def make_record(source: str, subject_key: str, statement: str) -> dict:
+def make_record(source: str, subject_key: str, statement: str,
+                source_path: str = "", source_section: str = "",
+                domains: list = None, paths: list = None) -> dict:
     uid = short_hash(f"{source}:{subject_key}:{statement}")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return {
-        "id": f"overlay:{source}:{uid}",
-        "kind": "overlay_context",
-        "subject_key": subject_key,
-        "statement": statement,
-        "index_status": "active",
         "authority": "observed",
-        "source": {"file": str(STATE_DIR.relative_to(REPO_ROOT) / _source_filename(source))},
-        "documented_at": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "id": f"overlay:{source}:{uid}",
+        "index_status": "active",
+        "kind": "overlay_context",
+        "provenance": {
+            "locator": source_section or source,
+            "source_path": source_path or f"harness/state/{_source_filename(source)}",
+            "source_section": source_section or source,
+            "source_type": "state",
+        },
+        "relations": {
+            "conflicts_with": [],
+            "extends": [],
+            "resolves": [],
+            "supersedes": [],
+        },
+        "scope": {
+            "api_surfaces": [],
+            "domains": domains or [],
+            "paths": paths or [],
+        },
+        "source_status": None,
+        "statement": statement,
+        "subject_key": subject_key,
+        "tags": ["overlay", "session"],
+        "temporal": {
+            "documented_at": today,
+            "effective_at": today,
+            "last_verified_at": today,
+        },
     }
 
 
@@ -103,6 +128,19 @@ def _yaml_list(text: str, key: str) -> list:
     return items
 
 
+def _classify_scope_items(scope_items: list) -> tuple:
+    """Split scope list items into path-like entries and domain entries."""
+    paths = []
+    domains = []
+    for item in scope_items:
+        # Path-like: contains '/', starts with '.', or has a file extension
+        if '/' in item or item.startswith('.') or re.search(r'\.\w{1,6}$', item):
+            paths.append(item)
+        else:
+            domains.append(item)
+    return paths, domains
+
+
 def parse_current_task(records: list) -> None:
     if not CURRENT_TASK_PATH.exists():
         return
@@ -114,11 +152,18 @@ def parse_current_task(records: list) -> None:
     risk_level = _yaml_scalar(text, "risk_level")
     status = _yaml_scalar(text, "status")
 
+    source_path = f"harness/state/{_source_filename('current-task')}"
+    scope_paths, scope_domains = _classify_scope_items(scope)
+
     if intent:
         records.append(make_record(
             "current-task",
             "current.task.intent",
             f"Current task intent: {intent}",
+            source_path=source_path,
+            source_section="intent",
+            domains=["current-task"],
+            paths=scope_paths,
         ))
 
     if scope:
@@ -127,6 +172,10 @@ def parse_current_task(records: list) -> None:
             "current-task",
             "current.task.scope",
             f"Current task scope: {scope_str}",
+            source_path=source_path,
+            source_section="scope",
+            domains=["current-task"] + scope_domains,
+            paths=scope_paths,
         ))
 
     if risk_level:
@@ -134,6 +183,9 @@ def parse_current_task(records: list) -> None:
             "current-task",
             "current.task.risk_level",
             f"Current task risk level: {risk_level}",
+            source_path=source_path,
+            source_section="risk_level",
+            domains=["current-task"],
         ))
 
     if status:
@@ -141,6 +193,9 @@ def parse_current_task(records: list) -> None:
             "current-task",
             "current.task.status",
             f"Current task status: {status}",
+            source_path=source_path,
+            source_section="status",
+            domains=["current-task"],
         ))
 
 
@@ -190,15 +245,28 @@ def parse_last_session(records: list) -> None:
                 if not re.match(r'^(?:#{1,6}|\*{1,2})', line.strip()):
                     pass  # ignore non-bullet content between sections
 
+    source_path = f"harness/state/{_source_filename('last-session')}"
     for subject_key, items in bullets.items():
         if not items:
             continue
         section_name = next(k for k, v in _SECTION_MAP.items() if v == subject_key)
         combined = "; ".join(items)
+        # Extract path-like entries from bullet text for scope.paths
+        extracted_paths = []
+        for item in items:
+            # Find path-like tokens: contain '/', start with '.', or have file extensions
+            tokens = re.findall(r'[\w./\-]+', item)
+            for token in tokens:
+                if '/' in token or token.startswith('.') or re.search(r'\.\w{1,6}$', token):
+                    extracted_paths.append(token)
         records.append(make_record(
             "last-session",
             subject_key,
             f"{section_name}: {combined}",
+            source_path=source_path,
+            source_section=section_name,
+            domains=["last-session"],
+            paths=extracted_paths,
         ))
 
 

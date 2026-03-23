@@ -33,6 +33,18 @@ bash harness/scripts/query-memory.sh --query "approval rules" --format markdown
 bash harness/scripts/query-memory.sh --query "plugin structure" --paths "plugin/" --top 5 --format json
 ```
 
+### Query with explain mode
+```bash
+bash harness/scripts/query-memory.sh --query "approval" --explain --format markdown
+```
+Shows admission reasons and score breakdown per result.
+
+### Query for orchestrator pack
+```bash
+bash harness/scripts/query-memory.sh --query "approval" --format pack
+```
+Returns structured JSON for orchestrator consumption. The pack includes `facts` (pre-scored records), `source_files_to_verify` (raw files to open for verification), and `unresolved_conflicts` (subjects with multiple active records).
+
 ### Rebuild after source changes
 After modifying durable memory sources, always run:
 ```bash
