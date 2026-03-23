@@ -1,0 +1,1686 @@
+{
+  "records": [
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "arch.orchestrator.",
+      "id": "mem:constraint:arch.key.patterns.agent.delegation.orchestrator.:d439f4db",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "Key Patterns",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Key Patterns",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Agent delegation: orchestrator reads SKILL.md procedure doc then delegates to specialist agents via Agent tool",
+      "subject_key": "arch.key.patterns.agent.delegation.orchestrator.",
+      "tags": [
+        "architecture",
+        "constraint",
+        "doc"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "arch.truth.",
+      "id": "mem:constraint:arch.key.patterns.approval.gate.source.of.truth.:e2e42d15",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "Key Patterns",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Key Patterns",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Approval gate source of truth: `harness/policies/approvals.yaml` is the enforcement gate the orchestrator checks before touching sensitive areas. `harness/manifest.yaml` `risk_zones` is descriptive context only",
+      "subject_key": "arch.key.patterns.approval.gate.source.of.truth.",
+      "tags": [
+        "architecture",
+        "constraint",
+        "doc"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "arch.md.files",
+      "id": "mem:constraint:arch.key.patterns.hidden.workflow.skill.md.files:83ee3ad8",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "Key Patterns",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Key Patterns",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Hidden workflow SKILL.md files are internal procedure documents: SKILL.md contains step-by-step instructions read by the orchestrator, not executable code and not user-invocable commands",
+      "subject_key": "arch.key.patterns.hidden.workflow.skill.md.files",
+      "tags": [
+        "architecture",
+        "constraint",
+        "doc"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "arch.skills.se",
+      "id": "mem:constraint:arch.key.patterns.template.based.setup.skills.se:9326e75a",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "Key Patterns",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Key Patterns",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Template-based setup: `skills/setup/templates/` contains all scaffolding templates with `{{PLACEHOLDER}}` syntax",
+      "subject_key": "arch.key.patterns.template.based.setup.skills.se",
+      "tags": [
+        "architecture",
+        "constraint",
+        "doc"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "arch.command.surface",
+      "id": "mem:constraint:arch.key.patterns.user.invocable.command.surface:2b6f9151",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "Key Patterns",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Key Patterns",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "User-invocable command surface is limited to two public commands: `/harness:setup` (bootstrap) and `/harness:validate` (diagnostic). All other workflows are hidden internal procedures",
+      "subject_key": "arch.key.patterns.user.invocable.command.surface",
+      "tags": [
+        "architecture",
+        "constraint",
+        "doc"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "arch.marketplace.meta",
+      "id": "mem:constraint:arch.system.boundaries.claude.plugin.marketplace.meta:4f107f0d",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "System Boundaries",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "System Boundaries",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`.claude-plugin/` \u2014 marketplace metadata",
+      "subject_key": "arch.system.boundaries.claude.plugin.marketplace.meta",
+      "tags": [
+        "architecture",
+        "constraint",
+        "doc"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "arch.operating.s",
+      "id": "mem:constraint:arch.system.boundaries.harness.repo.local.operating.s:d1a2e82a",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "System Boundaries",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "System Boundaries",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`harness/` \u2014 repo-local operating state (generated per-project by setup)",
+      "subject_key": "arch.system.boundaries.harness.repo.local.operating.s",
+      "tags": [
+        "architecture",
+        "constraint",
+        "doc"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "arch.runtime.code",
+      "id": "mem:constraint:arch.system.boundaries.plugin.all.plugin.runtime.code:2fddb8f0",
+      "index_status": "active",
+      "kind": "constraint",
+      "provenance": {
+        "locator": "System Boundaries",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "System Boundaries",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`plugin/` \u2014 all plugin runtime code (skills, agents, hooks, scripts)",
+      "subject_key": "arch.system.boundaries.plugin.all.plugin.runtime.code",
+      "tags": [
+        "architecture",
+        "constraint",
+        "doc"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.team.memb",
+      "id": "mem:observed_fact:arch.compiled.index.gener.committed.to.git.all.team.memb:8117e5ee",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Compiled index (generated, machine-optimized)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Compiled index (generated, machine-optimized)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Committed to git \u2014 all team members share the same retrieval advantage",
+      "subject_key": "arch.compiled.index.gener.committed.to.git.all.team.memb",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.scripts.b",
+      "id": "mem:observed_fact:arch.compiled.index.gener.generated.by.harness.scripts.b:b0a03af7",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Compiled index (generated, machine-optimized)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Compiled index (generated, machine-optimized)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Generated by `harness/scripts/build-memory-index.py` (no LLM involvement)",
+      "subject_key": "arch.compiled.index.gener.generated.by.harness.scripts.b",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.index.determini",
+      "id": "mem:observed_fact:arch.compiled.index.gener.harness.memory.index.determini:e89f7349",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Compiled index (generated, machine-optimized)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Compiled index (generated, machine-optimized)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`harness/memory-index/` \u2014 deterministic JSON compilation of all durable sources",
+      "subject_key": "arch.compiled.index.gener.harness.memory.index.determini",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.always.r",
+      "id": "mem:observed_fact:arch.compiled.index.gener.never.manually.edited.always.r:0416d77f",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Compiled index (generated, machine-optimized)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Compiled index (generated, machine-optimized)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "**Never manually edited** \u2014 always regenerated from source",
+      "subject_key": "arch.compiled.index.gener.never.manually.edited.always.r",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.by.do",
+      "id": "mem:observed_fact:arch.compiled.index.gener.scope.indexing.is.active.by.do:03dbfd2f",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Compiled index (generated, machine-optimized)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Compiled index (generated, machine-optimized)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Scope indexing is active: `by-domain/` and `by-path/` are populated on each rebuild",
+      "subject_key": "arch.compiled.index.gener.scope.indexing.is.active.by.do",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.are.populat",
+      "id": "mem:observed_fact:arch.compiled.index.gener.temporal.relations.are.populat:c6560d14",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Compiled index (generated, machine-optimized)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Compiled index (generated, machine-optimized)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Temporal relations are populated from ADR supersession chains in `relations` fields",
+      "subject_key": "arch.compiled.index.gener.temporal.relations.are.populat",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.records.group",
+      "id": "mem:observed_fact:arch.index.types.confirme.active.by.domain.records.group:4beb74ee",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Index types \u2014 confirmed",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Index types \u2014 confirmed",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`active/by-domain/` \u2014 records grouped by scope domain",
+      "subject_key": "arch.index.types.confirme.active.by.domain.records.group",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.records.r",
+      "id": "mem:observed_fact:arch.index.types.confirme.active.by.identifier.records.r:7f43e809",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Index types \u2014 confirmed",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Index types \u2014 confirmed",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`active/by-identifier/` \u2014 records referencing specific ADRs/REQs",
+      "subject_key": "arch.index.types.confirme.active.by.identifier.records.r",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.records.grouped",
+      "id": "mem:observed_fact:arch.index.types.confirme.active.by.path.records.grouped:a92de170",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Index types \u2014 confirmed",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Index types \u2014 confirmed",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`active/by-path/` \u2014 records grouped by scope path (normalized keys)",
+      "subject_key": "arch.index.types.confirme.active.by.path.records.grouped",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.records.",
+      "id": "mem:observed_fact:arch.index.types.confirme.active.by.source.path.records.:f33f4be1",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Index types \u2014 confirmed",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Index types \u2014 confirmed",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`active/by-source-path/` \u2014 records grouped by provenance.source_path",
+      "subject_key": "arch.index.types.confirme.active.by.source.path.records.",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.active.r",
+      "id": "mem:observed_fact:arch.index.types.confirme.active.by.subject.all.active.r:b2cce056",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Index types \u2014 confirmed",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Index types \u2014 confirmed",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`active/by-subject/` \u2014 all active records grouped by subject_key",
+      "subject_key": "arch.index.types.confirme.active.by.subject.all.active.r",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.by.ca",
+      "id": "mem:observed_fact:arch.index.types.confirme.timeline.records.grouped.by.ca:59d5cc05",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Index types \u2014 confirmed",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Index types \u2014 confirmed",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`timeline/` \u2014 records grouped by canonical_subject_key with latest-active tracking",
+      "subject_key": "arch.index.types.confirme.timeline.records.grouped.by.ca",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.scripts.build",
+      "id": "mem:observed_fact:arch.local.overlay.per.se.built.by.harness.scripts.build:e98fb883",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Local overlay (per-session, gitignored)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Local overlay (per-session, gitignored)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Built by `harness/scripts/build-memory-overlay.sh` from current session state",
+      "subject_key": "arch.local.overlay.per.se.built.by.harness.scripts.build",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.are.co",
+      "id": "mem:observed_fact:arch.local.overlay.per.se.cleaned.up.when.changes.are.co:58a44301",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Local overlay (per-session, gitignored)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Local overlay (per-session, gitignored)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Cleaned up when changes are committed; gitignored \u2014 per-session only",
+      "subject_key": "arch.local.overlay.per.se.cleaned.up.when.changes.are.co",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.overlay.u",
+      "id": "mem:observed_fact:arch.local.overlay.per.se.harness.cache.memory.overlay.u:b7d6b9e4",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Local overlay (per-session, gitignored)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Local overlay (per-session, gitignored)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`.harness-cache/memory-overlay/` \u2014 uncommitted working memory",
+      "subject_key": "arch.local.overlay.per.se.harness.cache.memory.overlay.u",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.via.inclu",
+      "id": "mem:observed_fact:arch.local.overlay.per.se.merged.at.query.time.via.inclu:087eafe4",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Local overlay (per-session, gitignored)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Local overlay (per-session, gitignored)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Merged at query time via `--include-overlay` flag, overrides compiled index for same subject",
+      "subject_key": "arch.local.overlay.per.se.merged.at.query.time.via.inclu",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.or.",
+      "id": "mem:observed_fact:arch.memory.promotion.lad.confirmed.verified.by.user.or.:96d46aaa",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Memory Promotion Ladder",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Memory Promotion Ladder",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "confirmed: verified by user or explicit repo rule",
+      "subject_key": "arch.memory.promotion.lad.confirmed.verified.by.user.or.",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.lint.",
+      "id": "mem:observed_fact:arch.memory.promotion.lad.enforced.encoded.as.test.lint.:3013ac3c",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Memory Promotion Ladder",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Memory Promotion Ladder",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "enforced: encoded as test, lint rule, config assertion, or validation script",
+      "subject_key": "arch.memory.promotion.lad.enforced.encoded.as.test.lint.",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.yet.ve",
+      "id": "mem:observed_fact:arch.memory.promotion.lad.hypothesis.inferred.not.yet.ve:3499daad",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Memory Promotion Ladder",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Memory Promotion Ladder",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "hypothesis: inferred, not yet verified",
+      "subject_key": "arch.memory.promotion.lad.hypothesis.inferred.not.yet.ve",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.by.code",
+      "id": "mem:observed_fact:arch.memory.promotion.lad.observed.fact.verified.by.code:e6023e5f",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Memory Promotion Ladder",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Memory Promotion Ladder",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "observed_fact: verified by code/tests/logs",
+      "subject_key": "arch.memory.promotion.lad.observed.fact.verified.by.code",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.support.a",
+      "id": "mem:observed_fact:arch.observed.facts.plugin.json.does.not.support.a:d4c32cd4",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Observed Facts",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Observed Facts",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`plugin.json` does not support `\"agents\"` or `\"hooks\"` fields \u2014 validation error. Evidence: install failed with \"agents: Invalid input\".",
+      "subject_key": "arch.observed.facts.plugin.json.does.not.support.a",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": "2026-03-20",
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.resolved.rel",
+      "id": "mem:observed_fact:arch.observed.facts.plugin.skills.are.resolved.rel:12e2baca",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Observed Facts",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Observed Facts",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Plugin skills are resolved relative to plugin root directory. Evidence: `\"skills\": \"./skills/\"` in plugin.json works when plugin root is set correctly.",
+      "subject_key": "arch.observed.facts.plugin.skills.are.resolved.rel",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": "2026-03-20",
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.plugin.",
+      "id": "mem:observed_fact:arch.observed.facts.relative.plugin.source.plugin.:f9a57432",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Observed Facts",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Observed Facts",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Relative plugin source (`./plugin`) is supported for Git-based marketplaces. Path resolves from the marketplace root. URL-based marketplace catalogs should use external plugin sources instead of relative paths. Evidence: Git-based marketplace add works with relative source.",
+      "subject_key": "arch.observed.facts.relative.plugin.source.plugin.",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": "2026-03-22",
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.support.a",
+      "id": "mem:observed_fact:arch.resolved.questions.plugin.json.does.not.support.a:00655d96",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Resolved Questions",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Resolved Questions",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`plugin.json` does not support `\"agents\"` or `\"hooks\"` fields. Resolved: 2026-03-20. Outcome: agents are auto-discovered from `agents/` directory without plugin.json declaration. Adding `\"agents\"` causes validation error.",
+      "subject_key": "arch.resolved.questions.plugin.json.does.not.support.a",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": "2026-03-20",
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.agent.fie",
+      "id": "mem:observed_fact:arch.resolved.questions.plugin.settings.json.agent.fie:663b8b37",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Resolved Questions",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Resolved Questions",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`plugin/settings.json` `\"agent\"` field sets the shipped plugin default main agent. Resolved: 2026-03-22. Outcome: `plugin/settings.json` sets the plugin's default main-thread agent for all users. Project `.claude/settings.json` can override this for local development (e.g., activating `harness:harness-orchestrator` explicitly). These are different configuration levels, not competing settings.",
+      "subject_key": "arch.resolved.questions.plugin.settings.json.agent.fie",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": "2026-03-22",
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.constraints.decis",
+      "id": "mem:observed_fact:arch.source.of.truth.dura.harness.docs.constraints.decis:32eab0fc",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Source of truth (durable, human-editable)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Source of truth (durable, human-editable)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`harness/docs/*` \u2014 constraints, decisions, requirements, architecture, runbooks",
+      "subject_key": "arch.source.of.truth.dura.harness.docs.constraints.decis",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.approvals.mem",
+      "id": "mem:observed_fact:arch.source.of.truth.dura.harness.policies.approvals.mem:040bc7e4",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Source of truth (durable, human-editable)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Source of truth (durable, human-editable)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`harness/policies/*` \u2014 approvals, memory policy",
+      "subject_key": "arch.source.of.truth.dura.harness.policies.approvals.mem",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.recent.decisions",
+      "id": "mem:observed_fact:arch.source.of.truth.dura.harness.state.recent.decisions:55a281c3",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Source of truth (durable, human-editable)",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Source of truth (durable, human-editable)",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`harness/state/*` \u2014 recent decisions, unknowns",
+      "subject_key": "arch.source.of.truth.dura.harness.state.recent.decisions",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.are.tr",
+      "id": "mem:observed_fact:arch.temporal.relations.p.adr.supersession.chains.are.tr:11f73972",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Temporal relations \u2014 partial",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Temporal relations \u2014 partial",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "ADR supersession chains are tracked via `relations.supersedes`",
+      "subject_key": "arch.temporal.relations.p.adr.supersession.chains.are.tr",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.enables.",
+      "id": "mem:observed_fact:arch.temporal.relations.p.canonical.subject.key.enables.:a547add1",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Temporal relations \u2014 partial",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Temporal relations \u2014 partial",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "`canonical_subject_key` enables timeline grouping but coverage is incremental",
+      "subject_key": "arch.temporal.relations.p.canonical.subject.key.enables.",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.yet.gener",
+      "id": "mem:observed_fact:arch.temporal.relations.p.freeform.docs.do.not.yet.gener:1e646672",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Temporal relations \u2014 partial",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Temporal relations \u2014 partial",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Freeform docs do not yet generate cross-references",
+      "subject_key": "arch.temporal.relations.p.freeform.docs.do.not.yet.gener",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.after.l",
+      "id": "mem:observed_fact:arch.temporal.relations.p.operator.tokens.before.after.l:3745d87a",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Temporal relations \u2014 partial",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Temporal relations \u2014 partial",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Operator tokens (before, after, latest) are separated from lexical scoring to prevent false matches",
+      "subject_key": "arch.temporal.relations.p.operator.tokens.before.after.l",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.to.deci",
+      "id": "mem:observed_fact:arch.temporal.relations.p.resolved.unknowns.link.to.deci:eaebc5b0",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Temporal relations \u2014 partial",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Temporal relations \u2014 partial",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Resolved unknowns link to decisions via `relations.resolves`",
+      "subject_key": "arch.temporal.relations.p.resolved.unknowns.link.to.deci",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ],
+  "source_shard": "docs/architecture/README"
+}

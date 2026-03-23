@@ -14,6 +14,12 @@ Records use the same schema as compiled index records but with:
   authority: observed
   index_status: active
   id: overlay:<source>:<hash>
+  canonical_subject_key: <subject_key>  # same as subject_key for overlay records
+
+Merge semantics when overlay is combined with compiled index:
+  - Same subject_key: overlay record OVERRIDES the compiled record (overlay wins)
+  - Same canonical_subject_key but different subject_key: BOTH kept (append, not override)
+  - No subject_key overlap: overlay records simply ADDED to the result set
 """
 import hashlib
 import json
@@ -47,6 +53,7 @@ def make_record(source: str, subject_key: str, statement: str,
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return {
         "authority": "observed",
+        "canonical_subject_key": subject_key,  # overlay uses subject_key as canonical
         "id": f"overlay:{source}:{uid}",
         "index_status": "active",
         "kind": "overlay_context",

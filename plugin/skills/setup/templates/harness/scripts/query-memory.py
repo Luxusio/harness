@@ -14,6 +14,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -27,6 +28,8 @@ ACTIVE_DIR = INDEX_DIR / "active" / "by-subject"
 DOMAIN_DIR = INDEX_DIR / "active" / "by-domain"
 PATH_DIR = INDEX_DIR / "active" / "by-path"
 TIMELINE_DIR = INDEX_DIR / "timeline"
+SOURCE_DIR = INDEX_DIR / "active" / "by-source-path"
+IDENTIFIER_DIR = INDEX_DIR / "active" / "by-identifier"
 VERSION_PATH = INDEX_DIR / "VERSION"
 OVERLAY_PATH = REPO_ROOT / ".harness-cache" / "memory-overlay" / "records.jsonl"
 
@@ -40,8 +43,16 @@ AUTHORITY_SCORE = {
 # Temporal recency bonus weights
 RECENCY_BONUS = 0.5  # per year of recency, applied to documented_at
 
+# Operator tokens: used for temporal/structural query interpretation, NOT lexical scoring
+OPERATOR_TOKENS = {"latest", "current", "changed", "still", "now", "before",
+                   "after", "superseded", "valid", "what"}
+
+# Keep for backward compatibility
 TEMPORAL_TERMS = {"latest", "current", "changed", "still", "now", "before",
                   "after", "superseded", "valid"}
+
+IDENTIFIER_RE = re.compile(r'\b(ADR-\d+|REQ-\d+)\b', re.IGNORECASE)
+PATH_RE = re.compile(r'(?:^|\s)([a-zA-Z0-9_.-]+/[a-zA-Z0-9_./-]+)')
 
 
 # ── Tokenizer ────────────────────────────────────────────────────────────────
@@ -50,12 +61,46 @@ def tokenize(text: str) -> set:
     """Lower-case word tokens from a string, filtering short noise words."""
     if not text:
         return set()
-    import re
     tokens = re.findall(r"[a-z0-9_\-]+", text.lower())
     stopwords = {"a", "an", "the", "is", "in", "of", "to", "and", "or", "for",
                  "on", "at", "by", "with", "as", "be", "it", "its", "this",
                  "that", "are", "was", "from", "not"}
     return {t for t in tokens if len(t) > 1 and t not in stopwords}
+
+
+# ── Structured Query Parser ───────────────────────────────────────────────────
+
+def parse_query(raw_query: str) -> dict:
+    """Parse query into structured features.
+
+    Separates content tokens (used for lexical scoring) from operator tokens
+    (used for temporal/structural interpretation) so operators like 'before'
+    don't leak into lexical matching.
+    """
+    tokens = tokenize(raw_query)
+    identifiers = [m.group(1).upper() for m in IDENTIFIER_RE.finditer(raw_query)]
+    raw_paths = [m.group(1) for m in PATH_RE.finditer(raw_query)]
+    operator_tokens = tokens & OPERATOR_TOKENS
+    # KEY: operators excluded from lexical scoring to prevent "before" matching
+    # "Always ask before" in approval rules
+    content_tokens = tokens - OPERATOR_TOKENS
+    return {
+        "content_tokens": content_tokens,
+        "operator_tokens": operator_tokens,
+        "identifiers": identifiers,
+        "raw_paths": raw_paths,
+    }
+
+
+# ── Path normalization ────────────────────────────────────────────────────────
+
+def normalize_path_key(path: str) -> str:
+    """Normalize a file path to a deterministic index key.
+
+    Shared between build and query so shard filenames are predictable.
+    """
+    path = path.strip("/").replace("/", "__").replace(".", "_")
+    return path[:80]
 
 
 # ── Path matching ─────────────────────────────────────────────────────────────
@@ -149,15 +194,18 @@ def merge_overlay(index_records: list, overlay_records: list) -> list:
 
 # ── Query Planner ─────────────────────────────────────────────────────────────
 
-def plan_query(args, query_tokens: set) -> tuple:
+def plan_query(args, parsed: dict) -> tuple:
     """Decide which index shards to load based on query hints.
 
-    Returns (candidates: list, sources_used: list).
-    Falls back to full scan if fewer than 3 targeted candidates found.
+    Uses structured parsed query features (content_tokens, operator_tokens,
+    identifiers, raw_paths) for targeted loading instead of full scans.
+
+    Returns (candidates: list, sources_used: list, explicit_path_hits: bool).
     """
     candidates = []
     sources_used = []
     seen = set()
+    explicit_path_hits = False
 
     def add_records(records, source_label):
         added = 0
@@ -169,6 +217,7 @@ def plan_query(args, query_tokens: set) -> tuple:
                 added += 1
         if added > 0:
             sources_used.append(source_label)
+        return added
 
     # 1. Domain-targeted loading
     if args.domains:
@@ -180,37 +229,110 @@ def plan_query(args, query_tokens: set) -> tuple:
             if path.exists():
                 add_records(load_json_file(path), f"by-domain/{domain}")
 
-    # 2. Path-targeted loading
+    # 2. Path-targeted loading (targeted, not full scan)
+    # Combine explicit --paths arg with paths extracted from query text
+    all_boost_paths = []
     if args.paths:
+        all_boost_paths += [p.strip() for p in args.paths.split(",") if p.strip()]
+    all_boost_paths += parsed.get("raw_paths", [])
+
+    if all_boost_paths:
         if PATH_DIR.exists():
-            for json_file in sorted(PATH_DIR.glob("*.json")):
-                add_records(load_json_file(json_file), f"by-path/{json_file.stem}")
+            for p in all_boost_paths:
+                key = normalize_path_key(p)
+                exact = PATH_DIR / f"{key}.json"
+                if exact.exists():
+                    n = add_records(load_json_file(exact), f"by-path/{key}")
+                    if n > 0:
+                        explicit_path_hits = True
+                else:
+                    # Try ancestor/descendant: only files whose stem matches structurally
+                    for json_file in PATH_DIR.glob("*.json"):
+                        reconstructed = json_file.stem.replace("__", "/").replace("_", ".")
+                        if strict_path_match(p, reconstructed) > 0:
+                            n = add_records(load_json_file(json_file), f"by-path/{json_file.stem}")
+                            if n > 0:
+                                explicit_path_hits = True
 
-    # 3. Timeline loading for temporal queries
-    if query_tokens & TEMPORAL_TERMS:
+        # Also try by-source-path index if it exists
+        if SOURCE_DIR.exists():
+            for p in all_boost_paths:
+                key = normalize_path_key(p)
+                src_file = SOURCE_DIR / f"{key}.json"
+                if src_file.exists():
+                    n = add_records(load_json_file(src_file), f"by-source-path/{key}")
+                    if n > 0:
+                        explicit_path_hits = True
+
+    # 3. Identifier-targeted loading
+    identifiers = parsed.get("identifiers", [])
+    if identifiers:
+        if IDENTIFIER_DIR.exists():
+            for ident in identifiers:
+                ident_key = ident.lower().replace("-", ".")
+                id_file = IDENTIFIER_DIR / f"{ident_key}.json"
+                if id_file.exists():
+                    add_records(load_json_file(id_file), f"by-identifier/{ident_key}")
+
+    # 4. Targeted timeline loading — only for shortlisted subjects + explicit identifiers
+    # NOT a full scan of all timeline files
+    operator_tokens = parsed.get("operator_tokens", set())
+    if operator_tokens or identifiers:
         if TIMELINE_DIR.exists():
-            for tf in sorted(TIMELINE_DIR.glob("*.json")):
-                add_records(load_json_file(tf), f"timeline/{tf.stem}")
+            # Load timelines for explicit identifiers
+            for ident in identifiers:
+                ident_lower = ident.lower().replace("-", ".")
+                for tf in TIMELINE_DIR.glob("*.json"):
+                    if ident_lower in tf.stem:
+                        add_records(load_json_file(tf), f"timeline/{tf.stem}")
 
-    # 4. Fallback to full scan if too few candidates
-    if len(candidates) < 3:
+            # Load timelines only for subjects already shortlisted (not a full scan)
+            shortlisted_subjects = {r.get("subject_key", "") for r in candidates}
+            for sk in list(shortlisted_subjects)[:20]:  # cap to prevent runaway scan
+                if not sk:
+                    continue
+                tf = TIMELINE_DIR / f"{sk}.json"
+                if tf.exists():
+                    add_records(load_json_file(tf), f"timeline/{sk}")
+
+    # 5. Quality-based rescue fallback (not just count < 3)
+    content_tokens = parsed.get("content_tokens", set())
+    max_content_overlap = 0
+    for r in candidates:
+        subject_key = r.get("subject_key", "")
+        statement = r.get("statement", "")
+        tags = " ".join(r.get("tags", []))
+        rec_tokens = tokenize(f"{subject_key} {statement} {tags}")
+        overlap = len(content_tokens & rec_tokens)
+        if overlap > max_content_overlap:
+            max_content_overlap = overlap
+
+    needs_rescue = (
+        len(candidates) < 3
+        or (not identifiers and not explicit_path_hits)
+        or max_content_overlap < 2
+    )
+    if needs_rescue:
         full = load_index_records()
-        add_records(full, "by-subject/* (fallback)")
+        add_records(full, "by-subject/* (rescue)")
 
-    return candidates, sources_used
+    return candidates, sources_used, explicit_path_hits
 
 
 # ── Admission Gate ────────────────────────────────────────────────────────────
 
-def has_match_signal(record: dict, query_tokens: set,
+def has_match_signal(record: dict, content_tokens: set,
                      boost_paths: list, boost_domains: list) -> bool:
-    """Return True if record has at least one genuine match signal (not just authority)."""
-    # Lexical overlap with subject/statement/tags
+    """Return True if record has at least one genuine match signal (not just authority).
+
+    Uses content_tokens (operator-stripped) for lexical matching.
+    """
+    # Lexical overlap with subject/statement/tags using content tokens only
     subject_key = record.get("subject_key", "")
     statement = record.get("statement", "")
     tags = " ".join(record.get("tags", []))
     text = f"{subject_key} {statement} {tags}"
-    if query_tokens & tokenize(text):
+    if content_tokens & tokenize(text):
         return True
 
     # Domain match
@@ -227,14 +349,26 @@ def has_match_signal(record: dict, query_tokens: set,
                 if strict_path_match(bp, sp) > 0:
                     return True
 
+    # Provenance source_path match
+    provenance = record.get("provenance", {})
+    if isinstance(provenance, dict):
+        src = provenance.get("source_path", "")
+        if src:
+            for bp in boost_paths:
+                if src == bp or bp.endswith(src) or src.endswith(bp):
+                    return True
+
     return False
 
 
 # ── Scoring ──────────────────────────────────────────────────────────────────
 
-def score_record(record: dict, query_tokens: set, boost_paths: list, boost_domains: list,
+def score_record(record: dict, content_tokens: set, boost_paths: list, boost_domains: list,
                  reference_date: str = "") -> tuple:
     """Compute relevance score for a single record.
+
+    Uses content_tokens (operator-stripped) for lexical scoring to prevent
+    operator words like 'before' from boosting irrelevant records.
 
     Returns (score: float, admission_reasons: list, score_breakdown: dict).
     """
@@ -243,13 +377,13 @@ def score_record(record: dict, query_tokens: set, boost_paths: list, boost_domai
     admission_reasons = []
     score_breakdown = {}
 
-    # Lexical overlap (primary signal)
+    # Lexical overlap (primary signal) — uses content_tokens only
     subject_key = record.get("subject_key", "")
     statement = record.get("statement", "")
     tags = " ".join(record.get("tags", []))
     record_text = f"{subject_key} {statement} {tags}"
     record_tokens = tokenize(record_text)
-    overlap = len(query_tokens & record_tokens)
+    overlap = len(content_tokens & record_tokens)
     if overlap > 0:
         lexical_score = overlap * 2.0
         score += lexical_score
@@ -282,6 +416,18 @@ def score_record(record: dict, query_tokens: set, boost_paths: list, boost_domai
         score += 5.0
         admission_reasons.append("domain")
         score_breakdown["domain"] = 5.0
+
+    # Provenance source_path boost — strong signal when --paths matches source file
+    provenance = record.get("provenance", {})
+    if isinstance(provenance, dict):
+        src = provenance.get("source_path", "")
+        if src:
+            for bp in boost_paths:
+                if src == bp or bp.endswith(src) or src.endswith(bp):
+                    score += 8.0  # strong provenance boost
+                    admission_reasons.append(f"provenance:{bp}")
+                    score_breakdown["provenance"] = 8.0
+                    break
 
     # Authority as rank modifier only (0.5x weight, not admission ticket)
     authority = record.get("authority", record.get("status", ""))
@@ -399,14 +545,22 @@ def format_pack(results: list, query: str, sources_used: list,
                 total_candidates: int, admitted: int, filtered: int) -> str:
     """Render results as a structured memory pack JSON."""
     facts = []
-    source_files = set()
+    source_files = {}  # path -> score for capping/sorting
     for entry in results:
         record = entry["record"]
+        # Rich fact with full record fields (PR3)
         fact = {
             "subject_key": record.get("subject_key", ""),
             "statement": record.get("statement", ""),
             "kind": record.get("kind", record.get("type", "")),
             "authority": record.get("authority", record.get("status", "")),
+            "index_status": record.get("index_status", ""),
+            "source_status": record.get("source_status"),
+            "scope": record.get("scope", {}),
+            "temporal": record.get("temporal", {}),
+            "relations": record.get("relations", {}),
+            "provenance": record.get("provenance", {}),
+            "tags": record.get("tags", []),
             "score": entry["score"],
             "admission_reasons": entry["admission_reasons"],
         }
@@ -414,16 +568,34 @@ def format_pack(results: list, query: str, sources_used: list,
         if isinstance(provenance, dict):
             src = provenance.get("source_path", "")
             if src:
-                fact["source_path"] = src
-                source_files.add(src)
+                # Track max score per source file for capping
+                if src not in source_files or entry["score"] > source_files[src]:
+                    source_files[src] = entry["score"]
         facts.append(fact)
+
+    # Detect conflicts: same canonical subject with multiple active records
+    # at different authorities
+    subject_groups: dict = {}
+    for entry in results:
+        sk = entry["record"].get("subject_key", "")
+        subject_groups.setdefault(sk, []).append(entry)
+    conflicts = []
+    for sk, entries in subject_groups.items():
+        if len(entries) > 1:
+            authorities = set(e["record"].get("authority", "") for e in entries)
+            if len(authorities) > 1:
+                conflicts.append({"subject_key": sk, "authorities": sorted(authorities)})
+
+    # Cap source_files_to_verify at 4, sorted by score descending
+    top_sources = sorted(source_files.items(), key=lambda x: x[1], reverse=True)[:4]
+    source_files_list = [s for s, _ in top_sources]
 
     pack = {
         "query": query,
         "sources_loaded": sources_used,
         "facts": facts,
-        "source_files_to_verify": sorted(source_files),
-        "unresolved_conflicts": [],
+        "source_files_to_verify": source_files_list,
+        "unresolved_conflicts": conflicts,
         "admission_summary": {
             "total_candidates": total_candidates,
             "admitted": admitted,
@@ -483,13 +655,16 @@ def main():
             print("_Memory index is corrupt. Try rebuilding with build-memory-index.sh._")
         sys.exit(0)
 
-    # Parse boost lists and query tokens
+    # Parse boost lists
     boost_paths = [p.strip() for p in args.paths.split(",") if p.strip()]
     boost_domains = [d.strip() for d in args.domains.split(",") if d.strip()]
-    query_tokens = tokenize(args.query)
 
-    # Query planner: load targeted shards first, fallback to full scan
-    records, sources_used = plan_query(args, query_tokens)
+    # Structured query parsing — separates content from operator tokens
+    parsed = parse_query(args.query)
+    content_tokens = parsed["content_tokens"]
+
+    # Query planner: load targeted shards first, quality-based rescue fallback
+    records, sources_used, explicit_path_hits = plan_query(args, parsed)
 
     if args.include_overlay:
         overlay = load_overlay_records()
@@ -502,24 +677,27 @@ def main():
     total_candidates = len(records)
 
     # Admission gate: every record must have at least one genuine match signal
-    if query_tokens or boost_paths or boost_domains:
+    # Uses content_tokens (operator-stripped) for lexical matching
+    if content_tokens or boost_paths or boost_domains:
         admitted_records = [
             r for r in records
-            if has_match_signal(r, query_tokens, boost_paths, boost_domains)
+            if has_match_signal(r, content_tokens, boost_paths, boost_domains)
         ]
     else:
         admitted_records = records
 
     filtered_count = total_candidates - len(admitted_records)
 
-    # Score admitted records
+    # Score admitted records using content_tokens (not raw query tokens)
     import datetime
     today = datetime.date.today().isoformat()
     scored = []
     for r in admitted_records:
-        sc, reasons, breakdown = score_record(r, query_tokens, boost_paths, boost_domains, today)
-        # Determine which shard this record came from (best effort via provenance)
-        src_path = r.get("provenance", {}).get("source_path", "") if isinstance(r.get("provenance"), dict) else ""
+        sc, reasons, breakdown = score_record(
+            r, content_tokens, boost_paths, boost_domains, today
+        )
+        src_path = (r.get("provenance", {}).get("source_path", "")
+                    if isinstance(r.get("provenance"), dict) else "")
         scored.append({
             "record": r,
             "score": sc,
@@ -527,6 +705,9 @@ def main():
             "score_breakdown": breakdown,
             "source_shard": src_path,
         })
+
+    # Apply provenance boost for --paths matches AFTER initial scoring
+    # (already done in score_record via boost_paths, this ensures all paths are covered)
 
     scored.sort(key=lambda x: x["score"], reverse=True)
     top_results = scored[:args.top]

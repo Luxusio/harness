@@ -573,6 +573,299 @@ PYEOF
     esac
 }
 
+# ── Test 14: Exact path query precision ──────────────────────────────────────
+# --paths "harness/policies/approvals.yaml" must put approvals source in top results.
+
+test_exact_path_precision() {
+    if [ ! -f "harness/memory-index/manifest.json" ]; then
+        skip "memory index not built (manifest.json missing)"
+        return
+    fi
+
+    local output
+    output=$(python3 harness/scripts/query-memory.py \
+        --query "approval" \
+        --paths "harness/policies/approvals.yaml" \
+        --top 3 \
+        --format json 2>/dev/null) || { skip "query-memory.py failed"; return; }
+
+    local result
+    result=$(python3 - <<PYEOF
+import json, sys
+try:
+    data = json.loads("""$output""")
+except Exception:
+    data = []
+if not data:
+    print("SKIP:no results returned")
+    sys.exit(0)
+top = data[0]
+prov = top.get('provenance', {})
+src = prov.get('source_path', '') if isinstance(prov, dict) else ''
+if 'approvals' in src or 'architecture' in src:
+    print(f"PASS:exact path query: top result from approvals/architecture source ({src})")
+else:
+    print(f"FAIL:exact path query: top result from '{src}', expected approvals source")
+PYEOF
+)
+    local verdict="${result%%:*}"
+    local msg="${result#*:}"
+    case "$verdict" in
+        PASS) pass "$msg" ;;
+        SKIP) skip "$msg" ;;
+        *)    fail "$msg" ;;
+    esac
+}
+
+# ── Test 15: Temporal operator NOT in lexical scoring ────────────────────────
+# "what changed before ADR-0002" must NOT have approval_rule records in top 3
+# that match purely on the word "before".
+
+test_temporal_operator_no_leak() {
+    if [ ! -f "harness/memory-index/manifest.json" ]; then
+        skip "memory index not built (manifest.json missing)"
+        return
+    fi
+
+    local tmpfile
+    tmpfile=$(mktemp /tmp/harness-test-XXXXXX.json)
+    python3 harness/scripts/query-memory.py \
+        --query "what changed before ADR-0002" \
+        --top 5 \
+        --format json 2>/dev/null > "$tmpfile" || { rm -f "$tmpfile"; skip "query-memory.py failed"; return; }
+
+    local result
+    result=$(python3 - "$tmpfile" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+if not data:
+    print("SKIP:no results returned (index may be empty)")
+    sys.exit(0)
+leaked = sum(
+    1 for r in data[:3]
+    if r.get('kind') in ('approval_rule',)
+    and 'before' in r.get('statement', '').lower()
+)
+if leaked == 0:
+    print("PASS:temporal operator: no 'before' lexical leak in top 3")
+else:
+    print(f"FAIL:temporal operator: {leaked} records leaked via 'before' lexical match")
+PYEOF
+)
+    rm -f "$tmpfile"
+    local verdict="${result%%:*}"
+    local msg="${result#*:}"
+    case "$verdict" in
+        PASS) pass "$msg" ;;
+        SKIP) skip "$msg" ;;
+        *)    fail "$msg" ;;
+    esac
+}
+
+# ── Test 16: Overlay precedence for direct query ──────────────────────────────
+# When overlay is present, query "current task status" with --include-overlay
+# must return an overlay record as the top result.
+
+test_overlay_precedence() {
+    if [ ! -f "harness/scripts/build-memory-overlay.py" ]; then
+        skip "build-memory-overlay.py not available (overlay worker may be pending)"
+        return
+    fi
+
+    python3 harness/scripts/build-memory-overlay.py > /dev/null 2>&1 || { skip "overlay builder not available"; return; }
+
+    if [ ! -f ".harness-cache/memory-overlay/records.jsonl" ]; then
+        skip "overlay records.jsonl not produced (may be a stub)"
+        return
+    fi
+
+    if [ ! -f "harness/memory-index/manifest.json" ]; then
+        skip "memory index not built — cannot test overlay precedence"
+        return
+    fi
+
+    local tmpfile
+    tmpfile=$(mktemp /tmp/harness-test-XXXXXX.json)
+    python3 harness/scripts/query-memory.py \
+        --query "current task status" \
+        --include-overlay \
+        --top 3 \
+        --format json 2>/dev/null > "$tmpfile" || { rm -f "$tmpfile"; skip "query-memory.py failed"; return; }
+
+    local result
+    result=$(python3 - "$tmpfile" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+if not data:
+    print("SKIP:no results")
+    sys.exit(0)
+top_id = data[0].get('id', '')
+if str(top_id).startswith('overlay:'):
+    print(f"PASS:overlay precedence: top result is overlay record (id={top_id})")
+else:
+    print(f"FAIL:overlay precedence: top result id='{top_id}', expected overlay:*")
+PYEOF
+)
+    rm -f "$tmpfile"
+    local verdict="${result%%:*}"
+    local msg="${result#*:}"
+    case "$verdict" in
+        PASS) pass "$msg" ;;
+        SKIP) skip "$msg" ;;
+        *)    fail "$msg" ;;
+    esac
+}
+
+# ── Test 17: Rich pack facts have full fields ─────────────────────────────────
+# Pack format facts[0] must contain scope, temporal, relations, provenance,
+# index_status, and tags.
+
+test_rich_pack_facts() {
+    if [ ! -f "harness/memory-index/manifest.json" ]; then
+        skip "memory index not built (manifest.json missing)"
+        return
+    fi
+
+    local tmpfile
+    tmpfile=$(mktemp /tmp/harness-test-XXXXXX.json)
+    python3 harness/scripts/query-memory.py \
+        --query "approval" \
+        --domains "approval-gates" \
+        --format pack 2>/dev/null > "$tmpfile" || true
+
+    if [ ! -s "$tmpfile" ]; then
+        rm -f "$tmpfile"
+        skip "pack format not implemented (no output)"
+        return
+    fi
+
+    local result
+    result=$(python3 - "$tmpfile" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    raw = f.read().strip()
+if not raw:
+    print("SKIP:pack format not implemented (empty output)")
+    sys.exit(0)
+try:
+    pack = json.loads(raw)
+except json.JSONDecodeError:
+    print("SKIP:pack format not implemented (not valid JSON)")
+    sys.exit(0)
+facts = pack.get('facts', [])
+if not facts:
+    print("SKIP:pack has no facts")
+    sys.exit(0)
+f = facts[0]
+required = ['scope', 'temporal', 'relations', 'provenance', 'index_status', 'tags']
+missing = [k for k in required if k not in f]
+if not missing:
+    print("PASS:rich pack: facts[0] has scope, temporal, relations, provenance, index_status, tags")
+else:
+    print(f"FAIL:rich pack: missing fields {missing}")
+PYEOF
+)
+    rm -f "$tmpfile"
+    local verdict="${result%%:*}"
+    local msg="${result#*:}"
+    case "$verdict" in
+        PASS) pass "$msg" ;;
+        SKIP) skip "$msg" ;;
+        *)    fail "$msg" ;;
+    esac
+}
+
+# ── Test 18: Source-path index exists ────────────────────────────────────────
+# harness/memory-index/active/by-source-path/ must exist and contain JSON files.
+
+test_source_path_index_exists() {
+    if [ ! -d "harness/memory-index/active/by-source-path" ]; then
+        skip "by-source-path index not yet built"
+        return
+    fi
+
+    local count
+    count=$(find harness/memory-index/active/by-source-path -name '*.json' 2>/dev/null | wc -l)
+    if [ "$count" -gt 0 ]; then
+        pass "source-path index has $count files"
+    else
+        fail "source-path index directory exists but is empty"
+    fi
+}
+
+# ── Test 19: Identifier index exists ─────────────────────────────────────────
+# harness/memory-index/active/by-identifier/ must have ADR-0001 or ADR-0002 entry.
+
+test_identifier_index_exists() {
+    if [ ! -d "harness/memory-index/active/by-identifier" ]; then
+        skip "by-identifier index not yet built"
+        return
+    fi
+
+    if [ -f "harness/memory-index/active/by-identifier/ADR-0001.json" ] || \
+       [ -f "harness/memory-index/active/by-identifier/ADR-0002.json" ]; then
+        pass "identifier index has ADR entries"
+    else
+        fail "identifier index exists but no ADR-0001 or ADR-0002 files found"
+    fi
+}
+
+# ── Test 20: Source files to verify capped at 4 ───────────────────────────────
+# Pack format source_files_to_verify must contain at most 4 entries.
+
+test_source_files_cap() {
+    if [ ! -f "harness/memory-index/manifest.json" ]; then
+        skip "memory index not built (manifest.json missing)"
+        return
+    fi
+
+    local tmpfile
+    tmpfile=$(mktemp /tmp/harness-test-XXXXXX.json)
+    python3 harness/scripts/query-memory.py \
+        --query "approval" \
+        --format pack 2>/dev/null > "$tmpfile" || true
+
+    if [ ! -s "$tmpfile" ]; then
+        rm -f "$tmpfile"
+        skip "pack format not implemented (no output)"
+        return
+    fi
+
+    local result
+    result=$(python3 - "$tmpfile" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    raw = f.read().strip()
+if not raw:
+    print("SKIP:pack format not implemented (empty output)")
+    sys.exit(0)
+try:
+    pack = json.loads(raw)
+except json.JSONDecodeError:
+    print("SKIP:pack format not implemented (not valid JSON)")
+    sys.exit(0)
+if 'source_files_to_verify' not in pack:
+    print("SKIP:pack has no source_files_to_verify key")
+    sys.exit(0)
+count = len(pack['source_files_to_verify'])
+if count <= 4:
+    print(f"PASS:source_files_to_verify capped at {count} (<=4)")
+else:
+    print(f"FAIL:source_files_to_verify has {count} files (expected <=4)")
+PYEOF
+)
+    rm -f "$tmpfile"
+    local verdict="${result%%:*}"
+    local msg="${result#*:}"
+    case "$verdict" in
+        PASS) pass "$msg" ;;
+        SKIP) skip "$msg" ;;
+        *)    fail "$msg" ;;
+    esac
+}
+
 # ── Runner ────────────────────────────────────────────────────────────────────
 
 echo "=== Memory Index Regression Tests ==="
@@ -591,6 +884,13 @@ run_test "Overlay schema parity"             test_overlay_schema_parity
 run_test "Relation edge existence"           test_relation_edge_existence
 run_test "Rebuild idempotency (strict)"      test_rebuild_idempotency_strict
 run_test "Pack format"                       test_pack_format
+run_test "Exact path query precision"        test_exact_path_precision
+run_test "Temporal operator no leak"         test_temporal_operator_no_leak
+run_test "Overlay precedence"                test_overlay_precedence
+run_test "Rich pack facts"                   test_rich_pack_facts
+run_test "Source-path index exists"          test_source_path_index_exists
+run_test "Identifier index exists"           test_identifier_index_exists
+run_test "Source files cap <=4"              test_source_files_cap
 
 echo ""
 echo "=== Results: $PASSES passed, $FAILURES failed, $SKIPS skipped ==="

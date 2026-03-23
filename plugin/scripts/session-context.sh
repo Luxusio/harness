@@ -283,6 +283,12 @@ if [[ -f "harness/memory-index/manifest.json" ]]; then
   echo "version: ${INDEX_VERSION}"
   echo "records: ${RECORD_COUNT}"
 
+  # Show canonical subject and conflict info
+  MULTI=$(python3 -c "import json; m=json.load(open('harness/memory-index/manifest.json')); print(m.get('multi_record_subjects', 0))" 2>/dev/null || echo "0")
+  SUPERSEDED=$(python3 -c "import json; m=json.load(open('harness/memory-index/manifest.json')); print(m.get('superseded_subjects', 0))" 2>/dev/null || echo "0")
+  echo "multi_record_subjects: ${MULTI}"
+  echo "superseded_subjects: ${SUPERSEDED}"
+
   # Check overlay
   if [[ -f ".harness-cache/memory-overlay/manifest.json" ]]; then
     OVERLAY_COUNT=$(python3 -c "import json; m=json.load(open('.harness-cache/memory-overlay/manifest.json')); print(m.get('record_count', 0))" 2>/dev/null || wc -l < ".harness-cache/memory-overlay/records.jsonl" 2>/dev/null || echo "0")

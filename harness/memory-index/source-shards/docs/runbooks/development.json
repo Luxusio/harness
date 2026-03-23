@@ -1,0 +1,377 @@
+{
+  "records": [
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "runbook.config.do",
+      "id": "mem:runbook_note:runbook.commands.build.none.plugin.is.config.do:4591dd57",
+      "index_status": "active",
+      "kind": "runbook_note",
+      "provenance": {
+        "locator": "Commands",
+        "source_path": "harness/docs/runbooks/development.md",
+        "source_section": "Commands",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "**Build:** (none \u2014 plugin is config/docs only)",
+      "subject_key": "runbook.commands.build.none.plugin.is.config.do",
+      "tags": [
+        "doc",
+        "runbook_note",
+        "runbooks"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "runbook.dir.p",
+      "id": "mem:runbook_note:runbook.commands.dev.server.claude.plugin.dir.p:0b21cf53",
+      "index_status": "active",
+      "kind": "runbook_note",
+      "provenance": {
+        "locator": "Commands",
+        "source_path": "harness/docs/runbooks/development.md",
+        "source_section": "Commands",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Dev server: `claude --plugin-dir ./plugin`",
+      "subject_key": "runbook.commands.dev.server.claude.plugin.dir.p",
+      "tags": [
+        "doc",
+        "runbook_note",
+        "runbooks"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "runbook.lint.none",
+      "id": "mem:runbook_note:runbook.commands.lint.none:3bfde262",
+      "index_status": "active",
+      "kind": "runbook_note",
+      "provenance": {
+        "locator": "Commands",
+        "source_path": "harness/docs/runbooks/development.md",
+        "source_section": "Commands",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "**Lint:** (none)",
+      "subject_key": "runbook.commands.lint.none",
+      "tags": [
+        "doc",
+        "runbook_note",
+        "runbooks"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "runbook.plugin.",
+      "id": "mem:runbook_note:runbook.commands.test.claude.plugin.dir.plugin.:624ed93a",
+      "index_status": "active",
+      "kind": "runbook_note",
+      "provenance": {
+        "locator": "Commands",
+        "source_path": "harness/docs/runbooks/development.md",
+        "source_section": "Commands",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Test: `claude --plugin-dir ./plugin --print 'list harness skills'`",
+      "subject_key": "runbook.commands.test.claude.plugin.dir.plugin.",
+      "tags": [
+        "doc",
+        "runbook_note",
+        "runbooks"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "runbook.marketplace.plugin",
+      "id": "mem:runbook_note:runbook.common.tasks.install.via.marketplace.plugin:f9b1a771",
+      "index_status": "active",
+      "kind": "runbook_note",
+      "provenance": {
+        "locator": "Common tasks",
+        "source_path": "harness/docs/runbooks/development.md",
+        "source_section": "Common tasks",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Install via marketplace: `/plugin marketplace add https://github.com/Luxusio/harness.git` then `/plugin install harness@harness`",
+      "subject_key": "runbook.common.tasks.install.via.marketplace.plugin",
+      "tags": [
+        "doc",
+        "runbook_note",
+        "runbooks"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "runbook.claude.plu",
+      "id": "mem:runbook_note:runbook.common.tasks.test.plugin.locally.claude.plu:466f6e30",
+      "index_status": "active",
+      "kind": "runbook_note",
+      "provenance": {
+        "locator": "Common tasks",
+        "source_path": "harness/docs/runbooks/development.md",
+        "source_section": "Common tasks",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Test plugin locally: `claude --plugin-dir ./plugin` then invoke `/harness:setup`",
+      "subject_key": "runbook.common.tasks.test.plugin.locally.claude.plu",
+      "tags": [
+        "doc",
+        "runbook_note",
+        "runbooks"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "runbook.cd.cl",
+      "id": "mem:runbook_note:runbook.common.tasks.update.marketplace.clone.cd.cl:726743ff",
+      "index_status": "active",
+      "kind": "runbook_note",
+      "provenance": {
+        "locator": "Common tasks",
+        "source_path": "harness/docs/runbooks/development.md",
+        "source_section": "Common tasks",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/docs/runbooks/development.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Update marketplace clone: `cd ~/.claude/plugins/marketplaces/harness && git fetch origin master && git reset --hard origin/master`",
+      "subject_key": "runbook.common.tasks.update.marketplace.clone.cd.cl",
+      "tags": [
+        "doc",
+        "runbook_note",
+        "runbooks"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "runbook.repo.",
+      "id": "mem:runbook_note:runbook.debugging.notes.marketplace.install.this.repo.:95c54a19",
+      "index_status": "active",
+      "kind": "runbook_note",
+      "provenance": {
+        "locator": "Debugging notes",
+        "source_path": "harness/docs/runbooks/development.md",
+        "source_section": "Debugging notes",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "./plugin",
+          "harness/docs/runbooks/development.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Marketplace install: This repo uses Git-based marketplace add (`/plugin marketplace add <git-url>`). The relative plugin source (`./plugin`) in `marketplace.json` works with Git-based installs. Raw `marketplace.json` URL-based installs are not compatible with this repo's distribution shape.",
+      "subject_key": "runbook.debugging.notes.marketplace.install.this.repo.",
+      "tags": [
+        "doc",
+        "runbook_note",
+        "runbooks"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    },
+    {
+      "authority": "confirmed",
+      "canonical_subject_key": "runbook.harness.scr",
+      "id": "mem:runbook_note:runbook.debugging.notes.validation.scripts.harness.scr:ea14e837",
+      "index_status": "active",
+      "kind": "runbook_note",
+      "provenance": {
+        "locator": "Debugging notes",
+        "source_path": "harness/docs/runbooks/development.md",
+        "source_section": "Debugging notes",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "runbooks"
+        ],
+        "paths": [
+          "harness/scripts/smoke.sh",
+          "harness/scripts/validate.sh",
+          "harness/docs/runbooks/development.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "Validation scripts: `harness/scripts/validate.sh` and `harness/scripts/smoke.sh` use manifest commands (`harness/manifest.yaml > commands.*`) as their primary source. Auto-detect fallback is used only when a manifest command is empty.",
+      "subject_key": "runbook.debugging.notes.validation.scripts.harness.scr",
+      "tags": [
+        "doc",
+        "runbook_note",
+        "runbooks"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ],
+  "source_shard": "docs/runbooks/development"
+}

@@ -45,6 +45,24 @@ bash harness/scripts/query-memory.sh --query "approval" --format pack
 ```
 Returns structured JSON for orchestrator consumption. The pack includes `facts` (pre-scored records), `source_files_to_verify` (raw files to open for verification), and `unresolved_conflicts` (subjects with multiple active records).
 
+### Query by identifier
+```bash
+bash harness/scripts/query-memory.sh --query "ADR-0002" --top 5 --format markdown
+```
+Loads the `by-identifier/` shard for ADR-0002 directly — no full index scan.
+
+### Query by source file
+```bash
+bash harness/scripts/query-memory.sh --query "approval" --paths "harness/policies/approvals.yaml" --format markdown
+```
+Loads the `by-source-path/` shard for the given file — returns only records whose provenance matches that source file.
+
+### Temporal query
+```bash
+bash harness/scripts/query-memory.sh --query "what changed before ADR-0002" --format pack
+```
+Operator tokens (before, after, latest) are NOT used for lexical matching — they drive temporal logic to filter by relation chains and timeline order.
+
 ### Rebuild after source changes
 After modifying durable memory sources, always run:
 ```bash

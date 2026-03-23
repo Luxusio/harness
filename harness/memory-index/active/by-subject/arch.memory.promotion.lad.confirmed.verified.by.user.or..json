@@ -1,0 +1,46 @@
+{
+  "records": [
+    {
+      "authority": "observed",
+      "canonical_subject_key": "arch.or.",
+      "id": "mem:observed_fact:arch.memory.promotion.lad.confirmed.verified.by.user.or.:96d46aaa",
+      "index_status": "active",
+      "kind": "observed_fact",
+      "provenance": {
+        "locator": "Memory Promotion Ladder",
+        "source_path": "harness/docs/architecture/README.md",
+        "source_section": "Memory Promotion Ladder",
+        "source_type": "doc"
+      },
+      "relations": {
+        "conflicts_with": [],
+        "extends": [],
+        "resolves": [],
+        "supersedes": []
+      },
+      "scope": {
+        "api_surfaces": [],
+        "domains": [
+          "architecture"
+        ],
+        "paths": [
+          "harness/docs/architecture/README.md"
+        ]
+      },
+      "source_status": null,
+      "statement": "confirmed: verified by user or explicit repo rule",
+      "subject_key": "arch.memory.promotion.lad.confirmed.verified.by.user.or.",
+      "tags": [
+        "architecture",
+        "doc",
+        "observed_fact"
+      ],
+      "temporal": {
+        "documented_at": null,
+        "effective_at": null,
+        "last_verified_at": null
+      }
+    }
+  ],
+  "subject_key": "arch.memory.promotion.lad.confirmed.verified.by.user.or."
+}

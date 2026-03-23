@@ -60,23 +60,30 @@ Load based on scope:
 **Index-first retrieval (when memory index is available):**
 
 Before opening raw doc files, check if `harness/memory-index/manifest.json` exists:
-0. If `harness/scripts/build-memory-overlay.sh` exists, run it to refresh session overlay:
-   `bash harness/scripts/build-memory-overlay.sh`
-1. Run query planner: `harness/scripts/query-memory.sh --query "<query>" --domains "<domains>" --paths "<paths>" --include-overlay --top 8 --format pack`
-2. The planner loads only relevant index shards (by-domain, by-path) — not the entire index
-3. Use the returned memory pack: `facts` for context, `source_files_to_verify` for raw verification
-4. Open at most 4 source files from `source_files_to_verify` for verification
-5. If the pack has `unresolved_conflicts`, consider heavy retrieval
-6. If the index is missing or corrupt, fall back to raw-docs approach
+0. If `harness/scripts/build-memory-overlay.sh` exists, run it to refresh session overlay
+1. Run structured query: `harness/scripts/query-memory.sh --query "<query>" --domains "<domains>" --paths "<paths>" --include-overlay --top 8 --format pack`
+2. The query planner:
+   - Parses the query into content tokens, operator tokens, identifiers, and path hints
+   - Loads only targeted index shards (by-domain, by-source-path, by-identifier) — NOT full scan
+   - Operator tokens (`before`, `after`, `latest`, `current`) drive temporal logic, NOT lexical matching
+   - Falls back to lexical rescue only when targeted recall is weak
+3. Use the returned memory pack:
+   - `facts[]` contain full record fields: `scope`, `temporal`, `relations`, `provenance`, `tags`
+   - `source_files_to_verify` lists the top 4 source files to open for raw verification
+   - `unresolved_conflicts` lists subjects with conflicting active records
+   - `timeline_candidates` lists subjects needing temporal resolution
+4. Open at most 4 source files from `source_files_to_verify`
+5. If `unresolved_conflicts` is non-empty or query is temporal → consider heavy retrieval
+6. If index is missing/corrupt → fall back to raw-docs approach
 
 This reduces context loading cost while maintaining accuracy through source verification. The overlay injects current session state (active task, last session summary) so queries automatically reflect the most recent context.
 
 **Heavy retrieval trigger:**
 
-Triggered when the memory pack contains:
-- `unresolved_conflicts` is non-empty
-- Query contains temporal terms and timeline data exists
-- Multiple records for same subject with different statuses
+Triggered when the memory pack shows:
+- `unresolved_conflicts` is non-empty (same subject, different authorities/statuses)
+- Query contains temporal operators AND `timeline_candidates` is non-empty
+- Pack `admission_summary.filtered` is very high (>90% candidates filtered → low recall signal)
 
 When heavy trigger fires and the memory search agents are available:
 1. Delegate to `memory-search-facts` for direct facts and explicit statements

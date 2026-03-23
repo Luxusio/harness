@@ -65,28 +65,36 @@ The repository uses a two-tier memory system — confirmed:
 - Merged at query time via `--include-overlay` flag, overrides compiled index for same subject
 - Cleaned up when changes are committed; gitignored — per-session only
 
-### Retrieval flow
+### Retrieval flow — confirmed
 ```
-query → query planner (loads relevant shards by-domain/by-path, not entire index)
-     → optional: local overlay merge (session-specific overrides)
-     → memory pack (facts + source_files_to_verify)
-     → raw source verification (top 4 files from pack)
-     → optional: agentic fan-out (when pack has unresolved_conflicts)
-     → single authoritative memory pack → orchestrator
+query → structured query parser (content/operator/identifier/path separation)
+     → targeted shard loading (by-domain, by-source-path, by-identifier)
+     → lexical rescue only when targeted recall is weak
+     → overlay merge (same schema, subject_key-based override)
+     → admission gate (match signal required, authority is rank modifier only)
+     → rich memory pack (facts with full fields, source_files_to_verify, unresolved_conflicts)
+     → raw source verification (top 4 files)
+     → optional heavy retrieval (temporal/conflict queries only)
 ```
 
-The planner-first approach avoids loading the full index on every query. Admission gate prevents unrelated high-authority records from leaking into results through strict domain/path filtering.
+The structured query parser separates operator tokens (before, after, latest), identifier references (ADR-NNNN, REQ-NNNN), path filters, and lexical content before shard selection. Targeted shard loading avoids full index scans. Lexical rescue activates only when targeted recall returns weak results. The admission gate requires a positive match signal — authority is a rank modifier, not a gate itself — preventing unrelated high-authority records from leaking into results.
+
+### Index types — confirmed
+- `active/by-subject/` — all active records grouped by subject_key
+- `active/by-domain/` — records grouped by scope domain
+- `active/by-path/` — records grouped by scope path (normalized keys)
+- `active/by-source-path/` — records grouped by provenance.source_path
+- `active/by-identifier/` — records referencing specific ADRs/REQs
+- `timeline/` — records grouped by canonical_subject_key with latest-active tracking
 
 ### Temporal relations — partial
-Records track supersession chains through `relations`:
-- `supersedes`: this record replaces an older one
-- `extends`: this record builds on another
-- `resolves`: this record answers an open question
-- `conflicts_with`: this record contradicts another (needs resolution)
+- ADR supersession chains are tracked via `relations.supersedes`
+- Resolved unknowns link to decisions via `relations.resolves`
+- Freeform docs do not yet generate cross-references
+- `canonical_subject_key` enables timeline grouping but coverage is incremental
+- Operator tokens (before, after, latest) are separated from lexical scoring to prevent false matches
 
 Superseded records are not deleted — they remain in `timeline/` for historical queries.
-
-**Current state:** Relation edges are populated for ADR supersession and resolved unknowns. Freeform docs (runbooks, constraints, requirements) do not yet generate cross-references automatically.
 
 ### Regression tests
 ```bash

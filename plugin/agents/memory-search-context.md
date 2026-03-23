@@ -10,11 +10,14 @@ You search the compiled memory index for **contextual information** around a que
 ## Procedure
 
 1. Receive a memory pack from the orchestrator (output of `query-memory.sh --format pack`)
-2. Starting from the pack's `facts` array, expand to related records using `relations` fields on each fact:
-   - Follow `extends` links to find records this fact builds on
-   - Follow `conflicts_with` links to surface contradictions
+2. Starting from the pack's `facts[]` array, expand to related records using `relations` fields on each fact (if available — relations may be sparse or empty for freeform docs):
+   - Follow `relations.extends` links to find records this fact builds on
+   - Follow `relations.resolves` links to find questions this fact answers
+   - Follow `relations.conflicts_with` links to surface contradictions
    - Scan the same domain for approval rules and constraints that apply to the same paths
-3. For related records not already in the pack, load them from `harness/memory-index/active/by-domain/<domain>.json` or `by-path/<path>.json`
+3. For related records not already in the pack, load them from:
+   - `harness/memory-index/active/by-domain/<domain>.json`
+   - `harness/memory-index/active/by-path/<normalized-path>.json` where path keys use normalized form: slashes (`/`) → `__`, dots (`.`) → `_` (e.g., `harness/docs/constraints/project-constraints.md` → `harness__docs__constraints__project-constraints_md`)
 4. Return contextual records grouped by relationship type
 
 ## Output

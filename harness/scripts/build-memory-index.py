@@ -875,7 +875,10 @@ def clean_generated(output_dir: Path) -> None:
     for subdir in ["source-shards", "active", "timeline"]:
         target = output_dir / subdir
         if target.exists():
-            shutil.rmtree(target)
+            shutil.rmtree(target, ignore_errors=True)
+            # Retry if filesystem race left remnants
+            if target.exists():
+                shutil.rmtree(target, ignore_errors=True)
     manifest = output_dir / "manifest.json"
     if manifest.exists():
         manifest.unlink()
