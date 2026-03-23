@@ -36,6 +36,7 @@ Verify each file exists and report PASS/FAIL:
 | `harness/scripts/validate.sh` | yes |
 | `harness/scripts/smoke.sh` | yes |
 | `harness/scripts/arch-check.sh` | yes |
+| `harness/scripts/check-approvals.sh` | yes |
 
 For each: `[PASS] <file> exists` or `[FAIL] <file> missing`
 
@@ -49,8 +50,9 @@ For each script in `harness/scripts/`:
 
 **approvals.yaml paths:**
 - Read `harness/policies/approvals.yaml`
-- For each `paths:` entry, check if the glob pattern matches at least one existing file or directory
-- `[PASS] approvals path <glob> has matches` or `[WARN] approvals path <glob> has no matches on disk`
+- For each rule, determine whether it is path-based (has a `paths:` field) or action-based (has only an `actions:` field):
+  - **Path-based rules** (`always_ask_before` items with `paths:`): check if each glob pattern matches at least one existing file or directory. `[PASS] approvals path <glob> has matches` or `[WARN] approvals path <glob> has no matches on disk`
+  - **Action-based rules** (`always_ask_before` items with only `actions:`, no `paths:`): do NOT warn about missing paths. Instead, verify that `reason` exists and that `min_files` (if present) is numeric. `[PASS] action-based rule <name> is valid` or `[WARN] action-based rule <name> missing reason field`
 
 **harness/docs/index.md references:**
 - Read `harness/docs/index.md`

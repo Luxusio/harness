@@ -10,62 +10,260 @@ fi
 echo "harness status: initialized in this repository."
 echo ""
 
-# === MANIFEST SUMMARY ===
-echo "=== MANIFEST SUMMARY ==="
-_yaml_field() {
-  local file="$1" field="$2"
-  grep -m1 "^${field}:" "$file" 2>/dev/null | sed 's/^[^:]*: *//' | tr -d '"' || true
-}
 MANIFEST="harness/manifest.yaml"
-MODE=$(_yaml_field "$MANIFEST" "mode")
-TYPE=$(_yaml_field "$MANIFEST" "type")
+
+# ── helpers ──────────────────────────────────────────────────────────────────
+
+# Extract a scalar field from under the top-level `project:` section.
+# Usage: project_scalar_field <file> <field>
+project_scalar_field() {
+  local file="$1" field="$2"
+  awk -v fld="$field" '
+    /^project:/ { in_proj = 1; next }
+    /^[a-zA-Z]/ { in_proj = 0 }
+    in_proj && $0 ~ "^  "fld":" {
+      val = $0; sub(/^[^:]*: */, "", val); gsub(/"/, "", val); sub(/ *#.*/, "", val);
+      print val; exit
+    }
+  ' "$file"
+}
+
+# Extract list items from under the top-level `project:` section for a given
+# sub-field (e.g. languages, frameworks).  Stops at the next 2-space key or
+# top-level key.  Returns one item per line (leading "- " stripped).
+# Usage: project_list_field <file> <field> [max]
+project_list_field() {
+  local file="$1" field="$2" max="${3:-999}"
+  awk -v fld="$field" -v mx="$max" '
+    /^project:/ { in_proj = 1; next }
+    /^[a-zA-Z]/ { in_proj = 0; in_list = 0; next }
+    in_proj && $0 ~ "^  "fld":" { in_list = 1; next }
+    in_proj && in_list && /^  [a-zA-Z]/ { in_list = 0 }
+    in_proj && in_list && /^[[:space:]]*-/ {
+      if (n++ >= mx) exit
+      val = $0; sub(/^[[:space:]]*- *"?/, "", val); sub(/ *#.*/, "", val); sub(/"?[[:space:]]*$/, "", val)
+      print val
+    }
+  ' "$file"
+}
+
+# Extract a scalar field nested one level under a named top-level section.
+# Usage: section_field <file> <section> <field>
+section_field() {
+  local file="$1" section="$2" field="$3"
+  awk -v sec="$section" -v fld="$field" '
+    /^[a-zA-Z]/ { in_sec = ($0 ~ "^"sec":") }
+    in_sec && $0 ~ "^  "fld":" {
+      val = $0; sub(/^[^:]*: */, "", val); gsub(/"/, "", val); sub(/ *#.*/, "", val);
+      print val; exit
+    }
+  ' "$file"
+}
+
+# Extract a top-level scalar list (items directly under a top-level key),
+# stopping at the next top-level key.  Returns one item per line.
+# Usage: top_level_scalar_list <file> <section> [max]
+top_level_scalar_list() {
+  local file="$1" section="$2" max="${3:-999}"
+  awk -v sec="$section" -v mx="$max" '
+    /^[a-zA-Z]/ { in_sec = ($0 ~ "^"sec":"); next }
+    in_sec && /^[[:space:]]*-[[:space:]]/ {
+      if (n++ >= mx) exit
+      val = $0; sub(/^[[:space:]]*- *"?/, "", val); sub(/ *#.*/, "", val); sub(/"?[[:space:]]*$/, "", val)
+      # Only emit simple scalar items (no colon after the value)
+      if (val !~ /:/) print val
+    }
+  ' "$file"
+}
+
+# Summarise objects in the always_ask_before list.
+# For path-based rules: "kind — reason (paths: p1, p2)"
+# For action-based rules: "kind — reason (actions: a, b; min_files: N)"
+# Usage: always_ask_before_summary <file> [max]
+always_ask_before_summary() {
+  local file="$1" max="${2:-999}"
+  awk -v mx="$max" '
+    /^always_ask_before:/ { in_sec = 1; next }
+    /^[a-zA-Z]/ && !/^always_ask_before:/ { in_sec = 0 }
+
+    in_sec {
+      # New object starts with "  - kind:" or "  - " followed by kind on same or next lines
+      if (/^[[:space:]]*- kind:/) {
+        if (kind != "") {
+          if (n++ < mx) print_entry()
+          kind = ""; reason = ""; paths = ""; actions = ""; min_files = ""
+        }
+        val = $0; sub(/.*kind:[[:space:]]*"?/, "", val); sub(/"?[[:space:]]*$/, "", val)
+        kind = val
+      } else if (/^[[:space:]]*- $/ || /^[[:space:]]*-$/) {
+        if (kind != "") {
+          if (n++ < mx) print_entry()
+          kind = ""; reason = ""; paths = ""; actions = ""; min_files = ""
+        }
+      } else if (/^[[:space:]]+reason:/) {
+        val = $0; sub(/.*reason:[[:space:]]*"?/, "", val); sub(/"?[[:space:]]*$/, "", val)
+        reason = val
+      } else if (/^[[:space:]]+min_files:/) {
+        val = $0; sub(/.*min_files:[[:space:]]*/, "", val); sub(/[[:space:]]*$/, "", val)
+        min_files = val
+      } else if (/^[[:space:]]+-[[:space:]]/ && kind != "" && paths == "" && actions == "") {
+        # Could be a path or action list item — look at context via paths/actions key seen above
+        val = $0; sub(/^[[:space:]]*- *"?/, "", val); sub(/"?[[:space:]]*$/, "", val)
+        if (awaiting == "paths") {
+          paths = (paths == "") ? val : paths ", " val
+        } else if (awaiting == "actions") {
+          actions = (actions == "") ? val : actions ", " val
+        }
+      } else if (/^[[:space:]]+paths:/) {
+        awaiting = "paths"; paths = ""
+      } else if (/^[[:space:]]+actions:/) {
+        awaiting = "actions"; actions = ""
+      } else if (/^[[:space:]]*- / && kind != "") {
+        # list item under paths or actions
+        val = $0; sub(/^[[:space:]]*- *"?/, "", val); sub(/"?[[:space:]]*$/, "", val)
+        if (val !~ /:/) {
+          if (awaiting == "paths") {
+            paths = (paths == "") ? val : paths ", " val
+          } else if (awaiting == "actions") {
+            actions = (actions == "") ? val : actions ", " val
+          }
+        }
+      }
+    }
+
+    END {
+      if (kind != "" && n < mx) print_entry()
+    }
+
+    function print_entry() {
+      line = kind " — " reason
+      if (actions != "") {
+        detail = "actions: " actions
+        if (min_files != "") detail = detail "; min_files: " min_files
+        line = line " (" detail ")"
+      } else if (paths != "") {
+        line = line " (paths: " paths ")"
+      }
+      print line
+    }
+  ' "$file"
+}
+
+# ── MANIFEST SUMMARY ─────────────────────────────────────────────────────────
+
+echo "=== MANIFEST SUMMARY ==="
+
+MODE=$(project_scalar_field "$MANIFEST" "mode")
+TYPE=$(project_scalar_field "$MANIFEST" "type")
 echo "mode: ${MODE:-unknown}  |  type: ${TYPE:-unknown}"
 
-# languages / frameworks (first 3 values from list fields)
+# languages / frameworks (nested under project:)
 for field in languages frameworks; do
-  vals=$(grep -A5 "^${field}:" "$MANIFEST" 2>/dev/null | grep '^\s*-' | head -3 | sed 's/^\s*- *//' | tr '\n' ',' | sed 's/,$//' || true)
+  vals=$(project_list_field "$MANIFEST" "$field" 3 | paste -sd',' - | sed 's/,/, /g')
   [[ -n "$vals" ]] && echo "${field}: ${vals}"
 done
 
-# build/test/lint/dev commands
-for field in build test lint dev; do
-  val=$(grep -m1 "^\s*${field}:" "$MANIFEST" 2>/dev/null | sed 's/^[^:]*: *//' | tr -d '"' || true)
+# package_manager (scalar under project:)
+pkg=$(project_scalar_field "$MANIFEST" "package_manager")
+[[ -n "$pkg" ]] && echo "package_manager: ${pkg}"
+
+# commands (nested under commands:)
+for field in dev build test lint; do
+  val=$(section_field "$MANIFEST" "commands" "$field")
   [[ -n "$val" ]] && echo "${field}: ${val}"
 done
 
-# top 3 key journeys
-journeys=$(grep -A20 "^key_journeys:" "$MANIFEST" 2>/dev/null | grep '^\s*-' | head -3 | sed 's/^\s*- */  - /' || true)
-[[ -n "$journeys" ]] && { echo "key_journeys (top 3):"; echo "$journeys"; }
+# key journeys — bounded: stops at next top-level key (risk_zones, etc.)
+journeys=$(awk '
+  /^key_journeys:/ { in_sec = 1; next }
+  /^[a-zA-Z]/ { in_sec = 0 }
+  in_sec && /^[[:space:]]*-[[:space:]]/ {
+    if (n++ >= 3) exit
+    val = $0; sub(/^[[:space:]]*- *"?/, "", val); sub(/ *#.*/, "", val); sub(/"?[[:space:]]*$/, "", val)
+    print val
+  }
+' "$MANIFEST")
+if [[ -n "$journeys" ]]; then
+  echo "key_journeys (top 3):"
+  while IFS= read -r line; do echo "  - $line"; done <<< "$journeys"
+fi
 
-# top 3 risk zones
-risks=$(grep -A20 "^risk_zones:" "$MANIFEST" 2>/dev/null | grep '^\s*-' | head -3 | sed 's/^\s*- */  - /' || true)
-[[ -n "$risks" ]] && { echo "risk_zones (top 3):"; echo "$risks"; }
+# risk zones (path + reason pairs) — bounded at next top-level key
+risk_output=$(awk '
+  /^[a-zA-Z]/ { in_sec = ($0 ~ /^risk_zones:/) ; next }
+  in_sec && /^[[:space:]]*- path:/ {
+    p = $0; sub(/.*path: *"?/, "", p); sub(/"?[[:space:]]*$/, "", p)
+    getline
+    if ($0 ~ /reason:/) { r = $0; sub(/.*reason: *"?/, "", r); sub(/"?[[:space:]]*$/, "", r) }
+    else { r = "" }
+    print p " — " r
+  }
+' "$MANIFEST" | head -3)
+if [[ -n "$risk_output" ]]; then
+  echo "risk_zones (top 3):"
+  while IFS= read -r line; do echo "  - $line"; done <<< "$risk_output"
+fi
 echo ""
 
-# === APPROVALS SUMMARY ===
+# ── APPROVALS SUMMARY ────────────────────────────────────────────────────────
+
 echo "=== APPROVALS SUMMARY ==="
 APPROVALS="harness/policies/approvals.yaml"
 if [[ -f "$APPROVALS" ]]; then
-  # Print rule names and first 1-2 paths per rule (bounded)
-  awk '
-    /^[a-zA-Z_][a-zA-Z0-9_]*:/ { rule=$0; gsub(/:.*/, "", rule); paths=0; print "rule: " rule }
-    /paths:/ { in_paths=1; next }
-    in_paths && /^\s*-/ {
-      if (paths < 2) { gsub(/^\s*- */, "    "); print; paths++ }
-      else if (paths == 2) { print "    ..."; paths++ }
+  # always_ask_before — parse objects into summaries
+  echo "always_ask_before:"
+  ask_items=$(always_ask_before_summary "$APPROVALS" 5)
+  if [[ -z "$ask_items" ]]; then
+    echo "  (none)"
+  else
+    while IFS= read -r line; do echo "  - $line"; done <<< "$ask_items"
+  fi
+
+  # auto_ok_examples — simple scalar list, bounded at next top-level key
+  ok_items=$(awk '
+    /^auto_ok_examples:/ { in_sec = 1; next }
+    /^[a-zA-Z]/ { in_sec = 0 }
+    in_sec && /^[[:space:]]*-[[:space:]]/ {
+      if (n++ >= 5) exit
+      val = $0; sub(/^[[:space:]]*- *"?/, "", val); sub(/ *#.*/, "", val); sub(/"?[[:space:]]*$/, "", val)
+      if (val !~ /:/) print val
     }
-    /^[a-zA-Z]/ && !/paths:/ { in_paths=0 }
-  ' "$APPROVALS" | head -30
+  ' "$APPROVALS")
+  echo "auto_ok_examples:"
+  if [[ -z "$ok_items" ]]; then
+    echo "  (none)"
+  else
+    while IFS= read -r line; do echo "  - $line"; done <<< "$ok_items"
+  fi
+
+  # ask_when — show keys where value is true, bounded at next top-level key
+  echo "ask_when:"
+  ask_when=$(awk '
+    /^ask_when:/ { in_sec = 1; next }
+    /^[a-zA-Z]/ { in_sec = 0 }
+    in_sec && /:[[:space:]]*true/ {
+      k = $0; sub(/:.*/, "", k); gsub(/^[[:space:]]+/, "", k)
+      print k
+    }
+  ' "$APPROVALS")
+  if [[ -z "$ask_when" ]]; then
+    echo "  (none)"
+  else
+    while IFS= read -r line; do echo "  - $line"; done <<< "$ask_when"
+  fi
 else
   echo "(no approvals policy found)"
 fi
 echo ""
 
-# === RECENT DECISIONS ===
+# ── RECENT DECISIONS ─────────────────────────────────────────────────────────
+
 echo "=== RECENT DECISIONS ==="
 if [[ -f "harness/state/recent-decisions.md" ]]; then
-  if grep -q '^[^#]' "harness/state/recent-decisions.md" 2>/dev/null; then
-    grep '^[^#]' "harness/state/recent-decisions.md" | tail -10
+  # Filter out HTML comments, blank lines, and heading-only lines
+  content=$(grep -v '^\s*$' "harness/state/recent-decisions.md" | grep -v '^<!--' | grep -v -- '-->$' | grep -v '^# ' | tail -10 || true)
+  if [[ -n "$content" ]]; then
+    echo "$content"
   else
     echo "(no decisions recorded yet)"
   fi
@@ -74,11 +272,13 @@ else
 fi
 echo ""
 
-# === LAST SESSION ===
+# ── LAST SESSION ─────────────────────────────────────────────────────────────
+
 echo "=== LAST SESSION ==="
 if [[ -f "harness/state/last-session-summary.md" ]]; then
-  if grep -q '^[^#]' "harness/state/last-session-summary.md" 2>/dev/null; then
-    { grep -v '^<!-- ' "harness/state/last-session-summary.md" | grep -v '^\s*$' | head -12; } || true
+  content=$(grep -v '^\s*$' "harness/state/last-session-summary.md" | grep -v '^<!--' | grep -v -- '-->$' | grep -v '^# ' | head -12 || true)
+  if [[ -n "$content" ]]; then
+    echo "$content"
   else
     echo "(no session summary recorded)"
   fi
@@ -87,20 +287,29 @@ else
 fi
 echo ""
 
-# === INTERRUPTED TASK ===
+# ── INTERRUPTED TASK ─────────────────────────────────────────────────────────
+
 if [[ -f "harness/state/current-task.yaml" ]]; then
-  TASK_STATUS=$(grep '^status:' "harness/state/current-task.yaml" 2>/dev/null | head -1 | sed 's/status: *"\{0,1\}\([^"]*\)"\{0,1\}/\1/')
-  if [[ -n "$TASK_STATUS" && "$TASK_STATUS" != "idle" && "$TASK_STATUS" != "complete" ]]; then
+  # Extract status, strip quotes and inline comments
+  TASK_STATUS=$(awk '/^status:/ { val=$2; gsub(/"/, "", val); sub(/ *#.*/, "", val); print val; exit }' "harness/state/current-task.yaml")
+
+  # Only active/validating/syncing count as interrupted
+  if [[ "$TASK_STATUS" == "active" || "$TASK_STATUS" == "validating" || "$TASK_STATUS" == "syncing" ]]; then
     echo "=== INTERRUPTED TASK ==="
-    # Show key fields only, not the full file
-    grep -E '^(id|title|status|goal|validated|started_at):' "harness/state/current-task.yaml" 2>/dev/null || true
+    # Show fields that actually exist in current-task.yaml schema
+    awk '
+      /^(intent|scope|risk_level|status|validated|memory_updates):/ { show=1 }
+      /^[a-zA-Z]/ && !/^(intent|scope|risk_level|status|validated|memory_updates):/ { show=0 }
+      show { print }
+    ' "harness/state/current-task.yaml"
     echo ""
     echo "WARNING: Previous session ended with task status '$TASK_STATUS'. Review and resume or reset."
     echo ""
   fi
 fi
 
-# === VALIDATION COMMANDS ===
+# ── VALIDATION COMMANDS ──────────────────────────────────────────────────────
+
 if [[ -f "CLAUDE.md" ]]; then
   echo "=== VALIDATION COMMANDS ==="
   sed 's/\r$//' "CLAUDE.md" | sed -n '/^## Validation commands/,/^## /{ /^## Validation commands/d; /^## /d; p; }' | head -8
@@ -108,7 +317,8 @@ if [[ -f "CLAUDE.md" ]]; then
   echo "CLAUDE.md is present -- follow its instructions for request handling."
 fi
 
-# === ADDITIONAL REFERENCES ===
+# ── ADDITIONAL REFERENCES ────────────────────────────────────────────────────
+
 echo ""
 echo "Additional repo-local sources when relevant:"
 echo "- harness/router.yaml"

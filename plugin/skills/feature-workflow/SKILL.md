@@ -17,12 +17,12 @@ Activate when the orchestrator classifies intent as `feature` — the user wants
 ## Procedure
 
 ### 1. Scope clarification and requirement capture
-- If the request is ambiguous, delegate to `harness:requirements-curator` to produce scope, criteria, and non-goals.
+- Delegate to `harness:requirements-curator` to produce scope, criteria, and non-goals. This is mandatory regardless of how clear the request appears.
+- Only `harness:requirements-curator` creates REQ files, assigns REQ numbers, manages the draft→accepted transition, and performs conflict checks. Do not create REQ files directly in this workflow.
 - The curator persists these as `harness/docs/requirements/REQ-NNNN-<slug>.md` with status `draft`.
 - The curator checks for conflicts against all existing `accepted`/`implemented` requirements.
   - If conflicts are found: present them to the user and wait for resolution before proceeding.
   - If no conflicts: the curator sets status to `accepted`.
-- If the request is clear enough, create the REQ file directly with status `accepted` (skip the curator), but still run the conflict check.
 - **Do NOT proceed to Step 2 until the REQ file has status `accepted` (conflict-free).**
 - Pass the REQ file path forward as context for subsequent steps.
 
@@ -47,13 +47,14 @@ Handoff:
 Incorporate the mapper's returned findings before proceeding to Step 4.
 
 ### 4. Risk gate
-Check approvals policy. If the feature touches any `always_ask_before` zones:
-- auth, db_schema, public_contract, infra, dependency_upgrade, large_delete_or_move
-- **Stop and ask the user for confirmation** before proceeding.
-Also ask if:
-- Requirements interpretation is ambiguous
-- Blast radius is unclear
-- An existing rule might conflict
+Evaluate the planned action and planned paths using `harness/scripts/check-approvals.sh` or equivalent deterministic logic against `harness/policies/approvals.yaml`. If any rule matches → stop and ask the user for confirmation before proceeding.
+
+Also check the `ask_when` situational flags in `approvals.yaml`:
+- `requirements_ambiguous`: requirements interpretation is unclear
+- `blast_radius_unknown`: scope of impact cannot be determined
+- `existing_rule_conflicts`: an existing confirmed rule might conflict
+
+If any `ask_when` condition applies → stop and ask the user before proceeding.
 
 ### 5. Implementation
 Delegate to `harness:implementation-engineer` with:
@@ -92,11 +93,15 @@ Handoff:
   constraints: <which rules were applied>
   next_action: Update relevant docs and recent-decisions.md
 ```
+Note: `harness:docs-sync` (docs-sync) does NOT modify REQ file status. REQ status transitions are owned exclusively by this workflow (see below).
+
 If a durable rule was confirmed during this work, also pass to `harness:decision-capture` with the rule text, type, and evidence.
 
-Update the REQ file status based on workflow progress:
-- After implementation completes (Step 5): set status to `implemented`, append history entry
-- After validation passes (Step 7): set status to `verified`, tick acceptance criteria checkboxes, append history entry
+**REQ status transitions (this workflow's responsibility):**
+- After implementation completes (Step 5): set REQ status to `implemented`, append history entry
+- After validation passes (Step 7): set REQ status to `verified`, tick acceptance criteria checkboxes, append history entry
+
+These status transitions and history appends are performed by this workflow only. No other skill or agent modifies REQ status after `accepted`.
 
 ### 9. Summary
 Report:

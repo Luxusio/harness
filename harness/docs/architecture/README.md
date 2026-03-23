@@ -11,15 +11,17 @@
 
 ## Key Patterns
 
-- Skills as procedure documents: SKILL.md contains step-by-step instructions, not executable code — confirmed
-- Agent delegation: orchestrator reads SKILL.md then delegates to specialist agents via Agent tool — confirmed
+- Hidden workflow SKILL.md files are internal procedure documents: SKILL.md contains step-by-step instructions read by the orchestrator, not executable code and not user-invocable commands — confirmed
+- User-invocable command surface is limited to two public commands: `/harness:setup` (bootstrap) and `/harness:validate` (diagnostic). All other workflows are hidden internal procedures — confirmed
+- Agent delegation: orchestrator reads SKILL.md procedure doc then delegates to specialist agents via Agent tool — confirmed
 - Template-based setup: `skills/setup/templates/` contains all scaffolding templates with `{{PLACEHOLDER}}` syntax — confirmed
+- Approval gate source of truth: `harness/policies/approvals.yaml` is the enforcement gate the orchestrator checks before touching sensitive areas. `harness/manifest.yaml` `risk_zones` is descriptive context only — confirmed
 
 ## Observed Facts
 
 - [2026-03-20] Plugin skills are resolved relative to plugin root directory. Evidence: `"skills": "./skills/"` in plugin.json works when plugin root is set correctly.
 - [2026-03-20] `plugin.json` does not support `"agents"` or `"hooks"` fields — validation error. Evidence: install failed with "agents: Invalid input".
-- [2026-03-20] Marketplace `"source"` with nested subdirectory paths may not work reliably. Evidence: `"source": "./plugin"` did not load skills in testing.
+- [2026-03-22] Relative plugin source (`./plugin`) is supported for Git-based marketplaces. Path resolves from the marketplace root. URL-based marketplace catalogs should use external plugin sources instead of relative paths. Evidence: Git-based marketplace add works with relative source.
 
 ## Validation Strategy
 
@@ -42,7 +44,7 @@ hypothesis → observed_fact → confirmed → enforced
 
 ## Resolved Questions
 
-- [2026-03-20] `plugin/settings.json` `"agent"` field does NOT set the main agent. Resolved: 2026-03-20. Outcome: use `"agent": "harness:harness-orchestrator"` in PROJECT `.claude/settings.json` instead. The setup skill now adds this automatically.
+- [2026-03-22] `plugin/settings.json` `"agent"` field sets the shipped plugin default main agent. Resolved: 2026-03-22. Outcome: `plugin/settings.json` sets the plugin's default main-thread agent for all users. Project `.claude/settings.json` can override this for local development (e.g., activating `harness:harness-orchestrator` explicitly). These are different configuration levels, not competing settings.
 - [2026-03-20] `plugin.json` does not support `"agents"` or `"hooks"` fields. Resolved: 2026-03-20. Outcome: agents are auto-discovered from `agents/` directory without plugin.json declaration. Adding `"agents"` causes validation error.
 
 ## Open Questions

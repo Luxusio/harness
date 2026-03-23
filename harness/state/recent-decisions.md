@@ -10,3 +10,5 @@
 - [2026-03-20] risk_zone: plugin/skills/setup/ — generates entire control plane for new repos
 - [2026-03-20] risk_zone: plugin/agents/harness-orchestrator.md — main agent prompt affects all runtime behavior
 - [2026-03-20] decision: No approval rules needed yet — greenfield plugin repo with no high-risk directories
+- [2026-03-23] decision: approvals.yaml is now the sole approval-gate source; manifest no longer carries approval defaults
+- [2026-03-23] architecture: hidden workflow SKILL.md files are documented as internal procedure docs read by the orchestrator

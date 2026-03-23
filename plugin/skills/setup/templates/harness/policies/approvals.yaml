@@ -1,3 +1,6 @@
+# This file is the sole source of truth for approval gates.
+# The orchestrator checks this before any risky edit.
+# manifest.yaml risk_zones are descriptive context, not approval gates.
 version: 1
 
 always_ask_before:
@@ -14,51 +17,12 @@ always_ask_before:
       - "schema/**"
     reason: "Database schema and migration risk"
 
-  - kind: public_contract_change
-    paths:
-      - "api/**"
-      - "contracts/**"
-      - "openapi/**"
-    reason: "Public or inter-service contract risk"
-
-  - kind: infra_change
-    paths:
-      - ".github/**"
-      - "infra/**"
-      - "terraform/**"
-      - "deploy/**"
-    reason: "Deployment and infrastructure changes"
-
-  - kind: dependency_upgrade
-    paths:
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "package-lock.json"
-      - "poetry.lock"
-      - "pyproject.toml"
-      - "requirements*.txt"
-      - "go.mod"
-      - "Cargo.toml"
-      - "Cargo.lock"
-    reason: "Versioning and transitive behavior risk"
-
-  - kind: billing_payment_change
-    paths:
-      - "billing/**"
-      - "payments/**"
-      - "stripe/**"
-      - "checkout/**"
-    reason: "Billing and payment logic — financial risk"
-
-  - kind: submodule_change
-    paths:
-      - "submodules/**"
-    reason: "Git submodule — changes affect a separate repository"
-
-  - kind: env_secrets_change
-    paths:
-      - ".env*"
-    reason: "Environment variables and secrets — changes may affect all services"
+  - kind: large_delete_or_move
+    actions:
+      - delete
+      - move
+    min_files: 10
+    reason: "Large structural deletes or moves have broad blast radius"
 
 auto_ok_examples:
   - docs_only_change

@@ -4,7 +4,7 @@
 - `CLAUDE.md` — project instructions for Claude
 - `harness/manifest.yaml` — project shape and commands
 - `harness/router.yaml` — intent routing configuration
-- `harness/policies/approvals.yaml` — risk zone approval rules
+- `harness/policies/approvals.yaml` — approval gates / ask-first rules
 - `harness/policies/memory-policy.yaml` — memory classification rules
 
 ## State
@@ -28,3 +28,4 @@
 - `harness/scripts/validate.sh` — validation checks
 - `harness/scripts/smoke.sh` — smoke tests
 - `harness/scripts/arch-check.sh` — architecture guardrail checks
+- `harness/scripts/check-approvals.sh` — deterministic approval gate checker

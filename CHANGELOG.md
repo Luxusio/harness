@@ -20,18 +20,18 @@ First stable release. harness is a Claude Code plugin that turns any single-root
 - Placeholder reference table with 19 substitution variables
 
 ### Phase 3: Runtime loop
-- Orchestrator wired to invoke skills by file path (read-and-follow protocol)
+- Orchestrator wired to read internal workflow procedure docs (SKILL.md files) by file path (read-and-follow protocol)
 - CLAUDE.md as declarative reference surface (routing tables, memory rules, format specs)
 - SessionStart hook upgraded to inject actual file content (manifest, approvals, decisions)
 - Working-state tracking via current-task.yaml
 - Formalized memory write conventions (recent-decisions, unknowns, session summary)
-- Structured handoff protocol between skills (Handoff/Result blocks)
-- Orchestrator reads skill procedures directly via file paths
+- Structured handoff protocol between internal workflow procedures (Handoff/Result blocks)
+- Orchestrator reads internal workflow procedure docs directly via file paths
 
 ### Phase 4: Hardening
 - arch-check.sh with real enforcement (Node.js/ESLint/madge, Python/ruff, Go/go-vet)
 - Architecture boundary rules via arch-rules.yaml (fallback for repos without native lint)
-- Memory compaction (50-entry threshold with archival for recent-decisions)
+- Memory compaction policy: `recent-decisions.md` undergoes archival to `recent-decisions-archive.md` during sync when the 50-entry threshold is exceeded (triggered during memory sync, not automatically in the background)
 - Multi-session continuity via last-session-summary.md
 - Graceful degradation when tools are not installed
 
@@ -42,10 +42,10 @@ First stable release. harness is a Claude Code plugin that turns any single-root
 - Version bumped to 1.0.0
 - LICENSE copyright updated
 - Final consistency sweep
-- Removed redundant workflow summaries — orchestrator reads skills directly
+- Removed redundant workflow summaries — orchestrator reads internal workflow procedure docs under `plugin/skills/*/SKILL.md` directly
 
 ### Known limitations (v1.0)
-- Monorepo/polyglot projects not supported (planned for v1.1)
+- Monorepo/polyglot projects: experimental / low-confidence support — runtime control plane is single-root, no per-service manifest schema yet (planned for v1.1)
 - Browser validation requires external tooling
 - Memory promotion (hypothesis → confirmed) is manual
 - System is prompt-driven and depends on Claude Code infrastructure

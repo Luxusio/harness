@@ -10,25 +10,25 @@ The runtime lives entirely under `plugin/`:
 
 - `plugin/CLAUDE.md` — main agent instructions injected at session start
 - `plugin/agents/` — specialist subagent prompts
-- `plugin/skills/` — hidden workflow skills (setup, validate, and internal workflows)
+- `plugin/skills/` — hidden internal workflow procedure documents (setup, validate, and internal workflows)
 - `plugin/hooks/` — session-start and stop hooks
 - `plugin/scripts/` — helper scripts referenced by skills
 
-Everything outside `plugin/` is project-level documentation and tooling for developing harness itself, not the shipped artifact.
+Everything outside `plugin/` is project-level documentation and tooling for developing harness itself, not the shipped artifact. The root `harness/` directory is the dogfood fixture — a real harness control plane used while developing harness itself.
 
 ## 3. Runtime model
 
 ```
 user plain-language request
   -> orchestrator (harness-orchestrator)
-  -> intent router -> workflow skill
+  -> intent router -> internal workflow procedure doc (SKILL.md)
   -> specialist agents (implementation, test, docs, brownfield-mapper, etc.)
   -> validation loop
   -> memory sync (recent-decisions, unknowns, domain docs)
   -> summary output
 ```
 
-The orchestrator always loads `harness/manifest.yaml`, `harness/router.yaml`, and `harness/policies/approvals.yaml` before acting. Memory is repo-local — it persists across sessions because it lives in the repository, not in the conversation.
+The orchestrator uses `harness/router.yaml` as the authoritative routing source. For workflow intents, it loads `harness/manifest.yaml`, `harness/router.yaml`, and `harness/policies/approvals.yaml` before acting. For direct Q&A, it loads only the minimum context needed. Memory is repo-local — it persists across sessions because it lives in the repository, not in the conversation.
 
 ## 4. Command surface
 
@@ -37,7 +37,7 @@ The orchestrator always loads `harness/manifest.yaml`, `harness/router.yaml`, an
 | `/harness:setup` | Bootstrap the control plane into a new or existing repository |
 | `/harness:validate` | Diagnostic: check that the control plane is consistent and complete |
 
-All other workflows (feature, bugfix, tests, refactor, docs, decision-capture, brownfield-adoption) are hidden skills invoked automatically by the orchestrator from plain-language requests.
+All other workflows (feature, bugfix, tests, refactor, docs, decision-capture, brownfield-adoption) are hidden internal workflow procedure documents (SKILL.md files under `plugin/skills/`) read and followed by the orchestrator in response to plain-language requests. They are not user-invocable commands.
 
 ## 5. Current gaps
 
@@ -47,6 +47,6 @@ All other workflows (feature, bugfix, tests, refactor, docs, decision-capture, b
 
 ## 6. Near-term priorities
 
-1. **Single prompt tree.** Consolidate all agent and skill prompts so there is exactly one authoritative location per concern — eliminate any duplication between plugin and repo-level files.
+1. **Router as single source of truth.** `harness/router.yaml` is the authoritative location for intent routing. CLAUDE.md files reference the router instead of duplicating routing tables.
 2. **Stronger stop hook.** The session stop hook should reliably detect when validation was skipped or memory sync was not run, and surface a clear warning before the session closes.
 3. **Clearer specialist output contracts.** Each specialist agent (implementation-engineer, test-engineer, docs-scribe, etc.) should declare its expected output format explicitly so the orchestrator can validate and route results without ambiguity.

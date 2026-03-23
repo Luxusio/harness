@@ -13,6 +13,6 @@
 <!-- Move resolved items here. Do not delete — keep for history. -->
 <!-- Format: - [YYYY-MM-DD] [scope] item — resolved: YYYY-MM-DD — outcome: <what happened> -->
 
-- [2026-03-20] [plugin] Does plugin settings.json `"agent"` field actually set the main agent prompt? — resolved: 2026-03-20 — outcome: No. Use `"agent": "harness:harness-orchestrator"` in project `.claude/settings.json` instead. Setup skill now adds this automatically.
-- [2026-03-20] [plugin] How does Claude Code resolve skill paths in nested plugin structures? — resolved: 2026-03-20 — outcome: `"source": "./plugin"` in marketplace.json has a known bug (issue #11278). Skills are resolved relative to plugin root. Agents are auto-discovered from `agents/` directory.
+- [2026-03-20] [plugin] Does plugin `settings.json` `"agent"` set the main agent prompt? — resolved: 2026-03-22 — outcome: Yes for shipped plugin defaults. `plugin/settings.json` can set the plugin's default main-thread agent. Project `.claude/settings.json` remains useful when this repository wants to activate `harness:harness-orchestrator` explicitly during development.
+- [2026-03-20] [plugin] How does Claude Code resolve plugin paths in marketplace-relative installations? — resolved: 2026-03-22 — outcome: Relative plugin sources such as `./plugin` are supported for Git-based marketplaces and resolve from the marketplace root. Direct URL-based marketplace catalogs should use external plugin sources instead of relative paths.
 - [2026-03-20] [plugin] Skill paths in plugin.json are resolved relative to the plugin root directory — resolved: 2026-03-20 — outcome: Confirmed. `"skills": "./skills/"` in plugin.json resolves relative to plugin root, not `.claude-plugin/`.

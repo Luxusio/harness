@@ -1,7 +1,7 @@
 ---
 name: docs-sync
-description: Updates constraints, ADRs, runbooks, domain docs, unknowns, requirement status, and the docs index after meaningful code, architecture, or policy changes.
-allowed-tools: Read, Glob, Grep, Write, Edit, Bash
+description: Updates constraints, ADRs, runbooks, domain docs, unknowns, and the docs index after meaningful code, architecture, or policy changes.
+allowed-tools: Read, Glob, Grep, Write, Edit, Bash, Agent
 user-invocable: false
 ---
 
@@ -23,7 +23,6 @@ Review the work just completed:
 - Bug fixed → runbook or findings update
 - Architecture changed → architecture docs update
 - Risk discovered → unknowns or approvals update
-- New feature requested → requirement spec created or status updated
 
 ### 2. Update the right files
 Delegate to `harness:docs-scribe` with specific instructions:
@@ -44,10 +43,7 @@ Delegate to `harness:docs-scribe` with specific instructions:
 - Update `harness/docs/architecture/` if boundaries or patterns changed
 - Mark inferred patterns as hypotheses
 
-**Requirement status changes:**
-- If a feature was implemented, update the REQ file status from `accepted` to `implemented`
-- If validation passed, update from `implemented` to `verified` and tick acceptance criteria
-- Update the `## History` section with a timestamped status transition entry
+REQ status/history mutation is performed by the owning workflow, not docs-sync.
 
 ### 3. Update the index
 - Review `harness/docs/index.md` — add new files, remove stale ones

@@ -6,9 +6,13 @@ set -euo pipefail
 # Reads project-specific rules from harness/arch-rules.yaml if present.
 # arch-rules.yaml is a FALLBACK for repos without native lint boundary rules.
 #
-# Usage: harness/scripts/arch-check.sh
+# Usage: harness/scripts/arch-check.sh [scope]
+#   scope: service name to check, or "all" (default)
+
+SCOPE="${1:-all}"
 
 echo "=== harness architecture check ==="
+echo "scope: $SCOPE"
 echo ""
 
 VIOLATIONS=0
@@ -23,186 +27,220 @@ fi
 
 # --- Phase 2: Language-specific checks ---
 
-# Node.js / TypeScript
-if [[ -f "package.json" ]]; then
-  echo ""
-  echo "--- Node.js/TypeScript ---"
+check_current_dir() {
+  # Node.js / TypeScript
+  if [[ -f "package.json" ]]; then
+    echo ""
+    echo "--- Node.js/TypeScript ---"
 
-  # Circular dependency check (madge)
-  if command -v npx &>/dev/null; then
-    SRC_DIR="src"
-    [[ -d "src" ]] || SRC_DIR="."
-    echo ">> circular dependencies (madge)"
-    if npx --yes madge --circular --extensions ts,js,tsx,jsx "$SRC_DIR" 2>/dev/null | grep -q "Circular"; then
-      echo "VIOLATION: circular dependencies detected in $SRC_DIR/"
-      npx --yes madge --circular --extensions ts,js,tsx,jsx "$SRC_DIR" 2>/dev/null | head -20
-      VIOLATIONS=$((VIOLATIONS + 1))
-    else
-      echo "   pass: no circular dependencies"
-    fi
-    CHECKS_RUN=$((CHECKS_RUN + 1))
-  fi
-
-  # ESLint boundary checks (native lint rules take precedence over arch-rules.yaml)
-  if command -v npx &>/dev/null && { [[ -f ".eslintrc.js" ]] || [[ -f ".eslintrc.json" ]] || [[ -f ".eslintrc.yml" ]] || [[ -f "eslint.config.js" ]] || [[ -f "eslint.config.mjs" ]] || [[ -f "eslint.config.ts" ]]; }; then
-    echo ">> eslint"
-    if ! npx eslint . --no-warn-ignored --max-warnings=0 2>/dev/null; then
-      echo "VIOLATION: eslint reported errors"
-      VIOLATIONS=$((VIOLATIONS + 1))
-    else
-      echo "   pass: eslint clean"
-    fi
-    CHECKS_RUN=$((CHECKS_RUN + 1))
-  fi
-
-  # Fallback: arch-rules.yaml boundary checks for TypeScript/JavaScript
-  if [[ -n "$ARCH_RULES" ]]; then
-    echo ">> arch-rules.yaml boundary checks (Node.js)"
-    # Parse boundaries for typescript/javascript and check forbidden imports
-    RULE_SOURCE=""
-    while IFS= read -r line; do
-      if [[ "$line" =~ source:\ *\"(.+)\" ]]; then
-        RULE_SOURCE="${BASH_REMATCH[1]}"
-        READING_FORBIDDEN=false
+    # Circular dependency check (madge)
+    if command -v npx &>/dev/null; then
+      SRC_DIR="src"
+      [[ -d "src" ]] || SRC_DIR="."
+      echo ">> circular dependencies (madge)"
+      if npx --yes madge --circular --extensions ts,js,tsx,jsx "$SRC_DIR" 2>/dev/null | grep -q "Circular"; then
+        echo "VIOLATION: circular dependencies detected in $SRC_DIR/"
+        npx --yes madge --circular --extensions ts,js,tsx,jsx "$SRC_DIR" 2>/dev/null | head -20
+        VIOLATIONS=$((VIOLATIONS + 1))
+      else
+        echo "   pass: no circular dependencies"
       fi
-      if [[ "$line" =~ forbidden_imports: ]]; then
-        READING_FORBIDDEN=true
-        continue
+      CHECKS_RUN=$((CHECKS_RUN + 1))
+    fi
+
+    # ESLint boundary checks (native lint rules take precedence over arch-rules.yaml)
+    if command -v npx &>/dev/null && { [[ -f ".eslintrc.js" ]] || [[ -f ".eslintrc.json" ]] || [[ -f ".eslintrc.yml" ]] || [[ -f "eslint.config.js" ]] || [[ -f "eslint.config.mjs" ]] || [[ -f "eslint.config.ts" ]]; }; then
+      echo ">> eslint"
+      if ! npx eslint . --no-warn-ignored --max-warnings=0 2>/dev/null; then
+        echo "VIOLATION: eslint reported errors"
+        VIOLATIONS=$((VIOLATIONS + 1))
+      else
+        echo "   pass: eslint clean"
       fi
-      if [[ "${READING_FORBIDDEN:-}" == "true" ]]; then
-        if [[ "$line" =~ ^\ *-\ *\"(.+)\" ]]; then
-          FORBIDDEN="${BASH_REMATCH[1]}"
-          if [[ -d "${RULE_SOURCE%%/**}" ]] && grep -r "from ['\"].*${FORBIDDEN}" ${RULE_SOURCE} 2>/dev/null | head -3; then
-            echo "VIOLATION: ${RULE_SOURCE} imports from forbidden ${FORBIDDEN}"
-            VIOLATIONS=$((VIOLATIONS + 1))
-          fi
-        else
+      CHECKS_RUN=$((CHECKS_RUN + 1))
+    fi
+
+    # Fallback: arch-rules.yaml boundary checks for TypeScript/JavaScript
+    if [[ -n "$ARCH_RULES" ]]; then
+      echo ">> arch-rules.yaml boundary checks (Node.js)"
+      # Parse boundaries for typescript/javascript and check forbidden imports
+      RULE_SOURCE=""
+      while IFS= read -r line; do
+        if [[ "$line" =~ source:\ *\"(.+)\" ]]; then
+          RULE_SOURCE="${BASH_REMATCH[1]}"
           READING_FORBIDDEN=false
         fi
+        if [[ "$line" =~ forbidden_imports: ]]; then
+          READING_FORBIDDEN=true
+          continue
+        fi
+        if [[ "${READING_FORBIDDEN:-}" == "true" ]]; then
+          if [[ "$line" =~ ^\ *-\ *\"(.+)\" ]]; then
+            FORBIDDEN="${BASH_REMATCH[1]}"
+            if [[ -d "${RULE_SOURCE%%/**}" ]] && grep -r "from ['\"].*${FORBIDDEN}" ${RULE_SOURCE} 2>/dev/null | head -3; then
+              echo "VIOLATION: ${RULE_SOURCE} imports from forbidden ${FORBIDDEN}"
+              VIOLATIONS=$((VIOLATIONS + 1))
+            fi
+          else
+            READING_FORBIDDEN=false
+          fi
+        fi
+      done < "$ARCH_RULES"
+      CHECKS_RUN=$((CHECKS_RUN + 1))
+    fi
+  fi
+
+  # Python
+  if [[ -f "pyproject.toml" ]] || [[ -f "setup.py" ]] || [[ -f "setup.cfg" ]] || [[ -f "requirements.txt" ]]; then
+    echo ""
+    echo "--- Python ---"
+
+    # Ruff (native lint takes precedence)
+    if command -v ruff &>/dev/null; then
+      echo ">> ruff check"
+      if ! ruff check . --select I 2>/dev/null; then
+        echo "VIOLATION: ruff import check reported errors"
+        VIOLATIONS=$((VIOLATIONS + 1))
+      else
+        echo "   pass: ruff import checks clean"
       fi
-    done < "$ARCH_RULES"
-    CHECKS_RUN=$((CHECKS_RUN + 1))
-  fi
-fi
-
-# Python
-if [[ -f "pyproject.toml" ]] || [[ -f "setup.py" ]] || [[ -f "setup.cfg" ]] || [[ -f "requirements.txt" ]]; then
-  echo ""
-  echo "--- Python ---"
-
-  # Ruff (native lint takes precedence)
-  if command -v ruff &>/dev/null; then
-    echo ">> ruff check"
-    if ! ruff check . --select I 2>/dev/null; then
-      echo "VIOLATION: ruff import check reported errors"
-      VIOLATIONS=$((VIOLATIONS + 1))
+      CHECKS_RUN=$((CHECKS_RUN + 1))
     else
-      echo "   pass: ruff import checks clean"
+      echo "SKIP: ruff not available"
     fi
-    CHECKS_RUN=$((CHECKS_RUN + 1))
-  else
-    echo "SKIP: ruff not available"
+
+    # Fallback: arch-rules.yaml boundary checks for Python
+    if [[ -n "$ARCH_RULES" ]]; then
+      echo ">> arch-rules.yaml boundary checks (Python)"
+      CHECKS_RUN=$((CHECKS_RUN + 1))
+    fi
   fi
 
-  # Fallback: arch-rules.yaml boundary checks for Python
-  if [[ -n "$ARCH_RULES" ]]; then
-    echo ">> arch-rules.yaml boundary checks (Python)"
-    CHECKS_RUN=$((CHECKS_RUN + 1))
-  fi
-fi
+  # Go
+  if [[ -f "go.mod" ]]; then
+    echo ""
+    echo "--- Go ---"
 
-# Go
-if [[ -f "go.mod" ]]; then
-  echo ""
-  echo "--- Go ---"
-
-  if command -v go &>/dev/null; then
-    echo ">> go vet"
-    if ! go vet ./... 2>/dev/null; then
-      echo "VIOLATION: go vet reported errors"
-      VIOLATIONS=$((VIOLATIONS + 1))
+    if command -v go &>/dev/null; then
+      echo ">> go vet"
+      if ! go vet ./... 2>/dev/null; then
+        echo "VIOLATION: go vet reported errors"
+        VIOLATIONS=$((VIOLATIONS + 1))
+      else
+        echo "   pass: go vet clean"
+      fi
+      CHECKS_RUN=$((CHECKS_RUN + 1))
     else
-      echo "   pass: go vet clean"
+      echo "SKIP: go not available"
     fi
-    CHECKS_RUN=$((CHECKS_RUN + 1))
-  else
-    echo "SKIP: go not available"
+
+    # Fallback: arch-rules.yaml boundary checks for Go
+    if [[ -n "$ARCH_RULES" ]]; then
+      echo ">> arch-rules.yaml boundary checks (Go)"
+      CHECKS_RUN=$((CHECKS_RUN + 1))
+    fi
   fi
 
-  # Fallback: arch-rules.yaml boundary checks for Go
-  if [[ -n "$ARCH_RULES" ]]; then
-    echo ">> arch-rules.yaml boundary checks (Go)"
-    CHECKS_RUN=$((CHECKS_RUN + 1))
-  fi
-fi
+  # Rust
+  if [[ -f "Cargo.toml" ]]; then
+    echo ""
+    echo "--- Rust ---"
 
-# Rust
-if [[ -f "Cargo.toml" ]]; then
-  echo ""
-  echo "--- Rust ---"
-
-  if command -v cargo &>/dev/null; then
-    echo ">> cargo clippy"
-    if ! cargo clippy -- -D warnings 2>/dev/null; then
-      echo "VIOLATION: cargo clippy reported errors"
-      VIOLATIONS=$((VIOLATIONS + 1))
+    if command -v cargo &>/dev/null; then
+      echo ">> cargo clippy"
+      if ! cargo clippy -- -D warnings 2>/dev/null; then
+        echo "VIOLATION: cargo clippy reported errors"
+        VIOLATIONS=$((VIOLATIONS + 1))
+      else
+        echo "   pass: cargo clippy clean"
+      fi
+      CHECKS_RUN=$((CHECKS_RUN + 1))
     else
-      echo "   pass: cargo clippy clean"
+      echo "SKIP: cargo not available"
     fi
-    CHECKS_RUN=$((CHECKS_RUN + 1))
-  else
-    echo "SKIP: cargo not available"
-  fi
 
-  # Fallback: arch-rules.yaml boundary checks for Rust
-  if [[ -n "$ARCH_RULES" ]]; then
-    echo ">> arch-rules.yaml boundary checks (Rust)"
-    CHECKS_RUN=$((CHECKS_RUN + 1))
-  fi
-fi
-
-# Java / Kotlin
-if [[ -x "gradlew" ]] && { [[ -f "build.gradle" ]] || [[ -f "build.gradle.kts" ]]; }; then
-  echo ""
-  echo "--- Java/Kotlin ---"
-
-  # Probe available tasks once
-  GRADLE_TASKS=$(./gradlew tasks --all 2>/dev/null || true)
-  JVM_CHECKS=0
-
-  # Detekt (Kotlin static analysis)
-  if echo "$GRADLE_TASKS" | grep -q "^detekt "; then
-    echo ">> detekt"
-    if ! ./gradlew detekt 2>/dev/null; then
-      echo "VIOLATION: detekt reported errors"
-      VIOLATIONS=$((VIOLATIONS + 1))
-    else
-      echo "   pass: detekt clean"
+    # Fallback: arch-rules.yaml boundary checks for Rust
+    if [[ -n "$ARCH_RULES" ]]; then
+      echo ">> arch-rules.yaml boundary checks (Rust)"
+      CHECKS_RUN=$((CHECKS_RUN + 1))
     fi
-    CHECKS_RUN=$((CHECKS_RUN + 1))
-    JVM_CHECKS=$((JVM_CHECKS + 1))
   fi
 
-  # Checkstyle (Java static analysis)
-  if echo "$GRADLE_TASKS" | grep -q "^checkstyleMain "; then
-    echo ">> checkstyle"
-    if ! ./gradlew checkstyleMain 2>/dev/null; then
-      echo "VIOLATION: checkstyle reported errors"
-      VIOLATIONS=$((VIOLATIONS + 1))
-    else
-      echo "   pass: checkstyle clean"
+  # Java / Kotlin
+  if [[ -x "gradlew" ]] && { [[ -f "build.gradle" ]] || [[ -f "build.gradle.kts" ]]; }; then
+    echo ""
+    echo "--- Java/Kotlin ---"
+
+    # Probe available tasks once
+    GRADLE_TASKS=$(./gradlew tasks --all 2>/dev/null || true)
+    JVM_CHECKS=0
+
+    # Detekt (Kotlin static analysis)
+    if echo "$GRADLE_TASKS" | grep -q "^detekt "; then
+      echo ">> detekt"
+      if ! ./gradlew detekt 2>/dev/null; then
+        echo "VIOLATION: detekt reported errors"
+        VIOLATIONS=$((VIOLATIONS + 1))
+      else
+        echo "   pass: detekt clean"
+      fi
+      CHECKS_RUN=$((CHECKS_RUN + 1))
+      JVM_CHECKS=$((JVM_CHECKS + 1))
     fi
-    CHECKS_RUN=$((CHECKS_RUN + 1))
-    JVM_CHECKS=$((JVM_CHECKS + 1))
-  fi
 
-  if [[ $JVM_CHECKS -eq 0 ]]; then
-    echo "SKIP: no detekt or checkstyle tasks configured"
+    # Checkstyle (Java static analysis)
+    if echo "$GRADLE_TASKS" | grep -q "^checkstyleMain "; then
+      echo ">> checkstyle"
+      if ! ./gradlew checkstyleMain 2>/dev/null; then
+        echo "VIOLATION: checkstyle reported errors"
+        VIOLATIONS=$((VIOLATIONS + 1))
+      else
+        echo "   pass: checkstyle clean"
+      fi
+      CHECKS_RUN=$((CHECKS_RUN + 1))
+      JVM_CHECKS=$((JVM_CHECKS + 1))
+    fi
+
+    if [[ $JVM_CHECKS -eq 0 ]]; then
+      echo "SKIP: no detekt or checkstyle tasks configured"
+    fi
+  elif [[ -f "pom.xml" ]] && command -v mvn &>/dev/null; then
+    echo ""
+    echo "--- Java (Maven) ---"
+    echo "SKIP: no architecture checks available for Maven projects"
   fi
-elif [[ -f "pom.xml" ]] && command -v mvn &>/dev/null; then
-  echo ""
-  echo "--- Java (Maven) ---"
-  echo "SKIP: no architecture checks available for Maven projects"
+}
+
+# --- Phase 2a: Monorepo iteration ---
+MONOREPO_DIRS=()
+for candidate in services packages apps; do
+  if [[ -d "$candidate" ]]; then
+    for d in "$candidate"/*/; do
+      [[ -d "$d" ]] && MONOREPO_DIRS+=("$d")
+    done
+  fi
+done
+
+if [[ ${#MONOREPO_DIRS[@]} -gt 0 ]]; then
+  # Check root first (if scope is "all" or matches root)
+  if [[ "$SCOPE" == "all" ]]; then
+    echo "--- root ---"
+    check_current_dir
+  fi
+  # Then iterate services
+  for svc_dir in "${MONOREPO_DIRS[@]}"; do
+    svc_name=$(basename "$svc_dir")
+    if [[ "$SCOPE" == "all" || "$SCOPE" == "$svc_name" ]]; then
+      echo ""
+      echo "========== service: $svc_name =========="
+      pushd "$svc_dir" > /dev/null
+      check_current_dir
+      popd > /dev/null
+    fi
+  done
+else
+  # Single-repo mode: just run checks in current directory
+  check_current_dir
 fi
 
 # --- Phase 3: Summary ---

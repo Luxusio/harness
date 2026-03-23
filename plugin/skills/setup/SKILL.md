@@ -71,6 +71,7 @@ Read and adapt these supporting templates:
 - [templates/harness/scripts/validate.sh](templates/harness/scripts/validate.sh)
 - [templates/harness/scripts/smoke.sh](templates/harness/scripts/smoke.sh)
 - [templates/harness/scripts/arch-check.sh](templates/harness/scripts/arch-check.sh)
+- [templates/harness/scripts/check-approvals.sh](templates/harness/scripts/check-approvals.sh)
 - [templates/harness/arch-rules.yaml](templates/harness/arch-rules.yaml)
 
 ## Goals
@@ -162,25 +163,34 @@ If `harness/manifest.yaml` already exists:
    - `harness/scripts/validate.sh`
    - `harness/scripts/smoke.sh`
    - `harness/scripts/arch-check.sh`
+   - `harness/scripts/check-approvals.sh`
    - `harness/arch-rules.yaml`
 
    #### Dynamic approvals population
 
+   `harness/policies/approvals.yaml` is the sole source of truth for approval gates. The manifest does NOT carry approval defaults and must not be used as an approval source.
+
    When creating `harness/policies/approvals.yaml`, start from the template defaults (auth, db_schema, public_contract, infra, dependency_upgrade, billing_payment) and then prune and populate based on what actually exists in the repository:
 
    1. **Scan the repo** for directories and files that correspond to each rule's default paths.
-   2. **For each approval rule**, replace the template path list with only the paths that exist (or are reasonable globs for existing directories). Use the following mapping as a guide:
-      - `auth_change`: check for `auth/`, `src/auth/`, `lib/auth/`, `app/auth/` etc.
-      - `db_schema_change`: check for `migrations/`, `db/`, `schema/`, `prisma/`, `alembic/`; also scan `compose.yaml`/`docker-compose.yaml` for volume mounts to `docker-entrypoint-initdb.d` — the source path contains SQL schema init files that should be protected
-      - `public_contract_change`: check for `api/`, `contracts/`, `openapi/`, `graphql/`, `proto/`
-      - `infra_change`: check for `.github/`, `infra/`, `terraform/`, `deploy/`, `k8s/`, `.circleci/`
-      - `dependency_upgrade`: check for `package.json`, `pnpm-lock.yaml`, `package-lock.json`, `poetry.lock`, `requirements*.txt`, `go.mod`, `Cargo.toml`, `pyproject.toml`
-      - `billing_payment_change`: check for `billing/`, `payments/`, `stripe/`, `checkout/`
-      - `submodule_change`: check for `.gitmodules` file; if present, parse it to extract submodule paths
-      - `env_secrets_change`: check for `.env`, `.env.*`, `.env.local`, `.env.dev`, `.env.prod`, `.env.example` files at root and in service directories
-   3. **Remove any approval rule** whose scanned paths list is empty (i.e., none of the candidate paths exist in the repo). Do not emit rules that reference phantom directories.
-   4. **Keep any rule** where at least one path exists or is a file that is present (e.g., `package.json`).
-   5. **Log which rules were kept and which were removed** in the finish summary so the user knows what was detected.
+   2. **For each approval rule**, classify it as either path-based or action-based:
+      - **Path-based rules** have a `paths:` list (e.g., `auth_change`, `db_schema_change`). Replace the template path list with only the paths that actually exist (or are reasonable globs for existing directories). Use the following mapping as a guide:
+        - `auth_change`: check for `auth/`, `src/auth/`, `lib/auth/`, `app/auth/` etc.
+        - `db_schema_change`: check for `migrations/`, `db/`, `schema/`, `prisma/`, `alembic/`; also scan `compose.yaml`/`docker-compose.yaml` for volume mounts to `docker-entrypoint-initdb.d` — the source path contains SQL schema init files that should be protected
+        - `public_contract_change`: check for `api/`, `contracts/`, `openapi/`, `graphql/`, `proto/`
+        - `infra_change`: check for `.github/`, `infra/`, `terraform/`, `deploy/`, `k8s/`, `.circleci/`
+        - `dependency_upgrade`: check for `package.json`, `pnpm-lock.yaml`, `package-lock.json`, `poetry.lock`, `requirements*.txt`, `go.mod`, `Cargo.toml`, `pyproject.toml`
+        - `billing_payment_change`: check for `billing/`, `payments/`, `stripe/`, `checkout/`
+        - `submodule_change`: check for `.gitmodules` file; if present, parse it to extract submodule paths
+        - `env_secrets_change`: check for `.env`, `.env.*`, `.env.local`, `.env.dev`, `.env.prod`, `.env.example` files at root and in service directories
+      - **Action-based rules** have only an `actions:` field (e.g., `large_delete_or_move`). These do not depend on any path existing in the repo and are kept regardless.
+   3. **Path-based rules**: remove any rule whose scanned paths list is empty (none of the candidate paths exist in the repo). Do not emit rules that reference phantom directories.
+   4. **Path-based rules**: keep any rule where at least one path exists or is a file that is present (e.g., `package.json`).
+   5. **Action-based rules**: always keep. Only verify that `reason` is present and `min_files` (if present) is numeric. Do not warn about missing paths for these rules.
+   6. **Log which rules were kept and which were removed** in the finish summary:
+      - kept path-based rules (with matching paths found)
+      - removed path-based rules (no matching paths found)
+      - kept action-based rules (always kept)
 
 5. **Brownfield extras**
    If the repo is brownfield, also create or update:
@@ -230,7 +240,7 @@ If `harness/manifest.yaml` already exists:
    1. Read each file and identify verified domain facts (not hypotheses or preferences).
    2. For each distinct domain area discovered, create a corresponding file in `harness/docs/domains/` (e.g., `data-fetcher.md`, `auth.md`, `payments.md`).
    3. Transfer only factual, verified knowledge — parsing rules, API contracts, architectural patterns, naming conventions, known limitations.
-   4. For service-level files (e.g., `services/catchy-api/CLAUDE.md`), create a dedicated domain doc per service (e.g., `harness/docs/domains/catchy-api.md`) and update `manifest.yaml` service entries with confirmed technical details (framework versions, test tools, build commands) replacing any `inferred` markers.
+   4. For service-level files (e.g., `services/catchy-api/CLAUDE.md`), create a dedicated domain doc per service (e.g., `harness/docs/domains/catchy-api.md`). Service-level instruction files can be read; service-specific domain docs, brownfield inventory entries, and architecture notes can be created. Do NOT invent new manifest schema — the manifest has no `services:` field and must not be given one.
    5. Do NOT transfer: personal preferences, IDE settings, temporary workarounds, or unverified hypotheses (those go to `harness/state/unknowns.md`).
    6. Log which source files were processed and what was migrated in the finish summary.
 
@@ -255,7 +265,7 @@ If `harness/manifest.yaml` already exists:
    - `CLAUDE.md` — project instructions for Claude
    - `harness/manifest.yaml` — project shape and commands
    - `harness/router.yaml` — intent routing configuration
-   - `harness/policies/approvals.yaml` — risk zone approval rules
+   - `harness/policies/approvals.yaml` — approval gates / ask-first rules
    - `harness/policies/memory-policy.yaml` — memory classification rules
 
    ## State
@@ -281,6 +291,7 @@ If `harness/manifest.yaml` already exists:
    - `harness/scripts/validate.sh` — validation checks
    - `harness/scripts/smoke.sh` — smoke tests
    - `harness/scripts/arch-check.sh` — architecture guardrail checks
+   - `harness/scripts/check-approvals.sh` — deterministic approval gate checker
    - `harness/arch-rules.yaml` — architecture rule definitions
    ```
 
@@ -335,7 +346,10 @@ If `harness/manifest.yaml` already exists:
 12. **Finish cleanly**
    End with:
    - files created or updated
-   - which approval rules were kept and which were removed (from dynamic approvals scan)
+   - approval rules summary (from dynamic approvals scan):
+     - kept path-based rules (matching paths found in repo)
+     - removed path-based rules (no matching paths found)
+     - kept action-based rules (always kept regardless of path presence)
    - what was inferred vs confirmed
    - remaining unknowns
    - a short reminder that the user can now work in plain language — the orchestrator is now active
@@ -348,6 +362,17 @@ Harness detects multiple languages and services in the same repository. This det
 - Command inference (build, test, dev commands per service) may be low-confidence when scripts are generated, aliased, or rely on CI tooling not visible in the repo.
 
 When confidence is low, ask rather than guess. A wrong inferred command that silently writes risky config is worse than a clarifying question. Signal low-confidence inferences with `inferred` markers in `manifest.yaml` and surface them in the finish summary so the user can confirm or correct them.
+
+**Monorepo support is experimental and docs-first.** The following operations are supported:
+
+- Service-level instruction files (`CLAUDE.md`, `AGENTS.md`, `README.md` in service directories) can be read for domain facts.
+- Service-specific domain docs (`harness/docs/domains/<service>.md`), brownfield inventory entries, and architecture notes can be created.
+
+The following operations are NOT supported and must not be performed:
+
+- Do NOT add a `services:` field to `manifest.yaml` — no such schema exists.
+- Do NOT invent new manifest schema to accommodate monorepo service lists.
+- Do NOT update `manifest.yaml` with per-service entries; record service-level technical details in `harness/docs/domains/` instead.
 
 ## Guardrails
 

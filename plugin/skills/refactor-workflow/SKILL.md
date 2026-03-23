@@ -34,9 +34,18 @@ Before touching anything:
 - Dead code
 
 ### 3. Risk gate
-- If refactoring touches `always_ask_before` zones, get confirmation
-- If the refactoring scope is large, break it into phases and confirm the plan
-- If boundaries are unclear, delegate to `harness:brownfield-mapper` first
+If boundaries are unclear, delegate to `harness:brownfield-mapper` first to establish scope before this gate.
+
+Evaluate the planned refactor action and planned paths using `harness/scripts/check-approvals.sh` or equivalent deterministic logic against `harness/policies/approvals.yaml`. If any rule matches → stop and ask the user for confirmation before proceeding. Large delete/move structural refactors naturally connect to action-based rules in `approvals.yaml`.
+
+Also check the `ask_when` situational flags in `approvals.yaml`:
+- `requirements_ambiguous`: the preservation contract is unclear
+- `blast_radius_unknown`: the full scope of impact cannot be determined
+- `existing_rule_conflicts`: an existing confirmed rule might conflict with the structural change
+
+If any `ask_when` condition applies → stop and ask the user before proceeding.
+
+If the refactoring scope is large, break it into phases and confirm the plan with the user before beginning.
 
 ### 4. Refactor in small steps
 Delegate to `harness:refactor-engineer` with:

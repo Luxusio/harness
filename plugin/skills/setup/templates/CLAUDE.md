@@ -12,23 +12,26 @@ Follow the orchestrator's runtime loop for every substantial request. This secti
 - Approvals: `harness/policies/approvals.yaml`
 - Memory policy: `harness/policies/memory-policy.yaml`
 
-### 2. Intent routing
+### Intent routing
 
-| Intent | Signals | Skill |
-|--------|---------|-------|
-| answer / explain | why, how, what, explain | Direct answer with context |
-| requirements | document, spec, clarify, plan | requirements-curator → docs-scribe |
-| feature | build, add, create, implement, new | feature-workflow |
-| bugfix | fix, broken, error, regression, failing | bugfix-workflow |
-| tests | test, coverage, case, prove | test-expansion |
-| refactor | refactor, cleanup, simplify, untangle | refactor-workflow |
-| docs | document, update docs, write guide | docs-sync |
-| decision | from now on, always, never, policy | decision-capture |
-| brownfield | legacy, unfamiliar, old code, map | brownfield-adoption |
-| validation | validate, verify, prove, evidence | validation-loop |
-| architecture | boundary, dependency, layer, module | architecture-guardrails |
-| memory | remember, record, capture, store | repo-memory-policy |
-| other | (no match) | Direct response with manifest context |
+`harness/router.yaml` is the authoritative routing file.
+Use it for:
+- intent names and signal examples
+- execution mode (`direct_response`, `specialists`, `skill`)
+- internal workflow procedure selection
+- primary agent order
+
+Do not maintain a second routing table in this file.
+
+Key rules:
+- Direct answers do not mutate files
+- Workflow intents must check approvals before risky edits
+- Memory sync happens after substantial mutating work
+
+### Approval gates and risk context
+
+- `harness/policies/approvals.yaml` — approval gate source of truth. The orchestrator reads this to decide whether to ask-first before touching a sensitive area.
+- `harness/manifest.yaml` `risk_zones` field — descriptive risk context. Lists which paths/areas are sensitive. Informs setup and human review but is not itself an enforcement gate.
 
 ### 3. Memory files for sync
 - Recent decisions: `harness/state/recent-decisions.md`
@@ -60,7 +63,7 @@ After every substantial task, report:
 
 - Read `harness/manifest.yaml` before substantial work.
 - Load only the domain docs and policies relevant to the current task.
-- Check `harness/policies/approvals.yaml` before touching high-risk zones.
+- Check `harness/policies/approvals.yaml` (approval gates) before touching sensitive areas.
 - Treat `harness/docs/constraints/` and `harness/docs/decisions/` as authoritative for confirmed project rules.
 - Run the narrowest validation that proves the change, then widen only if risk requires it.
 

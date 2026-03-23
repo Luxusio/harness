@@ -15,27 +15,15 @@ For every substantial request, execute this loop internally:
 
 ### 1. Classify intent
 
-Map the request to one or more intent categories:
+Classify the request using `harness/router.yaml` as the authoritative source for intent names, signal examples, execution modes, and workflow skills.
 
-| Intent | Signal words | Skill |
-|--------|-------------|------------------|
-| answer / explain | "why", "how", "what", "explain" | Direct answer with context |
-| requirements | "document", "spec", "clarify", "plan" | `requirements-curator` → `docs-scribe` |
-| feature | "build", "add", "create", "implement", "new" | `feature-workflow` |
-| bugfix | "fix", "broken", "error", "regression", "failing" | `bugfix-workflow` |
-| tests | "test", "coverage", "case", "prove" | `test-expansion` |
-| refactor | "refactor", "cleanup", "simplify", "untangle" | `refactor-workflow` |
-| brownfield | "legacy", "unfamiliar", "old code", "map" | `brownfield-adoption` |
-| decision | "from now on", "always", "never", "policy", "rule" | `decision-capture` |
-| docs | "document", "update docs", "write guide" | `docs-sync` |
-| validation | "validate", "verify", "prove", "evidence" | `validation-loop` |
-| architecture | "boundary", "dependency", "layer", "module" | `architecture-guardrails` |
-| memory | "remember", "record", "capture", "store" | `repo-memory-policy` |
-| other | (no match) | Direct response with manifest context |
+Key behaviors:
+- Direct answers (`execution_mode: direct_response`) skip Steps 3–7
+- Workflow intents create or update `harness/state/current-task.yaml`
 
 If the request spans multiple intents, execute them in dependency order.
 
-**Short-circuit for `answer` / `other`:** If the intent is `answer` or `other`, skip Steps 3–7. Load only the context needed to answer well (see Step 2 below), respond directly, and go to Step 8. Do NOT update `current-task.yaml` for simple Q&A.
+**Short-circuit for `direct_response` intents:** Intents with `execution_mode: direct_response` skip Steps 3–7. Load only the context needed to answer well (see Step 2 below), respond directly, and go to Step 8. Do NOT update `current-task.yaml` for these intents.
 
 **For all other intents:** Create or update `harness/state/current-task.yaml` with: intent, scope (files/domains involved), risk_level (auto or ask based on approvals check), status: active.
 
@@ -43,7 +31,7 @@ If the request spans multiple intents, execute them in dependency order.
 
 Read only the smallest relevant set — do not load everything.
 
-**For `answer` / `other` intents (no file changes):**
+**For `direct_response` intents (no file changes):**
 - `harness/manifest.yaml` (project shape — always useful for context)
 - Relevant `harness/docs/domains/` if the question is about a specific area
 - Relevant `harness/docs/constraints/` if the question is about rules
@@ -54,6 +42,7 @@ Read only the smallest relevant set — do not load everything.
 
 Always load first:
 - `harness/manifest.yaml` (project shape, commands)
+- `harness/router.yaml` (intent routing, execution modes)
 - `harness/policies/approvals.yaml` (what needs confirmation)
 
 Load based on scope:
@@ -76,47 +65,32 @@ Load based on scope:
 - Small internal refactoring with no behavior change
 - Clear, scoped bug fixes with test coverage
 
-**Always ask first** — check against `harness/policies/approvals.yaml`:
-- Authentication / authorization changes
-- Database schema / migration changes
-- Public API contract changes
-- Infrastructure / deployment changes
-- Dependency upgrades
-- Large deletes or moves
-- Billing / payment logic
-- Ambiguous brownfield areas with unclear blast radius
+**Data-driven approval check:**
+Use `harness/scripts/check-approvals.sh` or equivalent deterministic logic to evaluate `harness/policies/approvals.yaml` against the planned action and planned paths. If any rule matches → stop and ask the user for confirmation before proceeding.
 
-**Also ask when:**
-- Requirements interpretation is ambiguous
-- Blast radius is unknown
-- An existing confirmed rule might conflict with the request
-- The change affects key journeys from manifest
+`manifest.yaml` `risk_zones` are descriptive context to help scope the check. The approval decision source is `approvals.yaml` only.
+
+**Also ask when** any `ask_when` situational flag in `approvals.yaml` applies:
+- `requirements_ambiguous`: requirements interpretation is unclear
+- `blast_radius_unknown`: scope of impact cannot be determined
+- `existing_rule_conflicts`: an existing confirmed rule might conflict with the request
 
 ### 4. Route to workflow
 
 ### How workflows work
 
-Workflow skills define the governing procedure for the current task. Select the matching workflow, follow its procedure, and delegate execution to specialists as needed. Treat skill file paths as plugin-internal references only; do not rely on any second root-level prompt tree.
+Use `harness/router.yaml` to determine the execution mode for the classified intent:
 
-To activate a workflow:
-1. Read the skill's `SKILL.md` file at the path listed in the routing table
-2. Follow the procedure steps in order, driving execution through specialist delegation and current-task management
-3. Delegate each step to the appropriate specialist agent using the Agent tool
+- **`direct_response`** → answer directly, no specialist delegation needed
+- **`specialists`** → use the listed `primary_agents` chain in order
+- **`skill`** → read `skills/<workflow_skill>/SKILL.md` and follow its procedure
+
+To activate a skill-based workflow:
+1. Read the skill's `SKILL.md` at the path from the router's `workflow_skill` field. These are internal procedure documents under `plugin/skills/*/SKILL.md` — they are NOT user-facing slash commands.
+2. Follow the procedure steps in order, coordinating specialist delegation as directed by the skill document.
+3. Delegate each step to the appropriate specialist agent using the Agent tool.
 
 The orchestrator manages the overall runtime loop. Each skill defines the detailed procedure for one phase of work. Workflows can chain: a feature may trigger brownfield-adoption first, then implementation, then test-expansion, then docs-sync.
-
-| Workflow | When to use | Procedure |
-|----------|-------------|-----------|
-| `feature-workflow` | New functionality, endpoint, screen, behavior | Read and follow `skills/feature-workflow/SKILL.md` |
-| `bugfix-workflow` | Failure, regression, incorrect behavior | Read and follow `skills/bugfix-workflow/SKILL.md` |
-| `test-expansion` | Missing tests, weak coverage, flaky tests | Read and follow `skills/test-expansion/SKILL.md` |
-| `refactor-workflow` | Cleanup, simplification, no behavior change | Read and follow `skills/refactor-workflow/SKILL.md` |
-| `docs-sync` | Documentation updates needed | Read and follow `skills/docs-sync/SKILL.md` |
-| `decision-capture` | User states a durable rule | Read and follow `skills/decision-capture/SKILL.md` |
-| `brownfield-adoption` | Unfamiliar code area needs mapping first | Read and follow `skills/brownfield-adoption/SKILL.md` |
-| `validation-loop` | Changes need evidence before completion | Read and follow `skills/validation-loop/SKILL.md` |
-| `architecture-guardrails` | Structural changes need boundary checks | Read and follow `skills/architecture-guardrails/SKILL.md` |
-| `repo-memory-policy` | New knowledge needs classification and storage | Read and follow `skills/repo-memory-policy/SKILL.md` |
 
 ### 5. Delegate to specialists
 
@@ -201,6 +175,10 @@ Result:
 
 The orchestrator inspects `needs_handoff` after each result and initiates the indicated specialist delegation if present. It inspects `recordable_knowledge` to decide whether Step 7 (memory sync) is needed.
 
+#### Result contract enforcement
+
+All specialists must return results using the standard `Result:` schema above. If a specialist returns free-form output or omits required fields (`from`, `scope`, `changes`, `validation`), do not proceed to the next step. Instead, ask the same specialist to restate its output using the standard schema.
+
 ### 6. Validate
 
 Every change needs evidence. Use `validation-loop` to:
@@ -241,7 +219,7 @@ After validated work, check whether recordable knowledge emerged. Not every chan
 
 Prefer executable memory (tests, scripts) over docs when possible.
 
-After memory writes, check if `recent-decisions.md` exceeds 50 entries (lines matching `^- \[`). If so, follow the compaction procedure in `skills/repo-memory-policy/SKILL.md` § Compaction.
+After memory writes, check if `recent-decisions.md` exceeds 50 entries (lines matching `^- \[`). If the threshold is exceeded, perform sync-time threshold-based compaction by following the procedure in `skills/repo-memory-policy/SKILL.md` § Compaction. Compaction runs during this sync step when the threshold is exceeded — it is not triggered by background automation.
 
 Update `current-task.yaml`: set `memory_updates` list with each file modified during sync. Set status to `syncing`, then `complete` when done. If nothing was recordable, set `memory_updates: []` and status to `complete` directly — do not leave status as `syncing`.
 

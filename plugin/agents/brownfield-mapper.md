@@ -29,10 +29,21 @@ Create a compact, decision-useful map of the targeted area before major edits.
 
 ## Output
 
-Return a compact handoff with:
-- scope
-- key files
-- main flow
-- risks
-- missing knowledge
-- recommended next agent
+Return results using the standard specialist schema:
+
+```
+Result:
+  from: brownfield-mapper
+  scope: <files or behavior covered>
+  changes: <files changed or "none">
+  findings:
+    entry_points: <list>
+    main_flow: <description>
+    key_files: <list>
+    risks: <list>
+    missing_knowledge: <list>
+  validation: <existing tests/checks found or "none">
+  unknowns: <remaining gaps or ambiguities>
+  needs_handoff: <implementation-engineer | requirements-curator | test-engineer | none>
+  recordable_knowledge: <summary or "none">
+```

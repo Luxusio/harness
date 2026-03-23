@@ -19,6 +19,8 @@ Read `harness/manifest.yaml` to understand:
 
 ### 2. Run narrow-to-wide validation
 
+Validation scripts (`harness/scripts/validate.sh`, `harness/scripts/smoke.sh`) use `manifest.commands.*` as the runtime source of truth. Auto-detect fallback is used only when a manifest command is empty.
+
 **Level 1: Quick static checks** (always run if available)
 - Format check
 - Lint
@@ -58,6 +60,8 @@ For each level attempted:
 - Concrete evidence (test output, command results)
 - Any gaps or deferred validation
 - Confidence assessment
+
+This procedure collects and reports validation evidence only. REQ lifecycle mutation (e.g. transitioning status from `implemented` to `verified`) is the invoking workflow's responsibility, not validation-loop's.
 
 ## Mode-specific strategies
 

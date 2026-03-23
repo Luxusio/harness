@@ -16,3 +16,6 @@
 ## Debugging notes
 
 <!-- Add debugging insights from bug fixes -->
+
+- Marketplace install: This repo uses Git-based marketplace add (`/plugin marketplace add <git-url>`). The relative plugin source (`./plugin`) in `marketplace.json` works with Git-based installs. Raw `marketplace.json` URL-based installs are not compatible with this repo's distribution shape.
+- Validation scripts: `harness/scripts/validate.sh` and `harness/scripts/smoke.sh` use manifest commands (`harness/manifest.yaml > commands.*`) as their primary source. Auto-detect fallback is used only when a manifest command is empty.

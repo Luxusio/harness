@@ -1,12 +1,17 @@
+# This file is the sole source of truth for approval gates.
+# The orchestrator checks this before any risky edit.
+# manifest.yaml risk_zones are descriptive context, not approval gates.
 version: 1
 
-# Dynamic approvals — only rules with existing paths are included.
-# Removed: auth_change, db_schema_change, public_contract_change, infra_change,
-#           dependency_upgrade, billing_payment_change (no matching paths in repo)
-
-always_ask_before: []
-# No high-risk directories detected in this greenfield plugin repo.
-# Add rules here as the project grows.
+# Removed path-based rules: auth_change, db_schema_change — no matching paths in this repo.
+# Action-based rules are kept regardless of path presence.
+always_ask_before:
+  - kind: large_delete_or_move
+    actions:
+      - delete
+      - move
+    min_files: 10
+    reason: "Large structural deletes or moves have broad blast radius"
 
 auto_ok_examples:
   - docs_only_change

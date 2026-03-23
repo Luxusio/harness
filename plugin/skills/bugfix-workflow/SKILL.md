@@ -36,8 +36,16 @@ Activate when the orchestrator classifies intent as `bugfix` — the user report
 - For bugs with unclear causality or intermittent behavior, escalate to `oh-my-claudecode:tracer` for evidence-driven causal tracing if it is available in the current session. Otherwise continue with harness agents and main-thread reasoning.
 
 ### 4. Risk gate
-- If the fix touches `always_ask_before` zones, get confirmation
-- If the root cause is in a shared/critical path, assess blast radius before fixing
+Evaluate the planned fix action and planned paths using `harness/scripts/check-approvals.sh` or equivalent deterministic logic against `harness/policies/approvals.yaml`. If any rule matches → stop and ask the user for confirmation before proceeding.
+
+Also check the `ask_when` situational flags in `approvals.yaml`:
+- `requirements_ambiguous`: expected behavior after the fix is unclear
+- `blast_radius_unknown`: the fix touches a shared or critical path whose full scope cannot be determined — assess blast radius before proceeding
+- `existing_rule_conflicts`: an existing confirmed rule might conflict with the fix approach
+
+If any `ask_when` condition applies → stop and ask the user before proceeding.
+
+When scope is unclear, perform brownfield mapping (Step 3) and blast radius assessment before reaching this gate.
 
 ### 5. Fix
 Delegate to `harness:implementation-engineer` with:

@@ -39,6 +39,8 @@ harness works with **any single-root project**. Setup auto-detects languages, fr
 /plugin install harness@harness
 ```
 
+> **Note:** This uses Git-based marketplace add. The relative plugin source (`./plugin`) in `marketplace.json` works with Git-based installs but not with raw URL-based marketplace catalogs.
+
 **Option B — Local development**
 
 ```bash
@@ -70,11 +72,11 @@ The orchestrator handles classification, routing, validation, and memory automat
 your-repo/
 ├── CLAUDE.md                           # AI operating manual (reference data)
 └── harness/
-    ├── manifest.yaml                   # Project shape, commands, risk zones
+    ├── manifest.yaml                   # Project shape, commands, risk zones (descriptive context)
     ├── router.yaml                     # Intent routing configuration
     ├── arch-rules.yaml                 # Architecture boundary rules (initially empty)
     ├── policies/
-    │   ├── approvals.yaml              # Risk zone approval gates
+    │   ├── approvals.yaml              # Approval gates — ask-first rules for sensitive areas
     │   └── memory-policy.yaml          # Memory classification rules
     ├── state/
     │   ├── recent-decisions.md         # Chronological decision log
@@ -83,9 +85,10 @@ your-repo/
     │   ├── current-task.yaml          # Runtime loop state (gitignored)
     │   └── last-session-summary.md    # Previous session summary (gitignored)
     ├── scripts/
-    │   ├── validate.sh                 # Validation checks (auto-detects tools)
-    │   ├── smoke.sh                    # Smoke tests
-    │   └── arch-check.sh              # Architecture boundary checks
+    │   ├── validate.sh                 # Validation checks (manifest commands first, auto-detect fallback)
+    │   ├── smoke.sh                    # Smoke tests (manifest commands first, auto-detect fallback)
+    │   ├── arch-check.sh              # Architecture boundary checks
+    │   └── check-approvals.sh         # Deterministic approval gate checker
     └── docs/
         ├── index.md                    # Documentation index
         ├── constraints/                # Confirmed project rules
@@ -104,7 +107,7 @@ You speak naturally. The orchestrator automatically:
 1. **Classifies** your request (feature, bugfix, refactor, test, docs, decision...)
 2. **Loads** only the relevant context from the control plane
 3. **Checks risk** against approval rules before touching sensitive areas
-4. **Routes** to the correct skill procedure
+4. **Routes** to the correct internal workflow procedure document
 5. **Validates** with concrete evidence (tests, lint, build)
 6. **Records** durable knowledge back into repo memory
 7. **Summarizes** what changed, what was validated, and what needs follow-up
@@ -158,21 +161,21 @@ Run `/harness:validate` anytime to check control plane health:
 
 ## Configuration
 
-### Approval rules
-Edit `harness/policies/approvals.yaml` to add or remove risk zones. The orchestrator checks this before touching sensitive areas.
+### Approval gates
+Edit `harness/policies/approvals.yaml` to add or remove approval gates (ask-first rules). The orchestrator checks this before touching sensitive areas. Note: `harness/manifest.yaml` contains a `risk_zones` field that provides descriptive risk context about which paths are sensitive — this informs setup and human review but is not itself an enforcement gate.
 
 ### Architecture boundaries
 When the architecture-guardrails procedure confirms a boundary rule, it appends to `harness/arch-rules.yaml`. Run `harness/scripts/arch-check.sh` to verify enforcement.
 
 ### Memory
-- Decisions auto-archive after 50 entries
-- Resolved unknowns are pruned after 30 days
+- `recent-decisions.md` undergoes compaction policy during sync when the entry threshold is exceeded (archival to `recent-decisions-archive.md`)
+- Resolved items in `unknowns.md` become pruning candidates during sync after 30 days
 - Session summaries provide continuity between sessions
 - Requirements track lifecycle: draft → accepted → implemented → verified
 
 ## Known limitations
 
-1. **Monorepo/polyglot projects** — Experimental / low-confidence support. Setup detects workspace structure but treats the project as a single root. Inferred commands and risk zones should be reviewed manually before trusting them.
+1. **Monorepo/polyglot projects** — Experimental / low-confidence support. Setup can inventory multi-root workspace structure and read service-level docs, but the runtime control plane remains single-root. There is no per-service manifest schema yet. Inferred commands and risk zones should be reviewed manually before trusting them.
 2. **Browser validation** — The `browser-validator` agent exists but requires external browser tooling (not included). Falls back to smoke checks.
 3. **Memory promotion** — The hypothesis → confirmed → enforced ladder is manual. No automated promotion based on evidence accumulation.
 4. **Prompt-driven** — The entire system runs via Claude Code's agent/skill infrastructure. Behavior depends on model capability and prompt adherence.
@@ -182,6 +185,8 @@ When the architecture-guardrails procedure confirms a boundary rule, it appends 
 
 The shipped prompt system lives under `plugin/`. Root-level documentation exists to help develop this repository, not as a second runtime prompt tree.
 
+The root `harness/` directory is the dogfood fixture for this repository — it is a real harness control plane used to develop harness itself. `scripts/check-dogfood-sync.sh` checks for static mirror file drift between the dogfood fixture and the setup templates.
+
 ### Key files
 - `plugin/agents/` — shipped agent definitions
 - `plugin/skills/` — shipped skills
@@ -190,6 +195,8 @@ The shipped prompt system lives under `plugin/`. Root-level documentation exists
 - `plugin/skills/setup/templates/` — generated control plane templates
 - `plugin/.claude-plugin/plugin.json` — plugin manifest
 - Root `CLAUDE.md` — this repository's development manual
+- Root `harness/` — dogfood harness control plane for this repo
+- `scripts/check-dogfood-sync.sh` — checks static mirror file drift between dogfood fixture and setup templates
 
 ## License
 
