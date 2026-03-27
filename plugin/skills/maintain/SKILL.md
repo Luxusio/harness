@@ -1,6 +1,6 @@
 ---
 name: maintain
-description: Run periodic doc hygiene and structure maintenance, then request structure-critic approval for semantic changes.
+description: Run periodic doc hygiene and structure maintenance, then request critic-document approval for semantic changes.
 argument-hint: [optional focus area]
 context: fork
 agent: Explore
@@ -20,16 +20,17 @@ Optional focus from user: `$ARGUMENTS`
 
 ### 2. Scan index health
 - Verify each root CLAUDE.md index matches actual files on disk
-- Verify doc/CLAUDE.md registry matches actual roots on disk
+- Verify root `CLAUDE.md` registry matches actual roots on disk
+- Use root `CLAUDE.md` registry + root-specific `CLAUDE.md` (not `doc/CLAUDE.md`)
 
 ### 3. Mechanical cleanup (auto-apply)
 These changes are safe and do not need critic approval:
 - Normalize note headers (tags, summary, updated fields)
 - Rebuild root CLAUDE.md indexes to match actual files
-- Update doc/CLAUDE.md registry to match actual roots
+- Update root `CLAUDE.md` registry to match actual roots
 - Add missing superseded_by links where chains are obvious
 
-### 4. Semantic proposals (need critic-structure)
+### 4. Semantic proposals (need critic-document)
 These changes need approval — prepare a proposal:
 - Merging duplicate notes
 - Archiving stale notes
@@ -37,7 +38,7 @@ These changes need approval — prepare a proposal:
 - Compacting note chains (collapsing superseded sequences)
 - Deleting notes
 
-For each proposal, delegate to `harness:critic-structure` with:
+For each proposal, delegate to `harness:critic-document` with:
 ```
 Handoff:
   from: maintain
@@ -46,12 +47,15 @@ Handoff:
   rationale: <why this helps>
 ```
 
-Only apply if critic-structure returns PASS.
+Only apply if critic-document returns PASS.
 
-### 5. Report
+### 5. Optional architecture checks
+If `.claude/harness/constraints/check-architecture.*` exists, invoke it and report findings.
+
+### 6. Report
 End with:
 - **Cleaned**: mechanical fixes applied
-- **Proposed**: semantic changes submitted to critic-structure
-- **Approved**: changes that passed critic-structure
-- **Rejected**: changes that failed critic-structure
+- **Proposed**: semantic changes submitted to critic-document
+- **Approved**: changes that passed critic-document
+- **Rejected**: changes that failed critic-document
 - **Stats**: total notes by type, notes per root, stale count

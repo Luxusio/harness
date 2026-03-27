@@ -19,48 +19,51 @@ For every substantial request, execute this loop:
 
 ### 1. Classify intent
 
-| Intent | Signals | Lane |
-|--------|---------|------|
-| answer / explain | why, how, what, explain | Direct answer with context |
-| feature | build, add, create, implement | plan → critic-plan → developer → critic-runtime → writer → critic-write |
-| bugfix | fix, broken, error, regression | plan → critic-plan → developer → critic-runtime → writer → critic-write |
-| refactor | refactor, cleanup, simplify | plan → critic-plan → developer → critic-runtime |
-| docs | document, update docs, spec | writer → critic-write |
-| investigate | debug, analyze, trace | developer → writer (OBS/INF notes) |
-| structure | new root, reorganize, archive | plan → critic-structure |
-| maintain | cleanup notes, stale, hygiene | /harness:maintain skill |
+| Intent | Lane |
+|--------|------|
+| answer / explain | Direct answer with context |
+| everything that mutates the repo | Common mutate-repo loop |
+| maintain | /harness:maintain skill |
 
 **Short-circuit for `answer`:** Skip critics. Load only needed context, respond directly.
 
 ### 2. Load scoped context
 
+Always read `.claude/harness/manifest.yaml` when initialized.
+
 Read only the smallest relevant set:
-- `doc/CLAUDE.md` (root registry — always)
+- Root `CLAUDE.md` (root registry — always)
 - `doc/common/CLAUDE.md` (common root — always)
 - Relevant `doc/<root>/CLAUDE.md` based on task domain
-- Task-local `PLAN.md` and critic verdicts if resuming
+- Task-local `PLAN.md`, `TASK_STATE.yaml`, and critic verdicts if resuming
 
-### 3. Task lifecycle
+### 3. Task lifecycle (mutate-repo loop)
 
 ```
 user request
   → create task folder (.claude/harness/tasks/TASK__<date>__<slug>/)
-  → /harness:plan writes PLAN.md
-  → critic-plan validates → PASS required
-  → developer implements (code) or writer creates notes (docs)
-  → critic-runtime validates code (PASS/FAIL/BLOCKED_ENV)
-  → critic-write validates docs/notes (PASS/FAIL)
-  → structure changes go through critic-structure
-  → sync doc registry and indexes
-  → write RESULT.md → task closes
+  → REQUEST.md
+  → PLAN.md written as a contract
+  → CRITIC__plan.md must PASS
+  → implementation (developer, and writer when docs/notes are involved)
+  → QA__runtime.md recorded from executable verification
+  → CRITIC__runtime.md must PASS
+  → TASK_STATE.yaml and HANDOFF.md updated
+  → DOC_SYNC.md records durable note/index updates
+  → CRITIC__document.md must PASS
+  → RESULT.md
+  → task close
 ```
 
 Rules:
 - No implementation without PLAN.md
 - No implementation without critic-plan PASS
-- No code task closure without critic-runtime PASS or BLOCKED_ENV
-- No doc task closure without critic-write PASS
-- No root expansion without critic-structure PASS
+- No code task closure without critic-runtime PASS
+- No doc task closure without critic-document PASS
+- No root expansion without critic-document PASS
+- `BLOCKED_ENV` leaves the task open with `status: blocked_env` — never closes
+
+For answer-only / non-mutating work: no task folder required.
 
 ### 4. Delegate to specialists
 
@@ -68,21 +71,34 @@ Rules:
 |-------|------|-------------|
 | `harness:developer` | Code implementation | After plan-critic PASS |
 | `harness:writer` | REQ/OBS/INF notes, docs | After implementation or investigation |
-| `harness:critic-plan` | Validate PLAN.md | Before any implementation |
+| `harness:critic-plan` | Validate PLAN.md contract | Before any implementation |
 | `harness:critic-runtime` | Runtime verification | After code changes |
-| `harness:critic-write` | Doc/note hygiene | After doc/note changes |
-| `harness:critic-structure` | Structure governance | Before new roots or compaction |
+| `harness:critic-document` | Doc/note hygiene + structure governance | After doc/note changes or structure proposals |
 
-### 5. Sync durable knowledge
+### 5. Task artifacts
+
+Every repo-mutating task folder must contain:
+- `REQUEST.md` — original user request
+- `PLAN.md` — contract document
+- `TASK_STATE.yaml` — machine-readable task state
+- `HANDOFF.md` — developer handoff notes
+- `QA__runtime.md` — executable verification evidence
+- `DOC_SYNC.md` — durable note/index update record
+- `CRITIC__plan.md` — plan critic verdict
+- `CRITIC__runtime.md` — runtime critic verdict
+- `CRITIC__document.md` — document critic verdict
+- `RESULT.md` — task outcome summary
+
+### 6. Sync durable knowledge
 
 After each completed task:
 - Ensure new REQ/OBS/INF notes exist for discoveries
 - Update root CLAUDE.md indexes
-- Update doc/CLAUDE.md registry if roots changed
+- Update root `CLAUDE.md` registry if roots changed
 - Add superseded_by links to replaced notes
 - Queue maintenance work for future cleanup
 
-### 6. Summarize
+### 7. Summarize
 
 End with:
 - **Changed**: what was modified
@@ -102,7 +118,7 @@ End with:
 
 ## Initialization behavior
 
-If `doc/CLAUDE.md` is missing:
+If `.claude/harness/manifest.yaml` is missing:
 - Operate helpfully for the current request
 - Recommend `/harness:setup` when durable memory or critic-gated workflows would help
 - Do not recommend setup for simple one-off questions

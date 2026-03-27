@@ -1,50 +1,79 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ -f "doc/CLAUDE.md" ]]; then
-  echo "harness status: initialized in this repository."
+MANIFEST=".claude/harness/manifest.yaml"
+
+if [[ -f "$MANIFEST" ]]; then
+  echo "harness status: initialized (v3)."
   echo ""
 
-  # === DOC REGISTRY ===
-  echo "=== DOC REGISTRY ==="
-  cat "doc/CLAUDE.md"
-  echo ""
-
-  # === RECENT NOTES ===
-  echo "=== RECENT NOTES ==="
-  # Show latest REQ/OBS/INF notes across all roots
-  found_notes=0
-  for root_dir in doc/*/; do
-    if [[ -d "$root_dir" ]]; then
-      for note in "${root_dir}"REQ__*.md "${root_dir}"OBS__*.md "${root_dir}"INF__*.md; do
-        if [[ -f "$note" ]]; then
-          echo "- $note"
-          found_notes=1
-        fi
-      done
-    fi
-  done
-  if [[ "$found_notes" -eq 0 ]]; then
-    echo "(no durable notes found)"
+  # === REGISTERED ROOTS ===
+  echo "=== REGISTERED ROOTS ==="
+  if [[ -f "CLAUDE.md" ]]; then
+    grep -E "^registered_roots:" CLAUDE.md 2>/dev/null || echo "(none found in CLAUDE.md)"
   fi
   echo ""
 
-  # === PENDING TASKS ===
-  echo "=== PENDING TASKS ==="
-  task_dir=".claude/harness/tasks"
-  if [[ -d "$task_dir" ]]; then
-    for task in "$task_dir"/TASK__*/; do
+  # === OPEN TASKS ===
+  echo "=== OPEN TASKS ==="
+  TASK_DIR=".claude/harness/tasks"
+  found_open=0
+  if [[ -d "$TASK_DIR" ]]; then
+    for task in "$TASK_DIR"/TASK__*/; do
       if [[ -d "$task" ]]; then
-        result_file="${task}RESULT.md"
-        if [[ ! -f "$result_file" ]]; then
-          echo "- OPEN: $(basename "$task")"
+        state_file="${task}TASK_STATE.yaml"
+        if [[ -f "$state_file" ]]; then
+          status=$(grep "^status:" "$state_file" 2>/dev/null | head -1 | sed 's/status: *//')
+          if [[ "$status" != "closed" ]]; then
+            echo "- $(basename "$task") [status: ${status:-unknown}]"
+            found_open=1
+            # Show blockers from HANDOFF.md if present
+            handoff="${task}HANDOFF.md"
+            if [[ -f "$handoff" ]]; then
+              blocker=$(grep -i "blocker" "$handoff" 2>/dev/null | head -2)
+              if [[ -n "$blocker" ]]; then
+                echo "  $blocker"
+              fi
+            fi
+          fi
+        elif [[ ! -f "${task}RESULT.md" ]]; then
+          echo "- OPEN: $(basename "$task") (no TASK_STATE.yaml)"
+          found_open=1
         fi
       fi
     done
-  else
-    echo "(no task history)"
+  fi
+  if [[ "$found_open" -eq 0 ]]; then
+    echo "(no open tasks)"
   fi
   echo ""
+
+  # === BLOCKED TASKS ===
+  echo "=== BLOCKED TASKS ==="
+  found_blocked=0
+  if [[ -d "$TASK_DIR" ]]; then
+    for task in "$TASK_DIR"/TASK__*/; do
+      if [[ -d "$task" ]]; then
+        state_file="${task}TASK_STATE.yaml"
+        if [[ -f "$state_file" ]] && grep -q "status: blocked_env" "$state_file" 2>/dev/null; then
+          echo "- BLOCKED: $(basename "$task")"
+          found_blocked=1
+        fi
+      fi
+    done
+  fi
+  if [[ "$found_blocked" -eq 0 ]]; then
+    echo "(none)"
+  fi
+  echo ""
+
+  # === MAINTENANCE QUEUE ===
+  QUEUE=".claude/harness/maintenance/QUEUE.md"
+  if [[ -f "$QUEUE" ]] && [[ -s "$QUEUE" ]]; then
+    echo "=== MAINTENANCE QUEUE ==="
+    tail -5 "$QUEUE"
+    echo ""
+  fi
 
   echo "CLAUDE.md is present -- follow its instructions for request handling."
 else

@@ -1,7 +1,7 @@
 {
   "name": "harness",
   "version": "2.0.0",
-  "description": "AI operating system with plan/critic/developer/writer lanes, REQ/OBS/INF durable memory, and mandatory critic gates.",
+  "description": "AI operating system with execution-first harness, REQ/OBS/INF durable memory, unified critic-document, mandatory contract + executable QA + persistence + docs sync for all repo-mutating work.",
   "author": {
     "name": "harness"
   },
@@ -16,6 +16,8 @@
     "REQ",
     "OBS",
     "INF",
-    "durable-knowledge"
+    "durable-knowledge",
+    "executable-qa",
+    "task-state"
   ]
 }

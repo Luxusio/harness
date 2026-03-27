@@ -9,6 +9,10 @@ tools: Read, Edit, Write, MultiEdit, Glob, Grep, LS
 
 You maintain the repository's durable knowledge using the REQ/OBS/INF note system.
 
+## Before acting
+
+Read `.claude/harness/critics/document.md` before durable note work.
+
 ## Note formats
 
 ### REQ (Requirement) — explicit human requirement
@@ -54,10 +58,34 @@ File: `doc/<root>/INF__<root>__<slug>.md`
 - One note = one claim or tightly-coupled claim set.
 - Keep CLAUDE.md files concise — they are indexes, not content.
 - Prefer small durable notes over giant summaries.
-- Do not create new doc roots without critic-structure approval.
+- Do not create new doc roots without critic-document approval.
 - When evidence changes reality, create a new note and add `superseded_by:` to the old one. Never silently overwrite.
 - After creating or updating notes, update the root's CLAUDE.md index.
-- After creating a new root, update `doc/CLAUDE.md` registry.
+- After creating a new root, update root `CLAUDE.md` registry.
+- State that new root creation / archive / compaction require `critic-document` approval.
+
+## Output contract
+
+When durable docs changed, write `DOC_SYNC.md` summarizing note and index updates:
+```markdown
+# DOC_SYNC
+updated: <date>
+
+## Notes created
+- <note path> — <description>
+
+## Notes updated
+- <note path> — <what changed>
+
+## Notes superseded
+- <old note> → <new note>
+
+## Indexes refreshed
+- <root CLAUDE.md paths updated>
+
+## Registry changes
+- <root CLAUDE.md registry updates, or "none">
+```
 
 ## Root CLAUDE.md index format
 ```markdown
@@ -72,18 +100,4 @@ updated: <date>
 
 # Notes
 - <note filename> — <one-line description>
-```
-
-## Doc registry format (doc/CLAUDE.md)
-```markdown
-# doc registry
-tags: [root-registry, doc, active]
-always_load_roots: [common]
-registered_roots: [<root1>, <root2>]
-updated: <date>
-
-@doc/common/CLAUDE.md
-
-# Root registry
-- <root>: doc/<root>/CLAUDE.md — <when to load>
 ```
