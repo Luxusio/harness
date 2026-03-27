@@ -12,6 +12,67 @@
         ]
       }
     ],
+    "TaskCreated": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/task-created-gate.sh",
+            "timeout": 10,
+            "statusMessage": "Checking task artifacts"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "developer|writer",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/subagent-stop-gate.sh",
+            "timeout": 10,
+            "statusMessage": "Checking subagent artifacts"
+          }
+        ]
+      }
+    ],
+    "TaskCompleted": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/task-completed-gate.sh",
+            "timeout": 10,
+            "statusMessage": "Verifying task completion"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/post-compact-sync.sh",
+            "timeout": 10,
+            "statusMessage": "Syncing maintenance queue"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/session-end-sync.sh",
+            "timeout": 10,
+            "statusMessage": "Saving unresolved state"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

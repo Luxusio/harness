@@ -51,7 +51,7 @@ doc/
 **Operational structure:**
 ```
 .claude/
-  settings.json                          # hooks config
+  settings.json                          # agent config (hooks are provided by the plugin)
   harness/
     manifest.yaml                        # initialization marker + runtime config
     critics/
@@ -63,13 +63,9 @@ doc/
       QUEUE.md
       COMPACTION_LOG.md
     archive/
-  hooks/
-    task-created-gate.sh
-    subagent-stop-gate.sh
-    task-completed-gate.sh
-    post-compact-sync.sh
-    session-end-sync.sh
 ```
+
+Note: Hook scripts (task-created-gate, subagent-stop-gate, task-completed-gate, post-compact-sync, session-end-sync) are built into the plugin and do not need to be copied to target projects.
 
 **Executable QA scaffolding:**
 ```
@@ -146,8 +142,6 @@ Show:
 
 ### 12. Write files
 After user confirmation, write all files. Then:
-- `chmod +x .claude/hooks/*.sh`
-- `sed -i 's/\r$//' .claude/hooks/*.sh`
 - `chmod +x scripts/harness/*.sh`
 - `sed -i 's/\r$//' scripts/harness/*.sh`
 
@@ -162,7 +156,7 @@ Do NOT gitignore:
 - `doc/` — durable knowledge (the whole point)
 - `.claude/harness/critics/` — project-specific playbooks
 - `.claude/harness/manifest.yaml` — initialization marker
-- `.claude/settings.json`, `.claude/hooks/` — shared config
+- `.claude/settings.json` — agent config
 - `scripts/harness/` — executable QA scaffolding
 
 ### 14. Optional architecture constraints
