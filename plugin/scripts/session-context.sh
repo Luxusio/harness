@@ -14,7 +14,7 @@ if [[ -f "$MANIFEST" ]]; then
   fi
   echo ""
 
-  # === OPEN TASKS ===
+  # === OPEN TASKS (with task_id and lane) ===
   echo "=== OPEN TASKS ==="
   TASK_DIR=".claude/harness/tasks"
   found_open=0
@@ -22,10 +22,12 @@ if [[ -f "$MANIFEST" ]]; then
     for task in "$TASK_DIR"/TASK__*/; do
       if [[ -d "$task" ]]; then
         state_file="${task}TASK_STATE.yaml"
+        task_id=$(basename "$task")
         if [[ -f "$state_file" ]]; then
           status=$(grep "^status:" "$state_file" 2>/dev/null | head -1 | sed 's/status: *//')
+          lane=$(grep "^lane:" "$state_file" 2>/dev/null | head -1 | sed 's/lane: *//')
           if [[ "$status" != "closed" ]]; then
-            echo "- $(basename "$task") [status: ${status:-unknown}]"
+            echo "- ${task_id} [lane: ${lane:-unknown}, status: ${status:-unknown}]"
             found_open=1
             # Show blockers from HANDOFF.md if present
             handoff="${task}HANDOFF.md"
@@ -37,7 +39,7 @@ if [[ -f "$MANIFEST" ]]; then
             fi
           fi
         elif [[ ! -f "${task}RESULT.md" ]]; then
-          echo "- OPEN: $(basename "$task") (no TASK_STATE.yaml)"
+          echo "- OPEN: ${task_id} (no TASK_STATE.yaml)"
           found_open=1
         fi
       fi
@@ -55,8 +57,9 @@ if [[ -f "$MANIFEST" ]]; then
     for task in "$TASK_DIR"/TASK__*/; do
       if [[ -d "$task" ]]; then
         state_file="${task}TASK_STATE.yaml"
+        task_id=$(basename "$task")
         if [[ -f "$state_file" ]] && grep -q "status: blocked_env" "$state_file" 2>/dev/null; then
-          echo "- BLOCKED: $(basename "$task")"
+          echo "- BLOCKED: ${task_id}"
           found_blocked=1
         fi
       fi

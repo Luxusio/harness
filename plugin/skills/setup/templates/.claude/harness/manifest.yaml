@@ -10,9 +10,13 @@ runtime:
   smoke_script: scripts/harness/smoke.sh
   reset_script: scripts/harness/reset-db.sh
   healthchecks: []
+constraints:
+  architecture_doc: .claude/harness/constraints/architecture.md
+  architecture_check: .claude/harness/constraints/check-architecture.sh
 workflow:
   contract_required: true
   qa_required_for_repo_mutations: true
   persistence_required: true
   docs_sync_required: true
   document_critic: critic-document
+  constraints_enforced: true
