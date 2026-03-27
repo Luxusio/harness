@@ -54,9 +54,13 @@ doc/common/CLAUDE.md             # always-loaded root index
 doc/common/REQ__|OBS__|INF__*    # initial durable notes
 .claude/harness/manifest.yaml    # initialization marker + runtime config
 .claude/harness/critics/         # plan.md, runtime.md, document.md
-.claude/settings.json            # hook configuration
-.claude/hooks/*.sh               # 5 gate scripts
+.claude/settings.json            # agent configuration
 scripts/harness/                 # verify.sh, smoke.sh, healthcheck.sh, reset-db.sh
+```
+
+Hook scripts (task gates, session sync) are built into the plugin — no need to copy them to target projects.
+
+```
 ```
 
 ## Task artifacts
