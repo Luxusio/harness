@@ -1,12 +1,18 @@
-# Harness — Claude Code Plugin
-tags: [root, harness, bootstrap, plugin]
-summary: AI 운영 체계 플러그인. plan/critic/developer/writer 기반 task lifecycle을 제공한다.
+# CLAUDE.md
+tags: [root, harness, bootstrap]
+summary: repo entrypoint and durable root registry
+always_load_paths: [doc/common/CLAUDE.md]
+registered_roots: [common]
 updated: 2026-03-27
 
+@doc/common/CLAUDE.md
+
 # Operating mode
-- Default operating agent is `harness`.
-- Every task follows: plan → plan-critic → developer/writer → critic → sync.
-- No durable structure expansion without structure-critic approval.
+- Default operating agent is harness.
+- Every substantial repo-mutating task follows:
+  request -> contract plan -> plan critic -> implement -> runtime QA -> persistence -> docs sync -> document critic -> close.
+- New durable roots or durable structure changes go through critic-document.
+- `.claude/harness/manifest.yaml` is the initialization marker.
 
 # Plugin agents
 - `harness` — main orchestrator, routes work through lanes
@@ -14,13 +20,12 @@ updated: 2026-03-27
 - `writer` — writes/updates durable notes (REQ/OBS/INF) and documentation
 - `critic-plan` — validates PLAN.md before implementation
 - `critic-runtime` — runtime verification for code changes
-- `critic-write` — validates documentation and note hygiene
-- `critic-structure` — governs durable structure changes
+- `critic-document` — validates documentation, note hygiene, and durable structure changes
 
 # Plugin skills
-- `/harness:plan` — create or refresh task-local PLAN.md
+- `/harness:plan` — create or refresh task-local PLAN.md as a contract
 - `/harness:maintain` — periodic doc hygiene and structure maintenance
-- `/harness:setup` — bootstrap doc/ structure and critic playbooks in target project
+- `/harness:setup` — bootstrap harness structure and executable QA scaffolding in target project
 
 # Durable knowledge rules
 - REQ: explicit human requirements only
@@ -30,7 +35,6 @@ updated: 2026-03-27
 - When INF is verified, create OBS and link with superseded_by
 
 # Doc structure (created by /harness:setup in target projects)
-- `doc/` — durable knowledge root
 - `doc/common/` — always-loaded shared context
 - `doc/<root>/` — domain-specific roots (auth, billing, etc.)
 - Each root has its own CLAUDE.md with note index
