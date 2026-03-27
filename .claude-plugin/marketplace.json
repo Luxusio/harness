@@ -1,14 +1,14 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "harness",
-  "description": "AI operating system with REQ/OBS/INF durable memory and mandatory critic gates",
+  "description": "Repo-local universal loop runtime with lane-based routing, independent evaluation, and freshness-aware durable knowledge.",
   "owner": {
     "name": "harness"
   },
   "plugins": [
     {
       "name": "harness",
-      "description": "Repo-local operating system with plan/critic/developer/writer lanes, REQ/OBS/INF durable knowledge, and mandatory critic gates for validated software work.",
+      "description": "Universal loop runtime: request → context → lane selection → execution → independent evaluation → memory sync → escalation. 6 agents, 3 skills, REQ/OBS/INF durable knowledge with freshness tracking.",
       "version": "2.0.0",
       "author": {
         "name": "harness"
@@ -16,14 +16,14 @@
       "source": "./plugin",
       "category": "productivity",
       "tags": [
-        "workflow",
-        "memory",
-        "critic",
-        "validation",
+        "runtime-loop",
+        "lane-routing",
+        "critic-evaluation",
         "durable-knowledge",
-        "REQ-OBS-INF"
+        "freshness-aware-memory",
+        "executable-qa"
       ]
     }
   ],
-  "version": "2.0.0"
+  "version": "3.0.0"
 }

@@ -1,23 +1,20 @@
 {
   "name": "harness",
   "version": "2.0.0",
-  "description": "AI operating system with execution-first harness, REQ/OBS/INF durable memory, unified critic-document, mandatory contract + executable QA + persistence + docs sync for all repo-mutating work.",
+  "description": "Repo-local universal loop runtime: receive request, gather context, select lane, execute, verify, sync memory, escalate only when needed.",
   "author": {
     "name": "harness"
   },
   "license": "MIT",
   "skills": "./skills/",
   "keywords": [
-    "workflow",
-    "memory",
-    "critic",
-    "validation",
-    "documentation",
-    "REQ",
-    "OBS",
-    "INF",
+    "runtime-loop",
+    "lane-routing",
+    "critic-evaluation",
     "durable-knowledge",
+    "REQ-OBS-INF",
     "executable-qa",
-    "task-state"
+    "freshness-aware-memory",
+    "task-identity"
   ]
 }
