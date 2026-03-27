@@ -1,0 +1,4 @@
+# harness — operational artifacts (ephemeral, not durable knowledge)
+.claude/harness/tasks/
+.claude/harness/maintenance/
+.claude/harness/archive/

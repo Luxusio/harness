@@ -1,0 +1,21 @@
+{
+  "name": "harness",
+  "version": "2.0.0",
+  "description": "AI operating system with plan/critic/developer/writer lanes, REQ/OBS/INF durable memory, and mandatory critic gates.",
+  "author": {
+    "name": "harness"
+  },
+  "license": "MIT",
+  "skills": "./skills/",
+  "keywords": [
+    "workflow",
+    "memory",
+    "critic",
+    "validation",
+    "documentation",
+    "REQ",
+    "OBS",
+    "INF",
+    "durable-knowledge"
+  ]
+}
