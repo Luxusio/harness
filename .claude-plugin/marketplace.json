@@ -1,0 +1,29 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "harness",
+  "description": "AI operating system with REQ/OBS/INF durable memory and mandatory critic gates",
+  "owner": {
+    "name": "harness"
+  },
+  "plugins": [
+    {
+      "name": "harness",
+      "description": "Repo-local operating system with plan/critic/developer/writer lanes, REQ/OBS/INF durable knowledge, and mandatory critic gates for validated software work.",
+      "version": "2.0.0",
+      "author": {
+        "name": "harness"
+      },
+      "source": "./plugin",
+      "category": "productivity",
+      "tags": [
+        "workflow",
+        "memory",
+        "critic",
+        "validation",
+        "durable-knowledge",
+        "REQ-OBS-INF"
+      ]
+    }
+  ],
+  "version": "2.0.0"
+}
