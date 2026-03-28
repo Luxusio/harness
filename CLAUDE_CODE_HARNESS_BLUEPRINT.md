@@ -1,25 +1,29 @@
-# Claude Code Plugin Harness Blueprint
+# Claude Code Plugin Harness Blueprint (v3)
 
-이 문서는 다음 목표를 만족하는 Claude Code plugin/프로젝트 구조 초안이다.
+이 문서는 다음 목표를 만족하는 Claude Code plugin/프로젝트 구조 설계다.
 
 - main agent는 `harness`
 - 생산 lane은 `/plan` skill, `developer` subagent, `writer` subagent
-- critic은 항상 붙으며 `plan / runtime / write / structure` 4종으로 나뉜다
+- critic은 `plan / runtime / document` 3종 (unified document critic)
 - durable memory는 `doc/` 아래 root 확장 방식으로 저장한다
-- setup은 repo를 AI가 일할 수 있는 운영체제로 바꾸는 데 집중한다
-- 문서 구조는 미리 강제하지 않고, 필요가 입증될 때만 critic 승인 후 확장한다
+- setup은 repo를 AI가 일할 수 있는 운영체제로 바꾸되 executable QA scaffolding을 포함한다
+- root `CLAUDE.md`가 single repo entrypoint이자 durable root registry
+- `.claude/harness/manifest.yaml`가 initialization marker
+- 모든 substantial repo-mutating work는 contract + executable QA + persistence + docs sync를 거친다
+- architecture constraints는 optional machine-enforced checks로 분리
 
 ---
 
 ## 1. 핵심 원칙
 
-1. `CLAUDE.md`는 얇은 bootstrap이다.
+1. root `CLAUDE.md`가 single entrypoint이자 root registry다. `doc/CLAUDE.md`는 없다.
 2. `doc/`는 순수 memory root 공간이다.
 3. `REQ__ / OBS__ / INF__` note 파일이 durable knowledge의 기본 단위다.
-4. 개발 전에는 반드시 `PLAN.md`가 있어야 하고, `plan-critic` PASS가 있어야 한다.
+4. 개발 전에는 반드시 contract `PLAN.md`가 있어야 하고, `plan-critic` PASS가 있어야 한다.
 5. `developer`, `writer`는 직접 완료를 선언하지 못한다. 항상 critic 판정 후에만 다음 단계로 간다.
-6. 새 root, 새 장기 문서군, note 병합/삭제/압축은 `structure-critic` 승인 후에만 한다.
-7. `maintain`은 자동 정리 루프를 돌리되, 의미적 구조 변경은 critic 승인으로 제한한다.
+6. 새 root, 새 장기 문서군, note 병합/삭제/압축은 `critic-document` 승인 후에만 한다.
+7. `maintain`은 자동 정리 루프를 돌리되, 의미적 구조 변경은 critic-document 승인으로 제한한다.
+8. `BLOCKED_ENV`는 task를 열린 상태로 유지하고 blocker를 명시적으로 기록한다. 절대 task를 닫지 않는다.
 
 ---
 
@@ -27,11 +31,10 @@
 
 ```text
 repo/
-  CLAUDE.md
+  CLAUDE.md                        # single entrypoint + root registry
   doc/
-    CLAUDE.md
     common/
-      CLAUDE.md
+      CLAUDE.md                    # always-loaded root index
       REQ__project__primary-goals.md
       OBS__repo__workspace-layout.md
       INF__arch__initial-stack-assumptions.md
@@ -40,44 +43,37 @@ repo/
       REQ__...
       OBS__...
       INF__...
-      CRITIC__runtime.md        # optional root-local overlay
     billing/
       CLAUDE.md
       ...
+  scripts/
+    harness/
+      verify.sh                    # main verification entry point
+      smoke.sh                     # smoke test runner
+      healthcheck.sh               # health check probe
+      reset-db.sh                  # DB reset / seed
   .claude/
     settings.json
-    agents/
-      harness.md
-      developer.md
-      writer.md
-      critic-plan.md
-      critic-runtime.md
-      critic-write.md
-      critic-structure.md
-    skills/
-      plan/
-        SKILL.md
-      maintain/
-        SKILL.md
-    hooks/
-      task-created-gate.sh
-      task-completed-gate.sh
-      subagent-stop-gate.sh
-      session-end-sync.sh
-      post-compact-sync.sh
     harness/
+      manifest.yaml                # initialization marker + runtime config
       critics/
         plan.md
         runtime.md
-        write.md
-        structure.md
+        document.md
+      constraints/                 # optional
+        architecture.md
+        check-architecture.sh
       tasks/
         TASK__2026-03-27__add-google-oauth/
           REQUEST.md
           PLAN.md
+          TASK_STATE.yaml
+          HANDOFF.md
+          QA__runtime.md
+          DOC_SYNC.md
           CRITIC__plan.md
           CRITIC__runtime.md
-          CRITIC__write.md
+          CRITIC__document.md
           RESULT.md
       maintenance/
         QUEUE.md
@@ -87,9 +83,11 @@ repo/
 
 설명:
 
-- `doc/` 아래의 직계 하위 폴더는 전부 memory root다.
-- task/critic/maintenance 같은 운영 부산물은 `.claude/harness/`로 간다.
-- 각 root는 자기 `CLAUDE.md`를 가지며, note 인덱스와 로딩 조건을 적는다.
+- root `CLAUDE.md`가 registry. `doc/CLAUDE.md`는 없다.
+- `.claude/harness/manifest.yaml`가 initialization marker.
+- `scripts/harness/`는 executable QA scaffolding.
+- task 폴더에 `TASK_STATE.yaml`, `HANDOFF.md`, `QA__runtime.md`, `DOC_SYNC.md` 추가.
+- `constraints/`는 optional machine-enforced architecture checks.
 
 ---
 
@@ -100,43 +98,62 @@ repo/
 ```md
 # CLAUDE.md
 tags: [root, harness, bootstrap]
-summary: 이 파일은 프로젝트 진입점이다. 운영 규칙과 doc registry만 유지한다.
-always_load: [doc/CLAUDE.md]
-updated: 2026-03-27
-
-@doc/CLAUDE.md
-
-# Operating mode
-- Default operating agent is harness.
-- Every task follows plan -> plan-critic -> developer/writer -> critic -> sync.
-- No durable structure expansion without structure-critic approval.
-```
-
-### 3.2 `doc/CLAUDE.md`
-
-```md
-# doc registry
-tags: [root-registry, doc, active]
-summary: durable knowledge root registry. common은 항상 우선 로드하고 나머지는 필요 시 읽는다.
-always_load_roots: [common]
-registered_roots: [auth, billing]
+summary: repo entrypoint and durable root registry
+always_load_paths: [doc/common/CLAUDE.md]
+registered_roots: [common]
 updated: 2026-03-27
 
 @doc/common/CLAUDE.md
 
-# Root registry
-- auth: doc/auth/CLAUDE.md — load when auth/session/login/permission/cookie related work appears
-- billing: doc/billing/CLAUDE.md — load when pricing/invoice/stripe/payment work appears
-
-# Durable knowledge rules
-- REQ is only for explicit human requirements.
-- OBS is only for directly observed facts.
-- INF is only for unverified AI inferences.
-- Never silently rewrite INF into fact.
-- When INF is verified, create OBS and link with superseded_by.
+# Operating mode
+- Default operating agent is harness.
+- Every substantial repo-mutating task follows:
+  request -> contract plan -> plan critic -> implement -> runtime QA -> persistence -> docs sync -> document critic -> close.
+- New durable roots or durable structure changes go through critic-document.
+- `.claude/harness/manifest.yaml` is the initialization marker.
 ```
 
-### 3.3 root-local `doc/<root>/CLAUDE.md`
+### 3.2 `doc/common/CLAUDE.md`
+
+```md
+# common root
+tags: [root, common, active]
+summary: always-loaded durable context root. note index only.
+always_load_notes: [REQ__project__primary-goals.md]
+indexed_notes: [OBS__repo__workspace-layout.md, INF__arch__initial-stack-assumptions.md]
+updated: 2026-03-27
+
+@REQ__project__primary-goals.md
+
+# Notes
+- OBS__repo__workspace-layout.md — repo directory structure observation
+- INF__arch__initial-stack-assumptions.md — initial stack assumptions (unverified)
+```
+
+### 3.3 `.claude/harness/manifest.yaml`
+
+```yaml
+version: 3
+initialized_at: 2026-03-27
+entrypoint: CLAUDE.md
+always_load_paths:
+  - doc/common/CLAUDE.md
+registered_roots:
+  - common
+runtime:
+  verify_script: scripts/harness/verify.sh
+  smoke_script: scripts/harness/smoke.sh
+  reset_script: scripts/harness/reset-db.sh
+  healthchecks: []
+workflow:
+  contract_required: true
+  qa_required_for_repo_mutations: true
+  persistence_required: true
+  docs_sync_required: true
+  document_critic: critic-document
+```
+
+### 3.4 root-local `doc/<root>/CLAUDE.md`
 
 ```md
 # auth root
@@ -151,9 +168,6 @@ updated: 2026-03-27
 # Notes
 - OBS__auth__middleware-order.md — middleware redirect ordering observed in runtime
 - INF__auth__cookie-owner.md — likely cookie ownership assumption, not yet verified
-
-# Optional overlays
-- CRITIC__runtime.md — auth-specific runtime critic overlay if this root needs extra verification
 ```
 
 ---
@@ -203,12 +217,12 @@ verify_by: inspect response headers during login or trace cookie set path
 
 ## 5. 에이전트 정의
 
-## 5.1 `harness.md`
+### 5.1 `harness.md`
 
 ```md
 ---
 name: harness
-description: Default operating agent. Receives the user request, chooses the lane, coordinates critics, updates durable knowledge, and keeps the system simple.
+description: Default operating agent. Routes work, coordinates critics, updates durable knowledge.
 model: sonnet
 maxTurns: 12
 tools: Read, Edit, Write, MultiEdit, Bash, Glob, Grep, LS, TaskCreate, TaskUpdate
@@ -217,33 +231,18 @@ skills:
   - maintain
 ---
 
-You are the main operating agent for this repository.
-
 Mission:
-- Handle user work directly.
+- Route user work through the mutate-repo loop.
+- Always read .claude/harness/manifest.yaml when initialized.
 - Keep durable context correct and maintainable.
-- Route work through plan, developer, writer, and the correct critic.
-- Prefer existing roots over new structure.
-- Keep CLAUDE.md short and push details downward.
 
-Always-on behavior:
-1. Read root CLAUDE.md and only the relevant doc roots.
-2. Before implementation, produce or refresh PLAN.md.
-3. Require plan-critic PASS before starting developer.
-4. Require runtime-critic PASS before task completion on code work.
-5. Require write-critic PASS before task completion on documentation work.
-6. Require structure-critic PASS before creating a new doc root, a new long-lived document family, or meaningfully compacting durable notes.
-7. Sync REQ/OBS/INF after each completed task.
-8. Queue maintenance work instead of over-growing structure inline.
-
-Biases:
-- Simplicity over orchestration
-- Evidence over explanation
-- Existing structure over new structure
-- Runtime verification over code-reading-only
+Lane simplification:
+- answer/explain → direct response
+- everything that mutates the repo → common mutate-repo loop
+- maintain → maintenance loop plus critic-document for semantic changes
 ```
 
-## 5.2 `developer.md`
+### 5.2 `developer.md`
 
 ```md
 ---
@@ -256,77 +255,62 @@ mcpServers: [chrome-devtools]
 tools: Read, Edit, Write, MultiEdit, Bash, Glob, Grep, LS
 ---
 
-You implement code changes only after an approved PLAN.md exists.
+Before acting:
+- Read .claude/harness/manifest.yaml and task-local TASK_STATE.yaml
+- Read .claude/harness/critics/runtime.md
+- Read optional .claude/harness/constraints/*
 
-Rules:
-- Do not begin implementation without task-local PLAN.md and plan critic verdict.
-- Keep changes aligned to acceptance criteria.
-- Prefer incremental commits in thought structure even if not using git directly.
-- Leave runnable verification breadcrumbs: commands, routes, seeds, fixtures, logs, expected outputs.
-- If environment blocks execution, document the block precisely instead of pretending success.
+On finish:
+- Update TASK_STATE.yaml to status: implemented
+- Write developer handoff into HANDOFF.md
+- Record exact verification breadcrumbs for QA
 ```
 
-## 5.3 `writer.md`
+### 5.3 `writer.md`
 
 ```md
 ---
 name: writer
-description: Updates documentation and durable notes after implementation or investigation.
+description: Updates documentation and durable notes.
 model: sonnet
 maxTurns: 10
 permissionMode: acceptEdits
 tools: Read, Edit, Write, MultiEdit, Glob, Grep, LS
 ---
 
-You update docs and durable memory.
+Before acting:
+- Read .claude/harness/critics/document.md
 
-Rules:
-- Separate REQ, OBS, and INF strictly.
-- Keep CLAUDE.md files concise.
-- Prefer small durable notes over giant summaries.
-- Do not invent durable document families unless structure-critic approved them.
-- When code or runtime evidence changed reality, update notes by superseding history rather than erasing it.
+Output contract:
+- Write DOC_SYNC.md summarizing note and index updates
+- State that new root creation / archive / compaction require critic-document approval
 ```
 
----
-
-## 6. critic 분할
-
-### 6.1 `critic-plan.md`
+### 5.4 `critic-plan.md`
 
 ```md
 ---
 name: critic-plan
-description: Verifies PLAN.md before any implementation begins.
+description: Verifies PLAN.md as a contract before implementation.
 model: sonnet
 maxTurns: 8
 permissionMode: plan
 tools: Read, Glob, Grep, LS
 ---
 
-You are the mandatory plan critic.
-
-Check:
-- Did the plan capture explicit user requirements?
-- Are acceptance criteria specific and testable?
-- Is there a concrete verification path?
-- Are risks, rollback, and touched roots named?
-- Are inferred assumptions clearly marked as INF rather than fact?
+Before acting: read .claude/harness/critics/plan.md
 
 Output contract:
-- PASS / FAIL
-- missing_requirements
-- missing_verification
-- risks
-- required_doc_updates
+- verdict: PASS | FAIL
+- missing_requirements, missing_verification, missing_persistence, missing_docs_sync, risks, required_doc_updates
 ```
 
-### 6.2 `critic-runtime.md`
+### 5.5 `critic-runtime.md`
 
 ```md
 ---
 name: critic-runtime
-description: Mandatory runtime critic for code changes. Prefer execution, browser checks, API calls, and persistence checks over code-reading-only.
+description: Mandatory runtime critic with browser-first QA.
 model: sonnet
 maxTurns: 12
 permissionMode: acceptEdits
@@ -334,116 +318,66 @@ mcpServers: [chrome-devtools]
 tools: Read, Bash, Glob, Grep, LS
 ---
 
-You are the mandatory runtime critic.
+Before acting: read .claude/harness/critics/runtime.md
+Optionally run .claude/harness/constraints/check-architecture.* if present.
 
-Primary rule:
-- Do not give PASS from static code reading alone when runtime verification is feasible.
-
-Verification ladder:
-1. Run targeted tests/lint/smoke commands.
-2. Start the relevant server or attach to an existing one.
-3. Exercise API endpoints or user flows.
-4. Verify persistence or side effects when relevant.
-5. If UI changed and a browser path exists, verify it with Chrome or project MCP tools.
-6. Record concrete evidence and failure reproduction steps.
+BLOCKED_ENV is a runtime verdict only — task stays open with status: blocked_env.
 
 Output contract:
-- PASS / FAIL / BLOCKED_ENV
-- evidence
-- repro_steps
-- unmet_acceptance
-- required_OBS_notes
+- verdict: PASS | FAIL | BLOCKED_ENV
+- evidence, repro_steps, unmet_acceptance, blockers, required_OBS_notes
 ```
 
-### 6.3 `critic-write.md`
+### 5.6 `critic-document.md`
 
 ```md
 ---
-name: critic-write
-description: Mandatory critic for documentation and durable memory updates.
+name: critic-document
+description: Unified critic for documentation, note hygiene, and durable structure changes.
 model: sonnet
 maxTurns: 8
 permissionMode: plan
 tools: Read, Glob, Grep, LS
 ---
 
-You are the mandatory write critic.
+Before acting: read .claude/harness/critics/document.md
 
-Check:
-- Are claims backed by code, tests, runtime evidence, or explicit user requirements?
-- Are REQ / OBS / INF separated correctly?
-- Were outdated notes superseded instead of silently overwritten?
-- Were root indexes and doc registry updated if needed?
-- Did documentation drift away from current code or runtime behavior?
+Replaces critic-write and critic-structure.
 
 Output contract:
-- PASS / FAIL
-- unsupported_claims
-- classification_errors
-- missing_registry_updates
-- supersede_actions
-```
-
-### 6.4 `critic-structure.md`
-
-```md
----
-name: critic-structure
-description: Governs durable structure changes such as new doc roots, new long-lived document families, note compaction, and archival policy.
-model: sonnet
-maxTurns: 8
-permissionMode: plan
-tools: Read, Glob, Grep, LS
----
-
-You are the structure critic.
-
-Approve only when durable complexity clearly reduces future confusion.
-
-Check:
-- Can this be absorbed into an existing root?
-- Is this reusable durable context or only a one-off task artifact?
-- Does the new structure improve retrieval and maintenance?
-- Is compaction preserving history and supersede links?
-- Is deletion safe, or should this be archived instead?
-
-Output contract:
-- PASS / FAIL
-- proposed_structure
-- cheaper_alternative
-- retrieval_benefit
-- maintenance_risk
+- verdict: PASS | FAIL
+- unsupported_claims, classification_errors, missing_registry_updates
+- structure_actions, supersede_actions, notes
 ```
 
 ---
 
-## 7. project-custom critic layer
+## 6. project-custom critic layer
 
 각 critic은 아래 4층을 합쳐서 판단한다.
 
-1. **base critic prompt**  
+1. **base critic prompt**
    critic agent 고유의 불변 성격
 
-2. **project playbook**  
-   `.claude/harness/critics/{plan,runtime,write,structure}.md`
+2. **project playbook**
+   `.claude/harness/critics/{plan,runtime,document}.md`
    - setup이 repo를 읽고 초안을 자동 생성
    - 프로젝트 전역 규칙 저장
 
-3. **root-local overlay**  
-   `doc/<root>/CRITIC__runtime.md`, `doc/<root>/CRITIC__write.md` 같은 선택적 overlay
+3. **root-local overlay**
+   `doc/<root>/CRITIC__runtime.md` 같은 선택적 overlay
    - 특정 root에만 필요한 검증 규칙
-   - 예: auth는 login/refresh/logout/protected-route redirect 필수
 
-4. **task-local contract**  
+4. **task-local contract**
    `.claude/harness/tasks/TASK__*/PLAN.md`
    - 이번 작업 acceptance, verification plan, touched roots, expected evidence
 
-### 7.1 project playbook 예시
+### 6.1 project playbook 예시
 
 ```md
 # runtime critic project playbook
 tags: [critic, runtime, project, active]
-summary: 이 프로젝트는 web + api + postgres 구조다. runtime critic은 실행 없이 PASS를 내리면 안 된다.
+summary: 이 프로젝트는 web + api + postgres 구조다.
 must_verify: browser-flow, api-response, persistence
 prefer: pnpm test --filter, curl smoke calls, db query check
 block_if: execution-skipped-without-reason, evidence-free-pass
@@ -454,44 +388,126 @@ updated: 2026-03-27
 - api server: pnpm dev:api
 - health endpoint: http://localhost:3001/health
 - db check: psql $DATABASE_URL -c "select ..."
-```
 
-### 7.2 root overlay 예시
-
-```md
-# runtime critic auth overlay
-tags: [critic, runtime, root:auth, active]
-summary: auth 변경은 login, refresh, logout, protected-route redirect, cookie/session persistence를 확인해야 한다.
-evidence: browser log + server log + one persistence check
-updated: 2026-03-27
+# Browser-first QA map
+- preferred_verification_order: [tests, smoke, api, persistence, browser]
+- health_checks: [http://localhost:3001/health]
+- seed_reset_commands: [pnpm db:reset, pnpm db:seed]
+- persistence_checks: [psql $DATABASE_URL -c "select count(*) from users"]
 ```
 
 ---
 
-## 8. task 라이프사이클
+## 7. task state model
+
+### 7.1 `TASK_STATE.yaml`
+
+```yaml
+status: created
+mutates_repo: true
+qa_required: true
+qa_mode: browser-first
+plan_verdict: pending
+runtime_verdict: pending
+document_verdict: pending
+needs_env: []
+updated: 2026-03-27
+```
+
+Recommended states:
+- `created` → `planned` → `plan_passed` → `implemented` → `qa_passed` → `persisted` → `docs_synced` → `document_passed` → `closed`
+- `blocked_env` (task stays open, blocker is surfaced)
+
+### 7.2 `HANDOFF.md`
+
+Developer writes after implementation:
+
+```text
+Result:
+  from: developer
+  scope: <what changed>
+  changes: <files modified>
+  verification_inputs: <routes / commands / fixtures / test names>
+  blockers: <env / data / secrets issues>
+  next_action: runtime QA
+```
+
+### 7.3 `DOC_SYNC.md`
+
+Writer writes after durable note work:
+
+```md
+# DOC_SYNC
+updated: <date>
+
+## Notes created
+- <note path> — <description>
+
+## Notes updated
+- <note path> — <what changed>
+
+## Notes superseded
+- <old note> → <new note>
+
+## Indexes refreshed
+- <root CLAUDE.md paths updated>
+
+## Registry changes
+- <root CLAUDE.md registry updates, or "none">
+```
+
+### 7.4 `QA__runtime.md`
+
+Runtime critic records verification evidence:
+
+```md
+# QA Runtime Evidence
+date: <date>
+qa_mode: browser-first
+
+## Tests run
+- <test name>: PASS/FAIL
+
+## Smoke checks
+- <command>: <output summary>
+
+## Persistence checks
+- <check>: <result>
+
+## Browser checks
+- <route/flow>: <result + screenshot if applicable>
+```
+
+---
+
+## 8. task 라이프사이클 (v3)
 
 ```text
 user request
-  -> harness creates task folder
-  -> /plan skill writes PLAN.md
-  -> critic-plan validates PLAN.md
-  -> PASS only then developer or writer starts
-  -> developer changes code
-  -> critic-runtime validates with real execution when feasible
-  -> writer updates docs/notes
-  -> critic-write validates docs and note hygiene
-  -> structure changes, if any, go through critic-structure
-  -> harness syncs doc registry and task result
-  -> task can close
+  → harness creates task folder
+  → REQUEST.md
+  → PLAN.md written as a contract
+  → CRITIC__plan.md must PASS
+  → implementation (developer, and writer when docs/notes are involved)
+  → QA__runtime.md recorded from executable verification
+  → CRITIC__runtime.md must PASS
+  → TASK_STATE.yaml and HANDOFF.md updated
+  → DOC_SYNC.md records durable note/index updates
+  → CRITIC__document.md must PASS
+  → RESULT.md
+  → task close
 ```
 
 규칙:
 
 - PLAN 없이 개발 금지
 - plan critic PASS 없이 개발 금지
-- runtime critic PASS/BLOCKED_ENV 기록 없이 코드 task 종료 금지
-- write critic PASS 없이 문서 task 종료 금지
-- structure critic 승인 없이 root 확장/문서군 승격/의미적 compaction 금지
+- runtime critic PASS 없이 코드 task 종료 금지 (BLOCKED_ENV는 task를 열린 상태로 유지)
+- document critic PASS 없이 문서 task 종료 금지
+- DOC_SYNC.md 없이 repo-mutating task 종료 금지
+- TASK_STATE.yaml의 status: blocked_env인 task는 종료 불가
+
+For answer-only / non-mutating work: no task folder required.
 
 ---
 
@@ -499,189 +515,124 @@ user request
 
 ### 9.1 `/plan` skill
 
-```md
----
-name: plan
-description: Create or refresh a task-local PLAN.md before implementation.
-context: fork
-agent: Plan
----
+PLAN.md를 contract document로 작성한다.
 
-Create a PLAN.md for this task.
+필수 섹션:
+- Scope in / Scope out
+- User-visible outcomes
+- QA mode
+- Acceptance criteria
+- Verification contract (commands, routes, persistence checks, expected outputs)
+- Persistence steps (TASK_STATE, HANDOFF)
+- Required doc sync (notes, indexes)
+- Hard fail conditions
+- Risks / rollback
 
-Requirements:
-1. Restate explicit user requirements separately from inferred assumptions.
-2. List touched files and touched doc roots.
-3. Define acceptance criteria.
-4. Define a concrete verification plan.
-5. Note risks, rollback, and required durable note updates.
-6. Write the result to .claude/harness/tasks/TASK__$ARGUMENTS/PLAN.md
-```
+TASK_STATE.yaml와 HANDOFF.md도 초기화한다.
 
 ### 9.2 `/maintain` skill
 
-```md
----
-name: maintain
-description: Run periodic doc hygiene and structure maintenance, then request structure-critic approval for semantic changes.
-context: fork
-agent: Explore
----
-
-Inspect the durable knowledge structure and maintenance queue.
-
-Do:
-1. Find stale, duplicate, superseded, or orphaned notes.
-2. Rebuild root indexes if needed.
-3. Prepare a maintenance proposal.
-4. Apply only mechanical cleanup directly.
-5. Send semantic structure changes to critic-structure.
-6. Write results to .claude/harness/maintenance/QUEUE.md and COMPACTION_LOG.md
-```
+root `CLAUDE.md` registry + root-specific `CLAUDE.md` 기반으로 검사한다.
+semantic durable changes는 `critic-document`에게 보낸다.
+optional architecture constraint checks도 실행한다.
 
 ---
 
 ## 10. hooks 게이트
 
-프로젝트 전용 hooks는 `.claude/settings.json`에 둔다.
+### 10.0 hook 계약 (CRITICAL)
 
-### 10.1 예시 `settings.json`
+모든 hook 스크립트는 반드시:
+- stdin JSON을 파싱한다 (jq 또는 grep fallback)
+- blocking이 필요하면 exit 2를 사용한다 (exit 1은 non-blocking error — 로그만 남기고 진행됨)
+- 실행 가능 상태이거나 `bash` 경유로 호출된다
+- `FileChanged` hook으로 PASS verdict를 invalidation한다 (stale PASS 방지)
 
-```json
-{
-  "hooks": {
-    "TaskCreated": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".claude/hooks/task-created-gate.sh"
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "matcher": "developer|writer",
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".claude/hooks/subagent-stop-gate.sh"
-          }
-        ]
-      }
-    ],
-    "TaskCompleted": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".claude/hooks/task-completed-gate.sh"
-          }
-        ]
-      }
-    ],
-    "PostCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".claude/hooks/post-compact-sync.sh"
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": ".claude/hooks/session-end-sync.sh"
-          }
-        ]
-      }
-    ]
-  }
-}
-```
+### 10.1 hook 역할 (v3)
 
-### 10.2 hook 역할
-
-- `TaskCreated`: task 폴더와 REQUEST.md 생성 강제
-- `SubagentStop`: worker가 critic verdict 없이 멈추는 것 차단
-- `TaskCompleted`: 최신 critic PASS 없으면 완료 거부
-- `PostCompact`: compact 이후 maintenance queue 갱신
-- `SessionEnd`: unresolved INF, pending maintenance, stale task handoff 저장
+- `TaskCreated`: REQUEST.md, TASK_STATE.yaml, HANDOFF.md 확인. TASK_STATE.yaml 없으면 기본값 초기화.
+- `SubagentStop`:
+  - developer: PLAN.md, CRITIC__plan.md, TASK_STATE.yaml, HANDOFF.md 필요
+  - writer: TASK_STATE.yaml, DOC_SYNC.md (durable docs 변경 시) 필요
+- `TaskCompleted`:
+  - TASK_STATE.yaml 필수
+  - status: blocked_env이면 종료 거부
+  - CRITIC__plan.md PASS 필수
+  - repo-mutating: CRITIC__runtime.md PASS + DOC_SYNC.md 필수
+  - DOC_SYNC.md 있으면: CRITIC__document.md PASS 필수
+  - RESULT.md 필수
+- `PostCompact`: maintenance queue 갱신. root index/archive 변경 시 critic-document follow-up 기록.
+- `SessionEnd`: TASK_STATE.yaml 기반 스캔. blocked_env task 구분 기록. 미해결 INF, 미완 DOC_SYNC 기록.
 
 ---
 
-## 11. 자동 정리 루프
+## 11. executable QA scaffolding
 
-정리는 3층으로 둔다.
+setup이 생성하는 `scripts/harness/`:
 
-### 11.1 task-close hygiene
-매 task 종료 시:
-- note header normalize
-- root CLAUDE.md 인덱스 갱신
-- superseded 링크 추가
-- archive 후보 적재
+| Script | Purpose |
+|--------|---------|
+| `verify.sh` | Main entry point — runs smoke + healthcheck in sequence |
+| `smoke.sh` | Project-specific smoke tests (tests, curl, CLI commands) |
+| `healthcheck.sh` | Service health probes |
+| `reset-db.sh` | Database reset / seed |
 
-### 11.2 session hygiene
-- `PostCompact`: compaction summary를 maintenance log에 저장
-- `SessionEnd`: 열린 INF, 미완 task, 구조 제안, archive 후보 저장
-
-### 11.3 periodic maintenance
-- Desktop scheduled task, Cloud scheduled task, 또는 GitHub Actions로 주기 실행
-- 오래된 task 폴더 archive
-- duplicate/stale/orphan note 후보 수집
-- root index 재생성
-- semantic compaction은 structure-critic 승인 후에만 적용
+Project-shape guidance:
+- **web app**: browser-first smoke + route probes + persistence checks
+- **api**: curl/http smoke + DB or side-effect checks
+- **cli/worker**: example commands + log/output checks
+- **library**: tests/examples + minimal reproducible command
 
 ---
 
-## 12. `/harness:setup`이 해야 하는 일
+## 12. optional architecture constraints
 
-1. repo census
-   - manifests, lockfiles, README, docs, tests, scripts, CI, routes, migrations 조사
-2. safe observation
-   - 비파괴 실행만 수행 (`npm run`, `pytest --collect-only`, health check 등)
-3. bootstrap 생성
-   - root CLAUDE.md, `doc/CLAUDE.md`, `doc/common/*`, `.claude/agents/*`, `.claude/skills/*`, `.claude/settings.json`
-4. critic playbook 초안 생성
-   - project playbook 4종 자동 작성
-5. obvious root 후보 탐지
-   - auth/billing/infra 등 반복 경계가 있으면 제안
-6. structure-critic 검토
-   - 실제 root 승격 여부 판정
-7. reviewable diff 제시
-   - 바로 덮지 않고 diff로 보여준 뒤 반영
+`.claude/harness/constraints/`에 둔다. repo shape이 machine constraints를 필요로 할 때만 생성.
+
+- `architecture.md` — 인간이 읽는 architecture 규칙
+- `check-architecture.sh` — 기계가 실행하는 검증 스크립트
+
+critic-runtime이 optional로 실행할 수 있다.
 
 ---
 
-## 13. setup 산출물 최소 집합
+## 13. `/harness:setup`이 해야 하는 일
+
+1. repo census (.claude/harness/manifest.yaml 확인)
+2. safe observation (비파괴 실행만)
+3. minimal questions (최대 5개)
+4. bootstrap generation
+   - root CLAUDE.md, doc/common/*, .claude/harness/manifest.yaml
+   - .claude/settings.json
+   - .claude/harness/critics/{plan,runtime,document}.md
+   - scripts/harness/{verify,smoke,healthcheck,reset-db}.sh
+   (hook scripts는 plugin 내장 — target project에 복사 불필요)
+5. initial notes (REQ, OBS, INF)
+6. critic playbook generation
+7. executable QA scaffolding (project shape 기반)
+8. optional architecture constraints
+9. obvious root candidates → critic-document 승인
+10. reviewable diff → user 확인 후 반영
+11. .gitignore 설정
+12. harness agent 활성화
+
+### 13.1 setup 산출물 최소 집합
 
 반드시 생성:
-- `CLAUDE.md`
-- `doc/CLAUDE.md`
+- `CLAUDE.md` (root entrypoint + registry)
 - `doc/common/CLAUDE.md`
 - 최소 1개씩의 `REQ__`, `OBS__`, `INF__`
-- `.claude/agents/harness.md`
-- `.claude/agents/developer.md`
-- `.claude/agents/writer.md`
-- `.claude/agents/critic-plan.md`
-- `.claude/agents/critic-runtime.md`
-- `.claude/agents/critic-write.md`
-- `.claude/agents/critic-structure.md`
-- `.claude/skills/plan/SKILL.md`
-- `.claude/skills/maintain/SKILL.md`
+- `.claude/harness/manifest.yaml`
+- `.claude/harness/critics/{plan,runtime,document}.md`
 - `.claude/settings.json`
-- `.claude/harness/critics/{plan,runtime,write,structure}.md`
+- `scripts/harness/{verify,smoke,healthcheck,reset-db}.sh`
+
+Hook scripts (task gates, session sync 등)은 plugin에 내장되어 있으므로 target project에 복사 불필요.
 
 선택 생성:
 - 추가 root
 - root-local critic overlay
-- project-specific maintenance scripts
-- preview/launch config for runtime verification
+- `.claude/harness/constraints/{architecture.md,check-architecture.sh}`
 
 ---
 
@@ -690,9 +641,12 @@ Do:
 - 중앙 orchestrator graph 없음
 - root는 registry + note 조합만 강제
 - 문서군을 미리 타입으로 강제하지 않음
-- critic은 4종으로만 고정
+- critic은 3종으로 고정 (plan, runtime, document)
 - project custom은 critic playbook/overlay로 흡수
 - 운영 부산물과 durable memory를 물리적으로 분리
 - 자동 정리는 기계적 정리와 의미적 정리를 분리
+- TASK_STATE.yaml로 task lifecycle을 machine-readable하게 추적
+- executable QA scaffolding으로 verification이 실행 가능한 상태를 보장
+- BLOCKED_ENV는 task를 열린 상태로 유지해서 blocker가 무시되지 않음
 
-즉, 복잡도는 “상시 런타임”이 아니라 `setup`, `critic`, `maintenance`에만 몰아넣고, 평상시 작업은 `harness -> plan -> worker -> critic`의 짧은 루프로 유지한다.
+즉, 복잡도는 "상시 런타임"이 아니라 `setup`, `critic`, `maintenance`에만 몰아넣고, 평상시 작업은 `harness -> plan -> worker -> critic`의 짧은 루프로 유지한다.

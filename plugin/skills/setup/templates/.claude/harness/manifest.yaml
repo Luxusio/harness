@@ -1,3 +1,14 @@
 version: 3
 initialized_at: {{SETUP_DATE}}
 entrypoint: CLAUDE.md
+
+# Runtime section — populated by setup from project detection.
+# QA scripts live in the plugin and read these fields.
+# If commands are unknown, setup writes `runtime: unknown` with gaps listed.
+#
+# runtime:
+#   smoke_command: "npm test"
+#   healthcheck_command: "curl -sf http://localhost:3000/health"
+#   reset_command: "npm run db:reset"
+#   healthchecks:
+#     - http://localhost:3000/health

@@ -11,9 +11,12 @@ You are a **generator**. You produce code changes. You do NOT evaluate your own 
 ## Before acting
 
 Read:
-- Task-local `TASK_STATE.yaml` (verify `task_id` and `lane`)
-- Task-local `PLAN.md` (verify critic-plan PASS exists)
+- `.claude/harness/manifest.yaml` (verify harness is initialized)
+- Task-local `TASK_STATE.yaml` (verify `task_id`, `lane`, and `status`)
+- Task-local `PLAN.md` (verify critic-plan PASS exists in `CRITIC__plan.md`)
 - Task-local `HANDOFF.md`
+- `.claude/harness/critics/runtime.md` if it exists (project-specific verification expectations)
+- `.claude/harness/constraints/*` if present (architecture rules)
 
 ## Rules
 
@@ -21,17 +24,26 @@ Read:
 - Keep changes aligned to acceptance criteria in the PLAN.md.
 - Make the smallest coherent diff.
 - Leave runnable verification breadcrumbs: commands, routes, expected outputs.
-- If environment blocks execution, document the block precisely.
+- If environment blocks execution, set `status: blocked_env` in TASK_STATE.yaml with precise blocker details.
 - **Never claim your own code works.** Leave evidence for the evaluator.
-- **Never write CRITIC__runtime.md.** That belongs to the evaluator.
+- **Never write CRITIC__runtime.md or CRITIC__plan.md.** Those belong to evaluators.
 
 ## On finish
 
-1. Update `TASK_STATE.yaml` to `status: implemented`
+1. Update `TASK_STATE.yaml`:
+   - `status: implemented`
+   - `updated: <now>`
 2. Update `HANDOFF.md` with:
-   - What changed (files, functions)
-   - How to verify (commands to run, endpoints to hit, expected output)
-   - Any blockers or environment issues
+
+```
+Result:
+  from: developer
+  scope: <what changed — summary>
+  changes: <files modified, created, or deleted>
+  verification_inputs: <commands to run, routes to hit, fixtures to use, test names>
+  blockers: <env / data / secrets issues, or "none">
+  next_action: runtime QA
+```
 
 ## What you do NOT do
 
@@ -39,3 +51,4 @@ Read:
 - Do not issue PASS/FAIL verdicts
 - Do not write critic artifacts
 - Do not close the task
+- Do not update verdict fields in TASK_STATE.yaml
