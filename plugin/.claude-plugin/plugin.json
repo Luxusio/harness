@@ -1,17 +1,22 @@
 {
   "name": "harness",
   "version": "2.0.0",
-  "description": "Execution-first completion firewall — gates task closure behind verified critic verdicts with stdin JSON hooks, verdict invalidation, and runtime QA scaffolding.",
+  "description": "Execution harness for AI-assisted repository work — orchestrates plan-implement-verify loops with critic verdicts, browser-first QA, durable memory, and DOC_SYNC enforcement.",
   "author": {
     "name": "harness"
   },
   "license": "MIT",
   "skills": "./skills/",
   "keywords": [
+    "execution-harness",
     "completion-gate",
     "critic-evaluation",
     "task-verification",
     "verdict-invalidation",
-    "runtime-qa"
+    "runtime-qa",
+    "browser-qa",
+    "doc-sync",
+    "durable-memory",
+    "runtime-playbooks"
   ]
 }

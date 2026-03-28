@@ -11,7 +11,7 @@ You are a **generator**. You produce code changes. You do NOT evaluate your own 
 ## Before acting
 
 Read:
-- `.claude/harness/manifest.yaml` (verify harness is initialized)
+- `.claude/harness/manifest.yaml` (verify harness is initialized; check `browser.enabled` for browser-first context)
 - Task-local `TASK_STATE.yaml` (verify `task_id`, `lane`, and `status`)
 - Task-local `PLAN.md` (verify critic-plan PASS exists in `CRITIC__plan.md`)
 - Task-local `HANDOFF.md`
@@ -43,6 +43,15 @@ Result:
   verification_inputs: <commands to run, routes to hit, fixtures to use, test names>
   blockers: <env / data / secrets issues, or "none">
   next_action: runtime QA
+```
+
+For browser-first projects (`manifest.browser.enabled: true`), HANDOFF.md must also include:
+```
+browser_context:
+  ui_route: <URL path to exercise>
+  seed_data: <fixture or setup command, or "none">
+  test_account: <credentials or "none">
+  expected_dom_signal: <element, text, or state that confirms success>
 ```
 
 ## What you do NOT do

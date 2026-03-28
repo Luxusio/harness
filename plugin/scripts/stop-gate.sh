@@ -12,6 +12,7 @@ source "$(dirname "$0")/_lib.sh"
 
 OPEN_TASKS=()
 BLOCKED_TASKS=()
+PENDING_DOC_SYNC=()
 
 for task in "$TASK_DIR"/TASK__*/; do
   [[ ! -d "$task" ]] && continue
@@ -26,7 +27,14 @@ for task in "$TASK_DIR"/TASK__*/; do
   case "$status" in
     closed|archived|stale) ;;
     blocked_env) BLOCKED_TASKS+=("$task_id") ;;
-    *) OPEN_TASKS+=("$task_id [status: ${status:-unknown}]") ;;
+    *)
+      OPEN_TASKS+=("$task_id [status: ${status:-unknown}]")
+      # Warn about pending DOC_SYNC for repo-mutating open tasks
+      mutates=$(grep "^mutates_repo:" "$state_file" 2>/dev/null | head -1 | sed 's/mutates_repo: *//')
+      if [[ "$mutates" == "true" || "$mutates" == "unknown" ]]; then
+        [[ ! -f "${task}DOC_SYNC.md" ]] && PENDING_DOC_SYNC+=("$task_id")
+      fi
+      ;;
   esac
 done
 
@@ -38,6 +46,12 @@ if [[ ${#OPEN_TASKS[@]} -gt 0 ]]; then
   if [[ ${#BLOCKED_TASKS[@]} -gt 0 ]]; then
     echo "Note: ${#BLOCKED_TASKS[@]} task(s) are blocked_env (need env fix):"
     for t in "${BLOCKED_TASKS[@]}"; do
+      echo "  - ${t}"
+    done
+  fi
+  if [[ ${#PENDING_DOC_SYNC[@]} -gt 0 ]]; then
+    echo "Note: ${#PENDING_DOC_SYNC[@]} repo-mutating task(s) still need DOC_SYNC.md:"
+    for t in "${PENDING_DOC_SYNC[@]}"; do
       echo "  - ${t}"
     done
   fi

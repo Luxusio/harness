@@ -1,6 +1,6 @@
 ---
 name: setup
-description: Bootstrap the harness execution environment — critic playbooks, QA scaffolding, and runtime config. No placeholders.
+description: Bootstrap the harness execution environment — critic playbooks, QA scaffolding, browser-first detection, and runtime config. No placeholders.
 argument-hint: [optional focus]
 user-invocable: true
 allowed-tools: Read, Glob, Grep, Write, Edit, Bash, AskUserQuestion, Agent
@@ -8,7 +8,7 @@ allowed-tools: Read, Glob, Grep, Write, Edit, Bash, AskUserQuestion, Agent
 
 Bootstrap harness in the current repository.
 
-After setup, the harness agent gates task completion and agents can run verify/smoke loops immediately.
+After setup, the harness agent gates task completion and agents can run verify/smoke loops immediately. For web frontend projects, browser-first QA is configured automatically.
 
 Optional focus from user: `$ARGUMENTS`
 
@@ -19,6 +19,7 @@ Setup is complete when an agent can:
 2. Run verification commands from the manifest
 3. Get critic verdicts
 4. Close the task through the completion gate
+5. (web frontend) Launch browser QA via chrome-devtools MCP
 
 ## Procedure
 
@@ -30,11 +31,48 @@ Setup is complete when an agent can:
 ### Phase 2: Detect project shape
 
 Run only non-destructive commands. Detect:
-- Project type: web app / api / worker / library / cli / monorepo / other
+- Project type: web frontend / fullstack_web / api / worker / library / cli / monorepo / other
 - Languages, frameworks, package manager
 - Build/test/dev commands (actual commands, not guesses)
 - Health endpoints, smoke URLs, DB connections
 - Existing test infrastructure (test runner, fixtures, CI)
+
+**Web Frontend Auto-Detection (4-signal process):**
+
+#### 1st Signal: Framework/Package
+Read `package.json` dependencies and devDependencies. Look for:
+- `next`, `react`, `vite`, `vue`, `nuxt`, `svelte`, `astro`, `@angular/core`, `remix`, `solid-start`, `gatsby`
+
+#### 2nd Signal: Structure
+Check for presence of:
+- `src/app`, `src/pages`, `app/`, `pages/`, `public/`, `index.html`
+- `vite.config.*`, `next.config.*`, `astro.config.*`, `nuxt.config.*`, `angular.json`
+
+#### 3rd Signal: Executability
+Check `package.json` scripts for `dev`, `start`, `preview`. For monorepos, check workspace-level scripts. Extract port hints from `.env*`, config files, and known framework defaults:
+- Next.js → 3000, Vite → 5173, Nuxt → 3000, Astro → 4321, Angular → 4200, SvelteKit → 5173
+
+#### 4th Signal: Exclusion Rules
+Server-only packages without UI signals → browser QA disabled:
+- `express`, `fastify`, `@nestjs/core`, `django`, `flask`, `spring-boot`
+
+Mobile/native only → browser QA disabled:
+- `react-native`, `expo`
+
+#### Detection Result
+Determine and record:
+```
+project_shape: web_frontend | fullstack_web | api | cli | worker | library | monorepo
+browser_qa_supported: true | false
+frontend_candidates[]        # list of scored workspace paths
+primary_frontend             # highest-scoring candidate
+```
+
+#### Monorepo Rules
+- Score each workspace using all 4 signals
+- Highest-scoring workspace = primary frontend
+- Tie → ask user (max 1 question)
+- Frontend + API both present → `.claude/launch.json` lists both; frontend first
 
 ### Phase 3: Ask minimal questions (max 3)
 
@@ -43,7 +81,9 @@ Only ask what the repo cannot tell you:
 - Build/test commands if not detectable
 - Key user journeys or critical flows
 
-### Phase 4: Bootstrap structure
+For monorepo ties, ask which workspace is the primary frontend (counts toward the 3-question cap).
+
+### Phase 4: Bootstrap core structure
 
 Create the core structure:
 
@@ -60,6 +100,19 @@ doc/common/
   CLAUDE.md                      # common root index
 ```
 
+**Minimum output set:**
+- `CLAUDE.md`
+- `.claude/settings.json`
+- `.claude/harness/manifest.yaml`
+- `.claude/harness/critics/{plan,runtime,document}.md`
+- `.claude/harness/tasks/`
+- `doc/common/CLAUDE.md`
+- `doc/common/REQ__project__primary-goals.md`
+- `doc/common/OBS__repo__workspace-layout.md`
+- `doc/common/INF__arch__initial-assumptions.md`
+- (web frontend) `.claude/launch.json`
+- (web frontend) `.mcp.json`
+
 ### Phase 5: Generate CLAUDE.md
 
 If root `CLAUDE.md` doesn't exist, create one:
@@ -68,7 +121,7 @@ If root `CLAUDE.md` doesn't exist, create one:
 updated: <date>
 
 # Operating mode
-- Default agent is harness — a thin loop controller with completion gates.
+- Default agent is harness — an execution harness with critic verdicts and completion gates.
 - `.claude/harness/manifest.yaml` is the initialization marker.
 - Every repo-mutating task follows: plan -> critic-plan PASS -> implement -> critic-runtime PASS -> close.
 - Work in plain language. The harness routes requests and gates completion.
@@ -78,64 +131,47 @@ Include `doc/common/CLAUDE.md` in always_load_paths if notes were created.
 
 ### Phase 6: Generate manifest.yaml
 
-```yaml
-version: 3
-initialized_at: <date>
-entrypoint: CLAUDE.md
-```
+Generate from template at `${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/.claude/harness/manifest.yaml`.
 
-Add `runtime` section with detected commands. QA scripts live in the plugin at `${CLAUDE_PLUGIN_ROOT}/scripts/` — they read project-specific config from the manifest:
+For **web frontend / fullstack_web** projects, use the full manifest with `project`, `runtime`, `qa`, and `browser` sections populated from detection results.
 
-```yaml
-runtime:
-  smoke_command: "npm test"          # or pytest, go test, etc.
-  healthcheck_command: "curl -sf http://localhost:3000/health"
-  reset_command: "npm run db:reset"  # optional, omit if no DB
-  healthchecks:
-    - http://localhost:3000/health
-```
+For **non-web** projects (api, cli, worker, library), use a simplified manifest without `browser` or `project.primary_frontend` sections.
 
-The plugin scripts (`verify.sh`, `smoke.sh`, `healthcheck.sh`, `reset-db.sh`) read these fields automatically. Projects can also override with local `scripts/harness/*.sh` which take priority.
-
-If commands are unknown, add:
-
-```yaml
-runtime: unknown
-runtime_missing:
-  - test_command
-  - build_command
-  - dev_command
-```
-
-**Never omit runtime silently.** Either populate it or mark it unknown with specific gaps.
+The manifest `version` must be `4`.
 
 ### Phase 7: Configure QA runtime
 
-QA scripts are bundled in the plugin (`${CLAUDE_PLUGIN_ROOT}/scripts/`). Setup does NOT copy scripts into the project. Instead, populate `manifest.yaml` runtime fields so the plugin scripts know what to run.
+**Browser-first (web frontend / fullstack_web):**
+- Set `qa.default_mode: browser` and `browser.enabled: true` in manifest
+- Generate `.claude/launch.json` from template at `${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/.claude/launch.json`
+  - Populate `{{CONFIG_NAME}}` with framework name (e.g. "Next.js Dev")
+  - Populate `{{RUNTIME_EXECUTABLE}}` with package manager (`npm`, `pnpm`, `yarn`, `bun`)
+  - Populate `{{RUNTIME_ARGS}}` with dev script args (e.g. `["run", "dev"]`)
+  - Populate `{{CWD}}` with frontend workspace path (`.` for root)
+  - Populate `{{PORT}}` with detected port
+- Generate `.mcp.json` from template at `${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/.mcp.json`
 
-| Plugin script | Reads from manifest | Fallback |
-|---------------|-------------------|----------|
-| `verify.sh` | runs smoke.sh + healthcheck.sh | — |
-| `smoke.sh` | `runtime.smoke_command` | `scripts/harness/smoke.sh` in project |
-| `healthcheck.sh` | `runtime.healthcheck_command` | `scripts/harness/healthcheck.sh` in project |
-| `reset-db.sh` | `runtime.reset_command` | `scripts/harness/reset-db.sh` in project |
+**Command-line fallback (api, cli, worker, library):**
+- Set `qa.default_mode: cli` and `browser.enabled: false` in manifest
+- Skip `.claude/launch.json` and `.mcp.json`
 
-**Project-shape guidance for manifest fields:**
-- **web app**: `smoke_command: "npm test"`, healthchecks list, reset_command
+**Project-shape guidance for manifest runtime fields:**
+- **web frontend / fullstack_web**: `dev_command: "npm run dev"`, `test_command: "npm test"`, healthchecks list, reset_command if DB detected
 - **api**: `smoke_command: "curl -sf http://localhost:3001/health"`, DB reset
 - **cli/worker**: `smoke_command: "<tool> --version && <tool> example-input"`
 - **library**: `smoke_command: "npm test"` or equivalent
 
 **Rules:**
 - Populate manifest runtime fields with real detected commands
-- If a command is unknown, omit the field (the plugin script will print SKIP and exit non-zero)
-- Only create project-local `scripts/harness/` if the project needs custom multi-step verification beyond a single command
+- If a command is unknown, omit the field (plugin script prints SKIP and exits non-zero)
+- QA scripts (verify, smoke, healthcheck, reset-db, browser-smoke, persistence-check) live in `${CLAUDE_PLUGIN_ROOT}/scripts/` and are executed directly — no project-local copy needed
 
 ### Phase 8: Generate critic playbooks
 
 From templates at `${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/.claude/harness/critics/`.
 Fill project-specific values from detected shape:
 - Runtime playbook gets actual verify commands, health endpoints, preferred verification order
+- For web frontend projects, runtime playbook adds browser QA steps using chrome-devtools MCP
 - Plan playbook gets project-specific acceptance patterns
 - Document playbook gets project doc conventions
 
@@ -171,29 +207,45 @@ Only create when the project has clear boundaries to enforce (monorepo, layered 
   check-architecture.sh      # machine-executable checks
 ```
 
-### Phase 11: Setup .gitignore
+### Phase 11: Web frontend setup
+
+Only when `browser_qa_supported: true`:
+
+1. Write `.mcp.json` to project root (from template — enables chrome-devtools MCP server)
+2. Write `.claude/launch.json` (from template — configures dev server auto-launch)
+3. Record in manifest: `browser.status: configured`
+
+If `.mcp.json` already exists, merge `mcpServers.chrome-devtools` entry rather than overwriting.
+
+### Phase 12: Setup .gitignore
 
 Append harness entries if not already present:
 ```
 .claude/harness/tasks/
 ```
 
-### Phase 12: Activate harness agent
+### Phase 13: Activate harness agent
 
 Ensure `.claude/settings.json` has `"agent": "harness:harness"`.
 
-### Phase 13: Smoke test
+### Phase 14: Smoke test
 
 Run `${CLAUDE_PLUGIN_ROOT}/scripts/verify.sh` to validate the setup. Report result.
 If it fails, note the failures — do not silently skip.
 
-### Phase 14: Finish
+For web frontend projects, also verify:
+- `.mcp.json` contains `chrome-devtools` server entry
+- `.claude/launch.json` has a valid configuration with correct port
+
+### Phase 15: Finish report
 
 Report:
 - Files created or updated
 - Notes created (OBS/REQ/INF counts)
 - Runtime commands detected vs. unknown
-- Smoke test results from Phase 13
+- **Project shape detected** (web_frontend / fullstack_web / api / cli / etc.)
+- **Browser QA status**: enabled (with entry URL) | disabled (reason)
+- Smoke test results from Phase 14
 - Remaining unknowns and next steps
 
 ## Guardrails
@@ -201,6 +253,8 @@ Report:
 - **No placeholder scripts.** "No test runner detected → PASS" is forbidden.
 - **No fake scaffolding.** Only create files that have real content.
 - **Runtime must be explicit.** Either populated or marked `unknown` with gaps listed.
+- **Browser detection is automatic.** Never ask whether to enable browser QA — detect it.
 - Keep generated files concise and human-editable.
 - Mark uncertain items clearly.
 - Minimize friction — only ask about destructive/overwrite operations.
+- QA scripts in `${CLAUDE_PLUGIN_ROOT}/scripts/` are executed directly from the plugin.

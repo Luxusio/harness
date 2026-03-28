@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Create a task contract — PLAN.md with scope, acceptance criteria, verification, and rollback.
+description: Create a task contract — PLAN.md with scope, acceptance criteria, verification contract, doc sync, and rollback.
 argument-hint: <task-slug>
 context: fork
 agent: Plan
@@ -16,7 +16,7 @@ Task slug from user: `$ARGUMENTS`
 
 ### 1. Load context
 - Read root `CLAUDE.md`
-- Read `.claude/harness/manifest.yaml` if it exists
+- Read `.claude/harness/manifest.yaml` if it exists (check `browser.enabled`, `qa.default_mode`)
 - Scan relevant existing docs if any
 - Understand what the user is asking for
 
@@ -35,12 +35,20 @@ lane: <selected sub-lane: build|debug|verify|refactor|docs-sync|investigate>
 mutates_repo: <true|false>
 qa_required: <true|false>
 qa_mode: <auto|tests|smoke|browser-first>
+browser_required: <true|false>
+doc_sync_required: <true|false>
+touched_paths: []
+roots_touched: []
+verification_targets: []
 plan_verdict: pending
 runtime_verdict: pending
 document_verdict: pending
 blockers: []
 updated: <ISO 8601>
 ```
+
+Set `browser_required: true` and default `qa_mode: browser-first` when `manifest.browser.enabled: true`.
+Set `doc_sync_required: true` for all repo-mutating tasks.
 
 ### 4. Write REQUEST.md
 
@@ -69,19 +77,37 @@ mutates_repo: <true|false>
 ## Scope out
 <what this task will NOT do>
 
+## User-visible outcomes
+<what changes from the user's perspective — observable behavior, not implementation details>
+
+## Touched files / roots
+- <file or directory path>
+- <file or directory path>
+
+## QA mode
+<tests | smoke | browser-first>
+
 ## Acceptance criteria
 - [ ] <specific, testable criterion 1>
 - [ ] <specific, testable criterion 2>
 
-## Verification
+## Verification contract
 - commands: <exact commands to run>
+- routes: <URLs or API endpoints to hit, or "n/a">
+- persistence checks: <database or file state to verify, or "n/a">
 - expected outputs: <what success looks like>
+
+## Required doc sync
+<which doc surfaces need updating, or "none">
 
 ## Hard fail conditions
 <conditions that would mean this task has failed>
 
 ## Risks / rollback
 <what could go wrong, how to undo>
+
+## Open blockers
+<known blockers before implementation, or "none">
 ```
 
 If PLAN.md alone is genuinely insufficient (10+ files, cross-domain, high ambiguity), add ONE supporting document — SPEC.md, DESIGN.md, or TASKS.md. Do not create a hierarchy by default.
@@ -93,7 +119,8 @@ Create `.claude/harness/tasks/TASK__$ARGUMENTS/HANDOFF.md` with initial stub.
 ## Guardrails
 
 - Every acceptance criterion must be testable (no "works correctly")
-- Verification must have concrete commands or endpoints
+- Verification contract must have concrete executable commands or endpoints — prose alone is not sufficient
 - Hard fail conditions must be explicit
 - Risks section must name at least one rollback path for repo-mutating work
-- Do not create spec hierarchies, QA mode declarations, or doc sync plans by default
+- For browser-first projects: QA mode must be `browser-first`, not `smoke` or `tests` alone
+- All mandatory PLAN.md fields must be present (critic-plan will FAIL plans missing required fields)

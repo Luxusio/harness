@@ -11,6 +11,16 @@ source "$(dirname "$0")/_lib.sh"
 
 echo "=== HARNESS SESSION END SUMMARY ==="
 
+# --- Browser QA status ---
+browser_qa="disabled"
+if awk '/^qa:/{found=1} found && /browser_qa_supported:/{print; exit}' ".claude/harness/manifest.yaml" 2>/dev/null | grep -qE "browser_qa_supported\s*:\s*true"; then
+  browser_qa="enabled"
+elif awk '/^browser:/{found=1} found && /enabled:/{print; exit}' ".claude/harness/manifest.yaml" 2>/dev/null | grep -qE "enabled\s*:\s*true"; then
+  browser_qa="enabled"
+fi
+echo "browser_qa: ${browser_qa}"
+echo ""
+
 open_tasks=()
 blocked_tasks=()
 missing_doc_sync=()
@@ -32,7 +42,8 @@ for task in "$TASK_DIR"/TASK__*/; do
       blocked_tasks+=("${task_id} [lane: ${lane:-unknown}]")
       ;;
     *)
-      open_tasks+=("${task_id} [status: ${status:-unknown}, lane: ${lane:-unknown}]")
+      qa_mode=$(grep "^qa_mode:" "$state_file" 2>/dev/null | head -1 | sed 's/qa_mode: *//')
+      open_tasks+=("${task_id} [status: ${status:-unknown}, lane: ${lane:-unknown}, qa_mode: ${qa_mode:-auto}]")
 
       plan_v=$(grep "^plan_verdict:" "$state_file" 2>/dev/null | head -1 | sed 's/plan_verdict: *//')
       runtime_v=$(grep "^runtime_verdict:" "$state_file" 2>/dev/null | head -1 | sed 's/runtime_verdict: *//')
@@ -65,7 +76,7 @@ if [[ ${#incomplete_verdicts[@]} -gt 0 ]]; then
 fi
 
 if [[ ${#missing_doc_sync[@]} -gt 0 ]]; then
-  echo "MISSING DOC_SYNC:"
+  echo "MISSING DOC_SYNC (repo-mutating tasks):"
   for d in "${missing_doc_sync[@]}"; do echo "  - $d"; done
 fi
 
