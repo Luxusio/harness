@@ -1,30 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(dirname "$0")/_lib.sh"
 
-# Init-only: ensure minimal task artifacts exist. Never blocks.
-# Only uses explicit HARNESS_TASK_ID — no fallback to latest task.
-TASK_DIR=".claude/harness/tasks"
+# TaskCreated hook — initializes minimal task artifacts.
+# Non-blocking (exit 0 always).
+# stdin: JSON | exit 0: success | exit 2: block (unused)
 
-if [[ -z "${HARNESS_TASK_ID:-}" ]]; then
-  exit 0
-fi
+TASK_ID=$(json_field "task_id")
+TASK_ID="${TASK_ID:-${HARNESS_TASK_ID:-}}"
 
-TARGET="${TASK_DIR}/${HARNESS_TASK_ID}"
+[[ -z "$TASK_ID" ]] && exit 0
 
-if [[ ! -d "$TARGET" ]]; then
-  exit 0
-fi
+TARGET="${TASK_DIR}/${TASK_ID}"
+mkdir -p "$TARGET"
 
-TASK_ID="$HARNESS_TASK_ID"
-
-# Initialize TASK_STATE.yaml if missing (minimal schema)
+# Initialize TASK_STATE.yaml if missing
 if [[ ! -f "${TARGET}/TASK_STATE.yaml" ]]; then
   cat > "${TARGET}/TASK_STATE.yaml" <<EOF
 task_id: ${TASK_ID}
-lane: pending
 status: created
-mutates_repo: true
-updated: $(date +%Y-%m-%d)
+lane: pending
+mutates_repo: unknown
+qa_required: pending
+qa_mode: auto
+plan_verdict: pending
+runtime_verdict: pending
+document_verdict: pending
+blockers: []
+updated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
   echo "INFO: Initialized ${TARGET}/TASK_STATE.yaml"
 fi
@@ -34,7 +37,22 @@ if [[ ! -f "${TARGET}/HANDOFF.md" ]]; then
   cat > "${TARGET}/HANDOFF.md" <<EOF
 # Handoff: ${TASK_ID}
 status: pending
-updated: $(date +%Y-%m-%d)
+updated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF
   echo "INFO: Created ${TARGET}/HANDOFF.md stub"
 fi
+
+# Create REQUEST.md stub if missing
+if [[ ! -f "${TARGET}/REQUEST.md" ]]; then
+  request_text=$(json_field "description")
+  request_text="${request_text:-$(json_field "request")}"
+  cat > "${TARGET}/REQUEST.md" <<EOF
+# Request: ${TASK_ID}
+created: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+${request_text:-<!-- Request details pending -->}
+EOF
+  echo "INFO: Created ${TARGET}/REQUEST.md"
+fi
+
+exit 0

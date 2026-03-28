@@ -1,7 +1,7 @@
 {
   "name": "harness",
   "version": "2.0.0",
-  "description": "Thin completion firewall — gates task closure behind verified critic verdicts.",
+  "description": "Execution-first completion firewall — gates task closure behind verified critic verdicts with stdin JSON hooks, verdict invalidation, and runtime QA scaffolding.",
   "author": {
     "name": "harness"
   },
@@ -10,6 +10,8 @@
   "keywords": [
     "completion-gate",
     "critic-evaluation",
-    "task-verification"
+    "task-verification",
+    "verdict-invalidation",
+    "runtime-qa"
   ]
 }
