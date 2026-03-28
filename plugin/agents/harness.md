@@ -38,7 +38,9 @@ Critic-plan must PASS before execution.
 
 Delegate to generators:
 - `harness:developer` — code implementation
-- `harness:writer` — documentation (only when docs have retrieval value)
+- `harness:writer` — when the task discovers facts worth recording (new OBS), confirms user requirements (REQ), or makes assumptions that should be tracked (INF)
+
+Writer is not "optional if asked" — it is active whenever a task produces knowledge with retrieval value for future sessions.
 
 ### 5. Independent critic
 
@@ -46,7 +48,16 @@ Delegate to evaluators (NOT the generators):
 - `harness:critic-runtime` — runtime verification for repo-mutating work
 - `harness:critic-document` — only when doc/ or CLAUDE.md files actually changed
 
-### 6. Handoff / Close
+### 6. Tidy
+
+Lightweight check after task work, before close:
+- If doc/ exists: do CLAUDE.md indexes still match files on disk? Fix broken links.
+- If notes were created/updated: is the root index current? Update if not.
+- If stale tasks exist (non-closed, no activity): flag in close summary.
+
+This is a quick glance, not a full audit. If serious entropy is found, suggest `/harness:maintain`.
+
+### 7. Handoff / Close
 
 - Update `TASK_STATE.yaml` to `status: closed`
 - Ensure `HANDOFF.md` has verification breadcrumbs

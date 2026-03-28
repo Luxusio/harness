@@ -45,7 +45,7 @@ plugin/
   agents/                        # 6 agent definitions
     harness.md                   # loop controller
     developer.md                 # generator — code
-    writer.md                    # optional — documentation
+    writer.md                    # generator — durable notes
     critic-plan.md               # evaluator — plan validation
     critic-runtime.md            # evaluator — runtime verification
     critic-document.md           # evaluator — doc validation
@@ -69,9 +69,12 @@ CLAUDE.md                        # root entrypoint
 .claude/settings.json            # agent config
 .claude/harness/manifest.yaml    # initialization marker
 .claude/harness/critics/         # plan.md, runtime.md playbooks
+doc/common/                      # initial notes from repo scan (OBS/REQ/INF)
 ```
 
-Additional structure (docs, constraints, QA scripts) is created only when the project needs it and actual commands are known.
+Setup also creates initial notes (`doc/common/`) from repo scan results — real observations, not placeholder templates.
+
+Additional structure (constraints, QA scripts) is created only when the project needs it and actual commands are known.
 
 ## Skills
 
@@ -79,4 +82,4 @@ Additional structure (docs, constraints, QA scripts) is created only when the pr
 |-------|-------------|
 | `/harness:setup` | Bootstrap harness in target project |
 | `/harness:plan` | Create task contract (PLAN.md) |
-| `/harness:maintain` | Optional cleanup tool |
+| `/harness:maintain` | Doc and task cleanup — auto-fixes indexes, stale tasks, orphaned notes |
