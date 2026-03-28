@@ -1,20 +1,15 @@
 {
   "name": "harness",
   "version": "2.0.0",
-  "description": "Repo-local universal loop runtime: receive request, gather context, select lane, execute, verify, sync memory, escalate only when needed.",
+  "description": "Thin completion firewall — gates task closure behind verified critic verdicts.",
   "author": {
     "name": "harness"
   },
   "license": "MIT",
   "skills": "./skills/",
   "keywords": [
-    "runtime-loop",
-    "lane-routing",
+    "completion-gate",
     "critic-evaluation",
-    "durable-knowledge",
-    "REQ-OBS-INF",
-    "executable-qa",
-    "freshness-aware-memory",
-    "task-identity"
+    "task-verification"
   ]
 }
