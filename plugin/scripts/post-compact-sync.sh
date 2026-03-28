@@ -15,6 +15,16 @@ fi
 
 echo "=== HARNESS POST-COMPACT SUMMARY ==="
 
+# --- Browser QA availability ---
+browser_qa="disabled"
+if awk '/^qa:/{found=1} found && /browser_qa_supported:/{print; exit}' ".claude/harness/manifest.yaml" 2>/dev/null | grep -qE "browser_qa_supported\s*:\s*true"; then
+  browser_qa="enabled"
+elif awk '/^browser:/{found=1} found && /enabled:/{print; exit}' ".claude/harness/manifest.yaml" 2>/dev/null | grep -qE "enabled\s*:\s*true"; then
+  browser_qa="enabled"
+fi
+echo "browser_qa: ${browser_qa}"
+echo ""
+
 open_count=0
 blocked_count=0
 pending_verdicts=0
@@ -42,8 +52,19 @@ for task in "$TASK_DIR"/TASK__*/; do
       plan_v=$(grep "^plan_verdict:" "$state_file" 2>/dev/null | head -1 | sed 's/plan_verdict: *//')
       runtime_v=$(grep "^runtime_verdict:" "$state_file" 2>/dev/null | head -1 | sed 's/runtime_verdict: *//')
       doc_v=$(grep "^document_verdict:" "$state_file" 2>/dev/null | head -1 | sed 's/document_verdict: *//')
-      echo "- ${task_id} [${status:-unknown}, lane: ${lane:-unknown}]"
+      qa_mode=$(grep "^qa_mode:" "$state_file" 2>/dev/null | head -1 | sed 's/qa_mode: *//')
+      mutates=$(grep "^mutates_repo:" "$state_file" 2>/dev/null | head -1 | sed 's/mutates_repo: *//')
+      doc_sync_status="n/a"
+      if [[ "$mutates" == "true" || "$mutates" == "unknown" ]]; then
+        if [[ -f "${task}DOC_SYNC.md" ]]; then
+          doc_sync_status="present"
+        else
+          doc_sync_status="missing"
+        fi
+      fi
+      echo "- ${task_id} [${status:-unknown}, lane: ${lane:-unknown}, qa_mode: ${qa_mode:-auto}]"
       echo "  verdicts: plan=${plan_v:-?} runtime=${runtime_v:-?} document=${doc_v:-?}"
+      echo "  doc_sync: ${doc_sync_status}"
       [[ "$plan_v" == "pending" ]] && pending_verdicts=$((pending_verdicts + 1))
       [[ "$runtime_v" == "pending" ]] && pending_verdicts=$((pending_verdicts + 1))
       [[ "$doc_v" == "pending" ]] && pending_verdicts=$((pending_verdicts + 1))
@@ -57,18 +78,5 @@ else
   echo ""
   echo "Summary: ${open_count} open, ${blocked_count} blocked_env, ${pending_verdicts} pending verdicts"
 fi
-
-# Flag missing DOC_SYNC on mutating tasks
-for task in "$TASK_DIR"/TASK__*/; do
-  [[ ! -d "$task" ]] && continue
-  state_file="${task}TASK_STATE.yaml"
-  [[ ! -f "$state_file" ]] && continue
-  status=$(grep "^status:" "$state_file" 2>/dev/null | head -1 | sed 's/status: *//')
-  case "$status" in closed|archived|stale) continue ;; esac
-  mutates=$(grep "^mutates_repo:" "$state_file" 2>/dev/null | head -1 | sed 's/mutates_repo: *//')
-  if [[ "$mutates" == "true" || "$mutates" == "unknown" ]]; then
-    [[ ! -f "${task}DOC_SYNC.md" ]] && echo "NOTE: $(basename "$task") — repo-mutating task without DOC_SYNC.md"
-  fi
-done
 
 exit 0

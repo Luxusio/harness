@@ -14,18 +14,32 @@ TASK_ID="${TASK_ID:-${HARNESS_TASK_ID:-}}"
 TARGET="${TASK_DIR}/${TASK_ID}"
 mkdir -p "$TARGET"
 
+# Detect browser-first from manifest
+BROWSER_REQUIRED="false"
+QA_MODE="auto"
+if is_browser_first_project; then
+  BROWSER_REQUIRED="true"
+  QA_MODE="browser-first"
+fi
+
 # Initialize TASK_STATE.yaml if missing
 if [[ ! -f "${TARGET}/TASK_STATE.yaml" ]]; then
   cat > "${TARGET}/TASK_STATE.yaml" <<EOF
 task_id: ${TASK_ID}
 status: created
-lane: pending
+lane: unknown
 mutates_repo: unknown
 qa_required: pending
-qa_mode: auto
+qa_mode: ${QA_MODE}
 plan_verdict: pending
 runtime_verdict: pending
 document_verdict: pending
+browser_required: ${BROWSER_REQUIRED}
+doc_sync_required: false
+doc_changes_detected: false
+touched_paths: []
+roots_touched: []
+verification_targets: []
 blockers: []
 updated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 EOF

@@ -20,6 +20,8 @@ TARGET="${TASK_DIR}/${TASK_ID}"
 
 case "$AGENT_NAME" in
   developer|harness:developer)
+    # Developer must leave TASK_STATE.yaml and HANDOFF.md.
+    # Developers never write critic files — do not check for them.
     [[ ! -f "${TARGET}/TASK_STATE.yaml" ]] && echo "REMINDER: ${TASK_ID} — developer should update TASK_STATE.yaml"
     [[ ! -f "${TARGET}/HANDOFF.md" ]] && echo "REMINDER: ${TASK_ID} — developer should update HANDOFF.md with verification breadcrumbs"
     if [[ -f "${TARGET}/TASK_STATE.yaml" ]]; then
@@ -30,8 +32,15 @@ case "$AGENT_NAME" in
     fi
     ;;
   writer|harness:writer)
-    if git diff --name-only HEAD 2>/dev/null | grep -qE '(^doc/|\.md$)'; then
-      [[ ! -f "${TARGET}/DOC_SYNC.md" ]] && echo "REMINDER: ${TASK_ID} — writer changed docs but DOC_SYNC.md not found"
+    # Writer must produce DOC_SYNC.md for repo-mutating tasks.
+    IS_MUTATING="true"
+    if [[ -f "${TARGET}/TASK_STATE.yaml" ]]; then
+      if grep -q "^mutates_repo: false" "${TARGET}/TASK_STATE.yaml" 2>/dev/null; then
+        IS_MUTATING="false"
+      fi
+    fi
+    if [[ "$IS_MUTATING" != "false" ]]; then
+      [[ ! -f "${TARGET}/DOC_SYNC.md" ]] && echo "REMINDER: ${TASK_ID} — writer should produce DOC_SYNC.md for repo-mutating task (content may be 'none' if no docs changed)"
     fi
     ;;
   critic-runtime|harness:critic-runtime)

@@ -42,8 +42,15 @@ fi
 # --- HANDOFF.md required ---
 [[ ! -f "${TARGET}/HANDOFF.md" ]] && FAILURES+=("missing HANDOFF.md")
 
-# --- Runtime critic for repo-mutating tasks ---
+# --- Repo-mutating task requirements ---
 if [[ "$IS_MUTATING" != "false" ]]; then
+
+  # --- DOC_SYNC.md required for repo-mutating tasks ---
+  if [[ ! -f "${TARGET}/DOC_SYNC.md" ]]; then
+    FAILURES+=("repo-mutating task requires DOC_SYNC.md (may contain 'none' if no docs changed)")
+  fi
+
+  # --- Runtime critic required for repo-mutating tasks ---
   if [[ ! -f "${TARGET}/CRITIC__runtime.md" ]]; then
     FAILURES+=("repo-mutating task needs runtime critic verdict (CRITIC__runtime.md)")
   elif ! grep -qE '^verdict:\s*PASS\s*$' "${TARGET}/CRITIC__runtime.md" 2>/dev/null; then
@@ -51,12 +58,25 @@ if [[ "$IS_MUTATING" != "false" ]]; then
   fi
 fi
 
-# --- Document critic when DOC_SYNC.md exists ---
-# DOC_SYNC.md is the canonical signal that docs were changed by this task.
-# git diff is too broad — it catches working-tree changes unrelated to the task.
+# --- Document critic when DOC_SYNC.md exists with content other than "none",
+#     or when doc_changes_detected: true in TASK_STATE.yaml ---
+DOC_CRITIC_NEEDED="false"
 if [[ -f "${TARGET}/DOC_SYNC.md" ]]; then
+  # Check if DOC_SYNC.md has meaningful content (not just "none")
+  doc_sync_content=$(grep -v '^#' "${TARGET}/DOC_SYNC.md" 2>/dev/null | tr -d '[:space:]' || true)
+  if [[ "$doc_sync_content" != "none" && -n "$doc_sync_content" ]]; then
+    DOC_CRITIC_NEEDED="true"
+  fi
+fi
+if [[ -f "${TARGET}/TASK_STATE.yaml" ]]; then
+  if grep -q "^doc_changes_detected: true" "${TARGET}/TASK_STATE.yaml" 2>/dev/null; then
+    DOC_CRITIC_NEEDED="true"
+  fi
+fi
+
+if [[ "$DOC_CRITIC_NEEDED" == "true" ]]; then
   if [[ ! -f "${TARGET}/CRITIC__document.md" ]]; then
-    FAILURES+=("DOC_SYNC.md exists — needs document critic verdict (CRITIC__document.md)")
+    FAILURES+=("doc changes detected — needs document critic verdict (CRITIC__document.md)")
   elif ! grep -qE '^verdict:\s*PASS\s*$' "${TARGET}/CRITIC__document.md" 2>/dev/null; then
     FAILURES+=("document critic did not PASS")
   fi
