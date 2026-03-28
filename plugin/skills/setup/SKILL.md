@@ -35,7 +35,7 @@ Only ask what the repo cannot tell you:
 
 ### Phase 4: Bootstrap
 
-Create the minimal structure:
+Create the structure:
 
 ```
 CLAUDE.md                        # root entrypoint (if not exists)
@@ -44,15 +44,15 @@ CLAUDE.md                        # root entrypoint (if not exists)
 .claude/harness/critics/
   plan.md                        # plan critic playbook
   runtime.md                     # runtime critic playbook
-  document.md                    # document critic playbook (optional)
+  document.md                    # document critic playbook
 .claude/harness/tasks/           # task folder convention
+doc/common/
+  CLAUDE.md                      # common root index
 ```
 
 **What NOT to create by default:**
-- `doc/` tree with REQ/OBS/INF notes (only if user wants durable docs or repo already uses them)
 - `scripts/harness/*.sh` (only if actual test/build commands are confidently known)
 - `.claude/harness/constraints/` (only if user asks or project has clear architectural boundaries)
-- `.claude/harness/maintenance/` (not needed)
 - Placeholder scripts that default to PASS
 
 ### Phase 5: Generate CLAUDE.md
@@ -68,7 +68,7 @@ updated: <date>
 - Work in plain language. The harness routes requests and gates completion.
 ```
 
-Docs are optional. Only mention them if actually created.
+Include `doc/common/CLAUDE.md` in always_load_paths if notes were created.
 
 ### Phase 6: Generate manifest.yaml
 
@@ -85,7 +85,29 @@ Only add `runtime` section if actual commands were detected. Never add placehold
 From templates at `${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/.claude/harness/critics/`.
 Fill project-specific values from detected shape.
 
-### Phase 8: Setup .gitignore
+### Phase 8: Create initial notes
+
+Generate notes from what was actually detected — not templates with placeholders.
+
+**From repo scan (always):**
+- `doc/common/OBS__repo__workspace-layout.md` — observed project structure, languages, frameworks, commands
+  - Content comes from Phase 2 detection results — real facts, not guesses
+
+**From user answers (if goals were stated):**
+- `doc/common/REQ__project__primary-goals.md` — stated project goals and requirements
+
+**From inference (if stack assumptions were made):**
+- `doc/common/INF__arch__initial-assumptions.md` — inferred assumptions with `verify_by` instructions
+
+Update `doc/common/CLAUDE.md` index to list created notes.
+
+**Rules:**
+- Only create notes with real content from detection/conversation — never empty templates
+- OBS must have actual evidence (what was observed)
+- INF must have a concrete `verify_by` (how to check)
+- If nothing meaningful was detected, skip note creation
+
+### Phase 9: Setup .gitignore
 
 Append harness entries if not already present:
 ```
@@ -94,14 +116,15 @@ Append harness entries if not already present:
 
 Only add other entries if those directories were actually created.
 
-### Phase 9: Activate harness agent
+### Phase 10: Activate harness agent
 
 Ensure `.claude/settings.json` has `"agent": "harness:harness"`.
 
-### Phase 10: Finish
+### Phase 11: Finish
 
 Report:
 - Files created or updated
+- Notes created (OBS/REQ/INF counts)
 - What was detected vs. asked
 - Remaining unknowns
 

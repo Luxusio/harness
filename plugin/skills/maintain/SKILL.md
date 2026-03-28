@@ -1,6 +1,6 @@
 ---
 name: maintain
-description: Optional cleanup tool — finds stale tasks, broken links, and obvious entropy.
+description: Doc and task cleanup tool — finds and fixes stale tasks, broken links, index drift, and obvious entropy.
 argument-hint: [optional focus area]
 context: fork
 agent: Explore
@@ -8,34 +8,52 @@ user-invocable: true
 allowed-tools: Read, Glob, Grep, Write, Edit
 ---
 
-Optional cleanup tool for the harness task system.
+Cleanup tool for harness docs and tasks.
 
 Optional focus from user: `$ARGUMENTS`
 
-## What to check
+## What to check and fix
 
-1. **Stale open tasks** — Task folders with non-closed status that appear abandoned
-2. **Blocked tasks** — Tasks with `status: blocked_env` that may now be unblocked
-3. **Broken links** — CLAUDE.md indexes pointing to files that don't exist
-4. **Obvious drift** — Documentation that clearly contradicts current code
+### 1. Task health
+- Find open/blocked tasks in `.claude/harness/tasks/`
+- Flag abandoned tasks (non-closed, old `updated` date)
+- Flag `blocked_env` tasks that may now be unblocked
+- **Auto-fix:** Close clearly abandoned tasks (no activity, no open work)
+
+### 2. Index health (if doc/ exists)
+- Verify each CLAUDE.md index matches actual files on disk
+- **Auto-fix:** Add missing notes to index, remove entries for deleted files
+
+### 3. Note health (if notes exist)
+- Find notes with stale `last_verified_at`
+- Find orphaned notes (on disk but not in any index)
+- Find broken supersede chains (`superseded_by` pointing to non-existent file)
+- **Auto-fix:** Add orphaned notes to index, fix broken supersede links where target is obvious
+
+### 4. Obvious drift
+- Documentation that clearly contradicts current code (check key claims against reality)
+- **Flag only** — do not auto-fix content contradictions (needs writer + critic-document)
 
 ## Procedure
 
-### 1. Scan task health
-- Check `.claude/harness/tasks/` for open/blocked tasks
-- Report their status and age
+### 1. Scan
+Run all checks above. Collect findings.
 
-### 2. Scan doc health (if docs exist)
-- Verify CLAUDE.md indexes match files on disk
-- Check for obvious contradictions
+### 2. Auto-fix
+Apply safe mechanical fixes immediately:
+- Rebuild broken indexes
+- Add orphaned notes to correct root index
+- Fix broken supersede links
+- Close clearly dead tasks
 
 ### 3. Report
-- **Found**: issues by type
-- **Suggested**: actions to take
+- **Fixed**: what was auto-repaired
+- **Flagged**: issues that need human or writer attention
+- **Stats**: note count by type, stale count, task count by status
 
 ## Rules
 
-- This is an optional tool, not a mandatory loop phase
-- Only report issues that are clearly actionable
-- Do not create maintenance queues or compaction logs
-- Do not police freshness metadata or normalize note headers
+- Auto-fix only for mechanical issues (indexes, links, dead tasks)
+- Content changes (contradictions, merges, archives) need writer + critic-document
+- Do not create maintenance queues or logs — just fix and report
+- Keep it fast — scan, fix, report

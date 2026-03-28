@@ -28,7 +28,7 @@ These are enforced by the TaskCompleted hook — the only hard gate:
 | Agent | Role |
 |-------|------|
 | `harness:developer` | Generator — code implementation |
-| `harness:writer` | Optional — documentation when it has retrieval value |
+| `harness:writer` | Generator — creates/updates notes when tasks produce durable knowledge |
 | `harness:critic-plan` | Evaluator — plan contract validation |
 | `harness:critic-runtime` | Evaluator — runtime execution verification |
 | `harness:critic-document` | Evaluator — doc change validation (only when docs changed) |
@@ -45,12 +45,15 @@ These are enforced by the TaskCompleted hook — the only hard gate:
 | `docs-sync` | Documentation update only |
 | `investigate` | Research, may transition |
 
+## Automatic behaviors
+
+- **Note creation**: Writer creates OBS/REQ/INF notes when tasks discover facts worth preserving
+- **Index tidy**: Harness checks doc indexes match reality after task work, auto-fixes broken links
+- **Cleanup**: `/harness:maintain` scans and auto-fixes stale tasks, orphaned notes, index drift
+
 ## Optional features
 
-These are available but NOT mandatory:
-- Durable knowledge notes (REQ/OBS/INF) — use when the project benefits from structured docs
 - Architecture constraints — use when the project has clear boundaries to enforce
-- Maintenance scanning — use `/harness:maintain` when entropy is visible
 
 ## Core rules
 
