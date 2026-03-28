@@ -1,21 +1,13 @@
 # runtime critic project playbook
-tags: [critic, runtime, project, active]
 summary: {{PROJECT_SUMMARY}}
-must_verify: {{MUST_VERIFY}}
-prefer: {{PREFER_COMMANDS}}
-block_if: execution-skipped-without-reason, evidence-free-pass
 updated: {{SETUP_DATE}}
 
-# Environment map
-{{ENVIRONMENT_MAP}}
+# Verification approach
+- preferred_order: [tests, smoke, api, browser]
+- must_verify: {{MUST_VERIFY}}
+- prefer_commands: {{PREFER_COMMANDS}}
 
-# Browser-first QA map
-- preferred_verification_order: [tests, smoke, api, persistence, browser]
-- health_checks: {{HEALTHCHECKS}}
-- seed_reset_commands: {{SEED_RESET_COMMANDS}}
-- persistence_checks: {{PERSISTENCE_CHECKS}}
-
-# QA evidence requirements
-- QA__runtime.md must be written before verdict
+# Rules
+- Verify through execution, not code reading
 - Every PASS needs at least one concrete evidence item
-- BLOCKED_ENV requires exact blocker description for TASK_STATE.yaml
+- BLOCKED_ENV requires exact blocker description

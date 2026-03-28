@@ -1,22 +1,3 @@
 version: 3
 initialized_at: {{SETUP_DATE}}
 entrypoint: CLAUDE.md
-always_load_paths:
-  - doc/common/CLAUDE.md
-registered_roots:
-  - common
-runtime:
-  verify_script: scripts/harness/verify.sh
-  smoke_script: scripts/harness/smoke.sh
-  reset_script: scripts/harness/reset-db.sh
-  healthchecks: []
-constraints:
-  architecture_doc: .claude/harness/constraints/architecture.md
-  architecture_check: .claude/harness/constraints/check-architecture.sh
-workflow:
-  contract_required: true
-  qa_required_for_repo_mutations: true
-  persistence_required: true
-  docs_sync_required: true
-  document_critic: critic-document
-  constraints_enforced: true

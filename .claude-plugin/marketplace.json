@@ -1,14 +1,14 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "harness",
-  "description": "Repo-local universal loop runtime with lane-based routing, independent evaluation, and freshness-aware durable knowledge.",
+  "description": "Thin completion firewall — prevents false done claims by gating task closure behind verified critic verdicts.",
   "owner": {
     "name": "harness"
   },
   "plugins": [
     {
       "name": "harness",
-      "description": "Universal loop runtime: request → context → lane selection → execution → independent evaluation → memory sync → escalation. 6 agents, 3 skills, REQ/OBS/INF durable knowledge with freshness tracking.",
+      "description": "Completion firewall: plan critic PASS before implementation, runtime critic PASS before close, document critic when docs change. 6 agents, 3 skills.",
       "version": "2.0.0",
       "author": {
         "name": "harness"
@@ -16,12 +16,9 @@
       "source": "./plugin",
       "category": "productivity",
       "tags": [
-        "runtime-loop",
-        "lane-routing",
+        "completion-gate",
         "critic-evaluation",
-        "durable-knowledge",
-        "freshness-aware-memory",
-        "executable-qa"
+        "task-verification"
       ]
     }
   ],

@@ -19,20 +19,7 @@
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/task-created-gate.sh",
             "timeout": 10,
-            "statusMessage": "Checking task artifacts"
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "matcher": "developer|writer",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/subagent-stop-gate.sh",
-            "timeout": 10,
-            "statusMessage": "Checking subagent artifacts"
+            "statusMessage": "Initializing task artifacts"
           }
         ]
       }
@@ -45,42 +32,6 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/task-completed-gate.sh",
             "timeout": 10,
             "statusMessage": "Verifying task completion"
-          }
-        ]
-      }
-    ],
-    "PostCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/post-compact-sync.sh",
-            "timeout": 10,
-            "statusMessage": "Syncing maintenance queue"
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/session-end-sync.sh",
-            "timeout": 10,
-            "statusMessage": "Saving unresolved state"
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "agent",
-            "timeout": 20,
-            "statusMessage": "Verifying harness state",
-            "prompt": "You are a stop verifier for the harness plugin.\n\nRules:\n1. If .claude/harness/manifest.yaml does not exist, return {\"ok\": true}.\n2. Check if substantial work was done (files modified in this session).\n3. If substantial work was done:\n   a. Check TASK_STATE.yaml in the latest task folder. If status is blocked_env, return {\"ok\": false, \"reason\": \"Task is blocked_env — cannot close.\"}.\n   b. For repo-mutating tasks, check that CRITIC__runtime.md and CRITIC__document.md exist with PASS verdicts.\n   c. Check that DOC_SYNC.md exists for repo-mutating work with durable updates.\n   d. Were any new REQ/OBS/INF notes created or updated? Verify root CLAUDE.md indexes are current.\n   e. If a required critic verdict is missing, return {\"ok\": false, \"reason\": \"Missing critic verdict for completed work.\"}.\n4. If all checks pass, return {\"ok\": true}.\n\nReturn JSON only. Do not write files."
           }
         ]
       }

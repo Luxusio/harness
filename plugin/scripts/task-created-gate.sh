@@ -1,50 +1,40 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Ensure task folder, REQUEST.md, TASK_STATE.yaml, and HANDOFF.md exist when a task is created.
-# Uses explicit HARNESS_TASK_ID when available; falls back to latest task folder.
+# Init-only: ensure minimal task artifacts exist. Never blocks.
+# Only uses explicit HARNESS_TASK_ID — no fallback to latest task.
 TASK_DIR=".claude/harness/tasks"
 
-resolve_task_dir() {
-  if [[ -n "${HARNESS_TASK_ID:-}" && -d "${TASK_DIR}/${HARNESS_TASK_ID}" ]]; then
-    echo "${TASK_DIR}/${HARNESS_TASK_ID}"
-  else
-    ls -dt "${TASK_DIR}"/TASK__* 2>/dev/null | head -1
-  fi
-}
-
-TARGET=$(resolve_task_dir)
-
-if [[ -z "$TARGET" ]]; then
-  echo "WARNING: No task folder found in ${TASK_DIR}/"
+if [[ -z "${HARNESS_TASK_ID:-}" ]]; then
   exit 0
 fi
 
-TASK_ID=$(basename "$TARGET")
+TARGET="${TASK_DIR}/${HARNESS_TASK_ID}"
 
-if [[ ! -f "${TARGET}/REQUEST.md" ]]; then
-  echo "WARNING: ${TARGET}/REQUEST.md missing — task should have a request record."
+if [[ ! -d "$TARGET" ]]; then
+  exit 0
 fi
 
+TASK_ID="$HARNESS_TASK_ID"
+
+# Initialize TASK_STATE.yaml if missing (minimal schema)
 if [[ ! -f "${TARGET}/TASK_STATE.yaml" ]]; then
   cat > "${TARGET}/TASK_STATE.yaml" <<EOF
 task_id: ${TASK_ID}
-run_id: $(date +%s)
 lane: pending
-lane_rationale: pending
 status: created
 mutates_repo: true
-qa_required: true
-qa_mode: browser-first
-plan_verdict: pending
-runtime_verdict: pending
-document_verdict: pending
-needs_env: []
 updated: $(date +%Y-%m-%d)
 EOF
-  echo "INFO: Initialized ${TARGET}/TASK_STATE.yaml with task_id=${TASK_ID}."
+  echo "INFO: Initialized ${TARGET}/TASK_STATE.yaml"
 fi
 
+# Create HANDOFF.md stub if missing
 if [[ ! -f "${TARGET}/HANDOFF.md" ]]; then
-  echo "WARNING: ${TARGET}/HANDOFF.md missing — task should have a handoff document."
+  cat > "${TARGET}/HANDOFF.md" <<EOF
+# Handoff: ${TASK_ID}
+status: pending
+updated: $(date +%Y-%m-%d)
+EOF
+  echo "INFO: Created ${TARGET}/HANDOFF.md stub"
 fi
