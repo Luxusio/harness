@@ -144,6 +144,37 @@ When escalating: update `execution_mode` in `TASK_STATE.yaml`, re-plan with the 
 
 ---
 
+---
+
+## Review Overlay Integration
+
+Review overlays are orthogonal to execution modes — any mode (light, standard, sprinted) can have overlays active. Overlays add domain-specific review criteria on top of mode-based rubrics.
+
+### How overlays work
+
+1. During planning (step 3.5), the harness evaluates prompt keywords and predicted file paths
+2. Matching overlays are recorded in `TASK_STATE.yaml` as `review_overlays: [security, performance, ...]`
+3. Critics read the overlay list and apply additional checks when present
+4. If no overlays match, `review_overlays: []` — critics operate with standard behavior
+
+### Available overlays
+
+| Overlay | Trigger signals | Additional critic checks |
+|---------|----------------|------------------------|
+| `security` | auth/login/token/injection keywords, auth/api/middleware paths | Threat surface, permission boundary, secret handling, authz evidence |
+| `performance` | performance/latency/benchmark keywords, hot path/DB/cache paths | Performance contract in plan, numeric before/after evidence |
+| `frontend-refactor` | component/ui/hook/state keywords, app/components/pages paths | State boundary, dependency direction, testability, UI interaction evidence |
+
+### Overlay + mode combinations
+
+| Mode | Empty overlays | With overlays |
+|------|---------------|---------------|
+| light | Simplified rubric, minimal artifacts | Simplified rubric + overlay-specific checks |
+| standard | Full rubric, all artifacts | Full rubric + overlay-specific checks |
+| sprinted | Enhanced rubric + sprint contract | Enhanced rubric + sprint contract + overlay-specific checks |
+
+Overlays never change the execution mode itself — they only add review depth within the selected mode.
+
 ## TASK_STATE.yaml Storage
 
 `execution_mode` is stored as a top-level field immediately after `lane`:

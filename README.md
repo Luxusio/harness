@@ -88,6 +88,28 @@ The `FileChanged` hook marks notes `suspect` when their `invalidated_by_paths` a
 
 See `plugin/docs/note-freshness.md` for the full freshness lifecycle specification.
 
+## Hidden review overlays
+
+The harness conditionally activates domain-specific review overlays based on task signals — prompt keywords, predicted file paths, and lane classification. Three overlays are available: **security**, **performance**, and **frontend-refactor**. When active, critics apply additional checks specific to that domain. No new commands or workflows are needed — overlays are selected automatically during planning and stored in `TASK_STATE.yaml`.
+
+## Performance evidence
+
+Performance tasks (those with `performance_task: true` or a `performance` overlay) require numeric before/after evidence for runtime critic PASS. Qualitative claims alone ("it's faster") are not sufficient. The plan must include a performance contract with baseline metrics, target metrics, and a reproducible benchmark command. The runtime critic requires a Performance Comparison section in the evidence bundle.
+
+## Memory retrieval
+
+The prompt memory system uses freshness-weighted relevance scoring when selecting notes for context injection. Notes marked `current` receive full weight, `suspect` notes are included with a caution label, `stale` notes are used only as a last resort with a re-verification flag, and `superseded` notes are excluded entirely. The selection budget targets the top 2 relevant notes, 1 active task, and 1 recent verdict within a 600-character context limit.
+
+## Design decisions
+
+The following were evaluated and intentionally **not** included in this version:
+
+- **Full multi-agent DAG**: Visible orchestration adds complexity without proportional benefit for the current single-loop model.
+- **SendMessage-based agent communication**: File-based artifact contracts are preferred for reproducibility and debuggability.
+- **Full knowledge-base-builder governance**: Only the relevance selection quality improvement was needed, not the full taxonomy/RACI framework.
+- **ASMR ensemble / decision forest**: Experimental concept with insufficient certainty for production use.
+- **Large domain catalog**: Would bloat setup output and maintenance surface beyond the "setup + plain language" philosophy.
+
 ## Precise invalidation
 
 When files change after a critic PASS, verdict invalidation is path-scoped:

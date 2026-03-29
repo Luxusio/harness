@@ -96,6 +96,55 @@ All standard-mode requirements apply, plus:
 
 ---
 
+## Performance task validation
+
+When `TASK_STATE.yaml` has `performance_task: true` or `review_overlays` contains `performance`:
+
+A performance-related plan MUST include a `## Performance contract` section. FAIL if:
+- Performance contract section is missing entirely
+- Baseline metrics are empty, vague, or non-numeric ("it's slow" = FAIL)
+- Target metrics are missing or non-numeric
+- Benchmark command is missing or not reproducible
+- Guardrail metrics are not specified
+
+This check applies regardless of execution mode (light, standard, or sprinted). Non-performance tasks skip this section entirely.
+
+---
+
+## Overlay-aware review
+
+Read `review_overlays` from TASK_STATE.yaml. If the list is empty, skip this section entirely — standard behavior applies.
+
+When overlays are present, apply additional plan requirements:
+
+### Security overlay active
+
+PLAN.md must address:
+- **Threat surface**: Which attack vectors are relevant to this change
+- **Permission boundary**: How authorization is checked or modified
+- **Secret handling**: How secrets, tokens, or credentials are managed (storage, transit, logging)
+
+FAIL if security overlay is active and none of these are addressed in the plan.
+
+### Performance overlay active
+
+Performance contract must be present (see Performance task validation above). No additional plan requirements beyond the contract.
+
+### Frontend-refactor overlay active
+
+PLAN.md must address:
+- **State boundary**: Which components own state, where state lives
+- **Dependency direction**: Import direction between modules, coupling assessment
+- **Testability strategy**: How the refactored components will be tested
+
+FAIL if frontend-refactor overlay is active and none of these are addressed in the plan.
+
+### Multiple overlays
+
+When multiple overlays are active, all applicable requirements combine. Address each overlay's requirements.
+
+---
+
 ## Output contract
 
 Write `CRITIC__plan.md` with exactly this structure:
@@ -115,6 +164,7 @@ qa_mode: <browser-first | tests | smoke | cli-only | unset>
 sprint_contract: <defined | missing | n/a>
 risk_matrix: <defined | missing | n/a>
 rollback_steps: <specific | vague | missing | n/a>
+performance_contract: <defined | missing | n/a>
 issues: <list of specific problems to fix, or "none">
 notes: <optional free text>
 ```

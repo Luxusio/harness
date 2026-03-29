@@ -76,6 +76,12 @@ When `execution_mode: sprinted` is set in `TASK_STATE.yaml`, also verify:
 
 3. **Rollback documentation present**: If PLAN.md includes a `## Rollback steps` section with destructive/irreversible operations (db migrations, file deletions, dependency major upgrades), confirm that DOC_SYNC.md or a note records the rollback approach. Missing rollback documentation for destructive sprinted changes is a FAIL.
 
+4. **Structural change rationale** (when `review_overlays` is non-empty OR `execution_mode: sprinted`): If the task made structural changes (new directories, schema changes, dependency additions, new overlay-triggering files), confirm that at least one note or DOC_SYNC.md entry captures the design reasoning. Structural changes without captured rationale are flagged as FAIL.
+
+5. **Destructive rollback documentation** (when `review_overlays` is non-empty OR `execution_mode: sprinted`): If PLAN.md includes destructive or irreversible operations, confirm DOC_SYNC.md or a note documents the rollback approach. Missing rollback documentation for destructive changes is FAIL.
+
+6. **Security/performance doc drift** (when `review_overlays` contains `security` or `performance`): If the change is security-critical or performance-critical and DOC_SYNC.md claims "none" across all sections, flag as potential documentation drift — require explicit justification that no docs need updating.
+
 These additional checks apply only when `execution_mode: sprinted`. For `standard` and `light` modes, existing behavior is unchanged.
 
 ## Rules

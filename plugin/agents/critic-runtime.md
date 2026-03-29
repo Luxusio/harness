@@ -143,3 +143,73 @@ BLOCKED_ENV keeps the task in open status — it does not close.
 - Evidence is natural language summaries of command output — no metadata schemas needed.
 - A FAIL verdict must list specific unmet acceptance criteria.
 - For browser-first projects: MUST attempt browser verification before falling back to CLI.
+
+---
+
+## Performance task evidence
+
+When `TASK_STATE.yaml` has `performance_task: true` or `review_overlays` contains `performance`:
+
+The evidence bundle MUST include a `### Performance Comparison` section:
+
+```
+### Performance Comparison
+- baseline: <before measurements — numeric>
+- after: <after measurements — numeric>
+- delta: <improvement or regression — numeric>
+- workload parity: same | different (if different, explain why comparison is valid)
+- guardrail status: pass | fail
+```
+
+### PASS rules for performance tasks
+
+All of the following must hold:
+- Before and after numeric measurements are present
+- Same benchmark command or demonstrably equivalent workload was used
+- At least one core target metric shows improvement
+- No guardrail metric has a significant unexplained regression
+- No qualitative-only claims without numbers ("it feels faster" = FAIL)
+
+### FAIL rules for performance tasks
+
+Any of the following triggers FAIL:
+- Claims improvement with no numeric evidence
+- No baseline measurement recorded
+- Workload changed between before/after without explanation
+- Target metric worsened without explanation
+- Benchmark command is not reproducible
+
+Non-performance tasks skip this section entirely — existing evidence bundle rules apply.
+
+---
+
+## Overlay-aware evidence
+
+Read `review_overlays` from TASK_STATE.yaml. If the list is empty, skip this section — standard evidence rules apply.
+
+### Security overlay active
+
+Evidence bundle must demonstrate:
+- **Authorization tested**: At least one authz check was exercised (correct access + denied access)
+- **Error leakage checked**: Error responses do not expose internal details (stack traces, DB schemas, internal paths)
+- **Sensitive logging checked**: Logs do not contain secrets, tokens, or PII
+- **Request/response validation**: Input validation is exercised with edge cases
+
+FAIL if security overlay is active and none of these evidence items are present.
+
+### Performance overlay active
+
+Numeric Performance Comparison must be present (see Performance task evidence above). No additional evidence requirements.
+
+### Frontend-refactor overlay active
+
+Evidence bundle must demonstrate:
+- **Core UI interaction**: The primary user flow was exercised (browser or snapshot)
+- **Loading/error states**: At least loading or error state was observed
+- **Accessibility signal**: Keyboard navigation or semantic structure was checked
+
+FAIL if frontend-refactor overlay is active and no UI interaction evidence is present.
+
+### No overlays
+
+When `review_overlays` is empty, this entire section is skipped. Standard evidence rules apply unchanged.

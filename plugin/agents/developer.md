@@ -59,6 +59,15 @@ browser_context:
   expected_dom_signal: <element, text, or state that confirms success>
 ```
 
+For performance tasks (`performance_task: true` in TASK_STATE.yaml), HANDOFF.md must also include:
+```
+performance_evidence:
+  benchmark_command: <exact command used>
+  baseline_observed: <before metrics — numeric>
+  after_observed: <after metrics — numeric>
+  caveats: <environmental noise, cold start effects, or "none">
+```
+
 ## What you do NOT do
 
 - Do not evaluate your own code

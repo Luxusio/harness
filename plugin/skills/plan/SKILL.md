@@ -36,6 +36,29 @@ Before creating TASK_STATE.yaml, determine execution mode using these signals:
 
 Tie-break: higher mode wins when signals conflict.
 
+### 3.5 Select review overlays
+
+After mode selection, conservatively select review overlays based on prompt signals and predicted file paths. Overlays add domain-specific review criteria without changing the workflow.
+
+**Selection rules (apply only when signals are clear — when in doubt, do not select):**
+
+**Security overlay** — select when:
+- Prompt contains: auth, login, session, token, permission, role, cors, csrf, secret, cookie, middleware, sql, injection, header, password, encrypt
+- Predicted paths touch: auth/, api/auth, middleware/, security/, session/
+
+**Performance overlay** — select when:
+- Prompt contains: performance, latency, slow, benchmark, query, cache, memory, cpu, throughput, p95, p99, optimize, bottleneck
+- Predicted paths touch: hot path code, DB query files, caching layer
+
+**Frontend-refactor overlay** — select when:
+- Prompt contains: component, ui, layout, hook, state, a11y, responsive, refactor (with frontend context), architecture (with frontend context)
+- Predicted paths touch: app/, pages/, components/, src/ui/, src/components/, hooks/, stores/
+- Lane is `refactor` with frontend files
+
+Record selected overlays in TASK_STATE.yaml `review_overlays` field. Set `performance_task: true` when performance overlay is selected.
+
+If no signals match, leave `review_overlays: []` — this is the common case for normal tasks.
+
 ### 4. Create TASK_STATE.yaml
 
 Create `.claude/harness/tasks/TASK__$ARGUMENTS/TASK_STATE.yaml`:
@@ -57,6 +80,9 @@ plan_verdict: pending
 runtime_verdict: pending
 document_verdict: pending
 blockers: []
+review_overlays: []
+risk_tags: []
+performance_task: false
 updated: <ISO 8601>
 ```
 
@@ -81,6 +107,8 @@ Create `.claude/harness/tasks/TASK__$ARGUMENTS/PLAN.md` using the format matchin
 #### Mode A (light) — compact format
 
 Required sections only: Scope in, Acceptance criteria, Verification contract, Required doc sync. Skip risk matrix and rollback (unless genuinely risky).
+
+Performance contract is not required for light mode, but include if the change is performance-sensitive.
 
 ```markdown
 # Plan: <task title>
@@ -153,6 +181,19 @@ mutates_repo: <true|false>
 <known blockers before implementation, or "none">
 ```
 
+#### Conditional: Performance contract (when `performance_task: true` or `performance` overlay selected)
+
+When this task involves performance optimization, add this section to PLAN.md:
+
+## Performance contract
+- baseline metrics: <current measurements — must be numeric>
+- target metrics: <goals — must be numeric>
+- workload: <dataset size / user count / request rate / scenario>
+- benchmark command: <exact reproducible command>
+- warmup policy: <warmup runs before measurement, or "none">
+- guardrail metrics: <metrics that must not regress — must be numeric>
+- unacceptable regressions: <explicit fail conditions>
+
 #### Mode C (sprinted) — enhanced format
 
 All standard sections plus sprint contract, detailed risk matrix, explicit rollback steps, and dependency graph.
@@ -218,6 +259,19 @@ mutates_repo: <true|false>
 ## Open blockers
 <known blockers before implementation, or "none">
 ```
+
+#### Conditional: Performance contract (when `performance_task: true` or `performance` overlay selected)
+
+When this task involves performance optimization, add this section to PLAN.md:
+
+## Performance contract
+- baseline metrics: <current measurements — must be numeric>
+- target metrics: <goals — must be numeric>
+- workload: <dataset size / user count / request rate / scenario>
+- benchmark command: <exact reproducible command>
+- warmup policy: <warmup runs before measurement, or "none">
+- guardrail metrics: <metrics that must not regress — must be numeric>
+- unacceptable regressions: <explicit fail conditions>
 
 If PLAN.md alone is genuinely insufficient (10+ files, cross-domain, high ambiguity), add ONE supporting document — SPEC.md, DESIGN.md, or TASKS.md. Do not create a hierarchy by default.
 

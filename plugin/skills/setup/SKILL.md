@@ -95,6 +95,10 @@ CLAUDE.md                        # root entrypoint (if not exists)
   plan.md                        # plan critic playbook
   runtime.md                     # runtime critic playbook
   document.md                    # document critic playbook
+.claude/harness/review-overlays/
+  security.md                  # security review overlay
+  performance.md               # performance review overlay
+  frontend-refactor.md         # frontend refactor review overlay
 .claude/harness/tasks/           # task folder convention
 doc/common/
   CLAUDE.md                      # common root index
@@ -105,6 +109,7 @@ doc/common/
 - `.claude/settings.json`
 - `.claude/harness/manifest.yaml`
 - `.claude/harness/critics/{plan,runtime,document}.md`
+- `.claude/harness/review-overlays/{security,performance,frontend-refactor}.md`
 - `.claude/harness/tasks/`
 - `doc/common/CLAUDE.md`
 - `doc/common/REQ__project__primary-goals.md`

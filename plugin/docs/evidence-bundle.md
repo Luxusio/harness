@@ -158,6 +158,36 @@ The evidence bundle should be specific enough that a fixer can reproduce the fai
 
 ---
 
+## Performance Comparison (conditional)
+
+When the task is a performance task (`performance_task: true` or `performance` overlay selected), the evidence bundle MUST include an additional section:
+
+```markdown
+### Performance Comparison
+- baseline: <before measurements — numeric, with units>
+- after: <after measurements — numeric, with units>
+- delta: <change — numeric, with percentage or absolute>
+- workload parity: same | different
+- guardrail status: pass | fail
+```
+
+**Required for:** Any task with `performance_task: true` or `review_overlays` containing `performance`.
+
+**Not required for:** Normal feature, bugfix, docs, or refactor tasks without performance signals.
+
+### Performance Comparison verdict rules
+
+| Condition | Verdict |
+|-----------|---------|
+| Numeric before/after present, target improved, guardrails pass | PASS |
+| Qualitative claims only ("faster", "improved") without numbers | FAIL |
+| No baseline recorded | FAIL |
+| Workload changed without explanation | FAIL |
+| Target metric regressed unexplained | FAIL |
+| Benchmark not reproducible | FAIL |
+
+---
+
 ## Complete Example: PASS verdict
 
 ```markdown
