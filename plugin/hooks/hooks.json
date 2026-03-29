@@ -119,6 +119,18 @@
           }
         ]
       }
+    ],
+    "TeammateIdle": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/teammate_idle_gate.py",
+            "timeout": 5,
+            "statusMessage": "Checking teammate artifacts"
+          }
+        ]
+      }
     ]
   }
 }

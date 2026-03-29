@@ -7,10 +7,12 @@ The plugin orchestrates plan-implement-verify loops, enforces critic verdicts at
 ## The loop
 
 ```
-receive → classify (answer | mutate-repo) → [mode selection] → plan contract → critic-plan PASS → implement → self-check breadcrumbs → runtime QA (browser-first when supported) → writer / DOC_SYNC → critic-document (when doc surface changed) → close
+receive → classify (answer | mutate-repo) → [execution mode selection] → [orchestration mode selection] → plan contract → critic-plan PASS → implement → self-check breadcrumbs → runtime QA (browser-first when supported) → writer / DOC_SYNC → critic-document (when doc surface changed) → close
 ```
 
 Mode selection occurs after lane classification and before plan creation. The selected mode determines plan format, critic rubric, and artifact requirements.
+
+Orchestration mode (solo | subagents | team) is selected independently after execution mode. It determines who performs the work — a single agent, helper subagents, or a parallel team with file-disjoint ownership.
 
 ## Hook gates
 
@@ -24,6 +26,7 @@ Mode selection occurs after lane classification and before plan creation. The se
 | `FileChanged` | Precise invalidation: runtime_verdict for runtime paths, document_verdict for doc paths; marks affected notes suspect |
 | `PostCompact` | Re-inject open task summary + maintain-lite entropy indicators |
 | `SessionEnd` | Record final session state + maintain-lite entropy summary |
+| `TeammateIdle` | Advisory: check team worker produced minimum deliverables |
 
 All hook scripts parse stdin JSON and use exit 2 for blocking.
 
@@ -107,6 +110,30 @@ Mode may upgrade mid-task but **never downgrade**. Escalate when:
 - Additional roots discovered during implementation
 - Runtime FAIL reveals systemic issues
 - Destructive flag discovered post-plan
+
+## Orchestration modes
+
+After execution mode selection, the harness selects an orchestration mode to determine who performs the work. These axes are orthogonal.
+
+| Mode | Who performs work | When selected |
+|------|-------------------|---------------|
+| **solo** | Single agent | Small tasks, same-file risk, sequential dependencies |
+| **subagents** | Helper agents for focused work | Research, search, verification — no cross-talk needed |
+| **team** | Parallel workers with file ownership | Cross-layer, file-disjoint, parallel exploration |
+
+### Team mode specifics
+
+- Team tasks require `TEAM_PLAN.md` (file ownership, provider, fallback) and `TEAM_SYNTHESIS.md` (worker results, conflicts, resolution)
+- Shared artifacts (`TASK_STATE.yaml`, `HANDOFF.md`, `DOC_SYNC.md`, `CRITIC__*.md`) are modified only by the lead, never by team workers
+- Provider selection: native → omc → fallback (automatic, no user prompt)
+- Fallback is a normal path — not a failure. Record in `fallback_used` and continue.
+
+### Team prohibition rules
+
+Team mode is **not selected** when:
+- Same file would need concurrent edits
+- Strong sequential dependency chain
+- Small bugfix where team overhead is disproportionate
 
 ## Precise file-changed invalidation
 
@@ -325,6 +352,14 @@ runtime_verdict: pending | PASS | FAIL | BLOCKED_ENV
 document_verdict: pending | PASS | FAIL | skipped
 blockers: []
 updated: <ISO 8601>
+orchestration_mode: solo | subagents | team
+team_provider: none | native | omc | fallback-subagents | fallback-solo
+team_status: n/a | planned | running | degraded | fallback | complete | skipped
+team_size: 0
+team_reason: ""
+team_plan_required: false
+team_synthesis_required: false
+fallback_used: none | subagents | solo
 ```
 
 ## Manifest schema reference
@@ -349,6 +384,13 @@ browser:
 constraints:
   - rule: <plain-language description>
     check: <shell command exits non-zero on violation>
+teams:
+  provider: auto | native | omc | none
+  native_ready: true | false
+  omc_ready: true | false
+  auto_activate: true | false
+  approval_mode: preapproved | ask
+  fallback: subagents | solo
 ```
 
 ## Core rules
@@ -370,6 +412,10 @@ constraints:
 - Critics load calibration packs (`plugin/calibration/`) matching execution_mode and active overlays before judging.
 - SESSION_HANDOFF.json is generated on failure triggers (FAIL repeat, criterion reopen, sprinted compaction, blocked_env recovery, scope growth) for structured recovery.
 - Architecture constraint checks are hints by default; promoted to required evidence when sprinted + structural risk_tags + check-architecture script exists.
+- Team tasks require TEAM_PLAN.md and TEAM_SYNTHESIS.md before close
+- Shared task artifacts are modified only by the team lead, not workers
+- Auto team promotion proceeds without user confirmation when manifest sets `approval_mode: preapproved`
+- Team fallback (native → omc → subagents → solo) is a normal operational path, not a failure
 
 ## Mode-specific artifact requirements
 
@@ -390,3 +436,5 @@ constraints:
 | Risk matrix | no | no | required |
 | Rollback steps | no | no | required |
 | Dependency graph | no | no | required |
+| TEAM_PLAN.md | n/a | n/a | n/a | required when orchestration_mode=team |
+| TEAM_SYNTHESIS.md | n/a | n/a | n/a | required when orchestration_mode=team |

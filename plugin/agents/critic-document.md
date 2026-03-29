@@ -112,6 +112,22 @@ When `execution_mode: sprinted` is set in `TASK_STATE.yaml`, also verify:
 
 These additional checks apply only when `execution_mode: sprinted`. For `standard` and `light` modes, existing behavior is unchanged.
 
+---
+
+## Team mode documentation checks
+
+Read `orchestration_mode` from TASK_STATE.yaml. If `solo` or `subagents`, skip this section.
+
+When `orchestration_mode` is `team`:
+
+1. **Team artifact documentation**: If the task introduced `TEAM_PLAN.md` or `TEAM_SYNTHESIS.md`, verify that DOC_SYNC.md mentions these artifacts. FAIL if team artifacts exist but DOC_SYNC.md does not reference them.
+
+2. **Team-produced change accuracy**: When multiple workers produced changes, verify that DOC_SYNC.md accurately reflects the combined set of documentation changes — not just one worker's subset.
+
+3. **Structural drift check**: If the task made structural changes to the harness (new orchestration modes, new artifact types, new hooks), verify that README.md, plugin/CLAUDE.md, and relevant docs mention the new structures. FAIL if structural additions are absent from documentation.
+
+These checks apply only when `orchestration_mode: team`. For `solo` and `subagents`, existing behavior is unchanged.
+
 ## Rules
 
 - Only evaluate docs that actually changed — don't audit the entire doc tree

@@ -1,21 +1,21 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "harness",
-  "description": "Execution harness for AI-assisted repository work — adaptive execution modes (light/standard/sprinted), evidence bundles, freshness-aware memory, maintain-lite, and browser-first QA.",
+  "description": "Execution harness for AI-assisted repository work — adaptive execution modes (light/standard/sprinted), orchestration modes (solo/subagents/team), evidence bundles, freshness-aware memory, maintain-lite, and browser-first QA.",
   "owner": {
     "name": "harness"
   },
   "plugins": [
     {
       "name": "harness",
-      "description": "Execution harness: adaptive modes (light/standard/sprinted), evidence bundles, freshness-aware notes, maintain-lite entropy detection. 6 agents, 3 skills.",
+      "description": "Execution harness: adaptive modes (light/standard/sprinted), orchestration modes (solo/subagents/team), team readiness, evidence bundles, freshness-aware notes, maintain-lite entropy detection. 6 agents, 3 skills.",
       "version": "2.0.0",
       "author": {
         "name": "harness"
       },
       "source": "./plugin",
       "category": "productivity",
-      "tags": ["execution-harness", "completion-gate", "critic-evaluation", "task-verification", "browser-qa", "doc-sync", "execution-modes", "evidence-bundles", "note-freshness", "maintain-lite"]
+      "tags": ["execution-harness", "completion-gate", "critic-evaluation", "task-verification", "browser-qa", "doc-sync", "execution-modes", "evidence-bundles", "note-freshness", "maintain-lite", "orchestration-modes", "team-readiness", "auto-orchestration"]
     }
   ],
   "version": "2.0.0"

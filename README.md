@@ -1,6 +1,6 @@
 # harness — execution harness for AI-assisted repository work
 
-Version 4.2.0
+Version 2.0.0
 
 ## What it does
 
@@ -50,11 +50,47 @@ Mode is stored as `execution_mode` in `TASK_STATE.yaml`. Mode may escalate mid-t
 
 See `plugin/docs/execution-modes.md` for the full signal matrix, artifact table, and auto-escalation rules.
 
+## Orchestration modes
+
+The harness selects an orchestration mode independently from the execution mode. These are orthogonal axes: execution mode controls ceremony/verification depth, orchestration mode controls who performs the work.
+
+| Mode | When | Artifacts |
+|------|------|-----------|
+| **solo** | Single-file, sequential dependencies, same-file conflict risk, small tasks | Standard artifacts only |
+| **subagents** | Helper parallelism (research, search, verify), no cross-talk needed | Standard artifacts only |
+| **team** | Cross-layer work (app+api+tests), file-disjoint ownership, parallel exploration | TEAM_PLAN.md + TEAM_SYNTHESIS.md |
+
+Orchestration mode is stored as `orchestration_mode` in `TASK_STATE.yaml`. The two axes combine freely — for example, `execution_mode: sprinted` + `orchestration_mode: team` is valid for a cross-root, multi-surface task with parallel workers.
+
+### Auto team promotion
+
+The harness automatically selects team mode when:
+- Task spans multiple layers with clearly disjoint file ownership
+- Two or more independent work streams can run in parallel
+- Research/review benefits from competing perspectives
+
+Team mode is **prohibited** when:
+- Same file would need concurrent edits by multiple workers
+- Work has strong sequential dependencies
+- Task is a small bugfix that team overhead would dwarf
+
+### Provider fallback
+
+When team mode is selected, the harness probes for available providers:
+
+1. **Native** Claude Code teams (if `native_ready: true` in manifest)
+2. **OMC** teams (if `omc_ready: true` in manifest)
+3. **Fallback** to subagents or solo (no user prompt — automatic)
+
+The harness never asks the user for team permission when `approval_mode: preapproved`.
+
+See `plugin/docs/orchestration-modes.md` for the full selection algorithm and provider policy.
+
 ## Agents
 
 | Agent | Role |
 |-------|------|
-| `harness` | Orchestrating harness — classifies requests, selects execution mode, drives the loop, gates completion |
+| `harness` | Orchestrating harness — classifies requests, selects execution and orchestration modes, drives the loop, gates completion |
 | `developer` | Code generator — implements changes, populates touched_paths/verification_targets, updates HANDOFF.md |
 | `writer` | Doc generator — creates/updates notes with freshness metadata, writes DOC_SYNC.md |
 | `critic-plan` | Evaluator — validates plan contract using mode-matched rubric |
@@ -281,6 +317,8 @@ plugin/
     post_compact_sync.py         # post-compaction context + maintain-lite + handoff escalation
     handoff_escalation.py        # SESSION_HANDOFF.json trigger detection + generation
     stop_gate.py                 # stop gate (blocks if open tasks)
+    team_readiness.py              # team provider detection
+    teammate_idle_gate.py          # team worker deliverable check
   calibration/                   # critic calibration packs (few-shot examples)
     critic-plan/                 # light.md, standard.md, sprinted.md
     critic-runtime/              # default.md, performance.md, browser-first.md
@@ -293,6 +331,7 @@ plugin/
     retrieval-selection.md       # multi-signal retrieval algorithm reference
     handoff-escalation.md        # SESSION_HANDOFF.json triggers and schema
     architecture-promotion.md    # conditional architecture check promotion
+    orchestration-modes.md         # orchestration mode reference
 ```
 
 ## Setup outputs
@@ -335,6 +374,16 @@ browser:
 constraints:
   - rule: <plain-language rule>
     check: <shell command, exits non-zero on violation>
+teams:
+  provider: auto | native | omc | none
+  native_ready: true | false
+  omc_ready: true | false
+  auto_activate: true | false
+  approval_mode: preapproved | ask
+  fallback: subagents | solo
+  safe_only:
+    require_disjoint_files: true | false
+    forbid_same_file_edits: true | false
 ```
 
 ## Task state schema
@@ -360,6 +409,14 @@ runtime_verdict: pending | PASS | FAIL | BLOCKED_ENV
 document_verdict: pending | PASS | FAIL | skipped
 blockers: []
 updated: <ISO 8601>
+orchestration_mode: solo | subagents | team
+team_provider: none | native | omc | fallback-subagents | fallback-solo
+team_status: n/a | planned | running | degraded | fallback | complete | skipped
+team_size: 0
+team_reason: ""
+team_plan_required: false
+team_synthesis_required: false
+fallback_used: none | subagents | solo
 ```
 
 ## Hook behavior
@@ -374,6 +431,7 @@ updated: <ISO 8601>
 | `FileChanged` | Precise invalidation: runtime_verdict for runtime paths, document_verdict for doc paths; marks affected notes suspect |
 | `PostCompact` | Re-inject open task summary + maintain-lite entropy indicators |
 | `SessionEnd` | Record final session state + maintain-lite entropy summary |
+| `TeammateIdle` | Advisory check for team worker deliverables |
 
 ## Development
 

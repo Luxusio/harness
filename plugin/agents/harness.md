@@ -115,6 +115,70 @@ Execution mode may upgrade mid-task (`light → standard`, `standard → sprinte
 
 Store `execution_mode: light | standard | sprinted` in `TASK_STATE.yaml` immediately after mode selection.
 
+## Orchestration mode selection
+
+Run AFTER `execution_mode` selection, BEFORE plan creation. Store as `orchestration_mode` in `TASK_STATE.yaml` immediately.
+
+### Mode definitions
+
+**solo** — all work done by the lead agent alone, sequentially.
+
+**subagents** — lead spawns helper sub-agents for parallel research, search, or verification tasks; no cross-worker file ownership needed.
+
+**team** — lead spawns multiple worker agents with disjoint file ownership; work proceeds in parallel across independent roots or layers.
+
+### Selection rules
+
+**Select solo when:**
+- Single-file or small-diff task
+- Steps have sequential dependencies (B must follow A)
+- Same-file conflict risk (multiple changes to one file)
+- Lane is `docs-only`, `answer`, or `investigate`
+
+**Select subagents when:**
+- Helper tasks needed (research, search, verify) with no cross-talk
+- No team readiness confirmed but some parallelism is useful
+- Workers do not need to write files concurrently
+
+**Select team when:**
+- Cross-layer work (e.g., app + api + tests) with clearly disjoint file ownership
+- 2+ independent roots estimated from request + manifest
+- Parallel exploration or review across non-overlapping areas
+- Team provider is available and readiness probe passes
+
+### Prohibition rules for team mode
+
+Do NOT select team when:
+- Multiple workers would edit the same file concurrently
+- Steps form a sequential dependency chain
+- Task is a small bugfix (solo or subagents is sufficient)
+
+### Escalation and downgrade paths
+
+- solo → subagents: OK (add helpers mid-task if parallelism becomes useful)
+- subagents → team: OK (escalate if scope grows to cross-layer work)
+- team → fallback-subagents: OK (if team provider unavailable or readiness probe fails)
+- team → fallback-solo: OK (last resort if subagents also unavailable)
+
+Record any fallback in `fallback_used` in `TASK_STATE.yaml`.
+
+## Team execution contract
+
+When `orchestration_mode: team`:
+
+1. Read `manifest.teams.*` — select provider in priority order: `native` > `omc` > `fallback` (per `manifest.teams.provider`).
+2. When `auto_activate: true` and `approval_mode: preapproved` in manifest — no user confirmation required.
+3. If native provider blocked → try omc → if both fail → downgrade to `subagents` or `solo` and record `fallback_used`.
+4. Write `TEAM_PLAN.md` BEFORE spawning any workers. Required fields: worker roster, owned writable paths per worker, shared read-only paths, forbidden writes, synthesis strategy.
+5. Write `TEAM_SYNTHESIS.md` BEFORE close. Required: merge summary, conflict resolutions, final artifact list.
+6. Shared artifacts (`TASK_STATE.yaml`, `HANDOFF.md`, `DOC_SYNC.md`, `CRITIC__*.md`) are modified ONLY by the lead.
+7. Worker spawn prompt MUST include:
+   - Role and responsibility
+   - Owned writable paths (exhaustive list)
+   - Shared read-only paths
+   - Forbidden writes (paths worker must not touch)
+   - "Report instead of guess when blocked"
+
 ### Review overlay context
 
 After mode selection, if `TASK_STATE.yaml` contains non-empty `review_overlays`:
@@ -233,6 +297,8 @@ Every mutate-repo task folder contains at minimum:
 | `CRITIC__document.md` | critic-document | When docs changed |
 | `QA__runtime.md` | critic-runtime | Real evidence record for multi-step QA |
 | `RESULT.md` | harness | Optional summary |
+| `TEAM_PLAN.md` | harness (lead) | orchestration_mode=team |
+| `TEAM_SYNTHESIS.md` | harness (lead) | orchestration_mode=team |
 
 ## TASK_STATE.yaml schema
 
@@ -253,6 +319,14 @@ plan_verdict: pending | PASS | FAIL
 runtime_verdict: pending | PASS | FAIL | BLOCKED_ENV
 document_verdict: pending | PASS | FAIL | skipped
 blockers: []
+orchestration_mode: solo | subagents | team
+team_provider: none | native | omc | fallback-subagents | fallback-solo
+team_status: n/a | planned | running | degraded | fallback | complete | skipped
+team_size: 0
+team_reason: ""
+team_plan_required: false
+team_synthesis_required: false
+fallback_used: none | subagents | solo
 updated: <ISO 8601>
 ```
 

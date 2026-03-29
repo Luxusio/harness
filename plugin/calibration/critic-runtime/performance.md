@@ -11,6 +11,15 @@
 
 ---
 
+## False PASS pattern B — overlay evidence missing, no workload parity
+
+**Scenario**: Task adds a database index to improve search query speed. `performance_task: true` set in TASK_STATE.yaml.
+**What was submitted**: Evidence bundle shows `npm test` exit 0. Comment in CRITIC__runtime.md states "the index was applied; query plans will be faster." No benchmark run before or after. No query timing recorded. No mention of workload parity.
+**Why this should FAIL**: Passing unit tests do not constitute performance evidence. "Query plans will be faster" is a prediction, not a measurement. A performance task requires a numeric baseline, a numeric after measurement using the same workload, and confirmation that the guardrail threshold is met. Code-reading or inference is explicitly insufficient.
+**Correct verdict**: FAIL — no numeric baseline; no numeric after measurement; performance claim is inferential only; workload parity cannot be assessed without benchmark runs
+
+---
+
 ## Correct judgment example
 
 **Scenario**: Cache layer added to `/api/products` endpoint; performance_task: true.
@@ -24,3 +33,7 @@
 - guardrail status: pass (p99 < 200ms threshold met; error rate 0.1% → 0.0%)
 ```
 **Verdict**: PASS — numeric baseline and after measurements present with units, same benchmark command used for both runs (workload parity demonstrated), target metric improved, guardrail threshold met, no unexplained regressions.
+
+### Team performance tasks
+
+When `orchestration_mode: team` and the task is a performance task, each worker's performance impact should be measurable. The team synthesis should aggregate per-worker metrics into a combined before/after comparison. Do not accept team-level "it's faster" claims without per-area numeric evidence that maps to worker boundaries.
