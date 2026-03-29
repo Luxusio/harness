@@ -1,5 +1,10 @@
 # CLAUDE.md
-updated: 2026-03-28
+tags: [root, harness, bootstrap]
+summary: 프로젝트 진입점. 운영 규칙과 doc registry 참조.
+always_load: [doc/CLAUDE.md]
+updated: 2026-03-30
+
+@doc/CLAUDE.md
 
 # Operating mode
 - Default agent is harness — an execution harness with verdict invalidation.
