@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-import sys, os, re
+import sys, os, json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (read_hook_input, json_field, json_array, yaml_field, yaml_array,
                   manifest_field, is_browser_first_project, is_doc_path,
                   extract_roots, TASK_DIR, MANIFEST, now_iso)
 
 # Stop hook — catches premature completion attempts.
-# BLOCKING: exit 2 prevents stop when tasks are still open.
-# stdin: JSON | exit 0: allow stop | exit 2: BLOCK stop
+# Uses Claude Code structured JSON API (same pattern as ralph-loop):
+#   {"decision": "block", "reason": "<actionable message>"}  → blocks stop, feeds reason back to agent
+#   {"decision": "allow"}                                     → allows stop, no conversation injection
+# exit 0 always — decision field controls blocking, not exit code.
+
+def allow():
+    print(json.dumps({"decision": "allow"}))
+    sys.exit(0)
 
 # No harness initialized — allow stop
 if not os.path.exists(".claude/harness/manifest.yaml"):
-    sys.exit(0)
+    allow()
 if not os.path.isdir(TASK_DIR):
-    sys.exit(0)
+    allow()
 
 open_tasks = []
 blocked_tasks = []
@@ -37,30 +43,46 @@ for entry in sorted(os.listdir(TASK_DIR)):
     elif status == "blocked_env":
         blocked_tasks.append(task_id)
     else:
-        open_tasks.append(f"{task_id} [status: {status or 'unknown'}]")
-        # Warn about pending DOC_SYNC for repo-mutating open tasks
+        open_tasks.append((task_id, status or "unknown"))
         mutates = yaml_field("mutates_repo", state_file) or ""
         if mutates in ("true", "unknown"):
             if not os.path.exists(os.path.join(task_path, "DOC_SYNC.md")):
                 pending_doc_sync.append(task_id)
 
 if open_tasks:
-    print("BLOCKED: Cannot stop — open tasks remain:")
-    for t in open_tasks:
-        print(f"  - {t}")
+    lines = [
+        "HARNESS STOP GATE: open tasks remain. Complete or close them before stopping.",
+        "",
+        "Open tasks:",
+    ]
+    for task_id, status in open_tasks:
+        lines.append(f"  - {task_id} [status: {status}]")
+        if task_id in pending_doc_sync:
+            lines.append(f"    ↳ also needs DOC_SYNC.md")
+
     if blocked_tasks:
-        print(f"Note: {len(blocked_tasks)} task(s) are blocked_env (need env fix):")
+        lines.append("")
+        lines.append(f"Blocked-env tasks (need env fix before they can close):")
         for t in blocked_tasks:
-            print(f"  - {t}")
-    if pending_doc_sync:
-        print(f"Note: {len(pending_doc_sync)} repo-mutating task(s) still need DOC_SYNC.md:")
-        for t in pending_doc_sync:
-            print(f"  - {t}")
-    sys.exit(2)
+            lines.append(f"  - {t}")
+
+    lines += [
+        "",
+        "Actions you can take:",
+        "  • Finish the task and close it (update TASK_STATE.yaml status: closed)",
+        "  • Mark abandoned tasks stale: set status: stale in TASK_STATE.yaml",
+        "  • Run /harness:maintain to auto-mark stale tasks",
+    ]
+
+    print(json.dumps({"decision": "block", "reason": "\n".join(lines)}))
+    sys.exit(0)  # exit 0 — decision field controls blocking
 
 if blocked_tasks:
-    print(f"WARNING: Stopping with {len(blocked_tasks)} blocked_env task(s):")
-    for t in blocked_tasks:
-        print(f"  - {t}")
+    msg = f"Note: {len(blocked_tasks)} task(s) in blocked_env state (env fix required):\n"
+    msg += "\n".join(f"  - {t}" for t in blocked_tasks)
+    print(json.dumps({"decision": "allow", "systemMessage": msg}))
+    sys.exit(0)
 
+# Clean — no open or blocked tasks
+print(json.dumps({"decision": "allow"}))
 sys.exit(0)

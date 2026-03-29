@@ -46,6 +46,65 @@ def detect_lane_from_prompt(prompt):
         return "docs-sync"
     return None
 
+def _get_active_task_dir():
+    """Return the directory of the most recently active (non-closed) task, or None."""
+    task_dir = ".claude/harness/tasks"
+    if not os.path.isdir(task_dir):
+        return None
+    import re
+    candidates = []
+    for entry in os.listdir(task_dir):
+        if not entry.startswith("TASK__"):
+            continue
+        tp = os.path.join(task_dir, entry)
+        state_file = os.path.join(tp, "TASK_STATE.yaml")
+        if not os.path.isfile(state_file):
+            continue
+        try:
+            with open(state_file) as f:
+                content = f.read()
+            # Skip closed/archived/stale
+            m = re.search(r"^status:\s*(\S+)", content, re.MULTILINE)
+            status = m.group(1) if m else ""
+            if status in ("closed", "archived", "stale"):
+                continue
+            # Read updated timestamp for recency
+            m_upd = re.search(r"^updated:\s*(\S+)", content, re.MULTILINE)
+            updated = m_upd.group(1) if m_upd else ""
+            candidates.append((updated, tp))
+        except (OSError, AttributeError):
+            continue
+    if not candidates:
+        return None
+    # Most recently updated task
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    return candidates[0][1]
+
+def _is_fix_round(task_dir):
+    """Heuristic: True if this looks like a fix round (runtime FAIL or open checks).
+
+    Used to decide whether to inject checks summary.
+    A fix round is indicated by:
+      - runtime_verdict: FAIL in TASK_STATE.yaml
+      - SESSION_HANDOFF.json present (implies prior failure)
+      - CHECKS.yaml has focus-status criteria
+    """
+    if not task_dir or not os.path.isdir(task_dir):
+        return False
+    import re
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    if os.path.isfile(state_file):
+        try:
+            with open(state_file) as f:
+                content = f.read()
+            if re.search(r"^runtime_verdict:\s*FAIL", content, re.MULTILINE):
+                return True
+        except OSError:
+            pass
+    if os.path.isfile(os.path.join(task_dir, "SESSION_HANDOFF.json")):
+        return True
+    return False
+
 def gather_context(prompt):
     """Gather relevant context based on the prompt."""
     context_parts = []
@@ -111,7 +170,21 @@ def gather_context(prompt):
     except Exception:
         pass
 
-    # 5. Relevant notes (top 2, freshness-aware, multi-root)
+    # 5. CHECKS focus summary for fix rounds (WS-2)
+    # Inject only when: there is an active task in a fix round, AND CHECKS.yaml has
+    # focus-status criteria. Does not inject on casual/first-round prompts.
+    # Budget: max 120 chars (SUMMARY_MAX_CHARS from checks_focus), counted within 600 total.
+    try:
+        active_task_dir = _get_active_task_dir()
+        if active_task_dir and _is_fix_round(active_task_dir):
+            from checks_focus import get_checks_summary_for_task
+            checks_summary = get_checks_summary_for_task(active_task_dir)
+            if checks_summary:
+                context_parts.append(checks_summary)
+    except Exception:
+        pass
+
+    # 6. Relevant notes (top 2, freshness-aware, multi-root)
     try:
         current_lane = detect_lane_from_prompt(prompt)
         query_context = {

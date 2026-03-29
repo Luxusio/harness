@@ -1,11 +1,11 @@
 ---
 name: maintain
-description: Doc and task cleanup tool — finds and fixes stale tasks, broken links, index drift, and obvious entropy.
+description: Doc and task cleanup tool — finds and fixes stale tasks, broken links, index drift, obvious entropy, and generates local calibration cases.
 argument-hint: [optional focus area]
 context: fork
 agent: Explore
 user-invocable: true
-allowed-tools: Read, Glob, Grep, Write, Edit
+allowed-tools: Read, Glob, Grep, Write, Edit, Bash
 ---
 
 Cleanup tool for harness docs and tasks.
@@ -39,6 +39,14 @@ Optional focus from user: `$ARGUMENTS`
 - Documentation that clearly contradicts current code (check key claims against reality)
 - **Flag only** — do not auto-fix content contradictions (needs writer + critic-document)
 
+### 5. Local calibration case generation
+- Run `python3 plugin/scripts/calibration_miner.py` (or with `--dry-run` first to preview)
+- This scans tasks for `reopen_count >= 2` or `runtime_verdict_fail_count >= 2`
+- Generates/updates case files in `plugin/calibration/local/critic-runtime/`
+- Each case is short: pattern title, trigger, why PASS was wrong, what to check next time
+- **Deduplication**: re-running updates existing files (same slug), does not create duplicates
+- **When to skip**: if no tasks qualify (session_end_sync.py reports `calibration_candidates: 0`), skip this step
+
 ## Procedure
 
 ### 1. Scan
@@ -51,8 +59,16 @@ Apply safe mechanical fixes immediately:
 - Fix broken supersede links
 - Mark abandoned tasks as `status: stale` with `updated: <now>`
 
-### 3. Report
+### 3. Generate calibration cases (if candidates exist)
+```bash
+python3 plugin/scripts/calibration_miner.py --dry-run   # preview
+python3 plugin/scripts/calibration_miner.py             # write cases
+```
+Cases are written to `plugin/calibration/local/critic-runtime/<slug>.md`.
+
+### 4. Report
 - **Fixed**: what was auto-repaired
+- **Calibration**: how many cases generated/updated
 - **Flagged**: issues that need human or writer attention
 - **Stats**: note count by type, stale count, task count by status
 
@@ -76,6 +92,7 @@ Maintain-lite runs automatically via the `session-end-sync.sh` hook. It performs
 | **Orphan notes** | Files in `doc/common/` that are not referenced in any CLAUDE.md index |
 | **Broken supersede chains** | Notes with `superseded_by:` pointing to a file that does not exist on disk |
 | **Dead artifacts** | `CRITIC__*.md` files in closed task folders (status: `closed`) |
+| **Calibration candidates** | Tasks with `reopen_count >= 2` or `runtime_verdict_fail_count >= 2` (count only, no writes) |
 
 ### What maintain-lite does NOT do
 
@@ -83,6 +100,7 @@ Maintain-lite runs automatically via the `session-end-sync.sh` hook. It performs
 - Never deletes files
 - Never modifies notes or indexes
 - Never marks tasks stale (that is the full `maintain` skill's job)
+- Never writes calibration case files (read-only count only)
 
 ### Entropy health score
 
@@ -99,6 +117,18 @@ Scoring:
 
 The score is informational only. It does not block the session or gate any task.
 
+### Calibration candidate report
+
+When calibration candidates are found, session_end_sync.py prints:
+
+```
+=== CALIBRATION ===
+calibration_candidates: 2
+hint: run /harness:maintain to generate local calibration cases
+```
+
+This is read-only — no files are written by maintain-lite.
+
 ### When to run full maintain
 
-Run `/harness:maintain` when entropy is MEDIUM or HIGH, or when a session-end summary reports multiple stale tasks or orphan notes.
+Run `/harness:maintain` when entropy is MEDIUM or HIGH, or when a session-end summary reports multiple stale tasks, orphan notes, or calibration candidates.

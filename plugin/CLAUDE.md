@@ -1,8 +1,8 @@
-# harness v4.2 — Execution Harness
+# harness v4.3 — Execution Harness
 
 You are running with harness, an execution harness for AI-assisted repository work.
 
-The plugin orchestrates plan-implement-verify loops, enforces critic verdicts at task closure, invalidates stale verdicts when files change after a PASS, prevents premature stop when tasks are open, and coordinates specialist agents through adaptive execution modes, browser-first QA, DOC_SYNC enforcement, and freshness-aware memory.
+The plugin orchestrates plan-implement-verify loops, enforces critic verdicts at task closure, invalidates stale verdicts when files change after a PASS, prevents premature stop when tasks are open, and coordinates specialist agents through adaptive execution modes, browser-first QA, DOC_SYNC enforcement, freshness-aware memory, suspect note auto-recovery at task completion, CHECKS-based delta verification for fix rounds, and local calibration mining from repeated failures.
 
 ## The loop
 
@@ -20,12 +20,12 @@ Orchestration mode (solo | subagents | team) is selected independently after exe
 |------|----------|
 | `SessionStart` | Load context, show open tasks |
 | `TaskCreated` | Initialize TASK_STATE.yaml, HANDOFF.md, REQUEST.md |
-| `TaskCompleted` | **BLOCK** (exit 2) unless all required verdicts PASS; auto-populates touched_paths/roots_touched/verification_targets from git diff if empty |
+| `TaskCompleted` | **BLOCK** (exit 2) unless all required verdicts PASS; auto-populates touched_paths/roots_touched/verification_targets from git diff if empty; runs note auto-reverify (non-blocking) for suspect notes whose `invalidated_by_paths` overlap `touched_paths` |
 | `SubagentStop` | Warn if expected artifacts missing |
 | `Stop` | **BLOCK** (exit 2) if open tasks remain |
-| `FileChanged` | Precise invalidation: runtime_verdict for runtime paths, document_verdict for doc paths; marks affected notes suspect |
+| `FileChanged` | Precise invalidation: runtime_verdict for runtime paths, document_verdict for doc paths; marks affected notes suspect using **structural path matching** (exact or directory-prefix, not substring) |
 | `PostCompact` | Re-inject open task summary + maintain-lite entropy indicators |
-| `SessionEnd` | Record final session state + maintain-lite entropy summary |
+| `SessionEnd` | Record final session state + maintain-lite entropy summary + calibration candidate count |
 | `TeammateIdle` | Advisory: check team worker produced minimum deliverables |
 
 All hook scripts parse stdin JSON and use exit 2 for blocking.
@@ -148,15 +148,66 @@ When files change after a critic PASS, invalidation is scoped by path type:
 
 Doc paths: `doc/*`, `docs/*`, `*.md`, `README*`, `CHANGELOG*`, `LICENSE*`, `.claude/harness/critics/*`, `DOC_SYNC.md`
 
-Note freshness: if a changed file matches a note's `invalidated_by_paths`, that note's freshness transitions `current → suspect`.
+Note freshness: if a changed file matches a note's `invalidated_by_paths`, that note's freshness transitions `current → suspect`. Path matching is **structural** (exact or directory-prefix), never raw substring — preventing false positives from path text appearing in note body content.
 
 ## Acceptance ledger (CHECKS.yaml)
 
 Plan creation also generates `CHECKS.yaml` with stable criterion IDs (`AC-001`, ...). Developer updates criteria to `implemented_candidate`; critics update per-criterion verdicts. `reopen_count` tracks regressions. Non-blocking in this version. See `plugin/docs/acceptance-ledger.md`.
 
+## Delta verification (fix rounds) — WS-2
+
+In fix rounds (prior runtime FAIL or `SESSION_HANDOFF.json` present), critic-runtime uses a targeted strategy instead of always sweeping all criteria.
+
+### Fix round detection
+
+A fix round is indicated by ANY of:
+- `runtime_verdict: FAIL` in TASK_STATE.yaml
+- `SESSION_HANDOFF.json` present in the task directory
+- CHECKS.yaml has criteria in `failed` or `implemented_candidate` status
+
+### Focus/guardrail sets
+
+| Set | Criteria included | Purpose |
+|-----|-------------------|---------|
+| **Focus** | `failed`, `implemented_candidate`, `blocked` | Verify first — most likely changed |
+| **Guardrail** | `passed` (previously passing) | Check lightly for regression |
+
+Computed by `plugin/scripts/checks_focus.py`. SESSION_HANDOFF.json data takes precedence over CHECKS.yaml when both are present.
+
+### Prompt memory injection (fix rounds only)
+
+During fix rounds, `prompt_memory.py` injects a short checks summary (max 120 chars):
+```
+Checks: focus AC-002, AC-005 | guardrails AC-001
+```
+Injected only when: active task has `runtime_verdict: FAIL` or SESSION_HANDOFF.json present, CHECKS.yaml has focus-status criteria, and prompt is not casual.
+
+### Full sweep revert conditions
+
+Delta strategy reverts to full sweep when ANY of:
+- `execution_mode: sprinted`
+- `roots_touched ≥ 2`
+- `risk_tags` contains `structural`, `migration`, `schema`, or `cross-root`
+- No CHECKS.yaml and no SESSION_HANDOFF.json
+- First QA round (no prior FAIL)
+
 ## Critic calibration
 
 Critics load mode-specific calibration packs (`plugin/calibration/`) before judging. critic-plan selects by `execution_mode`; critic-runtime adds performance/browser-first packs when relevant overlays are active; critic-document always loads default. Each pack has 1-2 false PASS examples as advisory context.
+
+### Local calibration cases
+
+critic-runtime also reads the **3 most recently modified** files from `plugin/calibration/local/critic-runtime/` when the directory exists. These are task-specific cases generated by `/harness:maintain` from repeated failures in this repo.
+
+## Local calibration mining (WS-3)
+
+When a task has `reopen_count ≥ 2` (any criterion in CHECKS.yaml) or `runtime_verdict_fail_count ≥ 2` (in TASK_STATE.yaml), it is a calibration candidate. The `calibration_miner.py` script generates a short case file in `plugin/calibration/local/critic-runtime/` describing:
+
+- Why the previous PASS was wrong
+- What the critic must check next time
+- Evidence refs (CHECKS.yaml, CRITIC__runtime.md)
+
+Session end reports candidate count (read-only). Actual case files are only written by `/harness:maintain` or explicit `calibration_miner.py` invocation.
 
 ## Freshness-aware memory
 
@@ -177,11 +228,25 @@ Notes across all `doc/*/` roots carry freshness metadata that drives context rel
                  file in invalidated_by_paths changes
     current ──────────────────────────────────────► suspect
        ▲                                                 │
-       │  critic-runtime PASS (related area)             │  > 3 task completions
-       │  OR writer re-verifies with new evidence        │  without re-verification
+       │  auto-reverify exits 0 at task completion       │  > 3 task completions
+       │  OR critic-runtime PASS (related area)          │  without re-verification
+       │  OR writer re-verifies with new evidence        │
        └────────────────────── stale ◄───────────────────┘
                only via explicit re-verification
 ```
+
+### Note auto-reverify at task completion (WS-1)
+
+When a task completes, `task_completed_gate.py` runs a bounded auto-reverify pass on suspect notes. This closes the `suspect → current` loop without manual writer intervention.
+
+**How it works:**
+1. Collect all notes with `freshness: suspect` AND a non-empty `verification_command`
+2. Filter to notes whose `invalidated_by_paths` overlap with the task's `touched_paths` or `verification_targets` (structural match only)
+3. Run each note's `verification_command` (max 5 notes, 10s timeout per command)
+4. Exit 0 → update `freshness: current`, refresh `verified_at`
+5. Non-zero exit → leave `freshness: suspect`, print failure reason
+
+**Guarantees:** Non-blocking (failures never prevent task completion); bounded (max 5 notes, 10s each); no-op when `doc/` is absent; notes without a `verification_command` stay suspect.
 
 ### Writer lifecycle rules
 
@@ -240,6 +305,7 @@ Maintain-lite runs read-only at session end (`session-end-sync.sh`) and post-com
 | Orphan notes | Files in any `doc/*/` root not in any CLAUDE.md index |
 | Broken supersede chains | `superseded_by:` pointing to non-existent file |
 | Dead artifacts | `CRITIC__*.md` in closed task folders |
+| Calibration candidates | Tasks with `reopen_count ≥ 2` or `runtime_verdict_fail_count ≥ 2` (count only) |
 
 ### Entropy health score
 
@@ -293,11 +359,14 @@ Run `/harness:maintain` when entropy is MEDIUM or HIGH.
 
 ### critic-runtime (evaluator)
 
+- Reads local calibration cases from `plugin/calibration/local/critic-runtime/` (max 3 most recent) before starting
 - Verifies through execution, not code reading
+- In **fix rounds**: uses focus-first + guardrail-second strategy from CHECKS.yaml / SESSION_HANDOFF.json
 - For browser-first projects: attempts browser verification before CLI fallback
 - Produces evidence bundle in CRITIC__runtime.md
 - BLOCKED_ENV keeps task open (`status: blocked_env`) — does not close task
 - Every PASS requires at least one concrete evidence item
+- Every FAIL increments `runtime_verdict_fail_count` in TASK_STATE.yaml
 
 ### critic-document (evaluator)
 
@@ -350,6 +419,7 @@ verification_targets: []
 plan_verdict: pending | PASS | FAIL
 runtime_verdict: pending | PASS | FAIL | BLOCKED_ENV
 document_verdict: pending | PASS | FAIL | skipped
+runtime_verdict_fail_count: 0
 blockers: []
 updated: <ISO 8601>
 orchestration_mode: solo | subagents | team
@@ -408,14 +478,18 @@ teams:
 - Performance tasks require a numeric benchmark contract in the plan and numeric before/after evidence for runtime PASS. Qualitative-only claims are not sufficient.
 - Prompt memory uses 5-signal scoring across all `doc/*/` roots: lexical (0.4) + freshness (0.25) + root match (0.15) + path overlap (0.1) + lane relevance (0.1). Selection budget: 2 notes, 1 task, 1 verdict, ≤600 chars.
 - TASK_STATE.yaml includes `review_overlays`, `risk_tags`, and `performance_task` fields for overlay-aware critic routing.
-- CHECKS.yaml tracks per-criterion acceptance status alongside PLAN.md. Non-blocking in v4.2.
+- CHECKS.yaml tracks per-criterion acceptance status alongside PLAN.md. Non-blocking in v4.3.
 - Critics load calibration packs (`plugin/calibration/`) matching execution_mode and active overlays before judging.
+- critic-runtime also reads local calibration cases from `plugin/calibration/local/critic-runtime/` (max 3 most recent) when directory exists.
 - SESSION_HANDOFF.json is generated on failure triggers (FAIL repeat, criterion reopen, sprinted compaction, blocked_env recovery, scope growth) for structured recovery.
 - Architecture constraint checks are hints by default; promoted to required evidence when sprinted + structural risk_tags + check-architecture script exists.
 - Team tasks require TEAM_PLAN.md and TEAM_SYNTHESIS.md before close
 - Shared task artifacts are modified only by the team lead, not workers
 - Auto team promotion proceeds without user confirmation when manifest sets `approval_mode: preapproved`
 - Team fallback (native → omc → subagents → solo) is a normal operational path, not a failure
+- **(WS-1)** Suspect notes with `verification_command` are auto-reverified at task completion when their `invalidated_by_paths` overlap `touched_paths`. Non-blocking; max 5 notes; 10s per command.
+- **(WS-2)** Fix rounds (prior runtime FAIL or SESSION_HANDOFF.json) use focus-first + guardrail-second delta verification. Full sweep reverts for sprinted/structural/first-round tasks.
+- **(WS-3)** Tasks with `reopen_count ≥ 2` or `runtime_verdict_fail_count ≥ 2` are calibration candidates. Session end reports count; `/harness:maintain` generates case files in `plugin/calibration/local/critic-runtime/`.
 
 ## Mode-specific artifact requirements
 

@@ -172,12 +172,44 @@ if os.path.exists(checks_file):
         checks = (checks_data or {}).get("checks", []) or []
         open_criteria = [c for c in checks if c.get("status") != "passed"]
         if open_criteria:
-            ids = ", ".join(c.get("id", "?") for c in open_criteria)
-            print(f"WARN: {len(open_criteria)} open acceptance criterion/criteria in CHECKS.yaml: {ids}")
+            # Show grouped by status for clarity
+            by_status = {}
             for c in open_criteria:
-                print(f"  - {c.get('id', '?')} [{c.get('status', 'unknown')}] {c.get('title', '')}")
+                s = c.get("status", "unknown")
+                by_status.setdefault(s, []).append(c)
+            print(f"WARN: {len(open_criteria)} open acceptance criterion/criteria in CHECKS.yaml:")
+            for status_label, items in sorted(by_status.items()):
+                ids = ", ".join(c.get("id", "?") for c in items)
+                print(f"  [{status_label}] {ids}")
+                for c in items:
+                    title = c.get("title", "")
+                    if title:
+                        print(f"    - {c.get('id', '?')}: {title}")
     except Exception as e:
-        print(f"WARN: could not parse CHECKS.yaml: {e}")
+        # yaml not available — fallback to line-based parse
+        try:
+            with open(checks_file) as f:
+                lines = f.readlines()
+            open_ids = []
+            current_id = None
+            current_status = None
+            for line in lines:
+                import re as _re
+                m_id = _re.match(r"^\s*-?\s*id\s*:\s*(.+)", line)
+                if m_id:
+                    if current_id and current_status != "passed":
+                        open_ids.append(f"{current_id} [{current_status or 'unknown'}]")
+                    current_id = m_id.group(1).strip().strip('"').strip("'")
+                    current_status = None
+                m_st = _re.match(r"^\s+status\s*:\s*(.+)", line)
+                if m_st:
+                    current_status = m_st.group(1).strip().strip('"').strip("'")
+            if current_id and current_status != "passed":
+                open_ids.append(f"{current_id} [{current_status or 'unknown'}]")
+            if open_ids:
+                print(f"WARN: {len(open_ids)} open criteria in CHECKS.yaml: {', '.join(open_ids)}")
+        except Exception:
+            print(f"WARN: could not parse CHECKS.yaml: {e}")
 
 # --- Report and block ---
 if failures:
@@ -185,5 +217,18 @@ if failures:
     for f in failures:
         print(f"  - {f}")
     sys.exit(2)
+
+# --- Note auto-reverify (non-blocking, runs only on successful completion) ---
+# Attempt to recover suspect notes whose invalidated_by_paths overlap with this task.
+# Failures here do not block task completion.
+try:
+    from note_reverify import reverify_suspect_notes
+    results = reverify_suspect_notes(target)
+    recovered = sum(1 for _, s in results if s == "recovered")
+    if recovered:
+        print(f"NOTE FRESHNESS: {recovered} note(s) restored to current via reverify")
+except Exception as _e:
+    # Non-blocking — reverify errors must never prevent task completion
+    print(f"NOTE REVERIFY: skipped ({_e})")
 
 sys.exit(0)
