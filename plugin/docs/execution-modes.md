@@ -1,0 +1,210 @@
+# Execution Modes Reference
+
+updated: 2026-03-28
+
+This document defines the three execution modes used by the harness to scale ceremony to task complexity.
+
+---
+
+## Mode Definitions
+
+### Mode A — light
+
+Low-ceremony mode for small, contained tasks. Reduces artifact requirements and uses a simplified critic rubric.
+
+**Intended for:** Docs-only changes, single-file fixes, investigations, answers, low-blast-radius edits.
+
+**Loop:** compact plan contract → implement → single runtime/doc check
+
+### Mode B — standard
+
+The default mode. Full v4 loop with all artifacts required.
+
+**Intended for:** Normal feature additions, single-root bugfixes, standard QA tasks.
+
+**Loop:** plan contract → critic-plan PASS → implement → self-check breadcrumbs → runtime QA → writer/DOC_SYNC → critic-document → close
+
+### Mode C — sprinted
+
+Enhanced mode for high-risk, cross-surface, or structurally complex tasks. Adds sprint contract, detailed risk matrix, and explicit rollback steps.
+
+**Intended for:** Cross-root changes, multi-surface changes (app+api+db), destructive operations (migrations, schema changes, major dependency upgrades), prior-blocked tasks, ambiguous specs.
+
+**Loop:** enhanced plan (sprint contract + risk matrix + rollback) → critic-plan PASS (enhanced rubric) → implement → self-check breadcrumbs → runtime QA → writer/DOC_SYNC → critic-document → close
+
+---
+
+## Signal Matrix
+
+The harness evaluates these signals after lane classification to select an execution mode. Higher-weight mode wins when signals conflict.
+
+| Signal | Mode indicated |
+|--------|---------------|
+| Lane = `answer` | light |
+| Lane = `investigate` | light |
+| Lane = `docs-sync` | light |
+| Single file change | light |
+| Small predicted diff | light |
+| No API/DB/infra surfaces | light |
+| Normal feature, single root | standard |
+| `browser_required: true` (no prior failures) | standard |
+| 2+ roots estimated from request | sprinted |
+| 2+ repo surfaces (e.g., app+api, app+db, app+infra) | sprinted |
+| Prior `blocked_env` state | sprinted |
+| Runtime FAIL count ≥ 2 | sprinted |
+| Destructive/structural flag (migration, schema, major dep upgrade) | sprinted |
+| Large predicted diff | sprinted |
+| `browser_required: true` AND FAIL count ≥ 2 | sprinted |
+| Ambiguous spec requiring significant assumptions | sprinted |
+
+**Tie-break rule:** When signals point to different modes, the higher mode wins (sprinted > standard > light).
+
+---
+
+## Artifact Requirements Per Mode
+
+| Artifact | light | standard | sprinted |
+|----------|-------|----------|----------|
+| `TASK_STATE.yaml` | required | required | required |
+| `REQUEST.md` | required | required | required |
+| `PLAN.md` (compact) | required | — | — |
+| `PLAN.md` (full) | — | required | — |
+| `PLAN.md` (enhanced + sprint contract) | — | — | required |
+| `CRITIC__plan.md` (simplified rubric) | required | — | — |
+| `CRITIC__plan.md` (full rubric) | — | required | — |
+| `CRITIC__plan.md` (enhanced rubric) | — | — | required |
+| `HANDOFF.md` (minimal) | required | required | required |
+| `DOC_SYNC.md` | if repo-mutating | if repo-mutating | if repo-mutating |
+| `CRITIC__runtime.md` | if repo-mutating | if repo-mutating | if repo-mutating |
+| `CRITIC__document.md` | if docs changed | if docs changed | if docs changed |
+| Sprint contract (in PLAN.md) | no | no | required |
+| Risk matrix (in PLAN.md) | no | no | required |
+| Rollback steps (in PLAN.md) | no | no | required |
+| Dependency graph (in PLAN.md) | no | no | required |
+
+---
+
+## Plan Format Summary
+
+### Light — compact format
+
+Required sections: Scope in, Acceptance criteria, Verification contract, Required doc sync.
+
+Omitted sections (unless genuinely needed): Scope out, User-visible outcomes, Touched files/roots, QA mode, Hard fail conditions, Risks/rollback, Open blockers.
+
+### Standard — full format
+
+All PLAN.md sections required. See `plugin/skills/plan/SKILL.md` for the full template.
+
+### Sprinted — enhanced format
+
+All standard sections required, plus:
+- **Sprint contract**: surfaces, roots, rollback trigger, staged delivery flag
+- **Risk matrix**: table with likelihood, impact, mitigation per identified risk
+- **Rollback steps**: explicit ordered steps (vague "revert" is not sufficient)
+- **Dependency graph**: cross-component/cross-service dependencies
+
+---
+
+## Critic Rubric Summary
+
+### Light rubric (critic-plan, mode A)
+
+Checks: scope defined, acceptance criteria testable, verification contract executable.
+
+Does NOT fail for: missing Scope out, missing Hard fail conditions, missing Risks/rollback.
+
+### Standard rubric (critic-plan, mode B)
+
+Full rubric — all PLAN.md fields required. See `plugin/agents/critic-plan.md` for complete evaluation criteria.
+
+### Sprinted rubric (critic-plan, mode C)
+
+All standard checks plus:
+- Sprint contract present and complete (surfaces, roots, rollback trigger, staged delivery)
+- Risk matrix present with likelihood/impact/mitigation per risk
+- Rollback steps specific and ordered (not vague)
+- Dependency graph present for multi-surface changes
+
+---
+
+## Auto-Escalation Rules
+
+Execution mode may upgrade mid-task but **never downgrade**.
+
+| Trigger | Escalation |
+|---------|-----------|
+| Actual diff grows beyond initial estimate | light → standard or standard → sprinted |
+| Additional roots discovered during implementation | standard → sprinted |
+| Runtime FAIL reveals systemic issues | standard → sprinted |
+| Destructive flag discovered post-plan | any → sprinted |
+| `blocked_env` encountered mid-task | any → sprinted |
+
+When escalating: update `execution_mode` in `TASK_STATE.yaml`, re-plan with the new format, re-run critic-plan with the new rubric.
+
+---
+
+## TASK_STATE.yaml Storage
+
+`execution_mode` is stored as a top-level field immediately after `lane`:
+
+```yaml
+task_id: TASK__<slug>
+status: planned
+lane: <sub-lane>
+execution_mode: light | standard | sprinted
+mutates_repo: <true|false>
+...
+```
+
+The field is set by the harness (or plan skill) after lane classification and before any artifact creation. Critics read this field to select the correct rubric.
+
+---
+
+## Examples
+
+### Example 1: Docs-only change → light
+
+**Request:** "Update the README to add the new API endpoint."
+
+**Signals:** Lane = `docs-sync`, single file, small diff, no code surfaces.
+
+**Mode selected:** light
+
+**Artifacts:** Compact PLAN.md (Scope in + Acceptance criteria + Verification contract), minimal HANDOFF.md, DOC_SYNC.md (repo-mutating), CRITIC__runtime.md.
+
+---
+
+### Example 2: Normal feature → standard
+
+**Request:** "Add pagination to the `/users` endpoint."
+
+**Signals:** Single root (api), standard feature, moderate diff, no destructive changes.
+
+**Mode selected:** standard
+
+**Artifacts:** Full PLAN.md with all sections, full CRITIC__plan.md, HANDOFF.md, DOC_SYNC.md, CRITIC__runtime.md.
+
+---
+
+### Example 3: Frontend + API + DB change → sprinted
+
+**Request:** "Add a new billing module with a new DB table, API endpoints, and a React billing page."
+
+**Signals:** 3 surfaces (app+api+db), 3+ roots, large predicted diff, schema change (new table).
+
+**Mode selected:** sprinted
+
+**Artifacts:** Enhanced PLAN.md with sprint contract, risk matrix, rollback steps, dependency graph. Enhanced CRITIC__plan.md. Full runtime + document verification.
+
+---
+
+### Example 4: Prior blocked task resumes → sprinted
+
+**Request:** Resuming a task that previously hit `blocked_env`.
+
+**Signals:** Prior `blocked_env` state in TASK_STATE.yaml.
+
+**Mode selected:** sprinted (regardless of original mode)
+
+**Rationale:** A previously blocked task has demonstrated environmental complexity that warrants stronger planning and evaluation.

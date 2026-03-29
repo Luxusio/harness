@@ -63,3 +63,42 @@ Apply safe mechanical fixes immediately:
 - **Never auto-close tasks** — use `stale` or `archived` for mechanical states
 - Do not create maintenance queues or logs — just fix and report
 - Keep it fast — scan, fix, report
+
+## Maintain-lite (automatic at session end)
+
+Maintain-lite runs automatically via the `session-end-sync.sh` hook. It performs read-only entropy detection — no writes, no auto-fixes. Results appear in the session-end summary.
+
+### What maintain-lite detects
+
+| Check | How |
+|-------|-----|
+| **Stale tasks** | Tasks with `updated` > 7 days ago and status not `closed`/`archived`/`stale` |
+| **Orphan notes** | Files in `doc/common/` that are not referenced in any CLAUDE.md index |
+| **Broken supersede chains** | Notes with `superseded_by:` pointing to a file that does not exist on disk |
+| **Dead artifacts** | `CRITIC__*.md` files in closed task folders (status: `closed`) |
+
+### What maintain-lite does NOT do
+
+- Never auto-closes tasks
+- Never deletes files
+- Never modifies notes or indexes
+- Never marks tasks stale (that is the full `maintain` skill's job)
+
+### Entropy health score
+
+The session-end summary includes a quick entropy health score:
+
+```
+entropy: LOW | MEDIUM | HIGH
+```
+
+Scoring:
+- **LOW**: 0 stale tasks, 0 orphan notes, 0 broken chains, 0 dead artifacts
+- **MEDIUM**: Any 1–3 issues across all categories combined
+- **HIGH**: 4+ issues, or any broken supersede chain
+
+The score is informational only. It does not block the session or gate any task.
+
+### When to run full maintain
+
+Run `/harness:maintain` when entropy is MEDIUM or HIGH, or when a session-end summary reports multiple stale tasks or orphan notes.

@@ -30,10 +30,15 @@ Read:
 
 ## On finish
 
-1. Update `TASK_STATE.yaml`:
+1. Run `git diff --name-only` to get the list of files changed by your implementation.
+2. Populate `TASK_STATE.yaml` with the change set — **never close with empty `touched_paths: []`**:
+   - `touched_paths` — every file that was created, modified, or deleted
+   - `roots_touched` — unique first path segments of `touched_paths` (e.g. `src`, `plugin`, `tests`)
+   - `verification_targets` — subset of `touched_paths` that are runtime-relevant (exclude doc paths: `doc/*`, `docs/*`, `*.md`, `README*`, `CHANGELOG*`, `LICENSE*`, `.claude/harness/critics/*`, `DOC_SYNC.md`)
+3. Update `TASK_STATE.yaml`:
    - `status: implemented`
    - `updated: <now>`
-2. Update `HANDOFF.md` with:
+4. Update `HANDOFF.md` with:
 
 ```
 Result:

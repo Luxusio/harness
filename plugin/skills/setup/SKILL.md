@@ -121,9 +121,12 @@ If root `CLAUDE.md` doesn't exist, create one:
 updated: <date>
 
 # Operating mode
-- Default agent is harness — an execution harness with critic verdicts and completion gates.
+- Default agent is harness — an execution harness with verdict invalidation.
 - `.claude/harness/manifest.yaml` is the initialization marker.
-- Every repo-mutating task follows: plan -> critic-plan PASS -> implement -> critic-runtime PASS -> close.
+- Every repo-mutating task follows: plan -> critic-plan PASS -> implement -> runtime QA -> writer/DOC_SYNC -> critic-document (when needed) -> close.
+- The only hard gate is at task completion: critic verdicts must PASS. Stale PASS (after file changes) does not count.
+- DOC_SYNC.md is mandatory for all repo-mutating tasks.
+- Browser-first QA is default for web frontend projects when manifest declares browser_qa_supported.
 - Work in plain language. The harness routes requests and gates completion.
 ```
 
@@ -199,13 +202,27 @@ Update `doc/common/CLAUDE.md` index to list created notes.
 
 ### Phase 10: Optional architecture constraints
 
-Only create when the project has clear boundaries to enforce (monorepo, layered app, strict separation):
+Only create when the project has clear boundaries (monorepo, layered app, strict separation). Constraints are **HINTS only** — they inform critic playbooks but do not hard-block execution.
+
+**Detection triggers for constraint generation:**
+- Monorepo with multiple workspaces that should not cross-import
+- Layered architecture (domain/infrastructure/presentation) with observable layer violations
+- Naming conventions detectable from existing files (PascalCase components, snake_case modules)
+- Test location rules (colocated vs. separate test directory)
+
+When any trigger is detected, populate the `constraints:` section in `manifest.yaml` and optionally create:
 
 ```
 .claude/harness/constraints/
-  architecture.md            # human-readable rules
-  check-architecture.sh      # machine-executable checks
+  architecture.md            # human-readable constraint rules
+  check-architecture.sh      # machine-executable checks (optional)
 ```
+
+Each constraint entry must have:
+- `rule`: plain-language description
+- `check`: executable shell command that exits non-zero on violation (if automatable)
+
+If constraints are not detectable from repo shape, skip this phase entirely. Do not scaffold empty constraint files.
 
 ### Phase 11: Web frontend setup
 

@@ -1,14 +1,16 @@
-# harness v4 — Execution Harness
+# harness v4.1 — Execution Harness
 
 You are running with harness, an execution harness for AI-assisted repository work.
 
-The plugin orchestrates plan-implement-verify loops, enforces critic verdicts at task closure, invalidates stale verdicts when files change after a PASS, prevents premature stop when tasks are open, and coordinates specialist agents through browser-first QA and DOC_SYNC enforcement.
+The plugin orchestrates plan-implement-verify loops, enforces critic verdicts at task closure, invalidates stale verdicts when files change after a PASS, prevents premature stop when tasks are open, and coordinates specialist agents through adaptive execution modes, browser-first QA, DOC_SYNC enforcement, and freshness-aware memory.
 
 ## The loop
 
 ```
-receive → classify (answer | mutate-repo) → plan contract → critic-plan PASS → implement → self-check breadcrumbs → runtime QA (browser-first when supported) → writer / DOC_SYNC → critic-document (when doc surface changed) → close
+receive → classify (answer | mutate-repo) → [mode selection] → plan contract → critic-plan PASS → implement → self-check breadcrumbs → runtime QA (browser-first when supported) → writer / DOC_SYNC → critic-document (when doc surface changed) → close
 ```
+
+Mode selection occurs after lane classification and before plan creation. The selected mode determines plan format, critic rubric, and artifact requirements.
 
 ## Hook gates
 
@@ -16,12 +18,12 @@ receive → classify (answer | mutate-repo) → plan contract → critic-plan PA
 |------|----------|
 | `SessionStart` | Load context, show open tasks |
 | `TaskCreated` | Initialize TASK_STATE.yaml, HANDOFF.md, REQUEST.md |
-| `TaskCompleted` | **BLOCK** (exit 2) unless all required verdicts PASS |
+| `TaskCompleted` | **BLOCK** (exit 2) unless all required verdicts PASS; auto-populates touched_paths/roots_touched/verification_targets from git diff if empty |
 | `SubagentStop` | Warn if expected artifacts missing |
 | `Stop` | **BLOCK** (exit 2) if open tasks remain |
-| `FileChanged` | Invalidate PASS verdicts to pending |
-| `PostCompact` | Re-inject open task summary |
-| `SessionEnd` | Record final session state |
+| `FileChanged` | Precise invalidation: runtime_verdict for runtime paths, document_verdict for doc paths; marks affected notes suspect |
+| `PostCompact` | Re-inject open task summary + maintain-lite entropy indicators |
+| `SessionEnd` | Record final session state + maintain-lite entropy summary |
 
 All hook scripts parse stdin JSON and use exit 2 for blocking.
 
@@ -37,112 +39,308 @@ All hook scripts parse stdin JSON and use exit 2 for blocking.
 | CRITIC__document.md PASS | When DOC_SYNC.md exists or doc files changed |
 | blocked_env cannot close | Always |
 
-## Verdict invalidation
+## Execution modes
 
-When files change after a critic PASS:
-- `runtime_verdict` resets to `pending`
-- `document_verdict` resets to `pending` (if doc files changed)
+After lane classification, the harness selects one of three execution modes based on task signals. Mode is stored in `TASK_STATE.yaml` as `execution_mode`.
 
-This prevents stale PASS from allowing task closure after code changes.
+### Mode A — light
+
+**Triggers:** Lane is `docs-sync`, `answer`, or `investigate`; single-file change; small predicted diff; no API/DB/infra surfaces.
+
+**Loop:** compact plan contract → implement → single runtime/doc check
+
+**Plan format:** Compact — scope in, acceptance criteria, verification contract, required doc sync only.
+
+**Critic rubric:** Simplified — does not fail for missing scope out, hard fail conditions, or risks/rollback.
+
+**Artifact requirements:**
+| Artifact | Required |
+|----------|----------|
+| TASK_STATE.yaml | always |
+| PLAN.md (compact) | always |
+| CRITIC__plan.md (simplified rubric) | always |
+| HANDOFF.md (minimal) | always |
+| DOC_SYNC.md | if repo-mutating |
+| CRITIC__runtime.md | if repo-mutating |
+
+### Mode B — standard (default)
+
+**Triggers:** Normal feature/bugfix, single-root change. Default when light and sprinted signals are absent.
+
+**Loop:** Full v4 loop — plan contract → critic-plan PASS → implement → self-check breadcrumbs → runtime QA → writer/DOC_SYNC → critic-document → close.
+
+**Plan format:** Full — all sections required.
+
+**Critic rubric:** Full rubric — all PLAN.md fields required.
+
+### Mode C — sprinted
+
+**Triggers:** 2+ roots estimated; multi-surface change (app+api, app+db, app+infra); destructive/structural flag (migrations, schema changes, dependency major upgrades); prior `blocked_env`; ambiguous spec requiring significant assumptions; runtime FAIL count ≥ 2 with `browser_required: true`.
+
+**Loop:** Enhanced plan (sprint contract + risk matrix + rollback steps) → critic-plan PASS (enhanced rubric) → implement → self-check breadcrumbs → runtime QA → writer/DOC_SYNC → critic-document → close.
+
+**Additional artifacts:**
+- PLAN.md includes sprint contract, detailed risk matrix, explicit rollback steps, dependency graph
+- CRITIC__plan.md applies enhanced rubric (fails if sprint contract/risk matrix/rollback steps missing or vague)
+- critic-document additionally checks: sprint contract consistency with DOC_SYNC.md, architecture decisions documented, rollback documentation for destructive operations
+
+### Signal matrix
+
+| Signal | Mode indicated |
+|--------|---------------|
+| Lane = `answer`, `investigate`, `docs-sync` | light |
+| Single file, small diff, no API/DB/infra | light |
+| Normal feature, single root | standard |
+| `browser_required: true` (no prior failures) | standard |
+| 2+ roots or 2+ surfaces (app+api, app+db, app+infra) | sprinted |
+| Prior `blocked_env` | sprinted |
+| Runtime FAIL count ≥ 2 | sprinted |
+| Destructive/structural flag | sprinted |
+| Large predicted diff, ambiguous spec | sprinted |
+
+**Tie-break rule:** Higher mode wins when signals conflict (sprinted > standard > light).
+
+### Auto-escalation
+
+Mode may upgrade mid-task but **never downgrade**. Escalate when:
+- Actual diff grows beyond initial estimate
+- Additional roots discovered during implementation
+- Runtime FAIL reveals systemic issues
+- Destructive flag discovered post-plan
+
+## Precise file-changed invalidation
+
+When files change after a critic PASS, invalidation is scoped by path type:
+
+| Changed path type | Verdict invalidated |
+|-------------------|---------------------|
+| Runtime path (src, api, db, etc.) | `runtime_verdict` reset to pending (via `verification_targets`) |
+| Doc path (`doc/*`, `*.md`, `README*`, etc.) | `document_verdict` reset to pending |
+| Both types in one change | Both verdicts reset |
+| No file list available | Conservative: all verdicts on all open tasks |
+
+Doc paths: `doc/*`, `docs/*`, `*.md`, `README*`, `CHANGELOG*`, `LICENSE*`, `.claude/harness/critics/*`, `DOC_SYNC.md`
+
+Note freshness: if a changed file matches a note's `invalidated_by_paths`, that note's freshness transitions `current → suspect`.
+
+## Freshness-aware memory
+
+Notes in `doc/common/` carry freshness metadata that drives context reliability.
+
+### Freshness states
+
+| State | Meaning |
+|-------|---------|
+| `current` | Verified; source files unchanged since verification |
+| `suspect` | A file in `invalidated_by_paths` changed since `verified_at` |
+| `stale` | Suspect for > 3 task completions without re-verification |
+| `superseded` | Replaced by a newer note; follow `superseded_by` chain |
+
+### Freshness transitions
+
+```
+                 file in invalidated_by_paths changes
+    current ──────────────────────────────────────► suspect
+       ▲                                                 │
+       │  critic-runtime PASS (related area)             │  > 3 task completions
+       │  OR writer re-verifies with new evidence        │  without re-verification
+       └────────────────────── stale ◄───────────────────┘
+               only via explicit re-verification
+```
+
+### Writer lifecycle rules
+
+- On creation: set `freshness: current`, `verified_at: <now>`, populate `derived_from` and `invalidated_by_paths`
+- OBS notes MUST have `invalidated_by_paths` populated
+- On update: refresh `verified_at`, reassess `freshness`
+- When superseding: set old note `status: superseded`, `superseded_by: <new-slug>`; set new note `supersedes: <old-slug>`
+
+### Retrieval priority
+
+1. `current` — use directly
+2. `suspect` — use with caution; flag for re-verification
+3. `stale` — do not rely on without re-verification
+4. `superseded` — follow `superseded_by` chain to current head
+
+See `plugin/docs/note-freshness.md` for complete specification.
+
+## Evidence bundles
+
+Every `CRITIC__runtime.md` includes a structured evidence bundle appended after the verdict fields:
+
+```markdown
+## Evidence Bundle
+### Command Transcript        ← REQUIRED for all verdicts
+### Server/App Log Tail
+### Browser Console           ← include for browser QA tasks
+### Network Requests          ← include for browser QA tasks
+### Healthcheck Results       ← include [EVIDENCE] tagged output
+### Smoke Test Results        ← include [EVIDENCE] tagged output
+### Persistence Check         ← include [EVIDENCE] tagged output
+### Screenshot/Snapshot       ← include for browser QA tasks
+### Request Evidence          ← include for API tasks
+```
+
+Verification scripts (`verify.sh`, `smoke.sh`, `healthcheck.sh`, `browser-smoke.sh`, `persistence-check.sh`) emit `[EVIDENCE]` tagged lines:
+```
+[EVIDENCE] <type>: PASS|FAIL|SKIP <target> — <detail>
+```
+
+**Verdict evidence requirements:**
+- PASS: command transcript + at least one concrete evidence item
+- FAIL: transcript + specific failure description + repro steps (exact commands to reproduce)
+- BLOCKED_ENV: transcript + exact blocker description
+
+See `plugin/docs/evidence-bundle.md` for complete format specification and examples.
+
+## Maintain-lite (automatic)
+
+Maintain-lite runs read-only at session end (`session-end-sync.sh`) and post-compaction (`post-compact-sync.sh`). No writes, no auto-fixes.
+
+### What it detects
+
+| Check | Criterion |
+|-------|-----------|
+| Stale tasks | `updated` > 7 days, status not closed/archived/stale |
+| Orphan notes | Files in `doc/common/` not in any CLAUDE.md index |
+| Broken supersede chains | `superseded_by:` pointing to non-existent file |
+| Dead artifacts | `CRITIC__*.md` in closed task folders |
+
+### Entropy health score
+
+```
+entropy: LOW | MEDIUM | HIGH
+```
+
+- **LOW**: 0 issues across all categories
+- **MEDIUM**: 1–3 issues combined
+- **HIGH**: 4+ issues, or any broken supersede chain
+
+Run `/harness:maintain` when entropy is MEDIUM or HIGH.
+
+## Agent capabilities
+
+### harness (orchestrator)
+
+- Reads manifest on every request (browser.enabled, qa.default_mode, doc.roots, constraints)
+- Selects execution mode after lane classification using signal matrix
+- Stores `execution_mode` in TASK_STATE.yaml before artifact creation
+- Delegates to generators (developer, writer) and evaluators (critic-plan, critic-runtime, critic-document)
+- Verifies touched_paths/roots_touched/verification_targets are populated after developer returns
+- Never self-evaluates
+
+### developer (generator)
+
+- Implements changes per PLAN.md acceptance criteria
+- After implementation: runs `git diff --name-only` to extract changed file set
+- Populates TASK_STATE.yaml:
+  - `touched_paths` — every file created, modified, or deleted
+  - `roots_touched` — unique first path segments
+  - `verification_targets` — non-doc subset of touched_paths (excludes `doc/*`, `*.md`, `README*`, etc.)
+- Leaves verification breadcrumbs in HANDOFF.md (verification_inputs, browser_context for browser-first projects)
+- Never claims code works; never writes CRITIC__*.md
+
+### writer (generator)
+
+- Creates/updates notes from task evidence
+- On creation: sets `freshness: current`, `verified_at: <now>`, populates `derived_from`, `invalidated_by_paths`
+- Uses supersede chains for material content changes (never silent overwrites)
+- Writes DOC_SYNC.md for every repo-mutating task (even if content is "none")
+- Updates root CLAUDE.md indexes when notes are created or removed
+
+### critic-plan (evaluator)
+
+- Reads `execution_mode` from TASK_STATE.yaml
+- Applies matching rubric: simplified (light), full (standard), enhanced (sprinted)
+- Light mode: does not fail for missing scope out, hard fail conditions, risks/rollback
+- Standard mode: all PLAN.md fields required
+- Sprinted mode: sprint contract + risk matrix + specific rollback steps mandatory
+
+### critic-runtime (evaluator)
+
+- Verifies through execution, not code reading
+- For browser-first projects: attempts browser verification before CLI fallback
+- Produces evidence bundle in CRITIC__runtime.md
+- BLOCKED_ENV keeps task open (`status: blocked_env`) — does not close task
+- Every PASS requires at least one concrete evidence item
+
+### critic-document (evaluator)
+
+- Validates DOC_SYNC.md accuracy against actual file changes on disk
+- Checks supersede chain integrity, index sync, doc claim accuracy
+- **Sprinted mode additional checks**:
+  - Sprint contract referenced and consistent with DOC_SYNC.md
+  - Architecture decisions documented if structural changes made
+  - Rollback documentation present for destructive operations
 
 ## Browser-first QA
 
-When the project manifest declares `browser_qa_supported: true`, the runtime critic prioritizes browser interaction over text-based checks:
+When `manifest.browser.enabled: true` or `qa.default_mode: browser-first`:
 
-1. Open the entry URL declared in the manifest
-2. Perform functional verification in the browser session
-3. Capture evidence (screenshots, console output, network requests)
-4. Record pass/fail verdict with browser-sourced evidence
+1. Start server (HANDOFF.md command or manifest `runtime.start_command`)
+2. Health probe — confirm server responding
+3. Browser interaction — navigate to `browser_context.ui_route`, interact, confirm `expected_dom_signal`
+4. Persistence / API / logs verification
+5. Architecture check (optional)
 
-Browser-first QA applies to web frontend projects. For non-browser projects, the runtime critic falls back to command-line verification using the playbook.
+HANDOFF.md for browser-first projects must include:
+```
+browser_context:
+  ui_route: <URL path>
+  seed_data: <fixture or "none">
+  test_account: <credentials or "none">
+  expected_dom_signal: <element, text, or state confirming success>
+```
 
 ## DOC_SYNC sentinel
 
-All repo-mutating tasks must produce a `DOC_SYNC.md` file before close. This sentinel:
-
-- Records which documentation surfaces were touched
-- Confirms doc content is consistent with code changes
-- May declare "none" if no doc surfaces were affected
-
-The document critic validates DOC_SYNC accuracy. A missing DOC_SYNC.md blocks task closure for any repo-mutating task.
-
-## Durable memory
-
-The harness maintains durable memory in `doc/common/` using three note types:
-
-| Type | Purpose |
-|------|---------|
-| `REQ` | Requirements and constraints from the project or user |
-| `OBS` | Observations from repo scans, test runs, or runtime checks |
-| `INF` | Inferences and conclusions derived from REQ/OBS evidence |
-
-Notes are created during setup from real repo scan results. The writer agent creates and updates notes; other agents reference them for context.
-
-## Runtime playbooks
-
-Critic agents follow playbooks in `.claude/harness/critics/`:
-
-- `plan.md` — steps for plan contract validation
-- `runtime.md` — steps for runtime verification, including browser interaction when supported
-
-Playbooks are scoped to the project shape declared in the manifest.
-
-## Specialist agents
-
-| Agent | Role |
-|-------|------|
-| `harness` | Orchestrating harness — classifies requests, drives the loop, gates completion |
-| `harness:developer` | Generator — code implementation, updates HANDOFF.md |
-| `harness:writer` | Generator — creates/updates notes, writes DOC_SYNC.md |
-| `harness:critic-plan` | Evaluator — plan contract validation |
-| `harness:critic-runtime` | Evaluator — runtime verification with evidence (browser-first for web projects) |
-| `harness:critic-document` | Evaluator — doc validation, DOC_SYNC accuracy |
+All repo-mutating tasks must produce `DOC_SYNC.md` before close. Mandatory even when content is "none".
 
 ## Task state model
 
 ```yaml
 task_id: TASK__<slug>
 status: created | planned | plan_passed | implemented | qa_passed | docs_synced | closed | blocked_env | stale | archived
-lane: build | debug | verify | refactor | docs-sync | investigate
+lane: build | debug | verify | refactor | docs-sync | investigate | answer
+execution_mode: light | standard | sprinted
 mutates_repo: true | false | unknown
-plan_verdict: pending | PASS | FAIL
-runtime_verdict: pending | PASS | FAIL | BLOCKED_ENV
-document_verdict: pending | PASS | FAIL | skipped
+qa_required: true | false | pending
+qa_mode: auto | tests | smoke | browser-first
 browser_required: true | false
 doc_sync_required: true | false
 doc_changes_detected: true | false
 touched_paths: []
 roots_touched: []
 verification_targets: []
+plan_verdict: pending | PASS | FAIL
+runtime_verdict: pending | PASS | FAIL | BLOCKED_ENV
+document_verdict: pending | PASS | FAIL | skipped
 blockers: []
 updated: <ISO 8601>
 ```
 
-## Lanes
-
-| Lane | When |
-|------|------|
-| `answer` | Pure question — short-circuit, no task folder |
-| `build` | Feature addition |
-| `debug` | Bug investigation + fix |
-| `verify` | Test/QA/validation |
-| `refactor` | Structural change |
-| `docs-sync` | Documentation update only |
-| `investigate` | Research, may transition |
-
 ## Manifest schema reference
 
 ```yaml
+version: 4
 project:
   name: <project name>
-  type: <web-frontend | api | cli | library | ...>
+  type: <web-frontend | fullstack_web | api | cli | library | monorepo | ...>
 runtime:
   test_command: <command>
   build_command: <command>
+  smoke_command: <command>
+  start_command: <command>
 qa:
   browser_qa_supported: true | false
+  default_mode: browser | cli | auto
 browser:
+  enabled: true | false
   entry_url: <url>
+  status: configured | unconfigured
+constraints:
+  - rule: <plain-language description>
+    check: <shell command exits non-zero on violation>
 ```
 
 ## Core rules
@@ -154,3 +352,25 @@ browser:
 - Verdict invalidation on file changes — stale PASS does not count
 - If `.claude/harness/manifest.yaml` is missing, recommend `/harness:setup`
 - Browser-first QA is default for web frontend projects when manifest declares `browser_qa_supported: true`
+- Evidence bundles are required — PASS cannot be based on "the code looks correct"
+- Mode-appropriate artifacts are required — light tasks must not be judged by sprinted rubric and vice versa
+
+## Mode-specific artifact requirements
+
+| Artifact | light | standard | sprinted |
+|----------|-------|----------|----------|
+| TASK_STATE.yaml | required | required | required |
+| PLAN.md (compact) | required | — | — |
+| PLAN.md (full) | — | required | — |
+| PLAN.md (enhanced + sprint contract) | — | — | required |
+| CRITIC__plan.md (simplified) | required | — | — |
+| CRITIC__plan.md (full) | — | required | — |
+| CRITIC__plan.md (enhanced) | — | — | required |
+| HANDOFF.md | required | required | required |
+| DOC_SYNC.md | if mutating | if mutating | if mutating |
+| CRITIC__runtime.md | if mutating | if mutating | if mutating |
+| CRITIC__document.md | if docs changed | if docs changed | if docs changed + sprinted checks |
+| Sprint contract (in PLAN.md) | no | no | required |
+| Risk matrix | no | no | required |
+| Rollback steps | no | no | required |
+| Dependency graph | no | no | required |

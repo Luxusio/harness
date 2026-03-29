@@ -9,3 +9,7 @@ updated: 2026-03-28
 - DOC_SYNC.md is mandatory for all repo-mutating tasks.
 - Browser-first QA is default for web frontend projects when manifest declares browser_qa_supported.
 - Work in plain language. The harness routes requests and gates completion.
+- Execution mode is selected per task: light (docs/small), standard (default), sprinted (cross-root/destructive).
+- Runtime critic produces evidence bundles — structured proof required for every PASS verdict.
+- Notes carry freshness metadata (current/suspect/stale); file changes automatically mark affected notes suspect.
+- Maintain-lite runs at session end to detect entropy (stale tasks, orphan notes, broken chains) without writes.

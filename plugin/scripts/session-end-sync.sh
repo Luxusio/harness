@@ -84,4 +84,92 @@ if [[ ${#open_tasks[@]} -eq 0 && ${#blocked_tasks[@]} -eq 0 ]]; then
   echo "All tasks closed. Clean session end."
 fi
 
+# --- Maintain-lite entropy summary ---
+echo ""
+echo "=== MAINTAIN-LITE ==="
+
+stale_count=0
+orphan_count=0
+broken_chain_count=0
+dead_artifact_count=0
+now_epoch=$(date +%s)
+stale_threshold=$((7 * 24 * 3600))
+
+# Count stale tasks (updated > 7 days ago, not closed/archived/stale)
+for task in "$TASK_DIR"/TASK__*/; do
+  [[ ! -d "$task" ]] && continue
+  state_file="${task}TASK_STATE.yaml"
+  [[ ! -f "$state_file" ]] && continue
+  status=$(grep "^status:" "$state_file" 2>/dev/null | head -1 | sed 's/status: *//')
+  case "$status" in
+    closed|archived|stale) continue ;;
+  esac
+  updated_raw=$(grep "^updated:" "$state_file" 2>/dev/null | head -1 | sed 's/updated: *//')
+  if [[ -n "$updated_raw" ]]; then
+    updated_epoch=$(date -d "$updated_raw" +%s 2>/dev/null || echo 0)
+    age=$(( now_epoch - updated_epoch ))
+    if [[ $age -gt $stale_threshold ]]; then
+      stale_count=$((stale_count + 1))
+    fi
+  fi
+done
+
+# Count dead artifacts: CRITIC__*.md in closed task folders
+for task in "$TASK_DIR"/TASK__*/; do
+  [[ ! -d "$task" ]] && continue
+  state_file="${task}TASK_STATE.yaml"
+  [[ ! -f "$state_file" ]] && continue
+  status=$(grep "^status:" "$state_file" 2>/dev/null | head -1 | sed 's/status: *//')
+  if [[ "$status" == "closed" ]]; then
+    artifact_count=$(find "$task" -maxdepth 1 -name 'CRITIC__*.md' 2>/dev/null | wc -l)
+    dead_artifact_count=$((dead_artifact_count + artifact_count))
+  fi
+done
+
+# Count orphan notes: files in doc/common/ not referenced in any CLAUDE.md index
+if [[ -d "doc/common" ]]; then
+  for note in doc/common/*.md; do
+    [[ ! -f "$note" ]] && continue
+    note_base=$(basename "$note")
+    [[ "$note_base" == "CLAUDE.md" ]] && continue
+    # Check if note appears in any CLAUDE.md index under doc/
+    if ! grep -rl "$note_base" doc/ --include="CLAUDE.md" 2>/dev/null | grep -q .; then
+      orphan_count=$((orphan_count + 1))
+    fi
+  done
+fi
+
+# Count broken supersede chains: superseded_by: pointing to non-existent file
+if [[ -d "doc/common" ]]; then
+  for note in doc/common/*.md; do
+    [[ ! -f "$note" ]] && continue
+    superseded_by=$(grep "^superseded_by:" "$note" 2>/dev/null | head -1 | sed 's/superseded_by: *//')
+    if [[ -n "$superseded_by" && "$superseded_by" != "null" && "$superseded_by" != "~" ]]; then
+      # Resolve relative to doc/common/
+      target="doc/common/${superseded_by}"
+      [[ ! -f "$target" ]] && broken_chain_count=$((broken_chain_count + 1))
+    fi
+  done
+fi
+
+echo "stale_tasks: ${stale_count}"
+echo "orphan_notes: ${orphan_count}"
+echo "broken_supersede_chains: ${broken_chain_count}"
+echo "dead_artifacts: ${dead_artifact_count}"
+
+# Entropy health score
+total_issues=$((stale_count + orphan_count + dead_artifact_count))
+if [[ $broken_chain_count -gt 0 || $total_issues -ge 4 ]]; then
+  entropy="HIGH"
+elif [[ $total_issues -ge 1 ]]; then
+  entropy="MEDIUM"
+else
+  entropy="LOW"
+fi
+echo "entropy: ${entropy}"
+
+if [[ "$entropy" != "LOW" ]]; then
+  echo "hint: run /harness:maintain to clean up"
+fi
+
 exit 0

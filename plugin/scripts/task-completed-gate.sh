@@ -27,6 +27,39 @@ else
   if grep -q "^mutates_repo: false" "${TARGET}/TASK_STATE.yaml" 2>/dev/null; then
     IS_MUTATING="false"
   fi
+
+  # --- Auto-populate touched_paths if empty ---
+  state_file="${TARGET}/TASK_STATE.yaml"
+  existing_touched=$(yaml_array "touched_paths" "$state_file")
+  if [[ -z "$existing_touched" ]]; then
+    # Attempt to derive from git diff against previous commit
+    auto_touched=$(git diff --name-only HEAD~1 2>/dev/null || git diff --name-only 2>/dev/null || true)
+    if [[ -n "$auto_touched" ]]; then
+      # Build YAML inline array
+      inline_paths=$(echo "$auto_touched" | awk '{printf "\"%s\", ", $0}' | sed 's/, $//')
+      sed -i "s|^touched_paths: \[\]|touched_paths: [${inline_paths}]|" "$state_file"
+      # Derive and populate roots_touched
+      auto_roots=$(extract_roots "$auto_touched")
+      inline_roots=$(echo "$auto_roots" | awk '{printf "\"%s\", ", $0}' | sed 's/, $//')
+      sed -i "s|^roots_touched: \[\]|roots_touched: [${inline_roots}]|" "$state_file"
+      # Derive and populate verification_targets (non-doc paths only)
+      vt_paths=""
+      while IFS= read -r p; do
+        [[ -z "$p" ]] && continue
+        if ! is_doc_path "$p"; then
+          vt_paths="${vt_paths}${p}"$'\n'
+        fi
+      done <<< "$auto_touched"
+      vt_paths="${vt_paths%$'\n'}"
+      if [[ -n "$vt_paths" ]]; then
+        inline_vt=$(echo "$vt_paths" | awk '{printf "\"%s\", ", $0}' | sed 's/, $//')
+        sed -i "s|^verification_targets: \[\]|verification_targets: [${inline_vt}]|" "$state_file"
+      fi
+      echo "AUTO-POPULATED: touched_paths, roots_touched, verification_targets from git diff"
+    else
+      echo "WARN: touched_paths is empty and git diff returned no files — invalidation precision will be reduced"
+    fi
+  fi
 fi
 
 # --- PLAN.md required ---

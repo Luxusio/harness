@@ -1,7 +1,7 @@
 {
   "name": "harness",
   "version": "2.0.0",
-  "description": "Execution harness for AI-assisted repository work — orchestrates plan-implement-verify loops with critic verdicts, browser-first QA, durable memory, and DOC_SYNC enforcement.",
+  "description": "Execution harness for AI-assisted repository work — orchestrates plan-implement-verify loops with adaptive execution modes, evidence bundles, freshness-aware memory, and DOC_SYNC enforcement.",
   "author": {
     "name": "harness"
   },
@@ -17,6 +17,10 @@
     "browser-qa",
     "doc-sync",
     "durable-memory",
-    "runtime-playbooks"
+    "runtime-playbooks",
+    "execution-modes",
+    "evidence-bundles",
+    "note-freshness",
+    "maintain-lite"
   ]
 }

@@ -38,14 +38,63 @@ Keep notes concise. One note = one claim or tightly-coupled set.
 summary: <one-line description>
 status: active
 updated: <date>
+freshness: current
+verified_at: <ISO 8601>
+derived_from: []
+confidence: high | medium | low
+invalidated_by_paths: []
 
 <content>
 ```
 
 Additional fields by type:
-- **OBS**: `evidence:` (how this was verified — required)
+- **OBS**: `evidence:` (how this was verified — required), `invalidated_by_paths:` (source files whose change makes this observation suspect — required), `verification_command:` (optional re-verify command)
 - **INF**: `verify_by:` (concrete way to check this — required)
 - **REQ**: `source:` (who said this and when — required)
+
+Supersede chain fields (populated when superseding or being superseded):
+- `supersedes: <note-slug>` — note this replaces
+- `superseded_by: <note-slug>` — reverse link (set on old note)
+
+## Freshness lifecycle
+
+### Metadata fields
+
+| Field | Values | Description |
+|-------|--------|-------------|
+| `freshness` | `current \| suspect \| stale` | Freshness state; default `current` on creation |
+| `verified_at` | ISO 8601 timestamp | Last time this note was verified |
+| `derived_from` | list of source paths | Files this note's truth depends on |
+| `supersedes` | note-slug | Note this replaces |
+| `superseded_by` | note-slug | Reverse link to successor note |
+| `confidence` | `high \| medium \| low` | Writer's confidence in the note |
+| `invalidated_by_paths` | list of paths | Paths whose change makes this note suspect |
+| `verification_command` | shell command | Optional command to re-verify this note |
+
+### Writer lifecycle rules
+
+- **On note creation**: set `freshness: current`, `verified_at: <now>`, populate `derived_from` and `invalidated_by_paths`
+- **On note update**: refresh `verified_at`, reassess `freshness`
+- **When superseding**: set old note `status: superseded`, `superseded_by: <new-slug>`; set new note `supersedes: <old-slug>`
+- Prefer updating/superseding existing notes over creating new ones
+- OBS notes MUST have `invalidated_by_paths` populated
+
+### Freshness transitions
+
+| From | To | Trigger |
+|------|----|---------|
+| `current` | `suspect` | A file in `invalidated_by_paths` changes |
+| `suspect` | `current` | critic-runtime PASS covers the related area, or writer re-verifies with new evidence |
+| `suspect` | `stale` | Note has been suspect for > 3 task completions without re-verification |
+| `stale` | `current` | Explicit writer re-verification with new evidence only |
+
+### Retrieval priority
+
+1. `current` notes — preferred
+2. `suspect` notes — usable but flag for re-verification
+3. `stale` notes — flag as needing re-verification before relying on
+4. `superseded` notes — deprioritized; follow `superseded_by` chain to current note
+5. If the only note on a topic is stale, flag it as needing re-verification and do not rely on it without re-checking
 
 ## Rules
 
