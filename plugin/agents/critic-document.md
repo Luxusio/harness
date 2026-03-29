@@ -66,6 +66,18 @@ Update `TASK_STATE.yaml`:
 - If PASS: `document_verdict: PASS`
 - If FAIL: `document_verdict: FAIL`
 
+## Sprinted mode additional checks
+
+When `execution_mode: sprinted` is set in `TASK_STATE.yaml`, also verify:
+
+1. **Sprint contract referenced**: PLAN.md must include a `## Sprint contract` section. Confirm the sprint contract surfaces and roots are consistent with the doc changes listed in DOC_SYNC.md. If the sprint declared `docs` as a surface and DOC_SYNC.md claims "none" everywhere, that is a FAIL.
+
+2. **Architecture decisions documented**: If the task made structural changes (new root directories, schema changes, major dependency additions, new agent/skill files), confirm that at least one note (INF or OBS) captures the decision rationale. Structural changes without a captured rationale are flagged as a FAIL.
+
+3. **Rollback documentation present**: If PLAN.md includes a `## Rollback steps` section with destructive/irreversible operations (db migrations, file deletions, dependency major upgrades), confirm that DOC_SYNC.md or a note records the rollback approach. Missing rollback documentation for destructive sprinted changes is a FAIL.
+
+These additional checks apply only when `execution_mode: sprinted`. For `standard` and `light` modes, existing behavior is unchanged.
+
 ## Rules
 
 - Only evaluate docs that actually changed — don't audit the entire doc tree
@@ -74,3 +86,4 @@ Update `TASK_STATE.yaml`:
 - DOC_SYNC.md claiming "none" when doc files changed is FAIL
 - Missing metadata is a warning, not FAIL
 - Verify DOC_SYNC.md accuracy against actual file changes on disk
+- Read `execution_mode` from TASK_STATE.yaml to determine which rubric to apply

@@ -21,6 +21,91 @@ Read `.claude/harness/manifest.yaml` to understand project shape:
 
 If manifest is missing, operate helpfully for the current request and recommend `/harness:setup` when gated workflows would help.
 
+## Execution mode selection
+
+After lane classification, select an execution mode based on task signals. Store as `execution_mode` in `TASK_STATE.yaml`.
+
+### Mode A — light
+
+**Triggers (any of):**
+- Lane is `docs-sync`, `answer`, or `investigate`
+- Single file change, low blast radius
+- Predicted diff size: small
+- No API/DB/infra surfaces touched
+
+**Loop:** compact plan contract → implement → single runtime/doc check
+
+**Artifact requirements:**
+- `TASK_STATE.yaml` — required
+- `PLAN.md` — compact format (fewer required sections — see plan skill)
+- `CRITIC__plan.md` — simplified rubric (see critic-plan)
+- `HANDOFF.md` — minimal (verification breadcrumb only)
+- `DOC_SYNC.md` — required if repo-mutating
+- `CRITIC__runtime.md` — required if repo-mutating
+
+### Mode B — standard (default)
+
+**Triggers:** Normal feature/bugfix, single-root change, standard QA needed. All other requests not matching light or sprinted signals.
+
+**Loop:** Full v4 loop — plan contract → critic-plan PASS → implement → self-check breadcrumbs → runtime QA → writer/DOC_SYNC → critic-document → close.
+
+**Artifact requirements:** All current artifacts required (see task artifacts table).
+
+### Mode C — sprinted
+
+**Triggers (any of):**
+- Cross-root changes (2+ roots estimated from request + manifest)
+- Multi-surface change (app + api + db, app + infra, etc.)
+- `browser_required: true` AND prior FAIL count ≥ 2
+- Ambiguous spec requiring significant assumption-making
+- Destructive/structural flag: migrations, schema changes, dependency major upgrades
+- `blocked_env` was hit in a previous attempt
+
+**Loop:** Enhanced plan (sprint contract, risk matrix, rollback steps) → critic-plan PASS (enhanced rubric) → implement → self-check breadcrumbs → runtime QA → writer/DOC_SYNC → critic-document → close.
+
+**Additional artifacts:**
+- `PLAN.md` — includes sprint contract, detailed risk matrix, explicit rollback steps
+- `CRITIC__plan.md` — enhanced rubric checks sprint contract + risk matrix + rollback specificity
+
+### Mode selection signals (evaluated after lane classification)
+
+| Signal | Weight toward |
+|--------|--------------|
+| Lane = `docs-sync` | light |
+| Lane = `answer` or `investigate` | light |
+| Single file, small diff | light |
+| Normal feature, single root | standard |
+| 2+ roots estimated | sprinted |
+| 2+ repo surfaces (app+api, app+db, app+infra) | sprinted |
+| Prior `blocked_env` | sprinted |
+| Runtime FAIL count ≥ 2 | sprinted |
+| Destructive/structural flag | sprinted |
+| `browser_required: true` | standard (sprinted if FAIL ≥ 2) |
+| Large predicted diff | sprinted |
+
+**Tie-break rule:** When signals conflict, use the higher-weight mode.
+
+### Auto-escalation rule
+
+Execution mode may upgrade mid-task (`light → standard`, `standard → sprinted`) but NEVER downgrade. Escalate when:
+- Actual diff grows beyond initial estimate
+- Additional roots are discovered during implementation
+- A runtime FAIL reveals systemic issues
+- Destructive flag discovered post-plan
+
+### Mode storage
+
+Store `execution_mode: light | standard | sprinted` in `TASK_STATE.yaml` immediately after mode selection.
+
+When delegating to `harness:developer`, instruct the developer to populate:
+- `touched_paths` — actual files changed
+- `roots_touched` — repo roots affected
+- `verification_targets` — commands/routes for verification
+
+After developer returns, verify these fields are populated before handing off to critics.
+
+---
+
 ## Lane classification
 
 Every request goes through exactly one lane:
@@ -128,6 +213,7 @@ Every mutate-repo task folder contains at minimum:
 task_id: TASK__<slug>
 status: created | planned | plan_passed | implemented | qa_passed | docs_synced | closed | blocked_env | stale | archived
 lane: <sub-lane>
+execution_mode: light | standard | sprinted
 mutates_repo: true | false | unknown
 qa_required: true | false | pending
 qa_mode: auto | tests | smoke | browser-first

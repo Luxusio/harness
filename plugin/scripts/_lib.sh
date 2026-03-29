@@ -102,7 +102,7 @@ task_state_field() {
   yaml_field "$field" "${task_dir}/TASK_STATE.yaml"
 }
 
-# Check if a task's touched_paths or roots_touched overlaps with a given file path.
+# Check if a task's touched_paths, roots_touched, or verification_targets overlaps with a given file path.
 # Returns 0 (true) if there is overlap or if touched_paths is empty (conservative).
 # Usage: task_touches_path ".claude/harness/tasks/TASK__foo" "src/foo.ts"
 task_touches_path() {
@@ -111,14 +111,23 @@ task_touches_path() {
   local state_file="${task_dir}/TASK_STATE.yaml"
   [[ ! -f "$state_file" ]] && return 0
 
-  local touched roots
+  local touched roots vt
   touched=$(yaml_array "touched_paths" "$state_file")
   roots=$(yaml_array "roots_touched" "$state_file")
+  vt=$(yaml_array "verification_targets" "$state_file")
 
-  # If both lists are empty, conservatively treat as touching everything
-  if [[ -z "$touched" && -z "$roots" ]]; then
+  # If all lists are empty, conservatively treat as touching everything
+  if [[ -z "$touched" && -z "$roots" && -z "$vt" ]]; then
     return 0
   fi
+
+  # Check verification_targets for exact or prefix match
+  while IFS= read -r path; do
+    [[ -z "$path" ]] && continue
+    if [[ "$changed_file" == "$path" || "$changed_file" == "$path"/* ]]; then
+      return 0
+    fi
+  done <<< "$vt"
 
   # Check touched_paths for exact or prefix match
   while IFS= read -r path; do
@@ -159,6 +168,81 @@ find_tasks_touching_path() {
 
     if task_touches_path "$task" "$changed_file"; then
       echo "$task"
+    fi
+  done
+}
+
+# Derive the first path segment (root) from a file path.
+# Usage: root=$(path_root "src/foo/bar.ts")  → "src"
+path_root() {
+  echo "${1%%/*}"
+}
+
+# Derive unique directory roots (first path segment) from a newline-separated list of paths.
+# Usage: roots=$(extract_roots "$touched_paths_newline_separated")
+extract_roots() {
+  local paths="$1"
+  while IFS= read -r p; do
+    [[ -z "$p" ]] && continue
+    path_root "$p"
+  done <<< "$paths" | sort -u
+}
+
+# Classify a path as a doc path vs a runtime path.
+# Doc paths: doc/*, docs/*, *.md, README*, CHANGELOG*, LICENSE*,
+#             .claude/harness/critics/*, DOC_SYNC.md
+# Returns 0 (true) if the path is a doc path, 1 otherwise.
+# Usage: if is_doc_path "docs/guide.md"; then ...
+is_doc_path() {
+  local p="$1"
+  case "$p" in
+    doc/*|docs/*|*.md|README*|CHANGELOG*|LICENSE*|.claude/harness/critics/*|DOC_SYNC.md)
+      return 0 ;;
+    *)
+      return 1 ;;
+  esac
+}
+
+# Find all open tasks whose verification_targets overlap with a given file.
+# Falls back to touched_paths/roots_touched if verification_targets is empty.
+# Prints task directory paths (one per line).
+# Usage: find_tasks_with_verification_targets "src/foo.ts"
+find_tasks_with_verification_targets() {
+  local changed_file="$1"
+  [[ ! -d "$TASK_DIR" ]] && return
+
+  for task in "$TASK_DIR"/TASK__*/; do
+    [[ ! -d "$task" ]] && continue
+    local state_file="${task}TASK_STATE.yaml"
+    [[ ! -f "$state_file" ]] && continue
+
+    local status
+    status=$(yaml_field "status" "$state_file")
+    case "$status" in
+      closed|archived|stale) continue ;;
+    esac
+
+    local vt
+    vt=$(yaml_array "verification_targets" "$state_file")
+
+    if [[ -n "$vt" ]]; then
+      # Check verification_targets for exact or prefix match
+      local matched=false
+      while IFS= read -r path; do
+        [[ -z "$path" ]] && continue
+        if [[ "$changed_file" == "$path" || "$changed_file" == "$path"/* ]]; then
+          matched=true
+          break
+        fi
+      done <<< "$vt"
+      if [[ "$matched" == "true" ]]; then
+        echo "$task"
+      fi
+    else
+      # Fall back to touched_paths/roots_touched check
+      if task_touches_path "$task" "$changed_file"; then
+        echo "$task"
+      fi
     fi
   done
 }

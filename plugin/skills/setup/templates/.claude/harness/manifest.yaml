@@ -20,6 +20,7 @@ runtime:
 
 qa:
   default_mode: {{QA_MODE}}
+  browser_qa_supported: {{BROWSER_QA_SUPPORTED}}
   browser_required: {{BROWSER_REQUIRED}}
 
 browser:
@@ -27,3 +28,19 @@ browser:
   mcp_server: chrome-devtools
   launch_config: .claude/launch.json
   status: {{BROWSER_STATUS}}
+
+# constraints: (optional — populated by setup when project has clear boundaries)
+# Entries are HINTS only. They inform critic playbooks but do not hard-block execution.
+# constraints:
+#   import_boundaries:
+#     - rule: "src/server must not import from src/client"
+#       check: "grep -r 'from.*src/client' src/server && exit 1 || exit 0"
+#   layer_direction:
+#     - rule: "domain layer must not import from infrastructure layer"
+#       check: "scripts/check-layers.sh"
+#   naming_conventions:
+#     - rule: "React components must be PascalCase"
+#       check: "scripts/check-naming.sh"
+#   test_location:
+#     - rule: "unit tests must be colocated with source files"
+#       check: "scripts/check-test-location.sh"

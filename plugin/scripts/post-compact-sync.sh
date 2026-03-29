@@ -79,4 +79,69 @@ else
   echo "Summary: ${open_count} open, ${blocked_count} blocked_env, ${pending_verdicts} pending verdicts"
 fi
 
+# --- Maintain-lite entropy indicators (quick scan, no fixes) ---
+stale_count=0
+orphan_count=0
+broken_chain_count=0
+now_epoch=$(date +%s)
+stale_threshold=$((7 * 24 * 3600))
+
+# Count stale tasks
+for task in "$TASK_DIR"/TASK__*/; do
+  [[ ! -d "$task" ]] && continue
+  state_file="${task}TASK_STATE.yaml"
+  [[ ! -f "$state_file" ]] && continue
+  status=$(grep "^status:" "$state_file" 2>/dev/null | head -1 | sed 's/status: *//')
+  case "$status" in
+    closed|archived|stale) continue ;;
+  esac
+  updated_raw=$(grep "^updated:" "$state_file" 2>/dev/null | head -1 | sed 's/updated: *//')
+  if [[ -n "$updated_raw" ]]; then
+    updated_epoch=$(date -d "$updated_raw" +%s 2>/dev/null || echo 0)
+    age=$(( now_epoch - updated_epoch ))
+    [[ $age -gt $stale_threshold ]] && stale_count=$((stale_count + 1))
+  fi
+done
+
+# Count orphan notes
+if [[ -d "doc/common" ]]; then
+  for note in doc/common/*.md; do
+    [[ ! -f "$note" ]] && continue
+    note_base=$(basename "$note")
+    [[ "$note_base" == "CLAUDE.md" ]] && continue
+    if ! grep -rl "$note_base" doc/ --include="CLAUDE.md" 2>/dev/null | grep -q .; then
+      orphan_count=$((orphan_count + 1))
+    fi
+  done
+fi
+
+# Count broken supersede chains
+if [[ -d "doc/common" ]]; then
+  for note in doc/common/*.md; do
+    [[ ! -f "$note" ]] && continue
+    superseded_by=$(grep "^superseded_by:" "$note" 2>/dev/null | head -1 | sed 's/superseded_by: *//')
+    if [[ -n "$superseded_by" && "$superseded_by" != "null" && "$superseded_by" != "~" ]]; then
+      target="doc/common/${superseded_by}"
+      [[ ! -f "$target" ]] && broken_chain_count=$((broken_chain_count + 1))
+    fi
+  done
+fi
+
+# Entropy health score
+total_issues=$((stale_count + orphan_count))
+if [[ $broken_chain_count -gt 0 || $((total_issues)) -ge 4 ]]; then
+  entropy="HIGH"
+elif [[ $total_issues -ge 1 ]]; then
+  entropy="MEDIUM"
+else
+  entropy="LOW"
+fi
+
+echo ""
+echo "harness health: entropy=${entropy}"
+[[ $stale_count -gt 0 ]] && echo "  ${stale_count} task(s) may be stale (updated > 7 days ago)"
+[[ $orphan_count -gt 0 ]] && echo "  ${orphan_count} note(s) are orphaned (not in any CLAUDE.md index)"
+[[ $broken_chain_count -gt 0 ]] && echo "  ${broken_chain_count} broken supersede chain(s)"
+[[ "$entropy" != "LOW" ]] && echo "  hint: run /harness:maintain to clean up"
+
 exit 0

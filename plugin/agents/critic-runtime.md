@@ -58,6 +58,44 @@ unmet_acceptance: <list of acceptance criteria not met, or "none">
 blockers: <list of environment/infra blockers, or "none">
 ```
 
+Then append a structured **Evidence Bundle** section to `CRITIC__runtime.md`:
+
+```markdown
+## Evidence Bundle
+### Command Transcript
+<summary of commands run and their exit codes>
+
+### Server/App Log Tail
+<last N lines of relevant logs, if available; "n/a" if not applicable>
+
+### Browser Console
+<console errors/warnings captured during browser QA; "n/a" if not browser QA>
+
+### Network Requests
+<failed or notable requests captured during browser QA; "n/a" if not browser QA>
+
+### Healthcheck Results
+<output of healthcheck.sh; "skipped" if not run>
+
+### Smoke Test Results
+<output of smoke.sh; "skipped" if not run>
+
+### Persistence Check
+<output of persistence-check.sh; "skipped" if not applicable>
+
+### Screenshot/Snapshot
+<file path to screenshot or textual DOM snapshot, if browser QA; "n/a" otherwise>
+
+### Request Evidence
+<request IDs, endpoint response bodies, if API task; "n/a" otherwise>
+```
+
+**Evidence Bundle rules:**
+- PASS verdict: minimum command transcript + at least one concrete evidence item from the sections above
+- FAIL verdict: command transcript + specific failure description + repro steps that a fixer can follow
+- BLOCKED_ENV verdict: exact blocker description + what was attempted before giving up
+- Evidence is structured for reuse by the next fix round — be specific, not summary
+
 Write `QA__runtime.md` as a real evidence record whenever multiple verification steps were performed:
 
 ```markdown
