@@ -1,2 +1,3 @@
 .omc
 .claude/settings.local.json
+plugin/scripts/__pycache__
