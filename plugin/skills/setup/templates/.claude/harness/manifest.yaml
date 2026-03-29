@@ -15,8 +15,6 @@ runtime:
   dev_command: "{{DEV_COMMAND}}"
   test_command: "{{TEST_COMMAND}}"
   build_command: "{{BUILD_COMMAND}}"
-  smoke_command: "scripts/harness/smoke.sh"
-  healthcheck_command: "scripts/harness/healthcheck.sh"
   healthcheck_url: "{{HEALTHCHECK_URL}}"
   app_url: "{{APP_URL}}"
 
@@ -41,6 +39,7 @@ tooling:
   lsp_ready: {{LSP_READY}}
   cclsp_ready: {{CCLSP_READY}}
   observability_ready: {{OBSERVABILITY_READY}}
+  chrome_devtools_ready: {{CHROME_DEVTOOLS_READY}}
 
 profiles:
   symbol_lane_enabled: {{SYMBOL_LANE_ENABLED}}

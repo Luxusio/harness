@@ -22,10 +22,21 @@ Then read:
 - Task-local `TASK_STATE.yaml` (verify `task_id` and `browser_required`)
 - Task-local `PLAN.md` for acceptance criteria
 - Task-local `HANDOFF.md` for verification breadcrumbs (including `browser_context` if present)
-- `.claude/harness/manifest.yaml` to check `browser.enabled` and `qa.default_mode`
+- `.claude/harness/manifest.yaml` — check `browser.enabled`, `qa.default_mode`, and **`tooling.chrome_devtools_ready`**
 - `.claude/harness/critics/runtime.md` if it exists (project playbook)
 - `.claude/harness/constraints/check-architecture.*` if present (optional architecture checks)
 - If `orchestration_mode: team` in TASK_STATE.yaml: also read task-local `TEAM_SYNTHESIS.md`
+
+### chrome-devtools mandate
+
+After reading the manifest, check `tooling.chrome_devtools_ready`:
+
+| `chrome_devtools_ready` | `browser.enabled` | Required action |
+|-------------------------|-------------------|-----------------|
+| `true` | `true` | **Chrome DevTools MCP is mandatory.** CLI-only verification is not accepted. If it fails to connect, verdict is `BLOCKED_ENV` — not PASS, not FAIL. |
+| `false` | `true` | Attempt Chrome DevTools anyway; if unavailable, fall back to CLI and record gap in evidence. |
+| `true` | `false` | Use CLI verification (browser QA not configured for this project). |
+| `false` | `false` | Use CLI verification. |
 
 ## Primary rule
 
@@ -45,7 +56,10 @@ Execute verification in this priority order:
 4. **Persistence / API / logs verification** — confirm data was written, API returned expected response, or logs show expected output
 5. **Architecture check** (optional) — run constraint checks if present
 
-Do NOT fall back to CLI-only verification when browser verification is feasible. Attempt browser first; fall back only if the environment genuinely blocks it (record as BLOCKED_ENV).
+Do NOT fall back to CLI-only verification when browser verification is feasible.
+
+- If `tooling.chrome_devtools_ready: true` in manifest → Chrome DevTools MCP is **mandatory**. CLI-only is not a valid fallback. If MCP fails to connect, record `BLOCKED_ENV`.
+- If `tooling.chrome_devtools_ready: false` → attempt browser verification anyway; fall back to CLI only if environment genuinely blocks it, and record the gap in the evidence bundle.
 
 ### For non-browser projects
 
