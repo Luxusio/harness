@@ -71,10 +71,12 @@ primary_frontend             # highest-scoring candidate
 #### Monorepo Rules
 - Score each workspace using all 4 signals
 - Highest-scoring workspace = primary frontend
-- Tie → ask user (max 1 question)
+- Tie → ask user via `AskUserQuestion` (max 1 question)
 - Frontend + API both present → `.claude/launch.json` lists both; frontend first
 
 ### Phase 3: Ask minimal questions (max 3)
+
+**Use `AskUserQuestion` tool for every question** — never plain text. This provides a clickable UI for faster user responses.
 
 Only ask what the repo cannot tell you:
 - Primary project type if unclear
