@@ -70,11 +70,11 @@ def maintain_lite_entropy():
             state_file = os.path.join(task_path, "TASK_STATE.yaml")
             if not os.path.isfile(state_file):
                 continue
-            status = yaml_field(state_file, "status") or ""
+            status = yaml_field("status", state_file) or ""
             if status in ("closed", "archived", "stale"):
                 continue
             # Use file mtime as fallback, try updated: field first
-            updated_raw = yaml_field(state_file, "updated") or ""
+            updated_raw = yaml_field("updated", state_file) or ""
             if updated_raw:
                 try:
                     from datetime import datetime, timezone
@@ -137,7 +137,7 @@ def maintain_lite_entropy():
                 note_path = os.path.join(root_dir, fname)
                 if not os.path.isfile(note_path):
                     continue
-                superseded_by = yaml_field(note_path, "superseded_by") or ""
+                superseded_by = yaml_field("superseded_by", note_path) or ""
                 if superseded_by and superseded_by not in ("null", "~"):
                     # Check in same root directory first, then any doc/* root
                     target_same = os.path.join(root_dir, superseded_by)
@@ -177,8 +177,8 @@ def main():
             continue
 
         task_id = entry
-        status = yaml_field(state_file, "status") or "unknown"
-        lane = yaml_field(state_file, "lane") or "unknown"
+        status = yaml_field("status", state_file) or "unknown"
+        lane = yaml_field("lane", state_file) or "unknown"
 
         if status in ("closed", "archived", "stale"):
             continue
@@ -186,16 +186,16 @@ def main():
         if status == "blocked_env":
             blocked_count += 1
             print(f"- {task_id} [BLOCKED_ENV, lane: {lane}]")
-            blockers = yaml_field(state_file, "blockers") or ""
+            blockers = yaml_field("blockers", state_file) or ""
             if blockers and blockers != "[]":
                 print(f"  blockers: {blockers}")
         else:
             open_count += 1
-            plan_v = yaml_field(state_file, "plan_verdict") or "?"
-            runtime_v = yaml_field(state_file, "runtime_verdict") or "?"
-            doc_v = yaml_field(state_file, "document_verdict") or "?"
-            qa_mode = yaml_field(state_file, "qa_mode") or "auto"
-            mutates = yaml_field(state_file, "mutates_repo") or ""
+            plan_v = yaml_field("plan_verdict", state_file) or "?"
+            runtime_v = yaml_field("runtime_verdict", state_file) or "?"
+            doc_v = yaml_field("document_verdict", state_file) or "?"
+            qa_mode = yaml_field("qa_mode", state_file) or "auto"
+            mutates = yaml_field("mutates_repo", state_file) or ""
 
             doc_sync_status = "n/a"
             if mutates in ("true", "unknown"):
@@ -207,6 +207,15 @@ def main():
             print(f"- {task_id} [{status}, lane: {lane}, qa_mode: {qa_mode}]")
             print(f"  verdicts: plan={plan_v} runtime={runtime_v} document={doc_v}")
             print(f"  doc_sync: {doc_sync_status}")
+            orch_mode = yaml_field("orchestration_mode", state_file) or "solo"
+            if orch_mode != "solo":
+                team_status_val = yaml_field("team_status", state_file) or "n/a"
+                team_provider_val = yaml_field("team_provider", state_file) or "none"
+                print(f"  orchestration: {orch_mode}, team_status: {team_status_val}, provider: {team_provider_val}")
+                if team_status_val in ("running", "degraded"):
+                    print(f"  ⚠ team task in {team_status_val} state — may need attention")
+                    if team_status_val == "running":
+                        print(f"  note: native in-process teams may not survive compaction — check team state")
 
             if plan_v == "pending":
                 pending_verdicts += 1
@@ -229,7 +238,7 @@ def main():
         state_file = os.path.join(task_path, "TASK_STATE.yaml")
         if not os.path.isfile(state_file):
             continue
-        status = yaml_field(state_file, "status") or "unknown"
+        status = yaml_field("status", state_file) or "unknown"
         if status in ("closed", "archived", "stale"):
             continue
 

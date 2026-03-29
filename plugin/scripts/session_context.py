@@ -2,8 +2,8 @@
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (read_hook_input, yaml_field, yaml_array, manifest_field,
-                  is_browser_first_project, is_tooling_ready, is_profile_enabled,
-                  TASK_DIR, MANIFEST, now_iso)
+                  manifest_section_field, is_browser_first_project, is_tooling_ready,
+                  is_profile_enabled, TASK_DIR, MANIFEST, now_iso)
 
 
 def get_browser_qa_status():
@@ -60,8 +60,8 @@ def get_browser_qa_status():
             state_file = os.path.join(task_path, "TASK_STATE.yaml")
             if not os.path.isfile(state_file):
                 continue
-            status = yaml_field(state_file, "status")
-            browser_required = yaml_field(state_file, "browser_required")
+            status = yaml_field("status", state_file)
+            browser_required = yaml_field("browser_required", state_file)
             if status == "blocked_env" and browser_required == "true":
                 browser_qa = "blocked_env"
                 break
@@ -142,6 +142,17 @@ def main():
     print(f"Observability: {observability}")
     print("")
 
+    # Team readiness status
+    teams_provider = manifest_section_field("teams", "provider") or ""
+    if teams_provider:
+        native_ready = manifest_section_field("teams", "native_ready") or "false"
+        omc_ready = manifest_section_field("teams", "omc_ready") or "false"
+        print("=== TEAM READINESS ===")
+        print(f"Provider: {teams_provider}")
+        print(f"Native ready: {native_ready}")
+        print(f"OMC ready: {omc_ready}")
+        print("")
+
     # Open tasks
     print("=== OPEN TASKS ===")
     found_open = False
@@ -157,9 +168,9 @@ def main():
                 continue
 
             task_id = entry
-            status = yaml_field(state_file, "status") or "unknown"
-            lane = yaml_field(state_file, "lane") or "unknown"
-            qa_mode = yaml_field(state_file, "qa_mode") or "auto"
+            status = yaml_field("status", state_file) or "unknown"
+            lane = yaml_field("lane", state_file) or "unknown"
+            qa_mode = yaml_field("qa_mode", state_file) or "auto"
 
             if status in ("closed", "archived", "stale"):
                 continue
@@ -170,9 +181,9 @@ def main():
                 print(f"- {task_id} [lane: {lane}, BLOCKED_ENV, qa_mode: {qa_mode}]")
                 found_blocked = True
             else:
-                plan_v = yaml_field(state_file, "plan_verdict") or "?"
-                runtime_v = yaml_field(state_file, "runtime_verdict") or "?"
-                mutates = yaml_field(state_file, "mutates_repo") or ""
+                plan_v = yaml_field("plan_verdict", state_file) or "?"
+                runtime_v = yaml_field("runtime_verdict", state_file) or "?"
+                mutates = yaml_field("mutates_repo", state_file) or ""
 
                 doc_sync_status = "n/a"
                 if mutates in ("true", "unknown"):
@@ -183,6 +194,10 @@ def main():
 
                 print(f"- {task_id} [lane: {lane}, status: {status}, qa_mode: {qa_mode}, "
                       f"plan: {plan_v}, runtime: {runtime_v}, doc_sync: {doc_sync_status}]")
+                orch_mode = yaml_field("orchestration_mode", state_file) or "solo"
+                if orch_mode != "solo":
+                    team_status_val = yaml_field("team_status", state_file) or "n/a"
+                    print(f"  orchestration: {orch_mode}, team_status: {team_status_val}")
 
     if not found_open:
         print("(no open tasks)")

@@ -59,6 +59,33 @@ Record selected overlays in TASK_STATE.yaml `review_overlays` field. Set `perfor
 
 If no signals match, leave `review_overlays: []` — this is the common case for normal tasks.
 
+### 3.7 Select orchestration mode
+
+After selecting review overlays (step 3.5), determine orchestration mode using these signals:
+
+**Select solo when:**
+- Single-file or small-diff task
+- Steps have sequential dependencies (B must follow A)
+- Same-file conflict risk
+- Lane is `docs-only`, `answer`, or `investigate`
+
+**Select subagents when:**
+- Helper tasks needed (research, search, verify) with no cross-talk
+- No team readiness confirmed but some parallelism is useful
+- Workers do not need to write files concurrently
+
+**Select team when:**
+- Cross-layer work (app + api + tests) with clearly disjoint file ownership
+- 2+ independent roots estimated from request + manifest
+- Parallel exploration or review across non-overlapping areas
+- Team provider available and readiness probe passes
+
+**Prohibition rules for team:** do NOT select if multiple workers would edit the same file, steps are sequentially dependent, or the task is a small bugfix.
+
+**Escalation:** solo → subagents OK; subagents → team OK; team → fallback-subagents or fallback-solo if provider unavailable.
+
+When `orchestration_mode: team`, set `team_plan_required: true`, `team_synthesis_required: true`, and record a brief `team_reason`.
+
 ### 4. Create TASK_STATE.yaml
 
 Create `.claude/harness/tasks/TASK__$ARGUMENTS/TASK_STATE.yaml`:
@@ -83,6 +110,14 @@ blockers: []
 review_overlays: []
 risk_tags: []
 performance_task: false
+orchestration_mode: <solo|subagents|team>
+team_provider: none | native | omc | fallback-subagents | fallback-solo
+team_status: n/a | planned | running | degraded | fallback | complete | skipped
+team_size: 0
+team_reason: ""
+team_plan_required: <true|false>
+team_synthesis_required: <true|false>
+fallback_used: none | subagents | solo
 updated: <ISO 8601>
 ```
 

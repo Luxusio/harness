@@ -151,6 +151,43 @@ When multiple overlays are active, all applicable requirements combine. Address 
 
 ---
 
+## Team contract validation
+
+Read `orchestration_mode` from TASK_STATE.yaml. If `solo` or `subagents`, skip this section entirely.
+
+When `orchestration_mode` is `team`:
+
+1. Read task-local `TEAM_PLAN.md`
+2. Validate minimum required fields:
+
+| Field | Required content |
+|-------|-----------------|
+| Provider | `native` or `omc` — which team provider will be used |
+| Team size | Number of workers to spawn |
+| Worker roles | Each worker's role and responsibility |
+| File ownership | Each worker's writable file paths (must be disjoint) |
+| Shared-read paths | Paths all workers can read but none may write |
+| Overlap prohibition | Explicit rule forbidding same-file edits by multiple workers |
+| Dependency order | Which workers depend on others' output |
+| Fallback rule | What happens if team provider fails |
+
+**Team FAIL conditions:**
+- `TEAM_PLAN.md` does not exist when `orchestration_mode: team`
+- Worker file ownership is not defined (each worker must have explicit writable paths)
+- Same-file overlap prohibition rule is missing
+- Fallback rule is missing
+- For sprinted tasks: plan approval conditions are not specified
+
+**Team PASS requirements:**
+- File ownership is disjoint (no two workers share writable paths)
+- Overlap prohibition is explicitly stated
+- Fallback rule names a concrete alternative (e.g., "fallback to subagents")
+- Dependency order is clear (or "none — all workers independent")
+
+When `orchestration_mode` is `solo` or `subagents`, skip all team validation — do not check for `TEAM_PLAN.md`.
+
+---
+
 ## Output contract
 
 Write `CRITIC__plan.md` with exactly this structure:
@@ -171,6 +208,7 @@ sprint_contract: <defined | missing | n/a>
 risk_matrix: <defined | missing | n/a>
 rollback_steps: <specific | vague | missing | n/a>
 performance_contract: <defined | missing | n/a>
+team_contract: <defined | missing | n/a>
 issues: <list of specific problems to fix, or "none">
 notes: <optional free text>
 ```

@@ -59,6 +59,7 @@ def maintain_lite_full():
     orphan_count = 0
     broken_chain_count = 0
     dead_artifact_count = 0
+    degraded_team_count = 0
     now_epoch = time.time()
     stale_threshold = 7 * 24 * 3600
 
@@ -72,7 +73,7 @@ def maintain_lite_full():
             if not os.path.isfile(state_file):
                 continue
 
-            status = yaml_field(state_file, "status") or ""
+            status = yaml_field("status", state_file) or ""
 
             # Dead artifacts: CRITIC__*.md in closed task folders
             if status == "closed":
@@ -85,7 +86,7 @@ def maintain_lite_full():
                 continue
 
             # Stale tasks
-            updated_raw = yaml_field(state_file, "updated") or ""
+            updated_raw = yaml_field("updated", state_file) or ""
             if updated_raw:
                 try:
                     from datetime import datetime
@@ -101,6 +102,12 @@ def maintain_lite_full():
                 mtime = os.path.getmtime(state_file)
                 if (now_epoch - mtime) > stale_threshold:
                     stale_count += 1
+
+            # Count degraded team tasks
+            orch = yaml_field("orchestration_mode", state_file) or ""
+            ts = yaml_field("team_status", state_file) or ""
+            if orch == "team" and ts == "degraded":
+                degraded_team_count += 1
 
     # Count orphan notes across all doc/* roots
     doc_base = "doc"
@@ -143,7 +150,7 @@ def maintain_lite_full():
                 note_path = os.path.join(root_dir, fname)
                 if not os.path.isfile(note_path):
                     continue
-                superseded_by = yaml_field(note_path, "superseded_by") or ""
+                superseded_by = yaml_field("superseded_by", note_path) or ""
                 if superseded_by and superseded_by not in ("null", "~"):
                     # Check in same root directory first, then any doc/* root
                     target_same = os.path.join(root_dir, superseded_by)
@@ -151,7 +158,7 @@ def maintain_lite_full():
                     if not os.path.isfile(target_same) and not os.path.isfile(target_common):
                         broken_chain_count += 1
 
-    return stale_count, orphan_count, broken_chain_count, dead_artifact_count
+    return stale_count, orphan_count, broken_chain_count, dead_artifact_count, degraded_team_count
 
 
 def main():
@@ -183,8 +190,8 @@ def main():
             continue
 
         task_id = entry
-        status = yaml_field(state_file, "status") or "unknown"
-        lane = yaml_field(state_file, "lane") or "unknown"
+        status = yaml_field("status", state_file) or "unknown"
+        lane = yaml_field("lane", state_file) or "unknown"
 
         if status in ("closed", "archived", "stale"):
             continue
@@ -192,18 +199,22 @@ def main():
         if status == "blocked_env":
             blocked_tasks.append(f"{task_id} [lane: {lane}]")
         else:
-            qa_mode = yaml_field(state_file, "qa_mode") or "auto"
+            qa_mode = yaml_field("qa_mode", state_file) or "auto"
             open_tasks.append(f"{task_id} [status: {status}, lane: {lane}, qa_mode: {qa_mode}]")
+            orch_mode = yaml_field("orchestration_mode", state_file) or "solo"
+            if orch_mode != "solo":
+                team_status_val = yaml_field("team_status", state_file) or "n/a"
+                open_tasks[-1] += f", orch: {orch_mode}, team: {team_status_val}"
 
-            plan_v = yaml_field(state_file, "plan_verdict") or "?"
-            runtime_v = yaml_field(state_file, "runtime_verdict") or "?"
-            doc_v = yaml_field(state_file, "document_verdict") or "?"
+            plan_v = yaml_field("plan_verdict", state_file) or "?"
+            runtime_v = yaml_field("runtime_verdict", state_file) or "?"
+            doc_v = yaml_field("document_verdict", state_file) or "?"
             if plan_v == "pending" or runtime_v == "pending" or doc_v == "pending":
                 incomplete_verdicts.append(
                     f"{task_id}: plan={plan_v} runtime={runtime_v} document={doc_v}"
                 )
 
-            mutates = yaml_field(state_file, "mutates_repo") or ""
+            mutates = yaml_field("mutates_repo", state_file) or ""
             if mutates in ("true", "unknown"):
                 if not os.path.isfile(os.path.join(task_path, "DOC_SYNC.md")):
                     missing_doc_sync.append(task_id)
@@ -241,7 +252,7 @@ def main():
             state_file = os.path.join(task_path, "TASK_STATE.yaml")
             if not os.path.isfile(state_file):
                 continue
-            status = yaml_field(state_file, "status") or "unknown"
+            status = yaml_field("status", state_file) or "unknown"
             if status in ("closed", "archived", "stale"):
                 continue
 
@@ -287,7 +298,7 @@ def main():
                             print(f"    Read first: {', '.join(read_first)}")
 
     # Maintain-lite full entropy summary
-    stale_count, orphan_count, broken_chain_count, dead_artifact_count = maintain_lite_full()
+    stale_count, orphan_count, broken_chain_count, dead_artifact_count, degraded_team_count = maintain_lite_full()
 
     print("")
     print("=== MAINTAIN-LITE ===")
@@ -295,8 +306,9 @@ def main():
     print(f"orphan_notes: {orphan_count}")
     print(f"broken_supersede_chains: {broken_chain_count}")
     print(f"dead_artifacts: {dead_artifact_count}")
+    print(f"degraded_teams: {degraded_team_count}")
 
-    total_issues = stale_count + orphan_count + dead_artifact_count
+    total_issues = stale_count + orphan_count + dead_artifact_count + degraded_team_count
     if broken_chain_count > 0 or total_issues >= 4:
         entropy = "HIGH"
     elif total_issues >= 1:

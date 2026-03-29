@@ -18,8 +18,8 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (read_hook_input, json_array, yaml_field, yaml_array,
                   is_doc_path, find_tasks_touching_path,
-                  find_tasks_with_verification_targets, manifest_field,
-                  is_profile_enabled, TASK_DIR, MANIFEST, now_iso)
+                  find_tasks_with_verification_targets, task_touches_path,
+                  manifest_field, is_profile_enabled, TASK_DIR, MANIFEST, now_iso)
 
 import re
 import glob
@@ -125,6 +125,29 @@ def process_changed_file(changed_file):
             if not os.path.isfile(state_file):
                 continue
             invalidate_document(state_file, task_id, f"{changed_file} doc changed after PASS")
+
+    # Team status degradation: complete → degraded when related files change
+    if os.path.isdir(TASK_DIR):
+        for task in sorted(glob.glob(os.path.join(TASK_DIR, "TASK__*/"))):
+            if not os.path.isdir(task):
+                continue
+            state_file_t = os.path.join(task, "TASK_STATE.yaml")
+            if not os.path.isfile(state_file_t):
+                continue
+            status = yaml_field("status", state_file_t)
+            if status in ("closed", "archived", "stale"):
+                continue
+            orch = yaml_field("orchestration_mode", state_file_t)
+            ts = yaml_field("team_status", state_file_t)
+            if orch == "team" and ts == "complete":
+                if task_touches_path(task, changed_file):
+                    content = open(state_file_t, encoding="utf-8").read()
+                    content = content.replace("team_status: complete", "team_status: degraded")
+                    content = re.sub(r'^updated: .*', f'updated: {now_iso()}', content, flags=re.MULTILINE)
+                    with open(state_file_t, "w", encoding="utf-8") as f:
+                        f.write(content)
+                    task_id = os.path.basename(task.rstrip('/'))
+                    print(f"TEAM DEGRADED: {task_id} — team_status set to degraded ({changed_file} changed)")
 
 
 def main():

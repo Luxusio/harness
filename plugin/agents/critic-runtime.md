@@ -25,6 +25,7 @@ Then read:
 - `.claude/harness/manifest.yaml` to check `browser.enabled` and `qa.default_mode`
 - `.claude/harness/critics/runtime.md` if it exists (project playbook)
 - `.claude/harness/constraints/check-architecture.*` if present (optional architecture checks)
+- If `orchestration_mode: team` in TASK_STATE.yaml: also read task-local `TEAM_SYNTHESIS.md`
 
 ## Primary rule
 
@@ -96,6 +97,9 @@ Then append a structured **Evidence Bundle** section to `CRITIC__runtime.md`:
 
 ### Request Evidence
 <request IDs, endpoint response bodies, if API task; "n/a" otherwise>
+
+### Team Synthesis Review
+<when orchestration_mode=team: summary of TEAM_SYNTHESIS.md findings, unresolved items identified as verification targets, worker conflict assessment; "n/a" if not team mode>
 ```
 
 **Evidence Bundle rules:**
@@ -263,3 +267,22 @@ FAIL if frontend-refactor overlay is active and no UI interaction evidence is pr
 ### No overlays
 
 When `review_overlays` is empty, this entire section is skipped. Standard evidence rules apply unchanged.
+
+---
+
+## Team synthesis evidence
+
+Read `orchestration_mode` from TASK_STATE.yaml. If `solo` or `subagents`, skip this section.
+
+When `orchestration_mode` is `team`:
+
+1. Read `TEAM_SYNTHESIS.md` — this contains per-worker result summaries, conflicts, and unresolved items
+2. Treat unresolved items from TEAM_SYNTHESIS.md as additional verification targets
+3. **Do not trust worker self-assessment** — verify independently. Workers may claim completion without full testing
+4. Include a `### Team Synthesis Review` section in the evidence bundle:
+   - List each worker's claimed result
+   - Note any conflicts or duplicated work
+   - Note any unresolved items
+   - State whether independent verification confirmed or contradicted worker claims
+
+FAIL if `orchestration_mode: team` and `TEAM_SYNTHESIS.md` is missing — the lead must produce synthesis before requesting runtime verification.

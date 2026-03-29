@@ -146,6 +146,22 @@ if doc_critic_needed:
         if not re.search(r'^verdict:\s*PASS\s*$', doc_content, re.MULTILINE):
             failures.append("document critic did not PASS")
 
+# --- Team mode gates ---
+if os.path.exists(state_file):
+    orch_mode = yaml_field("orchestration_mode", state_file) or "solo"
+    if orch_mode == "team":
+        if not os.path.exists(os.path.join(target, "TEAM_PLAN.md")):
+            failures.append("team task requires TEAM_PLAN.md")
+        if not os.path.exists(os.path.join(target, "TEAM_SYNTHESIS.md")):
+            failures.append("team task requires TEAM_SYNTHESIS.md")
+        team_status_val = yaml_field("team_status", state_file) or ""
+        if team_status_val not in ("complete", "fallback"):
+            failures.append(f"team_status must be 'complete' or 'fallback', got '{team_status_val}'")
+        if team_status_val == "fallback":
+            fallback_val = yaml_field("fallback_used", state_file) or "none"
+            if fallback_val == "none":
+                failures.append("team_status is 'fallback' but fallback_used is 'none'")
+
 # --- CHECKS.yaml open criteria warning (non-blocking) ---
 checks_file = os.path.join(target, "CHECKS.yaml")
 if os.path.exists(checks_file):

@@ -11,7 +11,7 @@ from _lib import (read_hook_input, json_field, json_array, yaml_field, yaml_arra
 
 data = read_hook_input()
 
-task_id = json_field(data, "task_id") or os.environ.get("HARNESS_TASK_ID", "")
+task_id = json_field("task_id", data) or os.environ.get("HARNESS_TASK_ID", "")
 
 if not task_id:
     sys.exit(0)
@@ -49,6 +49,14 @@ blockers: []
 review_overlays: []
 risk_tags: []
 performance_task: false
+orchestration_mode: solo
+team_provider: none
+team_status: n/a
+team_size: 0
+team_reason: ""
+team_plan_required: false
+team_synthesis_required: false
+fallback_used: none
 updated: {now_iso()}
 """)
     print(f"INFO: Initialized {state_file}")
@@ -66,7 +74,7 @@ updated: {now_iso()}
 # Create REQUEST.md stub if missing
 request_file = os.path.join(target, "REQUEST.md")
 if not os.path.exists(request_file):
-    request_text = json_field(data, "description") or json_field(data, "request") or ""
+    request_text = json_field("description", data) or json_field("request", data) or ""
     body = request_text if request_text else "<!-- Request details pending -->"
     with open(request_file, "w") as f:
         f.write(f"""# Request: {task_id}

@@ -325,6 +325,51 @@ Set `profiles.observability_enabled: false` by default (requires explicit opt-in
 
 Report detected tooling in Phase 15 finish report.
 
+### Phase 11c: Team readiness detection
+
+Probe for team execution capabilities and populate the `teams:` section in manifest.yaml.
+
+Run `${CLAUDE_PLUGIN_ROOT}/scripts/team_readiness.py` to detect:
+
+#### Native team readiness
+- `claude --version` available and version supports native teams
+- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` environment variable set
+- Optional: `tmux` available for terminal-based team sessions
+
+#### OMC team readiness
+- `command -v omc` succeeds
+- `.omc/` directory exists in project or home directory
+
+#### Populate manifest teams section
+
+Based on readiness results, populate the `teams:` section in manifest.yaml:
+
+```yaml
+teams:
+  provider: auto
+  native_ready: <detected>
+  omc_ready: <detected>
+  auto_activate: true
+  approval_mode: preapproved
+  teammate_mode: auto
+  default_size: 3
+  max_size: 5
+  fallback: subagents
+  safe_only:
+    require_disjoint_files: true
+    forbid_same_file_edits: true
+    forbid_heavy_dependency_chains: true
+```
+
+Rules:
+- `provider: auto` by default (prefers native if ready, then omc, then fallback)
+- `native_ready` and `omc_ready` reflect actual detection results
+- `auto_activate: true` and `approval_mode: preapproved` mean the harness does not ask the user for team permission
+- If native team readiness is detected, consider adding `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` to `.claude/settings.json` env section
+- `fallback: subagents` means if team provider fails, fall back to subagents mode
+
+Report team readiness status in Phase 15 finish report.
+
 ### Phase 12: Setup .gitignore
 
 Append harness entries if not already present:
@@ -354,6 +399,7 @@ Report:
 - **Project shape detected** (web_frontend / fullstack_web / api / cli / etc.)
 - **Browser QA status**: enabled (with entry URL) | disabled (reason)
 - Smoke test results from Phase 14
+- **Team readiness**: native (ready/not ready), omc (ready/not ready), provider: auto
 - Remaining unknowns and next steps
 
 ## Guardrails

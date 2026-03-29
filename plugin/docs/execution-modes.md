@@ -2,6 +2,8 @@
 
 updated: 2026-03-28
 
+> **Note:** Execution mode (`light | standard | sprinted`) and orchestration mode (`solo | subagents | team`) are orthogonal axes. This document covers execution modes. See `plugin/docs/orchestration-modes.md` for orchestration modes.
+
 This document defines the three execution modes used by the harness to scale ceremony to task complexity.
 
 ---

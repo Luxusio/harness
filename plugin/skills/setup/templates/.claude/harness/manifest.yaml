@@ -47,6 +47,21 @@ profiles:
   ast_grep_enabled: {{AST_GREP_ENABLED}}
   observability_enabled: {{OBSERVABILITY_ENABLED}}
 
+teams:
+  provider: auto
+  native_ready: false
+  omc_ready: false
+  auto_activate: true
+  approval_mode: preapproved
+  teammate_mode: auto
+  default_size: 3
+  max_size: 5
+  fallback: subagents
+  safe_only:
+    require_disjoint_files: true
+    forbid_same_file_edits: true
+    forbid_heavy_dependency_chains: true
+
 # constraints: (optional — populated by setup when project has clear boundaries)
 # Entries are HINTS only. They inform critic playbooks but do not hard-block execution.
 # constraints:

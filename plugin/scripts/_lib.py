@@ -419,6 +419,32 @@ def parse_changed_files(input_str=None):
 
 
 # ---------------------------------------------------------------------------
+# Team helpers
+# ---------------------------------------------------------------------------
+
+def team_state_fields(task_dir):
+    """Return dict of team-related fields from TASK_STATE.yaml."""
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    return {
+        "orchestration_mode": yaml_field("orchestration_mode", state_file) or "solo",
+        "team_provider": yaml_field("team_provider", state_file) or "none",
+        "team_status": yaml_field("team_status", state_file) or "n/a",
+        "team_size": yaml_field("team_size", state_file) or "0",
+        "team_reason": yaml_field("team_reason", state_file) or "",
+        "fallback_used": yaml_field("fallback_used", state_file) or "none",
+    }
+
+def is_team_task(task_dir):
+    """Return True if orchestration_mode is 'team'."""
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    return yaml_field("orchestration_mode", state_file) == "team"
+
+def manifest_teams_field(field):
+    """Read a field from the teams: section of the manifest."""
+    return manifest_section_field("teams", field)
+
+
+# ---------------------------------------------------------------------------
 # Browser / project type
 # ---------------------------------------------------------------------------
 
