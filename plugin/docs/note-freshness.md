@@ -170,3 +170,36 @@ invalidated_by_paths:
   - src/db/pool.ts
 verify_by: "Run load test at 100 RPS and observe pool exhaustion errors"
 ```
+
+---
+
+## Prompt Memory Integration
+
+The prompt memory system (`plugin/scripts/prompt_memory.py`) uses note freshness metadata when selecting context for injection into user prompts.
+
+### Freshness weights
+
+| State | Weight | Behavior |
+|-------|--------|----------|
+| `current` | 1.0 | Included directly, no label |
+| `suspect` | 0.5 | Included with `[suspect]` label — may be outdated |
+| `stale` | 0.1 | Included only if no better candidates, with `[re-verify needed]` label |
+| `superseded` | 0.0 | Excluded entirely — follow superseded_by chain instead |
+
+### Selection budget
+
+The prompt memory system selects context within a 600-character budget:
+
+| Slot | Count | Source |
+|------|-------|--------|
+| Relevant notes | Top 2 | `doc/common/` notes scored by keyword match × freshness weight |
+| Active task | Top 1 | Open tasks scored by prompt relevance |
+| Recent verdict | Top 1 | Most recent critic verdict |
+| Blocker | 1 (if any) | Tasks with `status: blocked_env` |
+| Tooling hints | As-is | From manifest tooling/profile flags |
+
+### Scoring
+
+Note relevance is computed as: `keyword_match_score × freshness_weight`. This ensures that a highly relevant but `suspect` note (0.8 × 0.5 = 0.4) ranks below a moderately relevant `current` note (0.5 × 1.0 = 0.5).
+
+Casual prompts (greetings, confirmations) skip context injection entirely.

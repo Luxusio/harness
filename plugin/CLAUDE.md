@@ -354,6 +354,10 @@ constraints:
 - Browser-first QA is default for web frontend projects when manifest declares `browser_qa_supported: true`
 - Evidence bundles are required — PASS cannot be based on "the code looks correct"
 - Mode-appropriate artifacts are required — light tasks must not be judged by sprinted rubric and vice versa
+- Hidden review overlays (security, performance, frontend-refactor) activate conditionally per task based on prompt keywords and predicted paths. They add domain-specific checks to critics without changing the workflow.
+- Performance tasks require a numeric benchmark contract in the plan and numeric before/after evidence for runtime PASS. Qualitative-only claims are not sufficient.
+- Prompt memory uses freshness-weighted relevance scoring: current (1.0), suspect (0.5), stale (0.1), superseded (excluded). Selection budget: 2 notes, 1 task, 1 verdict, ≤600 chars.
+- TASK_STATE.yaml includes `review_overlays`, `risk_tags`, and `performance_task` fields for overlay-aware critic routing.
 
 ## Mode-specific artifact requirements
 

@@ -46,6 +46,9 @@ touched_paths: []
 roots_touched: []
 verification_targets: []
 blockers: []
+review_overlays: []
+risk_tags: []
+performance_task: false
 updated: {now_iso()}
 """)
     print(f"INFO: Initialized {state_file}")

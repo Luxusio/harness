@@ -97,6 +97,15 @@ Execution mode may upgrade mid-task (`light → standard`, `standard → sprinte
 
 Store `execution_mode: light | standard | sprinted` in `TASK_STATE.yaml` immediately after mode selection.
 
+### Review overlay context
+
+After mode selection, if `TASK_STATE.yaml` contains non-empty `review_overlays`:
+- Pass overlay names to critic-plan and critic-runtime when delegating
+- Critics will apply overlay-specific rubric sections in addition to mode-based rubrics
+- No new lanes or workflows are introduced — overlays operate within existing lanes
+
+If `review_overlays` is empty (the common case), critics operate with standard behavior unchanged.
+
 When delegating to `harness:developer`, instruct the developer to populate:
 - `touched_paths` — actual files changed
 - `roots_touched` — repo roots affected

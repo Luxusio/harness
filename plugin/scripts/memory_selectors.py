@@ -36,6 +36,39 @@ def extract_keywords(prompt):
             result.append(k)
     return result
 
+FRESHNESS_WEIGHTS = {
+    "current": 1.0,
+    "suspect": 0.5,
+    "stale": 0.1,
+    "superseded": 0.0,
+}
+
+def parse_note_frontmatter(content):
+    """Extract YAML-like header fields from note content."""
+    result = {
+        "freshness": "current",
+        "status": "active",
+        "summary": "",
+        "verified_at": "",
+        "derived_from": "",
+        "invalidated_by_paths": "",
+    }
+    if not content.startswith("---"):
+        return result
+    end = content.find("---", 3)
+    if end == -1:
+        return result
+    header = content[3:end]
+    for line in header.split("\n"):
+        line = line.strip()
+        if ":" in line:
+            key, _, val = line.partition(":")
+            key = key.strip()
+            val = val.strip()
+            if key in result:
+                result[key] = val
+    return result
+
 def score_relevance(keywords, text):
     """Score how relevant a text is to a set of keywords. Returns 0.0-1.0."""
     if not keywords or not text:
@@ -45,7 +78,7 @@ def score_relevance(keywords, text):
     return matches / len(keywords)
 
 def select_relevant_notes(prompt, notes_dir="doc/common"):
-    """Find notes in notes_dir matching prompt keywords. Returns list of (path, score, first_line)."""
+    """Find notes in notes_dir matching prompt keywords. Returns list of (path, weighted_score, first_line, freshness)."""
     keywords = extract_keywords(prompt)
     if not keywords or not os.path.isdir(notes_dir):
         return []
@@ -58,15 +91,37 @@ def select_relevant_notes(prompt, notes_dir="doc/common"):
         try:
             with open(fpath) as f:
                 content = f.read(1000)  # First 1000 chars
-            score = score_relevance(keywords, content)
-            if score > 0.1:  # Minimum threshold
-                first_line = content.split("\n")[0].strip("# ").strip()
-                scored.append((fpath, score, first_line))
+            frontmatter = parse_note_frontmatter(content)
+            # Skip superseded notes entirely
+            if frontmatter["status"] == "superseded":
+                continue
+            freshness = frontmatter["freshness"]
+            weight = FRESHNESS_WEIGHTS.get(freshness, 1.0)
+            raw_score = score_relevance(keywords, content)
+            weighted_score = raw_score * weight
+            if weighted_score > 0.1:  # Minimum threshold
+                # Find first non-frontmatter line
+                lines = content.split("\n")
+                first_line = ""
+                in_header = content.startswith("---")
+                past_header = not in_header
+                for line in lines:
+                    if not past_header:
+                        if line.strip() == "---" and lines.index(line) > 0:
+                            past_header = True
+                        continue
+                    stripped = line.strip("# ").strip()
+                    if stripped:
+                        first_line = stripped
+                        break
+                if not first_line:
+                    first_line = lines[0].strip("# ").strip()
+                scored.append((fpath, weighted_score, first_line, freshness))
         except Exception:
             continue
 
     scored.sort(key=lambda x: x[1], reverse=True)
-    return scored[:3]  # Top 3
+    return scored[:2]  # Top 2
 
 def select_active_tasks(prompt, task_dir=".claude/harness/tasks"):
     """Find active tasks relevant to prompt. Returns list of (task_id, status, relevance)."""
@@ -116,7 +171,7 @@ def select_active_tasks(prompt, task_dir=".claude/harness/tasks"):
         tasks.append((entry, status, score))
 
     tasks.sort(key=lambda x: x[2], reverse=True)
-    return tasks[:3]
+    return tasks[:1]
 
 def select_recent_verdicts(task_dir=".claude/harness/tasks"):
     """Get most recent critic verdicts. Returns list of (task_id, verdict_type, verdict)."""
@@ -142,7 +197,7 @@ def select_recent_verdicts(task_dir=".claude/harness/tasks"):
                         verdicts.append((entry, critic_type, "BLOCKED_ENV"))
                 except Exception:
                     continue
-    return verdicts[:5]
+    return verdicts[:1]
 
 def format_context(items, max_chars=500):
     """Format selected context items into a compact string."""
