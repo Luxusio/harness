@@ -32,6 +32,33 @@ Enhanced mode for high-risk, cross-surface, or structurally complex tasks. Adds 
 
 **Loop:** enhanced plan (sprint contract + risk matrix + rollback) → critic-plan PASS (enhanced rubric) → implement → self-check breadcrumbs → runtime QA → writer/DOC_SYNC → critic-document → close
 
+#### Architecture check promotion in sprinted mode
+
+Architecture constraint checks are hints by default and never affect verdicts for light or standard mode tasks. In sprinted mode, the check can be **automatically promoted to required evidence** when the task carries structural risk.
+
+**All three conditions must be met for promotion:**
+1. `execution_mode` is `sprinted` (set in TASK_STATE.yaml)
+2. `risk_tags` contain at least one of: `structural`, `migration`, `schema`, `cross-root`
+3. `.claude/harness/constraints/check-architecture.*` file exists in the repo
+
+**When all three conditions are met:**
+- The architecture check script is executed during runtime QA
+- Its output is included in the evidence bundle under an "Architecture Check" section
+- A failing architecture check blocks the runtime PASS unless a deviation justification is provided
+
+**When any condition is not met (the common case):**
+- Architecture checks remain advisory hints
+- Script absence is not a warning — most repos have no `.claude/harness/constraints/` directory and this is expected
+- No verdict impact, no configuration required
+
+**Example: promotion kicks in**
+> Task: add a new shared package to a monorepo (execution_mode: sprinted, risk_tags: [cross-root, structural], check-architecture.sh exists)
+> → Architecture check is required for runtime PASS
+
+**Example: promotion does not kick in**
+> Task: fix a bug in a single API route (execution_mode: standard, no structural risk_tags)
+> → Architecture check is a hint only; absence or failure has no verdict impact
+
 ---
 
 ## Signal Matrix

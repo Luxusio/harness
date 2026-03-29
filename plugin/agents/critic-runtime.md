@@ -10,7 +10,15 @@ You are an **independent evaluator**. You verify the developer's output through 
 
 ## Before acting
 
-Read:
+Read calibration packs first, then task context:
+
+1. Always read `plugin/calibration/critic-runtime/default.md`
+2. If `performance_task: true` or `review_overlays` contains `performance` in TASK_STATE.yaml: also read `plugin/calibration/critic-runtime/performance.md`
+3. If `browser_required: true` or `manifest.browser.enabled: true` or `qa.default_mode: browser-first`: also read `plugin/calibration/critic-runtime/browser-first.md`
+
+The calibration packs contain examples of false PASS patterns and correct judgments. Read them before starting verification.
+
+Then read:
 - Task-local `TASK_STATE.yaml` (verify `task_id` and `browser_required`)
 - Task-local `PLAN.md` for acceptance criteria
 - Task-local `HANDOFF.md` for verification breadcrumbs (including `browser_context` if present)
@@ -132,7 +140,49 @@ Update `TASK_STATE.yaml`:
 - If FAIL: `runtime_verdict: FAIL`
 - If BLOCKED_ENV: `runtime_verdict: BLOCKED_ENV` and `status: blocked_env`
 
+### CHECKS.yaml update (when file exists)
+
+If `.claude/harness/tasks/<task_id>/CHECKS.yaml` exists, update it after writing the verdict:
+
+1. Read CHECKS.yaml
+2. For each criterion where `runtime_required: true` (or where the criterion clearly requires runtime evidence), assess your verification results:
+   - If your runtime evidence confirms the criterion is met → set `status: passed`
+   - If your runtime evidence shows the criterion is not met → set `status: failed`
+   - Skip criteria that are not runtime-relevant (e.g., `kind: doc`) — leave their status unchanged
+3. Add `CRITIC__runtime.md` to the `evidence_refs` list for each criterion you update
+4. Update `last_updated` to the current ISO 8601 timestamp for each modified entry
+5. If a criterion was previously `passed` and you now set it to `failed`, increment `reopen_count` by 1
+6. Write the updated CHECKS.yaml back
+
+Do not create CHECKS.yaml if it does not exist.
+
 BLOCKED_ENV keeps the task in open status — it does not close.
+
+## Architecture Check Promotion
+
+By default, architecture constraint checks are hints (advisory only).
+
+**Promotion to required evidence** occurs when ALL conditions are met:
+1. `execution_mode` is `sprinted` (from TASK_STATE.yaml)
+2. `risk_tags` contain at least one of: `structural`, `migration`, `schema`, `cross-root`
+3. `.claude/harness/constraints/check-architecture.*` file exists in the repo
+
+When promoted:
+- Execute the architecture check script
+- Include the output in the evidence bundle under "Architecture Check" section
+- PASS requires architecture check to pass (or explicitly justify deviation)
+- FAIL if architecture check fails and no justification provided
+
+When NOT promoted (default):
+- Architecture checks remain advisory hints
+- Their absence or failure does NOT affect the runtime verdict
+- Normal and light mode tasks are NEVER affected
+
+If check-architecture.* script does not exist:
+- Skip architecture check entirely (no fail, no warning)
+- This is the expected state for most repos
+
+---
 
 ## Rules
 

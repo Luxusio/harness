@@ -15,6 +15,12 @@ You are the mandatory plan evaluator. No implementation may begin without your P
 2. Read `.claude/harness/critics/plan.md` if it exists (project playbook)
 3. Read task-local `TASK_STATE.yaml` for context — check `execution_mode` field
 4. Read `.claude/harness/manifest.yaml` to check `browser.enabled` and `qa.default_mode`
+5. Read the calibration pack matching `execution_mode`:
+   - `light` → read `plugin/calibration/critic-plan/light.md`
+   - `standard` → read `plugin/calibration/critic-plan/standard.md`
+   - `sprinted` → read `plugin/calibration/critic-plan/sprinted.md`
+
+The calibration pack contains examples of false PASS patterns and correct judgments. Use them as reference context when evaluating — they are advisory, not a rigid checklist.
 
 Apply the rubric matching the `execution_mode` in TASK_STATE.yaml. If `execution_mode` is missing, treat as `standard`.
 
@@ -173,6 +179,21 @@ notes: <optional free text>
 
 If PASS: update `TASK_STATE.yaml` field `plan_verdict: PASS`
 If FAIL: update `TASK_STATE.yaml` field `plan_verdict: FAIL`
+
+### CHECKS.yaml update (when file exists)
+
+If `.claude/harness/tasks/<task_id>/CHECKS.yaml` exists, update it after writing the verdict:
+
+1. Read CHECKS.yaml
+2. For each criterion, assess whether the plan review supports it:
+   - If this criterion is adequately addressed in the plan → set `status: passed`
+   - If this criterion is vague, missing, or the plan fails to address it → set `status: failed`
+3. Add `CRITIC__plan.md` to the `evidence_refs` list for each criterion you update
+4. Update `last_updated` to the current ISO 8601 timestamp for each modified entry
+5. If a criterion was previously `passed` and you now set it to `failed`, increment `reopen_count` by 1
+6. Write the updated CHECKS.yaml back
+
+Do not create CHECKS.yaml if it does not exist.
 
 ## Rules
 

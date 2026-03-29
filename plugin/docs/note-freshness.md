@@ -192,7 +192,7 @@ The prompt memory system selects context within a 600-character budget:
 
 | Slot | Count | Source |
 |------|-------|--------|
-| Relevant notes | Top 2 | `doc/common/` notes scored by keyword match × freshness weight |
+| Relevant notes | Top 2 | All `doc/*/` notes scored by multi-signal formula |
 | Active task | Top 1 | Open tasks scored by prompt relevance |
 | Recent verdict | Top 1 | Most recent critic verdict |
 | Blocker | 1 (if any) | Tasks with `status: blocked_env` |
@@ -200,6 +200,74 @@ The prompt memory system selects context within a 600-character budget:
 
 ### Scoring
 
-Note relevance is computed as: `keyword_match_score × freshness_weight`. This ensures that a highly relevant but `suspect` note (0.8 × 0.5 = 0.4) ranks below a moderately relevant `current` note (0.5 × 1.0 = 0.5).
+Note relevance is computed using a 5-signal linear combination:
+
+```
+score = lexical × 0.40 + freshness × 0.25 + root_match × 0.15 + path_overlap × 0.10 + lane_match × 0.10
+```
+
+| Signal | Weight | Description |
+|--------|--------|-------------|
+| `lexical` | 0.40 | Fraction of extracted keywords present in note text |
+| `freshness` | 0.25 | Freshness weight: current=1.0, suspect=0.5, stale=0.1, superseded=0.0 |
+| `root_match` | 0.15 | 1.0 if note's root is in active_roots, else 0.5 |
+| `path_overlap` | 0.10 | Overlap between prompt keywords and note's `path_scope` list |
+| `lane_match` | 0.10 | 1.0 if note's lane matches detected prompt lane, 0.7 if unknown/mismatch |
+
+A highly relevant but `suspect` note (e.g., lexical=0.8, freshness=0.5) scores 0.8×0.4 + 0.5×0.25 + ... which may rank below a moderately relevant `current` note, preserving the freshness-first principle.
 
 Casual prompts (greetings, confirmations) skip context injection entirely.
+
+---
+
+## Multi-Root Retrieval
+
+Notes can be stored in multiple `doc/*` subdirectories (roots). The retrieval system scans all registered roots when selecting context.
+
+### Root registration
+
+Roots are declared in the manifest under `registered_roots`:
+
+```yaml
+registered_roots:
+  - common
+  - frontend
+  - api
+```
+
+If `registered_roots` is absent from the manifest, the system falls back to scanning all `doc/*` subdirectories. `doc/common` is always included.
+
+### Root display in context
+
+Notes from non-common roots are prefixed with their root name in the injected context:
+
+```
+Note: [api] Rate limiter returns 429 with Retry-After header
+Note: Authentication flow requires session token in cookie
+```
+
+The second note (from `doc/common`) has no prefix. The first note (from `doc/api`) is prefixed with `[api]`.
+
+### Backward compatibility
+
+- Repos with only `doc/common/` behave identically to before — no configuration change needed.
+- Notes without `root`, `lane`, `path_scope`, or `topic_tags` fields use defaults: `root=common`, `lane=None`, `path_scope=[]`, `topic_tags=[]`.
+- The 0.1 minimum threshold and top-2 selection limit are unchanged.
+- The 600-character context budget is unchanged.
+
+---
+
+## Optional Note Metadata Fields
+
+The following fields improve retrieval scoring but are **not required**. Existing notes without them continue to work.
+
+```yaml
+root: common          # doc root this note belongs to (default: common)
+lane: build           # most relevant workflow lane (optional)
+path_scope:           # file paths this note covers (optional)
+  - src/api/users.py
+topic_tags:           # semantic labels (optional)
+  - authentication
+```
+
+See `plugin/docs/retrieval-selection.md` for the full retrieval reference.

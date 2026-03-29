@@ -1,4 +1,4 @@
-# harness v4.1 — Execution Harness
+# harness v4.2 — Execution Harness
 
 You are running with harness, an execution harness for AI-assisted repository work.
 
@@ -123,9 +123,17 @@ Doc paths: `doc/*`, `docs/*`, `*.md`, `README*`, `CHANGELOG*`, `LICENSE*`, `.cla
 
 Note freshness: if a changed file matches a note's `invalidated_by_paths`, that note's freshness transitions `current → suspect`.
 
+## Acceptance ledger (CHECKS.yaml)
+
+Plan creation also generates `CHECKS.yaml` with stable criterion IDs (`AC-001`, ...). Developer updates criteria to `implemented_candidate`; critics update per-criterion verdicts. `reopen_count` tracks regressions. Non-blocking in this version. See `plugin/docs/acceptance-ledger.md`.
+
+## Critic calibration
+
+Critics load mode-specific calibration packs (`plugin/calibration/`) before judging. critic-plan selects by `execution_mode`; critic-runtime adds performance/browser-first packs when relevant overlays are active; critic-document always loads default. Each pack has 1-2 false PASS examples as advisory context.
+
 ## Freshness-aware memory
 
-Notes in `doc/common/` carry freshness metadata that drives context reliability.
+Notes across all `doc/*/` roots carry freshness metadata that drives context reliability.
 
 ### Freshness states
 
@@ -202,7 +210,7 @@ Maintain-lite runs read-only at session end (`session-end-sync.sh`) and post-com
 | Check | Criterion |
 |-------|-----------|
 | Stale tasks | `updated` > 7 days, status not closed/archived/stale |
-| Orphan notes | Files in `doc/common/` not in any CLAUDE.md index |
+| Orphan notes | Files in any `doc/*/` root not in any CLAUDE.md index |
 | Broken supersede chains | `superseded_by:` pointing to non-existent file |
 | Dead artifacts | `CRITIC__*.md` in closed task folders |
 
@@ -356,8 +364,12 @@ constraints:
 - Mode-appropriate artifacts are required — light tasks must not be judged by sprinted rubric and vice versa
 - Hidden review overlays (security, performance, frontend-refactor) activate conditionally per task based on prompt keywords and predicted paths. They add domain-specific checks to critics without changing the workflow.
 - Performance tasks require a numeric benchmark contract in the plan and numeric before/after evidence for runtime PASS. Qualitative-only claims are not sufficient.
-- Prompt memory uses freshness-weighted relevance scoring: current (1.0), suspect (0.5), stale (0.1), superseded (excluded). Selection budget: 2 notes, 1 task, 1 verdict, ≤600 chars.
+- Prompt memory uses 5-signal scoring across all `doc/*/` roots: lexical (0.4) + freshness (0.25) + root match (0.15) + path overlap (0.1) + lane relevance (0.1). Selection budget: 2 notes, 1 task, 1 verdict, ≤600 chars.
 - TASK_STATE.yaml includes `review_overlays`, `risk_tags`, and `performance_task` fields for overlay-aware critic routing.
+- CHECKS.yaml tracks per-criterion acceptance status alongside PLAN.md. Non-blocking in v4.2.
+- Critics load calibration packs (`plugin/calibration/`) matching execution_mode and active overlays before judging.
+- SESSION_HANDOFF.json is generated on failure triggers (FAIL repeat, criterion reopen, sprinted compaction, blocked_env recovery, scope growth) for structured recovery.
+- Architecture constraint checks are hints by default; promoted to required evidence when sprinted + structural risk_tags + check-architecture script exists.
 
 ## Mode-specific artifact requirements
 
