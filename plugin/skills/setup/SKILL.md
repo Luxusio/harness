@@ -276,6 +276,23 @@ If `.mcp.json` already exists, merge `mcpServers.chrome-devtools` entry rather t
 
 Probe for available tooling and set the `tooling:` and `profiles:` fields in manifest.yaml.
 
+#### chrome-devtools MCP readiness
+
+Check whether the chrome-devtools MCP server is usable:
+
+```bash
+# 1. Is .mcp.json present and does it contain a chrome-devtools entry?
+grep -q "chrome-devtools" .mcp.json 2>/dev/null
+
+# 2. Is npx available? (the server launches via npx)
+command -v npx &>/dev/null
+```
+
+Rules:
+- Both conditions true → set `tooling.chrome_devtools_ready: true`
+- Either condition false → set `tooling.chrome_devtools_ready: false`
+- If `browser.enabled: true` but `chrome_devtools_ready: false` → flag in finish report as a gap (browser QA is configured but MCP server may not launch)
+
 #### ast-grep readiness
 
 Check for the ast-grep binary:
@@ -325,7 +342,7 @@ Rules:
 
 Set `profiles.observability_enabled: false` by default (requires explicit opt-in due to resource cost).
 
-Report detected tooling in Phase 15 finish report.
+Report detected tooling in Phase 15 finish report, including `chrome_devtools_ready` status. If `browser.enabled: true` but `chrome_devtools_ready: false`, flag explicitly as a gap.
 
 ### Phase 11c: Team readiness detection
 
@@ -403,6 +420,11 @@ Report:
 - Smoke test results from Phase 14
 - **Team readiness**: native (ready/not ready), omc (ready/not ready), provider: auto
 - Remaining unknowns and next steps
+
+**Always end the finish report with this notice:**
+
+> ⚠️ **Restart Claude Code** to apply the new harness configuration.
+> The agent, hooks, and manifest settings take effect only after a fresh session.
 
 ## Guardrails
 
