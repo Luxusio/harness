@@ -1,0 +1,7 @@
+id: no-ts-ignore
+language: typescript
+rule:
+  pattern: "// @ts-ignore"
+message: "@ts-ignore found — prefer @ts-expect-error with explanation"
+severity: warning
+note: "Sample rule. @ts-expect-error is safer as it errors when the suppressed error is fixed."

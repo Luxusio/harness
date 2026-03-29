@@ -1,0 +1,26 @@
+{
+  "_comment": "Optional LSP configuration for harness symbol lane. Rename to .lsp.json to activate.",
+  "servers": {
+    "typescript": {
+      "command": "typescript-language-server",
+      "args": ["--stdio"],
+      "languages": ["typescript", "typescriptreact", "javascript", "javascriptreact"]
+    },
+    "python": {
+      "command": "pyright-langserver",
+      "args": ["--stdio"],
+      "languages": ["python"]
+    },
+    "go": {
+      "command": "gopls",
+      "args": ["serve"],
+      "languages": ["go"]
+    },
+    "rust": {
+      "command": "rust-analyzer",
+      "args": [],
+      "languages": ["rust"]
+    }
+  },
+  "preferred_provider": "cclsp"
+}

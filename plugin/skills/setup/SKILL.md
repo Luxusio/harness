@@ -234,6 +234,61 @@ Only when `browser_qa_supported: true`:
 
 If `.mcp.json` already exists, merge `mcpServers.chrome-devtools` entry rather than overwriting.
 
+### Phase 11b: Detect tooling readiness
+
+Probe for available tooling and set the `tooling:` and `profiles:` fields in manifest.yaml.
+
+#### ast-grep readiness
+
+Check for the ast-grep binary:
+```bash
+command -v ast-grep &>/dev/null || command -v sg &>/dev/null
+```
+
+- Binary found → set `tooling.ast_grep_ready: true`
+- Binary not found → set `tooling.ast_grep_ready: false`
+
+Set `profiles.ast_grep_enabled: false` by default (user enables explicitly after confirming queries work).
+
+#### LSP / cclsp readiness
+
+Check for LSP infrastructure:
+```bash
+# Check for cclsp (harness-preferred LSP bridge)
+command -v cclsp &>/dev/null
+
+# Check for generic LSP configs in project
+ls .claude/lsp*.json .vscode/settings.json 2>/dev/null
+```
+
+Also check for language-specific LSP servers matching detected languages:
+- TypeScript/JavaScript → `typescript-language-server`, `vtsls`
+- Python → `pylsp`, `pyright`
+- Go → `gopls`
+- Rust → `rust-analyzer`
+
+Rules:
+- `cclsp` binary found → set `tooling.cclsp_ready: true`
+- Any LSP server matching project languages found → set `tooling.lsp_ready: true`
+- Neither found → both `false`
+
+Set `profiles.symbol_lane_enabled: false` by default (user enables explicitly).
+
+#### Observability feasibility
+
+Check Docker availability and project kind:
+```bash
+command -v docker &>/dev/null && docker info &>/dev/null 2>&1
+```
+
+Rules:
+- Docker available AND project kind is `web_frontend`, `fullstack_web`, `api`, or `worker` → set `tooling.observability_ready: true`
+- Otherwise → set `tooling.observability_ready: false`
+
+Set `profiles.observability_enabled: false` by default (requires explicit opt-in due to resource cost).
+
+Report detected tooling in Phase 15 finish report.
+
 ### Phase 12: Setup .gitignore
 
 Append harness entries if not already present:

@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/session-context.sh",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/session_context.py",
             "timeout": 10,
             "statusMessage": "Loading harness context"
           }
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/task-created-gate.sh",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/task_created_gate.py",
             "timeout": 10,
             "statusMessage": "Initializing task artifacts"
           }
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/task-completed-gate.sh",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/task_completed_gate.py",
             "timeout": 15,
             "statusMessage": "Verifying task completion"
           }
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/subagent-stop-gate.sh",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/subagent_stop_gate.py",
             "timeout": 10,
             "statusMessage": "Checking subagent artifacts"
           }
@@ -53,7 +53,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/stop-gate.sh",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/stop_gate.py",
             "timeout": 10,
             "statusMessage": "Checking open tasks"
           }
@@ -65,7 +65,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/file-changed-sync.sh",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/file_changed_sync.py",
             "timeout": 5,
             "statusMessage": "Syncing verdict state"
           }
@@ -77,7 +77,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/post-compact-sync.sh",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/post_compact_sync.py",
             "timeout": 10,
             "statusMessage": "Recovering task context"
           }
@@ -89,9 +89,33 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ${CLAUDE_PLUGIN_ROOT}/scripts/session-end-sync.sh",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/session_end_sync.py",
             "timeout": 10,
             "statusMessage": "Recording session state"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prompt_memory.py",
+            "timeout": 5,
+            "statusMessage": "Loading context hints"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/tool_routing.py",
+            "timeout": 3,
+            "statusMessage": "Checking tool hints"
           }
         ]
       }

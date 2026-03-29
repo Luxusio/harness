@@ -1,0 +1,8 @@
+id: deprecated-import-template
+language: typescript
+rule:
+  pattern: "import { $$$ } from 'OLD_MODULE'"
+fix: "import { $$$ } from 'NEW_MODULE'"
+message: "Deprecated import from OLD_MODULE — migrate to NEW_MODULE"
+severity: warning
+note: "Template rule. Replace OLD_MODULE and NEW_MODULE with actual module names."

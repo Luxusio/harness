@@ -4,6 +4,9 @@ entrypoint: CLAUDE.md
 
 project:
   shape: {{PROJECT_SHAPE}}
+  kind: {{PROJECT_KIND}}
+  languages: {{PROJECT_LANGUAGES}}
+  package_managers: {{PROJECT_PACKAGE_MANAGERS}}
   primary_frontend:
     cwd: {{FRONTEND_CWD}}
     framework: {{FRAMEWORK}}
@@ -11,9 +14,13 @@ project:
 runtime:
   dev_command: "{{DEV_COMMAND}}"
   test_command: "{{TEST_COMMAND}}"
+  build_command: "{{BUILD_COMMAND}}"
   smoke_command: "scripts/harness/smoke.sh"
   healthcheck_command: "scripts/harness/healthcheck.sh"
-  reset_command: "scripts/harness/reset-db.sh"
+  healthcheck_url: "{{HEALTHCHECK_URL}}"
+  app_url: "{{APP_URL}}"
+
+  ports: {{RUNTIME_PORTS}}
   base_urls:
     frontend: "{{FRONTEND_URL}}"
     api: "{{API_URL}}"
@@ -28,6 +35,17 @@ browser:
   mcp_server: chrome-devtools
   launch_config: .claude/launch.json
   status: {{BROWSER_STATUS}}
+
+tooling:
+  ast_grep_ready: {{AST_GREP_READY}}
+  lsp_ready: {{LSP_READY}}
+  cclsp_ready: {{CCLSP_READY}}
+  observability_ready: {{OBSERVABILITY_READY}}
+
+profiles:
+  symbol_lane_enabled: {{SYMBOL_LANE_ENABLED}}
+  ast_grep_enabled: {{AST_GREP_ENABLED}}
+  observability_enabled: {{OBSERVABILITY_ENABLED}}
 
 # constraints: (optional — populated by setup when project has clear boundaries)
 # Entries are HINTS only. They inform critic playbooks but do not hard-block execution.
