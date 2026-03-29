@@ -59,34 +59,41 @@ def invalidate_document(state_file, task_id, reason):
 
 
 def invalidate_note_freshness(changed_file):
-    """Scan doc/common/*.md and *.yaml; if invalidated_by_paths contains the file → set freshness: suspect."""
-    notes_dir = "doc/common"
-    if not os.path.isdir(notes_dir):
+    """Scan doc/*/*.md and *.yaml across all roots; if invalidated_by_paths contains the file → set freshness: suspect."""
+    doc_base = "doc"
+    if not os.path.isdir(doc_base):
         return
 
-    for pattern in (os.path.join(notes_dir, "*.md"), os.path.join(notes_dir, "*.yaml")):
-        for note_file in glob.glob(pattern):
-            if not os.path.isfile(note_file):
-                continue
-            try:
-                content = open(note_file, encoding="utf-8").read()
-            except OSError:
-                continue
-            if "invalidated_by_paths" not in content:
-                continue
-            if changed_file not in content:
-                continue
-            # Set freshness: suspect
-            if re.search(r'^freshness:', content, flags=re.MULTILINE):
-                content = re.sub(r'^freshness: .*', 'freshness: suspect', content, flags=re.MULTILINE)
-            else:
-                # Insert freshness after the first line
-                lines = content.split('\n')
-                lines.insert(1, 'freshness: suspect')
-                content = '\n'.join(lines)
-            with open(note_file, "w", encoding="utf-8") as f:
-                f.write(content)
-            print(f"NOTE SUSPECT: {note_file} — freshness set to suspect ({changed_file} changed)")
+    # Collect all note files across all doc/* subdirectories
+    note_files = []
+    for pattern in (
+        os.path.join(doc_base, "*", "*.md"),
+        os.path.join(doc_base, "*", "*.yaml"),
+    ):
+        note_files.extend(glob.glob(pattern))
+
+    for note_file in note_files:
+        if not os.path.isfile(note_file):
+            continue
+        try:
+            content = open(note_file, encoding="utf-8").read()
+        except OSError:
+            continue
+        if "invalidated_by_paths" not in content:
+            continue
+        if changed_file not in content:
+            continue
+        # Set freshness: suspect
+        if re.search(r'^freshness:', content, flags=re.MULTILINE):
+            content = re.sub(r'^freshness: .*', 'freshness: suspect', content, flags=re.MULTILINE)
+        else:
+            # Insert freshness after the first line
+            lines = content.split('\n')
+            lines.insert(1, 'freshness: suspect')
+            content = '\n'.join(lines)
+        with open(note_file, "w", encoding="utf-8") as f:
+            f.write(content)
+        print(f"NOTE SUSPECT: {note_file} — freshness set to suspect ({changed_file} changed)")
 
 
 def process_changed_file(changed_file):

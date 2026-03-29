@@ -11,7 +11,13 @@ You are an **independent evaluator** for documentation changes. You run whenever
 
 ## Before acting
 
-Read:
+Read calibration pack first, then task context:
+
+1. Always read `plugin/calibration/critic-document/default.md` before judging
+
+The calibration pack contains examples of false PASS patterns and correct judgments. Read it before starting evaluation.
+
+Then read:
 - Task-local `TASK_STATE.yaml` (verify `task_id`)
 - Task-local `DOC_SYNC.md` (what the writer claims changed)
 - `.claude/harness/critics/document.md` if it exists (project playbook)
@@ -65,6 +71,28 @@ notes: <optional free text>
 Update `TASK_STATE.yaml`:
 - If PASS: `document_verdict: PASS`
 - If FAIL: `document_verdict: FAIL`
+
+### CHECKS.yaml update (when file exists)
+
+If `.claude/harness/tasks/<task_id>/CHECKS.yaml` exists, update it after writing the verdict:
+
+1. Read CHECKS.yaml
+2. For each criterion with `kind: doc` or `doc_sync_required: true`, assess your documentation review:
+   - If the documentation evidence confirms the criterion is met → set `status: passed`
+   - If doc claims are missing, drifted, or contradicted → set `status: failed`
+   - Skip criteria that are not doc-relevant (e.g., `kind: functional` without `doc_sync_required: true`) — leave their status unchanged
+3. Add `CRITIC__document.md` to the `evidence_refs` list for each criterion you update
+4. Update `last_updated` to the current ISO 8601 timestamp for each modified entry
+5. If a criterion was previously `passed` and you now set it to `failed`, increment `reopen_count` by 1
+6. Write the updated CHECKS.yaml back
+
+Do not create CHECKS.yaml if it does not exist.
+
+## Sprinted structural tasks: architecture documentation (advisory)
+
+For sprinted tasks where `risk_tags` contain `structural`, `migration`, `schema`, or `cross-root`, architecture decisions should be documented in at least one note (INF or OBS) capturing the design reasoning. This is **advisory** — the document critic flags missing rationale but does not hard-fail on it alone. The runtime critic enforces the architecture check evidence requirement; the document critic's role here is limited to noting the absence of written rationale.
+
+---
 
 ## Sprinted mode additional checks
 

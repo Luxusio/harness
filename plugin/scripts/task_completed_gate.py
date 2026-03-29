@@ -146,6 +146,23 @@ if doc_critic_needed:
         if not re.search(r'^verdict:\s*PASS\s*$', doc_content, re.MULTILINE):
             failures.append("document critic did not PASS")
 
+# --- CHECKS.yaml open criteria warning (non-blocking) ---
+checks_file = os.path.join(target, "CHECKS.yaml")
+if os.path.exists(checks_file):
+    try:
+        import yaml
+        with open(checks_file) as f:
+            checks_data = yaml.safe_load(f)
+        checks = (checks_data or {}).get("checks", []) or []
+        open_criteria = [c for c in checks if c.get("status") != "passed"]
+        if open_criteria:
+            ids = ", ".join(c.get("id", "?") for c in open_criteria)
+            print(f"WARN: {len(open_criteria)} open acceptance criterion/criteria in CHECKS.yaml: {ids}")
+            for c in open_criteria:
+                print(f"  - {c.get('id', '?')} [{c.get('status', 'unknown')}] {c.get('title', '')}")
+    except Exception as e:
+        print(f"WARN: could not parse CHECKS.yaml: {e}")
+
 # --- Report and block ---
 if failures:
     print(f"BLOCKED: {task_id}")

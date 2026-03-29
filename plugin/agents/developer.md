@@ -11,12 +11,21 @@ You are a **generator**. You produce code changes. You do NOT evaluate your own 
 ## Before acting
 
 Read:
+- Task-local `SESSION_HANDOFF.json` **if it exists** — read this FIRST before any other artifact (see below)
 - `.claude/harness/manifest.yaml` (verify harness is initialized; check `browser.enabled` for browser-first context)
 - Task-local `TASK_STATE.yaml` (verify `task_id`, `lane`, and `status`)
 - Task-local `PLAN.md` (verify critic-plan PASS exists in `CRITIC__plan.md`)
 - Task-local `HANDOFF.md`
 - `.claude/harness/critics/runtime.md` if it exists (project-specific verification expectations)
 - `.claude/harness/constraints/*` if present (architecture rules)
+
+### SESSION_HANDOFF.json recovery context
+
+If `SESSION_HANDOFF.json` exists in the task directory:
+1. Read it before any other artifact — it contains structured recovery context.
+2. Focus implementation on `paths_in_focus` — these are the files most likely needing fixes.
+3. Avoid breaking `do_not_regress` items — these were previously passing and must stay passing.
+4. After the 2nd+ runtime FAIL, populate `do_not_regress` in the handoff by identifying criteria that passed in earlier runs (visible in CRITIC__runtime.md evidence bundles). This helps the next critic run know what not to break.
 
 ## Rules
 
@@ -29,6 +38,20 @@ Read:
 - **Never write CRITIC__runtime.md or CRITIC__plan.md.** Those belong to evaluators.
 
 ## On finish
+
+### CHECKS.yaml update (optional — skip silently if file absent)
+
+If `.claude/harness/tasks/<task_id>/CHECKS.yaml` exists, update it after implementation:
+
+1. Read CHECKS.yaml
+2. For each criterion whose acceptance condition your implementation addresses, set `status: implemented_candidate`
+3. Update `last_updated` to the current ISO 8601 timestamp for each modified entry
+4. Leave criteria you did not address at their current status — do not downgrade anything
+5. Write the updated CHECKS.yaml back
+
+Do not create CHECKS.yaml if it does not exist — that is the plan skill's responsibility.
+
+### Populate touched_paths
 
 1. Run `git diff --name-only` to get the list of files changed by your implementation.
 2. Populate `TASK_STATE.yaml` with the change set — **never close with empty `touched_paths: []`**:

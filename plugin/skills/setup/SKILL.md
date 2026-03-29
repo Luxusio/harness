@@ -147,6 +147,27 @@ For **non-web** projects (api, cli, worker, library), use a simplified manifest 
 
 The manifest `version` must be `4`.
 
+#### registered_roots field
+
+Always include `registered_roots` in the manifest. This list tells the memory retrieval system which `doc/*` subdirectories contain notes.
+
+```yaml
+registered_roots:
+  - common
+```
+
+Default is `["common"]` for single-workspace projects.
+
+**For monorepos or multi-surface projects**, suggest additional roots based on detected workspaces or source surfaces. Each additional root should correspond to a distinct `doc/<root>/` directory that will be created alongside `doc/common/`.
+
+Detection rules:
+- Single workspace → `registered_roots: [common]`
+- Monorepo with N workspaces → suggest one root per workspace (e.g., `[common, frontend, api, worker]`)
+- Multi-surface (app + api detected in same repo) → suggest surface-level roots (e.g., `[common, app, api]`)
+- Always include `common` as the base root; it is never removed
+
+When suggesting additional roots, create the corresponding `doc/<root>/CLAUDE.md` index file (empty index) so the directory exists and is indexed from the start.
+
 ### Phase 7: Configure QA runtime
 
 **Browser-first (web frontend / fullstack_web):**
@@ -207,7 +228,7 @@ Update `doc/common/CLAUDE.md` index to list created notes.
 
 ### Phase 10: Optional architecture constraints
 
-Only create when the project has clear boundaries (monorepo, layered app, strict separation). Constraints are **HINTS only** — they inform critic playbooks but do not hard-block execution.
+Only create when the project has clear boundaries (monorepo, layered app, strict separation). Constraints are **HINTS only** by default — they inform critic playbooks but do not hard-block execution.
 
 **Detection triggers for constraint generation:**
 - Monorepo with multiple workspaces that should not cross-import
@@ -228,6 +249,16 @@ Each constraint entry must have:
 - `check`: executable shell command that exits non-zero on violation (if automatable)
 
 If constraints are not detectable from repo shape, skip this phase entirely. Do not scaffold empty constraint files.
+
+**Architecture check promotion (automatic):**
+
+Under normal conditions, architecture checks are hints — their absence or failure does not affect critic verdicts. However, the architecture check result is automatically promoted to **required evidence** for a runtime PASS when ALL three conditions are met:
+
+1. `execution_mode` is `sprinted` (from TASK_STATE.yaml)
+2. `risk_tags` contain at least one of: `structural`, `migration`, `schema`, `cross-root`
+3. `.claude/harness/constraints/check-architecture.*` file exists in the repo
+
+This promotion is **automatic** — no user configuration is needed. For most repos (no constraints directory), architecture checks are skipped entirely and do not affect verdicts. For light and standard mode tasks, architecture checks are always hints regardless of risk tags. See `plugin/docs/architecture-promotion.md` for complete reference.
 
 ### Phase 11: Web frontend setup
 

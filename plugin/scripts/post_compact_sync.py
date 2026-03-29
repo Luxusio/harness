@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (read_hook_input, yaml_field, yaml_array, manifest_field,
                   is_browser_first_project, is_tooling_ready, is_profile_enabled,
                   TASK_DIR, MANIFEST, now_iso)
+from handoff_escalation import should_create_handoff, generate_handoff
 
 
 def get_browser_qa_status():
@@ -94,45 +95,55 @@ def maintain_lite_entropy():
                 if (now_epoch - mtime) > stale_threshold:
                     stale_count += 1
 
-    # Count orphan notes
-    doc_common = "doc/common"
-    if os.path.isdir(doc_common):
-        for fname in os.listdir(doc_common):
-            if not fname.endswith(".md"):
+    # Count orphan notes across all doc/* roots
+    doc_base = "doc"
+    if os.path.isdir(doc_base):
+        for root_entry in os.listdir(doc_base):
+            root_dir = os.path.join(doc_base, root_entry)
+            if not os.path.isdir(root_dir):
                 continue
-            if fname == "CLAUDE.md":
-                continue
-            note_path = os.path.join(doc_common, fname)
-            if not os.path.isfile(note_path):
-                continue
-            # Check if note_base appears in any CLAUDE.md under doc/
-            found = False
-            for root, dirs, files in os.walk("doc"):
-                if "CLAUDE.md" in files:
-                    claude_path = os.path.join(root, "CLAUDE.md")
-                    try:
-                        with open(claude_path) as f:
-                            if fname in f.read():
-                                found = True
-                                break
-                    except (OSError, IOError):
-                        pass
-            if not found:
-                orphan_count += 1
+            for fname in os.listdir(root_dir):
+                if not fname.endswith(".md"):
+                    continue
+                if fname == "CLAUDE.md":
+                    continue
+                note_path = os.path.join(root_dir, fname)
+                if not os.path.isfile(note_path):
+                    continue
+                # Check if note filename appears in any CLAUDE.md under doc/
+                found = False
+                for walk_root, dirs, files in os.walk(doc_base):
+                    if "CLAUDE.md" in files:
+                        claude_path = os.path.join(walk_root, "CLAUDE.md")
+                        try:
+                            with open(claude_path) as f:
+                                if fname in f.read():
+                                    found = True
+                                    break
+                        except (OSError, IOError):
+                            pass
+                if not found:
+                    orphan_count += 1
 
-    # Count broken supersede chains
-    if os.path.isdir(doc_common):
-        for fname in os.listdir(doc_common):
-            if not fname.endswith(".md"):
+    # Count broken supersede chains across all doc/* roots
+    if os.path.isdir(doc_base):
+        for root_entry in os.listdir(doc_base):
+            root_dir = os.path.join(doc_base, root_entry)
+            if not os.path.isdir(root_dir):
                 continue
-            note_path = os.path.join(doc_common, fname)
-            if not os.path.isfile(note_path):
-                continue
-            superseded_by = yaml_field(note_path, "superseded_by") or ""
-            if superseded_by and superseded_by not in ("null", "~"):
-                target = os.path.join(doc_common, superseded_by)
-                if not os.path.isfile(target):
-                    broken_chain_count += 1
+            for fname in os.listdir(root_dir):
+                if not fname.endswith(".md"):
+                    continue
+                note_path = os.path.join(root_dir, fname)
+                if not os.path.isfile(note_path):
+                    continue
+                superseded_by = yaml_field(note_path, "superseded_by") or ""
+                if superseded_by and superseded_by not in ("null", "~"):
+                    # Check in same root directory first, then any doc/* root
+                    target_same = os.path.join(root_dir, superseded_by)
+                    target_common = os.path.join(doc_base, "common", superseded_by)
+                    if not os.path.isfile(target_same) and not os.path.isfile(target_common):
+                        broken_chain_count += 1
 
     return stale_count, orphan_count, broken_chain_count
 
@@ -209,6 +220,29 @@ def main():
     else:
         print("")
         print(f"Summary: {open_count} open, {blocked_count} blocked_env, {pending_verdicts} pending verdicts")
+
+    # Handoff escalation — check open tasks for trigger conditions
+    for entry in sorted(os.listdir(TASK_DIR)):
+        task_path = os.path.join(TASK_DIR, entry)
+        if not os.path.isdir(task_path) or not entry.startswith("TASK__"):
+            continue
+        state_file = os.path.join(task_path, "TASK_STATE.yaml")
+        if not os.path.isfile(state_file):
+            continue
+        status = yaml_field(state_file, "status") or "unknown"
+        if status in ("closed", "archived", "stale"):
+            continue
+
+        trigger = should_create_handoff(task_path, compaction_just_occurred=True)
+        if trigger:
+            handoff = generate_handoff(task_path, trigger)
+            if handoff:
+                print("")
+                print(f"[HANDOFF] {entry} has SESSION_HANDOFF.json (trigger: {trigger})")
+                print(f"  Next step: {handoff.get('next_step', '')}")
+                read_first = handoff.get("files_to_read_first", [])
+                if read_first:
+                    print(f"  Read first: {', '.join(read_first)}")
 
     # Maintain-lite entropy
     stale_count, orphan_count, broken_chain_count = maintain_lite_entropy()

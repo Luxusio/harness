@@ -1,6 +1,6 @@
 # harness — execution harness for AI-assisted repository work
 
-Version 4.1.0
+Version 4.2.0
 
 ## What it does
 
@@ -67,9 +67,40 @@ When the project manifest declares `browser_qa_supported: true`, the runtime cri
 
 Browser-first is auto-detected during setup using a 4-signal process: framework/package detection, structure detection, executability check, and server-only exclusion rules.
 
+## Acceptance ledger (CHECKS.yaml)
+
+When `/harness:plan` creates a task, it also generates a machine-readable `CHECKS.yaml` alongside `PLAN.md`. Each acceptance criterion receives a stable ID (`AC-001`, `AC-002`, ...) and structured status tracking:
+
+```yaml
+checks:
+  - id: AC-001
+    title: "User can create account"
+    status: planned | implemented_candidate | passed | failed | blocked
+    kind: functional | verification | doc | risk
+    evidence_refs: []
+    reopen_count: 0
+    last_updated: "2026-03-29T00:00:00Z"
+```
+
+The developer updates criteria to `implemented_candidate` after implementation. Critics update per-criterion verdicts (`passed`/`failed`) with evidence refs. The `reopen_count` tracks regression (re-failure after a previous pass). The ledger is informational — it does not block task completion in this version.
+
+See `plugin/docs/acceptance-ledger.md` for the full schema and lifecycle.
+
+## Critic calibration
+
+Critics load mode-specific calibration packs before judging. These are short few-shot examples of common false PASS patterns, stored in `plugin/calibration/`:
+
+| Critic | Calibration files |
+|--------|-------------------|
+| critic-plan | `light.md`, `standard.md`, `sprinted.md` — selected by `execution_mode` |
+| critic-runtime | `default.md` (always), `performance.md` (when `performance_task`), `browser-first.md` (when browser QA) |
+| critic-document | `default.md` (always) |
+
+Calibration is advisory context for the critic, not a rigid checklist. Each file contains 1-2 examples of false PASS patterns and correct judgments.
+
 ## Freshness-aware memory
 
-The harness maintains durable memory in `doc/common/` using three note types:
+The harness maintains durable memory across `doc/*/` roots (default: `doc/common/`) using three note types:
 
 - **REQ** — requirements and constraints from the project or user
 - **OBS** — observations from repo scans, test runs, or runtime checks
@@ -98,7 +129,21 @@ Performance tasks (those with `performance_task: true` or a `performance` overla
 
 ## Memory retrieval
 
-The prompt memory system uses freshness-weighted relevance scoring when selecting notes for context injection. Notes marked `current` receive full weight, `suspect` notes are included with a caution label, `stale` notes are used only as a last resort with a re-verification flag, and `superseded` notes are excluded entirely. The selection budget targets the top 2 relevant notes, 1 active task, and 1 recent verdict within a 600-character context limit.
+The prompt memory system uses multi-signal relevance scoring across all registered doc roots (not just `doc/common/`). Five signals are combined in a linear scorer:
+
+| Signal | Weight | Description |
+|--------|--------|-------------|
+| Lexical relevance | 0.40 | Keyword match ratio (Unicode-aware, supports Korean/CJK) |
+| Freshness | 0.25 | current=1.0, suspect=0.5, stale=0.1, superseded=excluded |
+| Root match | 0.15 | Bonus when note's root matches the active task root |
+| Path overlap | 0.10 | Overlap between query paths and note's `path_scope` |
+| Lane relevance | 0.10 | Bonus when note's `lane` matches current task lane |
+
+Query tokenization handles: Unicode word splitting, file path segments, `snake_case`/`camelCase`/`kebab-case` decomposition, and 2-3gram fallback. The selection budget remains top 2 notes, 1 task, 1 verdict within 600 characters.
+
+Notes may carry optional retrieval metadata (`root`, `lane`, `path_scope`, `topic_tags`) for better scoring. Notes without these fields use defaults and score normally.
+
+See `plugin/docs/retrieval-selection.md` for the full algorithm specification.
 
 ## Design decisions
 
@@ -146,14 +191,42 @@ See `plugin/docs/evidence-bundle.md` for the full format specification and examp
 
 All repo-mutating tasks produce a `DOC_SYNC.md` file. This sentinel records which documentation surfaces were affected and confirms they are consistent with the code changes. The document critic validates DOC_SYNC accuracy before task close.
 
+## Handoff escalation
+
+When specific failure triggers are detected, the harness generates a `SESSION_HANDOFF.json` in the task folder for structured recovery:
+
+| Trigger | Condition |
+|---------|-----------|
+| `runtime_fail_repeat` | Runtime verdict FAIL count >= 2 |
+| `criterion_reopen` | Same acceptance criterion reopen_count >= 2 |
+| `sprinted_compaction` | Sprinted task undergoes context compaction |
+| `blocked_env_recovery` | Re-entry after blocked_env resolution |
+| `scope_growth` | Touched roots grew significantly beyond plan estimate |
+
+The handoff includes: open check IDs, last fail evidence, next recovery step, paths in focus, and a do-not-regress list. It is consumed by the harness on session re-entry and by the developer for recovery context.
+
+Normal successful tasks produce no handoff artifact. See `plugin/docs/handoff-escalation.md`.
+
+## Architecture check promotion
+
+Architecture constraint checks default to **hints only**. They are promoted to **required evidence** when all conditions are met:
+
+1. `execution_mode` is `sprinted`
+2. `risk_tags` contain structural / migration / schema / cross-root
+3. `.claude/harness/constraints/check-architecture.*` file exists
+
+When promoted, the runtime critic requires the architecture check result in the evidence bundle. Script absence = skip (not fail). Normal/light tasks are never affected.
+
+See `plugin/docs/architecture-promotion.md`.
+
 ## Maintain-lite
 
-At session end and post-compaction, the harness automatically runs maintain-lite: a read-only entropy scan with no writes or auto-fixes.
+At session end and post-compaction, the harness automatically runs maintain-lite: a read-only entropy scan across all `doc/*/` roots with no writes or auto-fixes.
 
 | Check | What it detects |
 |-------|----------------|
 | Stale tasks | `updated` > 7 days, status not closed/archived/stale |
-| Orphan notes | Files in `doc/common/` not referenced in any CLAUDE.md index |
+| Orphan notes | Files in any `doc/*/` root not referenced in any CLAUDE.md index |
 | Broken supersede chains | `superseded_by:` pointing to non-existent file |
 | Dead artifacts | `CRITIC__*.md` in closed task folders |
 
@@ -188,29 +261,38 @@ plugin/
   settings.json                  # default agent config
   hooks/hooks.json               # hook configuration
   agents/                        # 6 agent definitions
-    harness.md                   # orchestrating harness (mode selection, signal matrix)
-    developer.md                 # generator — code + touched_paths population
-    writer.md                    # generator — notes with freshness metadata
-    critic-plan.md               # evaluator — mode-aware plan validation
-    critic-runtime.md            # evaluator — runtime verification + evidence bundle
-    critic-document.md           # evaluator — doc validation + sprinted-mode checks
+    harness.md                   # orchestrating harness (mode selection, signal matrix, handoff reading)
+    developer.md                 # generator — code + touched_paths + CHECKS.yaml updates
+    writer.md                    # generator — notes with freshness + retrieval metadata
+    critic-plan.md               # evaluator — mode-aware plan validation + calibration
+    critic-runtime.md            # evaluator — runtime verification + evidence bundle + calibration + arch promotion
+    critic-document.md           # evaluator — doc validation + sprinted-mode checks + calibration
   skills/
-    plan/SKILL.md                # create task contract (mode-aware formats)
+    plan/SKILL.md                # create task contract (mode-aware formats) + CHECKS.yaml generation
     maintain/SKILL.md            # cleanup tool + maintain-lite docs
-    setup/SKILL.md               # bootstrap target project
+    setup/SKILL.md               # bootstrap target project (multi-root support, arch constraints)
   scripts/
-    _lib.sh                      # shared helpers (extract_roots, is_doc_path, find_tasks_with_verification_targets)
-    session-context.sh           # session start context
-    task-created-gate.sh         # task init (no blocking)
-    subagent-stop-gate.sh        # agent reminders (no blocking)
-    task-completed-gate.sh       # completion gate (auto-populates touched_paths on close)
-    file-changed-sync.sh         # precise invalidation (doc vs runtime, note freshness)
-    session-end-sync.sh          # session end summary + maintain-lite entropy
-    post-compact-sync.sh         # post-compaction context + maintain-lite entropy
+    _lib.py                      # shared helpers
+    prompt_memory.py             # context injection (multi-root retrieval)
+    memory_selectors.py          # note scoring (5-signal, Unicode-aware)
+    task_completed_gate.py       # completion gate + CHECKS.yaml warnings
+    file_changed_sync.py         # precise invalidation (all doc/* roots)
+    session_end_sync.py          # session end summary + maintain-lite (all roots) + handoff
+    post_compact_sync.py         # post-compaction context + maintain-lite + handoff escalation
+    handoff_escalation.py        # SESSION_HANDOFF.json trigger detection + generation
+    stop_gate.py                 # stop gate (blocks if open tasks)
+  calibration/                   # critic calibration packs (few-shot examples)
+    critic-plan/                 # light.md, standard.md, sprinted.md
+    critic-runtime/              # default.md, performance.md, browser-first.md
+    critic-document/             # default.md
   docs/
-    execution-modes.md           # execution mode reference
-    note-freshness.md            # note freshness lifecycle reference
+    execution-modes.md           # execution mode reference + arch check promotion
+    note-freshness.md            # note freshness lifecycle + multi-root retrieval
     evidence-bundle.md           # evidence bundle format reference
+    acceptance-ledger.md         # CHECKS.yaml schema and lifecycle
+    retrieval-selection.md       # multi-signal retrieval algorithm reference
+    handoff-escalation.md        # SESSION_HANDOFF.json triggers and schema
+    architecture-promotion.md    # conditional architecture check promotion
 ```
 
 ## Setup outputs

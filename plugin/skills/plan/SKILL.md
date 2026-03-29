@@ -275,7 +275,47 @@ When this task involves performance optimization, add this section to PLAN.md:
 
 If PLAN.md alone is genuinely insufficient (10+ files, cross-domain, high ambiguity), add ONE supporting document — SPEC.md, DESIGN.md, or TASKS.md. Do not create a hierarchy by default.
 
-### 7. Initialize HANDOFF.md
+### 7. Generate CHECKS.yaml
+
+After writing PLAN.md, extract each acceptance criterion and write `.claude/harness/tasks/TASK__$ARGUMENTS/CHECKS.yaml`.
+
+Parse the `## Acceptance criteria` section from PLAN.md. Each `- [ ] <criterion text>` line becomes one entry.
+
+Assign stable IDs sequentially: `AC-001`, `AC-002`, etc.
+
+Infer `kind` from the criterion text using these heuristics:
+- `functional` — describes user-visible behavior or a feature outcome
+- `verification` — describes a test, check, or validation step
+- `doc` — describes documentation or comment requirements
+- `risk` — describes a safety, rollback, or constraint condition
+
+Set optional fields when inferable:
+- `runtime_required: true` if the criterion requires running the application
+- `doc_sync_required: true` if the criterion requires documentation changes
+
+```yaml
+checks:
+  - id: AC-001
+    title: "<criterion text verbatim>"
+    status: planned
+    kind: functional
+    evidence_refs: []
+    reopen_count: 0
+    last_updated: "<ISO 8601 timestamp>"
+    notes: ""
+    # optional fields (omit if not applicable):
+    # owner_hint: ""
+    # related_paths: []
+    # overlay_tags: []
+    # runtime_required: false
+    # doc_sync_required: false
+```
+
+**Status values:** `planned` | `implemented_candidate` | `passed` | `failed` | `blocked`
+
+If the PLAN.md has no acceptance criteria (e.g., blank or malformed), write an empty `checks: []` list and note the omission.
+
+### 8. Initialize HANDOFF.md
 
 Create `.claude/harness/tasks/TASK__$ARGUMENTS/HANDOFF.md` with initial stub.
 

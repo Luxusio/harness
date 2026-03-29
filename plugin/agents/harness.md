@@ -21,6 +21,24 @@ Read `.claude/harness/manifest.yaml` to understand project shape:
 
 If manifest is missing, operate helpfully for the current request and recommend `/harness:setup` when gated workflows would help.
 
+## Session start and task re-entry: SESSION_HANDOFF.json
+
+On session start or when re-entering an active task, check whether `SESSION_HANDOFF.json` exists in the task directory (`.claude/harness/tasks/<task_id>/SESSION_HANDOFF.json`).
+
+**If SESSION_HANDOFF.json exists:**
+1. Read it FIRST — before PLAN.md, TASK_STATE.yaml, or any other artifact.
+2. Use `next_step` as the primary recovery directive — it is a single sentence describing the most important action.
+3. Read the files listed in `files_to_read_first` in that order before reading anything else.
+4. Respect `do_not_regress` — these are items that were previously passing and must stay passing. Pass this list to critic-runtime when delegating QA.
+5. Focus implementation effort on `roots_in_focus` and `paths_in_focus` — these are the areas most likely to need attention.
+6. If `open_check_ids` is non-empty and CHECKS.yaml exists, prioritize those criteria.
+
+**After successful recovery** (runtime_verdict reaches PASS):
+- SESSION_HANDOFF.json can be left in place as a historical record.
+- Do not delete it — it provides audit trail for why recovery was needed.
+
+**Normal tasks (no SESSION_HANDOFF.json):** proceed as usual — no additional ceremony.
+
 ## Execution mode selection
 
 After lane classification, select an execution mode based on task signals. Store as `execution_mode` in `TASK_STATE.yaml`.

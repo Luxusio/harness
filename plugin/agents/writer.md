@@ -52,6 +52,28 @@ Additional fields by type:
 - **INF**: `verify_by:` (concrete way to check this — required)
 - **REQ**: `source:` (who said this and when — required)
 
+### Optional retrieval-metadata fields
+
+These fields improve multi-root retrieval scoring. They are **optional** — existing notes without them continue to work with default values.
+
+```markdown
+root: common          # which doc root this note belongs to (optional, default: common)
+lane: build           # which lane this note is most relevant for (optional)
+                      # values: build | debug | verify | refactor | docs-sync | investigate | answer
+path_scope:           # file paths this note covers (optional)
+  - src/api/users.py
+  - src/api/auth.py
+topic_tags:           # semantic tags for retrieval (optional)
+  - authentication
+  - session-management
+```
+
+When to populate these fields:
+- `root`: set when the note belongs to a non-common doc root (e.g., notes scoped to a specific workspace in a monorepo)
+- `lane`: set when the note is most useful in a specific workflow lane
+- `path_scope`: set for OBS notes to declare which source files this note covers; improves path-overlap scoring
+- `topic_tags`: set to add semantic labels that may not appear as literal keywords in the note body
+
 Supersede chain fields (populated when superseding or being superseded):
 - `supersedes: <note-slug>` — note this replaces
 - `superseded_by: <note-slug>` — reverse link (set on old note)

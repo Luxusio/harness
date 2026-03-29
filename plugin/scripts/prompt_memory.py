@@ -7,7 +7,7 @@ import sys
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import read_hook_input, json_field
-from memory_selectors import select_relevant_notes, select_active_tasks, select_recent_verdicts
+from memory_selectors import select_relevant_notes, select_active_tasks, select_recent_verdicts, _get_registered_roots
 
 def is_casual(prompt):
     """Detect casual/greeting prompts that don't need context injection."""
@@ -29,12 +29,30 @@ def extract_prompt(hook_input):
             return val
     return ""
 
+def detect_lane_from_prompt(prompt):
+    """Attempt to detect the most relevant lane from the prompt text."""
+    if not prompt:
+        return None
+    lower = prompt.lower()
+    if any(w in lower for w in ["build", "compile", "bundle", "install", "package"]):
+        return "build"
+    if any(w in lower for w in ["debug", "fix", "error", "exception", "crash", "broken"]):
+        return "debug"
+    if any(w in lower for w in ["test", "verify", "check", "assert", "spec"]):
+        return "verify"
+    if any(w in lower for w in ["refactor", "cleanup", "rename", "reorganize", "restructure"]):
+        return "refactor"
+    if any(w in lower for w in ["doc", "document", "readme", "changelog", "comment"]):
+        return "docs-sync"
+    return None
+
 def gather_context(prompt):
     """Gather relevant context based on the prompt."""
     context_parts = []
 
-    # 1. Check manifest for tooling status
+    # 1. Check manifest for tooling status and registered roots
     manifest_path = ".claude/harness/manifest.yaml"
+    active_roots = []
     if os.path.isfile(manifest_path):
         try:
             with open(manifest_path) as f:
@@ -50,6 +68,12 @@ def gather_context(prompt):
                 context_parts.append("Tooling: " + ", ".join(tooling_hints))
         except Exception:
             pass
+
+    # Determine active roots for query context
+    try:
+        active_roots = _get_registered_roots("doc")
+    except Exception:
+        active_roots = ["common"]
 
     # 2. Active tasks (top 1 via selector)
     try:
@@ -71,7 +95,6 @@ def gather_context(prompt):
 
     # 4. Check for blockers (tasks with blocked_env status)
     try:
-        blocked = select_active_tasks(prompt)
         task_dir = ".claude/harness/tasks"
         if os.path.isdir(task_dir):
             for entry in os.listdir(task_dir):
@@ -88,19 +111,31 @@ def gather_context(prompt):
     except Exception:
         pass
 
-    # 5. Relevant notes (top 2, freshness-aware)
+    # 5. Relevant notes (top 2, freshness-aware, multi-root)
     try:
-        notes = select_relevant_notes(prompt)
-        for note_path, score, first_line, freshness in notes:
+        current_lane = detect_lane_from_prompt(prompt)
+        query_context = {
+            "active_roots": active_roots,
+            "current_lane": current_lane,
+        }
+        notes = select_relevant_notes(prompt, query_context=query_context)
+        for note_entry in notes:
+            note_path, score, first_line, freshness, root_name = note_entry
+            # Prefix with root name for non-common roots
+            if root_name and root_name != "common":
+                label_prefix = "[{}] ".format(root_name)
+            else:
+                label_prefix = ""
+
             if freshness == "current":
-                context_parts.append("Note: {}".format(first_line))
+                context_parts.append("Note: {}{}".format(label_prefix, first_line))
             elif freshness == "suspect":
-                context_parts.append("Note [suspect]: {}".format(first_line))
+                context_parts.append("Note [suspect]: {}{}".format(label_prefix, first_line))
             elif freshness == "stale":
                 # Only include stale if no current/suspect notes available
-                has_better = any(f in ("current", "suspect") for _, _, _, f in notes)
+                has_better = any(f in ("current", "suspect") for _, _, _, f, _ in notes)
                 if not has_better:
-                    context_parts.append("Note [re-verify needed]: {}".format(first_line))
+                    context_parts.append("Note [re-verify needed]: {}{}".format(label_prefix, first_line))
             # superseded notes are never included (already filtered in selector)
     except Exception:
         pass
