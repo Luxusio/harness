@@ -10,6 +10,7 @@ Precision rules:
   - both → invalidate both
 Conservative fallback (no file list): invalidate ALL verdicts on ALL open tasks.
 Note freshness: if a changed file matches a note's invalidated_by_paths, set note freshness to suspect.
+  Uses structural path comparison (exact / prefix), NOT substring matching.
 stdin: JSON | exit 0: always
 """
 
@@ -19,7 +20,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (read_hook_input, json_array, yaml_field, yaml_array,
                   is_doc_path, find_tasks_touching_path,
                   find_tasks_with_verification_targets, task_touches_path,
-                  manifest_field, is_profile_enabled, TASK_DIR, MANIFEST, now_iso)
+                  manifest_field, is_profile_enabled, TASK_DIR, MANIFEST, now_iso,
+                  parse_note_metadata, set_note_freshness)
 
 import re
 import glob
@@ -58,8 +60,32 @@ def invalidate_document(state_file, task_id, reason):
         f.write(content)
 
 
+def _path_matches_inv(changed_file, inv_path):
+    """Structural path match: exact equality or directory prefix.
+
+    NOT a substring match. This prevents false positives like:
+      changed: src/api-v2.py
+      inv:     src/api.py
+    → should NOT match (api.py != api-v2.py, no prefix relation)
+    """
+    if not inv_path or not changed_file:
+        return False
+    if changed_file == inv_path:
+        return True
+    if changed_file.startswith(inv_path + "/"):
+        return True
+    if inv_path.startswith(changed_file + "/"):
+        return True
+    return False
+
+
 def invalidate_note_freshness(changed_file):
-    """Scan doc/*/*.md and *.yaml across all roots; if invalidated_by_paths contains the file → set freshness: suspect."""
+    """Scan doc/*/*.md and *.yaml; if invalidated_by_paths structurally matches
+    changed_file → set freshness: suspect.
+
+    Uses parse_note_metadata for structured invalidated_by_paths extraction
+    instead of substring matching on raw content.
+    """
     doc_base = "doc"
     if not os.path.isdir(doc_base):
         return
@@ -72,27 +98,27 @@ def invalidate_note_freshness(changed_file):
     ):
         note_files.extend(glob.glob(pattern))
 
-    for note_file in note_files:
+    for note_file in sorted(note_files):
         if not os.path.isfile(note_file):
             continue
-        try:
-            content = open(note_file, encoding="utf-8").read()
-        except OSError:
+
+        meta = parse_note_metadata(note_file)
+        inv_paths = meta["invalidated_by_paths"]
+
+        if not inv_paths:
             continue
-        if "invalidated_by_paths" not in content:
+
+        # Structural comparison — no substring matching
+        matched = any(_path_matches_inv(changed_file, inv) for inv in inv_paths)
+        if not matched:
             continue
-        if changed_file not in content:
-            continue
-        # Set freshness: suspect
-        if re.search(r'^freshness:', content, flags=re.MULTILINE):
-            content = re.sub(r'^freshness: .*', 'freshness: suspect', content, flags=re.MULTILINE)
-        else:
-            # Insert freshness after the first line
-            lines = content.split('\n')
-            lines.insert(1, 'freshness: suspect')
-            content = '\n'.join(lines)
-        with open(note_file, "w", encoding="utf-8") as f:
-            f.write(content)
+
+        # Only transition current → suspect (already-suspect notes are left alone)
+        current_freshness = meta["freshness"]
+        if current_freshness == "suspect":
+            continue  # already suspect, no action needed
+
+        set_note_freshness(note_file, "suspect")
         print(f"NOTE SUSPECT: {note_file} — freshness set to suspect ({changed_file} changed)")
 
 

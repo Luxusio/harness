@@ -15,6 +15,7 @@ Read calibration packs first, then task context:
 1. Always read `plugin/calibration/critic-runtime/default.md`
 2. If `performance_task: true` or `review_overlays` contains `performance` in TASK_STATE.yaml: also read `plugin/calibration/critic-runtime/performance.md`
 3. If `browser_required: true` or `manifest.browser.enabled: true` or `qa.default_mode: browser-first`: also read `plugin/calibration/critic-runtime/browser-first.md`
+4. If `plugin/calibration/local/critic-runtime/` exists: read the **3 most recently modified** `.md` files from that directory (local calibration cases from past failures). Skip if directory is absent.
 
 The calibration packs contain examples of false PASS patterns and correct judgments. Read them before starting verification.
 
@@ -26,6 +27,7 @@ Then read:
 - `.claude/harness/critics/runtime.md` if it exists (project playbook)
 - `.claude/harness/constraints/check-architecture.*` if present (optional architecture checks)
 - If `orchestration_mode: team` in TASK_STATE.yaml: also read task-local `TEAM_SYNTHESIS.md`
+- If `SESSION_HANDOFF.json` exists in the task directory: read it for `open_check_ids` and `do_not_regress`
 
 ### chrome-devtools mandate
 
@@ -43,6 +45,39 @@ After reading the manifest, check `tooling.chrome_devtools_ready`:
 **Verify through execution, not through code reading.**
 
 Do not give PASS from static code reading alone when runtime verification is feasible.
+
+## Delta verification (fix rounds)
+
+When this is a **fix round** (prior runtime FAIL exists, or `SESSION_HANDOFF.json` is present), use a targeted verification strategy instead of always doing a full sweep.
+
+### How to detect a fix round
+
+A fix round is indicated by ANY of:
+- `runtime_verdict: FAIL` in TASK_STATE.yaml
+- `SESSION_HANDOFF.json` present in the task directory
+- CHECKS.yaml has criteria in `failed` or `implemented_candidate` status
+
+### Fix round verification order
+
+1. **Focus set first** — verify criteria in `open_check_ids` (from SESSION_HANDOFF.json) or criteria with `status: failed / implemented_candidate / blocked` in CHECKS.yaml. These are the criteria most likely to have changed.
+
+2. **Guardrail sweep second** — briefly confirm that criteria previously passing (from `do_not_regress` in SESSION_HANDOFF.json, or `status: passed` in CHECKS.yaml) have not regressed. A lighter check is acceptable here; the goal is regression detection, not re-proving everything.
+
+3. **Verdict** — PASS only if both focus set and guardrails pass. FAIL if any focus criterion is unmet.
+
+### When to revert to full sweep
+
+Revert to full exhaustive verification when ANY of the following is true:
+
+| Condition | Reason |
+|-----------|--------|
+| `execution_mode: sprinted` | Wide-surface task, regressions more likely |
+| `roots_touched` ≥ 2 | Cross-root changes need full coverage |
+| `risk_tags` contains `structural`, `migration`, `schema`, or `cross-root` | Structural changes invalidate prior coverage |
+| No CHECKS.yaml and no SESSION_HANDOFF.json | Can't identify focus — must sweep all |
+| First QA round (no prior FAIL) | No delta to focus on — sweep everything |
+
+**Default for Round 1: always full sweep.** Delta verification only applies to fix rounds (Round 2+).
 
 ## Verification approach
 
@@ -155,8 +190,21 @@ qa_mode: <browser-first | tests | smoke | cli>
 
 Update `TASK_STATE.yaml`:
 - If PASS: `runtime_verdict: PASS`
-- If FAIL: `runtime_verdict: FAIL`
+- If FAIL: `runtime_verdict: FAIL`; increment `runtime_verdict_fail_count` by 1 (add field if absent)
 - If BLOCKED_ENV: `runtime_verdict: BLOCKED_ENV` and `status: blocked_env`
+
+### runtime_verdict_fail_count tracking
+
+Every FAIL verdict must increment `runtime_verdict_fail_count` in TASK_STATE.yaml:
+
+```yaml
+# If field exists:
+runtime_verdict_fail_count: <previous + 1>
+# If field absent, add it:
+runtime_verdict_fail_count: 1
+```
+
+This count is used by `handoff_escalation.py` to trigger SESSION_HANDOFF.json generation and by `calibration_miner.py` to identify false PASS pattern candidates.
 
 ### CHECKS.yaml update (when file exists)
 
@@ -211,6 +259,8 @@ If check-architecture.* script does not exist:
 - Evidence is natural language summaries of command output — no metadata schemas needed.
 - A FAIL verdict must list specific unmet acceptance criteria.
 - For browser-first projects: MUST attempt browser verification before falling back to CLI.
+- Every FAIL must increment `runtime_verdict_fail_count` in TASK_STATE.yaml.
+- Fix rounds use focus-first + guardrail-second. Full sweep reverts for sprinted/structural/wide tasks.
 
 ---
 

@@ -494,3 +494,146 @@ def is_browser_first_project():
 def now_iso():
     """Return current UTC time as ISO 8601 string."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+# ---------------------------------------------------------------------------
+# Note metadata helpers (WS-1)
+# ---------------------------------------------------------------------------
+
+
+def _empty_note_metadata():
+    """Return empty note metadata dict."""
+    return {
+        "status": None,
+        "freshness": None,
+        "verified_at": None,
+        "invalidated_by_paths": [],
+        "verification_command": None,
+    }
+
+
+def parse_note_metadata(note_path):
+    """Parse structured freshness metadata from a note file.
+
+    Reads the note at note_path and extracts:
+      - status
+      - freshness
+      - verified_at
+      - invalidated_by_paths (list — parsed structurally, not substring)
+      - verification_command
+
+    Returns dict with above keys. Missing fields are None / [].
+    Returns empty metadata dict on read error.
+    """
+    if not note_path or not os.path.isfile(note_path):
+        return _empty_note_metadata()
+    try:
+        with open(note_path, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return _empty_note_metadata()
+
+    result = _empty_note_metadata()
+    i = 0
+    n = len(lines)
+
+    while i < n:
+        line = lines[i]
+
+        # Scalar fields
+        for field in ("status", "freshness", "verified_at", "verification_command"):
+            m = re.match(r"^\s*" + re.escape(field) + r"\s*:\s*(.*)", line)
+            if m:
+                val = m.group(1).rstrip("\n").strip().strip('"').strip("'")
+                result[field] = val if val else None
+                break
+
+        # invalidated_by_paths — inline or block
+        m = re.match(r"^\s*invalidated_by_paths\s*:\s*(.*)", line)
+        if m:
+            rest = m.group(1).strip()
+            if rest.startswith("["):
+                # Inline array: [a, b, c]
+                inner = rest.strip("[]")
+                items = []
+                for part in inner.split(","):
+                    part = part.strip().strip('"').strip("'")
+                    if part:
+                        items.append(part)
+                result["invalidated_by_paths"] = items
+            else:
+                # Block sequence — read subsequent lines
+                items = []
+                j = i + 1
+                while j < n:
+                    bm = re.match(r"^\s+-\s+(.*)", lines[j])
+                    if bm:
+                        val = bm.group(1).rstrip("\n").strip().strip('"').strip("'")
+                        if val:
+                            items.append(val)
+                        j += 1
+                    elif lines[j].strip() == "" or lines[j].strip().startswith("#"):
+                        j += 1
+                    else:
+                        break
+                result["invalidated_by_paths"] = items
+
+        i += 1
+
+    return result
+
+
+def set_note_freshness(note_path, freshness, verified_at=None):
+    """Update freshness (and optionally verified_at) in a note file in-place.
+
+    If freshness field exists, updates it. Otherwise inserts after first line.
+    If verified_at is provided and field exists, updates it; otherwise inserts
+    after the freshness line.
+
+    Returns True on success, False on error.
+    """
+    if not note_path or not os.path.isfile(note_path):
+        return False
+    try:
+        with open(note_path, "r", encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError:
+        return False
+
+    # Update or insert freshness
+    if re.search(r"^freshness\s*:", content, flags=re.MULTILINE):
+        content = re.sub(
+            r"^freshness\s*:.*",
+            f"freshness: {freshness}",
+            content,
+            flags=re.MULTILINE,
+        )
+    else:
+        lines = content.split("\n")
+        lines.insert(1, f"freshness: {freshness}")
+        content = "\n".join(lines)
+
+    # Update or insert verified_at
+    if verified_at:
+        if re.search(r"^verified_at\s*:", content, flags=re.MULTILINE):
+            content = re.sub(
+                r"^verified_at\s*:.*",
+                f"verified_at: {verified_at}",
+                content,
+                flags=re.MULTILINE,
+            )
+        else:
+            # Insert after freshness line
+            lines = content.split("\n")
+            for idx, line in enumerate(lines):
+                if re.match(r"^freshness\s*:", line):
+                    lines.insert(idx + 1, f"verified_at: {verified_at}")
+                    break
+            content = "\n".join(lines)
+
+    try:
+        with open(note_path, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        return True
+    except OSError:
+        return False

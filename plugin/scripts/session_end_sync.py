@@ -320,6 +320,20 @@ def main():
     if entropy != "LOW":
         print("hint: run /harness:maintain to clean up")
 
+    # Calibration candidate report (WS-3) — read-only, no file writes.
+    # Counts tasks qualifying for local calibration case generation.
+    # Actual case files are only written by /harness:maintain or calibration_miner.py.
+    try:
+        from calibration_miner import count_candidates
+        cal_candidates = count_candidates()
+        if cal_candidates > 0:
+            print("")
+            print("=== CALIBRATION ===")
+            print(f"calibration_candidates: {cal_candidates}")
+            print("hint: run /harness:maintain to generate local calibration cases")
+    except Exception:
+        pass  # Non-blocking — calibration reporting must never break session end
+
 
 if __name__ == "__main__":
     main()

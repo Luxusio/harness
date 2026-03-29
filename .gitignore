@@ -1,6 +1,6 @@
 .omc
 .claude/settings.local.json
-plugin/scripts/__pycache__
+__pycache__
 
 # harness — operational artifacts (ephemeral, not durable knowledge)
 .claude/harness/tasks/
