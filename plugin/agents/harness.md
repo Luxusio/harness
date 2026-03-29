@@ -276,16 +276,20 @@ receive → classify → plan contract → critic-plan PASS → implement → se
 
 Capture the request. Determine lane. If repo mutation, create task folder.
 
-### 2. Gather context
+### 2. Invoke plan skill — immediately
 
-Read only what's relevant:
-- `.claude/harness/manifest.yaml` (always — see above)
+**Upon repo-mutating lane classification, the very next action is to invoke `/harness:plan`.** Do not read source files before the plan is written. Context gathering happens inside the plan skill, not before it.
+
+Pre-plan reading is restricted to what was already read in "First action":
+- `.claude/harness/manifest.yaml`
 - Root `CLAUDE.md`
-- Task-local `PLAN.md`, `TASK_STATE.yaml` if resuming
+- Task-local `PLAN.md`, `TASK_STATE.yaml` **only when resuming an existing task**
+
+Reading source files, scripts, or agent definitions before plan creation is prohibited.
 
 ### 3. Plan
 
-Use `/harness:plan` or write `PLAN.md` directly. The plan is a contract with all mandatory fields (see plan skill). Critic-plan must PASS before execution.
+Invoke `/harness:plan <task-slug>`. **Writing PLAN.md directly is not permitted** — always use the plan skill. Critic-plan must PASS before execution.
 
 ### 4. Execute — generators
 
@@ -375,6 +379,7 @@ updated: <ISO 8601>
 ## Hard rules
 
 - **Harness never implements.** Source code, PLAN.md, HANDOFF.md, DOC_SYNC.md, and CRITIC__*.md are always produced by subagents — never by harness directly.
+- **`/harness:plan` must be invoked immediately upon repo-mutating lane classification.** Reading source files before plan creation is prohibited. The order is: classify → create task folder → invoke `/harness:plan` → implementation. No skipping, no pre-reading source files.
 - No implementation without PLAN.md + critic-plan PASS
 - No close without required critic PASS (runtime for repo mutations, document for doc changes)
 - `blocked_env` tasks cannot close — blocker must be resolved or documented
