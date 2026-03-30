@@ -6,6 +6,11 @@ Covers:
   - plan_verdict: pending + PLAN.md exists → block
   - workflow_violations non-empty → block
   - Normal passing task (scenario F) → no failures
+  - investigate task without RESULT.md → block
+  - directive pending → block
+  - workflow_mode=compliant + capability unavailable → block
+  - collapsed_approved + compliance_claim != degraded → block
+  - critic-plan count 0 → block
 
 Run with: python -m unittest discover -s tests -p 'test_*.py'
 """
@@ -36,6 +41,7 @@ def _make_passing_task(task_dir):
     _write(os.path.join(task_dir, "TASK_STATE.yaml"),
         "task_id: TASK__test\n"
         "status: implemented\n"
+        "lane: build\n"
         "mutates_repo: true\n"
         "plan_verdict: PASS\n"
         "runtime_verdict: PASS\n"
@@ -44,6 +50,13 @@ def _make_passing_task(task_dir):
         "execution_mode: standard\n"
         "orchestration_mode: solo\n"
         "workflow_violations: []\n"
+        "workflow_mode: compliant\n"
+        "compliance_claim: strict\n"
+        "artifact_provenance_required: false\n"
+        "result_required: false\n"
+        "capability_delegation: available\n"
+        "collapsed_mode_approved: false\n"
+        "directive_capture_state: clean\n"
         "agent_run_developer_count: 1\n"
         "agent_run_developer_last: 2026-01-01T00:00:00Z\n"
         "agent_run_critic_plan_count: 1\n"
@@ -173,7 +186,6 @@ class TestStalePASS(unittest.TestCase):
         with open(state_file, "w") as f:
             f.write(content)
         # CRITIC__runtime.md still has old PASS text — the "stale" case
-        # (it was written before file_changed_sync reset the verdict)
 
         failures = compute_completion_failures(self.task_dir)
         self.assertTrue(
@@ -350,6 +362,266 @@ class TestHandoffStub(unittest.TestCase):
         self.assertFalse(
             any("stub" in f.lower() for f in failures),
             f"Filled HANDOFF must not be flagged as stub. Got: {failures}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Investigate lane: RESULT.md required
+# ---------------------------------------------------------------------------
+
+class TestInvestigateResult(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.task_dir = os.path.join(self.tmp.name, "TASK__test")
+        os.makedirs(self.task_dir)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_investigate_without_result_blocks(self):
+        """investigate lane task missing RESULT.md → block."""
+        _make_passing_task(self.task_dir)
+        state_file = os.path.join(self.task_dir, "TASK_STATE.yaml")
+        with open(state_file) as f:
+            content = f.read()
+        content = content.replace("lane: build", "lane: investigate")
+        content = content.replace("result_required: false", "result_required: true")
+        content = content.replace("mutates_repo: true", "mutates_repo: false")
+        with open(state_file, "w") as f:
+            f.write(content)
+
+        failures = compute_completion_failures(self.task_dir)
+        self.assertTrue(
+            any("result" in f.lower() and "investigate" in f.lower() for f in failures),
+            f"Investigate task without RESULT.md must block. Got: {failures}"
+        )
+
+    def test_investigate_with_result_passes(self):
+        """investigate lane task with RESULT.md present → no result-related failure."""
+        _make_passing_task(self.task_dir)
+        state_file = os.path.join(self.task_dir, "TASK_STATE.yaml")
+        with open(state_file) as f:
+            content = f.read()
+        content = content.replace("lane: build", "lane: investigate")
+        content = content.replace("result_required: false", "result_required: true")
+        with open(state_file, "w") as f:
+            f.write(content)
+        _write(os.path.join(self.task_dir, "RESULT.md"), "# Result\nFindings here.\n")
+
+        failures = compute_completion_failures(self.task_dir)
+        self.assertFalse(
+            any("result" in f.lower() and "investigate" in f.lower() for f in failures),
+            f"Investigate task with RESULT.md must not block on result. Got: {failures}"
+        )
+
+    def test_result_required_true_blocks_without_result(self):
+        """result_required: true blocks regardless of lane."""
+        _make_passing_task(self.task_dir)
+        state_file = os.path.join(self.task_dir, "TASK_STATE.yaml")
+        with open(state_file) as f:
+            content = f.read()
+        content = content.replace("result_required: false", "result_required: true")
+        with open(state_file, "w") as f:
+            f.write(content)
+
+        failures = compute_completion_failures(self.task_dir)
+        self.assertTrue(
+            any("result" in f.lower() for f in failures),
+            f"result_required: true without RESULT.md must block. Got: {failures}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Directive capture gate
+# ---------------------------------------------------------------------------
+
+class TestDirectiveCaptureGate(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.task_dir = os.path.join(self.tmp.name, "TASK__test")
+        os.makedirs(self.task_dir)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_directive_pending_blocks(self):
+        """directive_capture_state=pending → block."""
+        _make_passing_task(self.task_dir)
+        state_file = os.path.join(self.task_dir, "TASK_STATE.yaml")
+        with open(state_file) as f:
+            content = f.read()
+        content = content.replace(
+            "directive_capture_state: clean",
+            "directive_capture_state: pending"
+        )
+        with open(state_file, "w") as f:
+            f.write(content)
+
+        failures = compute_completion_failures(self.task_dir)
+        self.assertTrue(
+            any("directive" in f.lower() for f in failures),
+            f"Pending directives must block close. Got: {failures}"
+        )
+
+    def test_directive_clean_passes(self):
+        """directive_capture_state=clean → no directive-related failure."""
+        _make_passing_task(self.task_dir)
+        failures = compute_completion_failures(self.task_dir)
+        self.assertFalse(
+            any("directive" in f.lower() for f in failures),
+            f"Clean directive state must not block. Got: {failures}"
+        )
+
+    def test_directive_captured_passes(self):
+        """directive_capture_state=captured → no directive-related failure."""
+        _make_passing_task(self.task_dir)
+        state_file = os.path.join(self.task_dir, "TASK_STATE.yaml")
+        with open(state_file) as f:
+            content = f.read()
+        content = content.replace(
+            "directive_capture_state: clean",
+            "directive_capture_state: captured"
+        )
+        with open(state_file, "w") as f:
+            f.write(content)
+
+        failures = compute_completion_failures(self.task_dir)
+        self.assertFalse(
+            any("directive" in f.lower() for f in failures),
+            f"Captured directive state must not block. Got: {failures}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Capability / compliance gate
+# ---------------------------------------------------------------------------
+
+class TestCapabilityComplianceGate(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.task_dir = os.path.join(self.tmp.name, "TASK__test")
+        os.makedirs(self.task_dir)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_compliant_with_unavailable_delegation_blocks(self):
+        """workflow_mode=compliant + capability_delegation=unavailable → block."""
+        _make_passing_task(self.task_dir)
+        state_file = os.path.join(self.task_dir, "TASK_STATE.yaml")
+        with open(state_file) as f:
+            content = f.read()
+        content = content.replace(
+            "capability_delegation: available",
+            "capability_delegation: unavailable"
+        )
+        with open(state_file, "w") as f:
+            f.write(content)
+
+        failures = compute_completion_failures(self.task_dir)
+        self.assertTrue(
+            any("compliant" in f.lower() and "unavailable" in f.lower() for f in failures),
+            f"Compliant mode + unavailable delegation must block. Got: {failures}"
+        )
+
+    def test_collapsed_approved_needs_degraded_claim(self):
+        """collapsed_approved + compliance_claim=strict → block."""
+        _make_passing_task(self.task_dir)
+        state_file = os.path.join(self.task_dir, "TASK_STATE.yaml")
+        with open(state_file) as f:
+            content = f.read()
+        content = content.replace(
+            "workflow_mode: compliant",
+            "workflow_mode: collapsed_approved"
+        )
+        # compliance_claim is still strict — should fail
+        with open(state_file, "w") as f:
+            f.write(content)
+
+        failures = compute_completion_failures(self.task_dir)
+        self.assertTrue(
+            any("collapsed_approved" in f.lower() and "degraded" in f.lower() for f in failures),
+            f"Collapsed approved with strict compliance must block. Got: {failures}"
+        )
+
+    def test_collapsed_approved_with_degraded_passes(self):
+        """collapsed_approved + compliance_claim=degraded + approved=true → no capability failure."""
+        _make_passing_task(self.task_dir)
+        state_file = os.path.join(self.task_dir, "TASK_STATE.yaml")
+        with open(state_file) as f:
+            content = f.read()
+        content = content.replace(
+            "workflow_mode: compliant",
+            "workflow_mode: collapsed_approved"
+        ).replace(
+            "compliance_claim: strict",
+            "compliance_claim: degraded"
+        ).replace(
+            "collapsed_mode_approved: false",
+            "collapsed_mode_approved: true"
+        )
+        with open(state_file, "w") as f:
+            f.write(content)
+
+        failures = compute_completion_failures(self.task_dir)
+        self.assertFalse(
+            any("collapsed" in f.lower() for f in failures),
+            f"Properly approved collapsed mode must not block. Got: {failures}"
+        )
+
+    def test_compliant_with_available_delegation_passes(self):
+        """workflow_mode=compliant + capability_delegation=available → no failure."""
+        _make_passing_task(self.task_dir)
+        failures = compute_completion_failures(self.task_dir)
+        self.assertFalse(
+            any("capability" in f.lower() or "delegation" in f.lower() for f in failures),
+            f"Available delegation should not trigger capability block. Got: {failures}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Critic-plan count hard requirement
+# ---------------------------------------------------------------------------
+
+class TestCriticPlanHardRequirement(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.task_dir = os.path.join(self.tmp.name, "TASK__test")
+        os.makedirs(self.task_dir)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_critic_plan_count_zero_blocks(self):
+        """critic-plan run count = 0 → block."""
+        _make_passing_task(self.task_dir)
+        state_file = os.path.join(self.task_dir, "TASK_STATE.yaml")
+        with open(state_file) as f:
+            content = f.read()
+        content = content.replace(
+            "agent_run_critic_plan_count: 1",
+            "agent_run_critic_plan_count: 0"
+        )
+        with open(state_file, "w") as f:
+            f.write(content)
+
+        failures = compute_completion_failures(self.task_dir)
+        self.assertTrue(
+            any("critic-plan" in f.lower() or "critic_plan" in f.lower() for f in failures),
+            f"critic-plan count=0 must block. Got: {failures}"
+        )
+
+    def test_critic_plan_count_nonzero_passes(self):
+        """critic-plan run count >= 1 → no failure."""
+        _make_passing_task(self.task_dir)
+        failures = compute_completion_failures(self.task_dir)
+        self.assertFalse(
+            any("critic-plan" in f.lower() and "no recorded" in f.lower() for f in failures),
+            f"critic-plan count=1 must not block. Got: {failures}"
         )
 
 

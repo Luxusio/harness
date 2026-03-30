@@ -6,7 +6,7 @@ import sys
 import re
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import read_hook_input, hook_json_get
+from _lib import read_hook_input, hook_json_get, yaml_field, yaml_array, TASK_DIR, MANIFEST
 from memory_selectors import select_relevant_notes, select_active_tasks, select_recent_verdicts, _get_registered_roots
 
 def is_casual(prompt):
@@ -30,25 +30,82 @@ def extract_prompt(hook_input):
     return ""
 
 def detect_lane_from_prompt(prompt):
-    """Attempt to detect the most relevant lane from the prompt text."""
+    """Attempt to detect the most relevant lane from the prompt text.
+
+    Language-agnostic: delegates actual classification to the LLM.
+    This function only provides a best-effort hint for note retrieval
+    scoring — it's OK to return None and let the LLM decide.
+    """
     if not prompt:
         return None
-    lower = prompt.lower()
-    if any(w in lower for w in ["build", "compile", "bundle", "install", "package"]):
-        return "build"
-    if any(w in lower for w in ["debug", "fix", "error", "exception", "crash", "broken"]):
-        return "debug"
-    if any(w in lower for w in ["test", "verify", "check", "assert", "spec"]):
+    # Check for file path references that hint at lane
+    if re.search(r"\btest[s_/]", prompt, re.IGNORECASE):
         return "verify"
-    if any(w in lower for w in ["refactor", "cleanup", "rename", "reorganize", "restructure"]):
-        return "refactor"
-    if any(w in lower for w in ["doc", "document", "readme", "changelog", "comment"]):
+    if re.search(r"\bdoc[s/]|README|CHANGELOG", prompt, re.IGNORECASE):
+        return "docs-sync"
+    # File extension hints
+    if re.search(r"\.(test|spec)\.(ts|js|py|go|rs)\b", prompt):
+        return "verify"
+    if re.search(r"\.md\b", prompt):
         return "docs-sync"
     return None
 
+
+def classify_prompt_intent(prompt):
+    """Classify prompt as answer | investigate | mutating.
+
+    Language-agnostic approach: uses structural signals instead of
+    vocabulary lists. The LLM does the real classification — this is
+    just for injecting the right context hint level.
+
+    Returns: "answer" | "investigate" | "mutating"
+    """
+    if not prompt:
+        return "answer"
+
+    stripped = prompt.strip()
+
+    # Very short = likely casual/answer
+    if len(stripped) < 15:
+        return "answer"
+
+    # Questions (any language) → answer
+    if stripped.endswith("?"):
+        return "answer"
+
+    # File path references with action context → mutating
+    # e.g. "@PLAN.md 구현해", "fix src/foo.py", "plugin/scripts/bar.py 수정"
+    has_file_ref = bool(re.search(r'[a-zA-Z0-9_/]+\.[a-zA-Z]{1,5}\b', stripped))
+    has_code_block = "```" in stripped
+
+    # References to existing task artifacts → likely continuing work
+    if re.search(r'PLAN\.md|TASK_STATE|HANDOFF|CRITIC__', stripped):
+        return "mutating"
+
+    # Imperative + file reference = likely mutating
+    if has_file_ref and len(stripped.split()) <= 10:
+        return "mutating"
+
+    # Code blocks in short prompts = mutating (giving code to apply)
+    if has_code_block:
+        return "mutating"
+
+    # Short imperative sentences (no question mark, few words) = likely mutating
+    words = stripped.split()
+    if 2 <= len(words) <= 8 and not stripped.endswith("?"):
+        # Short command-like prompt
+        return "mutating"
+
+    # Longer text without question marks and with file/code references
+    if len(words) > 8 and has_file_ref and not stripped.endswith("?"):
+        return "investigate"
+
+    return "answer"
+
+
 def _get_active_task_dir():
     """Return the directory of the most recently active (non-closed) task, or None."""
-    task_dir = "doc/harness/tasks"
+    task_dir = TASK_DIR
     if not os.path.isdir(task_dir):
         return None
     candidates = []
@@ -158,12 +215,64 @@ def _get_unplanned_hint(task_dir):
         return ""
 
 
+def _get_task_required_hint(prompt, active_task_dir):
+    """Return hint if prompt requires a task but none exists.
+
+    Checks prompt classification against active task state.
+    """
+    intent = classify_prompt_intent(prompt)
+
+    if intent == "answer":
+        return ""
+
+    # If there's an active task, no need for task-required hint
+    if active_task_dir:
+        return ""
+
+    if intent == "mutating":
+        return (
+            "TASK REQUIRED: this request appears to mutate the repo "
+            "— create a task folder and invoke /harness:plan before proceeding"
+        )
+    elif intent == "investigate":
+        return (
+            "TASK REQUIRED: this request appears to require investigation "
+            "— create a task folder for structured findings (RESULT.md required)"
+        )
+    return ""
+
+
+def _get_pending_directives_hint(task_dir):
+    """Return hint if there are pending directives needing promotion."""
+    if not task_dir or not os.path.isdir(task_dir):
+        return ""
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    directive_state = yaml_field("directive_capture_state", state_file)
+    if directive_state != "pending":
+        return ""
+
+    pending_file = os.path.join(task_dir, "DIRECTIVES_PENDING.yaml")
+    if not os.path.isfile(pending_file):
+        return ""
+
+    # Count pending directives
+    try:
+        with open(pending_file) as f:
+            content = f.read()
+        pending_count = content.count("status: pending")
+        if pending_count > 0:
+            return f"DIRECTIVES PENDING: {pending_count} user directive(s) awaiting promotion to durable notes"
+    except OSError:
+        pass
+    return ""
+
+
 def gather_context(prompt):
     """Gather relevant context based on the prompt."""
     context_parts = []
 
     # 1. Check manifest for tooling status and registered roots
-    manifest_path = "doc/harness/manifest.yaml"
+    manifest_path = MANIFEST
     active_roots = []
     if os.path.isfile(manifest_path):
         try:
@@ -187,12 +296,34 @@ def gather_context(prompt):
     except Exception:
         active_roots = ["common"]
 
-    # 2. WS-5: Unplanned task hint (injected first — highest priority for plan enforcement)
+    # Get active task dir (used by multiple checks below)
+    active_task_dir = None
     try:
         active_task_dir = _get_active_task_dir()
+    except Exception:
+        pass
+
+    # 2. Task-required hint (highest priority — inject first)
+    try:
+        task_hint = _get_task_required_hint(prompt, active_task_dir)
+        if task_hint:
+            context_parts.insert(0, task_hint)
+    except Exception:
+        pass
+
+    # 2b. WS-5: Unplanned task hint
+    try:
         unplanned_hint = _get_unplanned_hint(active_task_dir)
         if unplanned_hint:
             context_parts.insert(0, unplanned_hint)
+    except Exception:
+        pass
+
+    # 2c. Pending directives hint
+    try:
+        directives_hint = _get_pending_directives_hint(active_task_dir)
+        if directives_hint:
+            context_parts.append(directives_hint)
     except Exception:
         pass
 
@@ -216,7 +347,7 @@ def gather_context(prompt):
 
     # 5. Check for blockers (tasks with blocked_env status)
     try:
-        task_dir = "doc/harness/tasks"
+        task_dir = TASK_DIR
         if os.path.isdir(task_dir):
             for entry in os.listdir(task_dir):
                 if not entry.startswith("TASK__"):
@@ -233,11 +364,7 @@ def gather_context(prompt):
         pass
 
     # 6. CHECKS focus summary for fix rounds (WS-2)
-    # Inject only when: there is an active task in a fix round, AND CHECKS.yaml has
-    # focus-status criteria. Does not inject on casual/first-round prompts.
-    # Budget: max 120 chars (SUMMARY_MAX_CHARS from checks_focus), counted within 600 total.
     try:
-        active_task_dir = _get_active_task_dir()
         if active_task_dir and _is_fix_round(active_task_dir):
             from checks_focus import get_checks_summary_for_task
             checks_summary = get_checks_summary_for_task(active_task_dir)

@@ -1,5 +1,5 @@
 # harness manifest
-version: 4
+version: 5
 initialized_at: 2026-03-30
 
 # --- Top-level identity ---
@@ -26,6 +26,11 @@ qa:
 
 browser:
   enabled: false
+
+# --- Capabilities ---
+capabilities:
+  delegation_mode: auto
+  strict_compliance_requires_delegation: true
 
 # --- Registered doc roots ---
 registered_roots:

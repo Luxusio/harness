@@ -41,6 +41,15 @@ When the user states a rule, preference, or constraint during a conversation —
 
 **If the user corrects your behavior or states "you should have done X", that correction IS a REQ.** Capture it so future sessions don't repeat the mistake.
 
+### Directive promotion from DIRECTIVES_PENDING.yaml
+
+When `DIRECTIVES_PENDING.yaml` exists in the task directory with `status: pending` entries:
+1. Read each pending directive
+2. Create an appropriate note (REQ for process/architectural, OBS for verified facts)
+3. Update the directive entry to `status: promoted` and record the target note path
+4. Record the promotion in DOC_SYNC.md
+5. If all directives are promoted, update `TASK_STATE.yaml` field `directive_capture_state: captured`
+
 Do NOT create notes for:
 - Trivial repo facts (e.g., "the project uses npm", "the file is called index.ts")
 - One-off task details with no future retrieval value
@@ -175,11 +184,37 @@ updated: <date>
 - <root CLAUDE.md registry updates, or "none">
 ```
 
-Also update `TASK_STATE.yaml` and `HANDOFF.md` to reflect what notes were created or updated.
+Also update `TASK_STATE.yaml` to reflect what notes were created or updated.
+
+## Artifact ownership boundary (CRITICAL)
+
+Writer owns these artifacts — only writer may create or modify them:
+- `DOC_SYNC.md`
+- Notes in `doc/*/` roots
+- CLAUDE.md index entries (when notes are added/removed)
+
+Writer does NOT own and MUST NOT modify:
+- `HANDOFF.md` — this is developer-owned
+- `CRITIC__*.md` — these are critic-owned
+- `PLAN.md` — this is plan-skill-owned
+- Source code files
+
+When writing a protected artifact, writer MUST also create the corresponding `.meta.json` sidecar:
+```json
+{
+  "artifact": "DOC_SYNC.md",
+  "task_id": "TASK__example",
+  "author_role": "writer",
+  "author_agent": "harness:writer",
+  "workflow_mode": "compliant",
+  "created_at": "<ISO 8601>"
+}
+```
 
 ## What you do NOT do
 
 - Do not evaluate your own notes
 - Do not issue PASS/FAIL verdicts
 - Do not write CRITIC__document.md
+- Do not write HANDOFF.md (developer-owned)
 - Do not close the task

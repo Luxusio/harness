@@ -1,4 +1,4 @@
-# harness v2.0 — Execution Harness
+# harness v3.0 — Execution Harness
 
 You are running with harness, an execution harness for AI-assisted repository work.
 
@@ -19,14 +19,15 @@ Orchestration mode (solo | subagents | team) is selected independently after exe
 | Hook | Behavior |
 |------|----------|
 | `SessionStart` | Load context, show open tasks |
-| `TaskCreated` | Initialize TASK_STATE.yaml, HANDOFF.md, REQUEST.md |
+| `TaskCreated` | Initialize TASK_STATE.yaml, REQUEST.md (HANDOFF.md is developer-owned — not auto-created) |
 | `TaskCompleted` | **BLOCK** (exit 2) unless all required verdicts PASS; auto-populates touched_paths/roots_touched/verification_targets from git diff if empty; runs note auto-reverify (non-blocking) for suspect notes whose `invalidated_by_paths` overlap `touched_paths` |
-| `SubagentStop` | Record agent run provenance in TASK_STATE.yaml (`agent_run_<name>_count`/`last`); warn if expected artifacts missing |
+| `SubagentStop` | Record agent run provenance in TASK_STATE.yaml (`agent_run_<name>_count`/`last`); warn if expected artifacts missing; check .meta.json provenance sidecars and record workflow_violations if missing/mismatched |
 | `Stop` | **BLOCK** (exit 2) if open tasks remain; injects per-task next-action hint (status → next step, non-PASS verdicts shown) |
-| `PreToolUse` | **BLOCK** (exit 2) when source files are written without plan_verdict PASS on any active task; also blocks untracked mutations (no active task). Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies. |
+| `PreToolUse` | **preplan_read_gate**: BLOCK guarded path reads (source/script/agent) without plan session or plan_verdict PASS. **prewrite_gate**: BLOCK source writes without plan PASS; BLOCK protected artifact writes by wrong role (PLAN.md=plan-skill, HANDOFF.md=developer, DOC_SYNC.md=writer, CRITIC__*.md=respective critic). Fail-closed on managed repos. Bypass: HARNESS_SKIP_PREREAD=1 / HARNESS_SKIP_PREWRITE=1. |
 | `FileChanged` | Precise invalidation: runtime_verdict for runtime paths, document_verdict for doc paths; marks affected notes suspect using **structural path matching** (exact or directory-prefix, not substring) |
 | `PostCompact` | Re-inject open task summary + maintain-lite entropy indicators |
 | `SessionEnd` | Record final session state + maintain-lite entropy summary + calibration candidate count |
+| `UserPromptSubmit` | Inject context hints: task-required warnings, plan-required reminders, pending directive alerts, note retrieval, checks focus summary. Structural directive detection (language-agnostic). |
 | `TeammateIdle` | Advisory: check team worker produced minimum deliverables |
 
 All hook scripts parse stdin JSON and use exit 2 for blocking.
@@ -46,6 +47,12 @@ All hook scripts parse stdin JSON and use exit 2 for blocking.
 | execution_mode not pending | Repo-mutating tasks |
 | orchestration_mode not pending | Repo-mutating tasks |
 | YAML plan/runtime/document verdicts (not artifact text) | Always — stale PASS artifact does not count |
+| critic-plan agent_run count > 0 | Always (provenance hard requirement) |
+| Artifact provenance (.meta.json sidecars) | When artifact_provenance_required: true |
+| RESULT.md for investigate lane | When lane=investigate or result_required=true |
+| capability_delegation != unavailable for compliant close | Repo-mutating tasks |
+| collapsed_approved requires compliance_claim=degraded | When workflow_mode=collapsed_approved |
+| directive_capture_state != pending | Always (pending directives block close) |
 
 ## Execution modes
 
@@ -129,7 +136,8 @@ After execution mode selection, the harness selects an orchestration mode to det
 ### Team mode specifics
 
 - Team tasks require `TEAM_PLAN.md` (file ownership, provider, fallback) and `TEAM_SYNTHESIS.md` (worker results, conflicts, resolution)
-- Shared artifacts (`TASK_STATE.yaml`, `HANDOFF.md`, `DOC_SYNC.md`, `CRITIC__*.md`) are modified only by the lead, never by team workers
+- Lead-owned shared artifacts: `TASK_STATE.yaml`, `TEAM_PLAN.md`, `TEAM_SYNTHESIS.md`
+- Role-owned artifacts (even in team mode): HANDOFF.md=developer, DOC_SYNC.md=writer, CRITIC__*.md=respective critic
 - Provider selection: native → omc → fallback (automatic, no user prompt)
 - Fallback is a normal path — not a failure. Record in `fallback_used` and continue.
 
@@ -334,6 +342,8 @@ Run `/harness:maintain` when entropy is MEDIUM or HIGH.
 - Delegates to generators (developer, writer) and evaluators (critic-plan, critic-runtime, critic-document)
 - Verifies touched_paths/roots_touched/verification_targets are populated after developer returns
 - Never self-evaluates
+- Checks delegation capability before repo-mutating tasks; discloses degraded mode
+- PLAN.md authoring delegated to plan skill only (never developer, never harness directly)
 
 ### developer (generator)
 
@@ -353,6 +363,8 @@ Run `/harness:maintain` when entropy is MEDIUM or HIGH.
 - Uses supersede chains for material content changes (never silent overwrites)
 - Writes DOC_SYNC.md for every repo-mutating task (even if content is "none")
 - Updates root CLAUDE.md indexes when notes are created or removed
+- Promotes pending directives from DIRECTIVES_PENDING.yaml to durable REQ notes
+- Does NOT write HANDOFF.md (developer-owned)
 
 ### critic-plan (evaluator)
 
@@ -446,12 +458,22 @@ agent_run_critic_runtime_count: 0
 agent_run_critic_runtime_last: null
 agent_run_critic_document_count: 0
 agent_run_critic_document_last: null
+workflow_mode: compliant | degraded_capability | collapsed_approved
+compliance_claim: strict | degraded
+artifact_provenance_required: true
+result_required: false
+plan_session_state: closed | context_open | write_open
+capability_delegation: unknown | available | unavailable
+collapsed_mode_approved: false
+collapsed_reason: ""
+directive_capture_state: clean | pending | captured
+pending_directive_ids: []
 ```
 
 ## Manifest schema reference
 
 ```yaml
-version: 4
+version: 5
 project:
   name: <project name>
   type: <web-frontend | fullstack_web | api | cli | library | monorepo | ...>
@@ -477,6 +499,9 @@ teams:
   auto_activate: true | false
   approval_mode: preapproved | ask
   fallback: subagents | solo
+capabilities:
+  delegation_mode: auto | available | unavailable
+  strict_compliance_requires_delegation: true
 ```
 
 ## Core rules
@@ -509,6 +534,11 @@ teams:
 - **(Enforcement)** Completion gate uses YAML verdicts as source of truth — stale PASS artifacts (file changed after PASS) do not count. Provenance fields (`agent_run_*`) must show developer/writer/critic runs when required.
 - **(Enforcement)** `execution_mode` and `orchestration_mode` initialize to `pending`; must be explicitly set before a repo-mutating task can close.
 - **(Enforcement)** Source mutations on a task before plan PASS record `source_mutation_before_plan_pass` in `workflow_violations` and block close.
+- **(V1-V9 Enforcement)** Protected artifact ownership: PLAN.md=plan-skill, HANDOFF.md=developer, DOC_SYNC.md=writer, CRITIC__*.md=respective critic. Enforced by prewrite_gate with .meta.json provenance sidecars.
+- **(V1)** Pre-plan source reads blocked by preplan_read_gate. Plan session token (PLAN_SESSION.json) authorizes context/write phases.
+- **(V5)** Capability firewall: delegation unavailable prevents compliant close. Silent collapsed mode is a workflow violation.
+- **(V9)** User directives staged in DIRECTIVES_PENDING.yaml; pending directives block task close until promoted by writer.
+- **(V2)** Investigate lane requires RESULT.md for close. Task-required hints injected by prompt_memory when no active task exists.
 - **(WS-3)** Tasks with `reopen_count ≥ 2` or `runtime_verdict_fail_count ≥ 2` are calibration candidates. Session end reports count; `/harness:maintain` generates case files in `plugin/calibration/local/critic-runtime/`.
 
 ## Mode-specific artifact requirements
