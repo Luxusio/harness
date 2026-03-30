@@ -37,7 +37,8 @@ def invalidate_runtime(state_file, task_id, reason):
     """If runtime_verdict is PASS → replace with pending, update timestamp."""
     rv = yaml_field("runtime_verdict", state_file)
     if rv == "PASS":
-        content = open(state_file, encoding="utf-8").read()
+        with open(state_file, "r", encoding="utf-8") as f:
+            content = f.read()
         content = content.replace("runtime_verdict: PASS", "runtime_verdict: pending")
         content = re.sub(r'^updated: .*', f'updated: {now_iso()}', content, flags=re.MULTILINE)
         with open(state_file, "w", encoding="utf-8") as f:
@@ -49,7 +50,8 @@ def invalidate_document(state_file, task_id, reason):
     """If document_verdict is PASS → replace with pending, set doc_changes_detected: true."""
     dv = yaml_field("document_verdict", state_file)
     if dv == "PASS":
-        content = open(state_file, encoding="utf-8").read()
+        with open(state_file, "r", encoding="utf-8") as f:
+            content = f.read()
         content = content.replace("document_verdict: PASS", "document_verdict: pending")
         content = re.sub(r'^updated: .*', f'updated: {now_iso()}', content, flags=re.MULTILINE)
         with open(state_file, "w", encoding="utf-8") as f:
@@ -57,7 +59,8 @@ def invalidate_document(state_file, task_id, reason):
         print(f"INVALIDATED: {task_id} — document_verdict reset to pending ({reason})")
 
     # Also set doc_changes_detected: true
-    content = open(state_file, encoding="utf-8").read()
+    with open(state_file, "r", encoding="utf-8") as f:
+        content = f.read()
     if re.search(r'^doc_changes_detected:', content, flags=re.MULTILINE):
         content = re.sub(r'^doc_changes_detected: .*', 'doc_changes_detected: true', content, flags=re.MULTILINE)
     else:
@@ -223,7 +226,8 @@ def process_changed_file(changed_file):
             ts = yaml_field("team_status", state_file_t)
             if orch == "team" and ts == "complete":
                 if task_touches_path(task, changed_file):
-                    content = open(state_file_t, encoding="utf-8").read()
+                    with open(state_file_t, "r", encoding="utf-8") as f:
+                        content = f.read()
                     content = content.replace("team_status: complete", "team_status: degraded")
                     content = re.sub(r'^updated: .*', f'updated: {now_iso()}', content, flags=re.MULTILINE)
                     with open(state_file_t, "w", encoding="utf-8") as f:

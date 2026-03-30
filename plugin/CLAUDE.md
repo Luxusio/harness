@@ -285,7 +285,7 @@ Every `CRITIC__runtime.md` includes a structured evidence bundle appended after 
 ### Request Evidence          ← include for API tasks
 ```
 
-Verification scripts (`verify.sh`, `smoke.sh`, `healthcheck.sh`, `browser-smoke.sh`, `persistence-check.sh`) emit `[EVIDENCE]` tagged lines:
+Verification scripts (`verify.py`, `smoke.py`, `healthcheck.py`, `browser-smoke.py`, `persistence_check.py`) emit `[EVIDENCE]` tagged lines:
 ```
 [EVIDENCE] <type>: PASS|FAIL|SKIP <target> — <detail>
 ```

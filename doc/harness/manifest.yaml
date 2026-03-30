@@ -4,7 +4,7 @@ type: library
 languages: [python, markdown]
 browser_qa_supported: false
 verify_commands:
-  - bash plugin/scripts/verify.sh
-  - python plugin/scripts/healthcheck.py
-  - python plugin/scripts/smoke.py
+  - python3 plugin/scripts/verify.py
+  - python3 plugin/scripts/healthcheck.py
+  - python3 plugin/scripts/smoke.py
 initialized: 2026-03-30

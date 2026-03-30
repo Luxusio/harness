@@ -183,6 +183,49 @@ def compute_completion_failures(task_dir):
     return failures
 
 
+def _parse_checks_yaml(checks_file):
+    """Parse CHECKS.yaml using stdlib-only line-based regex (no pyyaml dependency).
+
+    Returns list of dicts with 'id', 'status', and 'title' keys.
+    """
+    criteria = []
+    try:
+        with open(checks_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return criteria
+
+    current = {}
+    for line in lines:
+        # New criterion entry (starts with "  - id:" or "- id:")
+        m_id = re.match(r"^\s*-?\s*id\s*:\s*(.+)", line)
+        if m_id:
+            if current.get("id"):
+                criteria.append(current)
+            current = {
+                "id": m_id.group(1).strip().strip('"').strip("'"),
+                "status": None,
+                "title": "",
+            }
+            continue
+        # Status field within a criterion
+        m_st = re.match(r"^\s+status\s*:\s*(.+)", line)
+        if m_st and current.get("id"):
+            current["status"] = m_st.group(1).strip().strip('"').strip("'")
+            continue
+        # Title field within a criterion
+        m_title = re.match(r"^\s+title\s*:\s*(.+)", line)
+        if m_title and current.get("id"):
+            current["title"] = m_title.group(1).strip().strip('"').strip("'")
+            continue
+
+    # Don't forget last entry
+    if current.get("id"):
+        criteria.append(current)
+
+    return criteria
+
+
 def main():
     data = read_hook_input()
 
@@ -251,19 +294,16 @@ def main():
     # --- Run completion checks (pure function) ---
     failures = compute_completion_failures(target)
 
-    # --- CHECKS.yaml open criteria warning (non-blocking) ---
+    # --- CHECKS.yaml open criteria warning (non-blocking, stdlib-only) ---
     checks_file = os.path.join(target, "CHECKS.yaml")
     if os.path.exists(checks_file):
         try:
-            import yaml
-            with open(checks_file) as f:
-                checks_data = yaml.safe_load(f)
-            checks = (checks_data or {}).get("checks", []) or []
-            open_criteria = [c for c in checks if c.get("status") != "passed"]
+            criteria = _parse_checks_yaml(checks_file)
+            open_criteria = [c for c in criteria if c.get("status") != "passed"]
             if open_criteria:
                 by_status = {}
                 for c in open_criteria:
-                    s = c.get("status", "unknown")
+                    s = c.get("status") or "unknown"
                     by_status.setdefault(s, []).append(c)
                 print(f"WARN: {len(open_criteria)} open acceptance criterion/criteria in CHECKS.yaml:")
                 for status_label, items in sorted(by_status.items()):
@@ -274,28 +314,7 @@ def main():
                         if title:
                             print(f"    - {c.get('id', '?')}: {title}")
         except Exception as e:
-            try:
-                with open(checks_file) as f:
-                    lines = f.readlines()
-                open_ids = []
-                current_id = None
-                current_status = None
-                for line in lines:
-                    m_id = re.match(r"^\s*-?\s*id\s*:\s*(.+)", line)
-                    if m_id:
-                        if current_id and current_status != "passed":
-                            open_ids.append(f"{current_id} [{current_status or 'unknown'}]")
-                        current_id = m_id.group(1).strip().strip('"').strip("'")
-                        current_status = None
-                    m_st = re.match(r"^\s+status\s*:\s*(.+)", line)
-                    if m_st:
-                        current_status = m_st.group(1).strip().strip('"').strip("'")
-                if current_id and current_status != "passed":
-                    open_ids.append(f"{current_id} [{current_status or 'unknown'}]")
-                if open_ids:
-                    print(f"WARN: {len(open_ids)} open criteria in CHECKS.yaml: {', '.join(open_ids)}")
-            except Exception:
-                print(f"WARN: could not parse CHECKS.yaml: {e}")
+            print(f"WARN: could not parse CHECKS.yaml: {e}")
 
     # --- Report and block ---
     if failures:

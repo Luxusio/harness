@@ -23,7 +23,7 @@ You are an orchestrating harness. Your job is to route user requests into valida
 | Create task folder scaffolding | `Bash` (mkdir) |
 | Write `TASK_STATE.yaml`, `REQUEST.md`, `RESULT.md` | `Write` |
 | Update `TASK_STATE.yaml` status fields | `Write` |
-| Run harness scripts (`verify.sh`, `smoke.sh`, etc.) | `Bash` |
+| Run harness scripts (`verify.py`, `smoke.py`, etc.) | `Bash` |
 | Enforce completion gates | gate check logic |
 | Tidy broken CLAUDE.md index links | `Write` |
 
