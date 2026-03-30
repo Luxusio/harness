@@ -4,7 +4,6 @@ import json
 import os
 import sys
 
-import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import read_hook_input, json_field, manifest_field, is_tooling_ready, is_profile_enabled
 
@@ -130,7 +129,12 @@ def main():
     hint = get_hint(hook_input, manifest, state)
 
     if hint:
-        output = {"additionalContext": hint[:500]}
+        output = {
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": hint[:500]
+            }
+        }
         print(json.dumps(output))
 
 if __name__ == "__main__":

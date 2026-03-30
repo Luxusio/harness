@@ -6,9 +6,9 @@ from _lib import (read_hook_input, json_field, json_array, yaml_field, yaml_arra
                   extract_roots, TASK_DIR, MANIFEST, now_iso)
 
 # Stop hook — catches premature completion attempts.
-# Uses Claude Code structured JSON API (same pattern as ralph-loop):
-#   {"decision": "block", "reason": "<actionable message>"}  → blocks stop, feeds reason back to agent
-#   {"decision": "allow"}                                     → allows stop, no conversation injection
+# Uses Claude Code structured JSON API:
+#   {"decision": "block", "reason": "<actionable message>"}  → blocks stop
+#   {"decision": "approve"}                                   → allows stop
 # exit 0 always — decision field controls blocking, not exit code.
 
 # Workflow status → next concrete action mapping.
@@ -48,15 +48,18 @@ def _verdict_hints(state_file):
     return hints
 
 
-def allow():
-    print(json.dumps({"decision": "allow"}))
+def approve(system_message=None):
+    result = {"decision": "approve"}
+    if system_message:
+        result["reason"] = system_message
+    print(json.dumps(result))
     sys.exit(0)
 
-# No harness initialized — allow stop
+# No harness initialized — approve stop
 if not os.path.exists("doc/harness/manifest.yaml"):
-    allow()
+    approve()
 if not os.path.isdir(TASK_DIR):
-    allow()
+    approve()
 
 open_tasks = []
 blocked_tasks = []
@@ -123,9 +126,7 @@ if open_tasks:
 if blocked_tasks:
     msg = f"Note: {len(blocked_tasks)} task(s) in blocked_env state (env fix required):\n"
     msg += "\n".join(f"  - {t}" for t in blocked_tasks)
-    print(json.dumps({"decision": "allow", "systemMessage": msg}))
-    sys.exit(0)
+    approve(system_message=msg)
 
 # Clean — no open or blocked tasks
-print(json.dumps({"decision": "allow"}))
-sys.exit(0)
+approve()
