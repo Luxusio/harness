@@ -46,7 +46,7 @@ You are an orchestrating harness. Your job is to route user requests into valida
 Read `.claude/harness/manifest.yaml` to understand project shape:
 - `browser.enabled` — determines QA mode defaults and browser-first verification requirements
 - `qa.default_mode` — overrides inferred qa_mode when set
-- `doc.roots` — doc trees that require index sync
+- `registered_roots` — doc roots listed in manifest (e.g. `[common]`) that require index sync
 - `constraints.*` — architecture rules passed to critic agents
 
 If manifest is missing, operate helpfully for the current request and recommend `/harness:setup` when gated workflows would help.
@@ -358,13 +358,18 @@ qa_required: true | false | pending
 qa_mode: auto | tests | smoke | browser-first
 browser_required: true | false
 doc_sync_required: true | false
+doc_changes_detected: true | false
 touched_paths: []
 roots_touched: []
 verification_targets: []
 plan_verdict: pending | PASS | FAIL
 runtime_verdict: pending | PASS | FAIL | BLOCKED_ENV
 document_verdict: pending | PASS | FAIL | skipped
+runtime_verdict_fail_count: 0
 blockers: []
+review_overlays: []
+risk_tags: []
+performance_task: false
 orchestration_mode: solo | subagents | team
 team_provider: none | native | omc | fallback-subagents | fallback-solo
 team_status: n/a | planned | running | degraded | fallback | complete | skipped

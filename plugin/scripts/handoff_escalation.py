@@ -11,7 +11,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import yaml_field, yaml_array, now_iso
+from _lib import yaml_field, yaml_array, now_iso, is_doc_path
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +245,7 @@ def _parse_checks(checks_path):
         if id_m:
             # Flush previous
             if current_id is not None:
-                if current_status and current_status.upper() == "PASS":
+                if current_status and current_status.lower() == "passed":
                     good_ids.append(current_id)
                 else:
                     open_ids.append(current_id)
@@ -259,7 +259,7 @@ def _parse_checks(checks_path):
 
     # Flush last entry
     if current_id is not None:
-        if current_status and current_status.upper() == "PASS":
+        if current_status and current_status.lower() == "passed":
             good_ids.append(current_id)
         else:
             open_ids.append(current_id)
@@ -317,19 +317,8 @@ def _extract_paths_from_critics(task_dir, touched_paths):
     if paths:
         return sorted(paths)[:10]  # Limit to 10 most relevant
     # Fall back to touched_paths (non-doc)
-    return [p for p in touched_paths if not _is_doc_path(p)][:10]
+    return [p for p in touched_paths if not is_doc_path(p)][:10]
 
-
-def _is_doc_path(path):
-    """Return True if path is documentation (not runtime)."""
-    doc_patterns = [
-        r"^doc/", r"^docs/", r"\.md$", r"^README", r"^CHANGELOG",
-        r"^LICENSE", r"^\.claude/harness/critics/", r"^DOC_SYNC\.md$",
-    ]
-    for pattern in doc_patterns:
-        if re.match(pattern, path):
-            return True
-    return False
 
 
 def _build_do_not_regress(task_dir, last_known_good_checks):

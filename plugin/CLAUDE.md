@@ -21,7 +21,7 @@ Orchestration mode (solo | subagents | team) is selected independently after exe
 | `SessionStart` | Load context, show open tasks |
 | `TaskCreated` | Initialize TASK_STATE.yaml, HANDOFF.md, REQUEST.md |
 | `TaskCompleted` | **BLOCK** (exit 2) unless all required verdicts PASS; auto-populates touched_paths/roots_touched/verification_targets from git diff if empty; runs note auto-reverify (non-blocking) for suspect notes whose `invalidated_by_paths` overlap `touched_paths` |
-| `SubagentStop` | Warn if expected artifacts missing |
+| `SubagentStop` | Record agent run provenance in TASK_STATE.yaml (`agent_run_<name>_count`/`last`); warn if expected artifacts missing |
 | `Stop` | **BLOCK** (exit 2) if open tasks remain |
 | `FileChanged` | Precise invalidation: runtime_verdict for runtime paths, document_verdict for doc paths; marks affected notes suspect using **structural path matching** (exact or directory-prefix, not substring) |
 | `PostCompact` | Re-inject open task summary + maintain-lite entropy indicators |
@@ -41,6 +41,10 @@ All hook scripts parse stdin JSON and use exit 2 for blocking.
 | CRITIC__runtime.md PASS | Repo-mutating tasks (mutates_repo != false) |
 | CRITIC__document.md PASS | When DOC_SYNC.md exists or doc files changed |
 | blocked_env cannot close | Always |
+| workflow_violations empty | Always (plan-first violation blocks close) |
+| execution_mode not pending | Repo-mutating tasks |
+| orchestration_mode not pending | Repo-mutating tasks |
+| YAML plan/runtime/document verdicts (not artifact text) | Always — stale PASS artifact does not count |
 
 ## Execution modes
 
@@ -406,7 +410,7 @@ All repo-mutating tasks must produce `DOC_SYNC.md` before close. Mandatory even 
 task_id: TASK__<slug>
 status: created | planned | plan_passed | implemented | qa_passed | docs_synced | closed | blocked_env | stale | archived
 lane: build | debug | verify | refactor | docs-sync | investigate | answer
-execution_mode: light | standard | sprinted
+execution_mode: pending | light | standard | sprinted
 mutates_repo: true | false | unknown
 qa_required: true | false | pending
 qa_mode: auto | tests | smoke | browser-first
@@ -422,7 +426,7 @@ document_verdict: pending | PASS | FAIL | skipped
 runtime_verdict_fail_count: 0
 blockers: []
 updated: <ISO 8601>
-orchestration_mode: solo | subagents | team
+orchestration_mode: pending | solo | subagents | team
 team_provider: none | native | omc | fallback-subagents | fallback-solo
 team_status: n/a | planned | running | degraded | fallback | complete | skipped
 team_size: 0
@@ -430,6 +434,17 @@ team_reason: ""
 team_plan_required: false
 team_synthesis_required: false
 fallback_used: none | subagents | solo
+workflow_violations: []
+agent_run_developer_count: 0
+agent_run_developer_last: null
+agent_run_writer_count: 0
+agent_run_writer_last: null
+agent_run_critic_plan_count: 0
+agent_run_critic_plan_last: null
+agent_run_critic_runtime_count: 0
+agent_run_critic_runtime_last: null
+agent_run_critic_document_count: 0
+agent_run_critic_document_last: null
 ```
 
 ## Manifest schema reference
@@ -489,6 +504,9 @@ teams:
 - Team fallback (native → omc → subagents → solo) is a normal operational path, not a failure
 - **(WS-1)** Suspect notes with `verification_command` are auto-reverified at task completion when their `invalidated_by_paths` overlap `touched_paths`. Non-blocking; max 5 notes; 10s per command.
 - **(WS-2)** Fix rounds (prior runtime FAIL or SESSION_HANDOFF.json) use focus-first + guardrail-second delta verification. Full sweep reverts for sprinted/structural/first-round tasks.
+- **(Enforcement)** Completion gate uses YAML verdicts as source of truth — stale PASS artifacts (file changed after PASS) do not count. Provenance fields (`agent_run_*`) must show developer/writer/critic runs when required.
+- **(Enforcement)** `execution_mode` and `orchestration_mode` initialize to `pending`; must be explicitly set before a repo-mutating task can close.
+- **(Enforcement)** Source mutations on a task before plan PASS record `source_mutation_before_plan_pass` in `workflow_violations` and block close.
 - **(WS-3)** Tasks with `reopen_count ≥ 2` or `runtime_verdict_fail_count ≥ 2` are calibration candidates. Session end reports count; `/harness:maintain` generates case files in `plugin/calibration/local/critic-runtime/`.
 
 ## Mode-specific artifact requirements
