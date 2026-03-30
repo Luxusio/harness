@@ -3,10 +3,11 @@
 import json
 import os
 import sys
+import re
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import read_hook_input, json_field
+from _lib import read_hook_input, hook_json_get
 from memory_selectors import select_relevant_notes, select_active_tasks, select_recent_verdicts, _get_registered_roots
 
 def is_casual(prompt):
@@ -24,7 +25,7 @@ def is_casual(prompt):
 def extract_prompt(hook_input):
     """Extract the user prompt from hook input JSON."""
     for field in ["prompt", "message", "content", "input", "query"]:
-        val = json_field(field, hook_input)
+        val = hook_json_get(hook_input, field)
         if val:
             return val
     return ""
@@ -51,7 +52,6 @@ def _get_active_task_dir():
     task_dir = ".claude/harness/tasks"
     if not os.path.isdir(task_dir):
         return None
-    import re
     candidates = []
     for entry in os.listdir(task_dir):
         if not entry.startswith("TASK__"):
@@ -91,7 +91,6 @@ def _is_fix_round(task_dir):
     """
     if not task_dir or not os.path.isdir(task_dir):
         return False
-    import re
     state_file = os.path.join(task_dir, "TASK_STATE.yaml")
     if os.path.isfile(state_file):
         try:
@@ -104,6 +103,61 @@ def _is_fix_round(task_dir):
     if os.path.isfile(os.path.join(task_dir, "SESSION_HANDOFF.json")):
         return True
     return False
+
+
+def _get_unplanned_hint(task_dir):
+    """WS-5: Return a strong hint string if the active task is unplanned.
+
+    Returns non-empty hint when:
+      - task mutates_repo (not explicitly false)
+      - plan_verdict != PASS
+      - status is created or planned (pre-implementation)
+
+    This is soft enforcement — the actual block happens at completion gate.
+    """
+    if not task_dir or not os.path.isdir(task_dir):
+        return ""
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    if not os.path.isfile(state_file):
+        return ""
+    try:
+        with open(state_file) as f:
+            content = f.read()
+
+        # Check mutates_repo
+        is_non_mutating = bool(re.search(r"^mutates_repo:\s*false", content, re.MULTILINE))
+        if is_non_mutating:
+            return ""
+
+        # Check plan_verdict
+        m_pv = re.search(r"^plan_verdict:\s*(\S+)", content, re.MULTILINE)
+        plan_verdict = m_pv.group(1) if m_pv else "pending"
+        if plan_verdict == "PASS":
+            return ""  # Already approved
+
+        # Check status
+        m_st = re.search(r"^status:\s*(\S+)", content, re.MULTILINE)
+        status = m_st.group(1) if m_st else "created"
+        if status not in ("created", "planned"):
+            return ""
+
+        # Check for existing violations (even stronger signal)
+        has_violation = bool(re.search(
+            r"source_mutation_before_plan_pass", content
+        ))
+        if has_violation:
+            return (
+                "PLAN REQUIRED + VIOLATION: task has source mutations without plan PASS"
+                " — stop source work; fix PLAN.md and obtain critic-plan PASS first"
+            )
+
+        return (
+            "PLAN REQUIRED: task not plan-approved"
+            " — do not mutate source; create/repair PLAN.md and obtain critic-plan PASS first"
+        )
+    except OSError:
+        return ""
+
 
 def gather_context(prompt):
     """Gather relevant context based on the prompt."""
@@ -134,7 +188,16 @@ def gather_context(prompt):
     except Exception:
         active_roots = ["common"]
 
-    # 2. Active tasks (top 1 via selector)
+    # 2. WS-5: Unplanned task hint (injected first — highest priority for plan enforcement)
+    try:
+        active_task_dir = _get_active_task_dir()
+        unplanned_hint = _get_unplanned_hint(active_task_dir)
+        if unplanned_hint:
+            context_parts.insert(0, unplanned_hint)
+    except Exception:
+        pass
+
+    # 3. Active tasks (top 1 via selector)
     try:
         active = select_active_tasks(prompt)
         if active:
@@ -143,7 +206,7 @@ def gather_context(prompt):
     except Exception:
         pass
 
-    # 3. Recent critic verdicts (top 1 via selector)
+    # 4. Recent critic verdicts (top 1 via selector)
     try:
         verdicts = select_recent_verdicts()
         if verdicts:
@@ -152,7 +215,7 @@ def gather_context(prompt):
     except Exception:
         pass
 
-    # 4. Check for blockers (tasks with blocked_env status)
+    # 5. Check for blockers (tasks with blocked_env status)
     try:
         task_dir = ".claude/harness/tasks"
         if os.path.isdir(task_dir):
@@ -170,7 +233,7 @@ def gather_context(prompt):
     except Exception:
         pass
 
-    # 5. CHECKS focus summary for fix rounds (WS-2)
+    # 6. CHECKS focus summary for fix rounds (WS-2)
     # Inject only when: there is an active task in a fix round, AND CHECKS.yaml has
     # focus-status criteria. Does not inject on casual/first-round prompts.
     # Budget: max 120 chars (SUMMARY_MAX_CHARS from checks_focus), counted within 600 total.
@@ -184,7 +247,7 @@ def gather_context(prompt):
     except Exception:
         pass
 
-    # 6. Relevant notes (top 2, freshness-aware, multi-root)
+    # 7. Relevant notes (top 2, freshness-aware, multi-root)
     try:
         current_lane = detect_lane_from_prompt(prompt)
         query_context = {

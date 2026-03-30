@@ -62,7 +62,12 @@ def read_hook_input():
 
 
 def json_field(field, input_str=None):
-    """Parse a string field from JSON. Returns str or ''."""
+    """Parse a string field from JSON. Returns str or ''.
+
+    Signature: json_field(field, input_str)
+      - field:     the key to look up
+      - input_str: the JSON string to parse (defaults to stdin)
+    """
     if input_str is None:
         input_str = read_hook_input()
     if not input_str:
@@ -79,6 +84,20 @@ def json_field(field, input_str=None):
             r'"' + re.escape(field) + r'"\s*:\s*"([^"]*)"', input_str
         )
         return m.group(1) if m else ""
+
+
+def hook_json_get(input_str, field):
+    """Parse a field from JSON hook input payload.
+
+    Signature: hook_json_get(input_str, field)
+      - input_str: the raw JSON payload from hook stdin
+      - field:     the key to extract
+
+    This wrapper has unambiguous argument order (input first, field second)
+    to prevent the easy inversion mistake of json_field(data, "field").
+    Use this in all hook entrypoints.
+    """
+    return json_field(field, input_str)
 
 
 def json_array(field, input_str=None):
@@ -637,3 +656,201 @@ def set_note_freshness(note_path, freshness, verified_at=None):
         return True
     except OSError:
         return False
+
+
+# ---------------------------------------------------------------------------
+# WS-1: Workflow state helpers — TASK_STATE read/write
+# ---------------------------------------------------------------------------
+
+
+def get_workflow_violations(task_dir):
+    """Return list of workflow_violations from TASK_STATE.yaml. Empty list if none."""
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    return yaml_array("workflow_violations", state_file)
+
+
+def append_workflow_violation(task_dir, violation):
+    """Append a violation string to workflow_violations in TASK_STATE.yaml.
+
+    Idempotent — does not add duplicate entries.
+    Returns True on success, False if state file absent.
+    """
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    if not os.path.isfile(state_file):
+        return False
+
+    current = get_workflow_violations(task_dir)
+    if violation in current:
+        return True  # already recorded
+
+    current.append(violation)
+    inline = ", ".join(f'"{v}"' for v in current)
+
+    try:
+        with open(state_file, "r", encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError:
+        return False
+
+    ts = now_iso()
+    if re.search(r"^workflow_violations:", content, re.MULTILINE):
+        content = re.sub(
+            r"^workflow_violations:.*",
+            f"workflow_violations: [{inline}]",
+            content,
+            flags=re.MULTILINE,
+        )
+    else:
+        content = content.rstrip("\n") + f"\nworkflow_violations: [{inline}]\n"
+
+    content = re.sub(r"^updated: .*", f"updated: {ts}", content, flags=re.MULTILINE)
+
+    try:
+        with open(state_file, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        return True
+    except OSError:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# WS-3: Agent run provenance helpers
+# ---------------------------------------------------------------------------
+
+
+def _agent_field_prefix(agent_name):
+    """Convert agent name to flat YAML field prefix.
+
+    e.g. "critic-runtime" → "agent_run_critic_runtime"
+    """
+    return "agent_run_" + agent_name.replace("-", "_")
+
+
+def get_agent_run_count(task_dir, agent_name):
+    """Return agent run count from TASK_STATE.yaml. Returns 0 if field absent."""
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    field = _agent_field_prefix(agent_name) + "_count"
+    val = yaml_field(field, state_file)
+    try:
+        return int(val) if val else 0
+    except (ValueError, TypeError):
+        return 0
+
+
+def increment_agent_run(task_dir, agent_name):
+    """Increment agent_run_<name>_count and update agent_run_<name>_last in TASK_STATE.yaml.
+
+    Returns True on success, False if state file absent or write error.
+    """
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    if not os.path.isfile(state_file):
+        return False
+
+    count_field = _agent_field_prefix(agent_name) + "_count"
+    last_field = _agent_field_prefix(agent_name) + "_last"
+
+    current_count = get_agent_run_count(task_dir, agent_name)
+    new_count = current_count + 1
+    ts = now_iso()
+
+    try:
+        with open(state_file, "r", encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError:
+        return False
+
+    # Update count field
+    if re.search(r"^" + re.escape(count_field) + r":", content, re.MULTILINE):
+        content = re.sub(
+            r"^" + re.escape(count_field) + r":.*",
+            f"{count_field}: {new_count}",
+            content,
+            flags=re.MULTILINE,
+        )
+    else:
+        content = content.rstrip("\n") + f"\n{count_field}: {new_count}\n"
+
+    # Update last field
+    if re.search(r"^" + re.escape(last_field) + r":", content, re.MULTILINE):
+        content = re.sub(
+            r"^" + re.escape(last_field) + r":.*",
+            f"{last_field}: {ts}",
+            content,
+            flags=re.MULTILINE,
+        )
+    else:
+        content = content.rstrip("\n") + f"\n{last_field}: {ts}\n"
+
+    # Update global updated timestamp
+    content = re.sub(r"^updated: .*", f"updated: {ts}", content, flags=re.MULTILINE)
+
+    try:
+        with open(state_file, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        return True
+    except OSError:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# WS-4: Verdict / doc critic / HANDOFF helpers
+# ---------------------------------------------------------------------------
+
+
+def is_plan_passed(task_dir):
+    """Return True if plan_verdict == PASS in TASK_STATE.yaml."""
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    return yaml_field("plan_verdict", state_file) == "PASS"
+
+
+def needs_document_critic(task_dir):
+    """Return True if document critic is required for this task.
+
+    Criteria (any of):
+      1. doc_changes_detected: true in TASK_STATE.yaml
+      2. DOC_SYNC.md exists with non-'none' meaningful content
+    """
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    if yaml_field("doc_changes_detected", state_file) == "true":
+        return True
+
+    doc_sync = os.path.join(task_dir, "DOC_SYNC.md")
+    if os.path.isfile(doc_sync):
+        try:
+            with open(doc_sync, "r", encoding="utf-8") as fh:
+                content = fh.read()
+            # Strip comment lines and whitespace; check if meaningful content remains
+            lines = [
+                ln.strip()
+                for ln in content.split("\n")
+                if ln.strip() and not ln.strip().startswith("#")
+            ]
+            meaningful = "".join(lines).lower()
+            if meaningful and meaningful != "none":
+                return True
+        except OSError:
+            pass
+
+    return False
+
+
+def is_handoff_stub(handoff_path):
+    """Return True if HANDOFF.md is an unfilled stub.
+
+    A stub is detected by:
+      - fewer than 5 non-empty lines, OR
+      - no '##' section headers (no real content sections)
+    """
+    if not handoff_path or not os.path.isfile(handoff_path):
+        return True
+    try:
+        with open(handoff_path, "r", encoding="utf-8") as fh:
+            content = fh.read()
+        lines = [ln for ln in content.strip().split("\n") if ln.strip()]
+        if len(lines) < 5:
+            return True
+        if not any(ln.startswith("##") for ln in lines):
+            return True
+        return False
+    except OSError:
+        return True

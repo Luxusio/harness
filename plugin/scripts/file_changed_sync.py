@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FileChanged hook — task-scoped verdict invalidation.
+"""FileChanged hook — task-scoped verdict invalidation + plan-first violation recording.
 
 Non-blocking. Resets stale PASS verdicts to pending only for tasks
 whose touched_paths/roots_touched/verification_targets overlap with the changed file(s).
@@ -9,6 +9,11 @@ Precision rules:
   - runtime path change → invalidate runtime_verdict only (via verification_targets)
   - both → invalidate both
 Conservative fallback (no file list): invalidate ALL verdicts on ALL open tasks.
+
+Plan-first enforcement (WS-5):
+  - runtime path change on task with explicit verification_targets ownership
+    AND plan_verdict != PASS → record workflow_violation source_mutation_before_plan_pass
+
 Note freshness: if a changed file matches a note's invalidated_by_paths, set note freshness to suspect.
   Uses structural path comparison (exact / prefix), NOT substring matching.
 stdin: JSON | exit 0: always
@@ -21,7 +26,8 @@ from _lib import (read_hook_input, json_array, yaml_field, yaml_array,
                   is_doc_path, find_tasks_touching_path,
                   find_tasks_with_verification_targets, task_touches_path,
                   manifest_field, is_profile_enabled, TASK_DIR, MANIFEST, now_iso,
-                  parse_note_metadata, set_note_freshness)
+                  parse_note_metadata, set_note_freshness, parse_changed_files,
+                  append_workflow_violation)
 
 import re
 import glob
@@ -122,8 +128,55 @@ def invalidate_note_freshness(changed_file):
         print(f"NOTE SUSPECT: {note_file} — freshness set to suspect ({changed_file} changed)")
 
 
+def _record_plan_first_violation(changed_file):
+    """WS-5: Check all open tasks that explicitly own changed_file via verification_targets.
+
+    If such a task has plan_verdict != PASS, record source_mutation_before_plan_pass.
+    Only fires when the task has explicit file ownership (non-empty verification_targets).
+    """
+    if not os.path.isdir(TASK_DIR):
+        return
+
+    for task in sorted(glob.glob(os.path.join(TASK_DIR, "TASK__*/"))):
+        if not os.path.isdir(task):
+            continue
+        state_file = os.path.join(task, "TASK_STATE.yaml")
+        if not os.path.isfile(state_file):
+            continue
+
+        status = yaml_field("status", state_file)
+        if status in ("closed", "archived", "stale"):
+            continue
+
+        # Only check if plan has NOT passed yet
+        plan_verdict = yaml_field("plan_verdict", state_file)
+        if plan_verdict == "PASS":
+            continue
+
+        # Require explicit verification_targets ownership (not conservative fallback)
+        vt = yaml_array("verification_targets", state_file)
+        if not vt:
+            continue  # no explicit ownership — skip to avoid false positives
+
+        # Check if changed_file is in this task's verification_targets
+        owned = any(
+            changed_file == path or changed_file.startswith(path + "/")
+            for path in vt
+            if path
+        )
+        if not owned:
+            continue
+
+        task_id = os.path.basename(task.rstrip("/"))
+        append_workflow_violation(task, "source_mutation_before_plan_pass")
+        print(
+            f"VIOLATION: {task_id} — source mutation before plan PASS"
+            f" ({changed_file} changed while plan_verdict={plan_verdict})"
+        )
+
+
 def process_changed_file(changed_file):
-    """Classify doc/runtime, call appropriate invalidation."""
+    """Classify doc/runtime, call appropriate invalidation and violation recording."""
     changed_is_doc = is_doc_path(changed_file)
     changed_is_runtime = not changed_is_doc
 
@@ -131,6 +184,9 @@ def process_changed_file(changed_file):
     invalidate_note_freshness(changed_file)
 
     if changed_is_runtime:
+        # WS-5: record plan-first violation for tasks that own this file
+        _record_plan_first_violation(changed_file)
+
         # Runtime change: invalidate runtime_verdict on tasks whose verification_targets overlap
         for task in find_tasks_with_verification_targets(changed_file):
             if not task:
@@ -184,10 +240,8 @@ def main():
 
     hook_input = read_hook_input()
 
-    # Parse changed files from stdin
-    changed_files = json_array("files", hook_input)
-    if not changed_files:
-        changed_files = json_array("paths", hook_input)
+    # Parse changed files from stdin (handles files/paths/changed_files/file_path/file/path)
+    changed_files = parse_changed_files(hook_input)
 
     if changed_files:
         # Process each changed file individually with precision
