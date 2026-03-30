@@ -8,7 +8,7 @@
 - durable memory는 `doc/` 아래 root 확장 방식으로 저장한다
 - setup은 repo를 AI가 일할 수 있는 운영체제로 바꾸되 executable QA scaffolding을 포함한다
 - root `CLAUDE.md`가 single repo entrypoint이자 durable root registry
-- `.claude/harness/manifest.yaml`가 initialization marker
+- `doc/harness/manifest.yaml`가 initialization marker
 - 모든 substantial repo-mutating work는 contract + executable QA + persistence + docs sync를 거친다
 - architecture constraints는 optional machine-enforced checks로 분리
 
@@ -84,7 +84,7 @@ repo/
 설명:
 
 - root `CLAUDE.md`가 registry. `doc/CLAUDE.md`는 없다.
-- `.claude/harness/manifest.yaml`가 initialization marker.
+- `doc/harness/manifest.yaml`가 initialization marker.
 - `scripts/harness/`는 executable QA scaffolding.
 - task 폴더에 `TASK_STATE.yaml`, `HANDOFF.md`, `QA__runtime.md`, `DOC_SYNC.md` 추가.
 - `constraints/`는 optional machine-enforced architecture checks.
@@ -110,7 +110,7 @@ updated: 2026-03-27
 - Every substantial repo-mutating task follows:
   request -> contract plan -> plan critic -> implement -> runtime QA -> persistence -> docs sync -> document critic -> close.
 - New durable roots or durable structure changes go through critic-document.
-- `.claude/harness/manifest.yaml` is the initialization marker.
+- `doc/harness/manifest.yaml` is the initialization marker.
 ```
 
 ### 3.2 `doc/common/CLAUDE.md`
@@ -130,7 +130,7 @@ updated: 2026-03-27
 - INF__arch__initial-stack-assumptions.md — initial stack assumptions (unverified)
 ```
 
-### 3.3 `.claude/harness/manifest.yaml`
+### 3.3 `doc/harness/manifest.yaml`
 
 ```yaml
 version: 3
@@ -233,7 +233,7 @@ skills:
 
 Mission:
 - Route user work through the mutate-repo loop.
-- Always read .claude/harness/manifest.yaml when initialized.
+- Always read doc/harness/manifest.yaml when initialized.
 - Keep durable context correct and maintainable.
 
 Lane simplification:
@@ -256,9 +256,9 @@ tools: Read, Edit, Write, MultiEdit, Bash, Glob, Grep, LS
 ---
 
 Before acting:
-- Read .claude/harness/manifest.yaml and task-local TASK_STATE.yaml
-- Read .claude/harness/critics/runtime.md
-- Read optional .claude/harness/constraints/*
+- Read doc/harness/manifest.yaml and task-local TASK_STATE.yaml
+- Read doc/harness/critics/runtime.md
+- Read optional doc/harness/constraints/*
 
 On finish:
 - Update TASK_STATE.yaml to status: implemented
@@ -279,7 +279,7 @@ tools: Read, Edit, Write, MultiEdit, Glob, Grep, LS
 ---
 
 Before acting:
-- Read .claude/harness/critics/document.md
+- Read doc/harness/critics/document.md
 
 Output contract:
 - Write DOC_SYNC.md summarizing note and index updates
@@ -298,7 +298,7 @@ permissionMode: plan
 tools: Read, Glob, Grep, LS
 ---
 
-Before acting: read .claude/harness/critics/plan.md
+Before acting: read doc/harness/critics/plan.md
 
 Output contract:
 - verdict: PASS | FAIL
@@ -318,8 +318,8 @@ mcpServers: [chrome-devtools]
 tools: Read, Bash, Glob, Grep, LS
 ---
 
-Before acting: read .claude/harness/critics/runtime.md
-Optionally run .claude/harness/constraints/check-architecture.* if present.
+Before acting: read doc/harness/critics/runtime.md
+Optionally run doc/harness/constraints/check-architecture.* if present.
 
 BLOCKED_ENV is a runtime verdict only — task stays open with status: blocked_env.
 
@@ -340,7 +340,7 @@ permissionMode: plan
 tools: Read, Glob, Grep, LS
 ---
 
-Before acting: read .claude/harness/critics/document.md
+Before acting: read doc/harness/critics/document.md
 
 Replaces critic-write and critic-structure.
 
@@ -360,7 +360,7 @@ Output contract:
    critic agent 고유의 불변 성격
 
 2. **project playbook**
-   `.claude/harness/critics/{plan,runtime,document}.md`
+   `doc/harness/critics/{plan,runtime,document}.md`
    - setup이 repo를 읽고 초안을 자동 생성
    - 프로젝트 전역 규칙 저장
 
@@ -369,7 +369,7 @@ Output contract:
    - 특정 root에만 필요한 검증 규칙
 
 4. **task-local contract**
-   `.claude/harness/tasks/TASK__*/PLAN.md`
+   `doc/harness/tasks/TASK__*/PLAN.md`
    - 이번 작업 acceptance, verification plan, touched roots, expected evidence
 
 ### 6.1 project playbook 예시
@@ -587,7 +587,7 @@ Project-shape guidance:
 
 ## 12. optional architecture constraints
 
-`.claude/harness/constraints/`에 둔다. repo shape이 machine constraints를 필요로 할 때만 생성.
+`doc/harness/constraints/`에 둔다. repo shape이 machine constraints를 필요로 할 때만 생성.
 
 - `architecture.md` — 인간이 읽는 architecture 규칙
 - `check-architecture.sh` — 기계가 실행하는 검증 스크립트
@@ -598,13 +598,13 @@ critic-runtime이 optional로 실행할 수 있다.
 
 ## 13. `/harness:setup`이 해야 하는 일
 
-1. repo census (.claude/harness/manifest.yaml 확인)
+1. repo census (doc/harness/manifest.yaml 확인)
 2. safe observation (비파괴 실행만)
 3. minimal questions (최대 5개)
 4. bootstrap generation
-   - root CLAUDE.md, doc/common/*, .claude/harness/manifest.yaml
+   - root CLAUDE.md, doc/common/*, doc/harness/manifest.yaml
    - .claude/settings.json
-   - .claude/harness/critics/{plan,runtime,document}.md
+   - doc/harness/critics/{plan,runtime,document}.md
    - scripts/harness/{verify,smoke,healthcheck,reset-db}.sh
    (hook scripts는 plugin 내장 — target project에 복사 불필요)
 5. initial notes (REQ, OBS, INF)
@@ -622,8 +622,8 @@ critic-runtime이 optional로 실행할 수 있다.
 - `CLAUDE.md` (root entrypoint + registry)
 - `doc/common/CLAUDE.md`
 - 최소 1개씩의 `REQ__`, `OBS__`, `INF__`
-- `.claude/harness/manifest.yaml`
-- `.claude/harness/critics/{plan,runtime,document}.md`
+- `doc/harness/manifest.yaml`
+- `doc/harness/critics/{plan,runtime,document}.md`
 - `.claude/settings.json`
 - `scripts/harness/{verify,smoke,healthcheck,reset-db}.sh`
 
@@ -632,7 +632,7 @@ Hook scripts (task gates, session sync 등)은 plugin에 내장되어 있으므�
 선택 생성:
 - 추가 root
 - root-local critic overlay
-- `.claude/harness/constraints/{architecture.md,check-architecture.sh}`
+- `doc/harness/constraints/{architecture.md,check-architecture.sh}`
 
 ---
 

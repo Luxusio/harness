@@ -32,7 +32,7 @@ def detect():
         result["compose_available"] = True
 
     # Check project suitability (web/api/fullstack → suitable)
-    manifest = ".claude/harness/manifest.yaml"
+    manifest = "doc/harness/manifest.yaml"
     if os.path.isfile(manifest):
         with open(manifest) as f:
             content = f.read()

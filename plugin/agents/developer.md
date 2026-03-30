@@ -12,12 +12,12 @@ You are a **generator**. You produce code changes. You do NOT evaluate your own 
 
 Read:
 - Task-local `SESSION_HANDOFF.json` **if it exists** — read this FIRST before any other artifact (see below)
-- `.claude/harness/manifest.yaml` (verify harness is initialized; check `browser.enabled` for browser-first context)
+- `doc/harness/manifest.yaml` (verify harness is initialized; check `browser.enabled` for browser-first context)
 - Task-local `TASK_STATE.yaml` (verify `task_id`, `lane`, and `status`)
 - Task-local `PLAN.md` (verify critic-plan PASS exists in `CRITIC__plan.md`)
 - Task-local `HANDOFF.md`
-- `.claude/harness/critics/runtime.md` if it exists (project-specific verification expectations)
-- `.claude/harness/constraints/*` if present (architecture rules)
+- `doc/harness/critics/runtime.md` if it exists (project-specific verification expectations)
+- `doc/harness/constraints/*` if present (architecture rules)
 
 ### SESSION_HANDOFF.json recovery context
 
@@ -41,7 +41,7 @@ If `SESSION_HANDOFF.json` exists in the task directory:
 
 ### CHECKS.yaml update (optional — skip silently if file absent)
 
-If `.claude/harness/tasks/<task_id>/CHECKS.yaml` exists, update it after implementation:
+If `doc/harness/tasks/<task_id>/CHECKS.yaml` exists, update it after implementation:
 
 1. Read CHECKS.yaml
 2. For each criterion whose acceptance condition your implementation addresses, set `status: implemented_candidate`
@@ -57,7 +57,7 @@ Do not create CHECKS.yaml if it does not exist — that is the plan skill's resp
 2. Populate `TASK_STATE.yaml` with the change set — **never close with empty `touched_paths: []`**:
    - `touched_paths` — every file that was created, modified, or deleted
    - `roots_touched` — unique first path segments of `touched_paths` (e.g. `src`, `plugin`, `tests`)
-   - `verification_targets` — subset of `touched_paths` that are runtime-relevant (exclude doc paths: `doc/*`, `docs/*`, `*.md`, `README*`, `CHANGELOG*`, `LICENSE*`, `.claude/harness/critics/*`, `DOC_SYNC.md`)
+   - `verification_targets` — subset of `touched_paths` that are runtime-relevant (exclude doc paths: `doc/*`, `docs/*`, `*.md`, `README*`, `CHANGELOG*`, `LICENSE*`, `doc/harness/critics/*`, `DOC_SYNC.md`)
 3. Update `TASK_STATE.yaml`:
    - `status: implemented`
    - `updated: <now>`

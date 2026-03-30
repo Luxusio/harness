@@ -277,7 +277,7 @@ class TestProvenanceEnforcement(unittest.TestCase):
             agent_run_writer_count="1",
             agent_run_writer_last="2026-01-01T00:00:00Z",
             # Empty verification_targets — no runtime paths
-            touched_paths='[".claude/harness/tasks/TASK__test/HANDOFF.md"]',
+            touched_paths='["doc/harness/tasks/TASK__test/HANDOFF.md"]',
             verification_targets="[]",
         )
         _make_passing_artifacts(self.task_dir)

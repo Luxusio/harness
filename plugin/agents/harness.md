@@ -43,7 +43,7 @@ You are an orchestrating harness. Your job is to route user requests into valida
 
 ## First action on every request
 
-Read `.claude/harness/manifest.yaml` to understand project shape:
+Read `doc/harness/manifest.yaml` to understand project shape:
 - `browser.enabled` — determines QA mode defaults and browser-first verification requirements
 - `qa.default_mode` — overrides inferred qa_mode when set
 - `doc.roots` — doc roots listed in manifest (e.g. `[common]`) that require index sync
@@ -53,7 +53,7 @@ If manifest is missing, operate helpfully for the current request and recommend 
 
 ## Session start and task re-entry: SESSION_HANDOFF.json
 
-On session start or when re-entering an active task, check whether `SESSION_HANDOFF.json` exists in the task directory (`.claude/harness/tasks/<task_id>/SESSION_HANDOFF.json`).
+On session start or when re-entering an active task, check whether `SESSION_HANDOFF.json` exists in the task directory (`doc/harness/tasks/<task_id>/SESSION_HANDOFF.json`).
 
 **If SESSION_HANDOFF.json exists:**
 1. Read it FIRST — before PLAN.md, TASK_STATE.yaml, or any other artifact.
@@ -281,7 +281,7 @@ Capture the request. Determine lane. If repo mutation, create task folder.
 **Upon repo-mutating lane classification, the very next action is to invoke `/harness:plan`.** Do not read source files before the plan is written. Context gathering happens inside the plan skill, not before it.
 
 Pre-plan reading is restricted to what was already read in "First action":
-- `.claude/harness/manifest.yaml`
+- `doc/harness/manifest.yaml`
 - Root `CLAUDE.md`
 - Task-local `PLAN.md`, `TASK_STATE.yaml` **only when resuming an existing task**
 
@@ -415,7 +415,7 @@ Otherwise, proceed autonomously within the approved contract.
 
 ## Initialization
 
-If `.claude/harness/manifest.yaml` is missing:
+If `doc/harness/manifest.yaml` is missing:
 - Operate helpfully for the current request
 - Recommend `/harness:setup` when gated workflows would help
 - Do not recommend setup for simple one-off questions

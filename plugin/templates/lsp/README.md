@@ -26,7 +26,7 @@ cclsp is preferred when available because it integrates directly with the Claude
 2. Verify the binary is on your PATH: `which typescript-language-server`
 3. Run `plugin/scripts/lsp_detect.py` to confirm detection.
 4. Optionally copy `plugin/templates/lsp/.lsp.json.optional` to `.lsp.json` and customize server arguments.
-5. Set `lsp_ready: true` in `.claude/harness/manifest.yaml` to activate the symbol lane.
+5. Set `lsp_ready: true` in `doc/harness/manifest.yaml` to activate the symbol lane.
 
 For cclsp setup, ensure the MCP LSP tools are registered in `.mcp.json` and set `cclsp_ready: true` in the manifest.
 

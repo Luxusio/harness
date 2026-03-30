@@ -53,7 +53,7 @@ def allow():
     sys.exit(0)
 
 # No harness initialized — allow stop
-if not os.path.exists(".claude/harness/manifest.yaml"):
+if not os.path.exists("doc/harness/manifest.yaml"):
     allow()
 if not os.path.isdir(TASK_DIR):
     allow()

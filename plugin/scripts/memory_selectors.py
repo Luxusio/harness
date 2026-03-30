@@ -290,7 +290,7 @@ def score_relevance(keywords, text):
 
 def _get_registered_roots(doc_base="doc"):
     """Return list of root names from manifest's registered_roots, or scan doc/*."""
-    manifest_path = ".claude/harness/manifest.yaml"
+    manifest_path = "doc/harness/manifest.yaml"
     roots = []
 
     if os.path.isfile(manifest_path):
@@ -435,7 +435,7 @@ def select_relevant_notes(prompt, notes_dir=None, query_context=None):
     return scored[:2]  # Top 2
 
 
-def select_active_tasks(prompt, task_dir=".claude/harness/tasks"):
+def select_active_tasks(prompt, task_dir="doc/harness/tasks"):
     """Find active tasks relevant to prompt. Returns list of (task_id, status, relevance)."""
     keywords = extract_keywords(prompt)
     if not os.path.isdir(task_dir):
@@ -486,7 +486,7 @@ def select_active_tasks(prompt, task_dir=".claude/harness/tasks"):
     return tasks[:1]
 
 
-def select_recent_verdicts(task_dir=".claude/harness/tasks"):
+def select_recent_verdicts(task_dir="doc/harness/tasks"):
     """Get most recent critic verdicts. Returns list of (task_id, verdict_type, verdict)."""
     if not os.path.isdir(task_dir):
         return []

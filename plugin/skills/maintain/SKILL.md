@@ -13,7 +13,7 @@ Optional focus from user: `$ARGUMENTS`
 ## What to check and fix
 
 ### 1. Task health
-- Find open/blocked tasks in `.claude/harness/tasks/`
+- Find open/blocked tasks in `doc/harness/tasks/`
 - Flag abandoned tasks (non-closed, old `updated` date)
 - **Stale task detection**: Mark tasks as stale if `updated` > 7 days ago and status is not `closed` or `archived`
 - Flag `blocked_env` tasks that may now be unblocked

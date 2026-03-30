@@ -10,7 +10,7 @@ from _lib import MANIFEST
 
 
 def load_state():
-    state_path = ".claude/harness/state.json"
+    state_path = "doc/harness/state.json"
     if not os.path.isfile(state_path):
         return {}
     try:

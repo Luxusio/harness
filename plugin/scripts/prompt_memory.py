@@ -49,7 +49,7 @@ def detect_lane_from_prompt(prompt):
 
 def _get_active_task_dir():
     """Return the directory of the most recently active (non-closed) task, or None."""
-    task_dir = ".claude/harness/tasks"
+    task_dir = "doc/harness/tasks"
     if not os.path.isdir(task_dir):
         return None
     candidates = []
@@ -164,7 +164,7 @@ def gather_context(prompt):
     context_parts = []
 
     # 1. Check manifest for tooling status and registered roots
-    manifest_path = ".claude/harness/manifest.yaml"
+    manifest_path = "doc/harness/manifest.yaml"
     active_roots = []
     if os.path.isfile(manifest_path):
         try:
@@ -217,7 +217,7 @@ def gather_context(prompt):
 
     # 5. Check for blockers (tasks with blocked_env status)
     try:
-        task_dir = ".claude/harness/tasks"
+        task_dir = "doc/harness/tasks"
         if os.path.isdir(task_dir):
             for entry in os.listdir(task_dir):
                 if not entry.startswith("TASK__"):

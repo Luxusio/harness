@@ -23,9 +23,9 @@ Then read:
 - Task-local `TASK_STATE.yaml` (verify `task_id` and `browser_required`)
 - Task-local `PLAN.md` for acceptance criteria
 - Task-local `HANDOFF.md` for verification breadcrumbs (including `browser_context` if present)
-- `.claude/harness/manifest.yaml` — check `browser.enabled`, `qa.default_mode`, and **`tooling.chrome_devtools_ready`**
-- `.claude/harness/critics/runtime.md` if it exists (project playbook)
-- `.claude/harness/constraints/check-architecture.*` if present (optional architecture checks)
+- `doc/harness/manifest.yaml` — check `browser.enabled`, `qa.default_mode`, and **`tooling.chrome_devtools_ready`**
+- `doc/harness/critics/runtime.md` if it exists (project playbook)
+- `doc/harness/constraints/check-architecture.*` if present (optional architecture checks)
 - If `orchestration_mode: team` in TASK_STATE.yaml: also read task-local `TEAM_SYNTHESIS.md`
 - If `SESSION_HANDOFF.json` exists in the task directory: read it for `open_check_ids` and `do_not_regress`
 
@@ -208,7 +208,7 @@ This count is used by `handoff_escalation.py` to trigger SESSION_HANDOFF.json ge
 
 ### CHECKS.yaml update (when file exists)
 
-If `.claude/harness/tasks/<task_id>/CHECKS.yaml` exists, update it after writing the verdict:
+If `doc/harness/tasks/<task_id>/CHECKS.yaml` exists, update it after writing the verdict:
 
 1. Read CHECKS.yaml
 2. For each criterion where `runtime_required: true` (or where the criterion clearly requires runtime evidence), assess your verification results:
@@ -231,7 +231,7 @@ By default, architecture constraint checks are hints (advisory only).
 **Promotion to required evidence** occurs when ALL conditions are met:
 1. `execution_mode` is `sprinted` (from TASK_STATE.yaml)
 2. `risk_tags` contain at least one of: `structural`, `migration`, `schema`, `cross-root`
-3. `.claude/harness/constraints/check-architecture.*` file exists in the repo
+3. `doc/harness/constraints/check-architecture.*` file exists in the repo
 
 When promoted:
 - Execute the architecture check script

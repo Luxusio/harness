@@ -8,11 +8,11 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import read_hook_input, json_field, manifest_field, is_tooling_ready, is_profile_enabled
 
-ROUTING_STATE_FILE = ".claude/harness/.routing-state.json"
+ROUTING_STATE_FILE = "doc/harness/.routing-state.json"
 
 def read_manifest():
     """Read manifest for known commands and tooling."""
-    manifest_path = ".claude/harness/manifest.yaml"
+    manifest_path = "doc/harness/manifest.yaml"
     data = {}
     if not os.path.isfile(manifest_path):
         return data

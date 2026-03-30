@@ -150,7 +150,7 @@ When files change after a critic PASS, invalidation is scoped by path type:
 | Both types in one change | Both verdicts reset |
 | No file list available | Conservative: all verdicts on all open tasks |
 
-Doc paths: `doc/*`, `docs/*`, `*.md`, `README*`, `CHANGELOG*`, `LICENSE*`, `.claude/harness/critics/*`, `DOC_SYNC.md`
+Doc paths: `doc/*`, `docs/*`, `*.md`, `README*`, `CHANGELOG*`, `LICENSE*`, `doc/harness/critics/*`, `DOC_SYNC.md`
 
 Note freshness: if a changed file matches a note's `invalidated_by_paths`, that note's freshness transitions `current → suspect`. Path matching is **structural** (exact or directory-prefix), never raw substring — preventing false positives from path text appearing in note body content.
 
@@ -485,7 +485,7 @@ teams:
 - DOC_SYNC.md is mandatory for all repo-mutating tasks
 - `blocked_env` leaves task open — never closes
 - Verdict invalidation on file changes — stale PASS does not count
-- If `.claude/harness/manifest.yaml` is missing, recommend `/harness:setup`
+- If `doc/harness/manifest.yaml` is missing, recommend `/harness:setup`
 - Browser-first QA is default for web frontend projects when manifest declares `browser_qa_supported: true`
 - Evidence bundles are required — PASS cannot be based on "the code looks correct"
 - Mode-appropriate artifacts are required — light tasks must not be judged by sprinted rubric and vice versa

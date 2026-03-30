@@ -9,7 +9,7 @@ import urllib.error
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import manifest_field
 
-MANIFEST = os.environ.get("HARNESS_MANIFEST", ".claude/harness/manifest.yaml")
+MANIFEST = os.environ.get("HARNESS_MANIFEST", "doc/harness/manifest.yaml")
 RETRIES = 10
 CONSOLE_ERRORS = 0
 NETWORK_FAILURES = 0

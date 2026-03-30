@@ -14,7 +14,7 @@ Task slug from user: `$ARGUMENTS`
 
 ### 1. Load context
 - Read root `CLAUDE.md`
-- Read `.claude/harness/manifest.yaml` if it exists (check `browser.enabled`, `qa.default_mode`)
+- Read `doc/harness/manifest.yaml` if it exists (check `browser.enabled`, `qa.default_mode`)
 - Scan relevant existing docs if any
 - Understand what the user is asking for
 
@@ -86,7 +86,7 @@ When `orchestration_mode: team`, set `team_plan_required: true`, `team_synthesis
 
 ### 4. Create TASK_STATE.yaml
 
-Create `.claude/harness/tasks/TASK__$ARGUMENTS/TASK_STATE.yaml`:
+Create `doc/harness/tasks/TASK__$ARGUMENTS/TASK_STATE.yaml`:
 
 ```yaml
 task_id: TASK__$ARGUMENTS
@@ -124,7 +124,7 @@ Set `doc_sync_required: true` for all repo-mutating tasks.
 
 ### 5. Write REQUEST.md
 
-Create `.claude/harness/tasks/TASK__$ARGUMENTS/REQUEST.md`:
+Create `doc/harness/tasks/TASK__$ARGUMENTS/REQUEST.md`:
 
 ```markdown
 # Request: TASK__$ARGUMENTS
@@ -135,7 +135,7 @@ created: <date>
 
 ### 6. Write PLAN.md
 
-Create `.claude/harness/tasks/TASK__$ARGUMENTS/PLAN.md` using the format matching the selected `execution_mode`.
+Create `doc/harness/tasks/TASK__$ARGUMENTS/PLAN.md` using the format matching the selected `execution_mode`.
 
 #### Mode A (light) — compact format
 
@@ -310,7 +310,7 @@ If PLAN.md alone is genuinely insufficient (10+ files, cross-domain, high ambigu
 
 ### 7. Generate CHECKS.yaml
 
-After writing PLAN.md, extract each acceptance criterion and write `.claude/harness/tasks/TASK__$ARGUMENTS/CHECKS.yaml`.
+After writing PLAN.md, extract each acceptance criterion and write `doc/harness/tasks/TASK__$ARGUMENTS/CHECKS.yaml`.
 
 Parse the `## Acceptance criteria` section from PLAN.md. Each `- [ ] <criterion text>` line becomes one entry.
 
@@ -350,7 +350,7 @@ If the PLAN.md has no acceptance criteria (e.g., blank or malformed), write an e
 
 ### 8. Initialize HANDOFF.md
 
-Create `.claude/harness/tasks/TASK__$ARGUMENTS/HANDOFF.md` with initial stub.
+Create `doc/harness/tasks/TASK__$ARGUMENTS/HANDOFF.md` with initial stub.
 
 ## Guardrails
 

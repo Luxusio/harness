@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Service health probes.
-Reads healthcheck_command from .claude/harness/manifest.yaml
+Reads healthcheck_command from doc/harness/manifest.yaml
 Falls back to project-local scripts/harness/healthcheck.sh if it exists.
 """
 
