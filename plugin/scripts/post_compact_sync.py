@@ -3,54 +3,9 @@ import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (read_hook_input, yaml_field, yaml_array, manifest_field,
                   is_browser_first_project, is_tooling_ready, is_profile_enabled,
+                  get_browser_qa_status,
                   TASK_DIR, MANIFEST, now_iso)
 from handoff_escalation import should_create_handoff, generate_handoff
-
-
-def get_browser_qa_status():
-    """Check browser QA status from manifest sections."""
-    browser_qa = "disabled"
-
-    in_qa = False
-    try:
-        with open(MANIFEST) as f:
-            for line in f:
-                if line.startswith("qa:"):
-                    in_qa = True
-                    continue
-                if in_qa:
-                    if line and not line[0].isspace():
-                        in_qa = False
-                        continue
-                    if "browser_qa_supported:" in line:
-                        val = line.split("browser_qa_supported:", 1)[1].strip().lower()
-                        if val == "true":
-                            browser_qa = "enabled"
-                        break
-    except (OSError, IOError):
-        pass
-
-    if browser_qa == "disabled":
-        in_browser = False
-        try:
-            with open(MANIFEST) as f:
-                for line in f:
-                    if line.startswith("browser:"):
-                        in_browser = True
-                        continue
-                    if in_browser:
-                        if line and not line[0].isspace():
-                            in_browser = False
-                            continue
-                        if "enabled:" in line:
-                            val = line.split("enabled:", 1)[1].strip().lower()
-                            if val == "true":
-                                browser_qa = "enabled"
-                            break
-        except (OSError, IOError):
-            pass
-
-    return browser_qa
 
 
 def maintain_lite_entropy():

@@ -55,78 +55,84 @@ def approve(system_message=None):
     print(json.dumps(result))
     sys.exit(0)
 
-# No harness initialized — approve stop
-if not os.path.exists("doc/harness/manifest.yaml"):
-    approve()
-if not os.path.isdir(TASK_DIR):
-    approve()
 
-open_tasks = []
-blocked_tasks = []
-pending_doc_sync = []
+def main():
+    # No harness initialized — approve stop
+    if not os.path.exists("doc/harness/manifest.yaml"):
+        approve()
+    if not os.path.isdir(TASK_DIR):
+        approve()
 
-for entry in sorted(os.listdir(TASK_DIR)):
-    if not entry.startswith("TASK__"):
-        continue  # ignore non-harness directories (numeric Claude Code IDs, etc.)
-    task_path = os.path.join(TASK_DIR, entry)
-    if not os.path.isdir(task_path):
-        continue
+    open_tasks = []
+    blocked_tasks = []
+    pending_doc_sync = []
 
-    state_file = os.path.join(task_path, "TASK_STATE.yaml")
-    task_id = entry
+    for entry in sorted(os.listdir(TASK_DIR)):
+        if not entry.startswith("TASK__"):
+            continue  # ignore non-harness directories (numeric Claude Code IDs, etc.)
+        task_path = os.path.join(TASK_DIR, entry)
+        if not os.path.isdir(task_path):
+            continue
 
-    if not os.path.exists(state_file):
-        continue
+        state_file = os.path.join(task_path, "TASK_STATE.yaml")
+        task_id = entry
 
-    status = yaml_field("status", state_file) or ""
+        if not os.path.exists(state_file):
+            continue
 
-    if status in ("closed", "archived", "stale"):
-        continue
-    elif status == "blocked_env":
-        blocked_tasks.append(task_id)
-    else:
-        open_tasks.append((task_id, status or "unknown"))
-        mutates = yaml_field("mutates_repo", state_file) or ""
-        if mutates in ("true", "unknown"):
-            if not os.path.exists(os.path.join(task_path, "DOC_SYNC.md")):
-                pending_doc_sync.append(task_id)
+        status = yaml_field("status", state_file) or ""
 
-if open_tasks:
-    lines = [
-        "HARNESS STOP GATE: open tasks remain. Complete or close them before stopping.",
-        "",
-        "Open tasks:",
-    ]
-    for task_id, status in open_tasks:
-        lines.append(f"  - {task_id} [status: {status}]")
-        lines.append(f"    → next: {_next_step(status)}")
-        state_file_path = os.path.join(TASK_DIR, task_id, "TASK_STATE.yaml")
-        for hint in _verdict_hints(state_file_path):
-            lines.append(f"    → {hint}")
-        if task_id in pending_doc_sync:
-            lines.append(f"    ↳ also needs DOC_SYNC.md")
+        if status in ("closed", "archived", "stale"):
+            continue
+        elif status == "blocked_env":
+            blocked_tasks.append(task_id)
+        else:
+            open_tasks.append((task_id, status or "unknown"))
+            mutates = yaml_field("mutates_repo", state_file) or ""
+            if mutates in ("true", "unknown"):
+                if not os.path.exists(os.path.join(task_path, "DOC_SYNC.md")):
+                    pending_doc_sync.append(task_id)
+
+    if open_tasks:
+        lines = [
+            "HARNESS STOP GATE: open tasks remain. Complete or close them before stopping.",
+            "",
+            "Open tasks:",
+        ]
+        for task_id, status in open_tasks:
+            lines.append(f"  - {task_id} [status: {status}]")
+            lines.append(f"    → next: {_next_step(status)}")
+            state_file_path = os.path.join(TASK_DIR, task_id, "TASK_STATE.yaml")
+            for hint in _verdict_hints(state_file_path):
+                lines.append(f"    → {hint}")
+            if task_id in pending_doc_sync:
+                lines.append(f"    ↳ also needs DOC_SYNC.md")
+
+        if blocked_tasks:
+            lines.append("")
+            lines.append(f"Blocked-env tasks (need env fix before they can close):")
+            for t in blocked_tasks:
+                lines.append(f"  - {t}")
+
+        lines += [
+            "",
+            "Actions you can take:",
+            "  • Finish the task and close it (update TASK_STATE.yaml status: closed)",
+            "  • Mark abandoned tasks stale: set status: stale in TASK_STATE.yaml",
+            "  • Run /harness:maintain to auto-mark stale tasks",
+        ]
+
+        print(json.dumps({"decision": "block", "reason": "\n".join(lines)}))
+        sys.exit(0)  # exit 0 — decision field controls blocking
 
     if blocked_tasks:
-        lines.append("")
-        lines.append(f"Blocked-env tasks (need env fix before they can close):")
-        for t in blocked_tasks:
-            lines.append(f"  - {t}")
+        msg = f"Note: {len(blocked_tasks)} task(s) in blocked_env state (env fix required):\n"
+        msg += "\n".join(f"  - {t}" for t in blocked_tasks)
+        approve(system_message=msg)
 
-    lines += [
-        "",
-        "Actions you can take:",
-        "  • Finish the task and close it (update TASK_STATE.yaml status: closed)",
-        "  • Mark abandoned tasks stale: set status: stale in TASK_STATE.yaml",
-        "  • Run /harness:maintain to auto-mark stale tasks",
-    ]
+    # Clean — no open or blocked tasks
+    approve()
 
-    print(json.dumps({"decision": "block", "reason": "\n".join(lines)}))
-    sys.exit(0)  # exit 0 — decision field controls blocking
 
-if blocked_tasks:
-    msg = f"Note: {len(blocked_tasks)} task(s) in blocked_env state (env fix required):\n"
-    msg += "\n".join(f"  - {t}" for t in blocked_tasks)
-    approve(system_message=msg)
-
-# Clean — no open or blocked tasks
-approve()
+if __name__ == "__main__":
+    main()
