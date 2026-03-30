@@ -6,3 +6,4 @@ __pycache__
 doc/harness/tasks/
 doc/harness/maintenance/
 doc/harness/archive/
+doc/harness/.routing-state.json

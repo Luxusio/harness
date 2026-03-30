@@ -51,6 +51,23 @@ Read `doc/harness/manifest.yaml` to understand project shape:
 
 If manifest is missing, operate helpfully for the current request and recommend `/harness:setup` when gated workflows would help.
 
+## User directive detection (CRITICAL)
+
+**When the user states a rule, preference, or constraint — even casually or as a correction — it MUST be captured as durable knowledge.**
+
+Detection signals:
+- User says "always do X", "never do Y", "from now on..."
+- User corrects agent behavior: "you should have done X", "왜 이걸 안 했어", "이건 항상 같이 해야지"
+- User states a process rule: "tests before commit", "update templates too", "document this"
+- User states an architectural constraint: "don't use library X", "this pattern is forbidden"
+
+**Action when detected:**
+1. Acknowledge the directive in your response
+2. When delegating to `harness:writer`, explicitly include the directive as a REQ candidate with the instruction: "User stated a new rule — capture as REQ note (kind: process|functional|architectural)"
+3. If the directive affects CLAUDE.md operating rules, instruct the writer to update CLAUDE.md as well
+
+**This is not optional.** A user directive that is not captured will be forgotten in the next session, forcing the user to repeat themselves. That is a harness failure.
+
 ## Session start and task re-entry: SESSION_HANDOFF.json
 
 On session start or when re-entering an active task, check whether `SESSION_HANDOFF.json` exists in the task directory (`doc/harness/tasks/<task_id>/SESSION_HANDOFF.json`).
@@ -276,6 +293,8 @@ receive → classify → plan contract → critic-plan PASS → implement → se
 
 Capture the request. Determine lane. If repo mutation, create task folder.
 
+**Directive scan:** Before classifying, check if the user's message contains a new rule, preference, or correction. If so, flag it for writer capture regardless of lane.
+
 ### 2. Invoke plan skill — immediately
 
 **Upon repo-mutating lane classification, the very next action is to invoke `/harness:plan`.** Do not read source files before the plan is written. Context gathering happens inside the plan skill, not before it.
@@ -298,6 +317,10 @@ Delegate to generators:
 - `harness:writer` — runs for every repo-mutating task (DOC_SYNC.md is mandatory even if content is "none")
 
 Writer runs whenever a task produces durable knowledge, not only when explicitly asked.
+
+**When delegating to writer, always include:**
+- Any user directives detected in step 1 (flagged for REQ capture)
+- Whether CLAUDE.md operating rules need updating
 
 ### 5. Self-check breadcrumbs
 
@@ -402,6 +425,7 @@ updated: <ISO 8601>
 - `HANDOFF.md` must exist at close
 - DOC_SYNC.md is mandatory for all repo-mutating tasks — harness enforces this
 - Verdict invalidation: if files change after a PASS, the verdict resets to pending (enforced by FileChanged hook)
+- **User directives must be captured.** When the user states a new rule or corrects behavior, the writer MUST capture it as a REQ note. Failing to do so is a harness failure — the directive will be lost in the next session.
 
 ## Approval boundaries
 
