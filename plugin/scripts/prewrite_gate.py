@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: BLOCK source file writes without plan approval.
+"""PreToolUse hook: BLOCK unauthorized writes.
 
-Blocking gate — exits 2 when source file write is attempted without plan_verdict PASS.
-Checks:
-  1. Is the target a source file? (skip harness operational files)
-  2. Is there an active harness task with plan_verdict: PASS?
-  3. If not, BLOCK the write (exit 2).
+Blocking gate — exits 2 when:
+  1. Source file write attempted without plan_verdict PASS on any active task.
+  2. Protected artifact write attempted by wrong role.
+  3. PLAN.md write attempted without active plan session token.
 
 Escape hatch: set HARNESS_SKIP_PREWRITE=1 to bypass (for emergency fixes).
 """
@@ -42,12 +41,46 @@ EXEMPT_PREFIXES = (
 )
 
 EXEMPT_FILENAMES = {
-    "CLAUDE.md", "PLAN.md", "HANDOFF.md", "DOC_SYNC.md", "REQUEST.md",
-    "RESULT.md", "TASK_STATE.yaml", "CHECKS.yaml", "SESSION_HANDOFF.json",
+    "CLAUDE.md", "REQUEST.md",
+    "TASK_STATE.yaml", "CHECKS.yaml", "SESSION_HANDOFF.json",
     "TEAM_PLAN.md", "TEAM_SYNTHESIS.md",
-    "CRITIC__plan.md", "CRITIC__runtime.md", "CRITIC__document.md",
-    "QA__runtime.md",
+    "RESULT.md",
+    "PLAN_SESSION.json",
+    "DIRECTIVES_PENDING.yaml",
 }
+
+# Protected artifacts with their authorized owner roles
+PROTECTED_ARTIFACT_OWNERS = {
+    "PLAN.md": {"plan-skill"},
+    "HANDOFF.md": {"developer"},
+    "DOC_SYNC.md": {"writer"},
+    "CRITIC__plan.md": {"critic-plan"},
+    "CRITIC__runtime.md": {"critic-runtime"},
+    "CRITIC__document.md": {"critic-document"},
+    "QA__runtime.md": {"critic-runtime"},
+}
+
+# Agent name normalization: maps CLAUDE_AGENT_NAME values to canonical roles
+AGENT_TO_ROLE = {
+    "harness:developer": "developer",
+    "developer": "developer",
+    "harness:writer": "writer",
+    "writer": "writer",
+    "harness:critic-plan": "critic-plan",
+    "critic-plan": "critic-plan",
+    "harness:critic-runtime": "critic-runtime",
+    "critic-runtime": "critic-runtime",
+    "harness:critic-document": "critic-document",
+    "critic-document": "critic-document",
+    "harness:harness": "harness",
+    "harness": "harness",
+}
+
+
+def _get_agent_role():
+    """Get the canonical role of the current agent from CLAUDE_AGENT_NAME."""
+    raw = os.environ.get("CLAUDE_AGENT_NAME", "")
+    return AGENT_TO_ROLE.get(raw, raw)
 
 
 def _is_source_file(filepath):
@@ -70,9 +103,46 @@ def _is_source_file(filepath):
     if basename in EXEMPT_FILENAMES:
         return False
 
+    # Check if it's a protected artifact (handled separately)
+    if basename in PROTECTED_ARTIFACT_OWNERS:
+        return False
+
+    # Meta sidecar files are always exempt
+    if basename.endswith(".meta.json"):
+        return False
+
     # Check extension
     _, ext = os.path.splitext(fp)
     return ext.lower() in SOURCE_EXTENSIONS
+
+
+def _is_protected_artifact(filepath):
+    """Return True if filepath is a protected artifact."""
+    if not filepath:
+        return False
+    basename = os.path.basename(filepath)
+    return basename in PROTECTED_ARTIFACT_OWNERS
+
+
+def _check_plan_session_token(task_dir):
+    """Check if there's an active plan session token allowing PLAN.md writes.
+
+    Returns True if plan session is open with phase=write.
+    """
+    if not task_dir:
+        return False
+    token_path = os.path.join(task_dir, "PLAN_SESSION.json")
+    if not os.path.isfile(token_path):
+        return False
+    try:
+        with open(token_path, "r", encoding="utf-8") as f:
+            import json as _json
+            token = _json.load(f)
+        state = token.get("state", "")
+        phase = token.get("phase", "")
+        return state == "open" and phase in ("write", "context")
+    except (json.JSONDecodeError, OSError):
+        return False
 
 
 def _find_active_tasks():
@@ -95,6 +165,31 @@ def _find_active_tasks():
         plan_v = yaml_field("plan_verdict", state_file) or "pending"
         active.append((entry, plan_v))
     return active
+
+
+def _find_active_task_dir():
+    """Return the most recently updated active task directory, or None."""
+    if not os.path.isdir(TASK_DIR):
+        return None
+    best = None
+    best_updated = ""
+    for entry in sorted(os.listdir(TASK_DIR)):
+        if not entry.startswith("TASK__"):
+            continue
+        task_path = os.path.join(TASK_DIR, entry)
+        if not os.path.isdir(task_path):
+            continue
+        state_file = os.path.join(task_path, "TASK_STATE.yaml")
+        if not os.path.isfile(state_file):
+            continue
+        status = yaml_field("status", state_file)
+        if status in ("closed", "archived", "stale"):
+            continue
+        updated = yaml_field("updated", state_file) or ""
+        if updated >= best_updated:
+            best_updated = updated
+            best = task_path
+    return best
 
 
 def _extract_file_path(hook_data):
@@ -127,6 +222,49 @@ def _extract_file_path(hook_data):
     return None
 
 
+def _check_protected_artifact_write(filepath):
+    """Check if a protected artifact write is authorized.
+
+    Returns (allowed: bool, message: str).
+    """
+    basename = os.path.basename(filepath)
+    allowed_roles = PROTECTED_ARTIFACT_OWNERS.get(basename)
+    if allowed_roles is None:
+        return True, ""
+
+    current_role = _get_agent_role()
+
+    # Special case: PLAN.md requires plan session token
+    if basename == "PLAN.md":
+        # Find task dir from filepath
+        task_dir = _find_active_task_dir()
+        if _check_plan_session_token(task_dir):
+            return True, ""
+        # Also allow if plan_verdict is already PASS (plan update)
+        if task_dir:
+            state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+            pss = yaml_field("plan_session_state", state_file)
+            if pss in ("context_open", "write_open"):
+                return True, ""
+        return False, (
+            f"BLOCKED: PLAN.md write requires active plan session token "
+            f"(PLAN_SESSION.json state=open, phase=write). "
+            f"Current agent role: '{current_role}'. "
+            f"Use /harness:plan to create PLAN.md."
+        )
+
+    # For other protected artifacts, check role
+    if current_role in allowed_roles:
+        return True, ""
+
+    expected = ", ".join(sorted(allowed_roles))
+    return False, (
+        f"BLOCKED: {basename} is a protected artifact owned by [{expected}]. "
+        f"Current agent role: '{current_role}'. "
+        f"Only authorized roles may write this artifact."
+    )
+
+
 def main():
     # Escape hatch for emergency fixes
     if os.environ.get("HARNESS_SKIP_PREWRITE"):
@@ -140,14 +278,25 @@ def main():
     if not filepath:
         sys.exit(0)
 
-    if not _is_source_file(filepath):
-        sys.exit(0)
-
-    # Source file write detected — check plan approval
+    # Check if harness is initialized
     if not os.path.isfile(MANIFEST):
         # Harness not initialized — no gate (don't block non-harness repos)
         sys.exit(0)
 
+    # --- Protected artifact ownership check ---
+    if _is_protected_artifact(filepath):
+        allowed, message = _check_protected_artifact_write(filepath)
+        if not allowed:
+            print(message)
+            sys.exit(2)
+        # Protected artifact with correct role — allow
+        sys.exit(0)
+
+    # --- Source file write check ---
+    if not _is_source_file(filepath):
+        sys.exit(0)
+
+    # Source file write detected — check plan approval
     active_tasks = _find_active_tasks()
 
     if not active_tasks:
@@ -173,14 +322,31 @@ def main():
         )
         sys.exit(2)
 
-    # Plan approved — allow write
+    # Source file write — check actor is developer
+    current_role = _get_agent_role()
+    if current_role and current_role not in ("developer", "harness", ""):
+        print(
+            f"BLOCKED: Source file write by non-developer role '{current_role}'. "
+            f"Only developer role may write source files. "
+            f"(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
+        )
+        sys.exit(2)
+
+    # Plan approved + authorized role — allow write
     sys.exit(0)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
-        # On unexpected errors, allow the write (fail-open to avoid blocking work)
-        pass
-    sys.exit(0)
+    except Exception as e:
+        # Fail-CLOSED on managed harness repos — do not silently allow
+        if os.path.isfile(MANIFEST):
+            print(
+                f"BLOCKED: prewrite gate encountered an error: {e}. "
+                f"Fail-closed on managed repos. "
+                f"Set HARNESS_SKIP_PREWRITE=1 to bypass."
+            )
+            sys.exit(2)
+        # Non-harness repo: fail-open to avoid blocking unrelated work
+        sys.exit(0)

@@ -18,3 +18,6 @@ updated: {{SETUP_DATE}}
 - Runtime critic produces evidence bundles — structured proof required for every PASS verdict.
 - Notes carry freshness metadata (current/suspect/stale); file changes automatically mark affected notes suspect.
 - Maintain-lite runs at session end to detect entropy (stale tasks, orphan notes, broken chains) without writes.
+- Protected artifacts have role ownership: PLAN.md=plan-skill, HANDOFF.md=developer, DOC_SYNC.md=writer, CRITIC__*.md=respective critic. Enforced by prewrite gate.
+- Pre-plan source reads are blocked until plan session opens. Capability firewall prevents silent collapsed mode.
+- User directives are captured in DIRECTIVES_PENDING.yaml and must be promoted before task close.

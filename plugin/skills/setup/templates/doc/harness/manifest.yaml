@@ -4,7 +4,7 @@
 #   Nested sections        → read by manifest_section_field("section", "key")
 #   browser/qa sections    → read by is_browser_first_project()
 
-version: 4
+version: 5
 initialized_at: {{SETUP_DATE}}
 
 # --- Top-level identity (manifest_field) ---
@@ -36,6 +36,11 @@ browser:
   launch_config: .claude/launch.json
   entry_url: "{{APP_URL}}"
   status: {{BROWSER_STATUS}}
+
+# --- Capabilities (capability_probe reads capabilities.delegation_mode) ---
+capabilities:
+  delegation_mode: auto
+  strict_compliance_requires_delegation: true
 
 # --- Project metadata (informational — not parsed by scripts) ---
 project_meta:

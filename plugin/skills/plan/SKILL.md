@@ -12,6 +12,27 @@ Task slug from user: `$ARGUMENTS`
 
 ## Procedure
 
+### 0. Open plan session token
+
+**Before any context gathering**, create the plan session token to authorize reads and writes:
+
+Create `doc/harness/tasks/TASK__$ARGUMENTS/PLAN_SESSION.json`:
+
+```json
+{
+  "task_id": "TASK__$ARGUMENTS",
+  "state": "open",
+  "phase": "context",
+  "source": "plan-skill",
+  "opened_at": "<ISO 8601>",
+  "expires_at": "<ISO 8601 +15min>"
+}
+```
+
+Also update `TASK_STATE.yaml` field `plan_session_state: context_open`.
+
+This token authorizes reading guarded paths (source/script/agent files) during planning.
+
 ### 1. Load context
 - Read root `CLAUDE.md`
 - Read `doc/harness/manifest.yaml` if it exists (check `browser.enabled`, `qa.default_mode`)
@@ -116,11 +137,22 @@ team_reason: ""
 team_plan_required: <true|false>
 team_synthesis_required: <true|false>
 fallback_used: none | subagents | solo
+workflow_mode: compliant
+compliance_claim: strict
+artifact_provenance_required: true
+result_required: <true if lane=investigate, false otherwise>
+plan_session_state: write_open
+capability_delegation: unknown
+collapsed_mode_approved: false
+collapsed_reason: ""
+directive_capture_state: clean
+pending_directive_ids: []
 updated: <ISO 8601>
 ```
 
 Set `browser_required: true` and default `qa_mode: browser-first` when `manifest.browser.enabled: true`.
 Set `doc_sync_required: true` for all repo-mutating tasks.
+Set `result_required: true` for investigate-lane tasks.
 
 ### 5. Write REQUEST.md
 
@@ -133,9 +165,29 @@ created: <date>
 <capture the original user request in their words>
 ```
 
+### 5.5 Transition plan session to write phase
+
+Before writing PLAN.md, update the session token:
+
+Update `PLAN_SESSION.json` field `phase` to `"write"`.
+Update `TASK_STATE.yaml` field `plan_session_state: write_open`.
+
 ### 6. Write PLAN.md
 
 Create `doc/harness/tasks/TASK__$ARGUMENTS/PLAN.md` using the format matching the selected `execution_mode`.
+
+**After writing PLAN.md**, create the provenance sidecar `PLAN.meta.json`:
+
+```json
+{
+  "artifact": "PLAN.md",
+  "task_id": "TASK__$ARGUMENTS",
+  "author_role": "plan-skill",
+  "author_agent": "harness:plan",
+  "workflow_mode": "compliant",
+  "created_at": "<ISO 8601>"
+}
+```
 
 #### Mode A (light) — compact format
 
@@ -348,9 +400,25 @@ checks:
 
 If the PLAN.md has no acceptance criteria (e.g., blank or malformed), write an empty `checks: []` list and note the omission.
 
-### 8. Initialize HANDOFF.md
+### 8. Close plan session
 
-Create `doc/harness/tasks/TASK__$ARGUMENTS/HANDOFF.md` with initial stub.
+After all plan artifacts are written, close the session:
+
+Update `PLAN_SESSION.json`:
+```json
+{
+  "task_id": "TASK__$ARGUMENTS",
+  "state": "closed",
+  "phase": "done",
+  "source": "plan-skill",
+  "opened_at": "<original>",
+  "closed_at": "<ISO 8601>"
+}
+```
+
+Update `TASK_STATE.yaml` field `plan_session_state: closed`.
+
+**HANDOFF.md is NOT created here.** It is a developer-owned artifact created after implementation with verification breadcrumbs.
 
 ## Guardrails
 
@@ -362,3 +430,4 @@ Create `doc/harness/tasks/TASK__$ARGUMENTS/HANDOFF.md` with initial stub.
 - **Standard mode**: All mandatory PLAN.md fields must be present (critic-plan will FAIL plans missing required fields)
 - **Sprinted mode**: Sprint contract, risk matrix, and rollback steps are mandatory (critic-plan will FAIL if missing)
 - **Template sync awareness (plugin repos only)**: When `Touched files / roots` includes `plugin/` paths, note in PLAN.md that template sync will be checked after runtime validation (harness step 6.5). No action needed at plan time — just awareness that the check will happen.
+- **Investigate lane**: Set `result_required: true` in TASK_STATE.yaml — investigate tasks cannot close without RESULT.md

@@ -65,6 +65,16 @@ team_plan_required: false
 team_synthesis_required: false
 fallback_used: none
 workflow_violations: []
+workflow_mode: compliant
+compliance_claim: strict
+artifact_provenance_required: true
+result_required: false
+plan_session_state: closed
+capability_delegation: unknown
+collapsed_mode_approved: false
+collapsed_reason: ""
+directive_capture_state: clean
+pending_directive_ids: []
 agent_run_developer_count: 0
 agent_run_developer_last: null
 agent_run_writer_count: 0
@@ -79,15 +89,8 @@ updated: {now_iso()}
 """)
         print(f"INFO: Initialized {state_file}")
 
-    # Create HANDOFF.md stub if missing
-    handoff_file = os.path.join(target, "HANDOFF.md")
-    if not os.path.exists(handoff_file):
-        with open(handoff_file, "w") as f:
-            f.write(f"""# Handoff: {task_id}
-status: pending
-updated: {now_iso()}
-""")
-        print(f"INFO: Created {handoff_file} stub")
+    # HANDOFF.md is NOT created here — it is a developer-owned artifact.
+    # Developer creates HANDOFF.md after implementation with verification breadcrumbs.
 
     # Create REQUEST.md stub if missing
     request_file = os.path.join(target, "REQUEST.md")

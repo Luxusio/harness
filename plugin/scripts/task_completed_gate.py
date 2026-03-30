@@ -55,13 +55,36 @@ def _parse_checks_yaml(checks_file):
     return criteria
 
 
+def _check_artifact_provenance(task_dir):
+    """Check provenance sidecars (.meta.json) for protected artifacts.
+
+    Returns list of failure strings. Empty means all OK.
+    Only enforced when artifact_provenance_required: true.
+    """
+    failures = []
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    provenance_required = yaml_field("artifact_provenance_required", state_file)
+    if provenance_required != "true":
+        return failures
+
+    try:
+        from provenance_helpers import check_all_provenance
+        failures = check_all_provenance(task_dir)
+    except ImportError:
+        pass  # provenance_helpers not available — skip
+
+    return failures
+
+
 def compute_completion_failures(task_dir):
     """Pure function: compute and return list of failure strings for a task.
 
     Uses TASK_STATE.yaml verdicts as source of truth — not artifact file text.
     Stale PASS (artifact says PASS but YAML says pending) is caught here.
-    Also checks provenance (agent run counts), workflow violations, and
-    CHECKS.yaml failed criteria (hard threshold per Anthropic requirement).
+    Also checks provenance (agent run counts), workflow violations,
+    CHECKS.yaml failed criteria (hard threshold per Anthropic requirement),
+    artifact authorship, investigate RESULT gate, capability/compliance gate,
+    and directive capture gate.
 
     Does NOT call git or do side effects. Safe to call from tests.
     """
@@ -118,6 +141,17 @@ def compute_completion_failures(task_dir):
     if not os.path.exists(os.path.join(task_dir, "CRITIC__plan.md")):
         failures.append("missing plan critic verdict (CRITIC__plan.md)")
 
+    # --- critic-plan must have run at least once (hard requirement) ---
+    has_provenance = bool(
+        re.search(r"^agent_run_developer_count:", state_content, re.MULTILINE)
+    )
+    if has_provenance:
+        critic_plan_count = get_agent_run_count(task_dir, "critic-plan")
+        if critic_plan_count == 0:
+            failures.append(
+                "critic-plan has no recorded runs — plan critic must be invoked"
+            )
+
     # --- HANDOFF.md required and must not be an unfilled stub ---
     handoff_file = os.path.join(task_dir, "HANDOFF.md")
     if not os.path.exists(handoff_file):
@@ -126,6 +160,15 @@ def compute_completion_failures(task_dir):
         failures.append(
             "HANDOFF.md is an unfilled stub — add verification breadcrumbs before close"
         )
+
+    # --- Investigate lane: RESULT.md required ---
+    lane = yaml_field("lane", state_file)
+    result_required = yaml_field("result_required", state_file)
+    if lane == "investigate" or result_required == "true":
+        if not os.path.exists(os.path.join(task_dir, "RESULT.md")):
+            failures.append(
+                "investigate task missing RESULT.md — summarize findings before close"
+            )
 
     # --- Repo-mutating requirements ---
     if is_mutating:
@@ -150,9 +193,6 @@ def compute_completion_failures(task_dir):
             )
 
         # Provenance checks — only enforced when tracking fields are present
-        has_provenance = bool(
-            re.search(r"^agent_run_developer_count:", state_content, re.MULTILINE)
-        )
         if has_provenance:
             # critic-runtime must have run at least once
             critic_rt_count = get_agent_run_count(task_dir, "critic-runtime")
@@ -206,6 +246,42 @@ def compute_completion_failures(task_dir):
                 failures.append(
                     "doc critic needed but critic-document has no recorded runs"
                 )
+
+    # --- Artifact provenance (meta.json sidecars) ---
+    provenance_failures = _check_artifact_provenance(task_dir)
+    failures.extend(provenance_failures)
+
+    # --- Capability / compliance gate ---
+    workflow_mode = yaml_field("workflow_mode", state_file) or "compliant"
+    capability = yaml_field("capability_delegation", state_file) or "unknown"
+    compliance_claim = yaml_field("compliance_claim", state_file) or "strict"
+
+    if workflow_mode == "compliant" and capability == "unavailable":
+        failures.append(
+            "workflow_mode=compliant but delegation capability is unavailable — "
+            "cannot close as compliant without delegation. "
+            "Get user approval for collapsed_approved mode or resolve delegation."
+        )
+
+    if workflow_mode == "collapsed_approved":
+        if compliance_claim != "degraded":
+            failures.append(
+                "workflow_mode=collapsed_approved requires compliance_claim=degraded "
+                f"but got '{compliance_claim}'"
+            )
+        collapsed_approved = yaml_field("collapsed_mode_approved", state_file)
+        if collapsed_approved != "true":
+            failures.append(
+                "workflow_mode=collapsed_approved but collapsed_mode_approved is not true"
+            )
+
+    # --- Directive capture gate ---
+    directive_state = yaml_field("directive_capture_state", state_file)
+    if directive_state == "pending":
+        failures.append(
+            "pending user directives were not captured into durable notes — "
+            "writer must promote DIRECTIVES_PENDING.yaml entries before close"
+        )
 
     # --- Team mode gates ---
     orch_mode = yaml_field("orchestration_mode", state_file) or "solo"

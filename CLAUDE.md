@@ -2,7 +2,7 @@
 tags: [root, harness, bootstrap]
 summary: 프로젝트 진입점. 운영 규칙과 doc registry 참조.
 always_load: [doc/CLAUDE.md]
-updated: 2026-03-30
+updated: 2026-03-31
 
 @doc/CLAUDE.md
 
@@ -18,6 +18,9 @@ updated: 2026-03-30
 - Runtime critic produces evidence bundles — structured proof required for every PASS verdict.
 - Notes carry freshness metadata (current/suspect/stale); file changes automatically mark affected notes suspect.
 - Maintain-lite runs at session end to detect entropy (stale tasks, orphan notes, broken chains) without writes.
+- Protected artifacts have role ownership: PLAN.md=plan-skill, HANDOFF.md=developer, DOC_SYNC.md=writer, CRITIC__*.md=respective critic. Enforced by prewrite gate.
+- Pre-plan source reads are blocked until plan session opens. Capability firewall prevents silent collapsed mode.
+- User directives are captured in DIRECTIVES_PENDING.yaml and must be promoted before task close.
 
 # Template sync rule (CRITICAL)
 - This repo IS the harness plugin source. Every change to runtime behavior (paths, hook output schemas, gitignore patterns, agent definitions, critic rubrics, skill logic) MUST also update the corresponding setup templates under `plugin/skills/setup/templates/`.
