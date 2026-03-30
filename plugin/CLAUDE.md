@@ -23,7 +23,7 @@ Orchestration mode (solo | subagents | team) is selected independently after exe
 | `TaskCompleted` | **BLOCK** (exit 2) unless all required verdicts PASS; auto-populates touched_paths/roots_touched/verification_targets from git diff if empty; runs note auto-reverify (non-blocking) for suspect notes whose `invalidated_by_paths` overlap `touched_paths` |
 | `SubagentStop` | Record agent run provenance in TASK_STATE.yaml (`agent_run_<name>_count`/`last`); warn if expected artifacts missing |
 | `Stop` | **BLOCK** (exit 2) if open tasks remain; injects per-task next-action hint (status → next step, non-PASS verdicts shown) |
-| `PreToolUse` | Advisory: warn when source files are written without plan_verdict PASS on any active task; also warns on untracked mutations (no active task) |
+| `PreToolUse` | **BLOCK** (exit 2) when source files are written without plan_verdict PASS on any active task; also blocks untracked mutations (no active task). Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies. |
 | `FileChanged` | Precise invalidation: runtime_verdict for runtime paths, document_verdict for doc paths; marks affected notes suspect using **structural path matching** (exact or directory-prefix, not substring) |
 | `PostCompact` | Re-inject open task summary + maintain-lite entropy indicators |
 | `SessionEnd` | Record final session state + maintain-lite entropy summary + calibration candidate count |
@@ -157,7 +157,7 @@ Note freshness: if a changed file matches a note's `invalidated_by_paths`, that 
 
 ## Acceptance ledger (CHECKS.yaml)
 
-Plan creation also generates `CHECKS.yaml` with stable criterion IDs (`AC-001`, ...). Developer updates criteria to `implemented_candidate`; critics update per-criterion verdicts. `reopen_count` tracks regressions. Non-blocking in this version. See `plugin/docs/acceptance-ledger.md`.
+Plan creation also generates `CHECKS.yaml` with stable criterion IDs (`AC-001`, ...). Developer updates criteria to `implemented_candidate`; critics update per-criterion verdicts. `reopen_count` tracks regressions. Failed criteria block task completion (hard threshold). See `plugin/docs/acceptance-ledger.md`.
 
 ## Delta verification (fix rounds) — WS-2
 
@@ -495,7 +495,7 @@ teams:
 - Performance tasks require a numeric benchmark contract in the plan and numeric before/after evidence for runtime PASS. Qualitative-only claims are not sufficient.
 - Prompt memory uses 5-signal scoring across all `doc/*/` roots: lexical (0.4) + freshness (0.25) + root match (0.15) + path overlap (0.1) + lane relevance (0.1). Selection budget: 2 notes, 1 task, 1 verdict, ≤600 chars.
 - TASK_STATE.yaml includes `review_overlays`, `risk_tags`, and `performance_task` fields for overlay-aware critic routing.
-- CHECKS.yaml tracks per-criterion acceptance status alongside PLAN.md. Non-blocking in v2.0.
+- CHECKS.yaml tracks per-criterion acceptance status alongside PLAN.md. Failed criteria block task completion (hard threshold per Anthropic requirement).
 - Critics load calibration packs (`plugin/calibration/`) matching execution_mode and active overlays before judging.
 - critic-runtime also reads local calibration cases from `plugin/calibration/local/critic-runtime/` (max 3 most recent) when directory exists.
 - SESSION_HANDOFF.json is generated on failure triggers (FAIL repeat, criterion reopen, sprinted compaction, blocked_env recovery, scope growth) for structured recovery.

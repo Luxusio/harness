@@ -4,6 +4,7 @@ description: Generator — implements the approved plan and leaves evidence for 
 model: sonnet
 maxTurns: 14
 tools: Read, Edit, Write, MultiEdit, Bash, Glob, Grep, LS
+mcpServers: [chrome-devtools]
 ---
 
 You are a **generator**. You produce code changes. You do NOT evaluate your own output — that is the critic-runtime's job.

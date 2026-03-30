@@ -12,12 +12,56 @@ from _lib import (read_hook_input, hook_json_get, json_field, json_array, yaml_f
 # stdin: JSON | exit 0: allow | exit 2: BLOCK
 
 
+def _parse_checks_yaml(checks_file):
+    """Parse CHECKS.yaml using stdlib-only line-based regex (no pyyaml dependency).
+
+    Returns list of dicts with 'id', 'status', and 'title' keys.
+    """
+    criteria = []
+    try:
+        with open(checks_file, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError:
+        return criteria
+
+    current = {}
+    for line in lines:
+        # New criterion entry (starts with "  - id:" or "- id:")
+        m_id = re.match(r"^\s*-?\s*id\s*:\s*(.+)", line)
+        if m_id:
+            if current.get("id"):
+                criteria.append(current)
+            current = {
+                "id": m_id.group(1).strip().strip('"').strip("'"),
+                "status": None,
+                "title": "",
+            }
+            continue
+        # Status field within a criterion
+        m_st = re.match(r"^\s+status\s*:\s*(.+)", line)
+        if m_st and current.get("id"):
+            current["status"] = m_st.group(1).strip().strip('"').strip("'")
+            continue
+        # Title field within a criterion
+        m_title = re.match(r"^\s+title\s*:\s*(.+)", line)
+        if m_title and current.get("id"):
+            current["title"] = m_title.group(1).strip().strip('"').strip("'")
+            continue
+
+    # Don't forget last entry
+    if current.get("id"):
+        criteria.append(current)
+
+    return criteria
+
+
 def compute_completion_failures(task_dir):
     """Pure function: compute and return list of failure strings for a task.
 
     Uses TASK_STATE.yaml verdicts as source of truth — not artifact file text.
     Stale PASS (artifact says PASS but YAML says pending) is caught here.
-    Also checks provenance (agent run counts) and workflow violations.
+    Also checks provenance (agent run counts), workflow violations, and
+    CHECKS.yaml failed criteria (hard threshold per Anthropic requirement).
 
     Does NOT call git or do side effects. Safe to call from tests.
     """
@@ -180,50 +224,24 @@ def compute_completion_failures(task_dir):
             if fallback_val == "none":
                 failures.append("team_status is 'fallback' but fallback_used is 'none'")
 
+    # --- CHECKS.yaml hard threshold: failed criteria block completion ---
+    checks_file = os.path.join(task_dir, "CHECKS.yaml")
+    if os.path.exists(checks_file):
+        try:
+            criteria = _parse_checks_yaml(checks_file)
+            failed_criteria = [
+                c for c in criteria if c.get("status") == "failed"
+            ]
+            if failed_criteria:
+                ids = ", ".join(c.get("id", "?") for c in failed_criteria)
+                failures.append(
+                    f"CHECKS.yaml has {len(failed_criteria)} failed criterion/criteria: {ids}"
+                    " — all acceptance criteria must pass before completion"
+                )
+        except Exception:
+            pass  # parse errors are non-blocking
+
     return failures
-
-
-def _parse_checks_yaml(checks_file):
-    """Parse CHECKS.yaml using stdlib-only line-based regex (no pyyaml dependency).
-
-    Returns list of dicts with 'id', 'status', and 'title' keys.
-    """
-    criteria = []
-    try:
-        with open(checks_file, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-    except OSError:
-        return criteria
-
-    current = {}
-    for line in lines:
-        # New criterion entry (starts with "  - id:" or "- id:")
-        m_id = re.match(r"^\s*-?\s*id\s*:\s*(.+)", line)
-        if m_id:
-            if current.get("id"):
-                criteria.append(current)
-            current = {
-                "id": m_id.group(1).strip().strip('"').strip("'"),
-                "status": None,
-                "title": "",
-            }
-            continue
-        # Status field within a criterion
-        m_st = re.match(r"^\s+status\s*:\s*(.+)", line)
-        if m_st and current.get("id"):
-            current["status"] = m_st.group(1).strip().strip('"').strip("'")
-            continue
-        # Title field within a criterion
-        m_title = re.match(r"^\s+title\s*:\s*(.+)", line)
-        if m_title and current.get("id"):
-            current["title"] = m_title.group(1).strip().strip('"').strip("'")
-            continue
-
-    # Don't forget last entry
-    if current.get("id"):
-        criteria.append(current)
-
-    return criteria
 
 
 def main():
@@ -294,18 +312,22 @@ def main():
     # --- Run completion checks (pure function) ---
     failures = compute_completion_failures(target)
 
-    # --- CHECKS.yaml open criteria warning (non-blocking, stdlib-only) ---
+    # --- CHECKS.yaml open criteria info (non-blocking, for visibility) ---
     checks_file = os.path.join(target, "CHECKS.yaml")
     if os.path.exists(checks_file):
         try:
             criteria = _parse_checks_yaml(checks_file)
-            open_criteria = [c for c in criteria if c.get("status") != "passed"]
+            # Show non-passed, non-failed criteria as info (failed ones are already in failures)
+            open_criteria = [
+                c for c in criteria
+                if c.get("status") not in ("passed", "failed")
+            ]
             if open_criteria:
                 by_status = {}
                 for c in open_criteria:
                     s = c.get("status") or "unknown"
                     by_status.setdefault(s, []).append(c)
-                print(f"WARN: {len(open_criteria)} open acceptance criterion/criteria in CHECKS.yaml:")
+                print(f"INFO: {len(open_criteria)} non-passed acceptance criterion/criteria in CHECKS.yaml:")
                 for status_label, items in sorted(by_status.items()):
                     ids = ", ".join(c.get("id", "?") for c in items)
                     print(f"  [{status_label}] {ids}")
