@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""PreToolUse hook: warn when source files are written without plan approval.
+"""PreToolUse hook: BLOCK source file writes without plan approval.
 
-Advisory only — prints a warning message but does NOT block (exit 0 always).
+Blocking gate — exits 2 when source file write is attempted without plan_verdict PASS.
 Checks:
   1. Is the target a source file? (skip harness operational files)
   2. Is there an active harness task with plan_verdict: PASS?
-  3. If not, inject a warning.
+  3. If not, BLOCK the write (exit 2).
+
+Escape hatch: set HARNESS_SKIP_PREWRITE=1 to bypass (for emergency fixes).
 """
 import json
 import os
@@ -126,6 +128,10 @@ def _extract_file_path(hook_data):
 
 
 def main():
+    # Escape hatch for emergency fixes
+    if os.environ.get("HARNESS_SKIP_PREWRITE"):
+        sys.exit(0)
+
     hook_data = read_hook_input()
     if not hook_data:
         sys.exit(0)
@@ -139,45 +145,35 @@ def main():
 
     # Source file write detected — check plan approval
     if not os.path.isfile(MANIFEST):
-        # Harness not initialized — no gate
+        # Harness not initialized — no gate (don't block non-harness repos)
         sys.exit(0)
 
     active_tasks = _find_active_tasks()
 
     if not active_tasks:
-        # No active task — untracked mutation
-        warning = (
-            "WARNING: Source file write with no active harness task. "
+        # No active task — untracked mutation → BLOCK
+        print(
+            "BLOCKED: Source file write with no active harness task. "
             "This mutation is untracked. Create a task folder and "
-            "run /harness:plan before implementing."
+            "run /harness:plan before implementing. "
+            "(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
         )
-        print(json.dumps({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "additionalContext": warning
-            }
-        }))
-        sys.exit(0)
+        sys.exit(2)
 
     # Check if any active task has plan_verdict: PASS
     any_plan_passed = any(pv == "PASS" for _, pv in active_tasks)
 
     if not any_plan_passed:
         task_list = ", ".join(f"{tid} (plan: {pv})" for tid, pv in active_tasks)
-        warning = (
-            f"WARNING: Source file write but plan_verdict is not PASS. "
+        print(
+            f"BLOCKED: Source file write but plan_verdict is not PASS. "
             f"Active tasks: {task_list}. "
-            f"Complete plan approval before implementing."
+            f"Complete plan approval before implementing. "
+            f"(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
         )
-        print(json.dumps({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "additionalContext": warning
-            }
-        }))
-        sys.exit(0)
+        sys.exit(2)
 
-    # Plan approved — no warning
+    # Plan approved — allow write
     sys.exit(0)
 
 
@@ -185,6 +181,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
-        # Never block on errors — advisory only
+        # On unexpected errors, allow the write (fail-open to avoid blocking work)
         pass
     sys.exit(0)
