@@ -62,7 +62,10 @@ Do not create CHECKS.yaml if it does not exist — that is the plan skill's resp
 3. Update `TASK_STATE.yaml`:
    - `status: implemented`
    - `updated: <now>`
-4. Update `HANDOFF.md` with:
+
+### Update HANDOFF.md
+
+Note: if `touched_paths` includes `plugin/` files, set `template_sync: pending` in HANDOFF.md. The harness will check template propagation after critic-runtime PASS (step 6.5).
 
 ```
 Result:
@@ -71,6 +74,7 @@ Result:
   changes: <files modified, created, or deleted>
   verification_inputs: <commands to run, routes to hit, fixtures to use, test names>
   blockers: <env / data / secrets issues, or "none">
+  template_sync: <pending | not needed | done> — <detail if plugin/ files touched, otherwise omit>
   next_action: runtime QA
 ```
 
