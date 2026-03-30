@@ -63,6 +63,8 @@ blocked_tasks = []
 pending_doc_sync = []
 
 for entry in sorted(os.listdir(TASK_DIR)):
+    if not entry.startswith("TASK__"):
+        continue  # ignore non-harness directories (numeric Claude Code IDs, etc.)
     task_path = os.path.join(TASK_DIR, entry)
     if not os.path.isdir(task_path):
         continue
