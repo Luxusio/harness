@@ -51,6 +51,34 @@ Read `doc/harness/manifest.yaml` to understand project shape:
 
 If manifest is missing, operate helpfully for the current request and recommend `/harness:setup` when gated workflows would help.
 
+## Second action — classify and activate plan (CRITICAL)
+
+**After reading manifest, classify the lane immediately. Then act on the classification — do not gather context first.**
+
+| Classification | Immediate next action |
+|----------------|----------------------|
+| `answer` | Respond directly. No task folder. |
+| `investigate` | Create task folder → invoke `/harness:plan` |
+| Any repo-mutating lane | Create task folder → invoke `/harness:plan` |
+
+**There is no step between classification and plan activation.**
+No source file reading. No analysis. No "let me understand the codebase first."
+Context gathering happens INSIDE the plan skill — that is its job.
+
+If you find yourself reading source files before PLAN.md exists, you are violating this rule.
+
+### Mid-response lane escalation (CRITICAL)
+
+If during response formulation you find yourself producing ANY of:
+- A numbered list of files to change
+- A phased action plan with specific steps
+- Acceptance criteria or verification commands
+- A table mapping problems to fixes
+
+**STOP immediately.** You are producing `investigate` or repo-mutating lane output in `answer` lane.
+Reclassify, create a task folder, and invoke `/harness:plan` before continuing.
+Do not finish the response and retroactively create the task — that loses the plan-first guarantee.
+
 ## User directive detection (CRITICAL)
 
 **When the user states a rule, preference, or constraint — even casually or as a correction — it MUST be captured as durable knowledge.**
@@ -250,7 +278,7 @@ Every request goes through exactly one lane:
 
 ### Lane: `answer`
 
-Pure question, explanation, or investigation with no repo mutation.
+Pure question or explanation — no analysis that produces actionable output.
 - No task folder, no critics, no artifacts.
 - Just respond.
 
@@ -258,11 +286,28 @@ Pure question, explanation, or investigation with no repo mutation.
 - No source file will be created, modified, or deleted
 - Request is purely informational ("what does X do?", "why does Y happen?", "explain Z")
 
+**`answer` lane is NOT appropriate when:**
+- Request asks for a "plan", "strategy", or "roadmap" for changes
+- Request combines analysis with action ("find X and fix Y", "문제점 찾아서 수정 계획")
+- Output will contain specific files to change, numbered action items, or phased plans
+- Request uses action verbs targeting the repo: "improve", "fix", "refactor", "update"
+
+These belong in `investigate` (analysis only) or a repo-mutating lane (analysis + execution).
+
 ### Lane: `investigate`
 
-Research that may produce conclusions or transition to another lane.
+Research that produces structured conclusions or action recommendations.
 - Create task folder and maintain artifacts.
 - May transition to `build`, `debug`, or `docs-sync` once scope is clear.
+
+**Mandatory artifacts for investigate:**
+- Task folder: `doc/harness/tasks/TASK__<slug>/`
+- `REQUEST.md` — what was asked
+- `TASK_STATE.yaml` — `lane: investigate`, `mutates_repo: unknown`
+
+**Transition rules:**
+- If conclusions include specific file changes → transition to repo-mutating lane, invoke `/harness:plan`
+- If conclusions are purely informational → close task with `RESULT.md`
 
 ### Repo-mutating lanes
 
@@ -286,7 +331,7 @@ Substantial repo mutations always include the writer lane (DOC_SYNC.md is mandat
 ## The mutate-repo loop
 
 ```
-receive → classify → plan contract → critic-plan PASS → implement → self-check breadcrumbs → runtime QA (browser-first when supported) → writer / DOC_SYNC → critic-document (when doc surface changed) → close
+receive → classify → plan contract → critic-plan PASS → implement → self-check breadcrumbs → runtime QA → template sync (plugin repos) → writer / DOC_SYNC → critic-document (when doc surface changed) → close
 ```
 
 ### 1. Receive + Classify
@@ -336,6 +381,17 @@ Delegate to evaluators (NEVER the generators):
 - `harness:critic-document` — invoke when `doc/` or `CLAUDE.md` files changed, or when `DOC_SYNC.md` exists
 
 How each critic verifies is defined in its own agent file. Harness does not prescribe verification internals.
+
+### 6.5. Template sync (plugin repos only)
+
+After critic-runtime PASS and before writer/DOC_SYNC, check template propagation:
+
+1. If `touched_paths` includes any `plugin/` file, read `doc/common/REQ__project__template-sync.md`
+2. For each modified plugin file, determine if a corresponding setup template needs updating
+3. If sync is needed: delegate to `harness:developer` to update templates, then re-run critic-runtime on the template changes
+4. If sync is not needed: record "template sync: not needed" in HANDOFF.md with reason
+
+This step only applies to repos where the plugin source IS the template origin (self-referential repos). Skip entirely for normal target projects.
 
 ### 7. Tidy
 

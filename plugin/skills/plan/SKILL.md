@@ -361,3 +361,4 @@ Create `doc/harness/tasks/TASK__$ARGUMENTS/HANDOFF.md` with initial stub.
 - **Light mode**: Hard fail conditions and Risks/rollback sections may be omitted unless the change is genuinely risky
 - **Standard mode**: All mandatory PLAN.md fields must be present (critic-plan will FAIL plans missing required fields)
 - **Sprinted mode**: Sprint contract, risk matrix, and rollback steps are mandatory (critic-plan will FAIL if missing)
+- **Template sync awareness (plugin repos only)**: When `Touched files / roots` includes `plugin/` paths, note in PLAN.md that template sync will be checked after runtime validation (harness step 6.5). No action needed at plan time — just awareness that the check will happen.
