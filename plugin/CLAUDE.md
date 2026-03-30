@@ -22,7 +22,7 @@ Orchestration mode (solo | subagents | team) is selected independently after exe
 | `TaskCreated` | Initialize TASK_STATE.yaml, HANDOFF.md, REQUEST.md |
 | `TaskCompleted` | **BLOCK** (exit 2) unless all required verdicts PASS; auto-populates touched_paths/roots_touched/verification_targets from git diff if empty; runs note auto-reverify (non-blocking) for suspect notes whose `invalidated_by_paths` overlap `touched_paths` |
 | `SubagentStop` | Record agent run provenance in TASK_STATE.yaml (`agent_run_<name>_count`/`last`); warn if expected artifacts missing |
-| `Stop` | **BLOCK** (exit 2) if open tasks remain |
+| `Stop` | **BLOCK** (exit 2) if open tasks remain; injects per-task next-action hint (status → next step, non-PASS verdicts shown) |
 | `FileChanged` | Precise invalidation: runtime_verdict for runtime paths, document_verdict for doc paths; marks affected notes suspect using **structural path matching** (exact or directory-prefix, not substring) |
 | `PostCompact` | Re-inject open task summary + maintain-lite entropy indicators |
 | `SessionEnd` | Record final session state + maintain-lite entropy summary + calibration candidate count |

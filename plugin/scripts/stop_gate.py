@@ -11,6 +11,43 @@ from _lib import (read_hook_input, json_field, json_array, yaml_field, yaml_arra
 #   {"decision": "allow"}                                     → allows stop, no conversation injection
 # exit 0 always — decision field controls blocking, not exit code.
 
+# Workflow status → next concrete action mapping.
+_NEXT_STEP_MAP = {
+    "created":     "Run `/harness:plan` to create PLAN.md",
+    "planned":     "Invoke `harness:critic-plan` to evaluate the plan",
+    "plan_passed": "Invoke `harness:developer` to implement",
+    "implemented": "Invoke `harness:critic-runtime` to verify",
+    "qa_passed":   "Invoke `harness:writer` to produce DOC_SYNC.md",
+    "docs_synced": "Invoke `harness:critic-document` if doc changes; otherwise close",
+}
+
+
+def _next_step(status):
+    """Return the next workflow action string for the given task status.
+
+    Pure function — no file I/O, safe to call from tests.
+    """
+    return _NEXT_STEP_MAP.get(status, "Check TASK_STATE.yaml — resolve ambiguous status")
+
+
+def _verdict_hints(state_file):
+    """Return list of non-PASS verdict hint strings for display.
+
+    Shows plan_verdict and runtime_verdict when they are not PASS,
+    so the agent knows exactly what gate still needs to be passed.
+    """
+    if not state_file or not os.path.exists(state_file):
+        return []
+    hints = []
+    pv = yaml_field("plan_verdict", state_file) or "pending"
+    rv = yaml_field("runtime_verdict", state_file) or "pending"
+    if pv != "PASS":
+        hints.append(f"plan_verdict: {pv}")
+    if rv != "PASS":
+        hints.append(f"runtime_verdict: {rv}")
+    return hints
+
+
 def allow():
     print(json.dumps({"decision": "allow"}))
     sys.exit(0)
@@ -57,6 +94,10 @@ if open_tasks:
     ]
     for task_id, status in open_tasks:
         lines.append(f"  - {task_id} [status: {status}]")
+        lines.append(f"    → next: {_next_step(status)}")
+        state_file_path = os.path.join(TASK_DIR, task_id, "TASK_STATE.yaml")
+        for hint in _verdict_hints(state_file_path):
+            lines.append(f"    → {hint}")
         if task_id in pending_doc_sync:
             lines.append(f"    ↳ also needs DOC_SYNC.md")
 

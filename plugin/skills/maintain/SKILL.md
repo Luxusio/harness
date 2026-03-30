@@ -2,8 +2,6 @@
 name: maintain
 description: Doc and task cleanup tool — finds and fixes stale tasks, broken links, index drift, obvious entropy, and generates local calibration cases.
 argument-hint: [optional focus area]
-context: fork
-agent: Explore
 user-invocable: true
 allowed-tools: Read, Glob, Grep, Write, Edit, Bash
 ---

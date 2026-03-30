@@ -2,8 +2,6 @@
 name: plan
 description: Create a task contract — PLAN.md with scope, acceptance criteria, verification contract, doc sync, and rollback.
 argument-hint: <task-slug>
-context: fork
-agent: Plan
 user-invocable: true
 allowed-tools: Read, Glob, Grep, Write, Edit, AskUserQuestion
 ---
