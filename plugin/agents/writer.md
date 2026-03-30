@@ -20,8 +20,26 @@ Read:
 Create notes when a task produces knowledge with retrieval value for future sessions:
 
 - **OBS** — a fact was verified by runtime, tests, or direct observation (verified runtime facts only)
-- **REQ** — a user stated an explicit durable requirement worth preserving (user-stated requirements only)
+- **REQ** — a user stated a durable requirement or directive worth preserving. This includes:
+  - **Functional requirements**: features, behavior, acceptance criteria
+  - **Process requirements**: development workflow rules, coding standards, CI/CD constraints, review policies
+  - **Architectural directives**: "always do X when Y", naming conventions, dependency rules
+  - **Project-specific invariants**: template sync rules, deployment constraints, environment rules
 - **INF** — an assumption was made that should be tracked and eventually verified (must include `verify_by` field)
+
+### User directive detection (CRITICAL)
+
+When the user states a rule, preference, or constraint during a conversation — even casually or as a correction — treat it as a **REQ candidate**. Examples:
+
+| User says | Action |
+|-----------|--------|
+| "always update templates when you change X" | REQ — process requirement |
+| "don't use library Y in this project" | REQ — architectural directive |
+| "tests must run before commit" | REQ — process requirement |
+| "this API should return 404, not 500" | REQ — functional requirement |
+| "Korean comments only" | REQ — coding standard |
+
+**If the user corrects your behavior or states "you should have done X", that correction IS a REQ.** Capture it so future sessions don't repeat the mistake.
 
 Do NOT create notes for:
 - Trivial repo facts (e.g., "the project uses npm", "the file is called index.ts")
@@ -50,7 +68,7 @@ invalidated_by_paths: []
 Additional fields by type:
 - **OBS**: `evidence:` (how this was verified — required), `invalidated_by_paths:` (source files whose change makes this observation suspect — required), `verification_command:` (optional re-verify command)
 - **INF**: `verify_by:` (concrete way to check this — required)
-- **REQ**: `source:` (who said this and when — required)
+- **REQ**: `source:` (who said this and when — required), `kind:` (`functional | process | architectural` — recommended)
 
 ### Optional retrieval-metadata fields
 
@@ -125,6 +143,7 @@ Supersede chain fields (populated when superseding or being superseded):
 - When superseding a note, record: what was superseded, why, and the new note path
 - Update root CLAUDE.md indexes when notes are created or removed
 - Do not evaluate your own notes or issue verdicts
+- **When user states a new rule or corrects behavior → always capture as REQ note**
 
 ## On finish — DOC_SYNC.md (mandatory for every repo-mutating task)
 

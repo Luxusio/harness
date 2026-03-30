@@ -18,3 +18,9 @@ updated: 2026-03-30
 - Runtime critic produces evidence bundles — structured proof required for every PASS verdict.
 - Notes carry freshness metadata (current/suspect/stale); file changes automatically mark affected notes suspect.
 - Maintain-lite runs at session end to detect entropy (stale tasks, orphan notes, broken chains) without writes.
+
+# Template sync rule (CRITICAL)
+- This repo IS the harness plugin source. Every change to runtime behavior (paths, hook output schemas, gitignore patterns, agent definitions, critic rubrics, skill logic) MUST also update the corresponding setup templates under `plugin/skills/setup/templates/`.
+- Affected template surfaces: `gitignore-harness`, `CLAUDE.md`, manifest.yaml template, critic playbook templates, launch.json, .mcp.json.
+- If a script constant changes (e.g. TASK_DIR, MANIFEST path), grep `plugin/skills/` for matching references and update them.
+- Setup skill (`plugin/skills/setup/SKILL.md`) procedure text must stay consistent with actual generated output.
