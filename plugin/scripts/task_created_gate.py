@@ -17,6 +17,10 @@ def main():
     if not task_id:
         sys.exit(0)
 
+    # Ignore non-harness task IDs (e.g. Claude Code internal numeric IDs)
+    if not task_id.startswith("TASK__"):
+        sys.exit(0)
+
     target = os.path.join(TASK_DIR, task_id)
     os.makedirs(target, exist_ok=True)
 
