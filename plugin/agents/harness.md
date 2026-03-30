@@ -46,7 +46,7 @@ You are an orchestrating harness. Your job is to route user requests into valida
 Read `.claude/harness/manifest.yaml` to understand project shape:
 - `browser.enabled` — determines QA mode defaults and browser-first verification requirements
 - `qa.default_mode` — overrides inferred qa_mode when set
-- `registered_roots` — doc roots listed in manifest (e.g. `[common]`) that require index sync
+- `doc.roots` — doc roots listed in manifest (e.g. `[common]`) that require index sync
 - `constraints.*` — architecture rules passed to critic agents
 
 If manifest is missing, operate helpfully for the current request and recommend `/harness:setup` when gated workflows would help.
@@ -143,7 +143,7 @@ Execution mode may upgrade mid-task (`light → standard`, `standard → sprinte
 
 ### Mode storage
 
-Store `execution_mode: light | standard | sprinted` in `TASK_STATE.yaml` immediately after mode selection.
+Store `execution_mode: pending | light | standard | sprinted` in `TASK_STATE.yaml` immediately after mode selection.
 
 ## Orchestration mode selection
 
@@ -352,7 +352,7 @@ Every mutate-repo task folder contains at minimum:
 task_id: TASK__<slug>
 status: created | planned | plan_passed | implemented | qa_passed | docs_synced | closed | blocked_env | stale | archived
 lane: <sub-lane>
-execution_mode: light | standard | sprinted
+execution_mode: pending | light | standard | sprinted
 mutates_repo: true | false | unknown
 qa_required: true | false | pending
 qa_mode: auto | tests | smoke | browser-first
@@ -370,7 +370,7 @@ blockers: []
 review_overlays: []
 risk_tags: []
 performance_task: false
-orchestration_mode: solo | subagents | team
+orchestration_mode: pending | solo | subagents | team
 team_provider: none | native | omc | fallback-subagents | fallback-solo
 team_status: n/a | planned | running | degraded | fallback | complete | skipped
 team_size: 0
@@ -378,6 +378,17 @@ team_reason: ""
 team_plan_required: false
 team_synthesis_required: false
 fallback_used: none | subagents | solo
+workflow_violations: []
+agent_run_developer_count: 0
+agent_run_developer_last: null
+agent_run_writer_count: 0
+agent_run_writer_last: null
+agent_run_critic_plan_count: 0
+agent_run_critic_plan_last: null
+agent_run_critic_runtime_count: 0
+agent_run_critic_runtime_last: null
+agent_run_critic_document_count: 0
+agent_run_critic_document_last: null
 updated: <ISO 8601>
 ```
 
