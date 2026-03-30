@@ -402,7 +402,7 @@ Ensure `.claude/settings.json` has `"agent": "harness:harness"`.
 
 ### Phase 14: Smoke test
 
-Run `${CLAUDE_PLUGIN_ROOT}/scripts/verify.sh` to validate the setup. Report result.
+Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verify.py` to validate the setup. Report result.
 If it fails, note the failures — do not silently skip.
 
 For web frontend projects, also verify:

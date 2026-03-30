@@ -3,70 +3,8 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (read_hook_input, yaml_field, yaml_array, manifest_field,
                   manifest_section_field, is_browser_first_project, is_tooling_ready,
-                  is_profile_enabled, TASK_DIR, MANIFEST, now_iso)
-
-
-def get_browser_qa_status():
-    """Check browser QA status from manifest sections and task states."""
-    browser_qa = "disabled"
-
-    # Check qa: section for browser_qa_supported
-    in_qa = False
-    try:
-        with open(MANIFEST) as f:
-            for line in f:
-                if line.startswith("qa:"):
-                    in_qa = True
-                    continue
-                if in_qa:
-                    if line and not line[0].isspace():
-                        in_qa = False
-                        continue
-                    if "browser_qa_supported:" in line:
-                        val = line.split("browser_qa_supported:", 1)[1].strip().lower()
-                        if val == "true":
-                            browser_qa = "enabled"
-                        break
-    except (OSError, IOError):
-        pass
-
-    # Check browser: section for enabled
-    if browser_qa == "disabled":
-        in_browser = False
-        try:
-            with open(MANIFEST) as f:
-                for line in f:
-                    if line.startswith("browser:"):
-                        in_browser = True
-                        continue
-                    if in_browser:
-                        if line and not line[0].isspace():
-                            in_browser = False
-                            continue
-                        if "enabled:" in line:
-                            val = line.split("enabled:", 1)[1].strip().lower()
-                            if val == "true":
-                                browser_qa = "enabled"
-                            break
-        except (OSError, IOError):
-            pass
-
-    # Check for blocked_env tasks requiring browser
-    if browser_qa == "enabled" and os.path.isdir(TASK_DIR):
-        for entry in sorted(os.listdir(TASK_DIR)):
-            task_path = os.path.join(TASK_DIR, entry)
-            if not os.path.isdir(task_path) or not entry.startswith("TASK__"):
-                continue
-            state_file = os.path.join(task_path, "TASK_STATE.yaml")
-            if not os.path.isfile(state_file):
-                continue
-            status = yaml_field("status", state_file)
-            browser_required = yaml_field("browser_required", state_file)
-            if status == "blocked_env" and browser_required == "true":
-                browser_qa = "blocked_env"
-                break
-
-    return browser_qa
+                  is_profile_enabled, get_browser_qa_status,
+                  TASK_DIR, MANIFEST, now_iso)
 
 
 def get_tooling_status():
@@ -129,7 +67,7 @@ def main():
             print(f"type: {project_type}")
         print("")
 
-    # Browser QA status
+    # Browser QA status (uses shared helper from _lib)
     browser_qa = get_browser_qa_status()
     print(f"=== BROWSER QA: {browser_qa} ===")
     print("")

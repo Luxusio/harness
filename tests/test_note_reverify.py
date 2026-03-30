@@ -247,7 +247,7 @@ class TestReverifySuspectNotes(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.base = self.tmp.name
         self.doc_base = os.path.join(self.base, "doc", "common")
-        self.task_dir = os.path.join(self.base, ".claude", "harness", "tasks", "TASK__test")
+        self.task_dir = os.path.join(self.base, "doc", "harness", "tasks", "TASK__test")
         os.makedirs(self.doc_base)
         os.makedirs(self.task_dir)
 

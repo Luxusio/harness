@@ -108,7 +108,7 @@ All verification scripts emit `[EVIDENCE]` tagged lines to stdout for easy extra
 
 ### Per-script examples
 
-**verify.sh**
+**verify.py**
 ```
 [EVIDENCE] verify: started at 2026-03-28T10:00:00Z
 [EVIDENCE] smoke: PASS — exit 0 — Tests: 42 passed

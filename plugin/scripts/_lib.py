@@ -504,6 +504,76 @@ def is_browser_first_project():
     return False
 
 
+def get_browser_qa_status():
+    """Check browser QA status from manifest sections and task states.
+
+    Returns 'disabled', 'enabled', or 'blocked_env'.
+    Shared across session_context.py and session_end_sync.py.
+    """
+    browser_qa = "disabled"
+
+    if not os.path.isfile(MANIFEST):
+        return browser_qa
+
+    # Check qa: section for browser_qa_supported
+    in_qa = False
+    try:
+        with open(MANIFEST) as f:
+            for line in f:
+                if line.startswith("qa:"):
+                    in_qa = True
+                    continue
+                if in_qa:
+                    if line and not line[0].isspace():
+                        in_qa = False
+                        continue
+                    if "browser_qa_supported:" in line:
+                        val = line.split("browser_qa_supported:", 1)[1].strip().lower()
+                        if val == "true":
+                            browser_qa = "enabled"
+                        break
+    except (OSError, IOError):
+        pass
+
+    # Check browser: section for enabled
+    if browser_qa == "disabled":
+        in_browser = False
+        try:
+            with open(MANIFEST) as f:
+                for line in f:
+                    if line.startswith("browser:"):
+                        in_browser = True
+                        continue
+                    if in_browser:
+                        if line and not line[0].isspace():
+                            in_browser = False
+                            continue
+                        if "enabled:" in line:
+                            val = line.split("enabled:", 1)[1].strip().lower()
+                            if val == "true":
+                                browser_qa = "enabled"
+                            break
+        except (OSError, IOError):
+            pass
+
+    # Check for blocked_env tasks requiring browser
+    if browser_qa == "enabled" and os.path.isdir(TASK_DIR):
+        for entry in sorted(os.listdir(TASK_DIR)):
+            task_path = os.path.join(TASK_DIR, entry)
+            if not os.path.isdir(task_path) or not entry.startswith("TASK__"):
+                continue
+            state_file = os.path.join(task_path, "TASK_STATE.yaml")
+            if not os.path.isfile(state_file):
+                continue
+            status = yaml_field("status", state_file)
+            browser_required = yaml_field("browser_required", state_file)
+            if status == "blocked_env" and browser_required == "true":
+                browser_qa = "blocked_env"
+                break
+
+    return browser_qa
+
+
 # ---------------------------------------------------------------------------
 # Timestamp
 # ---------------------------------------------------------------------------
@@ -807,7 +877,10 @@ def needs_document_critic(task_dir):
 
     Criteria (any of):
       1. doc_changes_detected: true in TASK_STATE.yaml
-      2. DOC_SYNC.md exists with non-'none' meaningful content
+      2. DOC_SYNC.md exists with meaningful content beyond metadata + "none" sections
+
+    A DOC_SYNC.md with only headers, metadata lines (updated:, etc.), and "none"
+    or "(or \"none\")" entries is considered empty — no document critic needed.
     """
     state_file = os.path.join(task_dir, "TASK_STATE.yaml")
     if yaml_field("doc_changes_detected", state_file) == "true":
@@ -818,14 +891,28 @@ def needs_document_critic(task_dir):
         try:
             with open(doc_sync, "r", encoding="utf-8") as fh:
                 content = fh.read()
-            # Strip comment lines and whitespace; check if meaningful content remains
-            lines = [
-                ln.strip()
-                for ln in content.split("\n")
-                if ln.strip() and not ln.strip().startswith("#")
-            ]
-            meaningful = "".join(lines).lower()
-            if meaningful and meaningful != "none":
+            # Filter out: blank lines, comment/header lines (#/##),
+            # metadata lines (key: value at top), and "none"/"(or \"none\")" lines
+            content_lines = []
+            for ln in content.split("\n"):
+                stripped = ln.strip()
+                if not stripped:
+                    continue
+                # Skip markdown headers
+                if stripped.startswith("#"):
+                    continue
+                # Skip metadata lines like "updated: 2026-03-30"
+                if re.match(r"^[a-z_]+\s*:", stripped):
+                    continue
+                # Skip "none" variants
+                lower = stripped.lower().strip('"').strip("'")
+                if lower in ("none", "(or \"none\")", '(or "none")'):
+                    continue
+                # Skip list items that are just "none"
+                if re.match(r"^-\s*none\s*$", stripped, re.IGNORECASE):
+                    continue
+                content_lines.append(stripped)
+            if content_lines:
                 return True
         except OSError:
             pass

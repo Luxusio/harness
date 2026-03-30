@@ -48,7 +48,7 @@ repo/
       ...
   scripts/
     harness/
-      verify.sh                    # main verification entry point
+      verify.py                    # main verification entry point
       smoke.sh                     # smoke test runner
       healthcheck.sh               # health check probe
       reset-db.sh                  # DB reset / seed
@@ -141,7 +141,7 @@ always_load_paths:
 registered_roots:
   - common
 runtime:
-  verify_script: scripts/harness/verify.sh
+  verify_script: scripts/harness/verify.py
   smoke_script: scripts/harness/smoke.sh
   reset_script: scripts/harness/reset-db.sh
   healthchecks: []
@@ -572,7 +572,7 @@ setup이 생성하는 `scripts/harness/`:
 
 | Script | Purpose |
 |--------|---------|
-| `verify.sh` | Main entry point — runs smoke + healthcheck in sequence |
+| `verify.py` | Main entry point — runs smoke + healthcheck in sequence |
 | `smoke.sh` | Project-specific smoke tests (tests, curl, CLI commands) |
 | `healthcheck.sh` | Service health probes |
 | `reset-db.sh` | Database reset / seed |
