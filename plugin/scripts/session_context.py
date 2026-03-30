@@ -53,7 +53,7 @@ def main():
         print("Run /harness:setup to bootstrap.")
         sys.exit(0)
 
-    print("harness: initialized (v4).")
+    print("harness: initialized (v2).")
     print("")
 
     # Project shape from manifest

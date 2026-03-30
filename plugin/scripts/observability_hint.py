@@ -4,26 +4,13 @@ import json
 import os
 import sys
 
-import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import MANIFEST
-
-
-def load_state():
-    state_path = "doc/harness/state.json"
-    if not os.path.isfile(state_path):
-        return {}
-    try:
-        with open(state_path) as f:
-            return json.load(f)
-    except Exception:
-        return {}
+from _lib import MANIFEST, is_profile_enabled
 
 
 def is_observability_enabled():
-    """Check if observability is enabled in harness state."""
-    state = load_state()
-    return state.get("observability_enabled", False)
+    """Check if observability is enabled in manifest profiles."""
+    return is_profile_enabled("observability_enabled")
 
 
 def hints_for_context(context):

@@ -1,4 +1,4 @@
-# harness v4.3 — Execution Harness
+# harness v2.0 — Execution Harness
 
 You are running with harness, an execution harness for AI-assisted repository work.
 
@@ -23,6 +23,7 @@ Orchestration mode (solo | subagents | team) is selected independently after exe
 | `TaskCompleted` | **BLOCK** (exit 2) unless all required verdicts PASS; auto-populates touched_paths/roots_touched/verification_targets from git diff if empty; runs note auto-reverify (non-blocking) for suspect notes whose `invalidated_by_paths` overlap `touched_paths` |
 | `SubagentStop` | Record agent run provenance in TASK_STATE.yaml (`agent_run_<name>_count`/`last`); warn if expected artifacts missing |
 | `Stop` | **BLOCK** (exit 2) if open tasks remain; injects per-task next-action hint (status → next step, non-PASS verdicts shown) |
+| `PreToolUse` | Advisory: warn when source files are written without plan_verdict PASS on any active task; also warns on untracked mutations (no active task) |
 | `FileChanged` | Precise invalidation: runtime_verdict for runtime paths, document_verdict for doc paths; marks affected notes suspect using **structural path matching** (exact or directory-prefix, not substring) |
 | `PostCompact` | Re-inject open task summary + maintain-lite entropy indicators |
 | `SessionEnd` | Record final session state + maintain-lite entropy summary + calibration candidate count |
@@ -74,7 +75,7 @@ After lane classification, the harness selects one of three execution modes base
 
 **Triggers:** Normal feature/bugfix, single-root change. Default when light and sprinted signals are absent.
 
-**Loop:** Full v4 loop — plan contract → critic-plan PASS → implement → self-check breadcrumbs → runtime QA → writer/DOC_SYNC → critic-document → close.
+**Loop:** Full v2 loop — plan contract → critic-plan PASS → implement → self-check breadcrumbs → runtime QA → writer/DOC_SYNC → critic-document → close.
 
 **Plan format:** Full — all sections required.
 
@@ -480,6 +481,7 @@ teams:
 
 ## Core rules
 
+- **User-facing questions must use AskUserQuestion tool.** When asking the user for choices, preferences, or judgment, always use AskUserQuestion — never plain text. This provides clickable UI and prevents missed responses.
 - No implementation without PLAN.md + critic-plan PASS
 - No close without required critic PASS
 - DOC_SYNC.md is mandatory for all repo-mutating tasks
@@ -493,7 +495,7 @@ teams:
 - Performance tasks require a numeric benchmark contract in the plan and numeric before/after evidence for runtime PASS. Qualitative-only claims are not sufficient.
 - Prompt memory uses 5-signal scoring across all `doc/*/` roots: lexical (0.4) + freshness (0.25) + root match (0.15) + path overlap (0.1) + lane relevance (0.1). Selection budget: 2 notes, 1 task, 1 verdict, ≤600 chars.
 - TASK_STATE.yaml includes `review_overlays`, `risk_tags`, and `performance_task` fields for overlay-aware critic routing.
-- CHECKS.yaml tracks per-criterion acceptance status alongside PLAN.md. Non-blocking in v4.3.
+- CHECKS.yaml tracks per-criterion acceptance status alongside PLAN.md. Non-blocking in v2.0.
 - Critics load calibration packs (`plugin/calibration/`) matching execution_mode and active overlays before judging.
 - critic-runtime also reads local calibration cases from `plugin/calibration/local/critic-runtime/` (max 3 most recent) when directory exists.
 - SESSION_HANDOFF.json is generated on failure triggers (FAIL repeat, criterion reopen, sprinted compaction, blocked_env recovery, scope growth) for structured recovery.
