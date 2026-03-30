@@ -5,7 +5,6 @@ import os
 import sys
 import re
 
-import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import read_hook_input, hook_json_get
 from memory_selectors import select_relevant_notes, select_active_tasks, select_recent_verdicts, _get_registered_roots
@@ -297,8 +296,13 @@ def main():
     if len(context) > 600:
         context = context[:597] + "..."
 
-    # Output for hook
-    output = {"additionalContext": context}
+    # Output for hook — hookSpecificOutput schema
+    output = {
+        "hookSpecificOutput": {
+            "hookEventName": "UserPromptSubmit",
+            "additionalContext": context
+        }
+    }
     print(json.dumps(output))
 
 if __name__ == "__main__":
