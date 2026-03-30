@@ -20,7 +20,7 @@ Low-ceremony mode for small, contained tasks. Reduces artifact requirements and 
 
 ### Mode B — standard
 
-The default mode. Full v4 loop with all artifacts required.
+The default mode. Full v2 loop with all artifacts required.
 
 **Intended for:** Normal feature additions, single-root bugfixes, standard QA tasks.
 

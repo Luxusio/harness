@@ -60,6 +60,18 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prewrite_gate.py",
+            "timeout": 3,
+            "statusMessage": "Checking write gate"
+          }
+        ]
+      }
+    ],
     "FileChanged": [
       {
         "hooks": [

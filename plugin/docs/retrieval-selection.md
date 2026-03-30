@@ -183,7 +183,7 @@ The second note (common root) has no prefix.
 
 ## Backward Compatibility Guarantees
 
-1. **Single-root repos** (`doc/common/` only): behavior is identical to pre-v4.1. No manifest changes required.
+1. **Single-root repos** (`doc/common/` only): behavior is identical to pre-v2.0. No manifest changes required.
 
 2. **Notes without new metadata fields**: scored using defaults — `root=common`, `lane=None`, `path_scope=[]`. The `lane_match` and `path_overlap` signals contribute neutral values (0.7 and 0.0 respectively).
 

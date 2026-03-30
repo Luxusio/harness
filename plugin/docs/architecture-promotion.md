@@ -2,7 +2,7 @@
 
 updated: 2026-03-29
 
-This document describes how architecture constraint checks transition from advisory hints to required evidence in the harness v4.1 runtime critic.
+This document describes how architecture constraint checks transition from advisory hints to required evidence in the harness v2.0 runtime critic.
 
 ---
 

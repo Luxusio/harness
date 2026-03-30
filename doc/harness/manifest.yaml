@@ -1,10 +1,41 @@
 # harness manifest
-project: harness-plugin
+version: 4
+initialized_at: 2026-03-30
+
+# --- Top-level identity ---
+name: harness-plugin
 type: library
 languages: [python, markdown]
-browser_qa_supported: false
+
+# --- Top-level runtime commands ---
+# test_command requires pytest: pip install pytest
+test_command: "python3 -m pytest tests/ -x --tb=short"
+# smoke_command intentionally omitted — smoke.py SKIPs gracefully.
+# To enable: smoke_command: "python3 -m pytest tests/ -x --tb=line -q"
+
+# --- Verify commands (used by verify.py) ---
 verify_commands:
   - python3 plugin/scripts/verify.py
   - python3 plugin/scripts/healthcheck.py
   - python3 plugin/scripts/smoke.py
-initialized: 2026-03-30
+
+# --- QA ---
+qa:
+  default_mode: cli
+  browser_qa_supported: false
+
+browser:
+  enabled: false
+
+# --- Registered doc roots ---
+registered_roots:
+  - common
+
+# --- Teams ---
+teams:
+  provider: auto
+  native_ready: false
+  omc_ready: false
+  auto_activate: true
+  approval_mode: preapproved
+  fallback: subagents

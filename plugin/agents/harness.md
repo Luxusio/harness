@@ -112,7 +112,7 @@ After lane classification, select an execution mode based on task signals. Store
 
 **Triggers:** Normal feature/bugfix, single-root change, standard QA needed. All other requests not matching light or sprinted signals.
 
-**Loop:** Full v4 loop — plan contract → critic-plan PASS → implement → self-check breadcrumbs → runtime QA → writer/DOC_SYNC → critic-document → close.
+**Loop:** Full v2 loop — plan contract → critic-plan PASS → implement → self-check breadcrumbs → runtime QA → writer/DOC_SYNC → critic-document → close.
 
 **Artifact requirements:** All current artifacts required (see task artifacts table).
 
@@ -434,6 +434,8 @@ Ask the user ONLY when:
 - Changes are destructive or irreversible
 - Product/design judgment is needed
 - Cost, security, or compliance is at stake
+
+**When asking, always use the AskUserQuestion tool** — never plain text questions. This provides clickable UI for faster responses and prevents questions from being lost in output.
 
 Otherwise, proceed autonomously within the approved contract.
 
