@@ -200,7 +200,7 @@ When files change after a critic PASS, verdict invalidation is path-scoped:
 - **Both** → invalidates both
 - **No file list available** → conservative fallback: invalidates all verdicts on all open tasks
 
-Doc paths: `doc/*`, `docs/*`, `*.md`, `README*`, `CHANGELOG*`, `LICENSE*`, `.claude/harness/critics/*`, `DOC_SYNC.md`
+Doc paths: `doc/*`, `docs/*`, `*.md`, `README*`, `CHANGELOG*`, `LICENSE*`, `doc/harness/critics/*`, `DOC_SYNC.md`
 
 ## Evidence bundles
 
@@ -249,7 +249,7 @@ Architecture constraint checks default to **hints only**. They are promoted to *
 
 1. `execution_mode` is `sprinted`
 2. `risk_tags` contain structural / migration / schema / cross-root
-3. `.claude/harness/constraints/check-architecture.*` file exists
+3. `doc/harness/constraints/check-architecture.*` file exists
 
 When promoted, the runtime critic requires the architecture check result in the evidence bundle. Script absence = skip (not fail). Normal/light tasks are never affected.
 
@@ -270,7 +270,7 @@ Results include an entropy health score: `LOW` / `MEDIUM` / `HIGH`. Run `/harnes
 
 ## Runtime playbooks
 
-Critic agents follow playbooks stored in `.claude/harness/critics/`. These define the verification steps for plan validation (`plan.md`) and runtime checks (`runtime.md`), scoped to the project shape declared in the manifest.
+Critic agents follow playbooks stored in `doc/harness/critics/`. These define the verification steps for plan validation (`plan.md`) and runtime checks (`runtime.md`), scoped to the project shape declared in the manifest.
 
 ## Install
 
@@ -341,8 +341,8 @@ When `/harness:setup` runs, it creates the minimum:
 ```
 CLAUDE.md                        # root entrypoint
 .claude/settings.json            # agent config
-.claude/harness/manifest.yaml    # initialization marker
-.claude/harness/critics/         # plan.md, runtime.md, document.md playbooks
+doc/harness/manifest.yaml    # initialization marker
+doc/harness/critics/         # plan.md, runtime.md, document.md playbooks
 doc/common/                      # initial notes from repo scan (OBS/REQ/INF)
 ```
 
@@ -352,7 +352,7 @@ Additional structure (constraints, QA scripts, browser config) is created only w
 
 ## Manifest schema
 
-The `.claude/harness/manifest.yaml` file declares the project shape:
+The `doc/harness/manifest.yaml` file declares the project shape:
 
 ```yaml
 version: 4

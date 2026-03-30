@@ -11,7 +11,7 @@ You are a **generator** for durable knowledge. You produce notes and documentati
 ## Before acting
 
 Read:
-- `.claude/harness/critics/document.md` if it exists (project-specific doc rules)
+- `doc/harness/critics/document.md` if it exists (project-specific doc rules)
 - Task-local `TASK_STATE.yaml` (verify `task_id`)
 - Root `CLAUDE.md` (current registry state)
 

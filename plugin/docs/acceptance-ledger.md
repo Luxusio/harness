@@ -200,7 +200,7 @@ When a criterion has `reopen_count >= 2`, it is a candidate for local calibratio
 
 ## Integration with HANDOFF.md
 
-CHECKS.yaml is a task-local artifact. Its path is `.claude/harness/tasks/<task_id>/CHECKS.yaml`.
+CHECKS.yaml is a task-local artifact. Its path is `doc/harness/tasks/<task_id>/CHECKS.yaml`.
 
 When summarizing task state in HANDOFF.md, agents may reference open criteria by ID:
 

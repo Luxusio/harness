@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Project-specific smoke tests.
-Reads smoke_command from .claude/harness/manifest.yaml
+Reads smoke_command from doc/harness/manifest.yaml
 Falls back to project-local scripts/harness/smoke.sh if it exists.
 """
 
@@ -38,6 +38,6 @@ if smoke_cmd:
     sys.exit(exit_code)
 
 print("SKIP: no smoke tests configured")
-print("Add smoke_command to .claude/harness/manifest.yaml or create scripts/harness/smoke.sh")
+print("Add smoke_command to doc/harness/manifest.yaml or create scripts/harness/smoke.sh")
 print("[EVIDENCE] smoke: FAIL — no smoke tests configured")
 sys.exit(1)

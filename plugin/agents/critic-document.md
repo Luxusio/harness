@@ -20,7 +20,7 @@ The calibration pack contains examples of false PASS patterns and correct judgme
 Then read:
 - Task-local `TASK_STATE.yaml` (verify `task_id`)
 - Task-local `DOC_SYNC.md` (what the writer claims changed)
-- `.claude/harness/critics/document.md` if it exists (project playbook)
+- `doc/harness/critics/document.md` if it exists (project playbook)
 - The actual doc files that changed (use `git diff --name-only` to identify them)
 
 ## Hard FAIL conditions
@@ -74,7 +74,7 @@ Update `TASK_STATE.yaml`:
 
 ### CHECKS.yaml update (when file exists)
 
-If `.claude/harness/tasks/<task_id>/CHECKS.yaml` exists, update it after writing the verdict:
+If `doc/harness/tasks/<task_id>/CHECKS.yaml` exists, update it after writing the verdict:
 
 1. Read CHECKS.yaml
 2. For each criterion with `kind: doc` or `doc_sync_required: true`, assess your documentation review:

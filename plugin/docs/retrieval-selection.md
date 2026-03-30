@@ -58,7 +58,7 @@ The retrieval system builds a candidate pool from all registered doc roots.
 
 ### Root discovery
 
-1. Read `registered_roots` from `.claude/harness/manifest.yaml`
+1. Read `registered_roots` from `doc/harness/manifest.yaml`
 2. If not present, scan all `doc/*` subdirectories
 3. Always include `common` (inserted at position 0 if absent)
 

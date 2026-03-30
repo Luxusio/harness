@@ -26,7 +26,7 @@ An architecture check is **promoted to required evidence** for a runtime PASS on
 |---|-----------|---------------|
 | 1 | `execution_mode` is `sprinted` | `TASK_STATE.yaml` top-level field |
 | 2 | `risk_tags` contains at least one of: `structural`, `migration`, `schema`, `cross-root` | `TASK_STATE.yaml` `risk_tags` list |
-| 3 | A file matching `.claude/harness/constraints/check-architecture.*` exists in the repo | Filesystem check |
+| 3 | A file matching `doc/harness/constraints/check-architecture.*` exists in the repo | Filesystem check |
 
 If any one of these conditions is false, the check remains a hint and no verdict impact occurs.
 
@@ -36,7 +36,7 @@ If any one of these conditions is false, the check remains a hint and no verdict
 
 When all three conditions are met, the critic-runtime agent:
 
-1. Locates and executes the `.claude/harness/constraints/check-architecture.*` script
+1. Locates and executes the `doc/harness/constraints/check-architecture.*` script
 2. Captures the full output (stdout + exit code)
 3. Includes the output in the evidence bundle under a dedicated `### Architecture Check` section
 4. Evaluates the result:
@@ -49,14 +49,14 @@ A FAIL verdict is issued if the architecture check fails and no justification is
 
 ## Script Absence: Skip, Not Fail
 
-If the `.claude/harness/constraints/check-architecture.*` file does not exist:
+If the `doc/harness/constraints/check-architecture.*` file does not exist:
 
 - The architecture check is **skipped entirely**
 - No warning is emitted
 - No verdict impact
 - The evidence bundle section is omitted or marked "skipped"
 
-This is the **expected state for most repos**. The `.claude/harness/constraints/` directory is optional and only created during setup when the project has detectable architectural boundaries (see `plugin/skills/setup/SKILL.md` Phase 10).
+This is the **expected state for most repos**. The `doc/harness/constraints/` directory is optional and only created during setup when the project has detectable architectural boundaries (see `plugin/skills/setup/SKILL.md` Phase 10).
 
 ---
 
@@ -84,7 +84,7 @@ When promoted and the script is executed, the evidence bundle in `CRITIC__runtim
 
 ```markdown
 ### Architecture Check
-Running: .claude/harness/constraints/check-architecture.sh
+Running: doc/harness/constraints/check-architecture.sh
 Checking cross-workspace imports... OK
 Checking layer boundaries... OK
 [EVIDENCE] arch-check: PASS — exit 0 — all constraints satisfied
@@ -94,7 +94,7 @@ Checking layer boundaries... OK
 
 ```markdown
 ### Architecture Check
-Running: .claude/harness/constraints/check-architecture.sh
+Running: doc/harness/constraints/check-architecture.sh
 Checking cross-workspace imports... VIOLATION: packages/ui imports from packages/api
 [EVIDENCE] arch-check: FAIL — exit 1 — cross-workspace import detected
 

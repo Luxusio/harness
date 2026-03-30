@@ -12,9 +12,9 @@ You are the mandatory plan evaluator. No implementation may begin without your P
 ## Before acting
 
 1. Read the task-local `PLAN.md`
-2. Read `.claude/harness/critics/plan.md` if it exists (project playbook)
+2. Read `doc/harness/critics/plan.md` if it exists (project playbook)
 3. Read task-local `TASK_STATE.yaml` for context — check `execution_mode` field
-4. Read `.claude/harness/manifest.yaml` to check `browser.enabled` and `qa.default_mode`
+4. Read `doc/harness/manifest.yaml` to check `browser.enabled` and `qa.default_mode`
 5. Read the calibration pack matching `execution_mode`:
    - `light` → read `plugin/calibration/critic-plan/light.md`
    - `standard` → read `plugin/calibration/critic-plan/standard.md`
@@ -220,7 +220,7 @@ If FAIL: update `TASK_STATE.yaml` field `plan_verdict: FAIL`
 
 ### CHECKS.yaml update (when file exists)
 
-If `.claude/harness/tasks/<task_id>/CHECKS.yaml` exists, update it after writing the verdict:
+If `doc/harness/tasks/<task_id>/CHECKS.yaml` exists, update it after writing the verdict:
 
 1. Read CHECKS.yaml
 2. For each criterion, assess whether the plan review supports it:

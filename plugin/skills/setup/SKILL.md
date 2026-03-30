@@ -25,7 +25,7 @@ Setup is complete when an agent can:
 
 ### Phase 1: Repo census
 
-- Check if `.claude/harness/manifest.yaml` already exists. If so, ask: repair, upgrade, or re-run.
+- Check if `doc/harness/manifest.yaml` already exists. If so, ask: repair, upgrade, or re-run.
 - Scan for: manifests, lockfiles, README, tests, scripts, CI config.
 
 ### Phase 2: Detect project shape
@@ -92,16 +92,16 @@ Create the core structure:
 ```
 CLAUDE.md                        # root entrypoint (if not exists)
 .claude/settings.json            # agent config
-.claude/harness/manifest.yaml    # initialization marker + runtime config
-.claude/harness/critics/
+doc/harness/manifest.yaml    # initialization marker + runtime config
+doc/harness/critics/
   plan.md                        # plan critic playbook
   runtime.md                     # runtime critic playbook
   document.md                    # document critic playbook
-.claude/harness/review-overlays/
+doc/harness/review-overlays/
   security.md                  # security review overlay
   performance.md               # performance review overlay
   frontend-refactor.md         # frontend refactor review overlay
-.claude/harness/tasks/           # task folder convention
+doc/harness/tasks/           # task folder convention
 doc/common/
   CLAUDE.md                      # common root index
 ```
@@ -109,10 +109,10 @@ doc/common/
 **Minimum output set:**
 - `CLAUDE.md`
 - `.claude/settings.json`
-- `.claude/harness/manifest.yaml`
-- `.claude/harness/critics/{plan,runtime,document}.md`
-- `.claude/harness/review-overlays/{security,performance,frontend-refactor}.md`
-- `.claude/harness/tasks/`
+- `doc/harness/manifest.yaml`
+- `doc/harness/critics/{plan,runtime,document}.md`
+- `doc/harness/review-overlays/{security,performance,frontend-refactor}.md`
+- `doc/harness/tasks/`
 - `doc/common/CLAUDE.md`
 - `doc/common/REQ__project__primary-goals.md`
 - `doc/common/OBS__repo__workspace-layout.md`
@@ -129,7 +129,7 @@ updated: <date>
 
 # Operating mode
 - Default agent is harness — an execution harness with verdict invalidation.
-- `.claude/harness/manifest.yaml` is the initialization marker.
+- `doc/harness/manifest.yaml` is the initialization marker.
 - Every repo-mutating task follows: plan -> critic-plan PASS -> implement -> runtime QA -> writer/DOC_SYNC -> critic-document (when needed) -> close.
 - The only hard gate is at task completion: critic verdicts must PASS. Stale PASS (after file changes) does not count.
 - DOC_SYNC.md is mandatory for all repo-mutating tasks.
@@ -141,7 +141,7 @@ Include `doc/common/CLAUDE.md` in always_load_paths if notes were created.
 
 ### Phase 6: Generate manifest.yaml
 
-Generate from template at `${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/.claude/harness/manifest.yaml`.
+Generate from template at `${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/doc/harness/manifest.yaml`.
 
 For **web frontend / fullstack_web** projects, use the full manifest with `project`, `runtime`, `qa`, and `browser` sections populated from detection results.
 
@@ -199,7 +199,7 @@ When suggesting additional roots, create the corresponding `doc/<root>/CLAUDE.md
 
 ### Phase 8: Generate critic playbooks
 
-From templates at `${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/.claude/harness/critics/`.
+From templates at `${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/doc/harness/critics/`.
 Fill project-specific values from detected shape:
 - Runtime playbook gets actual verify commands, health endpoints, preferred verification order
 - For web frontend projects, runtime playbook adds browser QA steps using chrome-devtools MCP
@@ -241,7 +241,7 @@ Only create when the project has clear boundaries (monorepo, layered app, strict
 When any trigger is detected, populate the `constraints:` section in `manifest.yaml` and optionally create:
 
 ```
-.claude/harness/constraints/
+doc/harness/constraints/
   architecture.md            # human-readable constraint rules
   check-architecture.sh      # machine-executable checks (optional)
 ```
@@ -258,7 +258,7 @@ Under normal conditions, architecture checks are hints — their absence or fail
 
 1. `execution_mode` is `sprinted` (from TASK_STATE.yaml)
 2. `risk_tags` contain at least one of: `structural`, `migration`, `schema`, `cross-root`
-3. `.claude/harness/constraints/check-architecture.*` file exists in the repo
+3. `doc/harness/constraints/check-architecture.*` file exists in the repo
 
 This promotion is **automatic** — no user configuration is needed. For most repos (no constraints directory), architecture checks are skipped entirely and do not affect verdicts. For light and standard mode tasks, architecture checks are always hints regardless of risk tags. See `plugin/docs/architecture-promotion.md` for complete reference.
 
@@ -393,7 +393,7 @@ Report team readiness status in Phase 15 finish report.
 
 Append harness entries if not already present:
 ```
-.claude/harness/tasks/
+doc/harness/tasks/
 ```
 
 ### Phase 13: Activate harness agent

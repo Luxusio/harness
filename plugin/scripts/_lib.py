@@ -14,8 +14,8 @@ from datetime import datetime, timezone
 # Constants
 # ---------------------------------------------------------------------------
 
-TASK_DIR = ".claude/harness/tasks"
-MANIFEST = ".claude/harness/manifest.yaml"
+TASK_DIR = "doc/harness/tasks"
+MANIFEST = "doc/harness/manifest.yaml"
 
 # ---------------------------------------------------------------------------
 # Lazy stdin reader — read once, cache forever
@@ -377,7 +377,6 @@ def is_doc_path(path):
         r"^README",
         r"^CHANGELOG",
         r"^LICENSE",
-        r"^\.claude/harness/critics/",
         r"^DOC_SYNC\.md$",
     ]
     for pattern in doc_patterns:

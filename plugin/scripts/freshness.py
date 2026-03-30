@@ -24,7 +24,7 @@ def get_git_changed_since(timestamp):
         pass
     return []
 
-def check_stale_verdicts(task_dir=".claude/harness/tasks"):
+def check_stale_verdicts(task_dir="doc/harness/tasks"):
     """Check for PASS verdicts that may be stale due to file changes."""
     warnings = []
     if not os.path.isdir(task_dir):
@@ -86,7 +86,7 @@ def check_stale_verdicts(task_dir=".claude/harness/tasks"):
 
     return warnings
 
-def check_doc_sync_staleness(task_dir=".claude/harness/tasks"):
+def check_doc_sync_staleness(task_dir="doc/harness/tasks"):
     """Check if DOC_SYNC.md content is stale."""
     warnings = []
     if not os.path.isdir(task_dir):
