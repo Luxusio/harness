@@ -5,6 +5,7 @@ Blocking gate — exits 2 when:
   1. Source file write attempted without plan_verdict PASS on any active task.
   2. Protected artifact write attempted by wrong role.
   3. PLAN.md write attempted without active plan session token.
+  4. Workflow control surface write attempted from a non-maintenance task.
 
 Escape hatch: set HARNESS_SKIP_PREWRITE=1 to bypass (for emergency fixes).
 """
@@ -19,6 +20,28 @@ from _lib import (
     TASK_DIR,
     MANIFEST,
 )
+
+# ---------------------------------------------------------------------------
+# Workflow control surface — files that define harness runtime behaviour.
+# Writes to these are only permitted from tasks where maintenance_task=true.
+# ---------------------------------------------------------------------------
+
+WORKFLOW_CONTROL_SURFACE = {
+    # Agent prompts / CLAUDE.md
+    "plugin/CLAUDE.md",
+    "plugin/agents/harness.md",
+    # Execution / orchestration docs
+    "plugin/docs/execution-modes.md",
+    "plugin/docs/orchestration-modes.md",
+    # Hook manifest
+    "plugin/hooks/hooks.json",
+    # Setup skill and templates
+    "plugin/skills/setup/SKILL.md",
+    "plugin/skills/setup/templates/CLAUDE.md",
+    "plugin/skills/setup/templates/doc/harness/manifest.yaml",
+    # CLI control plane
+    "plugin/scripts/hctl.py",
+}
 
 # --- Source file detection ---
 
@@ -192,6 +215,30 @@ def _find_active_task_dir():
     return best
 
 
+def _is_workflow_control_surface(filepath):
+    """Return True if filepath is a workflow control surface file.
+
+    These files define harness runtime behaviour; they may only be written
+    when the active task has maintenance_task=true.
+    """
+    if not filepath:
+        return False
+    fp = filepath
+    if fp.startswith("./"):
+        fp = fp[2:]
+    return fp in WORKFLOW_CONTROL_SURFACE
+
+
+def _active_task_is_maintenance():
+    """Return True if the most recently updated active task has maintenance_task=true."""
+    task_dir = _find_active_task_dir()
+    if not task_dir:
+        return False
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    val = yaml_field("maintenance_task", state_file) or "false"
+    return str(val).lower() in ("true", "1", "yes")
+
+
 def _extract_file_path(hook_data):
     """Extract the target file path from PreToolUse hook payload.
 
@@ -281,6 +328,23 @@ def main():
     # Check if harness is initialized
     if not os.path.isfile(MANIFEST):
         # Harness not initialized — no gate (don't block non-harness repos)
+        sys.exit(0)
+
+    # --- Workflow control surface lock ---
+    # Files that define harness runtime behaviour may only be written from
+    # tasks where maintenance_task=true.
+    if _is_workflow_control_surface(filepath):
+        if not _active_task_is_maintenance():
+            print(
+                f"BLOCKED: '{filepath}' is a workflow control surface file. "
+                f"Direct writes are only permitted from maintenance tasks "
+                f"(maintenance_task=true in TASK_STATE.yaml). "
+                f"Run `hctl start` to compile routing, or set maintenance_task "
+                f"in TASK_STATE.yaml. "
+                f"(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
+            )
+            sys.exit(2)
+        # Maintenance task — allow write to control surface
         sys.exit(0)
 
     # --- Protected artifact ownership check ---

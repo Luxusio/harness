@@ -2,6 +2,7 @@
 .claude/settings.local.json
 .claude/harness/
 __pycache__
+.DS_Store
 
 # harness — operational artifacts (ephemeral, not durable knowledge)
 doc/harness/tasks/

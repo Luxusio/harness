@@ -7,7 +7,7 @@ import re
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import read_hook_input, hook_json_get, yaml_field, yaml_array, TASK_DIR, MANIFEST
-from memory_selectors import select_relevant_notes, select_active_tasks, select_recent_verdicts, _get_registered_roots
+from memory_selectors import select_relevant_notes, _get_registered_roots
 
 def is_casual(prompt):
     """Detect casual/greeting prompts that don't need context injection."""
@@ -118,44 +118,30 @@ def _get_complaint_summary(task_dir):
 
 
 def _is_complaint_like(prompt):
-    """Return True if prompt appears to express dissatisfaction with prior output.
+    """Return True only for explicit dissatisfaction signals.
 
-    Language-agnostic heuristics — no vocabulary list needed:
-    - Negation + outcome signals (English and Korean)
-    - Short non-question prompts (likely directives or corrections)
+    This stays intentionally conservative so normal short prompts do not trigger
+    complaint reminders on every turn.
     """
     if not prompt:
         return False
 
     stripped = prompt.strip()
-
-    # Questions are not complaints
-    if stripped.endswith("?"):
+    if not stripped or stripped.endswith("?"):
         return False
 
-    # Check for negation + outcome signals (English)
+    lower = stripped.lower()
     negation_outcome_en = [
         "still", "again", "didn't", "not working", "doesn't work",
         "not fixed", "still broken", "same issue", "still failing",
         "didn't fix", "didn't work", "not done", "wrong",
+        "broken", "regressed",
     ]
-    lower = stripped.lower()
-    for signal in negation_outcome_en:
-        if signal in lower:
-            return True
+    korean_signals = ["아직", "여전히", "안 됨", "안돼", "안됨", "안 돼", "못했", "틀렸"]
 
-    # Check for Korean dissatisfaction signals
-    korean_signals = ["아직", "여전히", "안 됨", "안돼", "안됨", "안 돼", "여전히", "못했"]
-    for signal in korean_signals:
-        if signal in stripped:
-            return True
-
-    # Short prompts (< 60 chars) that are not questions are often corrections
-    if len(stripped) < 60 and not stripped.endswith("?"):
-        # Only if not a casual greeting (already filtered upstream)
-        return True
-
-    return False
+    return any(signal in lower for signal in negation_outcome_en) or any(
+        signal in stripped for signal in korean_signals
+    )
 
 
 def _get_active_task_dir():
@@ -257,15 +243,9 @@ def _get_unplanned_hint(task_dir):
             r"source_mutation_before_plan_pass", content
         ))
         if has_violation:
-            return (
-                "PLAN REQUIRED + VIOLATION: task has source mutations without plan PASS"
-                " — stop source work; fix PLAN.md and obtain critic-plan PASS first"
-            )
+            return "plan violation: stop source edits and repair PLAN.md before continuing"
 
-        return (
-            "PLAN REQUIRED: task not plan-approved"
-            " — do not mutate source; create/repair PLAN.md and obtain critic-plan PASS first"
-        )
+        return "plan required: critic-plan PASS before source edits"
     except OSError:
         return ""
 
@@ -285,15 +265,9 @@ def _get_task_required_hint(prompt, active_task_dir):
         return ""
 
     if intent == "mutating":
-        return (
-            "TASK REQUIRED: this request appears to mutate the repo "
-            "— create a task folder and invoke /harness:plan before proceeding"
-        )
+        return "task required: create a task and run /harness:plan before repo changes"
     elif intent == "investigate":
-        return (
-            "TASK REQUIRED: this request appears to require investigation "
-            "— create a task folder for structured findings (RESULT.md required)"
-        )
+        return "task required: create a task for structured investigation"
     return ""
 
 
@@ -316,65 +290,73 @@ def _get_pending_directives_hint(task_dir):
             content = f.read()
         pending_count = content.count("status: pending")
         if pending_count > 0:
-            return f"DIRECTIVES PENDING: {pending_count} user directive(s) awaiting promotion to durable notes"
+            return f"directives pending: {pending_count}"
     except OSError:
         pass
     return ""
 
 
+def _latest_task_verdict(task_dir):
+    """Return a short verdict summary for the active task only."""
+    if not task_dir or not os.path.isdir(task_dir):
+        return ""
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    if not os.path.isfile(state_file):
+        return ""
+
+    runtime_v = yaml_field("runtime_verdict", state_file) or "pending"
+    if runtime_v in ("FAIL", "BLOCKED_ENV"):
+        return f"runtime={runtime_v}"
+
+    document_v = yaml_field("document_verdict", state_file) or "pending"
+    if document_v == "FAIL":
+        return "document=FAIL"
+
+    plan_v = yaml_field("plan_verdict", state_file) or "pending"
+    if plan_v == "FAIL":
+        return "plan=FAIL"
+
+    return ""
+
+
 def gather_context(prompt):
-    """Gather relevant context based on the prompt."""
+    """Gather a small amount of high-signal context for the next turn."""
     context_parts = []
 
-    # 1. Check manifest for tooling status and registered roots
-    manifest_path = MANIFEST
-    active_roots = []
-    if os.path.isfile(manifest_path):
-        try:
-            with open(manifest_path) as f:
-                manifest = f.read()
-            tooling_hints = []
-            if "symbol_lane_enabled: true" in manifest:
-                tooling_hints.append("Symbol lane: active")
-            if "ast_grep_enabled: true" in manifest:
-                tooling_hints.append("Structural search: active")
-            if "observability_enabled: true" in manifest:
-                tooling_hints.append("Observability: active")
-            if tooling_hints:
-                context_parts.append("Tooling: " + ", ".join(tooling_hints))
-        except Exception:
-            pass
-
-    # Determine active roots for query context
     try:
         active_roots = _get_registered_roots("doc")
     except Exception:
         active_roots = ["common"]
 
-    # Get active task dir (used by multiple checks below)
     active_task_dir = None
     try:
         active_task_dir = _get_active_task_dir()
     except Exception:
         pass
 
-    # 2. Task-required hint (highest priority — inject first)
     try:
         task_hint = _get_task_required_hint(prompt, active_task_dir)
         if task_hint:
-            context_parts.insert(0, task_hint)
+            return [task_hint]
     except Exception:
         pass
 
-    # 2b. WS-5: Unplanned task hint
     try:
         unplanned_hint = _get_unplanned_hint(active_task_dir)
         if unplanned_hint:
-            context_parts.insert(0, unplanned_hint)
+            context_parts.append(unplanned_hint)
     except Exception:
         pass
 
-    # 2c. Pending directives hint
+    if active_task_dir:
+        try:
+            state_file = os.path.join(active_task_dir, "TASK_STATE.yaml")
+            task_id = yaml_field("task_id", state_file) or os.path.basename(active_task_dir)
+            status = yaml_field("status", state_file) or "unknown"
+            context_parts.append(f"active:{task_id}[{status}]")
+        except Exception:
+            pass
+
     try:
         directives_hint = _get_pending_directives_hint(active_task_dir)
         if directives_hint:
@@ -382,62 +364,23 @@ def gather_context(prompt):
     except Exception:
         pass
 
-    # 2d. Complaint summary for active tasks with open complaints
     try:
         if active_task_dir:
             complaint_summary = _get_complaint_summary(active_task_dir)
             if complaint_summary:
                 context_parts.append(complaint_summary)
+            elif _is_complaint_like(prompt):
+                context_parts.append("complaint hint: capture dissatisfaction before proceeding")
     except Exception:
         pass
 
-    # 2e. Complaint-check reminder if prompt looks complaint-like
     try:
-        if _is_complaint_like(prompt):
-            context_parts.append(
-                "COMPLAINT CHECK: if the user is signaling dissatisfaction with prior output, "
-                "stage a complaint artifact before proceeding"
-            )
+        verdict = _latest_task_verdict(active_task_dir)
+        if verdict:
+            context_parts.append(verdict)
     except Exception:
         pass
 
-    # 3. Active tasks (top 1 via selector)
-    try:
-        active = select_active_tasks(prompt)
-        if active:
-            task_id, status, _ = active[0]
-            context_parts.append("Active task: {} [{}]".format(task_id, status))
-    except Exception:
-        pass
-
-    # 4. Recent critic verdicts (top 1 via selector)
-    try:
-        verdicts = select_recent_verdicts()
-        if verdicts:
-            task_id, verdict_type, verdict = verdicts[0]
-            context_parts.append("Recent verdict: {}/{}: {}".format(task_id, verdict_type, verdict))
-    except Exception:
-        pass
-
-    # 5. Check for blockers (tasks with blocked_env status)
-    try:
-        task_dir = TASK_DIR
-        if os.path.isdir(task_dir):
-            for entry in os.listdir(task_dir):
-                if not entry.startswith("TASK__"):
-                    continue
-                state_file = os.path.join(task_dir, entry, "TASK_STATE.yaml")
-                if not os.path.isfile(state_file):
-                    continue
-                with open(state_file) as f:
-                    content = f.read()
-                if "status: blocked_env" in content:
-                    context_parts.append("BLOCKED: {} needs env fix".format(entry))
-                    break
-    except Exception:
-        pass
-
-    # 6. CHECKS focus summary for fix rounds (WS-2)
     try:
         if active_task_dir and _is_fix_round(active_task_dir):
             from checks_focus import get_checks_summary_for_task
@@ -447,7 +390,6 @@ def gather_context(prompt):
     except Exception:
         pass
 
-    # 7. Relevant notes (top 2, freshness-aware, multi-root)
     try:
         current_lane = detect_lane_from_prompt(prompt)
         query_context = {
@@ -455,28 +397,17 @@ def gather_context(prompt):
             "current_lane": current_lane,
         }
         notes = select_relevant_notes(prompt, query_context=query_context)
-        for note_entry in notes:
-            note_path, score, first_line, freshness, root_name = note_entry
-            # Prefix with root name for non-common roots
-            if root_name and root_name != "common":
-                label_prefix = "[{}] ".format(root_name)
-            else:
-                label_prefix = ""
-
+        if notes:
+            _, _, first_line, freshness, root_name = notes[0]
+            prefix = f"[{root_name}] " if root_name and root_name != "common" else ""
             if freshness == "current":
-                context_parts.append("Note: {}{}".format(label_prefix, first_line))
+                context_parts.append(f"note:{prefix}{first_line}")
             elif freshness == "suspect":
-                context_parts.append("Note [suspect]: {}{}".format(label_prefix, first_line))
-            elif freshness == "stale":
-                # Only include stale if no current/suspect notes available
-                has_better = any(f in ("current", "suspect") for _, _, _, f, _ in notes)
-                if not has_better:
-                    context_parts.append("Note [re-verify needed]: {}{}".format(label_prefix, first_line))
-            # superseded notes are never included (already filtered in selector)
+                context_parts.append(f"note[suspect]:{prefix}{first_line}")
     except Exception:
         pass
 
-    return context_parts
+    return context_parts[:4]
 
 def main():
     hook_input = read_hook_input()
@@ -492,10 +423,10 @@ def main():
     if not context_parts:
         sys.exit(0)
 
-    # Format as additionalContext (max ~600 chars)
+    # Format as additionalContext (keep it small — this runs every turn)
     context = " | ".join(context_parts)
-    if len(context) > 600:
-        context = context[:597] + "..."
+    if len(context) > 320:
+        context = context[:317] + "..."
 
     # Output for hook — hookSpecificOutput schema
     output = {

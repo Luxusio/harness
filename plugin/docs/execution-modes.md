@@ -1,10 +1,15 @@
 # Execution Modes Reference
 
-updated: 2026-03-28
+updated: 2026-04-01
+
+> **Compatibility / maintenance reference only.**
+> This document is NOT the agent-facing canonical routing source.
+> For task routing, use: `python3 plugin/scripts/hctl.py context --task-dir <dir> --json`
+> Execution mode is derived automatically by `hctl start` and stored as a compatibility field in TASK_STATE.yaml.
 
 > **Note:** Execution mode (`light | standard | sprinted`) and orchestration mode (`solo | subagents | team`) are orthogonal axes. This document covers execution modes. See `plugin/docs/orchestration-modes.md` for orchestration modes.
 
-This document defines the three execution modes used by the harness to scale ceremony to task complexity.
+This document is a compatibility reference for the three execution modes. Agents should rely on `hctl context` output rather than reading this document at runtime.
 
 ---
 

@@ -1048,6 +1048,366 @@ def get_planning_mode(state_file):
 
 
 # ---------------------------------------------------------------------------
+# CLI-first helpers (hctl support)
+# ---------------------------------------------------------------------------
+
+
+def set_task_state_field(task_dir, field, value):
+    """Update a single field in TASK_STATE.yaml using regex line replacement.
+
+    If the field exists, updates it in-place.
+    If the field is missing, appends it before the final 'updated:' line.
+    Also refreshes the 'updated:' timestamp.
+    Returns True on success, False on error.
+    """
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    if not os.path.isfile(state_file):
+        return False
+    try:
+        with open(state_file, "r", encoding="utf-8") as fh:
+            content = fh.read()
+    except OSError:
+        return False
+
+    # Represent value correctly
+    if isinstance(value, bool):
+        yaml_val = "true" if value else "false"
+    elif isinstance(value, list):
+        inline = ", ".join(f'"{v}"' for v in value)
+        yaml_val = f"[{inline}]"
+    elif value is None:
+        yaml_val = "null"
+    else:
+        yaml_val = str(value)
+
+    ts = now_iso()
+
+    if re.search(r"^" + re.escape(field) + r":", content, re.MULTILINE):
+        content = re.sub(
+            r"^" + re.escape(field) + r":.*",
+            f"{field}: {yaml_val}",
+            content,
+            flags=re.MULTILINE,
+        )
+    else:
+        # Append before 'updated:' line if present, else at end
+        if re.search(r"^updated:", content, re.MULTILINE):
+            content = re.sub(
+                r"^(updated:.*)$",
+                f"{field}: {yaml_val}\nupdated: {ts}",
+                content,
+                flags=re.MULTILINE,
+                count=1,
+            )
+            # Don't update updated again below
+            try:
+                with open(state_file, "w", encoding="utf-8") as fh:
+                    fh.write(content)
+                return True
+            except OSError:
+                return False
+        else:
+            content = content.rstrip("\n") + f"\n{field}: {yaml_val}\n"
+
+    # Update timestamp
+    if re.search(r"^updated:", content, re.MULTILINE):
+        content = re.sub(r"^updated:.*", f"updated: {ts}", content, flags=re.MULTILINE)
+
+    try:
+        with open(state_file, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        return True
+    except OSError:
+        return False
+
+
+def compile_routing(task_dir, request_text=""):
+    """Compute routing fields from TASK_STATE.yaml + request text heuristics.
+
+    Returns a dict of fields to set in TASK_STATE.yaml:
+      risk_level, parallelism, workflow_locked, maintenance_task,
+      routing_compiled, routing_source,
+      execution_mode (compat), orchestration_mode (compat)
+
+    Rules (from PLAN.md §9):
+    risk_level:
+      - low: lane in [docs-sync, answer, investigate] OR (single-file, no keywords)
+      - high: maintenance/harness/template keywords, browser+failures, multi-root risk_tags
+      - medium: default
+
+    maintenance_task:
+      - true if: "maintenance-task" in risk_tags, "harness-source" in risk_tags,
+        OR (lane in [refactor, build] AND "template-sync-required" in risk_tags)
+
+    workflow_locked:
+      - false if maintenance_task=true, else true
+
+    parallelism: always 1 in v1
+    """
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+
+    lane = yaml_field("lane", state_file) or "unknown"
+    risk_tags = yaml_array("risk_tags", state_file)
+    browser_required = yaml_field("browser_required", state_file) or "false"
+    fail_count_raw = yaml_field("runtime_verdict_fail_count", state_file) or "0"
+    try:
+        fail_count = int(fail_count_raw)
+    except (ValueError, TypeError):
+        fail_count = 0
+
+    req = request_text.lower()
+
+    # --- maintenance_task ---
+    HIGH_MAINTENANCE_TAGS = {"maintenance-task", "harness-source"}
+    maintenance_task = False
+    if HIGH_MAINTENANCE_TAGS.intersection(set(risk_tags)):
+        maintenance_task = True
+    elif lane in ("refactor", "build") and "template-sync-required" in risk_tags:
+        maintenance_task = True
+
+    # Keyword heuristic from request text
+    MAINTENANCE_KEYWORDS = {
+        "harness", "plugin", "workflow", "hook", "hctl", "setup", "template",
+        "control surface", "prewrite", "session_context", "prompt_memory",
+    }
+    if not maintenance_task and any(kw in req for kw in MAINTENANCE_KEYWORDS):
+        # Only if also touching CLAUDE.md / plugin files
+        if any(kw in req for kw in ("claude.md", "plugin/", "hooks.json", "execution-modes")):
+            maintenance_task = True
+
+    # --- risk_level ---
+    LOW_LANES = {"docs-sync", "answer", "investigate"}
+    HIGH_RISK_TAGS = {"multi-root", "destructive", "structural", "harness-source",
+                      "maintenance-task", "template-sync-required"}
+
+    if lane in LOW_LANES:
+        risk_level = "low"
+    elif (
+        HIGH_RISK_TAGS.intersection(set(risk_tags))
+        or (browser_required == "true" and fail_count >= 2)
+        or maintenance_task
+    ):
+        risk_level = "high"
+    else:
+        risk_level = "medium"
+
+    # Request text high-risk keywords
+    HIGH_RISK_KEYWORDS = {
+        "setup", "template", "control surface", "harness-source", "hooks.json",
+        "execution-modes", "orchestration-modes", "prewrite_gate", "hctl",
+    }
+    if risk_level != "high" and any(kw in req for kw in HIGH_RISK_KEYWORDS):
+        risk_level = "high"
+
+    # --- parallelism (always 1 in v1) ---
+    parallelism = 1
+
+    # --- workflow_locked ---
+    workflow_locked = not maintenance_task
+
+    # --- compat fields ---
+    EXEC_MODE_MAP = {"low": "light", "medium": "standard", "high": "sprinted"}
+    execution_mode = EXEC_MODE_MAP.get(risk_level, "standard")
+    orchestration_mode = "solo" if parallelism <= 1 else "subagents"
+
+    return {
+        "risk_level": risk_level,
+        "parallelism": parallelism,
+        "workflow_locked": workflow_locked,
+        "maintenance_task": maintenance_task,
+        "routing_compiled": True,
+        "routing_source": "hctl",
+        "execution_mode": execution_mode,
+        "orchestration_mode": orchestration_mode,
+    }
+
+
+def emit_compact_context(task_dir):
+    """Return a brief task pack for runtime control.
+
+    The default task pack is intentionally compact:
+      - task-local must_read only (cap 4)
+      - summarized checks instead of full criterion dumps
+      - short notes / next_action hints
+      - hctl commands only
+
+    This keeps the runtime control plane small enough to replace repeated
+    rereads of global harness docs.
+    """
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+
+    def _bool(val):
+        if isinstance(val, bool):
+            return val
+        return str(val).lower() in ("true", "1", "yes")
+
+    def _int(val):
+        try:
+            return int(val)
+        except (ValueError, TypeError):
+            return 0
+
+    def _display_path(path_value):
+        try:
+            cwd = os.getcwd()
+            if os.path.isabs(path_value):
+                rel = os.path.relpath(path_value, cwd)
+                if not rel.startswith(".."):
+                    return rel
+        except (OSError, ValueError):
+            pass
+        return path_value
+
+    task_id = yaml_field("task_id", state_file) or os.path.basename(task_dir)
+    status = yaml_field("status", state_file) or "unknown"
+    lane = yaml_field("lane", state_file) or "unknown"
+    risk_level = yaml_field("risk_level", state_file) or "medium"
+    qa_required = _bool(yaml_field("qa_required", state_file) or "true")
+    doc_sync_required = _bool(yaml_field("doc_sync_required", state_file) or "false")
+    browser_required = _bool(yaml_field("browser_required", state_file) or "false")
+    parallelism = _int(yaml_field("parallelism", state_file) or "1")
+    workflow_locked = _bool(yaml_field("workflow_locked", state_file) or "true")
+    maintenance_task = _bool(yaml_field("maintenance_task", state_file) or "false")
+
+    execution_mode = yaml_field("execution_mode", state_file) or "standard"
+    orchestration_mode = yaml_field("orchestration_mode", state_file) or "solo"
+
+    task_root = os.path.join(TASK_DIR, task_id)
+    must_read_pairs = [
+        (f"{task_root}/TASK_STATE.yaml", os.path.join(task_dir, "TASK_STATE.yaml")),
+        (f"{task_root}/PLAN.md", os.path.join(task_dir, "PLAN.md")),
+        (f"{task_root}/CHECKS.yaml", os.path.join(task_dir, "CHECKS.yaml")),
+        (f"{task_root}/HANDOFF.md", os.path.join(task_dir, "HANDOFF.md")),
+        (f"{task_root}/SESSION_HANDOFF.json", os.path.join(task_dir, "SESSION_HANDOFF.json")),
+        (f"{task_root}/RESULT.md", os.path.join(task_dir, "RESULT.md")),
+    ]
+    must_read = []
+    seen = set()
+    for rel_path, abs_path in must_read_pairs:
+        if rel_path in seen:
+            continue
+        if os.path.isfile(abs_path):
+            must_read.append(rel_path)
+            seen.add(rel_path)
+        if len(must_read) >= 4:
+            break
+
+    display_task_dir = _display_path(task_dir)
+    commands = {
+        "update": (
+            f"python3 plugin/scripts/hctl.py update --task-dir {display_task_dir} "
+            "--from-git-diff"
+        ),
+        "verify": f"python3 plugin/scripts/hctl.py verify --task-dir {display_task_dir}",
+        "close": f"python3 plugin/scripts/hctl.py close --task-dir {display_task_dir}",
+    }
+
+    checks_file = os.path.join(task_dir, "CHECKS.yaml")
+    check_items = []
+    if os.path.isfile(checks_file):
+        try:
+            with open(checks_file, "r", encoding="utf-8") as fh:
+                lines = fh.readlines()
+            current = {}
+            for line in lines:
+                m_id = re.match(r"^\s*-?\s*id\s*:\s*(.+)", line)
+                if m_id:
+                    if current.get("id"):
+                        check_items.append(current)
+                    current = {
+                        "id": m_id.group(1).strip().strip('"').strip("'"),
+                        "status": "pending",
+                        "title": "",
+                    }
+                    continue
+                m_st = re.match(r"^\s+status\s*:\s*(.+)", line)
+                if m_st and current.get("id"):
+                    current["status"] = m_st.group(1).strip().strip('"').strip("'")
+                    continue
+                m_title = re.match(r"^\s+title\s*:\s*(.+)", line)
+                if m_title and current.get("id"):
+                    current["title"] = m_title.group(1).strip().strip('"').strip("'")
+                    continue
+            if current.get("id"):
+                check_items.append(current)
+        except OSError:
+            pass
+
+    failed_ids = [c["id"] for c in check_items if c.get("status") == "failed"]
+    blocked_ids = [c["id"] for c in check_items if c.get("status") == "blocked"]
+    candidate_ids = [c["id"] for c in check_items if c.get("status") == "implemented_candidate"]
+    open_ids = [
+        c["id"]
+        for c in check_items
+        if c.get("status") not in ("passed", "skipped")
+    ]
+    top_open_titles = [
+        c.get("title", "")[:90]
+        for c in check_items
+        if c.get("status") not in ("passed", "skipped") and c.get("title")
+    ][:2]
+    open_failures = failed_ids + [cid for cid in blocked_ids if cid not in failed_ids]
+
+    checks = {
+        "total": len(check_items),
+        "open_ids": open_ids[:8],
+        "failed_ids": failed_ids[:8],
+        "blocked_ids": blocked_ids[:8],
+        "candidate_ids": candidate_ids[:8],
+        "top_open_titles": top_open_titles,
+    }
+
+    notes = []
+    routing_compiled = str(yaml_field("routing_compiled", state_file) or "false").lower()
+    plan_verdict = yaml_field("plan_verdict", state_file) or "pending"
+    runtime_verdict = yaml_field("runtime_verdict", state_file) or "pending"
+
+    if routing_compiled != "true":
+        notes.append("routing not compiled yet")
+    if plan_verdict != "PASS":
+        notes.append(f"plan_verdict={plan_verdict}")
+    if runtime_verdict == "FAIL":
+        notes.append("runtime fix round open")
+    if maintenance_task:
+        notes.append("maintenance task: workflow surface unlocked")
+    notes = notes[:3]
+
+    if routing_compiled != "true":
+        next_action = "Run hctl start, then re-open context before planning or implementation."
+    elif plan_verdict != "PASS":
+        next_action = "Get PLAN.md to critic-plan PASS before mutating source files."
+    elif runtime_verdict == "FAIL":
+        next_action = "Fix open runtime failures, run hctl verify, then re-check critics."
+    elif lane == "investigate":
+        next_action = "Write RESULT.md with findings and close after verification gates pass."
+    else:
+        next_action = "Implement the smallest diff for open checks, then run hctl update, verify, and close."
+
+    return {
+        "task_id": task_id,
+        "status": status,
+        "lane": lane,
+        "risk_level": risk_level,
+        "qa_required": qa_required,
+        "doc_sync_required": doc_sync_required,
+        "browser_required": browser_required,
+        "parallelism": parallelism,
+        "workflow_locked": workflow_locked,
+        "maintenance_task": maintenance_task,
+        "compat": {
+            "execution_mode": execution_mode,
+            "orchestration_mode": orchestration_mode,
+        },
+        "must_read": must_read,
+        "commands": commands,
+        "checks": checks,
+        "open_failures": open_failures,
+        "notes": notes,
+        "next_action": next_action,
+    }
+
+
+# ---------------------------------------------------------------------------
 # WS-3 v2: Observability activation policy
 # ---------------------------------------------------------------------------
 
