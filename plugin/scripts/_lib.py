@@ -433,6 +433,32 @@ def parse_changed_files(input_str=None):
                 if norm:
                     result.add(norm)
 
+    # Also check tool_input.file_path for PostToolUse events
+    if not result:
+        try:
+            import json as _json
+            if isinstance(input_str, str):
+                raw = _json.loads(input_str)
+            else:
+                raw = input_str or {}
+            tool_input = raw.get("tool_input", {}) if isinstance(raw, dict) else {}
+            if isinstance(tool_input, dict):
+                for field in ("file_path", "file_paths", "path"):
+                    val = tool_input.get(field)
+                    if val and isinstance(val, str):
+                        norm = normalize_path(val)
+                        if norm:
+                            result.add(norm)
+                            break
+                    elif val and isinstance(val, list):
+                        for item in val:
+                            if item and isinstance(item, str):
+                                norm = normalize_path(item)
+                                if norm:
+                                    result.add(norm)
+        except Exception:
+            pass
+
     return sorted(result)
 
 

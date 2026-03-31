@@ -12,18 +12,6 @@
         ]
       }
     ],
-    "TaskCreated": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/task_created_gate.py",
-            "timeout": 10,
-            "statusMessage": "Initializing task artifacts"
-          }
-        ]
-      }
-    ],
     "TaskCompleted": [
       {
         "hooks": [
@@ -72,18 +60,6 @@
         ]
       }
     ],
-    "FileChanged": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/file_changed_sync.py",
-            "timeout": 5,
-            "statusMessage": "Syncing verdict state"
-          }
-        ]
-      }
-    ],
     "PostCompact": [
       {
         "hooks": [
@@ -128,6 +104,17 @@
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/tool_routing.py",
             "timeout": 3,
             "statusMessage": "Checking tool hints"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/file_changed_sync.py",
+            "timeout": 5,
+            "statusMessage": "Syncing verdict state"
           }
         ]
       }
