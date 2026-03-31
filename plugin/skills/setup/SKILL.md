@@ -398,7 +398,27 @@ doc/harness/tasks/
 
 ### Phase 13: Activate harness agent
 
-Ensure `.claude/settings.json` has `"agent": "harness:harness"`.
+Ensure `.claude/settings.json` has at least:
+
+```json
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "agent": "harness:harness",
+  "permissions": {
+    "allow": [
+      "Skill(harness:plan)",
+      "Skill(harness:plan *)",
+      "Skill(harness:maintain)",
+      "Skill(harness:maintain *)"
+    ]
+  }
+}
+```
+
+Rationale:
+- the main thread runs as `harness:harness`
+- `harness` invokes `harness:plan` / `harness:maintain` through the `Skill` tool
+- plugin-shipped agents cannot rely on `permissionMode` or `mcpServers` frontmatter, so browser QA must be configured through project/session scope tools such as `.mcp.json`
 
 ### Phase 14: Smoke test
 

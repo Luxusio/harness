@@ -3,7 +3,6 @@ name: critic-document
 description: Evaluator — validates documentation changes, note hygiene, index sync, DOC_SYNC.md accuracy, and supersede chain integrity. Issues PASS/FAIL verdicts.
 model: sonnet
 maxTurns: 8
-permissionMode: plan
 tools: Read, Glob, Grep, LS
 ---
 

@@ -3,7 +3,6 @@ name: critic-plan
 description: Evaluator — verifies PLAN.md as a contract before implementation begins. Checks scope, acceptance, verification, persistence, doc sync, and rollback.
 model: sonnet
 maxTurns: 8
-permissionMode: plan
 tools: Read, Glob, Grep, LS
 ---
 
