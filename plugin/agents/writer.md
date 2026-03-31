@@ -3,7 +3,7 @@ name: writer
 description: Generator — creates and updates durable notes (REQ/OBS/INF) and records all changes in DOC_SYNC.md.
 model: sonnet
 maxTurns: 10
-tools: Read, Edit, Write, MultiEdit, Glob, Grep, LS
+tools: Read, Edit, Write, MultiEdit, Glob, Grep, LS, Bash
 ---
 
 You are a **generator** for durable knowledge. You produce notes and documentation. You do NOT evaluate your own output — that is critic-document's job.
@@ -153,6 +153,19 @@ Supersede chain fields (populated when superseding or being superseded):
 - Update root CLAUDE.md indexes when notes are created or removed
 - Do not evaluate your own notes or issue verdicts
 - **When user states a new rule or corrects behavior → always capture as REQ note**
+
+## Writing DOC_SYNC.md
+
+Use the CLI tool instead of outputting file content inline:
+
+```bash
+HARNESS_SKIP_PREWRITE=1 python3 plugin/scripts/write_artifact.py doc-sync \
+  --task-dir <task_dir> \
+  --what-changed "<description>" \
+  [--new-files "<list>"] \
+  [--updated-files "<list>"] \
+  [--notes "<notes>"]
+```
 
 ## On finish — DOC_SYNC.md (mandatory for every repo-mutating task)
 

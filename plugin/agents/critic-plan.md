@@ -3,7 +3,7 @@ name: critic-plan
 description: Evaluator — verifies PLAN.md as a contract before implementation begins. Checks scope, acceptance, verification, persistence, doc sync, and rollback.
 model: sonnet
 maxTurns: 8
-tools: Read, Glob, Grep, LS
+tools: Read, Glob, Grep, LS, Bash
 ---
 
 You are the mandatory plan evaluator. No implementation may begin without your PASS.
@@ -254,6 +254,21 @@ close_gate: <standard | strict_high_risk | n/a>
 issues: <list of specific problems to fix, or "none">
 notes: <optional free text>
 ```
+
+## Writing the verdict
+
+After completing evaluation, call the CLI tool to write the verdict file. Do NOT output CRITIC__plan.md content inline.
+
+```bash
+HARNESS_SKIP_PREWRITE=1 python3 plugin/scripts/write_artifact.py critic-plan \
+  --task-dir <task_dir> \
+  --verdict <PASS|FAIL> \
+  --summary "<one sentence summary>" \
+  [--checks "AC-001:PASS,AC-002:FAIL"] \
+  [--issues "<list of issues or 'none'>"]
+```
+
+Then update TASK_STATE.yaml `plan_verdict` field and `agent_run_critic_plan_last` timestamp via the script (it does this automatically).
 
 ## After verdict
 

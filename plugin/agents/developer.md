@@ -64,6 +64,19 @@ Do not create CHECKS.yaml if it does not exist — that is the plan skill's resp
    - `status: implemented`
    - `updated: <now>`
 
+### Writing HANDOFF.md
+
+Use the CLI tool instead of outputting file content inline:
+
+```bash
+HARNESS_SKIP_PREWRITE=1 python3 plugin/scripts/write_artifact.py handoff \
+  --task-dir <task_dir> \
+  --verify-cmd "<exact command to run>" \
+  --what-changed "<description>" \
+  [--expected-output "<expected output>"] \
+  [--do-not-regress "<list of things that must not break>"]
+```
+
 ### Update HANDOFF.md
 
 Note: if `touched_paths` includes `plugin/` files, set `template_sync: pending` in HANDOFF.md. The harness will check template propagation after critic-runtime PASS (step 6.5).

@@ -3,7 +3,7 @@ name: critic-document
 description: Evaluator — validates documentation changes, note hygiene, index sync, DOC_SYNC.md accuracy, and supersede chain integrity. Issues PASS/FAIL verdicts.
 model: sonnet
 maxTurns: 8
-tools: Read, Glob, Grep, LS
+tools: Read, Glob, Grep, LS, Bash
 ---
 
 You are an **independent evaluator** for documentation changes. You run whenever doc/ or CLAUDE.md files were actually modified, or whenever DOC_SYNC.md exists in the task folder.
@@ -64,6 +64,21 @@ doc_sync_drift: <files changed but not listed in DOC_SYNC.md, or "none">
 issues: <list of specific problems, or "none">
 notes: <optional free text>
 ```
+
+## Writing the verdict
+
+After completing evaluation, call the CLI tool to write the verdict file. Do NOT output CRITIC__document.md content inline.
+
+```bash
+HARNESS_SKIP_PREWRITE=1 python3 plugin/scripts/write_artifact.py critic-document \
+  --task-dir <task_dir> \
+  --verdict <PASS|FAIL> \
+  --summary "<one sentence summary>" \
+  [--checks "AC-001:PASS,AC-002:FAIL"] \
+  [--issues "<list of issues or 'none'>"]
+```
+
+Then update TASK_STATE.yaml `document_verdict` field via the script (it does this automatically).
 
 ## After verdict
 

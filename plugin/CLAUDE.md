@@ -545,6 +545,50 @@ capabilities:
 - **(Perf-v2 WS-2)** `planning_mode: broad-build` generates longform spec trio (`01_product_spec.md`, `02_design_language.md`, `03_architecture.md`) before PLAN.md for broad product/build requests. Orthogonal to execution_mode. Default = `standard`.
 - **(Perf-v2 WS-3)** `observability` review overlay activates conditionally when: manifest `tooling.observability_ready: true`, project kind is web/api/fullstack/worker, AND signal present (performance overlay, fail count >= 2, or investigation keywords). Stack DOWN = advisory fallback, not FAIL.
 
+## Artifact Write Pattern (CLI)
+
+All protected artifacts are written via `plugin/scripts/write_artifact.py` CLI — NOT by outputting file content inline in agent responses.
+
+### Why
+
+Inline artifact content in responses costs 500-2000 tokens per write. CLI calls cost ~50-100 tokens.
+
+### Usage
+
+```bash
+# critic writes runtime verdict
+HARNESS_SKIP_PREWRITE=1 python3 plugin/scripts/write_artifact.py critic-runtime \
+  --task-dir doc/harness/tasks/TASK__foo \
+  --verdict PASS \
+  --execution-mode standard \
+  --summary "357 tests OK" \
+  --transcript "Ran 357 tests\nOK" \
+  --checks "AC-001:PASS,AC-002:PASS"
+
+# developer writes handoff
+HARNESS_SKIP_PREWRITE=1 python3 plugin/scripts/write_artifact.py handoff \
+  --task-dir doc/harness/tasks/TASK__foo \
+  --verify-cmd "python3 -m unittest discover -s tests" \
+  --what-changed "Added write_artifact.py CLI"
+
+# writer writes doc-sync
+HARNESS_SKIP_PREWRITE=1 python3 plugin/scripts/write_artifact.py doc-sync \
+  --task-dir doc/harness/tasks/TASK__foo \
+  --what-changed "Updated agent tools and prompts"
+```
+
+### Subcommands
+
+| Subcommand | Artifact | Caller |
+|---|---|---|
+| `critic-runtime` | CRITIC__runtime.md + meta.json | critic-runtime |
+| `critic-plan` | CRITIC__plan.md + meta.json | critic-plan |
+| `critic-document` | CRITIC__document.md + meta.json | critic-document |
+| `handoff` | HANDOFF.md + meta.json | developer |
+| `doc-sync` | DOC_SYNC.md + meta.json | writer |
+
+All subcommands also update `TASK_STATE.yaml` verdict fields automatically.
+
 ## Mode-specific artifact requirements
 
 | Artifact | light | standard | sprinted |

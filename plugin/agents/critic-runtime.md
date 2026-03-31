@@ -107,6 +107,23 @@ Do NOT fall back to CLI-only verification when browser verification is feasible.
 3. Verify persistence or side effects when relevant
 4. If architecture constraints exist, run them
 
+## Writing the verdict
+
+After completing verification, call the CLI tool to write the verdict file. Do NOT output CRITIC__runtime.md content inline.
+
+```bash
+HARNESS_SKIP_PREWRITE=1 python3 plugin/scripts/write_artifact.py critic-runtime \
+  --task-dir <task_dir> \
+  --verdict <PASS|FAIL|BLOCKED_ENV> \
+  --execution-mode <light|standard|sprinted> \
+  --summary "<one sentence summary>" \
+  --transcript "<commands run and their output>" \
+  [--checks "AC-001:PASS,AC-002:FAIL"] \
+  [--verdict-reason "<extended reason>"]
+```
+
+The script automatically updates TASK_STATE.yaml `runtime_verdict`, increments `runtime_verdict_fail_count` on FAIL, and updates CHECKS.yaml criterion statuses.
+
 ## Output contract
 
 Write `CRITIC__runtime.md` with exactly this structure:
