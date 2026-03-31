@@ -21,3 +21,5 @@ updated: {{SETUP_DATE}}
 - Protected artifacts have role ownership: PLAN.md=plan-skill, HANDOFF.md=developer, DOC_SYNC.md=writer, CRITIC__*.md=respective critic. Enforced by prewrite gate.
 - Pre-plan source reads are blocked until plan session opens. Capability firewall prevents silent collapsed mode.
 - User directives are captured in DIRECTIVES_PENDING.yaml and must be promoted before task close.
+- Use `python3 plugin/scripts/hctl.py context --task-dir <dir> --json` as the canonical routing source before starting any task.
+- Workflow control surface files (plugin/CLAUDE.md, hctl.py, hooks.json, setup templates, agent prompts) are write-locked for normal tasks; only maintenance tasks (maintenance_task=true) may modify them.

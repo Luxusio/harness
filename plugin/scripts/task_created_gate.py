@@ -67,6 +67,12 @@ team_synthesis_required: false
 fallback_used: none
 workflow_violations: []
 workflow_mode: compliant
+risk_level: pending
+parallelism: 1
+workflow_locked: true
+maintenance_task: false
+routing_compiled: false
+routing_source: pending
 compliance_claim: strict
 artifact_provenance_required: true
 result_required: false
