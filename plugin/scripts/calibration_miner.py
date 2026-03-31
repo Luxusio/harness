@@ -157,11 +157,29 @@ def _extract_fail_evidence(task_dir):
 # Public API
 # ---------------------------------------------------------------------------
 
+def _has_false_pass_complaint(task_dir):
+    """Return True if COMPLAINTS.yaml has any false_pass kind complaint.
+
+    Uses stdlib regex only — no pyyaml dependency.
+    """
+    complaints_file = os.path.join(task_dir, "COMPLAINTS.yaml")
+    if not os.path.isfile(complaints_file):
+        return False
+    try:
+        with open(complaints_file, "r", encoding="utf-8") as fh:
+            content = fh.read()
+        # Look for any entry with kind: false_pass
+        return bool(re.search(r"^\s+kind\s*:\s*false_pass", content, re.MULTILINE))
+    except OSError:
+        return False
+
+
 def find_calibration_candidates(tasks_dir=None):
     """Return list of task_dirs that qualify for calibration case generation.
 
     Skips closed/archived/stale tasks.
-    Qualifies if: reopen_count >= MIN_REOPEN_COUNT OR runtime_fail_count >= MIN_FAIL_COUNT.
+    Qualifies if: reopen_count >= MIN_REOPEN_COUNT OR runtime_fail_count >= MIN_FAIL_COUNT
+    OR COMPLAINTS.yaml has a false_pass kind entry.
     """
     if tasks_dir is None:
         tasks_dir = TASK_DIR
@@ -182,8 +200,9 @@ def find_calibration_candidates(tasks_dir=None):
 
         reopen = _get_max_reopen_count(task_path)
         fails = _count_runtime_fails(task_path)
+        has_false_pass = _has_false_pass_complaint(task_path)
 
-        if reopen >= MIN_REOPEN_COUNT or fails >= MIN_FAIL_COUNT:
+        if reopen >= MIN_REOPEN_COUNT or fails >= MIN_FAIL_COUNT or has_false_pass:
             candidates.append(task_path)
 
     return candidates
@@ -213,12 +232,25 @@ def mine_calibration_case(task_dir, output_dir=None, write=True):
     task_id = yaml_field("task_id", state_file) or os.path.basename(task_dir)
     reopen = _get_max_reopen_count(task_dir)
     fails = _count_runtime_fails(task_dir)
+    has_false_pass = _has_false_pass_complaint(task_dir)
 
-    if reopen < MIN_REOPEN_COUNT and fails < MIN_FAIL_COUNT:
+    if reopen < MIN_REOPEN_COUNT and fails < MIN_FAIL_COUNT and not has_false_pass:
         return None
 
     # Build case content
-    if reopen >= MIN_REOPEN_COUNT:
+    if has_false_pass and reopen < MIN_REOPEN_COUNT and fails < MIN_FAIL_COUNT:
+        trigger = "false_pass_complaint"
+        why_wrong = (
+            "A false_pass complaint was staged — the previous PASS verdict was accepted "
+            "by the critic but the user found the outcome did not meet requirements. "
+            "The critic did not verify the acceptance condition with sufficient runtime evidence."
+        )
+        what_to_check = (
+            "Next time: reproduce the user-reported failure scenario explicitly before declaring PASS. "
+            "Do not rely on code-reading or partial test coverage. "
+            "Check COMPLAINTS.yaml for related_check_ids to focus verification."
+        )
+    elif reopen >= MIN_REOPEN_COUNT:
         trigger = f"reopen_count={reopen}"
         reopened = _get_reopened_criteria(task_dir)
         if reopened:
@@ -254,6 +286,8 @@ def mine_calibration_case(task_dir, output_dir=None, write=True):
         evidence_refs.append("CRITIC__runtime.md")
     if os.path.isfile(os.path.join(task_dir, "CHECKS.yaml")):
         evidence_refs.append("CHECKS.yaml")
+    if os.path.isfile(os.path.join(task_dir, "COMPLAINTS.yaml")):
+        evidence_refs.append("COMPLAINTS.yaml")
 
     updated = now_iso()
 

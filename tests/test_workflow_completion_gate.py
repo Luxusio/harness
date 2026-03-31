@@ -625,5 +625,153 @@ class TestCriticPlanHardRequirement(unittest.TestCase):
         )
 
 
+class TestComplaintCloseGate(unittest.TestCase):
+    """Test complaint-related close gate logic."""
+
+    def _make_base_state(self, tmp):
+        """Create a task dir with all normal requirements satisfied."""
+        os.makedirs(tmp, exist_ok=True)
+        # Minimal passing TASK_STATE
+        yaml = (
+            "task_id: TASK__test\n"
+            "status: implemented\n"
+            "lane: build\n"
+            "execution_mode: standard\n"
+            "orchestration_mode: solo\n"
+            "mutates_repo: true\n"
+            "plan_verdict: PASS\n"
+            "runtime_verdict: PASS\n"
+            "document_verdict: skipped\n"
+            "runtime_verdict_fail_count: 0\n"
+            "doc_sync_required: true\n"
+            "doc_changes_detected: false\n"
+            "workflow_mode: compliant\n"
+            "compliance_claim: strict\n"
+            "capability_delegation: available\n"
+            "collapsed_mode_approved: false\n"
+            "workflow_violations: []\n"
+            "directive_capture_state: clean\n"
+            "pending_directive_ids: []\n"
+            "complaint_capture_state: clean\n"
+            "pending_complaint_ids: []\n"
+            "last_complaint_at: null\n"
+            "artifact_provenance_required: false\n"
+            "result_required: false\n"
+            "touched_paths: []\n"
+            "roots_touched: []\n"
+            "verification_targets: []\n"
+        )
+        with open(os.path.join(tmp, "TASK_STATE.yaml"), "w") as f:
+            f.write(yaml)
+        # Required artifacts
+        for name in ("PLAN.md", "CRITIC__plan.md", "HANDOFF.md", "DOC_SYNC.md", "CRITIC__runtime.md"):
+            with open(os.path.join(tmp, name), "w") as f:
+                f.write(f"# {name}\nverification_breadcrumb: done\n")
+        return tmp
+
+    def test_complaint_capture_state_pending_blocks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_base_state(tmp)
+            # Set complaint_capture_state to pending
+            state = os.path.join(tmp, "TASK_STATE.yaml")
+            with open(state) as f:
+                content = f.read()
+            content = content.replace("complaint_capture_state: clean", "complaint_capture_state: pending")
+            with open(state, "w") as f:
+                f.write(content)
+            failures = compute_completion_failures(tmp)
+            self.assertTrue(any("complaint" in f.lower() for f in failures), failures)
+
+    def test_blocking_open_complaint_in_yaml_blocks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_base_state(tmp)
+            # Write COMPLAINTS.yaml with a blocking open complaint
+            complaints = (
+                "complaints:\n"
+                "  - id: cmp_test001\n"
+                "    status: open\n"
+                "    kind: outcome_fail\n"
+                "    lane: objective\n"
+                "    scope: task\n"
+                "    text: \"still broken\"\n"
+                "    captured_at: \"2026-03-31T00:00:00Z\"\n"
+                "    source_prompt_ref: user_prompt\n"
+                "    related_check_ids: []\n"
+                "    blocks_close: true\n"
+                "    calibration_candidate: false\n"
+                "    promoted_note_path: null\n"
+                "    promoted_directive_id: null\n"
+                "    evidence_refs: []\n"
+                "    resolution: \"\"\n"
+            )
+            with open(os.path.join(tmp, "COMPLAINTS.yaml"), "w") as f:
+                f.write(complaints)
+            failures = compute_completion_failures(tmp)
+            self.assertTrue(any("complaint" in f.lower() for f in failures), failures)
+
+    def test_resolved_complaints_do_not_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_base_state(tmp)
+            # All complaints resolved
+            complaints = (
+                "complaints:\n"
+                "  - id: cmp_test002\n"
+                "    status: resolved\n"
+                "    kind: outcome_fail\n"
+                "    lane: objective\n"
+                "    scope: task\n"
+                "    text: \"was broken, now fixed\"\n"
+                "    captured_at: \"2026-03-31T00:00:00Z\"\n"
+                "    source_prompt_ref: user_prompt\n"
+                "    related_check_ids: []\n"
+                "    blocks_close: true\n"
+                "    calibration_candidate: false\n"
+                "    promoted_note_path: null\n"
+                "    promoted_directive_id: null\n"
+                "    evidence_refs: []\n"
+                "    resolution: \"fixed in v2\"\n"
+            )
+            with open(os.path.join(tmp, "COMPLAINTS.yaml"), "w") as f:
+                f.write(complaints)
+            failures = compute_completion_failures(tmp)
+            # No complaint-related failures
+            self.assertFalse(any("complaint" in f.lower() for f in failures), failures)
+
+    def test_non_blocking_open_complaint_does_not_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_base_state(tmp)
+            # blocks_close: false
+            complaints = (
+                "complaints:\n"
+                "  - id: cmp_test003\n"
+                "    status: open\n"
+                "    kind: preference_fail\n"
+                "    lane: subjective\n"
+                "    scope: task\n"
+                "    text: \"style preference\"\n"
+                "    captured_at: \"2026-03-31T00:00:00Z\"\n"
+                "    source_prompt_ref: user_prompt\n"
+                "    related_check_ids: []\n"
+                "    blocks_close: false\n"
+                "    calibration_candidate: false\n"
+                "    promoted_note_path: null\n"
+                "    promoted_directive_id: null\n"
+                "    evidence_refs: []\n"
+                "    resolution: \"\"\n"
+            )
+            with open(os.path.join(tmp, "COMPLAINTS.yaml"), "w") as f:
+                f.write(complaints)
+            failures = compute_completion_failures(tmp)
+            self.assertFalse(any("complaint" in f.lower() for f in failures), failures)
+
+    def test_no_complaints_yaml_does_not_block(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_base_state(tmp)
+            # No COMPLAINTS.yaml at all
+            self.assertFalse(os.path.exists(os.path.join(tmp, "COMPLAINTS.yaml")))
+            failures = compute_completion_failures(tmp)
+            self.assertFalse(any("complaint" in f.lower() for f in failures), failures)
+
+
 if __name__ == "__main__":
     unittest.main()

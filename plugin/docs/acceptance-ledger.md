@@ -316,3 +316,11 @@ checks:
     notes: ""
     doc_sync_required: true
 ```
+
+## Complaint-triggered reopen
+
+When a complaint has `related_check_ids`, those criteria are automatically added to the focus set for the next verification round (via `checks_focus.py`).
+
+Optionally, if a complaint of kind `outcome_fail` or `false_pass` is staged against a criterion that was previously `passed`, the developer or harness may manually increment that criterion's `reopen_count` and set its status back to `implemented_candidate`. This triggers delta-verification focus on that criterion.
+
+The complaint-to-criterion link is advisory by default. Automatic reopen mutation is only performed when explicitly instructed.

@@ -76,6 +76,9 @@ collapsed_mode_approved: false
 collapsed_reason: ""
 directive_capture_state: clean
 pending_directive_ids: []
+complaint_capture_state: clean
+pending_complaint_ids: []
+last_complaint_at: null
 agent_run_developer_count: 0
 agent_run_developer_last: null
 agent_run_writer_count: 0

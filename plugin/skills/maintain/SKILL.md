@@ -41,6 +41,16 @@ Optional focus from user: `$ARGUMENTS`
 - Run `python3 plugin/scripts/calibration_miner.py` (or with `--dry-run` first to preview)
 - This scans tasks for `reopen_count >= 2` or `runtime_verdict_fail_count >= 2`
 - Generates/updates case files in `plugin/calibration/local/critic-runtime/`
+
+### Complaint-derived calibration
+
+`false_pass` complaints in `COMPLAINTS.yaml` are treated as calibration candidates alongside the existing `reopen_count >= 2` and `runtime_verdict_fail_count >= 2` triggers.
+
+When `/harness:maintain` runs, it calls `calibration_miner.py` which now also checks for `false_pass` kind complaints in any task's COMPLAINTS.yaml. If found:
+- Trigger label: `false_pass_complaint`
+- Evidence refs include `COMPLAINTS.yaml`
+- Case describes why the previous PASS was wrong based on the complaint text
+- Same dedupe/update logic as other calibration cases (one file per task slug)
 - Each case is short: pattern title, trigger, why PASS was wrong, what to check next time
 - **Deduplication**: re-running updates existing files (same slug), does not create duplicates
 - **When to skip**: if no tasks qualify (session_end_sync.py reports `calibration_candidates: 0`), skip this step
