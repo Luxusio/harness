@@ -72,7 +72,7 @@ primary_frontend             # highest-scoring candidate
 - Score each workspace using all 4 signals
 - Highest-scoring workspace = primary frontend
 - Tie → ask user via `AskUserQuestion` (max 1 question)
-- Frontend + API both present → `.claude/launch.json` lists both; frontend first
+- Frontend + API both present → `doc/harness/launch.json` lists both; frontend first
 
 ### Phase 3: Ask minimal questions (max 3)
 
@@ -117,7 +117,7 @@ doc/common/
 - `doc/common/REQ__project__primary-goals.md`
 - `doc/common/OBS__repo__workspace-layout.md`
 - `doc/common/INF__arch__initial-assumptions.md`
-- (web frontend) `.claude/launch.json`
+- (web frontend) `doc/harness/launch.json`
 - (web frontend) `.mcp.json`
 
 ### Phase 5: Generate CLAUDE.md
@@ -174,7 +174,7 @@ When suggesting additional roots, create the corresponding `doc/<root>/CLAUDE.md
 
 **Browser-first (web frontend / fullstack_web):**
 - Set `qa.default_mode: browser` and `browser.enabled: true` in manifest
-- Generate `.claude/launch.json` from template at `${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/.claude/launch.json`
+- Generate `doc/harness/launch.json` from template at `${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/doc/harness/launch.json`
   - Populate `{{CONFIG_NAME}}` with framework name (e.g. "Next.js Dev")
   - Populate `{{RUNTIME_EXECUTABLE}}` with package manager (`npm`, `pnpm`, `yarn`, `bun`)
   - Populate `{{RUNTIME_ARGS}}` with dev script args (e.g. `["run", "dev"]`)
@@ -184,7 +184,7 @@ When suggesting additional roots, create the corresponding `doc/<root>/CLAUDE.md
 
 **Command-line fallback (api, cli, worker, library):**
 - Set `qa.default_mode: cli` and `browser.enabled: false` in manifest
-- Skip `.claude/launch.json` and `.mcp.json`
+- Skip `doc/harness/launch.json` and `.mcp.json`
 
 **Project-shape guidance for manifest runtime fields:**
 - **web frontend / fullstack_web**: `dev_command: "npm run dev"`, `test_command: "npm test"`, healthchecks list, reset_command if DB detected
@@ -267,7 +267,7 @@ This promotion is **automatic** — no user configuration is needed. For most re
 Only when `browser_qa_supported: true`:
 
 1. Write `.mcp.json` to project root (from template — enables chrome-devtools MCP server)
-2. Write `.claude/launch.json` (from template — configures dev server auto-launch)
+2. Write `doc/harness/launch.json` (from template — configures dev server auto-launch)
 3. Record in manifest: `browser.status: configured`
 
 If `.mcp.json` already exists, merge `mcpServers.chrome-devtools` entry rather than overwriting.
@@ -427,7 +427,7 @@ If it fails, note the failures — do not silently skip.
 
 For web frontend projects, also verify:
 - `.mcp.json` contains `chrome-devtools` server entry
-- `.claude/launch.json` has a valid configuration with correct port
+- `doc/harness/launch.json` has a valid configuration with correct port
 
 ### Phase 15: Finish report
 

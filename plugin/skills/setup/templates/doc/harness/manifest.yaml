@@ -33,7 +33,7 @@ qa:
 browser:
   enabled: {{BROWSER_ENABLED}}
   mcp_server: chrome-devtools
-  launch_config: .claude/launch.json
+  launch_config: doc/harness/launch.json
   entry_url: "{{APP_URL}}"
   status: {{BROWSER_STATUS}}
 
