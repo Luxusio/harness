@@ -21,6 +21,7 @@ CHECKS.yaml is a machine-readable companion to PLAN.md that tracks the lifecycle
 ## Schema
 
 ```yaml
+close_gate: standard | strict_high_risk
 checks:
   - id: AC-001
     title: "User can do X"
@@ -236,7 +237,46 @@ CHECKS.yaml is optional. All agents check for its existence before reading or wr
 - If CHECKS.yaml is malformed → log a warning, skip silently
 - Tasks created before CHECKS.yaml was introduced work exactly as before
 
-The presence or absence of CHECKS.yaml does not affect any hard gate in the harness.
+The `close_gate` field is backward-compatible:
+- Absent field → treated as `standard` (existing behavior preserved)
+- `close_gate: standard` → only `failed` criteria block completion
+- `close_gate: strict_high_risk` → ALL non-`passed` criteria block completion
+
+---
+
+## Close gate policy
+
+The `close_gate` top-level field in CHECKS.yaml controls how strictly non-passed criteria are enforced at task close.
+
+### standard (default)
+
+Only `failed` criteria block task completion. Other non-passed statuses (`planned`, `implemented_candidate`, `blocked`) are advisory warnings.
+
+### strict_high_risk
+
+ALL criteria must be `passed` before the task can close. Any criterion in `planned`, `implemented_candidate`, `failed`, or `blocked` status blocks completion.
+
+The blocker message groups criteria by status with actionable descriptions:
+- `failed` — critic FAIL
+- `implemented_candidate` — implementation claimed but not critic-verified
+- `planned` — not yet implemented or verified
+- `blocked` — env/dependency blocker unresolved
+
+### When strict_high_risk is set
+
+The plan skill sets `close_gate: strict_high_risk` when ANY of:
+- `execution_mode: sprinted`
+- `review_overlays` contains `security` or `performance`
+- `risk_tags` contains `structural`, `migration`, `schema`, or `cross-root`
+
+### Removing criteria from strict tasks
+
+To close a strict task when a criterion is no longer relevant:
+1. Update PLAN.md acceptance criteria (remove the criterion)
+2. Re-sync CHECKS.yaml (remove the entry)
+3. Re-pass critic-plan
+
+This ensures the contract is updated rather than bypassed at close time.
 
 ---
 

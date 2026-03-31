@@ -5,7 +5,8 @@ from _lib import (read_hook_input, hook_json_get, json_field, json_array, yaml_f
                   manifest_field, is_browser_first_project, is_doc_path,
                   extract_roots, TASK_DIR, MANIFEST, now_iso,
                   get_workflow_violations, get_agent_run_count,
-                  needs_document_critic, is_handoff_stub)
+                  needs_document_critic, is_handoff_stub,
+                  parse_checks_close_gate)
 
 # TaskCompleted hook — completion firewall.
 # BLOCKING: exit 2 rejects completion when verdicts are missing.
@@ -76,6 +77,55 @@ def _check_artifact_provenance(task_dir):
     return failures
 
 
+def _strict_close_gate_failures(checks_file, criteria):
+    """Check strict_high_risk close gate: all criteria must be 'passed'.
+
+    Returns list of failure strings grouped by status.
+    """
+    failures = []
+    non_passed = [c for c in criteria if c.get("status") != "passed"]
+    if not non_passed:
+        return failures
+
+    # Group by status for clear messaging
+    by_status = {}
+    for c in non_passed:
+        s = c.get("status") or "unknown"
+        by_status.setdefault(s, []).append(c)
+
+    parts = []
+    for status_label in ("failed", "implemented_candidate", "planned", "blocked", "unknown"):
+        items = by_status.get(status_label, [])
+        if not items:
+            continue
+        ids = ", ".join(c.get("id", "?") for c in items)
+        detail_lines = []
+        for c in items:
+            title = c.get("title", "")
+            if title:
+                detail_lines.append(f"    {c.get('id', '?')}: {title}")
+        status_desc = {
+            "failed": "critic FAIL",
+            "implemented_candidate": "implementation claimed but not critic-verified",
+            "planned": "not yet implemented or verified",
+            "blocked": "env/dependency blocker unresolved",
+            "unknown": "status unknown",
+        }.get(status_label, status_label)
+        part = f"  [{status_label}] {ids} — {status_desc}"
+        if detail_lines:
+            part += "\n" + "\n".join(detail_lines)
+        parts.append(part)
+
+    count = len(non_passed)
+    failures.append(
+        f"STRICT CLOSE GATE (close_gate: strict_high_risk): "
+        f"{count} criterion/criteria not passed in CHECKS.yaml — "
+        f"all must be 'passed' for high-risk task close:\n" + "\n".join(parts)
+    )
+
+    return failures
+
+
 def compute_completion_failures(task_dir):
     """Pure function: compute and return list of failure strings for a task.
 
@@ -83,6 +133,7 @@ def compute_completion_failures(task_dir):
     Stale PASS (artifact says PASS but YAML says pending) is caught here.
     Also checks provenance (agent run counts), workflow violations,
     CHECKS.yaml failed criteria (hard threshold per Anthropic requirement),
+    strict close gate for high-risk tasks,
     artifact authorship, investigate RESULT gate, capability/compliance gate,
     and directive capture gate.
 
@@ -300,20 +351,28 @@ def compute_completion_failures(task_dir):
             if fallback_val == "none":
                 failures.append("team_status is 'fallback' but fallback_used is 'none'")
 
-    # --- CHECKS.yaml hard threshold: failed criteria block completion ---
+    # --- CHECKS.yaml gates ---
     checks_file = os.path.join(task_dir, "CHECKS.yaml")
     if os.path.exists(checks_file):
         try:
             criteria = _parse_checks_yaml(checks_file)
-            failed_criteria = [
-                c for c in criteria if c.get("status") == "failed"
-            ]
-            if failed_criteria:
-                ids = ", ".join(c.get("id", "?") for c in failed_criteria)
-                failures.append(
-                    f"CHECKS.yaml has {len(failed_criteria)} failed criterion/criteria: {ids}"
-                    " — all acceptance criteria must pass before completion"
-                )
+            close_gate = parse_checks_close_gate(checks_file)
+
+            if close_gate == "strict_high_risk":
+                # Strict gate: ALL criteria must be 'passed'
+                strict_failures = _strict_close_gate_failures(checks_file, criteria)
+                failures.extend(strict_failures)
+            else:
+                # Standard gate: only 'failed' criteria block completion
+                failed_criteria = [
+                    c for c in criteria if c.get("status") == "failed"
+                ]
+                if failed_criteria:
+                    ids = ", ".join(c.get("id", "?") for c in failed_criteria)
+                    failures.append(
+                        f"CHECKS.yaml has {len(failed_criteria)} failed criterion/criteria: {ids}"
+                        " — all acceptance criteria must pass before completion"
+                    )
         except Exception:
             pass  # parse errors are non-blocking
 
@@ -393,24 +452,30 @@ def main():
     if os.path.exists(checks_file):
         try:
             criteria = _parse_checks_yaml(checks_file)
+            close_gate = parse_checks_close_gate(checks_file)
             # Show non-passed, non-failed criteria as info (failed ones are already in failures)
-            open_criteria = [
-                c for c in criteria
-                if c.get("status") not in ("passed", "failed")
-            ]
-            if open_criteria:
-                by_status = {}
-                for c in open_criteria:
-                    s = c.get("status") or "unknown"
-                    by_status.setdefault(s, []).append(c)
-                print(f"INFO: {len(open_criteria)} non-passed acceptance criterion/criteria in CHECKS.yaml:")
-                for status_label, items in sorted(by_status.items()):
-                    ids = ", ".join(c.get("id", "?") for c in items)
-                    print(f"  [{status_label}] {ids}")
-                    for c in items:
-                        title = c.get("title", "")
-                        if title:
-                            print(f"    - {c.get('id', '?')}: {title}")
+            # For strict gate, all non-passed are already blocking — show as info anyway
+            if close_gate == "strict_high_risk":
+                # Info already provided via blocking message
+                pass
+            else:
+                open_criteria = [
+                    c for c in criteria
+                    if c.get("status") not in ("passed", "failed")
+                ]
+                if open_criteria:
+                    by_status = {}
+                    for c in open_criteria:
+                        s = c.get("status") or "unknown"
+                        by_status.setdefault(s, []).append(c)
+                    print(f"INFO: {len(open_criteria)} non-passed acceptance criterion/criteria in CHECKS.yaml:")
+                    for status_label, items in sorted(by_status.items()):
+                        ids = ", ".join(c.get("id", "?") for c in items)
+                        print(f"  [{status_label}] {ids}")
+                        for c in items:
+                            title = c.get("title", "")
+                            if title:
+                                print(f"    - {c.get('id', '?')}: {title}")
         except Exception as e:
             print(f"WARN: could not parse CHECKS.yaml: {e}")
 

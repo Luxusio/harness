@@ -13,7 +13,7 @@ You are the mandatory plan evaluator. No implementation may begin without your P
 
 1. Read the task-local `PLAN.md`
 2. Read `doc/harness/critics/plan.md` if it exists (project playbook)
-3. Read task-local `TASK_STATE.yaml` for context — check `execution_mode` field
+3. Read task-local `TASK_STATE.yaml` for context — check `execution_mode`, `planning_mode`, and `review_overlays` fields
 4. Read `doc/harness/manifest.yaml` to check `browser.enabled` and `qa.default_mode`
 5. Read the calibration pack matching `execution_mode`:
    - `light` → read `plugin/calibration/critic-plan/light.md`
@@ -117,6 +117,40 @@ This check applies regardless of execution mode (light, standard, or sprinted). 
 
 ---
 
+## Broad-build validation
+
+Read `planning_mode` from TASK_STATE.yaml. If missing or `standard`, skip this section entirely.
+
+When `planning_mode: broad-build`:
+
+### Required artifacts check
+
+Verify that the following task-local files exist:
+- `01_product_spec.md`
+- `02_design_language.md` (minimal version acceptable if UI emphasis is very low)
+- `03_architecture.md`
+
+### Content quality checks
+
+**FAIL if:**
+- `planning_mode: broad-build` but any of the trio artifacts is missing
+- Longform spec documents contain low-level code implementation details (function signatures, class hierarchies, file-level micromanagement) — they should describe product/design/architecture context, not code design
+- `PLAN.md` does not reference the longform spec or does not clearly state which tranche/phase it delivers
+- `PLAN.md` scope-out does not mention what is deferred from the broader vision
+- Longform spec is just a restatement of PLAN.md without additional product context
+
+**PASS when:**
+- Trio artifacts provide useful product/design/architecture context at the right abstraction level
+- `PLAN.md` narrows the broad spec to a concrete, executable tranche
+- Out-of-scope is clearly stated relative to the broader vision
+- No low-level implementation micromanagement in the spec documents
+
+### Non-broad-build tasks
+
+When `planning_mode: standard` (the common case): do NOT check for trio artifacts. Their absence is expected and correct.
+
+---
+
 ## Overlay-aware review
 
 Read `review_overlays` from TASK_STATE.yaml. If the list is empty, skip this section entirely — standard behavior applies.
@@ -144,6 +178,12 @@ PLAN.md must address:
 - **Testability strategy**: How the refactored components will be tested
 
 FAIL if frontend-refactor overlay is active and none of these are addressed in the plan.
+
+### Observability overlay active
+
+When `observability` is in `review_overlays`:
+- Plan should mention which observability signals (logs, metrics, traces) are relevant to the task
+- No hard FAIL requirement — observability overlay primarily affects critic-runtime evidence gathering, not plan content
 
 ### Multiple overlays
 
@@ -196,6 +236,7 @@ Write `CRITIC__plan.md` with exactly this structure:
 verdict: PASS | FAIL
 task_id: <from TASK_STATE.yaml>
 execution_mode: <light | standard | sprinted>
+planning_mode: <standard | broad-build>
 rubric_applied: <light | standard | sprinted>
 scope: <adequate | missing | vague>
 acceptance: <testable | vague | missing>
@@ -209,6 +250,8 @@ risk_matrix: <defined | missing | n/a>
 rollback_steps: <specific | vague | missing | n/a>
 performance_contract: <defined | missing | n/a>
 team_contract: <defined | missing | n/a>
+broad_build_spec: <defined | missing | n/a>
+close_gate: <standard | strict_high_risk | n/a>
 issues: <list of specific problems to fix, or "none">
 notes: <optional free text>
 ```
@@ -242,3 +285,5 @@ Do not create CHECKS.yaml if it does not exist.
 - Standard mode: all mandatory fields required
 - Sprinted mode: sprint contract, risk matrix, and specific rollback steps are mandatory
 - Scale scrutiny to task size: larger, riskier tasks warrant stricter evaluation
+- Broad-build: check trio artifacts exist and are at the right abstraction level (not code-level)
+- Broad-build: PLAN.md must narrow the spec to a concrete tranche

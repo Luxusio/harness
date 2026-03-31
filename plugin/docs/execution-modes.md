@@ -173,6 +173,65 @@ When escalating: update `execution_mode` in `TASK_STATE.yaml`, re-plan with the 
 
 ---
 
+## Planning Mode
+
+Planning mode is orthogonal to execution mode. It controls planning depth, not risk level or evaluation rigor.
+
+### planning_mode values
+
+| Value | When selected | Effect |
+|-------|--------------|--------|
+| `standard` | Default. Bugfixes, refactors, investigations, single-endpoint features. | Standard PLAN.md flow. |
+| `broad-build` | Broad product/build requests: greenfield apps, dashboards, multi-root platforms. | Generates longform spec trio (`01_product_spec.md`, `02_design_language.md`, `03_architecture.md`) before PLAN.md. |
+
+### broad-build trigger conditions
+
+**Required (ALL):** lane is `build`, request is a broad product/build request.
+
+**Plus 2+ of:** short high-level request (1-4 sentences), greenfield/new app/dashboard/site, no file path anchors, browser/UI emphasis, 2+ roots estimated, too many assumptions needed for immediate PLAN.md.
+
+**Exclusions (ANY blocks broad-build):** clear bugfix, single endpoint/component, performance/enforcement/refactor, request already has detailed technical spec.
+
+### broad-build artifacts
+
+| Artifact | Purpose | NOT for |
+|----------|---------|---------|
+| `01_product_spec.md` | Problem definition, users, flows, must/should/nice-to-have, out of scope | Code design, file structure |
+| `02_design_language.md` | Interaction model, layout, UI/UX constraints, visual priorities | CSS specs, component APIs |
+| `03_architecture.md` | High-level modules, data flow, integration points, persistence | Class hierarchies, function signatures |
+
+These narrow a broad request into a concrete PLAN.md contract. They do NOT replace PLAN.md.
+
+### Backward compatibility
+
+`planning_mode` field absence = `standard`. Older tasks are unaffected.
+
+---
+
+## CHECKS.yaml close_gate Policy
+
+CHECKS.yaml includes a top-level `close_gate` field that controls close behavior:
+
+| Value | Effect | When set |
+|-------|--------|----------|
+| `standard` | Only `failed` criteria block close (existing behavior) | Default, legacy tasks |
+| `strict_high_risk` | ALL non-`passed` criteria block close (`planned`, `implemented_candidate`, `failed`, `blocked`) | High-risk tasks |
+
+### strict_high_risk triggers
+
+Set `close_gate: strict_high_risk` when ANY of:
+- `execution_mode: sprinted`
+- `review_overlays` contains `security` or `performance`
+- `risk_tags` contains `structural`, `migration`, `schema`, or `cross-root`
+
+### Backward compatibility
+
+`close_gate` field absence = `standard`. Older CHECKS.yaml files and tasks without CHECKS.yaml are unaffected.
+
+### Scope removal in strict mode
+
+To remove a criterion from a strict task, re-plan (update PLAN.md acceptance criteria, re-sync CHECKS.yaml, re-pass critic-plan). No runtime exemptions or ad-hoc waivers.
+
 ---
 
 ## Review Overlay Integration
@@ -193,6 +252,7 @@ Review overlays are orthogonal to execution modes — any mode (light, standard,
 | `security` | auth/login/token/injection keywords, auth/api/middleware paths | Threat surface, permission boundary, secret handling, authz evidence |
 | `performance` | performance/latency/benchmark keywords, hot path/DB/cache paths | Performance contract in plan, numeric before/after evidence |
 | `frontend-refactor` | component/ui/hook/state keywords, app/components/pages paths | State boundary, dependency direction, testability, UI interaction evidence |
+| `observability` | readiness true + (performance overlay, fail count >= 2, or investigation keywords: intermittent/flaky/cross-service/latency/p95/p99) | Observability evidence in runtime bundle (logs/metrics/traces when stack UP; advisory fallback when DOWN) |
 
 ### Overlay + mode combinations
 
@@ -213,6 +273,7 @@ task_id: TASK__<slug>
 status: planned
 lane: <sub-lane>
 execution_mode: light | standard | sprinted
+planning_mode: standard | broad-build
 mutates_repo: <true|false>
 ...
 ```

@@ -940,3 +940,158 @@ def is_handoff_stub(handoff_path):
         return False
     except OSError:
         return True
+
+
+# ---------------------------------------------------------------------------
+# WS-1 v2: CHECKS.yaml close_gate parser
+# ---------------------------------------------------------------------------
+
+
+def parse_checks_close_gate(checks_file):
+    """Parse the top-level close_gate field from CHECKS.yaml.
+
+    Returns 'standard' (default) or 'strict_high_risk'.
+    Missing field or absent file → 'standard' (backward compatible).
+    """
+    if not checks_file or not os.path.isfile(checks_file):
+        return "standard"
+    try:
+        with open(checks_file, "r", encoding="utf-8") as fh:
+            for line in fh:
+                m = re.match(r"^close_gate\s*:\s*(.+)", line)
+                if m:
+                    val = m.group(1).strip().strip('"').strip("'")
+                    if val in ("standard", "strict_high_risk"):
+                        return val
+                    return "standard"
+    except OSError:
+        pass
+    return "standard"
+
+
+def should_set_strict_close_gate(state_file):
+    """Determine if a task should use strict_high_risk close gate.
+
+    Returns True when any of:
+      - execution_mode: sprinted
+      - review_overlays contains 'security' or 'performance'
+      - risk_tags contains 'structural', 'migration', 'schema', or 'cross-root'
+
+    Args:
+        state_file: path to TASK_STATE.yaml
+
+    Returns:
+        bool
+    """
+    if not state_file or not os.path.isfile(state_file):
+        return False
+
+    exec_mode = yaml_field("execution_mode", state_file)
+    if exec_mode == "sprinted":
+        return True
+
+    overlays = yaml_array("review_overlays", state_file)
+    if "security" in overlays or "performance" in overlays:
+        return True
+
+    risk_tags = yaml_array("risk_tags", state_file)
+    high_risk_tags = {"structural", "migration", "schema", "cross-root"}
+    if high_risk_tags.intersection(risk_tags):
+        return True
+
+    return False
+
+
+# ---------------------------------------------------------------------------
+# WS-2 v2: Planning mode helper
+# ---------------------------------------------------------------------------
+
+
+def get_planning_mode(state_file):
+    """Read planning_mode from TASK_STATE.yaml.
+
+    Returns 'standard' (default) or 'broad-build'.
+    Missing field → 'standard' (backward compatible).
+    """
+    if not state_file or not os.path.isfile(state_file):
+        return "standard"
+    val = yaml_field("planning_mode", state_file)
+    if val in ("standard", "broad-build"):
+        return val
+    return "standard"
+
+
+# ---------------------------------------------------------------------------
+# WS-3 v2: Observability activation policy
+# ---------------------------------------------------------------------------
+
+
+def should_activate_observability(manifest_ready, project_kind, review_overlays,
+                                  runtime_fail_count, context_text=""):
+    """Determine if observability overlay should be activated for a task.
+
+    Returns (bool, str) — (should_activate, reason).
+
+    Required conditions (ALL must be true):
+      - manifest_ready is True (tooling.observability_ready)
+      - project_kind is web/api/fullstack/worker family
+
+    Plus at least ONE additional signal:
+      - 'performance' in review_overlays
+      - runtime_fail_count >= 2
+      - context_text contains investigation keywords (intermittent, flaky,
+        cross-service, latency spike, p95, p99, trace, log correlation)
+
+    Returns (False, reason) when:
+      - manifest_ready is False
+      - project_kind is library/cli
+      - No additional signal present
+    """
+    # Gate: readiness must be true
+    if not manifest_ready:
+        return (False, "observability_ready is false")
+
+    # Gate: project kind must be suitable
+    suitable_kinds = {"web", "api", "fullstack", "fullstack_web", "web_frontend",
+                      "web-frontend", "worker", "service"}
+    kind_lower = (project_kind or "").lower().replace("-", "_").replace(" ", "_")
+    # Check if any suitable kind is a substring of or matches the project kind
+    kind_match = False
+    for sk in suitable_kinds:
+        sk_normalized = sk.replace("-", "_")
+        if sk_normalized == kind_lower or sk_normalized in kind_lower:
+            kind_match = True
+            break
+    if not kind_match:
+        return (False, f"project kind '{project_kind}' not suitable (need web/api/fullstack/worker)")
+
+    # Additional signals — need at least one
+    reasons = []
+
+    if isinstance(review_overlays, (list, tuple)) and "performance" in review_overlays:
+        reasons.append("performance overlay active")
+
+    try:
+        fail_count = int(runtime_fail_count) if runtime_fail_count is not None else 0
+    except (ValueError, TypeError):
+        fail_count = 0
+    if fail_count >= 2:
+        reasons.append(f"runtime_verdict_fail_count={fail_count}")
+
+    # Context keyword scan
+    ctx = (context_text or "").lower()
+    investigation_keywords = [
+        "intermittent", "flaky", "cross-service", "cross_service",
+        "latency spike", "latency_spike", "p95", "p99",
+        "trace", "log correlation", "log_correlation",
+        "metric correlation", "metric_correlation",
+    ]
+    for kw in investigation_keywords:
+        if kw in ctx:
+            reasons.append(f"context keyword: {kw}")
+            break  # one keyword is enough
+
+    if not reasons:
+        return (False, "no activation signal (performance overlay, fail count >= 2, or investigation keywords)")
+
+    return (True, "; ".join(reasons))

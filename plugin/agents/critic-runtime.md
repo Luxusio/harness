@@ -150,6 +150,9 @@ Then append a structured **Evidence Bundle** section to `CRITIC__runtime.md`:
 
 ### Team Synthesis Review
 <when orchestration_mode=team: summary of TEAM_SYNTHESIS.md findings, unresolved items identified as verification targets, worker conflict assessment; "n/a" if not team mode>
+
+### Observability Evidence
+<when observability overlay is active and stack is UP: log/metric/trace excerpts or summaries relevant to verification; when stack is DOWN: "stack DOWN — standard evidence used (advisory)"; "n/a" if observability overlay not active>
 ```
 
 **Evidence Bundle rules:**
@@ -328,6 +331,28 @@ Evidence bundle must demonstrate:
 - **Accessibility signal**: Keyboard navigation or semantic structure was checked
 
 FAIL if frontend-refactor overlay is active and no UI interaction evidence is present.
+
+### Observability overlay active
+
+When `observability` is in `review_overlays`:
+
+1. Run `python3 plugin/scripts/observability_status.py` to check stack status
+2. **If stack is UP:**
+   - Run `python3 plugin/scripts/observability_hint.py <context>` for relevant queries
+   - Include log/metric/trace evidence in the `### Observability Evidence` section of the evidence bundle
+   - Use observability data to strengthen verification (e.g., confirm no error spikes, latency within bounds)
+   - When the task makes performance or reliability claims, observability evidence takes priority over self-reported metrics
+3. **If stack is DOWN:**
+   - Record "stack DOWN — standard evidence used" in the `### Observability Evidence` section
+   - Fall back to standard verification (tests, CLI, logs)
+   - Stack DOWN is advisory — it does NOT cause FAIL by itself
+   - Stack DOWN is NOT a BLOCKED_ENV condition
+
+**Observability PASS/FAIL rules:**
+- Overlay active + stack UP + no observability evidence gathered → strong warning (consider FAIL if task claims rely on runtime behavior)
+- Overlay active + stack DOWN → standard evidence fallback, no penalty
+- Overlay active + performance/reliability claim + observability evidence available → prefer observability evidence over self-reported numbers
+- Overlay NOT active → skip entirely, no evidence required
 
 ### No overlays
 

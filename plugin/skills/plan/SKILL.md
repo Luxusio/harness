@@ -55,6 +55,51 @@ Before creating TASK_STATE.yaml, determine execution mode using these signals:
 
 Tie-break: higher mode wins when signals conflict.
 
+### 3.3 Select planning mode
+
+After execution mode selection, determine planning mode. This is orthogonal to execution mode.
+
+```yaml
+planning_mode: standard | broad-build
+```
+
+**Select `broad-build` when ALL of:**
+- Lane is `build`
+- Request is a broad product/build request
+
+**Plus 2+ of these additional signals:**
+- Request is short and high-level (1–4 sentences)
+- Greenfield / new app / dashboard / site / tool / workspace / platform
+- No specific file paths or low-level implementation anchors
+- Browser/UI emphasis
+- 2+ roots estimated
+- Writing PLAN.md immediately would require too many assumptions
+
+**Do NOT select `broad-build` when ANY of:**
+- Clear bugfix
+- Single endpoint/component work
+- Performance optimization / enforcement / refactor
+- Request already contains detailed technical spec with file anchors
+
+**Default:** `planning_mode: standard` (field absence = standard for backward compatibility).
+
+#### broad-build artifacts
+
+When `planning_mode: broad-build`, generate these task-local artifacts BEFORE writing PLAN.md:
+
+**`01_product_spec.md`** — problem definition, target users, primary flows, must/should/nice-to-have, out of scope.
+
+**`02_design_language.md`** — interaction model, layout principles, UI/UX constraints, visual priorities, patterns to avoid.
+
+**`03_architecture.md`** — high-level modules, data flow, integration points, persistence boundaries, risk/constraint summary.
+
+These are NOT low-level code specs. Function/class/file micromanagement is prohibited. The purpose is to narrow a broad request into a clear execution contract for PLAN.md.
+
+PLAN.md is still required and must reference these specs:
+- Link to `01_product_spec.md` for scope justification
+- State which tranche this task delivers
+- State what is explicitly NOT in this task
+
 ### 3.5 Select review overlays
 
 After mode selection, conservatively select review overlays based on prompt signals and predicted file paths. Overlays add domain-specific review criteria without changing the workflow.
@@ -73,6 +118,20 @@ After mode selection, conservatively select review overlays based on prompt sign
 - Prompt contains: component, ui, layout, hook, state, a11y, responsive, refactor (with frontend context), architecture (with frontend context)
 - Predicted paths touch: app/, pages/, components/, src/ui/, src/components/, hooks/, stores/
 - Lane is `refactor` with frontend files
+
+**Observability overlay** — select when ALL required conditions are met:
+- `tooling.observability_ready: true` in manifest
+- Project kind is web/api/fullstack/worker
+
+AND at least ONE additional signal:
+- `performance` overlay is also selected
+- `runtime_verdict_fail_count >= 2` in TASK_STATE.yaml (re-plan / recovery context)
+- Request or failure context contains investigation keywords: intermittent, flaky, cross-service, latency spike, p95, p99, trace, log correlation
+
+Do NOT select observability overlay when:
+- Project kind is library/cli
+- `tooling.observability_ready` is false or absent
+- Task is a simple docs/refactor/single-pass bugfix with no investigation signals
 
 Record selected overlays in TASK_STATE.yaml `review_overlays` field. Set `performance_task: true` when performance overlay is selected.
 
@@ -114,6 +173,7 @@ task_id: TASK__$ARGUMENTS
 status: planned
 lane: <selected sub-lane: build|debug|verify|refactor|docs-sync|investigate>
 execution_mode: <light|standard|sprinted>
+planning_mode: <standard|broad-build>
 mutates_repo: <true|false>
 qa_required: <true|false>
 qa_mode: <auto|tests|smoke|browser-first>
@@ -175,6 +235,8 @@ Update `TASK_STATE.yaml` field `plan_session_state: write_open`.
 ### 6. Write PLAN.md
 
 Create `doc/harness/tasks/TASK__$ARGUMENTS/PLAN.md` using the format matching the selected `execution_mode`.
+
+**If `planning_mode: broad-build`:** write `01_product_spec.md`, `02_design_language.md`, and `03_architecture.md` BEFORE writing PLAN.md (see step 3.3).
 
 **After writing PLAN.md**, create the provenance sidecar `PLAN.meta.json`:
 
@@ -358,7 +420,18 @@ When this task involves performance optimization, add this section to PLAN.md:
 - guardrail metrics: <metrics that must not regress — must be numeric>
 - unacceptable regressions: <explicit fail conditions>
 
-If PLAN.md alone is genuinely insufficient (10+ files, cross-domain, high ambiguity), add ONE supporting document — SPEC.md, DESIGN.md, or TASKS.md. Do not create a hierarchy by default.
+#### Broad-build tasks
+
+When `planning_mode: broad-build`, the longform spec artifacts (`01_product_spec.md`, `02_design_language.md`, `03_architecture.md`) must already exist before PLAN.md is written (see step 3.3).
+
+PLAN.md for broad-build tasks must additionally include:
+- Reference to `01_product_spec.md` for scope justification
+- Which tranche/phase this task delivers from the broader spec
+- What is explicitly NOT in this task (scope out from the broader vision)
+
+The supporting documents do NOT replace PLAN.md — they provide context. PLAN.md remains the single executable contract.
+
+If PLAN.md alone is genuinely insufficient (10+ files, cross-domain, high ambiguity) and `planning_mode` is NOT `broad-build`, add ONE supporting document — SPEC.md, DESIGN.md, or TASKS.md. Do not create a hierarchy by default.
 
 ### 7. Generate CHECKS.yaml
 
@@ -378,7 +451,21 @@ Set optional fields when inferable:
 - `runtime_required: true` if the criterion requires running the application
 - `doc_sync_required: true` if the criterion requires documentation changes
 
+#### close_gate policy
+
+Determine the `close_gate` value based on task risk signals:
+
+Set `close_gate: strict_high_risk` when ANY of:
+- `execution_mode: sprinted`
+- `review_overlays` contains `security` or `performance`
+- `risk_tags` contains `structural`, `migration`, `schema`, or `cross-root`
+
+Otherwise set `close_gate: standard`.
+
+The `close_gate` field is a top-level field in CHECKS.yaml (not inside criteria).
+
 ```yaml
+close_gate: <standard | strict_high_risk>
 checks:
   - id: AC-001
     title: "<criterion text verbatim>"
@@ -429,5 +516,6 @@ Update `TASK_STATE.yaml` field `plan_session_state: closed`.
 - **Light mode**: Hard fail conditions and Risks/rollback sections may be omitted unless the change is genuinely risky
 - **Standard mode**: All mandatory PLAN.md fields must be present (critic-plan will FAIL plans missing required fields)
 - **Sprinted mode**: Sprint contract, risk matrix, and rollback steps are mandatory (critic-plan will FAIL if missing)
+- **Broad-build mode**: `01_product_spec.md`, `02_design_language.md`, `03_architecture.md` must exist before PLAN.md. These must be high-level product context — NOT low-level code specs.
 - **Template sync awareness (plugin repos only)**: When `Touched files / roots` includes `plugin/` paths, note in PLAN.md that template sync will be checked after runtime validation (harness step 6.5). No action needed at plan time — just awareness that the check will happen.
 - **Investigate lane**: Set `result_required: true` in TASK_STATE.yaml — investigate tasks cannot close without RESULT.md

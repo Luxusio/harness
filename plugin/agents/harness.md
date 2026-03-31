@@ -217,7 +217,8 @@ Execution mode may upgrade mid-task (`light → standard`, `standard → sprinte
 
 ### Mode storage
 
-Store `execution_mode: pending | light | standard | sprinted` in `TASK_STATE.yaml` immediately after mode selection.
+Store `execution_mode: pending | light | standard | sprinted
+planning_mode: standard | broad-build` in `TASK_STATE.yaml` immediately after mode selection.
 
 ## Orchestration mode selection
 
@@ -478,6 +479,7 @@ task_id: TASK__<slug>
 status: created | planned | plan_passed | implemented | qa_passed | docs_synced | closed | blocked_env | stale | archived
 lane: <sub-lane>
 execution_mode: pending | light | standard | sprinted
+planning_mode: standard | broad-build
 mutates_repo: true | false | unknown
 qa_required: true | false | pending
 qa_mode: auto | tests | smoke | browser-first
@@ -492,7 +494,7 @@ runtime_verdict: pending | PASS | FAIL | BLOCKED_ENV
 document_verdict: pending | PASS | FAIL | skipped
 runtime_verdict_fail_count: 0
 blockers: []
-review_overlays: []
+review_overlays: []  # may include: security, performance, frontend-refactor, observability
 risk_tags: []
 performance_task: false
 orchestration_mode: pending | solo | subagents | team
