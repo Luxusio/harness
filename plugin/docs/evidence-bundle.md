@@ -285,3 +285,13 @@ n/a
 ### Request Evidence
 POST /api/data attempt 11: HTTP 200 (expected 429)
 ```
+
+## Complaint-linked evidence refs
+
+When `COMPLAINTS.yaml` exists in the task directory and contains open complaints, the evidence bundle should include complaint references:
+
+- In `evidence_refs` fields: cite `COMPLAINTS.yaml` alongside `CHECKS.yaml` and `CRITIC__runtime.md`
+- For `false_pass` complaints: include a "Why previous PASS was wrong" section citing the complaint ID and text
+- Format: `COMPLAINTS.yaml#<complaint_id>` for specific complaint references
+
+This ensures that false PASS patterns are traceable back to the user signal that identified them.

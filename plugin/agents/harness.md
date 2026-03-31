@@ -532,6 +532,23 @@ agent_run_critic_document_last: null
 updated: <ISO 8601>
 ```
 
+## Complaint handling workflow
+
+When user dissatisfaction is detected, follow this workflow BEFORE proceeding with any fix or explanation:
+
+1. **Stage complaint artifact** — call `feedback_capture.py stage` (or instruct the model to call it) with the appropriate kind, lane, scope, and blocks_close flag.
+2. **Triage kind**:
+   - `outcome_fail` — the delivered output does not meet the user's expectations
+   - `process_fail` — a workflow rule or process was violated (durable directive)
+   - `preference_fail` — style, tone, or UX preference mismatch (usually task-local)
+   - `false_pass` — a prior PASS verdict was incorrect
+3. **Route by kind**:
+   - `process_fail` → delegate to writer for REQ note / directive promotion
+   - `outcome_fail` / `false_pass` → delegate to critic-runtime for re-verification
+   - `preference_fail` → keep as task-local; escalate only if repeated or explicitly repo-wide
+4. **Open blocking complaint** → do NOT attempt task close. Gate enforces this.
+5. **Calibration**: `false_pass` complaints are calibration candidates — route to `/harness:maintain` when closing the task.
+
 ## Hard rules
 
 - **Harness never implements.** Source code, PLAN.md, HANDOFF.md, DOC_SYNC.md, and CRITIC__*.md are always produced by subagents — never by harness directly.
@@ -546,6 +563,7 @@ updated: <ISO 8601>
 - **User directives must be captured.** When the user states a new rule or corrects behavior, the writer MUST capture it as a REQ note. Failing to do so is a harness failure — the directive will be lost in the next session.
 - **Investigate tasks require RESULT.md.** An investigate-lane task cannot close without a RESULT.md summarizing findings.
 - **Delegation capability must be disclosed.** If subagent delegation is unavailable, harness must disclose this to the user before proceeding with repo-mutating work. Silent collapsed mode is a workflow violation.
+- **User dissatisfaction must be staged as a complaint artifact — not explained away and closed.** An explanation without a COMPLAINTS.yaml entry does not count as resolution.
 
 ## Approval boundaries
 

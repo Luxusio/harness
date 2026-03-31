@@ -126,6 +126,54 @@ def _strict_close_gate_failures(checks_file, criteria):
     return failures
 
 
+def _get_blocking_open_complaints(complaints_file):
+    """Parse COMPLAINTS.yaml and return list of IDs where blocks_close: true AND status: open.
+
+    Uses stdlib regex only — no pyyaml dependency.
+    Returns list of complaint ID strings. Empty list if none found or parse error.
+    """
+    blocking = []
+    try:
+        with open(complaints_file, "r", encoding="utf-8") as f:
+            content = f.read()
+    except OSError:
+        return blocking
+
+    # Split into entry blocks by finding "  - id:" markers
+    current_id = None
+    current_status = None
+    current_blocks = True  # default blocks_close is true
+
+    for line in content.splitlines():
+        # New entry
+        m_id = re.match(r'^\s*-?\s*id\s*:\s*(.+)', line)
+        if m_id:
+            # Flush previous entry
+            if current_id and current_status == "open" and current_blocks:
+                blocking.append(current_id)
+            current_id = m_id.group(1).strip().strip('"').strip("'")
+            current_status = None
+            current_blocks = True  # default
+            continue
+
+        m_status = re.match(r'^\s+status\s*:\s*(.+)', line)
+        if m_status and current_id:
+            current_status = m_status.group(1).strip().strip('"').strip("'")
+            continue
+
+        m_blocks = re.match(r'^\s+blocks_close\s*:\s*(.+)', line)
+        if m_blocks and current_id:
+            val = m_blocks.group(1).strip().lower()
+            current_blocks = val not in ("false", "no", "0")
+            continue
+
+    # Flush last entry
+    if current_id and current_status == "open" and current_blocks:
+        blocking.append(current_id)
+
+    return blocking
+
+
 def compute_completion_failures(task_dir):
     """Pure function: compute and return list of failure strings for a task.
 
@@ -333,6 +381,28 @@ def compute_completion_failures(task_dir):
             "pending user directives were not captured into durable notes — "
             "writer must promote DIRECTIVES_PENDING.yaml entries before close"
         )
+
+    # --- Complaint close gate ---
+    complaint_state = yaml_field("complaint_capture_state", state_file)
+    if complaint_state == "pending":
+        failures.append(
+            "pending user complaint was not triaged — "
+            "triage and resolve complaint before close"
+        )
+
+    # Check COMPLAINTS.yaml for blocking open complaints
+    complaints_file = os.path.join(task_dir, "COMPLAINTS.yaml")
+    if os.path.exists(complaints_file):
+        try:
+            blocking = _get_blocking_open_complaints(complaints_file)
+            if blocking:
+                ids = ", ".join(blocking)
+                failures.append(
+                    f"open blocking complaint exists ({ids}) — "
+                    "triage and resolve complaint before close"
+                )
+        except Exception:
+            pass
 
     # --- Team mode gates ---
     orch_mode = yaml_field("orchestration_mode", state_file) or "solo"

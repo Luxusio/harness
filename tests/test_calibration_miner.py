@@ -292,5 +292,79 @@ class TestCountCandidates(unittest.TestCase):
         )
 
 
+class TestFalsePassComplaintTrigger(unittest.TestCase):
+    """Test that false_pass complaints trigger calibration candidates."""
+
+    def _make_task(self, tmp_root, task_id, fail_count=0, reopen_count=0, complaints_yaml=None):
+        task_dir = os.path.join(tmp_root, task_id)
+        os.makedirs(task_dir)
+        state = (
+            f"task_id: {task_id}\n"
+            f"status: implemented\n"
+            f"runtime_verdict_fail_count: {fail_count}\n"
+        )
+        with open(os.path.join(task_dir, "TASK_STATE.yaml"), "w") as f:
+            f.write(state)
+        if complaints_yaml:
+            with open(os.path.join(task_dir, "COMPLAINTS.yaml"), "w") as f:
+                f.write(complaints_yaml)
+        return task_dir
+
+    def _false_pass_complaints_yaml(self, status="open"):
+        return (
+            "complaints:\n"
+            "  - id: cmp_fp001\n"
+            f"    status: {status}\n"
+            "    kind: false_pass\n"
+            "    lane: objective\n"
+            "    scope: task\n"
+            "    text: \"done but actually broken\"\n"
+            "    captured_at: \"2026-03-31T00:00:00Z\"\n"
+            "    source_prompt_ref: user_prompt\n"
+            "    related_check_ids: []\n"
+            "    blocks_close: true\n"
+            "    calibration_candidate: true\n"
+            "    promoted_note_path: null\n"
+            "    promoted_directive_id: null\n"
+            "    evidence_refs: []\n"
+            "    resolution: \"\"\n"
+        )
+
+    def test_false_pass_open_is_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__fp1", complaints_yaml=self._false_pass_complaints_yaml("open"))
+            candidates = find_calibration_candidates(tmp)
+            self.assertIn(task_dir, candidates)
+
+    def test_false_pass_resolved_is_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__fp2", complaints_yaml=self._false_pass_complaints_yaml("resolved"))
+            candidates = find_calibration_candidates(tmp)
+            self.assertIn(task_dir, candidates)
+
+    def test_no_complaints_below_thresholds_not_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._make_task(tmp, "TASK__ok1", fail_count=0, reopen_count=0)
+            candidates = find_calibration_candidates(tmp)
+            self.assertEqual(candidates, [])
+
+    def test_false_pass_case_includes_complaints_in_evidence_refs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__fp3", complaints_yaml=self._false_pass_complaints_yaml("open"))
+            case = mine_calibration_case(task_dir, output_dir=tmp, write=False)
+            self.assertIsNotNone(case)
+            self.assertEqual(case["trigger"], "false_pass_complaint")
+            self.assertIn("COMPLAINTS.yaml", case.get("evidence_refs", []))
+
+    def test_false_pass_case_write_creates_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__fp4", complaints_yaml=self._false_pass_complaints_yaml("open"))
+            out_dir = os.path.join(tmp, "calibration_out")
+            case = mine_calibration_case(task_dir, output_dir=out_dir, write=True)
+            self.assertIsNotNone(case)
+            slug = case["slug"]
+            self.assertTrue(os.path.isfile(os.path.join(out_dir, f"{slug}.md")))
+
+
 if __name__ == "__main__":
     unittest.main()

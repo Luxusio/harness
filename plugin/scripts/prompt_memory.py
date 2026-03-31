@@ -103,6 +103,61 @@ def classify_prompt_intent(prompt):
     return "answer"
 
 
+def _get_complaint_summary(task_dir):
+    """Return short complaint summary if active task has open complaints."""
+    try:
+        import sys, os
+        scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)))
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        from feedback_capture import summarize_open_complaints
+        summary = summarize_open_complaints(task_dir)
+        return summary if summary else ""
+    except Exception:
+        return ""
+
+
+def _is_complaint_like(prompt):
+    """Return True if prompt appears to express dissatisfaction with prior output.
+
+    Language-agnostic heuristics — no vocabulary list needed:
+    - Negation + outcome signals (English and Korean)
+    - Short non-question prompts (likely directives or corrections)
+    """
+    if not prompt:
+        return False
+
+    stripped = prompt.strip()
+
+    # Questions are not complaints
+    if stripped.endswith("?"):
+        return False
+
+    # Check for negation + outcome signals (English)
+    negation_outcome_en = [
+        "still", "again", "didn't", "not working", "doesn't work",
+        "not fixed", "still broken", "same issue", "still failing",
+        "didn't fix", "didn't work", "not done", "wrong",
+    ]
+    lower = stripped.lower()
+    for signal in negation_outcome_en:
+        if signal in lower:
+            return True
+
+    # Check for Korean dissatisfaction signals
+    korean_signals = ["아직", "여전히", "안 됨", "안돼", "안됨", "안 돼", "여전히", "못했"]
+    for signal in korean_signals:
+        if signal in stripped:
+            return True
+
+    # Short prompts (< 60 chars) that are not questions are often corrections
+    if len(stripped) < 60 and not stripped.endswith("?"):
+        # Only if not a casual greeting (already filtered upstream)
+        return True
+
+    return False
+
+
 def _get_active_task_dir():
     """Return the directory of the most recently active (non-closed) task, or None."""
     task_dir = TASK_DIR
@@ -324,6 +379,25 @@ def gather_context(prompt):
         directives_hint = _get_pending_directives_hint(active_task_dir)
         if directives_hint:
             context_parts.append(directives_hint)
+    except Exception:
+        pass
+
+    # 2d. Complaint summary for active tasks with open complaints
+    try:
+        if active_task_dir:
+            complaint_summary = _get_complaint_summary(active_task_dir)
+            if complaint_summary:
+                context_parts.append(complaint_summary)
+    except Exception:
+        pass
+
+    # 2e. Complaint-check reminder if prompt looks complaint-like
+    try:
+        if _is_complaint_like(prompt):
+            context_parts.append(
+                "COMPLAINT CHECK: if the user is signaling dissatisfaction with prior output, "
+                "stage a complaint artifact before proceeding"
+            )
     except Exception:
         pass
 

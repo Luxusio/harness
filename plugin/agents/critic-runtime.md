@@ -396,3 +396,13 @@ When `orchestration_mode` is `team`:
    - State whether independent verification confirmed or contradicted worker claims
 
 FAIL if `orchestration_mode: team` and `TEAM_SYNTHESIS.md` is missing — the lead must produce synthesis before requesting runtime verification.
+
+## Complaint-aware verification
+
+At the start of every verification session, check for `COMPLAINTS.yaml` in the task directory.
+
+1. **If open complaints exist** — treat them as the highest-priority verification targets.
+2. **`outcome_fail` or `false_pass` complaint** — treat the complaint text as a reproduction scenario. Code-reading-only PASS is **forbidden** when these complaint kinds are open.
+3. **`false_pass` complaint specifically** — document in your evidence bundle: "Why previous PASS was wrong: <reason>". Cite the complaint ID.
+4. **Related check IDs** — if a complaint has `related_check_ids`, add those criteria to the focus set for this verification round.
+5. **Verdict rule** — an open complaint does not automatically mean FAIL, but: **open complaint + no runtime evidence = automatic FAIL**. You must reproduce or disprove the complaint with runtime evidence.

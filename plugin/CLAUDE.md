@@ -53,6 +53,8 @@ All hook scripts parse stdin JSON and use exit 2 for blocking.
 | capability_delegation != unavailable for compliant close | Repo-mutating tasks |
 | collapsed_approved requires compliance_claim=degraded | When workflow_mode=collapsed_approved |
 | directive_capture_state != pending | Always (pending directives block close) |
+| complaint_capture_state != pending | Always |
+| No open blocking complaints in COMPLAINTS.yaml | Always |
 
 ## Execution modes
 
@@ -417,6 +419,17 @@ browser_context:
 
 All repo-mutating tasks must produce `DOC_SYNC.md` before close. Mandatory even when content is "none".
 
+## Complaint surface
+
+When a user expresses dissatisfaction with prior output, a complaint artifact must be staged before proceeding:
+
+- **Artifact**: `doc/harness/tasks/<task_id>/COMPLAINTS.yaml`
+- **Tool**: `plugin/scripts/feedback_capture.py stage --task-dir <dir> --text "..." --kind <kind>`
+- **Kinds**: `outcome_fail` | `process_fail` | `preference_fail` | `false_pass` | `unclear`
+- **Close gate**: tasks with `complaint_capture_state: pending` or any `blocks_close: true` + `status: open` complaint cannot close.
+- **Dedupe**: same text + open/promoted status → update existing entry, not new.
+- **Triage paths**: process_fail → writer/REQ; outcome/false_pass → critic-runtime; false_pass → calibration_miner.
+
 ## Task state model
 
 ```yaml
@@ -469,6 +482,9 @@ collapsed_mode_approved: false
 collapsed_reason: ""
 directive_capture_state: clean | pending | captured
 pending_directive_ids: []
+complaint_capture_state: clean | pending | triaged
+pending_complaint_ids: []
+last_complaint_at: null
 ```
 
 ## Manifest schema reference

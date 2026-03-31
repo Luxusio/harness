@@ -224,6 +224,17 @@ When writing a protected artifact, writer MUST also create the corresponding `.m
 }
 ```
 
+## Complaint promotion
+
+When starting work on a task, check for `COMPLAINTS.yaml` in the task directory. For each open complaint, handle by kind:
+
+- **`process_fail`** → promote to a REQ note in `doc/common/` or stage in `DIRECTIVES_PENDING.yaml`. Mark the complaint `promoted` with the note path. Record in DOC_SYNC.md.
+- **`preference_fail`** → keep as task-local preference unless: (a) user explicitly said "always" or "repo-wide", or (b) same preference appeared in 2+ tasks. Then promote to REQ candidate.
+- **`outcome_fail`** → do NOT self-resolve. Hand off to critic-runtime for re-verification. You may not close this complaint unilaterally.
+- **`false_pass`** → mark as calibration candidate in COMPLAINTS.yaml. Do not close unilaterally. Route to `/harness:maintain` for calibration case generation.
+
+After any promotion action, record the result in DOC_SYNC.md under a "Complaint promotions" section.
+
 ## What you do NOT do
 
 - Do not evaluate your own notes
