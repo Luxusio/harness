@@ -39,6 +39,7 @@ def main():
 status: created
 lane: unknown
 execution_mode: pending
+planning_mode: standard
 mutates_repo: unknown
 qa_required: pending
 qa_mode: {qa_mode}

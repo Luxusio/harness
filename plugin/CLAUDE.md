@@ -165,7 +165,7 @@ Note freshness: if a changed file matches a note's `invalidated_by_paths`, that 
 
 ## Acceptance ledger (CHECKS.yaml)
 
-Plan creation also generates `CHECKS.yaml` with stable criterion IDs (`AC-001`, ...). Developer updates criteria to `implemented_candidate`; critics update per-criterion verdicts. `reopen_count` tracks regressions. Failed criteria block task completion (hard threshold). See `plugin/docs/acceptance-ledger.md`.
+Plan creation also generates `CHECKS.yaml` with stable criterion IDs (`AC-001`, ...). Developer updates criteria to `implemented_candidate`; critics update per-criterion verdicts. `reopen_count` tracks regressions. Failed criteria block task completion (hard threshold). High-risk tasks use `close_gate: strict_high_risk` which blocks on ALL non-passed criteria. See `plugin/docs/acceptance-ledger.md`.
 
 ## Delta verification (fix rounds) — WS-2
 
@@ -424,6 +424,7 @@ task_id: TASK__<slug>
 status: created | planned | plan_passed | implemented | qa_passed | docs_synced | closed | blocked_env | stale | archived
 lane: build | debug | verify | refactor | docs-sync | investigate | answer
 execution_mode: pending | light | standard | sprinted
+planning_mode: standard | broad-build
 mutates_repo: true | false | unknown
 qa_required: true | false | pending
 qa_mode: auto | tests | smoke | browser-first
@@ -540,6 +541,9 @@ capabilities:
 - **(V9)** User directives staged in DIRECTIVES_PENDING.yaml; pending directives block task close until promoted by writer.
 - **(V2)** Investigate lane requires RESULT.md for close. Task-required hints injected by prompt_memory when no active task exists.
 - **(WS-3)** Tasks with `reopen_count ≥ 2` or `runtime_verdict_fail_count ≥ 2` are calibration candidates. Session end reports count; `/harness:maintain` generates case files in `plugin/calibration/local/critic-runtime/`.
+- **(Perf-v2 WS-1)** CHECKS.yaml `close_gate: strict_high_risk` blocks close for ANY non-passed criterion (not just `failed`). Set automatically for sprinted tasks, security/performance overlays, or structural risk tags. Field absence = `standard` (legacy behavior preserved).
+- **(Perf-v2 WS-2)** `planning_mode: broad-build` generates longform spec trio (`01_product_spec.md`, `02_design_language.md`, `03_architecture.md`) before PLAN.md for broad product/build requests. Orthogonal to execution_mode. Default = `standard`.
+- **(Perf-v2 WS-3)** `observability` review overlay activates conditionally when: manifest `tooling.observability_ready: true`, project kind is web/api/fullstack/worker, AND signal present (performance overlay, fail count >= 2, or investigation keywords). Stack DOWN = advisory fallback, not FAIL.
 
 ## Mode-specific artifact requirements
 

@@ -52,6 +52,8 @@ If `doc/harness/tasks/<task_id>/CHECKS.yaml` exists, update it after implementat
 
 Do not create CHECKS.yaml if it does not exist — that is the plan skill's responsibility.
 
+**close_gate awareness:** If CHECKS.yaml has `close_gate: strict_high_risk`, ALL criteria must reach `passed` before the task can close. Ensure implementation addresses every acceptance criterion — not just the ones that seem most important.
+
 ### Populate touched_paths
 
 1. Run `git diff --name-only` to get the list of files changed by your implementation.
