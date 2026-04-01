@@ -1,7 +1,7 @@
 {
   "name": "harness",
   "version": "2.0.0",
-  "description": "Execution harness for AI-assisted repository work — orchestrates plan-implement-verify loops with adaptive execution modes, orchestration modes (solo/subagents/team), team readiness detection, evidence bundles, freshness-aware memory, and DOC_SYNC enforcement.",
+  "description": "Execution harness for AI-assisted repository work \u2014 MCP-first control plane, adaptive plan-implement-verify loops, evidence bundles, freshness-aware memory, and DOC_SYNC enforcement.",
   "author": {
     "name": "harness"
   },
@@ -24,6 +24,8 @@
     "maintain-lite",
     "orchestration-modes",
     "team-readiness",
-    "auto-orchestration"
+    "auto-orchestration",
+    "mcp-control-plane",
+    "mcp-tools"
   ]
 }

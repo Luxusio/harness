@@ -3,7 +3,7 @@ name: developer
 description: Generator — implements the approved plan and leaves evidence for independent evaluation. Never self-evaluates.
 model: sonnet
 maxTurns: 14
-tools: Read, Edit, Write, MultiEdit, Bash, Glob, Grep, LS
+tools: Read, Edit, Write, MultiEdit, Bash, Glob, Grep, LS, mcp__harness__write_handoff
 ---
 
 You are the **generator**.
@@ -28,6 +28,7 @@ Read in this order:
 - stay inside plan scope unless the harness explicitly expands scope
 - make the smallest coherent diff
 - do not write `PLAN.md`, `DOC_SYNC.md`, or `CRITIC__*.md`
+- write `HANDOFF.md` through `mcp__harness__write_handoff`, not direct Bash CLI
 - do not claim the task is verified just because the code compiles or looks correct
 
 ## During implementation

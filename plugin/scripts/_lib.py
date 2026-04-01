@@ -1048,7 +1048,7 @@ def get_planning_mode(state_file):
 
 
 # ---------------------------------------------------------------------------
-# CLI-first helpers (hctl support)
+# Task-pack helpers (MCP-backed hctl support)
 # ---------------------------------------------------------------------------
 
 
@@ -1294,12 +1294,9 @@ def emit_compact_context(task_dir):
 
     display_task_dir = _display_path(task_dir)
     commands = {
-        "update": (
-            f"python3 plugin/scripts/hctl.py update --task-dir {display_task_dir} "
-            "--from-git-diff"
-        ),
-        "verify": f"python3 plugin/scripts/hctl.py verify --task-dir {display_task_dir}",
-        "close": f"python3 plugin/scripts/hctl.py close --task-dir {display_task_dir}",
+        "update": "mcp__harness__task_update_from_git_diff",
+        "verify": "mcp__harness__task_verify",
+        "close": "mcp__harness__task_close",
     }
 
     checks_file = os.path.join(task_dir, "CHECKS.yaml")
@@ -1373,15 +1370,15 @@ def emit_compact_context(task_dir):
     notes = notes[:3]
 
     if routing_compiled != "true":
-        next_action = "Run hctl start, then re-open context before planning or implementation."
+        next_action = "Run mcp__harness__task_start, then re-open mcp__harness__task_context before planning or implementation."
     elif plan_verdict != "PASS":
         next_action = "Get PLAN.md to critic-plan PASS before mutating source files."
     elif runtime_verdict == "FAIL":
-        next_action = "Fix open runtime failures, run hctl verify, then re-check critics."
+        next_action = "Fix open runtime failures, run mcp__harness__task_verify, then re-check critics."
     elif lane == "investigate":
         next_action = "Write RESULT.md with findings and close after verification gates pass."
     else:
-        next_action = "Implement the smallest diff for open checks, then run hctl update, verify, and close."
+        next_action = "Implement the smallest diff for open checks, then run mcp__harness__task_update_from_git_diff, task_verify, and task_close."
 
     return {
         "task_id": task_id,

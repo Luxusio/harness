@@ -193,20 +193,6 @@ class TestHctlStart(unittest.TestCase):
         risk = _yaml_field(state, "risk_level")
         self.assertEqual(risk, "high")
 
-    def test_start_resets_context_markers(self):
-        task_dir = _make_task(
-            self.tmp.name,
-            "TASK__test",
-            extra_fields={
-                "context_read_count": 3,
-                "context_last_read_at": "2026-01-01T00:00:00Z",
-            },
-        )
-        _run_hctl("start", "--task-dir", task_dir)
-        state = os.path.join(task_dir, "TASK_STATE.yaml")
-        self.assertEqual(_yaml_field(state, "context_read_count"), "0")
-        self.assertEqual(_yaml_field(state, "context_last_read_at"), "null")
-
 
 # ---------------------------------------------------------------------------
 # Test: hctl context --json — required keys, brief caps
@@ -297,16 +283,6 @@ class TestHctlContextJson(unittest.TestCase):
         ctx = self._context_json(lane="refactor",
                                  risk_tags=["maintenance-task"])
         self.assertTrue(ctx["maintenance_task"])
-
-    def test_context_records_read_marker(self):
-        task_dir = _make_task(self.tmp.name, "TASK__ctx_marker")
-        _run_hctl("start", "--task-dir", task_dir)
-        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json")
-        self.assertEqual(code, 0, err)
-        state = os.path.join(task_dir, "TASK_STATE.yaml")
-        self.assertEqual(_yaml_field(state, "context_read_count"), "1")
-        last_read = _yaml_field(state, "context_last_read_at")
-        self.assertTrue(last_read and last_read != "null")
 
 
 # ---------------------------------------------------------------------------

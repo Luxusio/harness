@@ -23,7 +23,7 @@ Use this playbook when you need to investigate runtime issues using the observab
 docker compose -f docker-compose.yml -f docker-compose.observability.yml --profile observability up -d
 
 # Verify stack is running
-python3 plugin/scripts/observability.py status
+# (or call mcp__harness__observability_status)
 
 # Open Grafana
 open http://localhost:3100
@@ -114,4 +114,4 @@ grep -E "ERROR|FATAL|panic" logs/app.log | tail -50
 ps aux | grep <app-name>
 ```
 
-Use `plugin/scripts/observability.py detect` to check readiness before attempting to start the stack.
+Use `mcp__harness__observability_detect` to check readiness before attempting to start the stack.

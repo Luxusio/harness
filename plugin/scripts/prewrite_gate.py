@@ -33,14 +33,17 @@ WORKFLOW_CONTROL_SURFACE = {
     # Execution / orchestration docs
     "plugin/docs/execution-modes.md",
     "plugin/docs/orchestration-modes.md",
-    # Hook manifest
+    # Hook manifest / plugin MCP surface
     "plugin/hooks/hooks.json",
+    "plugin/.mcp.json",
     # Setup skill and templates
     "plugin/skills/setup/SKILL.md",
     "plugin/skills/setup/templates/CLAUDE.md",
     "plugin/skills/setup/templates/doc/harness/manifest.yaml",
-    # CLI control plane
+    # MCP / CLI control plane
     "plugin/scripts/hctl.py",
+    "plugin/scripts/mcp_bash_guard.py",
+    "plugin/mcp/harness_server.py",
 }
 
 # --- Source file detection ---
@@ -339,10 +342,11 @@ def main():
                 f"BLOCKED: '{filepath}' is a workflow control surface file. "
                 f"Direct writes are only permitted from maintenance tasks "
                 f"(maintenance_task=true in TASK_STATE.yaml). "
-                f"Run `hctl start` to compile routing, or set maintenance_task "
+                f"Run `mcp__harness__task_start` to compile routing, or set maintenance_task "
                 f"in TASK_STATE.yaml. "
-                f"(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
-            , file=sys.stderr)
+                f"(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)",
+                file=sys.stderr,
+            )
             sys.exit(2)
         # Maintenance task — allow write to control surface
         sys.exit(0)
@@ -370,7 +374,7 @@ def main():
             "This mutation is untracked. Create a task folder and "
             "run /harness:plan before implementing. "
             "(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
-        , file=sys.stderr)
+        )
         sys.exit(2)
 
     # Check if any active task has plan_verdict: PASS
@@ -383,7 +387,7 @@ def main():
             f"Active tasks: {task_list}. "
             f"Complete plan approval before implementing. "
             f"(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
-        , file=sys.stderr)
+        )
         sys.exit(2)
 
     # Source file write — check actor is developer
@@ -393,7 +397,7 @@ def main():
             f"BLOCKED: Source file write by non-developer role '{current_role}'. "
             f"Only developer role may write source files. "
             f"(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
-        , file=sys.stderr)
+        )
         sys.exit(2)
 
     # Plan approved + authorized role — allow write
@@ -410,7 +414,7 @@ if __name__ == "__main__":
                 f"BLOCKED: prewrite gate encountered an error: {e}. "
                 f"Fail-closed on managed repos. "
                 f"Set HARNESS_SKIP_PREWRITE=1 to bypass."
-            , file=sys.stderr)
+            )
             sys.exit(2)
         # Non-harness repo: fail-open to avoid blocking unrelated work
         sys.exit(0)
