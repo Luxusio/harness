@@ -24,7 +24,7 @@ cclsp is preferred when available because it integrates directly with the Claude
 
 1. Install the LSP server binary for your language (see Supported Languages below).
 2. Verify the binary is on your PATH: `which typescript-language-server`
-3. Run `plugin/scripts/lsp_detect.py` to confirm detection.
+3. Run `plugin/scripts/tooling_probe.py lsp-detect` to confirm detection.
 4. Optionally copy `plugin/templates/lsp/.lsp.json.optional` to `.lsp.json` and customize server arguments.
 5. Set `lsp_ready: true` in `doc/harness/manifest.yaml` to activate the symbol lane.
 
@@ -50,4 +50,4 @@ When `symbol_lane_enabled: true` is set in the manifest profile, the harness rou
 - **Rename operations** use `lsp_prepare_rename` + `lsp_rename`
 - **Type-check verification** uses `lsp_diagnostics`
 
-Run `plugin/scripts/symbol_lane_hint.py <query-type>` to get routing hints for a specific query type. Valid query types: `definition`, `references`, `rename`, `callsite`, `type-usage`, `symbols`, `diagnostics`.
+Run `plugin/scripts/tooling_probe.py symbol-hint <query-type>` to get routing hints for a specific query type. Valid query types: `definition`, `references`, `rename`, `callsite`, `type-usage`, `symbols`, `diagnostics`.

@@ -10,14 +10,14 @@ languages: [python, markdown]
 # --- Top-level runtime commands ---
 # test_command requires pytest: pip install pytest
 test_command: "python3 -m pytest tests/ -x --tb=short"
-# smoke_command intentionally omitted — smoke.py SKIPs gracefully.
+# smoke_command intentionally omitted — verify.py smoke SKIPs gracefully.
 # To enable: smoke_command: "python3 -m pytest tests/ -x --tb=line -q"
 
 # --- Verify commands (used by verify.py) ---
 verify_commands:
   - python3 plugin/scripts/verify.py
-  - python3 plugin/scripts/healthcheck.py
-  - python3 plugin/scripts/smoke.py
+  - python3 plugin/scripts/verify.py healthcheck
+  - python3 plugin/scripts/verify.py smoke
 
 # --- QA ---
 qa:

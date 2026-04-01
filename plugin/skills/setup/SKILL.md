@@ -348,7 +348,7 @@ Report detected tooling in Phase 15 finish report, including `chrome_devtools_re
 
 Probe for team execution capabilities and populate the `teams:` section in manifest.yaml.
 
-Run `${CLAUDE_PLUGIN_ROOT}/scripts/team_readiness.py` to detect:
+Run `${CLAUDE_PLUGIN_ROOT}/scripts/capability_probe.py team` to detect:
 
 #### Native team readiness
 - `claude --version` available and version supports native teams

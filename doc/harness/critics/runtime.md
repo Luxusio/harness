@@ -1,8 +1,8 @@
 # runtime critic project playbook
 tags: [critic, runtime, project, active]
 summary: Claude Code execution harness plugin
-must_verify: [verify.py, healthcheck.py, smoke.py]
-prefer: [python3 plugin/scripts/verify.py, python3 plugin/scripts/healthcheck.py]
+must_verify: [verify.py]
+prefer: [python3 plugin/scripts/verify.py]
 block_if: execution-skipped-without-reason, evidence-free-pass
 updated: 2026-03-30
 
