@@ -317,7 +317,7 @@ plugin/
     post_compact_sync.py         # post-compaction context + maintain-lite + handoff escalation
     handoff_escalation.py        # SESSION_HANDOFF.json trigger detection + generation
     stop_gate.py                 # stop gate (blocks if open tasks)
-    team_readiness.py              # team provider detection
+    capability_probe.py           # delegation + team provider detection
     teammate_idle_gate.py          # team worker deliverable check
   calibration/                   # critic calibration packs (few-shot examples)
     critic-plan/                 # light.md, standard.md, sprinted.md

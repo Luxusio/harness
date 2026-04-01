@@ -5,7 +5,7 @@ Single entry point for task lifecycle management:
   start    — compile routing fields into TASK_STATE.yaml
   context  — emit compact task pack (--json for machine-readable)
   update   — sync touched_paths/roots_touched/verification_targets
-  verify   — delegate to verify.py / smoke.py / healthcheck.py
+  verify   — delegate to verify.py (suite / smoke / healthcheck modes)
   close    — wrap task_completed_gate.py
   artifact — wrap write_artifact.py
 

@@ -1,25 +1,22 @@
 #!/usr/bin/env python3
-"""Capability probe — detect delegation availability.
+"""Capability probe — detect delegation availability and team readiness.
 
-Determines whether subagent delegation is available in the current environment.
-Used by harness to decide workflow_mode (compliant vs degraded_capability).
+Default CLI behavior remains unchanged:
+  python3 capability_probe.py
+    -> prints `delegation_capability: <status>`
 
-Detection priority:
-  1. manifest capabilities.delegation_mode (explicit override)
-  2. CLAUDE_AGENT_NAME presence (agent delegation signal)
-  3. Environment signals (known CI/CD, container environments)
-  4. Default: unknown
-
-Usage:
-    from capability_probe import probe_delegation_capability
-    status = probe_delegation_capability()  # "available" | "unavailable" | "unknown"
+Additional team readiness mode:
+  python3 capability_probe.py team
+  python3 capability_probe.py team --quiet
 """
 
+import json
 import os
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import MANIFEST, manifest_section_field
+from _lib import manifest_section_field
 
 
 def probe_delegation_capability():
@@ -27,38 +24,29 @@ def probe_delegation_capability():
 
     Returns: "available" | "unavailable" | "unknown"
     """
-    # 1. Explicit manifest override
     manifest_mode = manifest_section_field("capabilities", "delegation_mode")
     if manifest_mode in ("available", "unavailable"):
         return manifest_mode
 
-    # 2. Agent name presence — if we're running as a named agent, delegation likely works
     agent_name = os.environ.get("CLAUDE_AGENT_NAME", "")
     if agent_name and ":" in agent_name:
-        # Running inside a named agent context — delegation infrastructure exists
         return "available"
 
-    # 3. Known environment signals
-    # CI/CD environments typically don't support interactive delegation
     ci_signals = [
         "CI", "CONTINUOUS_INTEGRATION", "GITHUB_ACTIONS",
         "GITLAB_CI", "JENKINS_URL", "CIRCLECI", "BUILDKITE",
     ]
-    for sig in ci_signals:
-        if os.environ.get(sig):
+    for signal in ci_signals:
+        if os.environ.get(signal):
             return "unavailable"
 
-    # 4. Default
     return "unknown"
 
 
 def update_task_capability(task_dir, capability_status=None):
-    """Update capability_delegation field in TASK_STATE.yaml.
-
-    If capability_status is None, probes automatically.
-    Returns the status string.
-    """
+    """Update capability_delegation field in TASK_STATE.yaml."""
     import re
+
     if capability_status is None:
         capability_status = probe_delegation_capability()
 
@@ -67,8 +55,8 @@ def update_task_capability(task_dir, capability_status=None):
         return capability_status
 
     try:
-        with open(state_file, "r", encoding="utf-8") as f:
-            content = f.read()
+        with open(state_file, "r", encoding="utf-8") as handle:
+            content = handle.read()
 
         if re.search(r"^capability_delegation:", content, re.MULTILINE):
             content = re.sub(
@@ -80,14 +68,95 @@ def update_task_capability(task_dir, capability_status=None):
         else:
             content = content.rstrip("\n") + f"\ncapability_delegation: {capability_status}\n"
 
-        with open(state_file, "w", encoding="utf-8") as f:
-            f.write(content)
+        with open(state_file, "w", encoding="utf-8") as handle:
+            handle.write(content)
     except OSError:
         pass
 
     return capability_status
 
 
-if __name__ == "__main__":
+def check_native_ready():
+    """Check if native Claude Code teams are available."""
+    details = {}
+    teams_env = os.environ.get("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "")
+    details["teams_env_set"] = teams_env == "1"
+
+    claude_version = ""
+    try:
+        result = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            claude_version = result.stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    details["claude_version"] = claude_version
+    details["claude_available"] = bool(claude_version)
+
+    tmux_available = False
+    try:
+        result = subprocess.run(["tmux", "-V"], capture_output=True, text=True, timeout=3)
+        tmux_available = result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    details["tmux_available"] = tmux_available
+
+    ready = details["teams_env_set"] and details["claude_available"]
+    return ready, details
+
+
+def check_omc_ready():
+    """Check if oh-my-claudecode teams are available."""
+    details = {}
+    omc_available = False
+    try:
+        result = subprocess.run(["command", "-v", "omc"], capture_output=True, text=True, timeout=3, shell=True)
+        omc_available = result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+
+    if not omc_available:
+        try:
+            result = subprocess.run(["which", "omc"], capture_output=True, text=True, timeout=3)
+            omc_available = result.returncode == 0
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+
+    details["omc_available"] = omc_available
+    omc_dir_exists = os.path.isdir(".omc") or os.path.isdir(os.path.join(os.path.expanduser("~"), ".omc"))
+    details["omc_dir_exists"] = omc_dir_exists
+
+    ready = omc_available
+    return ready, details
+
+
+def probe_team_readiness():
+    native_ready, native_details = check_native_ready()
+    omc_ready, omc_details = check_omc_ready()
+    return {
+        "native_ready": native_ready,
+        "omc_ready": omc_ready,
+        "any_ready": native_ready or omc_ready,
+        "details": {
+            "native": native_details,
+            "omc": omc_details,
+        },
+    }
+
+
+def main(argv=None):
+    argv = list(argv or sys.argv[1:])
+    if argv and argv[0] == "team":
+        quiet = "--quiet" in argv[1:]
+        result = probe_team_readiness()
+        if quiet:
+            return 0 if result["any_ready"] else 1
+        print(json.dumps(result, indent=2))
+        return 0
+
     result = probe_delegation_capability()
     print(f"delegation_capability: {result}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
