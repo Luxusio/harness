@@ -342,7 +342,7 @@ def main():
                 f"Run `hctl start` to compile routing, or set maintenance_task "
                 f"in TASK_STATE.yaml. "
                 f"(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
-            )
+            , file=sys.stderr)
             sys.exit(2)
         # Maintenance task — allow write to control surface
         sys.exit(0)
@@ -351,7 +351,7 @@ def main():
     if _is_protected_artifact(filepath):
         allowed, message = _check_protected_artifact_write(filepath)
         if not allowed:
-            print(message)
+            print(message, file=sys.stderr)
             sys.exit(2)
         # Protected artifact with correct role — allow
         sys.exit(0)
@@ -370,7 +370,7 @@ def main():
             "This mutation is untracked. Create a task folder and "
             "run /harness:plan before implementing. "
             "(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
-        )
+        , file=sys.stderr)
         sys.exit(2)
 
     # Check if any active task has plan_verdict: PASS
@@ -383,7 +383,7 @@ def main():
             f"Active tasks: {task_list}. "
             f"Complete plan approval before implementing. "
             f"(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
-        )
+        , file=sys.stderr)
         sys.exit(2)
 
     # Source file write — check actor is developer
@@ -393,7 +393,7 @@ def main():
             f"BLOCKED: Source file write by non-developer role '{current_role}'. "
             f"Only developer role may write source files. "
             f"(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
-        )
+        , file=sys.stderr)
         sys.exit(2)
 
     # Plan approved + authorized role — allow write
@@ -410,7 +410,7 @@ if __name__ == "__main__":
                 f"BLOCKED: prewrite gate encountered an error: {e}. "
                 f"Fail-closed on managed repos. "
                 f"Set HARNESS_SKIP_PREWRITE=1 to bypass."
-            )
+            , file=sys.stderr)
             sys.exit(2)
         # Non-harness repo: fail-open to avoid blocking unrelated work
         sys.exit(0)
