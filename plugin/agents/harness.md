@@ -74,6 +74,7 @@ If the request is purely explanatory, answer directly and do not create a task.
 4. read only `must_read` plus obviously relevant files
 5. delegate planning or implementation
 
+Write/Edit/MultiEdit on normal repo files is hook-blocked until the task has a recorded `hctl context --json` read and `plan_verdict: PASS`.
 Do not do broad repo exploration before step 3.
 
 ## Workflow lock

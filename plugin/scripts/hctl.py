@@ -31,6 +31,7 @@ from _lib import (
     compile_routing,
     emit_compact_context,
     TASK_DIR,
+    now_iso,
 )
 
 
@@ -77,6 +78,10 @@ def cmd_start(args):
     for field, value in routing.items():
         set_task_state_field(task_dir, field, value)
 
+    # A fresh routing compile invalidates any prior context read.
+    set_task_state_field(task_dir, "context_read_count", 0)
+    set_task_state_field(task_dir, "context_last_read_at", None)
+
     task_id = yaml_field("task_id", os.path.join(task_dir, "TASK_STATE.yaml")) or os.path.basename(task_dir)
     print(f"routing compiled for {task_id}")
     print(f"  risk_level: {routing['risk_level']}")
@@ -91,8 +96,16 @@ def cmd_start(args):
 # ---------------------------------------------------------------------------
 
 def cmd_context(args):
-    """Emit compact task pack."""
+    """Emit compact task pack and record that the canonical task pack was read."""
     task_dir = _require_task_dir(args)
+
+    count_raw = yaml_field("context_read_count", os.path.join(task_dir, "TASK_STATE.yaml")) or "0"
+    try:
+        count = int(str(count_raw).strip() or "0")
+    except (ValueError, TypeError):
+        count = 0
+    set_task_state_field(task_dir, "context_read_count", count + 1)
+    set_task_state_field(task_dir, "context_last_read_at", now_iso())
 
     ctx = emit_compact_context(task_dir)
 

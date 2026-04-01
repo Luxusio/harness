@@ -73,6 +73,8 @@ workflow_locked: true
 maintenance_task: false
 routing_compiled: false
 routing_source: pending
+context_read_count: 0
+context_last_read_at: null
 compliance_claim: strict
 artifact_provenance_required: true
 result_required: false

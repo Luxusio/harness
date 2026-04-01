@@ -50,6 +50,18 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hctl_guard.py",
+            "timeout": 3,
+            "statusMessage": "Checking task/context gate"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           {
             "type": "command",

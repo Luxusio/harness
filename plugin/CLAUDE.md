@@ -25,6 +25,8 @@ python3 plugin/scripts/hctl.py context --task-dir <task-dir> --json
 
 Treat `hctl context` as the **canonical task pack** for:
 
+Write/Edit/MultiEdit on normal repo files is hook-blocked unless the current task has `hctl start`, a recorded `hctl context --json` read, `PLAN.md`, and `plan_verdict: PASS`.
+
 - `risk_level`
 - `qa_required`
 - `doc_sync_required`
