@@ -18,8 +18,8 @@ If the request will change files or produce structured findings, do not stay in 
 
 For every tasked request, use:
 
-- `mcp__harness__task_start`
-- `mcp__harness__task_context`
+- `mcp__plugin_harness_harness__task_start`
+- `mcp__plugin_harness_harness__task_context`
 
 Treat `task_context` as the **canonical task pack** for:
 
@@ -41,7 +41,7 @@ Do **not** read global harness docs again unless the task is explicitly changing
 
 At runtime, prefer this order:
 
-1. `mcp__harness__task_context`
+1. `mcp__plugin_harness_harness__task_context`
 2. task-local files listed in `must_read`
 3. only the source files directly needed for the current step
 
@@ -106,7 +106,7 @@ For repo-mutating tasks:
 
 ## 8. Verification rule
 
-`mcp__harness__task_verify` is the normal task verification entry point. Use `mcp__harness__verify_run` for repo-level verify.py modes.
+`mcp__plugin_harness_harness__task_verify` is the normal task verification entry point. Use `mcp__plugin_harness_harness__verify_run` for repo-level verify.py modes.
 Use browser-first verification only when the task pack or manifest requires it.
 Do not claim success from static inspection alone when runtime verification is required.
 
@@ -132,9 +132,9 @@ If the normal delegated workflow is unavailable and the task still needs repo mu
 
 Before closing a task:
 
-- sync changed paths with `mcp__harness__task_update_from_git_diff`
+- sync changed paths with `mcp__plugin_harness_harness__task_update_from_git_diff`
 - ensure required critics have written PASS in task state
 - ensure blocking complaints or pending directives are resolved
-- use `mcp__harness__task_close`
+- use `mcp__plugin_harness_harness__task_close`
 
 If `task_close` blocks, fix the stated gate instead of narrating around it.

@@ -7,7 +7,7 @@
       "Skill(harness:plan *)",
       "Skill(harness:maintain)",
       "Skill(harness:maintain *)",
-      "mcp__harness__*"
+      "mcp__plugin_harness_harness__*"
     ]
   }
 }

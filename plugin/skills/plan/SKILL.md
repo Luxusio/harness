@@ -3,7 +3,7 @@ name: plan
 description: Create a task contract — PLAN.md with scope, acceptance criteria, verification contract, doc sync, and rollback.
 argument-hint: <task-slug>
 user-invocable: true
-allowed-tools: Read, Glob, Grep, Write, Edit, AskUserQuestion, mcp__harness__task_start, mcp__harness__task_context
+allowed-tools: Read, Glob, Grep, Write, Edit, AskUserQuestion, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context
 ---
 
 Create or repair the task contract for `TASK__$ARGUMENTS`.
@@ -26,8 +26,8 @@ Also set `plan_session_state: context_open` in `TASK_STATE.yaml`.
 
 Run:
 
-- `mcp__harness__task_start { task_dir: "doc/harness/tasks/TASK__$ARGUMENTS" }`
-- `mcp__harness__task_context { task_dir: "doc/harness/tasks/TASK__$ARGUMENTS" }`
+- `mcp__plugin_harness_harness__task_start { task_dir: "doc/harness/tasks/TASK__$ARGUMENTS" }`
+- `mcp__plugin_harness_harness__task_context { task_dir: "doc/harness/tasks/TASK__$ARGUMENTS" }`
 
 Use the returned task pack as the source of truth for:
 

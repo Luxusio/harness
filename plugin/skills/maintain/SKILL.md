@@ -3,7 +3,7 @@ name: maintain
 description: Doc and task cleanup tool — finds and fixes stale tasks, broken links, index drift, obvious entropy, and generates local calibration cases.
 argument-hint: [optional focus area]
 user-invocable: true
-allowed-tools: Read, Glob, Grep, Write, Edit, Bash, mcp__harness__calibration_mine
+allowed-tools: Read, Glob, Grep, Write, Edit, Bash, mcp__plugin_harness_harness__calibration_mine
 ---
 
 Cleanup tool for harness docs and tasks.
@@ -38,7 +38,7 @@ Optional focus from user: `$ARGUMENTS`
 - **Flag only** — do not auto-fix content contradictions (needs writer + critic-document)
 
 ### 5. Local calibration case generation
-- Run `mcp__harness__calibration_mine` (`dry_run: true` first if you want a preview)
+- Run `mcp__plugin_harness_harness__calibration_mine` (`dry_run: true` first if you want a preview)
 - This scans tasks for `reopen_count >= 2` or `runtime_verdict_fail_count >= 2`
 - Generates/updates case files in `plugin/calibration/local/critic-runtime/`
 

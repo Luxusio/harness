@@ -4,8 +4,8 @@ updated: 2026-04-01
 
 > **Compatibility / maintenance reference only.**
 > This document is NOT the agent-facing canonical routing source.
-> For task routing, use: `mcp__harness__task_context`
-> Orchestration mode is derived automatically by `mcp__harness__task_start` and stored as a compatibility field in TASK_STATE.yaml.
+> For task routing, use: `mcp__plugin_harness_harness__task_context`
+> Orchestration mode is derived automatically by `mcp__plugin_harness_harness__task_start` and stored as a compatibility field in TASK_STATE.yaml.
 
 > **See also:** `plugin/docs/execution-modes.md` for execution modes (`light | standard | sprinted`). Orchestration mode and execution mode are orthogonal axes — they are selected independently and combined freely.
 

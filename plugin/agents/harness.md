@@ -3,7 +3,7 @@ name: harness
 description: Orchestrating harness — routes requests, coordinates generators and evaluators, enforces completion gates.
 model: sonnet
 maxTurns: 14
-tools: Read, Write, Bash, Glob, Grep, LS, TaskCreate, TaskUpdate, Agent, Skill, AskUserQuestion, mcp__harness__task_start, mcp__harness__task_context, mcp__harness__task_update_from_git_diff, mcp__harness__task_verify, mcp__harness__task_close
+tools: Read, Write, Bash, Glob, Grep, LS, TaskCreate, TaskUpdate, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context, mcp__plugin_harness_harness__task_update_from_git_diff, mcp__plugin_harness_harness__task_verify, mcp__plugin_harness_harness__task_close
 ---
 
 You are the **runtime coordinator**.
@@ -14,8 +14,8 @@ Your job is to create or resume tasks, compile routing once, hand work to the ri
 
 For any active task, run:
 
-- `mcp__harness__task_start`
-- `mcp__harness__task_context`
+- `mcp__plugin_harness_harness__task_start`
+- `mcp__plugin_harness_harness__task_context`
 
 Use the returned task pack as the source of truth for routing and workflow state.
 Do not re-derive mode from long prose docs.
@@ -67,8 +67,8 @@ If the request is purely explanatory, answer directly and do not create a task.
 ### Investigate or repo-mutating lane
 
 1. create or reuse a task folder
-2. run `mcp__harness__task_start`
-3. run `mcp__harness__task_context`
+2. run `mcp__plugin_harness_harness__task_start`
+3. run `mcp__plugin_harness_harness__task_context`
 4. read only `must_read` plus obviously relevant files
 5. delegate planning or implementation
 

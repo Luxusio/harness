@@ -652,32 +652,17 @@ class McpServer:
         self.protocol_version = SUPPORTED_PROTOCOLS[0]
 
     def _read_message(self) -> dict[str, Any] | None:
-        headers: dict[str, str] = {}
-        while True:
-            line = sys.stdin.buffer.readline()
-            if not line:
-                return None
-            if line in (b"\r\n", b"\n"):
-                break
-            decoded = line.decode("utf-8").strip()
-            if not decoded:
-                break
-            if ":" in decoded:
-                key, value = decoded.split(":", 1)
-                headers[key.strip().lower()] = value.strip()
-        length_str = headers.get("content-length")
-        if not length_str:
+        line = sys.stdin.buffer.readline()
+        if not line:
             return None
-        body = sys.stdin.buffer.read(int(length_str))
-        if not body:
+        line = line.strip()
+        if not line:
             return None
-        return json.loads(body.decode("utf-8"))
+        return json.loads(line.decode("utf-8"))
 
     def _write_message(self, payload: dict[str, Any]) -> None:
-        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        header = f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
-        sys.stdout.buffer.write(header)
-        sys.stdout.buffer.write(body)
+        line = (json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8")
+        sys.stdout.buffer.write(line)
         sys.stdout.buffer.flush()
 
     def _reply(self, msg_id: Any, result: Any) -> None:
