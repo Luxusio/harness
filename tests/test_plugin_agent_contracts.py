@@ -53,23 +53,23 @@ class PluginAgentContractTests(unittest.TestCase):
     def test_agents_and_skills_expose_required_harness_mcp_tools(self):
         harness_tools = parse_csv_field(extract_frontmatter("plugin/agents/harness.md"), "tools")
         for required in (
-            "mcp__harness__task_start",
-            "mcp__harness__task_context",
-            "mcp__harness__task_update_from_git_diff",
-            "mcp__harness__task_verify",
-            "mcp__harness__task_close",
+            "mcp__plugin_harness_harness__task_start",
+            "mcp__plugin_harness_harness__task_context",
+            "mcp__plugin_harness_harness__task_update_from_git_diff",
+            "mcp__plugin_harness_harness__task_verify",
+            "mcp__plugin_harness_harness__task_close",
         ):
             self.assertIn(required, harness_tools)
 
         plan_tools = parse_csv_field((REPO_ROOT / "plugin/skills/plan/SKILL.md").read_text(encoding="utf-8").split("---\n", 2)[1], "allowed-tools")
-        for required in ("mcp__harness__task_start", "mcp__harness__task_context"):
+        for required in ("mcp__plugin_harness_harness__task_start", "mcp__plugin_harness_harness__task_context"):
             self.assertIn(required, plan_tools)
 
         critic_plan_tools = parse_csv_field(extract_frontmatter("plugin/agents/critic-plan.md"), "tools")
-        self.assertIn("mcp__harness__write_critic_plan", critic_plan_tools)
+        self.assertIn("mcp__plugin_harness_harness__write_critic_plan", critic_plan_tools)
 
         critic_document_tools = parse_csv_field(extract_frontmatter("plugin/agents/critic-document.md"), "tools")
-        self.assertIn("mcp__harness__write_critic_document", critic_document_tools)
+        self.assertIn("mcp__plugin_harness_harness__write_critic_document", critic_document_tools)
 
     def test_project_settings_preapprove_harness_skills(self):
         settings = json.loads((REPO_ROOT / ".claude/settings.json").read_text(encoding="utf-8"))
@@ -79,7 +79,7 @@ class PluginAgentContractTests(unittest.TestCase):
             "Skill(harness:plan *)",
             "Skill(harness:maintain)",
             "Skill(harness:maintain *)",
-            "mcp__harness__*",
+            "mcp__plugin_harness_harness__*",
         }
         self.assertTrue(expected.issubset(set(allow)))
 

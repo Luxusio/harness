@@ -342,7 +342,7 @@ def main():
                 f"BLOCKED: '{filepath}' is a workflow control surface file. "
                 f"Direct writes are only permitted from maintenance tasks "
                 f"(maintenance_task=true in TASK_STATE.yaml). "
-                f"Run `mcp__harness__task_start` to compile routing, or set maintenance_task "
+                f"Run `mcp__plugin_harness_harness__task_start` to compile routing, or set maintenance_task "
                 f"in TASK_STATE.yaml. "
                 f"(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)",
                 file=sys.stderr,

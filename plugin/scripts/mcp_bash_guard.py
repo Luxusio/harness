@@ -22,39 +22,39 @@ from _lib import read_hook_input  # noqa: E402
 MANAGED_SCRIPT_PATTERNS = {
     "hctl.py": {
         "subcommand_tools": {
-            "start": "mcp__harness__task_start",
-            "context": "mcp__harness__task_context",
-            "update": "mcp__harness__task_update_from_git_diff",
-            "verify": "mcp__harness__task_verify",
-            "close": "mcp__harness__task_close",
-            "artifact": "mcp__harness__write_*",
+            "start": "mcp__plugin_harness_harness__task_start",
+            "context": "mcp__plugin_harness_harness__task_context",
+            "update": "mcp__plugin_harness_harness__task_update_from_git_diff",
+            "verify": "mcp__plugin_harness_harness__task_verify",
+            "close": "mcp__plugin_harness_harness__task_close",
+            "artifact": "mcp__plugin_harness_harness__write_*",
         },
-        "default_tool": "mcp__harness__task_context",
+        "default_tool": "mcp__plugin_harness_harness__task_context",
     },
     "verify.py": {
-        "default_tool": "mcp__harness__verify_run",
+        "default_tool": "mcp__plugin_harness_harness__verify_run",
     },
     "write_artifact.py": {
         "subcommand_tools": {
-            "critic-runtime": "mcp__harness__write_critic_runtime",
-            "critic-plan": "mcp__harness__write_critic_plan",
-            "critic-document": "mcp__harness__write_critic_document",
-            "handoff": "mcp__harness__write_handoff",
-            "doc-sync": "mcp__harness__write_doc_sync",
+            "critic-runtime": "mcp__plugin_harness_harness__write_critic_runtime",
+            "critic-plan": "mcp__plugin_harness_harness__write_critic_plan",
+            "critic-document": "mcp__plugin_harness_harness__write_critic_document",
+            "handoff": "mcp__plugin_harness_harness__write_handoff",
+            "doc-sync": "mcp__plugin_harness_harness__write_doc_sync",
         },
-        "default_tool": "mcp__harness__write_critic_plan",
+        "default_tool": "mcp__plugin_harness_harness__write_critic_plan",
     },
     "calibration_miner.py": {
-        "default_tool": "mcp__harness__calibration_mine",
+        "default_tool": "mcp__plugin_harness_harness__calibration_mine",
     },
     "observability.py": {
         "subcommand_tools": {
-            "detect": "mcp__harness__observability_detect",
-            "status": "mcp__harness__observability_status",
-            "hint": "mcp__harness__observability_hint",
-            "policy": "mcp__harness__observability_policy",
+            "detect": "mcp__plugin_harness_harness__observability_detect",
+            "status": "mcp__plugin_harness_harness__observability_status",
+            "hint": "mcp__plugin_harness_harness__observability_hint",
+            "policy": "mcp__plugin_harness_harness__observability_policy",
         },
-        "default_tool": "mcp__harness__observability_status",
+        "default_tool": "mcp__plugin_harness_harness__observability_status",
     },
 }
 
@@ -92,7 +92,7 @@ def _find_managed_script(command: str) -> str | None:
 def _infer_tool(script_name: str, command: str) -> str:
     meta = MANAGED_SCRIPT_PATTERNS.get(script_name, {})
     subcommand_tools = meta.get("subcommand_tools", {})
-    default_tool = meta.get("default_tool", "mcp__harness__task_context")
+    default_tool = meta.get("default_tool", "mcp__plugin_harness_harness__task_context")
     if not subcommand_tools:
         return default_tool
 

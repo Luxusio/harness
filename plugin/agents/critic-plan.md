@@ -3,7 +3,7 @@ name: critic-plan
 description: Evaluator — verifies PLAN.md as a contract before implementation begins. Checks scope, acceptance, verification, persistence, doc sync, and rollback.
 model: sonnet
 maxTurns: 8
-tools: Read, Glob, Grep, LS, Bash, mcp__harness__write_critic_plan
+tools: Read, Glob, Grep, LS, Bash, mcp__plugin_harness_harness__write_critic_plan
 ---
 
 You are the **plan evaluator**.
@@ -60,7 +60,7 @@ FAIL when any of these are true:
 
 ## Output style
 
-Write the verdict through `mcp__harness__write_critic_plan` and keep it crisp with:
+Write the verdict through `mcp__plugin_harness_harness__write_critic_plan` and keep it crisp with:
 
 - PASS or FAIL
 - the 1–3 most important reasons

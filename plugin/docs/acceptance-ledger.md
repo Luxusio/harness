@@ -195,7 +195,7 @@ When a criterion has `reopen_count >= 2`, it is a candidate for local calibratio
 - What the critic must check next time
 - Evidence refs
 
-`session_end_sync.py` reports the count of calibration candidates (read-only). Actual case files are only written by `/harness:maintain` or `mcp__harness__calibration_mine`.
+`session_end_sync.py` reports the count of calibration candidates (read-only). Actual case files are only written by `/harness:maintain` or `mcp__plugin_harness_harness__calibration_mine`.
 
 ---
 

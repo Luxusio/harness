@@ -3,7 +3,7 @@ name: setup
 description: Bootstrap the harness execution environment — critic playbooks, QA scaffolding, browser-first detection, and runtime config. No placeholders.
 argument-hint: [optional focus]
 user-invocable: true
-allowed-tools: Read, Glob, Grep, Write, Edit, Bash, AskUserQuestion, Agent, mcp__harness__verify_run
+allowed-tools: Read, Glob, Grep, Write, Edit, Bash, AskUserQuestion, Agent, mcp__plugin_harness_harness__verify_run
 ---
 
 Bootstrap harness in the current repository.
@@ -410,7 +410,7 @@ Ensure `.claude/settings.json` has at least:
       "Skill(harness:plan *)",
       "Skill(harness:maintain)",
       "Skill(harness:maintain *)",
-      "mcp__harness__*"
+      "mcp__plugin_harness_harness__*"
     ]
   }
 }
@@ -423,7 +423,7 @@ Rationale:
 
 ### Phase 14: Smoke test
 
-Run `mcp__harness__verify_run { mode: "suite" }` to validate the setup. Report the result.
+Run `mcp__plugin_harness_harness__verify_run { mode: "suite" }` to validate the setup. Report the result.
 If it fails, note the failures — do not silently skip.
 
 For web frontend projects, also verify:
