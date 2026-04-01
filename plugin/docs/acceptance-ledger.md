@@ -189,13 +189,13 @@ This is injected only when:
 
 ## Calibration Mining
 
-When a criterion has `reopen_count >= 2`, it is a candidate for local calibration case generation. The `calibration_miner.py` script generates a short case file in `plugin/calibration/local/critic-runtime/` describing:
+When a criterion has `reopen_count >= 2`, it is a candidate for local calibration case generation. The calibration MCP tool generates a short case file in `plugin/calibration/local/critic-runtime/` describing:
 
 - Why the previous PASS was wrong
 - What the critic must check next time
 - Evidence refs
 
-`session_end_sync.py` reports the count of calibration candidates (read-only). Actual case files are only written by `/harness:maintain` or explicit `calibration_miner.py` invocation.
+`session_end_sync.py` reports the count of calibration candidates (read-only). Actual case files are only written by `/harness:maintain` or `mcp__harness__calibration_mine`.
 
 ---
 

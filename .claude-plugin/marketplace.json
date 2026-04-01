@@ -15,7 +15,7 @@
       },
       "source": "./plugin",
       "category": "productivity",
-      "tags": ["execution-harness", "completion-gate", "critic-evaluation", "task-verification", "browser-qa", "doc-sync", "execution-modes", "evidence-bundles", "note-freshness", "maintain-lite", "orchestration-modes", "team-readiness", "auto-orchestration"]
+      "tags": ["execution-harness", "completion-gate", "critic-evaluation", "task-verification", "browser-qa", "doc-sync", "execution-modes", "evidence-bundles", "note-freshness", "maintain-lite", "orchestration-modes", "team-readiness", "auto-orchestration", "mcp-control-plane", "mcp-tools"]
     }
   ],
   "version": "2.0.0"

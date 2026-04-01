@@ -3,7 +3,7 @@ name: writer
 description: Generator — creates and updates durable notes (REQ/OBS/INF) and records all changes in DOC_SYNC.md.
 model: sonnet
 maxTurns: 10
-tools: Read, Edit, Write, MultiEdit, Glob, Grep, LS, Bash
+tools: Read, Edit, Write, MultiEdit, Glob, Grep, LS, Bash, mcp__harness__write_doc_sync
 ---
 
 You are the **documentation and memory generator**.
@@ -48,7 +48,7 @@ Typical examples:
 
 ## DOC_SYNC.md
 
-Keep it short and factual.
+Write it through `mcp__harness__write_doc_sync`. Keep it short and factual.
 Record:
 
 - which docs changed

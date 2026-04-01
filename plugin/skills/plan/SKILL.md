@@ -3,12 +3,12 @@ name: plan
 description: Create a task contract — PLAN.md with scope, acceptance criteria, verification contract, doc sync, and rollback.
 argument-hint: <task-slug>
 user-invocable: true
-allowed-tools: Read, Glob, Grep, Write, Edit, AskUserQuestion
+allowed-tools: Read, Glob, Grep, Write, Edit, AskUserQuestion, mcp__harness__task_start, mcp__harness__task_context
 ---
 
 Create or repair the task contract for `TASK__$ARGUMENTS`.
 
-The skill is **CLI-first**: let `hctl` compile routing, then write only the minimum task-local artifacts needed for implementation and evaluation.
+The skill is **MCP-first**: let the harness MCP tools compile routing, then write only the minimum task-local artifacts needed for implementation and evaluation.
 
 ## Procedure
 
@@ -26,12 +26,10 @@ Also set `plan_session_state: context_open` in `TASK_STATE.yaml`.
 
 Run:
 
-```bash
-python3 plugin/scripts/hctl.py start --task-dir doc/harness/tasks/TASK__$ARGUMENTS
-python3 plugin/scripts/hctl.py context --task-dir doc/harness/tasks/TASK__$ARGUMENTS --json
-```
+- `mcp__harness__task_start { task_dir: "doc/harness/tasks/TASK__$ARGUMENTS" }`
+- `mcp__harness__task_context { task_dir: "doc/harness/tasks/TASK__$ARGUMENTS" }`
 
-Use the returned JSON as the source of truth for:
+Use the returned task pack as the source of truth for:
 
 - `risk_level`
 - `qa_required`

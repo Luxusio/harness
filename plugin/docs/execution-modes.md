@@ -4,12 +4,12 @@ updated: 2026-04-01
 
 > **Compatibility / maintenance reference only.**
 > This document is NOT the agent-facing canonical routing source.
-> For task routing, use: `python3 plugin/scripts/hctl.py context --task-dir <dir> --json`
-> Execution mode is derived automatically by `hctl start` and stored as a compatibility field in TASK_STATE.yaml.
+> For task routing, use: `mcp__harness__task_context`
+> Execution mode is derived automatically by `mcp__harness__task_start` and stored as a compatibility field in TASK_STATE.yaml.
 
 > **Note:** Execution mode (`light | standard | sprinted`) and orchestration mode (`solo | subagents | team`) are orthogonal axes. This document covers execution modes. See `plugin/docs/orchestration-modes.md` for orchestration modes.
 
-This document is a compatibility reference for the three execution modes. Agents should rely on `hctl context` output rather than reading this document at runtime.
+This document is a compatibility reference for the three execution modes. Agents should rely on `task_context` output rather than reading this document at runtime.
 
 ---
 

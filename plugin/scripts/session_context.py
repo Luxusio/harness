@@ -88,7 +88,7 @@ def main():
         print("active tasks: none")
     if blocked:
         print(f"blocked_env: {blocked}")
-    print("hint: use hctl context --task-dir <dir> --json for the canonical task pack")
+    print("hint: use mcp__harness__task_context for the canonical task pack")
 
 
 if __name__ == "__main__":

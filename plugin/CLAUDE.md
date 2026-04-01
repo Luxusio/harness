@@ -1,8 +1,8 @@
 # harness runtime rules
 
-This repository uses a **CLI-first harness**.
+This repository uses an **MCP-first harness** for model-facing control.
 
-The goal is simple: the model should spend tokens on the task, not on re-deriving workflow policy. Runtime control comes from `hctl`, task-local artifacts, and hook gates.
+The goal is simple: the model should spend tokens on the task, not on brittle shell assembly. Runtime control comes from MCP tools, task-local artifacts, and hook gates. The CLI remains as backend/manual fallback.
 
 ## 1. Classify first
 
@@ -14,18 +14,14 @@ Use the smallest lane that fits the request.
 
 If the request will change files or produce structured findings, do not stay in answer mode.
 
-## 2. Runtime control comes from `hctl`
+## 2. Runtime control comes from harness MCP tools
 
-For every tasked request:
+For every tasked request, use:
 
-```bash
-python3 plugin/scripts/hctl.py start --task-dir <task-dir>
-python3 plugin/scripts/hctl.py context --task-dir <task-dir> --json
-```
+- `mcp__harness__task_start`
+- `mcp__harness__task_context`
 
-Treat `hctl context` as the **canonical task pack** for:
-
-Write/Edit/MultiEdit on normal repo files is hook-blocked unless the current task has `hctl start`, a recorded `hctl context --json` read, `PLAN.md`, and `plan_verdict: PASS`.
+Treat `task_context` as the **canonical task pack** for:
 
 - `risk_level`
 - `qa_required`
@@ -45,7 +41,7 @@ Do **not** read global harness docs again unless the task is explicitly changing
 
 At runtime, prefer this order:
 
-1. `hctl context --json`
+1. `mcp__harness__task_context`
 2. task-local files listed in `must_read`
 3. only the source files directly needed for the current step
 
@@ -82,13 +78,13 @@ Only tasks with `maintenance_task: true` may change those files.
 
 Normal loop:
 
-```bash
-hctl start
-hctl context
+```text
+task_start
+task_context
 # plan / implement / evaluate
-hctl update --from-git-diff
-hctl verify
-hctl close
+task_update_from_git_diff
+task_verify
+task_close
 ```
 
 Practical meaning:
@@ -110,7 +106,7 @@ For repo-mutating tasks:
 
 ## 8. Verification rule
 
-`hctl verify` is the normal verification entry point.
+`mcp__harness__task_verify` is the normal task verification entry point. Use `mcp__harness__verify_run` for repo-level verify.py modes.
 Use browser-first verification only when the task pack or manifest requires it.
 Do not claim success from static inspection alone when runtime verification is required.
 
@@ -136,9 +132,9 @@ If the normal delegated workflow is unavailable and the task still needs repo mu
 
 Before closing a task:
 
-- sync changed paths with `hctl update --from-git-diff`
+- sync changed paths with `mcp__harness__task_update_from_git_diff`
 - ensure required critics have written PASS in task state
 - ensure blocking complaints or pending directives are resolved
-- use `hctl close`
+- use `mcp__harness__task_close`
 
-If `hctl close` blocks, fix the stated gate instead of narrating around it.
+If `task_close` blocks, fix the stated gate instead of narrating around it.

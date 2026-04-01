@@ -3,7 +3,7 @@ name: maintain
 description: Doc and task cleanup tool — finds and fixes stale tasks, broken links, index drift, obvious entropy, and generates local calibration cases.
 argument-hint: [optional focus area]
 user-invocable: true
-allowed-tools: Read, Glob, Grep, Write, Edit, Bash
+allowed-tools: Read, Glob, Grep, Write, Edit, Bash, mcp__harness__calibration_mine
 ---
 
 Cleanup tool for harness docs and tasks.
@@ -38,7 +38,7 @@ Optional focus from user: `$ARGUMENTS`
 - **Flag only** — do not auto-fix content contradictions (needs writer + critic-document)
 
 ### 5. Local calibration case generation
-- Run `python3 plugin/scripts/calibration_miner.py` (or with `--dry-run` first to preview)
+- Run `mcp__harness__calibration_mine` (`dry_run: true` first if you want a preview)
 - This scans tasks for `reopen_count >= 2` or `runtime_verdict_fail_count >= 2`
 - Generates/updates case files in `plugin/calibration/local/critic-runtime/`
 
@@ -46,7 +46,7 @@ Optional focus from user: `$ARGUMENTS`
 
 `false_pass` complaints in `COMPLAINTS.yaml` are treated as calibration candidates alongside the existing `reopen_count >= 2` and `runtime_verdict_fail_count >= 2` triggers.
 
-When `/harness:maintain` runs, it calls `calibration_miner.py` which now also checks for `false_pass` kind complaints in any task's COMPLAINTS.yaml. If found:
+When `/harness:maintain` runs, it calls the calibration MCP tool, which also checks for `false_pass` kind complaints in any task's COMPLAINTS.yaml. If found:
 - Trigger label: `false_pass_complaint`
 - Evidence refs include `COMPLAINTS.yaml`
 - Case describes why the previous PASS was wrong based on the complaint text
@@ -68,9 +68,9 @@ Apply safe mechanical fixes immediately:
 - Mark abandoned tasks as `status: stale` with `updated: <now>`
 
 ### 3. Generate calibration cases (if candidates exist)
-```bash
-python3 plugin/scripts/calibration_miner.py --dry-run   # preview
-python3 plugin/scripts/calibration_miner.py             # write cases
+```text
+calibration_mine { dry_run: true }   # preview
+calibration_mine { dry_run: false }  # write cases
 ```
 Cases are written to `plugin/calibration/local/critic-runtime/<slug>.md`.
 

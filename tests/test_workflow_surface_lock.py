@@ -48,6 +48,9 @@ class TestIsWorkflowControlSurface(unittest.TestCase):
     def test_hooks_json(self):
         self.assertTrue(_is_workflow_control_surface("plugin/hooks/hooks.json"))
 
+    def test_plugin_mcp_json(self):
+        self.assertTrue(_is_workflow_control_surface("plugin/.mcp.json"))
+
     def test_setup_skill(self):
         self.assertTrue(_is_workflow_control_surface("plugin/skills/setup/SKILL.md"))
 
@@ -63,6 +66,12 @@ class TestIsWorkflowControlSurface(unittest.TestCase):
 
     def test_hctl_py(self):
         self.assertTrue(_is_workflow_control_surface("plugin/scripts/hctl.py"))
+
+    def test_harness_mcp_server(self):
+        self.assertTrue(_is_workflow_control_surface("plugin/mcp/harness_server.py"))
+
+    def test_mcp_bash_guard(self):
+        self.assertTrue(_is_workflow_control_surface("plugin/scripts/mcp_bash_guard.py"))
 
     def test_dot_slash_normalized(self):
         self.assertTrue(_is_workflow_control_surface("./plugin/CLAUDE.md"))

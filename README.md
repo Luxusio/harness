@@ -25,8 +25,6 @@ The only hard gate is at **task completion**: all required critic verdicts must 
 
 Tasks with `blocked_env` status cannot close.
 
-Repo writes are now hard-gated earlier as well: normal `Write` / `Edit` / `MultiEdit` calls are blocked unless the current task has a compiled routing state (`hctl start`), a recorded canonical task-pack read (`hctl context --json`), `PLAN.md`, and `plan_verdict: PASS`. This closes config / lockfile / docs bypasses that the old source-only gate missed.
-
 ## Execution modes
 
 The harness selects an execution mode after lane classification to scale ceremony to task complexity.

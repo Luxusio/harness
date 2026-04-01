@@ -50,18 +50,17 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Write|Edit|MultiEdit",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hctl_guard.py",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/mcp_bash_guard.py",
             "timeout": 3,
-            "statusMessage": "Checking task/context gate"
+            "statusMessage": "Routing harness control commands to MCP"
           }
         ]
       },
       {
-        "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           {
             "type": "command",
