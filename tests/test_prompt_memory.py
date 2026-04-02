@@ -4,11 +4,13 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "plugin", "scripts"))
 os.environ["HARNESS_SKIP_STDIN"] = "1"
 os.environ["HARNESS_SKIP_PREREAD"] = "1"
 
+import prompt_memory as prompt_memory_module
 from prompt_memory import _get_complaint_summary, _is_complaint_like, is_casual
 
 
@@ -128,3 +130,56 @@ class TestIsCasual(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSimilarFailureHint(unittest.TestCase):
+
+    def test_gather_context_surfaces_similar_failure_in_fix_round(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            current = os.path.join(tmp, "TASK__current")
+            previous = os.path.join(tmp, "TASK__previous")
+            os.makedirs(current)
+            os.makedirs(previous)
+
+            with open(os.path.join(current, "TASK_STATE.yaml"), "w", encoding="utf-8") as f:
+                f.write(
+                    "task_id: TASK__current\n"
+                    "status: implemented\n"
+                    "lane: debug\n"
+                    "runtime_verdict: FAIL\n"
+                    "updated: 2026-04-01T00:00:00Z\n"
+                    "verification_targets: [src/api/users.py]\n"
+                )
+            with open(os.path.join(current, "REQUEST.md"), "w", encoding="utf-8") as f:
+                f.write("Fix the users API persistence bug.\n")
+            with open(os.path.join(current, "CHECKS.yaml"), "w", encoding="utf-8") as f:
+                f.write(
+                    "checks:\n"
+                    "  - id: AC-001\n"
+                    "    status: failed\n"
+                    "    title: Users API persists updates\n"
+                )
+
+            with open(os.path.join(previous, "TASK_STATE.yaml"), "w", encoding="utf-8") as f:
+                f.write(
+                    "task_id: TASK__previous\n"
+                    "status: closed\n"
+                    "lane: debug\n"
+                    "runtime_verdict_fail_count: 2\n"
+                    "updated: 2026-03-01T00:00:00Z\n"
+                    "verification_targets: [src/api/users.py]\n"
+                )
+            with open(os.path.join(previous, "REQUEST.md"), "w", encoding="utf-8") as f:
+                f.write("Repair the failing users API save path.\n")
+            with open(os.path.join(previous, "CRITIC__runtime.md"), "w", encoding="utf-8") as f:
+                f.write(
+                    "verdict: FAIL\n"
+                    "summary: persistence still fails after reload\n"
+                )
+
+            with mock.patch.object(prompt_memory_module, "TASK_DIR", tmp), \
+                 mock.patch.object(prompt_memory_module, "select_relevant_notes", return_value=[]):
+                parts = prompt_memory_module.gather_context("fix src/api/users.py still broken")
+
+            self.assertTrue(any(part.startswith("similar:TASK__previous") for part in parts), parts)
+            self.assertLessEqual(len(parts), 4)

@@ -103,12 +103,14 @@ Detection: `len(roots_touched) > roots_estimate + 1` where `roots_estimate` is s
 
 ## task_context evidence-first promotion
 
-When `SESSION_HANDOFF.json` is present, or a task has an active `CRITIC__runtime.md` / `CRITIC__document.md` FAIL, `mcp__plugin_harness_harness__task_context` switches into an evidence-first posture:
+When `SESSION_HANDOFF.json` is present, a task has an active `CRITIC__runtime.md` / `CRITIC__document.md` FAIL, **or runtime verification is blocked by environment/setup issues**, `mcp__plugin_harness_harness__task_context` switches into an evidence-first posture:
 
 1. it promotes the most relevant failing critic artifact into `must_read`
 2. it keeps `SESSION_HANDOFF.json` near the front of `must_read` when present
-3. it emits a compact `review_focus` block with `trigger`, `critic_artifact`, `supporting_artifact`, and a short `evidence_excerpt`
-4. it carries forward `focus_check_ids`, `paths_in_focus`, and `do_not_regress` when available
+3. on `blocked_env`, it promotes `ENVIRONMENT_SNAPSHOT.md` so recovery starts from actual sandbox facts rather than re-probing the repo
+4. it emits a compact `review_focus` block with `trigger`, `critic_artifact`, `supporting_artifact`, and a short `evidence_excerpt`
+5. it carries forward `focus_check_ids`, `paths_in_focus`, and `do_not_regress` when available
+6. when a similar past failure exists, it also surfaces `prior_similar_task`, `prior_similar_artifact`, and `prior_similar_excerpt` as a single top-1 recovery hint
 
 This is meant to stop fix rounds from reopening with only summaries while the actual failing evidence stays hidden deeper in the task folder.
 

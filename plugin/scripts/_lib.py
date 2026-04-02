@@ -1616,6 +1616,22 @@ def emit_compact_context(task_dir):
             pieces.append("paths: " + ", ".join(str(x) for x in paths[:2]))
         return _compact_excerpt(" | ".join(pieces))
 
+    def _excerpt_from_env_snapshot(path_value):
+        text_value = _read_text(path_value)
+        if not text_value:
+            return ""
+        lines = []
+        for raw in text_value.splitlines():
+            stripped = raw.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if stripped.startswith("captured_at:") or stripped.startswith("reason:"):
+                continue
+            lines.append(stripped.lstrip("- "))
+            if len(lines) >= 3:
+                break
+        return _compact_excerpt(" | ".join(lines))
+
     task_id = yaml_field("task_id", state_file) or os.path.basename(task_dir)
     status = yaml_field("status", state_file) or "unknown"
     lane = yaml_field("lane", state_file) or "unknown"
@@ -1730,17 +1746,21 @@ def emit_compact_context(task_dir):
     document_critic_name = "CRITIC__document.md"
     doc_sync_name = "DOC_SYNC.md"
     handoff_name = "HANDOFF.md"
+    request_name = "REQUEST.md"
+    env_snapshot_name = "ENVIRONMENT_SNAPSHOT.md"
 
     session_handoff_path = _task_abs(session_handoff_name)
     runtime_critic_path = _task_abs(runtime_critic_name)
     document_critic_path = _task_abs(document_critic_name)
     doc_sync_path = _task_abs(doc_sync_name)
     handoff_path = _task_abs(handoff_name)
+    env_snapshot_path = _task_abs(env_snapshot_name)
 
     handoff_data = _load_handoff_json(session_handoff_path)
     runtime_critic_verdict = _critic_verdict(runtime_critic_path)
     document_critic_verdict = _critic_verdict(document_critic_path)
     runtime_fix_round = runtime_verdict == "FAIL" or runtime_critic_verdict == "FAIL"
+    blocked_env_round = status == "blocked_env" or runtime_verdict == "BLOCKED_ENV" or runtime_critic_verdict == "BLOCKED_ENV"
     document_fix_round = document_critic_verdict == "FAIL"
 
     review_focus = {
@@ -1751,8 +1771,9 @@ def emit_compact_context(task_dir):
     focus_critic_name = ""
     focus_support_name = ""
     evidence_excerpt = ""
+    similar_failure = None
 
-    if runtime_fix_round or document_fix_round or handoff_data:
+    if runtime_fix_round or document_fix_round or blocked_env_round or handoff_data:
         review_focus["evidence_first"] = True
         if runtime_fix_round:
             focus_trigger = "runtime_fail"
@@ -1762,6 +1783,9 @@ def emit_compact_context(task_dir):
             focus_trigger = "document_fail"
             focus_critic_name = document_critic_name if os.path.isfile(document_critic_path) else ""
             focus_support_name = doc_sync_name if os.path.isfile(doc_sync_path) else ""
+        elif blocked_env_round:
+            focus_trigger = "blocked_env"
+            focus_support_name = env_snapshot_name if os.path.isfile(env_snapshot_path) else ""
         else:
             focus_trigger = "session_handoff"
 
@@ -1769,6 +1793,8 @@ def emit_compact_context(task_dir):
             evidence_excerpt = _excerpt_from_critic(runtime_critic_path)
         elif focus_critic_name == document_critic_name:
             evidence_excerpt = _excerpt_from_critic(document_critic_path)
+        elif focus_support_name == env_snapshot_name:
+            evidence_excerpt = _excerpt_from_env_snapshot(env_snapshot_path)
 
         if not evidence_excerpt:
             evidence_excerpt = _excerpt_from_handoff(handoff_data)
@@ -1795,6 +1821,23 @@ def emit_compact_context(task_dir):
         if do_not_regress:
             review_focus["do_not_regress"] = do_not_regress
 
+        try:
+            from failure_memory import find_similar_failure
+
+            similar_failure = find_similar_failure(task_dir)
+        except Exception:
+            similar_failure = None
+
+        if similar_failure:
+            review_focus["prior_similar_task"] = similar_failure.get("task_id")
+            review_focus["prior_similar_artifact"] = os.path.join(
+                TASK_DIR,
+                str(similar_failure.get("task_id") or ""),
+                str(similar_failure.get("artifact") or "TASK_STATE.yaml"),
+            )
+            if similar_failure.get("excerpt"):
+                review_focus["prior_similar_excerpt"] = str(similar_failure.get("excerpt"))
+
     default_must_read_order = [
         "TASK_STATE.yaml",
         "PLAN.md",
@@ -1810,12 +1853,16 @@ def emit_compact_context(task_dir):
             priority_must_read.append(session_handoff_name)
         if focus_critic_name:
             priority_must_read.append(focus_critic_name)
+        if blocked_env_round and os.path.isfile(env_snapshot_path):
+            priority_must_read.append(env_snapshot_name)
         for raw_name in handoff_data.get("files_to_read_first", []) if isinstance(handoff_data, dict) else []:
             if isinstance(raw_name, str) and raw_name.strip():
                 priority_must_read.append(raw_name.strip())
         if focus_support_name:
             priority_must_read.append(focus_support_name)
-        priority_must_read.extend(["TASK_STATE.yaml", "PLAN.md", "CHECKS.yaml", "HANDOFF.md"])
+        priority_must_read.extend(["TASK_STATE.yaml", request_name, "PLAN.md", "CHECKS.yaml", "HANDOFF.md"])
+    elif planning_mode == "broad-build" and plan_verdict != "PASS":
+        priority_must_read.extend(["TASK_STATE.yaml", request_name, env_snapshot_name, "PLAN.md", "CHECKS.yaml"])
     else:
         priority_must_read.extend(default_must_read_order)
 
@@ -1838,12 +1885,16 @@ def emit_compact_context(task_dir):
         notes.append("planning_mode=broad-build")
     if plan_verdict != "PASS":
         notes.append(f"plan_verdict={plan_verdict}")
-    if runtime_fix_round:
+    if blocked_env_round:
+        notes.append("blocked env: read environment snapshot")
+    elif runtime_fix_round:
         notes.append("runtime fix round: evidence-first")
     elif document_fix_round:
         notes.append("document fix round: evidence-first")
     elif handoff_data:
         notes.append("session handoff present")
+    if similar_failure and similar_failure.get("task_id"):
+        notes.append(f"similar failure: {similar_failure['task_id']}")
     if maintenance_task:
         notes.append("maintenance task: workflow surface unlocked")
     notes = notes[:3]
@@ -1853,11 +1904,13 @@ def emit_compact_context(task_dir):
     elif plan_verdict != "PASS":
         if planning_mode == "broad-build":
             next_action = (
-                "Use the plan skill broad-build path to write 01_product_spec.md, "
-                "02_design_language.md, 03_architecture.md, then PLAN.md before source changes."
+                "Read REQUEST.md and ENVIRONMENT_SNAPSHOT.md first, then use the plan skill broad-build path to write "
+                "01_product_spec.md, 02_design_language.md, 03_architecture.md, then PLAN.md before source changes."
             )
         else:
             next_action = "Get PLAN.md to critic-plan PASS before mutating source files."
+    elif blocked_env_round:
+        next_action = "Read ENVIRONMENT_SNAPSHOT.md first, repair the missing tool or setup assumption, then rerun task_verify before continuing."
     elif runtime_fix_round:
         next_action = "Read the surfaced runtime evidence first, fix the failing path, run mcp__plugin_harness_harness__task_verify, then re-check critics."
     elif document_fix_round:
