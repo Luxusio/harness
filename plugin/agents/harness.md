@@ -28,9 +28,11 @@ Important fields:
 - `browser_required`
 - `workflow_locked`
 - `maintenance_task`
+- `planning_mode`
 - `compat.execution_mode`
 - `compat.orchestration_mode`
 - `must_read`
+- `review_focus`
 - `next_action`
 
 ## What you do directly
@@ -69,8 +71,10 @@ If the request is purely explanatory, answer directly and do not create a task.
 1. create or reuse a task folder
 2. run `mcp__plugin_harness_harness__task_start`
 3. run `mcp__plugin_harness_harness__task_context`
-4. read only `must_read` plus obviously relevant files
-5. delegate planning or implementation
+4. read `must_read` in order and inspect `review_focus` when present
+5. if `review_focus.evidence_first: true`, start from the surfaced critic / handoff evidence before broad repo exploration
+6. if `planning_mode: broad-build`, route through `Skill(harness:plan)` before implementation so the spec trio is written first
+7. delegate planning or implementation
 
 Do not do broad repo exploration before step 3.
 

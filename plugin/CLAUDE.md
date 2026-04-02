@@ -29,6 +29,7 @@ Treat `task_context` as the **canonical task pack** for:
 - `browser_required`
 - `workflow_locked`
 - `maintenance_task`
+- `planning_mode`
 - `compat.execution_mode`
 - `compat.orchestration_mode`
 - `must_read`
@@ -102,7 +103,8 @@ For repo-mutating tasks:
 
 - do not mutate source before `PLAN.md` exists and critic-plan PASS is recorded
 - if the task is unplanned, stop source work and repair the plan first
-- if the request is broad and under-specified, use the plan skill to narrow it before implementation
+- if `planning_mode: broad-build`, let the plan skill write `01_product_spec.md`, `02_design_language.md`, and `03_architecture.md` before `PLAN.md`
+- otherwise, if the request is broad and under-specified, use the plan skill to narrow it before implementation
 
 ## 8. Verification rule
 

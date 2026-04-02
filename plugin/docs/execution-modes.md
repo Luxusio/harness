@@ -6,6 +6,7 @@ updated: 2026-04-01
 > This document is NOT the agent-facing canonical routing source.
 > For task routing, use: `mcp__plugin_harness_harness__task_context`
 > Execution mode is derived automatically by `mcp__plugin_harness_harness__task_start` and stored as a compatibility field in TASK_STATE.yaml.
+> Planning mode is also derived by `task_start` and stored as `planning_mode` in TASK_STATE.yaml.
 
 > **Note:** Execution mode (`light | standard | sprinted`) and orchestration mode (`solo | subagents | team`) are orthogonal axes. This document covers execution modes. See `plugin/docs/orchestration-modes.md` for orchestration modes.
 
@@ -193,6 +194,8 @@ Planning mode is orthogonal to execution mode. It controls planning depth, not r
 
 **Required (ALL):** lane is `build`, request is a broad product/build request.
 
+`task_start` evaluates this from explicit request text first and falls back to task-local `REQUEST.md` when no request text is passed.
+
 **Plus 2+ of:** short high-level request (1-4 sentences), greenfield/new app/dashboard/site, no file path anchors, browser/UI emphasis, 2+ roots estimated, too many assumptions needed for immediate PLAN.md.
 
 **Exclusions (ANY blocks broad-build):** clear bugfix, single endpoint/component, performance/enforcement/refactor, request already has detailed technical spec.
@@ -210,6 +213,8 @@ These narrow a broad request into a concrete PLAN.md contract. They do NOT repla
 ### Backward compatibility
 
 `planning_mode` field absence = `standard`. Older tasks are unaffected.
+
+Existing `PLAN.md` also preserves the current mode — auto-promotion only happens before the first plan contract exists.
 
 ---
 

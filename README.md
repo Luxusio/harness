@@ -50,6 +50,17 @@ Mode is stored as `execution_mode` in `TASK_STATE.yaml`. Mode may escalate mid-t
 
 See `plugin/docs/execution-modes.md` for the full signal matrix, artifact table, and auto-escalation rules.
 
+## Planning modes
+
+Planning depth is selected independently from execution mode and stored as `planning_mode` in `TASK_STATE.yaml`.
+
+| Mode | When | Effect |
+|------|------|--------|
+| **standard** | Default for bugfixes, refactors, investigations, and already-detailed specs | Write `PLAN.md` directly |
+| **broad-build** | Broad build-lane product requests with sparse specs and no strong file anchors | Write `01_product_spec.md`, `02_design_language.md`, `03_architecture.md` before `PLAN.md` |
+
+`task_start` promotes `planning_mode: broad-build` conservatively. It only triggers before a plan exists, and it stays off for bugfixes, refactors, performance work, single-component requests, or detailed technical specs.
+
 ## Orchestration modes
 
 The harness selects an orchestration mode independently from the execution mode. These are orthogonal axes: execution mode controls ceremony/verification depth, orchestration mode controls who performs the work.

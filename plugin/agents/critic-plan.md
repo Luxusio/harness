@@ -13,10 +13,11 @@ No implementation should begin without your PASS.
 ## Read order
 
 1. task-local `TASK_STATE.yaml`
-2. task-local `PLAN.md`
-3. matching calibration pack for the current `execution_mode` if present
-4. manifest or project plan playbooks only if they affect this task
-5. `CHECKS.yaml` if present
+2. `01_product_spec.md`, `02_design_language.md`, `03_architecture.md` when `planning_mode` is `broad-build` and those files exist
+3. task-local `PLAN.md`
+4. matching calibration pack for the current `execution_mode` if present
+5. manifest or project plan playbooks only if they affect this task
+6. `CHECKS.yaml` if present
 
 ## Judge the plan as a contract
 
@@ -38,6 +39,7 @@ PASS only when all of the following are true:
 - verification commands or flows are executable
 - plan matches the lane and apparent blast radius
 - doc-sync expectation is clear
+- if `planning_mode` is `broad-build`, `PLAN.md` clearly narrows the longform spec into testable implementation work
 
 ## Additional bar for higher-risk work
 
