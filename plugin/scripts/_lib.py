@@ -7,8 +7,11 @@ import json
 import os
 import re
 import sys
+import shutil
 import glob as _glob
+import fnmatch
 from datetime import datetime, timezone
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -757,6 +760,540 @@ def is_team_task(task_dir):
     """Return True if orchestration_mode is 'team'."""
     state_file = os.path.join(task_dir, "TASK_STATE.yaml")
     return yaml_field("orchestration_mode", state_file) == "team"
+
+
+TEAM_PLAN_REQUIRED_HEADINGS = (
+    "## Worker Roster",
+    "## Owned Writable Paths",
+    "## Shared Read-Only Paths",
+    "## Forbidden Writes",
+    "## Synthesis Strategy",
+)
+
+TEAM_SYNTHESIS_REQUIRED_HEADINGS = (
+    "## Integrated Result",
+    "## Cross-Checks",
+    "## Verification Summary",
+    "## Residual Risks",
+)
+
+TEAM_PLACEHOLDER_MARKERS = (
+    "TODO:",
+    "TBD",
+    "<fill",
+    "<todo",
+    "[todo]",
+)
+
+TEAM_NO_PATH_MARKERS = {"none", "n/a", "na", "-", "(none)"}
+TEAM_WORKER_ENV_KEYS = ("HARNESS_TEAM_WORKER",)
+_TEAM_GLOB_MAGIC = set("*?[]")
+
+
+def _normalize_worker_name(value):
+    """Normalize worker identifiers so env values and TEAM_PLAN entries align."""
+    raw = str(value or "").strip().strip("`").strip('"').strip("'")
+    if not raw:
+        return ""
+    raw = raw.replace("_", "-")
+    raw = re.sub(r"\s+", "-", raw)
+    return raw.lower()
+
+
+def _normalize_team_path_pattern(value):
+    """Normalize TEAM_PLAN path patterns to repo-relative POSIX style."""
+    raw = str(value or "").strip().strip("`").strip('"').strip("'")
+    if not raw:
+        return ""
+    raw = raw.replace("\\", "/")
+    while raw.startswith("./"):
+        raw = raw[2:]
+    raw = raw.strip()
+    if raw.endswith("/") and not raw.endswith("/**"):
+        raw = raw.rstrip("/")
+    return raw
+
+
+def _markdown_section_body(text_value, heading):
+    """Return the body of a markdown ## section, or an empty string."""
+    if not text_value or not heading:
+        return ""
+    normalized = text_value.replace("\r\n", "\n")
+    pattern = re.compile(
+        rf"(?ms)^" + re.escape(heading) + r"\s*$\n(.*?)(?=^##\s|\Z)"
+    )
+    match = pattern.search(normalized)
+    return match.group(1).strip("\n") if match else ""
+
+
+def _markdown_bullets(section_body):
+    """Return top-level bullet items from a markdown section body."""
+    bullets = []
+    for raw_line in str(section_body or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("<!--"):
+            continue
+        if re.match(r"^[-*]\s+", line):
+            bullets.append(re.sub(r"^[-*]\s+", "", line).strip())
+    return bullets
+
+
+def _split_path_values(payload):
+    values = []
+    for part in re.split(r"\s*,\s*", str(payload or "")):
+        norm = _normalize_team_path_pattern(part)
+        if not norm:
+            continue
+        if norm.lower() in TEAM_NO_PATH_MARKERS:
+            continue
+        values.append(norm)
+    return values
+
+
+def _has_glob_magic(pattern):
+    return any(ch in str(pattern or "") for ch in _TEAM_GLOB_MAGIC)
+
+
+def _pattern_prefix(pattern):
+    pat = _normalize_team_path_pattern(pattern)
+    if not pat:
+        return ""
+    first_magic = min((pat.find(ch) for ch in _TEAM_GLOB_MAGIC if ch in pat), default=-1)
+    if first_magic == -1:
+        return pat
+    prefix = pat[:first_magic]
+    if "/" in prefix:
+        prefix = prefix.rsplit("/", 1)[0]
+    return prefix.strip("/")
+
+
+def _match_team_path_pattern(pattern, repo_path):
+    """Conservative matcher for TEAM_PLAN patterns against repo-relative paths."""
+    pat = _normalize_team_path_pattern(pattern)
+    target = _normalize_team_path_pattern(repo_path)
+    if not pat or not target:
+        return False
+    if pat == target:
+        return True
+    if pat.endswith("/**"):
+        prefix = pat[:-3]
+        return target == prefix or target.startswith(prefix + "/")
+    if pat.endswith("/*"):
+        prefix = pat[:-2]
+        if not (target == prefix or target.startswith(prefix + "/")):
+            return False
+        remainder = target[len(prefix):].lstrip("/")
+        return remainder != "" and "/" not in remainder
+    if _has_glob_magic(pat):
+        if fnmatch.fnmatch(target, pat):
+            return True
+    return target.startswith(pat + "/")
+
+
+def _team_patterns_overlap(pattern_a, pattern_b):
+    """Return True when two TEAM_PLAN writable patterns clearly overlap."""
+    a = _normalize_team_path_pattern(pattern_a)
+    b = _normalize_team_path_pattern(pattern_b)
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if _match_team_path_pattern(a, b) or _match_team_path_pattern(b, a):
+        return True
+    prefix_a = _pattern_prefix(a)
+    prefix_b = _pattern_prefix(b)
+    if prefix_a and prefix_b:
+        if prefix_a == prefix_b:
+            broad_a = a.endswith("/**") or a.endswith("/*") or not _has_glob_magic(a)
+            broad_b = b.endswith("/**") or b.endswith("/*") or not _has_glob_magic(b)
+            if broad_a or broad_b:
+                return True
+        if prefix_a.startswith(prefix_b + "/") or prefix_b.startswith(prefix_a + "/"):
+            return True
+    return False
+
+
+def parse_team_plan_ownership(plan_path):
+    """Parse TEAM_PLAN.md into worker/path ownership metadata."""
+    result = {
+        "exists": False,
+        "workers": [],
+        "worker_labels": {},
+        "owned_writable_paths": {},
+        "shared_read_only_paths": [],
+        "forbidden_writes": {},
+        "validation_errors": [],
+        "raw_text": "",
+    }
+    if not plan_path or not os.path.isfile(plan_path):
+        result["validation_errors"] = ["TEAM_PLAN.md missing"]
+        return result
+    try:
+        text_value = Path(plan_path).read_text(encoding="utf-8")
+    except OSError:
+        result["validation_errors"] = ["TEAM_PLAN.md unreadable"]
+        return result
+
+    result["exists"] = True
+    result["raw_text"] = text_value
+
+    roster_body = _markdown_section_body(text_value, "## Worker Roster")
+    owned_body = _markdown_section_body(text_value, "## Owned Writable Paths")
+    shared_body = _markdown_section_body(text_value, "## Shared Read-Only Paths")
+    forbidden_body = _markdown_section_body(text_value, "## Forbidden Writes")
+
+    errors = []
+
+    worker_labels = {}
+    workers = []
+    for item in _markdown_bullets(roster_body):
+        if ":" not in item:
+            errors.append(f"worker roster entry must use '<worker>: <scope>', got '{item}'")
+            continue
+        worker_raw, label_raw = item.split(":", 1)
+        worker = _normalize_worker_name(worker_raw)
+        if not worker:
+            errors.append(f"worker roster entry has empty worker name: '{item}'")
+            continue
+        if worker in worker_labels:
+            errors.append(f"duplicate worker '{worker}' in worker roster")
+            continue
+        worker_labels[worker] = label_raw.strip()
+        workers.append(worker)
+
+    if not workers:
+        errors.append("worker roster must list at least one worker")
+
+    owned = {worker: [] for worker in workers}
+    for item in _markdown_bullets(owned_body):
+        if ":" not in item:
+            errors.append(f"owned writable paths entry must use '<worker>: <path>', got '{item}'")
+            continue
+        worker_raw, payload = item.split(":", 1)
+        worker = _normalize_worker_name(worker_raw)
+        if worker not in owned:
+            errors.append(f"owned writable paths references unknown worker '{worker_raw.strip()}'")
+            continue
+        paths = _split_path_values(payload)
+        if not paths:
+            errors.append(f"owned writable paths must list at least one path for worker '{worker}'")
+            continue
+        owned[worker].extend(paths)
+
+    for worker in workers:
+        if not owned.get(worker):
+            errors.append(f"worker '{worker}' must own at least one writable path")
+
+    shared_read_only = []
+    for item in _markdown_bullets(shared_body):
+        shared_read_only.extend(_split_path_values(item))
+
+    forbidden = {worker: [] for worker in workers}
+    for item in _markdown_bullets(forbidden_body):
+        if ":" not in item:
+            errors.append(f"forbidden writes entry must use '<worker>: <path>', got '{item}'")
+            continue
+        worker_raw, payload = item.split(":", 1)
+        worker = _normalize_worker_name(worker_raw)
+        if worker not in forbidden:
+            errors.append(f"forbidden writes references unknown worker '{worker_raw.strip()}'")
+            continue
+        forbidden[worker].extend(_split_path_values(payload))
+
+    ownership_pairs = []
+    for worker, patterns in owned.items():
+        for pattern in patterns:
+            ownership_pairs.append((worker, pattern))
+
+    for idx, (worker_a, pattern_a) in enumerate(ownership_pairs):
+        for worker_b, pattern_b in ownership_pairs[idx + 1:]:
+            if worker_a == worker_b:
+                continue
+            if _team_patterns_overlap(pattern_a, pattern_b):
+                errors.append(
+                    f"overlapping writable ownership between '{worker_a}' ({pattern_a}) and '{worker_b}' ({pattern_b})"
+                )
+
+    for shared_pattern in shared_read_only:
+        for worker, pattern in ownership_pairs:
+            if _team_patterns_overlap(shared_pattern, pattern):
+                errors.append(
+                    f"shared read-only path '{shared_pattern}' overlaps writable ownership for '{worker}' ({pattern})"
+                )
+
+    result.update({
+        "workers": workers,
+        "worker_labels": worker_labels,
+        "owned_writable_paths": owned,
+        "shared_read_only_paths": shared_read_only,
+        "forbidden_writes": forbidden,
+        "validation_errors": sorted(set(errors)),
+    })
+    return result
+
+
+def get_team_worker_identity():
+    """Return normalized team worker identity from env, or ''."""
+    for env_key in TEAM_WORKER_ENV_KEYS:
+        raw = os.environ.get(env_key, "")
+        norm = _normalize_worker_name(raw)
+        if norm:
+            return norm
+
+    raw_agent = str(os.environ.get("CLAUDE_AGENT_NAME", "")).strip()
+    if not raw_agent:
+        return ""
+    candidates = [raw_agent]
+    if ":" in raw_agent:
+        candidates.append(raw_agent.split(":")[-1])
+    for item in candidates:
+        norm = _normalize_worker_name(item)
+        if norm.startswith("worker-") or norm.startswith("team-"):
+            return norm
+    return ""
+
+
+def check_team_write_ownership(task_dir, repo_path, worker_name=""):
+    """Return (allowed, message, metadata) for team-mode source writes."""
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    if yaml_field("orchestration_mode", state_file) != "team":
+        return True, "", {}
+
+    plan_path = os.path.join(task_dir, "TEAM_PLAN.md")
+    plan = parse_team_plan_ownership(plan_path)
+    errors = list(plan.get("validation_errors") or [])
+    if errors:
+        return False, (
+            "BLOCKED: TEAM_PLAN.md ownership map is invalid. " + "; ".join(errors[:4])
+        ), {"plan": plan, "target": _normalize_team_path_pattern(repo_path)}
+
+    target = _normalize_team_path_pattern(repo_path)
+    if not target:
+        return False, "BLOCKED: could not normalize team write target path.", {"plan": plan, "target": ""}
+
+    shared_matches = [
+        pattern for pattern in plan.get("shared_read_only_paths", [])
+        if _match_team_path_pattern(pattern, target)
+    ]
+    if shared_matches:
+        return False, (
+            f"BLOCKED: '{target}' is declared shared read-only in TEAM_PLAN.md "
+            f"({', '.join(shared_matches[:3])})."
+        ), {"plan": plan, "target": target, "shared_matches": shared_matches}
+
+    owner_matches = []
+    for worker, patterns in (plan.get("owned_writable_paths") or {}).items():
+        if any(_match_team_path_pattern(pattern, target) for pattern in patterns):
+            owner_matches.append(worker)
+
+    if not owner_matches:
+        return False, (
+            f"BLOCKED: '{target}' is outside TEAM_PLAN.md owned writable paths. "
+            "Only declared worker-owned paths may be mutated in team mode."
+        ), {"plan": plan, "target": target, "owner_matches": owner_matches}
+
+    if len(owner_matches) > 1:
+        return False, (
+            f"BLOCKED: '{target}' matches multiple worker ownership entries "
+            f"({', '.join(owner_matches)}). Fix TEAM_PLAN.md overlap before writing."
+        ), {"plan": plan, "target": target, "owner_matches": owner_matches}
+
+    worker = _normalize_worker_name(worker_name) or get_team_worker_identity()
+    if worker:
+        if worker not in plan.get("workers", []):
+            return False, (
+                f"BLOCKED: team worker '{worker}' is not declared in TEAM_PLAN.md. "
+                "Set HARNESS_TEAM_WORKER to a declared worker name before source writes."
+            ), {"plan": plan, "target": target, "worker": worker, "owner_matches": owner_matches}
+
+        forbidden_matches = [
+            pattern for pattern in (plan.get("forbidden_writes") or {}).get(worker, [])
+            if _match_team_path_pattern(pattern, target)
+        ]
+        if forbidden_matches:
+            return False, (
+                f"BLOCKED: team worker '{worker}' may not write '{target}' per TEAM_PLAN.md "
+                f"forbidden writes ({', '.join(forbidden_matches[:3])})."
+            ), {"plan": plan, "target": target, "worker": worker, "owner_matches": owner_matches}
+
+        expected_owner = owner_matches[0]
+        if worker != expected_owner:
+            return False, (
+                f"BLOCKED: '{target}' is owned by team worker '{expected_owner}', not '{worker}'. "
+                "Respect TEAM_PLAN.md writable ownership."
+            ), {"plan": plan, "target": target, "worker": worker, "owner_matches": owner_matches}
+
+    return True, "", {"plan": plan, "target": target, "owner_matches": owner_matches, "worker": worker}
+
+
+def _team_artifact_readiness(path_value, required_headings):
+    """Return structured readiness for TEAM_PLAN / TEAM_SYNTHESIS artifacts."""
+    if not path_value or not os.path.isfile(path_value):
+        return {
+            "exists": False,
+            "ready": False,
+            "missing_sections": list(required_headings),
+            "has_placeholders": True,
+            "mtime": 0.0,
+        }
+
+    try:
+        with open(path_value, "r", encoding="utf-8") as fh:
+            text_value = fh.read()
+    except OSError:
+        return {
+            "exists": False,
+            "ready": False,
+            "missing_sections": list(required_headings),
+            "has_placeholders": True,
+            "mtime": 0.0,
+        }
+
+    missing_sections = [
+        heading for heading in required_headings if heading not in text_value
+    ]
+    normalized = text_value.lower()
+    has_placeholders = any(marker.lower() in normalized for marker in TEAM_PLACEHOLDER_MARKERS)
+
+    try:
+        mtime = os.path.getmtime(path_value)
+    except OSError:
+        mtime = 0.0
+
+    return {
+        "exists": True,
+        "ready": not missing_sections and not has_placeholders,
+        "missing_sections": missing_sections,
+        "has_placeholders": has_placeholders,
+        "mtime": mtime,
+    }
+
+
+def team_artifact_status(task_dir):
+    """Return readiness + derived status for team artifacts in a task dir."""
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    orch_mode = yaml_field("orchestration_mode", state_file) or "solo"
+    current_status = yaml_field("team_status", state_file) or "n/a"
+    fallback_used = yaml_field("fallback_used", state_file) or "none"
+
+    plan_path = os.path.join(task_dir, "TEAM_PLAN.md")
+    synthesis_path = os.path.join(task_dir, "TEAM_SYNTHESIS.md")
+    plan_state = _team_artifact_readiness(plan_path, TEAM_PLAN_REQUIRED_HEADINGS)
+    plan_ownership = parse_team_plan_ownership(plan_path)
+    plan_validation_errors = list(plan_ownership.get("validation_errors") or [])
+    if plan_validation_errors:
+        plan_state["ready"] = False
+    synthesis_state = _team_artifact_readiness(
+        synthesis_path, TEAM_SYNTHESIS_REQUIRED_HEADINGS
+    )
+
+    try:
+        state_mtime = os.path.getmtime(state_file)
+    except OSError:
+        state_mtime = 0.0
+
+    synthesis_refreshed_after_degraded = bool(
+        synthesis_state["ready"] and synthesis_state["mtime"] > state_mtime
+    )
+
+    derived_status = current_status
+    if orch_mode != "team":
+        derived_status = current_status
+    elif fallback_used != "none":
+        derived_status = "fallback"
+    elif current_status == "degraded" and not synthesis_refreshed_after_degraded:
+        derived_status = "degraded"
+    elif synthesis_state["ready"]:
+        derived_status = "complete"
+    elif plan_state["ready"]:
+        derived_status = "running"
+    else:
+        derived_status = "planned"
+
+    return {
+        "orchestration_mode": orch_mode,
+        "current_status": current_status,
+        "derived_status": derived_status,
+        "fallback_used": fallback_used,
+        "plan_path": plan_path,
+        "plan_exists": plan_state["exists"],
+        "plan_ready": plan_state["ready"],
+        "plan_missing_sections": plan_state["missing_sections"],
+        "plan_has_placeholders": plan_state["has_placeholders"],
+        "plan_validation_errors": plan_validation_errors,
+        "plan_workers": list(plan_ownership.get("workers") or []),
+        "plan_owned_writable_paths": dict(plan_ownership.get("owned_writable_paths") or {}),
+        "plan_shared_read_only_paths": list(plan_ownership.get("shared_read_only_paths") or []),
+        "plan_forbidden_writes": dict(plan_ownership.get("forbidden_writes") or {}),
+        "synthesis_path": synthesis_path,
+        "synthesis_exists": synthesis_state["exists"],
+        "synthesis_ready": synthesis_state["ready"],
+        "synthesis_missing_sections": synthesis_state["missing_sections"],
+        "synthesis_has_placeholders": synthesis_state["has_placeholders"],
+        "synthesis_refreshed_after_degraded": synthesis_refreshed_after_degraded,
+    }
+
+
+def sync_team_status(task_dir):
+    """Synchronize TASK_STATE.yaml team_status from artifact readiness."""
+    artifact_state = team_artifact_status(task_dir)
+    if artifact_state.get("orchestration_mode") != "team":
+        return artifact_state
+    derived_status = artifact_state.get("derived_status")
+    current_status = artifact_state.get("current_status")
+    if derived_status and derived_status != current_status:
+        set_task_state_field(task_dir, "team_status", derived_status)
+        artifact_state["current_status"] = derived_status
+    return artifact_state
+
+
+def ensure_team_artifacts(task_dir, routing=None):
+    """Create TEAM_PLAN / TEAM_SYNTHESIS scaffolds for team tasks if missing."""
+    if routing is not None:
+        orch_mode = str(routing.get("orchestration_mode") or "solo")
+    else:
+        state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+        orch_mode = yaml_field("orchestration_mode", state_file) or "solo"
+    if orch_mode != "team":
+        return []
+
+    created = []
+
+    plan_path = os.path.join(task_dir, "TEAM_PLAN.md")
+    if not os.path.isfile(plan_path):
+        with open(plan_path, "w", encoding="utf-8") as fh:
+            fh.write(
+                "# Team Plan\n\n"
+                "## Worker Roster\n"
+                "- TODO: assign each worker, scope, and handoff order\n\n"
+                "## Owned Writable Paths\n"
+                "- TBD\n\n"
+                "## Shared Read-Only Paths\n"
+                "- TBD\n\n"
+                "## Forbidden Writes\n"
+                "- TBD\n\n"
+                "## Synthesis Strategy\n"
+                "- TODO: describe merge + verification flow\n"
+            )
+        created.append(plan_path)
+
+    synthesis_path = os.path.join(task_dir, "TEAM_SYNTHESIS.md")
+    if not os.path.isfile(synthesis_path):
+        with open(synthesis_path, "w", encoding="utf-8") as fh:
+            fh.write(
+                "# Team Synthesis\n\n"
+                "## Integrated Result\n"
+                "- TODO: summarize the merged worker output\n\n"
+                "## Cross-Checks\n"
+                "- TBD\n\n"
+                "## Verification Summary\n"
+                "- TODO: list verification commands + outcomes\n\n"
+                "## Residual Risks\n"
+                "- TODO: record remaining risk or write `none`\n"
+            )
+        created.append(synthesis_path)
+
+    return created
 
 def manifest_teams_field(field):
     """Read a field from the teams: section of the manifest."""
@@ -1605,25 +2142,13 @@ def set_task_state_field(task_dir, field, value):
 def compile_routing(task_dir, request_text=""):
     """Compute routing fields from TASK_STATE.yaml + request text heuristics.
 
-    Returns a dict of fields to set in TASK_STATE.yaml:
-      risk_level, parallelism, workflow_locked, maintenance_task,
-      routing_compiled, routing_source, planning_mode,
-      execution_mode (compat), orchestration_mode (compat)
+    Returns canonical routing fields plus compatibility orchestration fields.
 
-    Rules (from PLAN.md §9):
-    risk_level:
-      - low: lane in [docs-sync, answer, investigate] OR (single-file, no keywords)
-      - high: maintenance/harness/template keywords, browser+failures, multi-root risk_tags
-      - medium: default
-
-    maintenance_task:
-      - true if: "maintenance-task" in risk_tags, "harness-source" in risk_tags,
-        OR (lane in [refactor, build] AND "template-sync-required" in risk_tags)
-
-    workflow_locked:
-      - false if maintenance_task=true, else true
-
-    parallelism: always 1 in v1
+    The policy is deliberately team-first but still conservative about safety:
+      - solo is reserved for clearly small / low-overhead tasks
+      - team is preferred for broad-build, multi-surface, and maintenance work
+      - when team ownership or provider readiness is unclear, fall back to
+        subagents rather than collapsing to solo
     """
     state_file = os.path.join(task_dir, "TASK_STATE.yaml")
 
@@ -1638,23 +2163,64 @@ def compile_routing(task_dir, request_text=""):
 
     request_text = load_request_text(task_dir, request_text=request_text)
     req = request_text.lower()
+    risk_tag_set = set(risk_tags)
+    planning_mode = infer_planning_mode(task_dir, request_text=request_text)
+
+    def _flag(value):
+        return str(value or "").strip().lower() == "true"
+
+    def _contains_any(text_value, needles):
+        return any(needle in text_value for needle in needles)
+
+    def _surface_hits(text_value):
+        groups = {
+            "frontend": ("frontend", "client", "ui", "page", "component", "react", "vue"),
+            "backend": ("backend", "api", "server", "route", "service", "endpoint"),
+            "tests": ("test", "tests", "pytest", "playwright", "spec"),
+            "docs": ("readme", "docs", "documentation", "doc_sync", "doc sync"),
+            "infra": ("docker", "workflow", "ci", "build", "deploy", "migration", "schema", "database", "db"),
+            "harness": ("harness", "plugin", "hook", "mcp", "template", "prompt_memory", "prewrite"),
+        }
+        hits = []
+        for name, keywords in groups.items():
+            if _contains_any(text_value, keywords):
+                hits.append(name)
+        return hits
+
+    def _preferred_team_provider():
+        provider_pref = str(manifest_teams_field("provider") or "auto").strip().lower() or "auto"
+        native_ready = _flag(manifest_teams_field("native_ready")) or (
+            os.environ.get("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS") == "1"
+            and shutil.which("claude") is not None
+        )
+        omc_ready = _flag(manifest_teams_field("omc_ready")) or shutil.which("omc") is not None
+
+        if provider_pref == "none":
+            return "none", False
+        if provider_pref == "native":
+            return "native", native_ready
+        if provider_pref == "omc":
+            return "omc", omc_ready
+        if native_ready:
+            return "native", True
+        if omc_ready:
+            return "omc", True
+        return "none", False
 
     # --- maintenance_task ---
     HIGH_MAINTENANCE_TAGS = {"maintenance-task", "harness-source"}
     maintenance_task = False
-    if HIGH_MAINTENANCE_TAGS.intersection(set(risk_tags)):
+    if HIGH_MAINTENANCE_TAGS.intersection(risk_tag_set):
         maintenance_task = True
-    elif lane in ("refactor", "build") and "template-sync-required" in risk_tags:
+    elif lane in ("refactor", "build") and "template-sync-required" in risk_tag_set:
         maintenance_task = True
 
-    # Keyword heuristic from request text
     MAINTENANCE_KEYWORDS = {
         "harness", "plugin", "workflow", "hook", "hctl", "setup", "template",
         "control surface", "prewrite", "session_context", "prompt_memory",
     }
-    if not maintenance_task and any(kw in req for kw in MAINTENANCE_KEYWORDS):
-        # Only if also touching CLAUDE.md / plugin files
-        if any(kw in req for kw in ("claude.md", "plugin/", "hooks.json", "execution-modes")):
+    if not maintenance_task and _contains_any(req, MAINTENANCE_KEYWORDS):
+        if _contains_any(req, ("claude.md", "plugin/", "hooks.json", "execution-modes")):
             maintenance_task = True
 
     # --- risk_level ---
@@ -1665,7 +2231,7 @@ def compile_routing(task_dir, request_text=""):
     if lane in LOW_LANES:
         risk_level = "low"
     elif (
-        HIGH_RISK_TAGS.intersection(set(risk_tags))
+        HIGH_RISK_TAGS.intersection(risk_tag_set)
         or (browser_required == "true" and fail_count >= 2)
         or maintenance_task
     ):
@@ -1673,25 +2239,95 @@ def compile_routing(task_dir, request_text=""):
     else:
         risk_level = "medium"
 
-    # Request text high-risk keywords
     HIGH_RISK_KEYWORDS = {
         "setup", "template", "control surface", "harness-source", "hooks.json",
         "execution-modes", "orchestration-modes", "prewrite_gate", "hctl",
     }
-    if risk_level != "high" and any(kw in req for kw in HIGH_RISK_KEYWORDS):
+    if risk_level != "high" and _contains_any(req, HIGH_RISK_KEYWORDS):
         risk_level = "high"
-
-    # --- parallelism (always 1 in v1) ---
-    parallelism = 1
 
     # --- workflow_locked ---
     workflow_locked = not maintenance_task
 
-    # --- compat fields ---
+    # --- execution / orchestration ---
     EXEC_MODE_MAP = {"low": "light", "medium": "standard", "high": "sprinted"}
     execution_mode = EXEC_MODE_MAP.get(risk_level, "standard")
-    orchestration_mode = "solo" if parallelism <= 1 else "subagents"
-    planning_mode = infer_planning_mode(task_dir, request_text=request_text)
+
+    trivial_keywords = {
+        "typo", "rename", "comment", "readme", "docs only", "doc-only", "one-line",
+        "one line", "single-file", "single file", "one file", "small bugfix", "minor fix",
+        "tiny fix", "small task",
+    }
+    sequential_keywords = {
+        "sequential", "step by step", "serial", "same file", "single file", "one file",
+    }
+    surface_hits = _surface_hits(req)
+    multi_surface = len(surface_hits) >= 2
+    small_task = lane in LOW_LANES or _contains_any(req, trivial_keywords)
+    sequential_or_conflict = _contains_any(req, sequential_keywords)
+
+    team_reason = ""
+    team_preferred = False
+    if not small_task and not sequential_or_conflict:
+        if planning_mode == "broad-build":
+            team_preferred = True
+            team_reason = "team-preferred: broad-build scope"
+        elif maintenance_task:
+            team_preferred = True
+            team_reason = "team-preferred: maintenance / harness work"
+        elif HIGH_RISK_TAGS.intersection(risk_tag_set):
+            team_preferred = True
+            team_reason = "team-preferred: structural or multi-root risk"
+        elif multi_surface:
+            team_preferred = True
+            team_reason = "team-preferred: multi-surface request"
+        elif browser_required == "true" and lane in ("build", "debug", "verify"):
+            team_preferred = True
+            team_reason = "team-preferred: browser-backed implementation + verification"
+
+    fallback_mode = str(manifest_teams_field("fallback") or "subagents").strip().lower() or "subagents"
+    if fallback_mode not in ("subagents", "solo"):
+        fallback_mode = "subagents"
+    try:
+        configured_team_size = int(str(manifest_teams_field("default_size") or "3"))
+    except ValueError:
+        configured_team_size = 3
+    configured_team_size = max(2, configured_team_size)
+
+    parallelism = 1  # compatibility placeholder; orchestration_mode drives routing
+    team_provider = "none"
+    team_status = "skipped"
+    team_size = 0
+    team_plan_required = False
+    team_synthesis_required = False
+    fallback_used = "none"
+
+    if small_task:
+        orchestration_mode = "solo"
+        team_reason = "solo: small / low-overhead task"
+        team_status = "skipped"
+    elif team_preferred:
+        provider, ready = _preferred_team_provider()
+        if ready and provider in ("native", "omc"):
+            orchestration_mode = "team"
+            team_provider = provider
+            team_status = "planned"
+            team_size = configured_team_size
+            team_plan_required = True
+            team_synthesis_required = True
+        else:
+            orchestration_mode = fallback_mode
+            team_provider = f"fallback-{fallback_mode}"
+            team_status = "fallback"
+            fallback_used = fallback_mode
+            if not team_reason:
+                team_reason = "fallback: team-preferred task but no ready provider"
+            else:
+                team_reason = f"{team_reason}; fallback: no ready provider"
+    else:
+        orchestration_mode = "subagents"
+        team_reason = "subagents: non-trivial task but disjoint ownership unclear"
+        team_status = "skipped"
 
     return {
         "risk_level": risk_level,
@@ -1703,6 +2339,13 @@ def compile_routing(task_dir, request_text=""):
         "planning_mode": planning_mode,
         "execution_mode": execution_mode,
         "orchestration_mode": orchestration_mode,
+        "team_provider": team_provider,
+        "team_status": team_status,
+        "team_size": team_size,
+        "team_reason": team_reason,
+        "team_plan_required": team_plan_required,
+        "team_synthesis_required": team_synthesis_required,
+        "fallback_used": fallback_used,
     }
 
 
@@ -1856,8 +2499,19 @@ def emit_compact_context(task_dir):
 
     execution_mode = yaml_field("execution_mode", state_file) or "standard"
     orchestration_mode = yaml_field("orchestration_mode", state_file) or "solo"
+    team_provider = yaml_field("team_provider", state_file) or "none"
+    team_status = yaml_field("team_status", state_file) or "n/a"
+    team_size = _int(yaml_field("team_size", state_file) or "0")
+    team_reason = yaml_field("team_reason", state_file) or ""
+    team_plan_required = _bool(yaml_field("team_plan_required", state_file) or "false")
+    team_synthesis_required = _bool(yaml_field("team_synthesis_required", state_file) or "false")
+    fallback_used = yaml_field("fallback_used", state_file) or "none"
     planning_mode = get_planning_mode(state_file)
     runtime_fail_count = _int(yaml_field("runtime_verdict_fail_count", state_file) or "0")
+    team_artifacts = team_artifact_status(task_dir)
+    team_status = team_artifacts.get("derived_status", team_status)
+    team_plan_name = "TEAM_PLAN.md"
+    team_synthesis_name = "TEAM_SYNTHESIS.md"
 
     task_root = os.path.join(TASK_DIR, task_id)
     commands = {
@@ -2124,6 +2778,15 @@ def emit_compact_context(task_dir):
         if focus_support_name:
             priority_must_read.append(focus_support_name)
         priority_must_read.extend(["TASK_STATE.yaml", request_name, "PLAN.md", "CHECKS.yaml", "HANDOFF.md"])
+    elif orchestration_mode == "team" and team_plan_required and not team_artifacts.get("plan_ready"):
+        priority_must_read.extend([team_plan_name, "TASK_STATE.yaml", request_name, "PLAN.md", "CHECKS.yaml"])
+    elif (
+        orchestration_mode == "team"
+        and team_synthesis_required
+        and team_artifacts.get("plan_ready")
+        and team_status in ("running", "degraded")
+    ):
+        priority_must_read.extend([team_plan_name, team_synthesis_name, "TASK_STATE.yaml", request_name, "CHECKS.yaml"])
     elif planning_mode == "broad-build" and plan_verdict != "PASS":
         priority_must_read.extend(["TASK_STATE.yaml", request_name, env_snapshot_name, "PLAN.md", "CHECKS.yaml"])
     elif env_snapshot_surface:
@@ -2150,6 +2813,16 @@ def emit_compact_context(task_dir):
         notes.append("planning_mode=broad-build")
     if plan_verdict != "PASS":
         notes.append(f"plan_verdict={plan_verdict}")
+    if orchestration_mode == "team" and team_plan_required and not team_artifacts.get("plan_ready"):
+        notes.append("team plan pending")
+    elif (
+        orchestration_mode == "team"
+        and team_synthesis_required
+        and team_artifacts.get("plan_ready")
+        and team_status in ("running", "degraded")
+        and not team_artifacts.get("synthesis_ready")
+    ):
+        notes.append("team synthesis pending")
     if blocked_env_round:
         notes.append("blocked env: read environment snapshot")
     elif runtime_fix_round:
@@ -2176,6 +2849,16 @@ def emit_compact_context(task_dir):
             )
         else:
             next_action = "Get PLAN.md to critic-plan PASS before mutating source files."
+    elif orchestration_mode == "team" and team_plan_required and not team_artifacts.get("plan_ready"):
+        next_action = "Complete TEAM_PLAN.md first — assign worker ownership, writable paths, and synthesis rules before spawning workers or mutating source files."
+    elif (
+        orchestration_mode == "team"
+        and team_synthesis_required
+        and team_artifacts.get("plan_ready")
+        and team_status in ("running", "degraded")
+        and not team_artifacts.get("synthesis_ready")
+    ):
+        next_action = "Write TEAM_SYNTHESIS.md with integrated result, cross-checks, and verification summary before running task_close."
     elif blocked_env_round:
         next_action = "Read ENVIRONMENT_SNAPSHOT.md first, repair the missing tool or setup assumption, then rerun task_verify before continuing."
     elif runtime_fix_round:
@@ -2211,6 +2894,35 @@ def emit_compact_context(task_dir):
             "execution_mode": execution_mode,
             "orchestration_mode": orchestration_mode,
         },
+        "team": {
+            "provider": team_provider,
+            "status": team_status,
+            "size": team_size,
+            "reason": team_reason,
+            "plan_required": team_plan_required,
+            "synthesis_required": team_synthesis_required,
+            "fallback_used": fallback_used,
+            "plan_artifact": _task_rel(team_plan_name),
+            "plan_exists": bool(team_artifacts.get("plan_exists")),
+            "plan_ready": bool(team_artifacts.get("plan_ready")),
+            "plan_missing_sections": list(team_artifacts.get("plan_missing_sections") or []),
+            "plan_has_placeholders": bool(team_artifacts.get("plan_has_placeholders")),
+            "plan_validation_errors": list(team_artifacts.get("plan_validation_errors") or []),
+            "plan_workers": list(team_artifacts.get("plan_workers") or []),
+            "plan_owned_writable_paths": dict(team_artifacts.get("plan_owned_writable_paths") or {}),
+            "plan_shared_read_only_paths": list(team_artifacts.get("plan_shared_read_only_paths") or []),
+            "plan_forbidden_writes": dict(team_artifacts.get("plan_forbidden_writes") or {}),
+            "synthesis_artifact": _task_rel(team_synthesis_name),
+            "synthesis_exists": bool(team_artifacts.get("synthesis_exists")),
+            "synthesis_ready": bool(team_artifacts.get("synthesis_ready")),
+            "synthesis_missing_sections": list(team_artifacts.get("synthesis_missing_sections") or []),
+            "synthesis_has_placeholders": bool(team_artifacts.get("synthesis_has_placeholders")),
+            "synthesis_refreshed_after_degraded": bool(team_artifacts.get("synthesis_refreshed_after_degraded")),
+        },
+        "team_plan_name": team_plan_name,
+        "team_synthesis_name": team_synthesis_name,
+        "team_plan_path": _task_rel(team_plan_name),
+        "team_synthesis_path": _task_rel(team_synthesis_name),
         "must_read": must_read,
         "commands": commands,
         "checks": checks,

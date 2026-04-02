@@ -26,8 +26,9 @@ os.environ["HARNESS_SKIP_STDIN"] = "1"
 from prewrite_gate import (
     _is_source_file, _find_active_tasks, _extract_file_path,
     _is_protected_artifact, _check_protected_artifact_write,
-    _get_agent_role, _check_plan_session_token,
+    _get_agent_role, _check_plan_session_token, _check_team_plan_ready,
 )
+from _lib import check_team_write_ownership, get_team_worker_identity
 
 
 # ---------------------------------------------------------------------------
@@ -365,10 +366,128 @@ class TestFailClosed(unittest.TestCase):
         import prewrite_gate
         # The __main__ block now fail-closes when MANIFEST exists
         # We just verify the logic is correct by checking the file
-        self.assertIn("Fail-closed on managed repos",
-                       open(os.path.join(os.path.dirname(__file__),
-                            "..", "plugin", "scripts", "prewrite_gate.py")).read())
+        target = os.path.join(os.path.dirname(__file__), "..", "plugin", "scripts", "prewrite_gate.py")
+        with open(target, "r", encoding="utf-8") as fh:
+            self.assertIn("Fail-closed on managed repos", fh.read())
 
+
+class TestTeamPlanGate(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        import prewrite_gate
+        self._orig_task_dir = prewrite_gate.TASK_DIR
+        self.task_base = os.path.join(self.tmp.name, "doc", "harness", "tasks")
+        os.makedirs(self.task_base, exist_ok=True)
+        prewrite_gate.TASK_DIR = self.task_base
+
+    def tearDown(self):
+        import prewrite_gate
+        prewrite_gate.TASK_DIR = self._orig_task_dir
+        self.tmp.cleanup()
+
+    def _write_team_task(self, task_id="TASK__team"):
+        task_dir = os.path.join(self.task_base, task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        with open(os.path.join(task_dir, "TASK_STATE.yaml"), "w", encoding="utf-8") as fh:
+            fh.write(
+                f"task_id: {task_id}\n"
+                "status: plan_passed\n"
+                "plan_verdict: PASS\n"
+                "orchestration_mode: team\n"
+                "team_status: planned\n"
+                "updated: 2026-01-01T00:00:00Z\n"
+            )
+        return task_dir
+
+    def test_incomplete_team_plan_blocks_source_writes(self):
+        task_dir = self._write_team_task()
+        with open(os.path.join(task_dir, "TEAM_PLAN.md"), "w", encoding="utf-8") as fh:
+            fh.write("# Team Plan\n\n## Worker Roster\n- TODO: assign workers\n")
+        allowed, message = _check_team_plan_ready(task_dir)
+        self.assertFalse(allowed)
+        self.assertIn("TEAM_PLAN.md", message)
+
+    def test_completed_team_plan_allows_source_writes(self):
+        task_dir = self._write_team_task()
+        with open(os.path.join(task_dir, "TEAM_PLAN.md"), "w", encoding="utf-8") as fh:
+            fh.write(
+                "# Team Plan\n"
+                "## Worker Roster\n- worker-a: app\n\n"
+                "## Owned Writable Paths\n- worker-a: app/**\n\n"
+                "## Shared Read-Only Paths\n- docs/**\n\n"
+                "## Forbidden Writes\n- worker-a: api/**\n\n"
+                "## Synthesis Strategy\n- merge then verify\n"
+            )
+        allowed, message = _check_team_plan_ready(task_dir)
+        self.assertTrue(allowed)
+        self.assertEqual(message, "")
+
+    def test_overlapping_team_ownership_blocks_source_writes(self):
+        task_dir = self._write_team_task()
+        with open(os.path.join(task_dir, "TEAM_PLAN.md"), "w", encoding="utf-8") as fh:
+            fh.write(
+                "# Team Plan\n"
+                "## Worker Roster\n- worker-a: app\n- worker-b: api\n\n"
+                "## Owned Writable Paths\n- worker-a: src/api/**\n- worker-b: src/api/auth.ts\n\n"
+                "## Shared Read-Only Paths\n- docs/**\n\n"
+                "## Forbidden Writes\n- worker-a: none\n- worker-b: none\n\n"
+                "## Synthesis Strategy\n- lead merges then verifies\n"
+            )
+        allowed, message = _check_team_plan_ready(task_dir)
+        self.assertFalse(allowed)
+        self.assertIn("ownership errors", message)
+        self.assertIn("overlapping writable ownership", message)
+
+    def test_team_write_outside_owned_paths_is_blocked(self):
+        task_dir = self._write_team_task()
+        with open(os.path.join(task_dir, "TEAM_PLAN.md"), "w", encoding="utf-8") as fh:
+            fh.write(
+                "# Team Plan\n"
+                "## Worker Roster\n- worker-a: app\n- worker-b: api\n\n"
+                "## Owned Writable Paths\n- worker-a: app/**\n- worker-b: api/**\n\n"
+                "## Shared Read-Only Paths\n- docs/**\n\n"
+                "## Forbidden Writes\n- worker-a: api/**\n- worker-b: app/**\n\n"
+                "## Synthesis Strategy\n- lead merges then verifies\n"
+            )
+        allowed, message, _ = check_team_write_ownership(task_dir, "tests/test_api.py")
+        self.assertFalse(allowed)
+        self.assertIn("outside TEAM_PLAN.md owned writable paths", message)
+
+    def test_team_write_shared_read_only_path_is_blocked(self):
+        task_dir = self._write_team_task()
+        with open(os.path.join(task_dir, "TEAM_PLAN.md"), "w", encoding="utf-8") as fh:
+            fh.write(
+                "# Team Plan\n"
+                "## Worker Roster\n- worker-a: app\n- worker-b: api\n\n"
+                "## Owned Writable Paths\n- worker-a: app/**\n- worker-b: api/**\n\n"
+                "## Shared Read-Only Paths\n- docs/**\n\n"
+                "## Forbidden Writes\n- worker-a: api/**\n- worker-b: app/**\n\n"
+                "## Synthesis Strategy\n- lead merges then verifies\n"
+            )
+        allowed, message, _ = check_team_write_ownership(task_dir, "docs/architecture.md")
+        self.assertFalse(allowed)
+        self.assertIn("shared read-only", message)
+
+    def test_explicit_team_worker_must_stay_in_owned_paths(self):
+        task_dir = self._write_team_task()
+        with open(os.path.join(task_dir, "TEAM_PLAN.md"), "w", encoding="utf-8") as fh:
+            fh.write(
+                "# Team Plan\n"
+                "## Worker Roster\n- worker-a: app\n- worker-b: api\n\n"
+                "## Owned Writable Paths\n- worker-a: app/**\n- worker-b: api/**\n\n"
+                "## Shared Read-Only Paths\n- docs/**\n\n"
+                "## Forbidden Writes\n- worker-a: api/**\n- worker-b: app/**\n\n"
+                "## Synthesis Strategy\n- lead merges then verifies\n"
+            )
+        os.environ["HARNESS_TEAM_WORKER"] = "worker-a"
+        self.assertEqual(get_team_worker_identity(), "worker-a")
+        allowed, _, _ = check_team_write_ownership(task_dir, "app/main.py")
+        self.assertTrue(allowed)
+        allowed, message, _ = check_team_write_ownership(task_dir, "api/routes.py")
+        self.assertFalse(allowed)
+        self.assertTrue("owned by team worker 'worker-b'" in message or "may not write" in message)
+        os.environ.pop("HARNESS_TEAM_WORKER", None)
 
 if __name__ == "__main__":
     unittest.main()

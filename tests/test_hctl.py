@@ -73,13 +73,17 @@ def _write_request(task_dir, body):
         )
 
 
-def _run_hctl(*args, cwd=None):
+def _run_hctl(*args, cwd=None, env=None):
     """Run hctl.py with given args, return (returncode, stdout, stderr)."""
+    run_env = os.environ.copy()
+    if env:
+        run_env.update(env)
     result = subprocess.run(
         [sys.executable, HCTL] + list(args),
         capture_output=True,
         text=True,
         cwd=cwd or REPO_ROOT,
+        env=run_env,
     )
     return result.returncode, result.stdout, result.stderr
 
@@ -188,7 +192,44 @@ class TestHctlStart(unittest.TestCase):
         _run_hctl("start", "--task-dir", task_dir)
         state = os.path.join(task_dir, "TASK_STATE.yaml")
         om = _yaml_field(state, "orchestration_mode")
-        self.assertEqual(om, "solo")
+        self.assertEqual(om, "subagents")
+
+    def test_start_small_task_keeps_solo(self):
+        task_dir = _make_task(self.tmp.name, "TASK__small", lane="debug")
+        _write_request(task_dir, "Fix a small single-file typo in README.md.")
+        _run_hctl("start", "--task-dir", task_dir)
+        state = os.path.join(task_dir, "TASK_STATE.yaml")
+        self.assertEqual(_yaml_field(state, "orchestration_mode"), "solo")
+        self.assertEqual(_yaml_field(state, "team_status"), "skipped")
+
+    def test_start_team_preferred_falls_back_to_subagents_when_provider_missing(self):
+        task_dir = _make_task(self.tmp.name, "TASK__team", lane="build", risk_tags=["multi-root"])
+        _write_request(task_dir, "Implement app, API, and tests for the feature.")
+        _run_hctl("start", "--task-dir", task_dir, env={"PATH": ""})
+        state = os.path.join(task_dir, "TASK_STATE.yaml")
+        self.assertEqual(_yaml_field(state, "orchestration_mode"), "subagents")
+        self.assertEqual(_yaml_field(state, "team_status"), "fallback")
+        self.assertEqual(_yaml_field(state, "team_provider"), "fallback-subagents")
+        self.assertEqual(_yaml_field(state, "fallback_used"), "subagents")
+
+    def test_start_team_selected_when_provider_ready(self):
+        task_dir = _make_task(self.tmp.name, "TASK__team_ready", lane="build", risk_tags=["multi-root"])
+        _write_request(task_dir, "Implement app, API, and tests for the feature.")
+        fake_bin = Path(self.tmp.name) / "bin"
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        omc_path = fake_bin / "omc"
+        omc_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        omc_path.chmod(0o755)
+        env = {"PATH": f"{fake_bin}{os.pathsep}" + os.environ.get("PATH", "")}
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        state = os.path.join(task_dir, "TASK_STATE.yaml")
+        self.assertEqual(_yaml_field(state, "orchestration_mode"), "team")
+        self.assertEqual(_yaml_field(state, "team_status"), "planned")
+        self.assertEqual(_yaml_field(state, "team_provider"), "omc")
+        self.assertEqual(_yaml_field(state, "team_plan_required"), "true")
+        self.assertEqual(_yaml_field(state, "team_synthesis_required"), "true")
+        self.assertTrue(os.path.isfile(os.path.join(task_dir, "TEAM_PLAN.md")))
+        self.assertTrue(os.path.isfile(os.path.join(task_dir, "TEAM_SYNTHESIS.md")))
 
     def test_start_writes_failure_case_sidecar(self):
         task_dir = _make_task(self.tmp.name, "TASK__test", lane="debug")
@@ -248,12 +289,39 @@ class TestHctlContextJson(unittest.TestCase):
         self.assertEqual(code, 0, err)
         return json.loads(out)
 
+    def _team_env(self):
+        fake_bin = Path(self.tmp.name) / "bin"
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        omc_path = fake_bin / "omc"
+        omc_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        omc_path.chmod(0o755)
+        return {"PATH": f"{fake_bin}{os.pathsep}" + os.environ.get("PATH", "")}
+
+    def _write_completed_team_plan(self, task_dir):
+        Path(task_dir, "TEAM_PLAN.md").write_text(
+            "# Team Plan\n"
+            "## Worker Roster\n"
+            "- worker-1: frontend\n"
+            "- worker-2: backend\n\n"
+            "## Owned Writable Paths\n"
+            "- worker-1: app/**\n"
+            "- worker-2: api/**\n\n"
+            "## Shared Read-Only Paths\n"
+            "- docs/**\n\n"
+            "## Forbidden Writes\n"
+            "- worker-1: api/**\n"
+            "- worker-2: app/**\n\n"
+            "## Synthesis Strategy\n"
+            "- lead merges diffs and runs final verification\n",
+            encoding="utf-8",
+        )
+
     def test_required_keys_present(self):
         ctx = self._context_json()
         required = {
             "task_id", "status", "lane", "risk_level", "qa_required",
             "doc_sync_required", "browser_required", "parallelism",
-            "workflow_locked", "maintenance_task", "planning_mode", "compat",
+            "workflow_locked", "maintenance_task", "planning_mode", "compat", "team",
             "must_read", "commands", "checks", "open_failures", "notes",
             "review_focus", "next_action",
         }
@@ -447,6 +515,36 @@ class TestHctlContextJson(unittest.TestCase):
         self.assertIn("DOC_SYNC.md", ctx["review_focus"].get("supporting_artifact", ""))
         self.assertIn("document evidence first", ctx["next_action"].lower())
 
+    def test_team_context_prioritizes_team_plan_when_scaffold_is_incomplete(self):
+        task_dir = _make_task(self.tmp.name, "TASK__ctx_team", lane="build", risk_tags=["multi-root"])
+        _write_request(task_dir, "Implement app, API, and tests for the feature.")
+        env = self._team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json", env=env)
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertEqual(ctx["team"]["status"], "planned")
+        self.assertTrue(ctx["team"]["plan_exists"])
+        self.assertFalse(ctx["team"]["plan_ready"])
+        self.assertTrue(any(item.endswith("TEAM_PLAN.md") for item in ctx["must_read"]))
+        self.assertIn("TEAM_PLAN.md", ctx["next_action"])
+
+    def test_team_context_promotes_status_to_running_when_team_plan_is_ready(self):
+        task_dir = _make_task(self.tmp.name, "TASK__ctx_team", lane="build", risk_tags=["multi-root"])
+        _write_request(task_dir, "Implement app, API, and tests for the feature.")
+        env = self._team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_completed_team_plan(task_dir)
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json", env=env)
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertEqual(ctx["team"]["status"], "running")
+        self.assertTrue(ctx["team"]["plan_ready"])
+        self.assertFalse(ctx["team"]["synthesis_ready"])
+        self.assertIn("TEAM_SYNTHESIS.md", ctx["next_action"])
+
 
 # ---------------------------------------------------------------------------
 # Test: hctl context human-readable (no --json)
@@ -515,9 +613,9 @@ class TestCompatibilityFields(unittest.TestCase):
         self.assertEqual(fields["execution_mode"], "sprinted")
         self.assertEqual(fields["risk_level"], "high")
 
-    def test_orchestration_mode_solo_when_parallelism_1(self):
+    def test_non_trivial_build_prefers_subagents_over_solo(self):
         fields = self._start_and_read("build")
-        self.assertEqual(fields["orchestration_mode"], "solo")
+        self.assertEqual(fields["orchestration_mode"], "subagents")
 
 
 # ---------------------------------------------------------------------------

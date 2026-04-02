@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""FileChanged hook — task-scoped verdict invalidation + plan-first violation recording.
+"""Write-tool PostToolUse hook — task-scoped verdict invalidation + plan-first violation recording.
 
 Non-blocking. Resets stale PASS verdicts to pending only for tasks
 whose touched_paths/roots_touched/verification_targets overlap with the changed file(s).

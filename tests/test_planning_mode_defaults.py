@@ -6,7 +6,7 @@ Covers:
   - get_planning_mode() handles missing file gracefully
   - get_planning_mode() handles missing field → 'standard'
   - get_planning_mode() handles unknown values → 'standard'
-  - task_created_gate includes planning_mode field
+  - legacy task bootstrap helper includes planning_mode field
 
 Run with: python -m unittest discover -s tests -p 'test_*.py'
 """
@@ -178,10 +178,10 @@ class TestPlanningModeAutoPromotion(unittest.TestCase):
 
 
 class TestTaskCreatedGatePlanningMode(unittest.TestCase):
-    """Verify that task_created_gate includes planning_mode in TASK_STATE.yaml."""
+    """Verify that the legacy task bootstrap helper includes planning_mode in TASK_STATE.yaml."""
 
     def test_task_state_template_has_planning_mode(self):
-        """The task_created_gate.py template should include planning_mode: standard."""
+        """The legacy task bootstrap helper should include planning_mode: standard."""
         import task_created_gate
         import inspect
         source = inspect.getsource(task_created_gate.main)

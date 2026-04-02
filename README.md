@@ -75,12 +75,12 @@ Orchestration mode is stored as `orchestration_mode` in `TASK_STATE.yaml`. The t
 
 ### Auto team promotion
 
-The harness automatically selects team mode when:
-- Task spans multiple layers with clearly disjoint file ownership
-- Two or more independent work streams can run in parallel
-- Research/review benefits from competing perspectives
+The harness is now **team-first for non-trivial work**:
+- `solo` is reserved for clearly small / low-overhead tasks
+- `team` is preferred for broad-build, maintenance, multi-root, or multi-surface work when file ownership can be partitioned safely
+- `subagents` is the default fallback for non-trivial work when safe team ownership or provider readiness is not established
 
-Team mode is **prohibited** when:
+Team mode is still **prohibited** when:
 - Same file would need concurrent edits by multiple workers
 - Work has strong sequential dependencies
 - Task is a small bugfix that team overhead would dwarf
@@ -162,7 +162,7 @@ Notes carry freshness metadata that transitions automatically:
 | `stale` | Suspect for more than 3 task completions without re-verification |
 | `superseded` | Replaced by a newer note; follow `superseded_by` chain |
 
-The `FileChanged` hook marks notes `suspect` when their `invalidated_by_paths` are modified. The writer agent restores `suspect → current` after re-verification.
+The write-tool `PostToolUse` matcher (`Write|Edit|MultiEdit`) marks notes `suspect` when their `invalidated_by_paths` are modified. The writer agent restores `suspect → current` after re-verification.
 
 See `plugin/docs/note-freshness.md` for the full freshness lifecycle specification.
 
@@ -447,19 +447,35 @@ team_synthesis_required: false
 fallback_used: none | subagents | solo
 ```
 
+## Team artifact lifecycle
+
+For `orchestration_mode: team`, task state is now driven by the actual team artifacts:
+
+- `task_start` scaffolds `TEAM_PLAN.md` and `TEAM_SYNTHESIS.md` when a team task is selected.
+- Source writes stay blocked until `TEAM_PLAN.md` is fully completed (required headings present, no `TODO` / `TBD` placeholders, valid disjoint writable ownership).
+- Once team mode is running, source writes are restricted to paths explicitly owned in `TEAM_PLAN.md`; shared read-only paths remain write-blocked.
+- `TEAM_SYNTHESIS.md` is required before `task_close`; once it is complete, `team_status` can resolve to `complete` without a manual YAML edit.
+- If a team round degraded, `TEAM_SYNTHESIS.md` must be refreshed after that degraded round before close succeeds.
+
 ## Hook behavior
 
 | Hook | Behavior |
 |------|----------|
 | `SessionStart` | Load context, show open tasks |
-| `TaskCreated` | Initialize TASK_STATE.yaml, HANDOFF.md, REQUEST.md |
 | `TaskCompleted` | **BLOCK** (exit 2) unless all required verdicts PASS; auto-populates touched_paths from git diff if empty |
 | `SubagentStop` | Warn if expected artifacts missing |
 | `Stop` | **BLOCK** (exit 2) if open tasks remain |
-| `FileChanged` | Precise invalidation: runtime_verdict for runtime paths, document_verdict for doc paths; marks affected notes suspect |
+| `PreToolUse (Bash)` | Route harness control commands to MCP aliases before shell execution |
+| `PreToolUse` | Enforce the write gate and workflow lock before repo mutation; team tasks keep source writes blocked until `TEAM_PLAN.md` is complete and then restrict writes to declared worker-owned paths |
+| `UserPromptSubmit` | Surface task/doc memory hints plus open directive/complaint summaries |
+| `PostToolUse` | Emit tool-routing hints after tool execution |
+| `PostToolUse (Write|Edit|MultiEdit)` | Precise invalidation: runtime_verdict for runtime paths, document_verdict for doc paths; marks affected notes suspect |
 | `PostCompact` | Re-inject open task summary + maintain-lite entropy indicators |
 | `SessionEnd` | Record final session state + maintain-lite entropy summary |
 | `TeammateIdle` | Advisory check for team worker deliverables |
+
+
+Optional bootstrap: `plugin/scripts/task_created_gate.py` still exists as a manual task-directory initializer, but it is **not** wired in `plugin/hooks/hooks.json`.
 
 ## Development
 

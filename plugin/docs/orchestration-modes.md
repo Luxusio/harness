@@ -69,18 +69,15 @@ Orchestration mode is **independent** of execution mode. Any combination is vali
 
 | Signal | Mode indicated |
 |--------|---------------|
-| Single-file or small-diff task | solo |
-| Sequential step dependencies | solo |
-| Same-file conflict risk | solo |
-| Lane = `docs-only`, `answer`, `investigate` | solo |
-| Helper tasks needed (research/search/verify), no file writes | subagents |
-| Parallelism useful but team readiness not confirmed | subagents |
+| Single-file, docs-only, answer, investigate, or obviously tiny task | solo |
+| Non-trivial task, but disjoint writable ownership is unclear | subagents |
+| Team-preferred task, but provider/readiness is missing | fallback-subagents |
+| Broad-build request with partitionable surfaces | team |
+| Maintenance / harness / multi-root work with safe ownership split | team |
 | Cross-layer work (app+api+tests), disjoint file ownership | team |
-| 2+ independent roots from request + manifest | team |
 | Parallel exploration or review across non-overlapping areas | team |
-| Team provider available and readiness probe passes | team |
 
-**Tie-break rule:** When signals conflict, prefer the less complex mode (solo < subagents < team). Only escalate to team when file ownership is clearly disjoint.
+**Tie-break rule:** Prefer `team` for non-trivial work when ownership is safely partitionable. Prefer `subagents` over `solo` when the task is not small but a safe team split is unclear.
 
 ### Prohibition rules for team
 
@@ -94,20 +91,18 @@ Do NOT select `team` when:
 ## Recommended Selection Algorithm
 
 ```
-if lane in (docs-only, answer, investigate):
+if lane in (docs-only, answer, investigate) or task_is_small:
     return solo
 
-if single_file or small_diff or sequential_dependencies or same_file_conflict_risk:
-    return solo
-
-if cross_layer and disjoint_ownership and team_provider_available and readiness_probe_passes:
-    if independent_roots >= 2 or parallel_layers_evident:
+if broad_build or maintenance_task or multi_root or multi_surface_request:
+    if disjoint_ownership and team_provider_available and readiness_probe_passes:
         return team
+    return subagents  # team-preferred fallback
 
-if parallelism_useful and not sequential_dependencies:
+if task_is_non_trivial:
     return subagents
 
-return solo  # default
+return solo
 ```
 
 ---
@@ -141,7 +136,10 @@ Provider preference is read from `manifest.teams.provider`. If not set, default 
 
 When `manifest.teams.auto_activate: true` and `manifest.teams.approval_mode: preapproved`:
 - No user confirmation is required before spawning workers
-- Lead proceeds directly to TEAM_PLAN.md creation and worker spawn
+- `task_start` scaffolds `TEAM_PLAN.md` and `TEAM_SYNTHESIS.md`
+- Source writes stay blocked until `TEAM_PLAN.md` is completed and the ownership map is valid
+- During execution, source writes are limited to TEAM_PLAN-declared writable paths; shared read-only paths remain blocked
+- If `HARNESS_TEAM_WORKER` is set, the prewrite gate additionally enforces per-worker path ownership
 - All worker activity is recorded in TASK_STATE.yaml for auditability
 
 ---
@@ -171,6 +169,16 @@ Minimum required fields:
 | Shared read-only paths | Paths all workers may read but not write |
 | Forbidden writes | Paths each worker must not touch |
 | Synthesis strategy | How lead will merge worker outputs |
+
+### Artifact-driven team status
+
+`task_context` derives `team_status` from the artifact state rather than trusting a stale YAML field:
+
+- `planned` — `TEAM_PLAN.md` exists but is still scaffold/incomplete
+- `running` — `TEAM_PLAN.md` is complete, `TEAM_SYNTHESIS.md` is not
+- `complete` — `TEAM_SYNTHESIS.md` is complete
+- `degraded` — a degraded round was recorded and synthesis has not been refreshed yet
+- `fallback` — a fallback path (for example `subagents`) was used
 
 ### TEAM_SYNTHESIS.md (required before close)
 
