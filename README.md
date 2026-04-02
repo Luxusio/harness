@@ -254,6 +254,20 @@ The handoff includes: open check IDs, last fail evidence, next recovery step, pa
 
 Normal successful tasks produce no handoff artifact. See `plugin/docs/handoff-escalation.md`.
 
+## Failure case history
+
+Fix rounds now also emit a lightweight `FAILURE_CASE.json` sidecar in each task folder. It stores a compact summary of the failure surface already present in harness artifacts: lane, failing checks, path focus, verdict counts, and a short excerpt.
+
+This stays intentionally conservative — no external DB, no embeddings, and no cross-repo writes. The index is only used to make repeated failures easier to compare.
+
+`hctl` adds three inspection commands:
+
+- `hctl history` — list indexed failure cases across task history
+- `hctl top-failures --task-dir ...` — show the top similar past failures for the current task
+- `hctl diff-case --case-a TASK__... --case-b TASK__...` — compare two cases by shared checks / paths / keywords
+
+The runtime control plane still keeps prompt context small: fix rounds surface at most the top 3 similar cases, while the prompt hook continues to inject only the single best hint. See `plugin/docs/failure-history.md`.
+
 ## Architecture check promotion
 
 Architecture constraint checks default to **hints only**. They are promoted to **required evidence** when all conditions are met:
@@ -320,8 +334,10 @@ plugin/
     setup/SKILL.md               # bootstrap target project (multi-root support, arch constraints)
   scripts/
     _lib.py                      # shared helpers
-    prompt_memory.py             # context injection (multi-root retrieval)
+    prompt_memory.py             # context injection (multi-root retrieval + single similar-failure hint)
     memory_selectors.py          # note scoring (5-signal, Unicode-aware)
+    failure_memory.py            # FAILURE_CASE sidecar + top-k similar-failure retrieval
+    hctl.py                      # task control plane + failure history/top-failures/diff-case CLI
     task_completed_gate.py       # completion gate + CHECKS.yaml warnings
     file_changed_sync.py         # precise invalidation (all doc/* roots)
     session_end_sync.py          # session end summary + maintain-lite (all roots) + handoff
@@ -341,6 +357,7 @@ plugin/
     acceptance-ledger.md         # CHECKS.yaml schema and lifecycle
     retrieval-selection.md       # multi-signal retrieval algorithm reference
     handoff-escalation.md        # SESSION_HANDOFF.json triggers and schema
+    failure-history.md           # FAILURE_CASE index and similar-failure CLI
     architecture-promotion.md    # conditional architecture check promotion
     orchestration-modes.md         # orchestration mode reference
 ```

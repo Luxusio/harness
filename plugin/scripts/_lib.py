@@ -1646,6 +1646,7 @@ def emit_compact_context(task_dir):
     execution_mode = yaml_field("execution_mode", state_file) or "standard"
     orchestration_mode = yaml_field("orchestration_mode", state_file) or "solo"
     planning_mode = get_planning_mode(state_file)
+    runtime_fail_count = _int(yaml_field("runtime_verdict_fail_count", state_file) or "0")
 
     task_root = os.path.join(TASK_DIR, task_id)
     commands = {
@@ -1763,6 +1764,39 @@ def emit_compact_context(task_dir):
     blocked_env_round = status == "blocked_env" or runtime_verdict == "BLOCKED_ENV" or runtime_critic_verdict == "BLOCKED_ENV"
     document_fix_round = document_critic_verdict == "FAIL"
 
+    verify_commands_config = yaml_array("verify_commands", MANIFEST) if os.path.isfile(MANIFEST) else []
+    request_preview = (_read_text(_task_abs(request_name)) or "")[:900]
+    normalized_request_preview = re.sub(r"\s+", " ", (request_preview or "").lower())
+    env_signal_reasons = []
+    if planning_mode == "broad-build" and plan_verdict != "PASS":
+        env_signal_reasons.append("broad_build")
+    if blocked_env_round:
+        env_signal_reasons.append("blocked_env")
+    if execution_mode == "sprinted":
+        env_signal_reasons.append("sprinted")
+    if orchestration_mode == "team" or parallelism > 1:
+        env_signal_reasons.append("team")
+    if browser_required:
+        env_signal_reasons.append("browser")
+    if runtime_fail_count >= 1:
+        env_signal_reasons.append("runtime_fail_history")
+    if len(verify_commands_config) >= 2 or any(len(str(cmd)) > 90 for cmd in verify_commands_config):
+        env_signal_reasons.append("verify_stack")
+    if any(
+        phrase in normalized_request_preview
+        for phrase in (
+            "setup", "install", "dependency", "dependencies", "toolchain",
+            "environment", "env", "package manager", "dev server", "playwright",
+            "browser", "docker", "vite", "webpack", "pytest", "node", "python",
+        )
+    ):
+        env_signal_reasons.append("toolchain")
+    env_snapshot_surface = os.path.isfile(env_snapshot_path) and (
+        blocked_env_round
+        or (planning_mode == "broad-build" and plan_verdict != "PASS")
+        or len(env_signal_reasons) >= 2
+    )
+
     review_focus = {
         "evidence_first": False,
     }
@@ -1821,12 +1855,18 @@ def emit_compact_context(task_dir):
         if do_not_regress:
             review_focus["do_not_regress"] = do_not_regress
 
-        try:
-            from failure_memory import find_similar_failure
+        if env_snapshot_surface:
+            review_focus["environment_artifact"] = _task_rel(env_snapshot_name)
+            review_focus["environment_reasons"] = env_signal_reasons[:4]
 
-            similar_failure = find_similar_failure(task_dir)
+        try:
+            from failure_memory import find_similar_failures
+
+            similar_failures = find_similar_failures(task_dir, limit=3)
+            similar_failure = similar_failures[0] if similar_failures else None
         except Exception:
             similar_failure = None
+            similar_failures = []
 
         if similar_failure:
             review_focus["prior_similar_task"] = similar_failure.get("task_id")
@@ -1837,6 +1877,18 @@ def emit_compact_context(task_dir):
             )
             if similar_failure.get("excerpt"):
                 review_focus["prior_similar_excerpt"] = str(similar_failure.get("excerpt"))
+            review_focus["prior_similar_count"] = len(similar_failures)
+            review_focus["prior_similar_cases"] = [
+                {
+                    "task_id": str(item.get("task_id") or ""),
+                    "artifact": str(item.get("artifact") or "TASK_STATE.yaml"),
+                    "score": float(item.get("score") or 0.0),
+                    "matching_check_ids": list(item.get("matching_check_ids") or [])[:3],
+                    "matching_paths": list(item.get("matching_paths") or [])[:3],
+                    "excerpt": str(item.get("excerpt") or "")[:120],
+                }
+                for item in similar_failures[:3]
+            ]
 
     default_must_read_order = [
         "TASK_STATE.yaml",
@@ -1853,7 +1905,7 @@ def emit_compact_context(task_dir):
             priority_must_read.append(session_handoff_name)
         if focus_critic_name:
             priority_must_read.append(focus_critic_name)
-        if blocked_env_round and os.path.isfile(env_snapshot_path):
+        if env_snapshot_surface and os.path.isfile(env_snapshot_path):
             priority_must_read.append(env_snapshot_name)
         for raw_name in handoff_data.get("files_to_read_first", []) if isinstance(handoff_data, dict) else []:
             if isinstance(raw_name, str) and raw_name.strip():
@@ -1863,6 +1915,8 @@ def emit_compact_context(task_dir):
         priority_must_read.extend(["TASK_STATE.yaml", request_name, "PLAN.md", "CHECKS.yaml", "HANDOFF.md"])
     elif planning_mode == "broad-build" and plan_verdict != "PASS":
         priority_must_read.extend(["TASK_STATE.yaml", request_name, env_snapshot_name, "PLAN.md", "CHECKS.yaml"])
+    elif env_snapshot_surface:
+        priority_must_read.extend(["TASK_STATE.yaml", env_snapshot_name, request_name, "PLAN.md", "CHECKS.yaml"])
     else:
         priority_must_read.extend(default_must_read_order)
 
@@ -1895,6 +1949,8 @@ def emit_compact_context(task_dir):
         notes.append("session handoff present")
     if similar_failure and similar_failure.get("task_id"):
         notes.append(f"similar failure: {similar_failure['task_id']}")
+    if env_snapshot_surface and not blocked_env_round:
+        notes.append("env snapshot surfaced")
     if maintenance_task:
         notes.append("maintenance task: workflow surface unlocked")
     notes = notes[:3]
@@ -1912,7 +1968,10 @@ def emit_compact_context(task_dir):
     elif blocked_env_round:
         next_action = "Read ENVIRONMENT_SNAPSHOT.md first, repair the missing tool or setup assumption, then rerun task_verify before continuing."
     elif runtime_fix_round:
-        next_action = "Read the surfaced runtime evidence first, fix the failing path, run mcp__plugin_harness_harness__task_verify, then re-check critics."
+        if env_snapshot_surface:
+            next_action = "Read the surfaced runtime evidence first, then consult ENVIRONMENT_SNAPSHOT.md before changing setup or toolchain assumptions, run mcp__plugin_harness_harness__task_verify, and re-check critics."
+        else:
+            next_action = "Read the surfaced runtime evidence first, fix the failing path, run mcp__plugin_harness_harness__task_verify, then re-check critics."
     elif document_fix_round:
         next_action = "Read the surfaced document evidence first, repair DOC_SYNC / notes, then re-run critic-document before closing."
     elif handoff_data:
@@ -1920,7 +1979,10 @@ def emit_compact_context(task_dir):
     elif lane == "investigate":
         next_action = "Write RESULT.md with findings and close after verification gates pass."
     else:
-        next_action = "Implement the smallest diff for open checks, then run mcp__plugin_harness_harness__task_update_from_git_diff, task_verify, and task_close."
+        if env_snapshot_surface:
+            next_action = "Read ENVIRONMENT_SNAPSHOT.md before making setup or verification assumptions, implement the smallest diff for open checks, then run mcp__plugin_harness_harness__task_update_from_git_diff, task_verify, and task_close."
+        else:
+            next_action = "Implement the smallest diff for open checks, then run mcp__plugin_harness_harness__task_update_from_git_diff, task_verify, and task_close."
 
     return {
         "task_id": task_id,
