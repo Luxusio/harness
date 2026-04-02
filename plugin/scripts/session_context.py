@@ -5,6 +5,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (
+    exit_if_unmanaged_repo,
     read_hook_input,
     yaml_field,
     get_browser_qa_status,
@@ -70,10 +71,7 @@ def _active_tasks(limit=2):
 
 def main():
     read_hook_input()
-
-    if not os.path.isfile(MANIFEST):
-        print("harness: not initialized — run /harness:setup")
-        return
+    exit_if_unmanaged_repo()
 
     project_name = manifest_field("name") or "repo"
     browser = get_browser_qa_status()

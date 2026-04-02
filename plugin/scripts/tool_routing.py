@@ -5,7 +5,8 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import read_hook_input, json_field, manifest_field, is_tooling_ready, is_profile_enabled
+from _lib import (read_hook_input, json_field, manifest_field, is_tooling_ready,
+                  is_profile_enabled, exit_if_unmanaged_repo)
 
 ROUTING_STATE_FILE = "doc/harness/.routing-state.json"
 
@@ -120,6 +121,8 @@ def get_hint(hook_input, manifest, state):
     return hint
 
 def main():
+    exit_if_unmanaged_repo()
+
     hook_input = read_hook_input()
     if not hook_input:
         sys.exit(0)

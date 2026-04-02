@@ -17,7 +17,7 @@ import shlex
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import read_hook_input  # noqa: E402
+from _lib import exit_if_unmanaged_repo, read_hook_input  # noqa: E402
 
 MANAGED_SCRIPT_PATTERNS = {
     "hctl.py": {
@@ -123,6 +123,8 @@ def _message(script_name: str, tool_name: str, command: str) -> str:
 def main() -> int:
     if os.environ.get("HARNESS_SKIP_MCP_GUARD"):
         return 0
+
+    exit_if_unmanaged_repo()
 
     command = _extract_command()
     if not command:

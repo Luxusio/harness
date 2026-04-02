@@ -3,13 +3,16 @@ import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (read_hook_input, hook_json_get, json_field, json_array, yaml_field, yaml_array,
                   manifest_field, is_browser_first_project, is_doc_path,
-                  extract_roots, TASK_DIR, MANIFEST, now_iso)
+                  extract_roots, TASK_DIR, MANIFEST, now_iso,
+                  exit_if_unmanaged_repo)
 
 # TaskCreated hook — initializes minimal task artifacts.
 # Non-blocking (exit 0 always).
 # stdin: JSON | exit 0: success | exit 2: block (unused)
 
 def main():
+    exit_if_unmanaged_repo()
+
     data = read_hook_input()
 
     task_id = hook_json_get(data, "task_id") or os.environ.get("HARNESS_TASK_ID", "")
