@@ -2,7 +2,8 @@
 import sys, os, re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (read_hook_input, hook_json_get, json_field, yaml_field, yaml_array,
-                  TASK_DIR, now_iso, increment_agent_run, append_workflow_violation)
+                  TASK_DIR, now_iso, increment_agent_run, append_workflow_violation,
+                  exit_if_unmanaged_repo)
 
 # SubagentStop hook — records subagent provenance and checks expected artifacts.
 # Non-blocking (exit 0 always). Records violations for close-time enforcement.
@@ -149,6 +150,8 @@ def check_artifact_provenance(task_dir, canonical_agent):
 
 
 def main():
+    exit_if_unmanaged_repo()
+
     data = read_hook_input()
 
     # WS-1 fix: hook_json_get(data, field) instead of json_field(data, field)

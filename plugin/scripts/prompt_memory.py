@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (
     MANIFEST,
     TASK_DIR,
+    exit_if_unmanaged_repo,
     hook_json_get,
     read_hook_input,
     yaml_array,
@@ -502,6 +503,8 @@ def gather_context(prompt):
 
 
 def main():
+    exit_if_unmanaged_repo()
+
     hook_input = read_hook_input()
     prompt = extract_prompt(hook_input)
 

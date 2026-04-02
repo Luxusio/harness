@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (read_hook_input, hook_json_get, json_field, json_array, yaml_field, yaml_array,
                   manifest_field, is_browser_first_project, is_doc_path,
                   extract_roots, TASK_DIR, MANIFEST, now_iso,
+                  exit_if_unmanaged_repo,
                   get_workflow_violations, get_agent_run_count,
                   needs_document_critic, is_handoff_stub,
                   parse_checks_close_gate)
@@ -450,6 +451,8 @@ def compute_completion_failures(task_dir):
 
 
 def main():
+    exit_if_unmanaged_repo()
+
     data = read_hook_input()
 
     # WS-1 fix: hook_json_get(data, field) instead of json_field(data, field)

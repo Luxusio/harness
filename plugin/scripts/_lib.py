@@ -221,6 +221,25 @@ def manifest_field(field):
     return yaml_field(field, MANIFEST)
 
 
+def is_harness_initialized(manifest_path=None):
+    """Return True when the current repository is harness-managed.
+
+    The manifest is the setup marker written by /harness:setup. Hooks should
+    treat repositories without this file as unmanaged and no-op silently.
+    """
+    if manifest_path is None:
+        manifest_path = MANIFEST
+    return os.path.isfile(manifest_path)
+
+
+def exit_if_unmanaged_repo(manifest_path=None):
+    """Exit the current hook silently when harness is not initialized."""
+    if manifest_path is None:
+        manifest_path = MANIFEST
+    if not is_harness_initialized(manifest_path):
+        raise SystemExit(0)
+
+
 def manifest_section_field(section, field, expected=None):
     """Check a field inside a YAML section. Returns value str, or bool if expected given."""
     if not os.path.isfile(MANIFEST):
