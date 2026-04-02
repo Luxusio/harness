@@ -9,6 +9,8 @@ from _lib import (
     read_hook_input,
     yaml_field,
     get_browser_qa_status,
+    is_profile_enabled,
+    is_tooling_ready,
     manifest_field,
     TASK_DIR,
     MANIFEST,
@@ -18,26 +20,21 @@ from _lib import (
 def _tooling_flags():
     if not os.path.isfile(MANIFEST):
         return []
-    try:
-        with open(MANIFEST, encoding="utf-8") as fh:
-            content = fh.read()
-    except OSError:
-        return []
 
     flags = []
-    if "symbol_lane_enabled: true" in content:
+    if is_profile_enabled("symbol_lane_enabled"):
         flags.append("symbol:on")
-    elif "lsp_ready: true" in content or "cclsp_ready: true" in content:
+    elif is_tooling_ready("lsp_ready") or is_tooling_ready("cclsp_ready"):
         flags.append("symbol:ready")
 
-    if "ast_grep_enabled: true" in content:
+    if is_profile_enabled("ast_grep_enabled"):
         flags.append("ast:on")
-    elif "ast_grep_ready: true" in content:
+    elif is_tooling_ready("ast_grep_ready"):
         flags.append("ast:ready")
 
-    if "observability_enabled: true" in content:
+    if is_profile_enabled("observability_enabled"):
         flags.append("obs:on")
-    elif "observability_ready: true" in content:
+    elif is_tooling_ready("observability_ready"):
         flags.append("obs:ready")
 
     return flags

@@ -215,10 +215,228 @@ def yaml_array(field, filepath):
 # Manifest helpers
 # ---------------------------------------------------------------------------
 
+_MANIFEST_CACHE_PATH = None
+_MANIFEST_CACHE_MTIME = None
+_MANIFEST_CACHE_DATA = None
+_MANIFEST_TEMPLATE = "plugin/skills/setup/templates/doc/harness/manifest.yaml"
+_MANIFEST_MISSING = object()
+
+
+def _yaml_scalar_value(raw):
+    """Best-effort scalar parser for simple YAML fragments."""
+    value = (raw or "").strip()
+    if not value:
+        return ""
+
+    # Preserve explicitly quoted strings verbatim (minus quotes)
+    if (value.startswith('"') and value.endswith('"')) or (
+        value.startswith("'") and value.endswith("'")
+    ):
+        return value[1:-1]
+
+    if value.startswith("[") and value.endswith("]"):
+        inner = value[1:-1].strip()
+        if not inner:
+            return []
+        items = []
+        for part in inner.split(","):
+            parsed = _yaml_scalar_value(part)
+            if parsed == "":
+                continue
+            items.append(parsed)
+        return items
+
+    lower = value.lower()
+    if lower == "true":
+        return True
+    if lower == "false":
+        return False
+    if lower in ("null", "none", "~"):
+        return None
+    if re.match(r"^-?\d+$", value):
+        try:
+            return int(value)
+        except ValueError:
+            pass
+    if re.match(r"^-?\d+\.\d+$", value):
+        try:
+            return float(value)
+        except ValueError:
+            pass
+    return value
+
+
+def _yaml_next_significant(lines, start_idx):
+    """Return (indent, stripped) for the next non-empty, non-comment line."""
+    for idx in range(start_idx + 1, len(lines)):
+        raw = lines[idx].rstrip("\n")
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        return indent, stripped
+    return None, None
+
+
+
+def _parse_simple_yaml_mapping(filepath):
+    """Parse a small YAML mapping used by the manifest.
+
+    Supports the subset used by harness manifests:
+      - nested dictionaries via indentation
+      - block sequences of scalars
+      - inline scalar arrays: [a, b]
+      - booleans / ints / quoted strings
+
+    It is intentionally conservative and returns {} on read errors.
+    """
+    if not filepath or not os.path.isfile(filepath):
+        return {}
+    try:
+        with open(filepath, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return {}
+
+    root = {}
+    stack = [(-1, root)]
+
+    for i, raw in enumerate(lines):
+        line = raw.rstrip("\n")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        indent = len(line) - len(line.lstrip(" "))
+        while len(stack) > 1 and indent <= stack[-1][0]:
+            stack.pop()
+        parent = stack[-1][1]
+
+        if stripped.startswith("- "):
+            if not isinstance(parent, list):
+                continue
+            item_value = stripped[2:].strip()
+            if item_value:
+                parent.append(_yaml_scalar_value(item_value))
+            continue
+
+        if ":" not in stripped or not isinstance(parent, dict):
+            continue
+
+        key, rest = stripped.split(":", 1)
+        key = key.strip()
+        rest = rest.strip()
+
+        if not rest:
+            next_indent, next_stripped = _yaml_next_significant(lines, i)
+            if next_indent is not None and next_indent > indent and next_stripped.startswith("- "):
+                container = []
+            else:
+                container = {}
+            parent[key] = container
+            stack.append((indent, container))
+            continue
+
+        parent[key] = _yaml_scalar_value(rest)
+
+    return root
+
+
+
+def _manifest_data(manifest_path=None):
+    """Return cached parsed manifest data as nested dict/list scalars."""
+    global _MANIFEST_CACHE_PATH, _MANIFEST_CACHE_MTIME, _MANIFEST_CACHE_DATA
+
+    if manifest_path is None:
+        manifest_path = MANIFEST
+    if not manifest_path or not os.path.isfile(manifest_path):
+        return {}
+
+    try:
+        mtime = os.path.getmtime(manifest_path)
+    except OSError:
+        return {}
+
+    if (
+        _MANIFEST_CACHE_PATH == manifest_path
+        and _MANIFEST_CACHE_MTIME == mtime
+        and isinstance(_MANIFEST_CACHE_DATA, dict)
+    ):
+        return _MANIFEST_CACHE_DATA
+
+    data = _parse_simple_yaml_mapping(manifest_path)
+    _MANIFEST_CACHE_PATH = manifest_path
+    _MANIFEST_CACHE_MTIME = mtime
+    _MANIFEST_CACHE_DATA = data
+    return data
+
+
+
+def _manifest_lookup(data, path):
+    current = data
+    for key in path:
+        if not isinstance(current, dict) or key not in current:
+            return _MANIFEST_MISSING
+        current = current[key]
+    return current
+
+
+
+def _manifest_stringify(value):
+    if value is _MANIFEST_MISSING or value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, list):
+        return "[" + ", ".join(_manifest_stringify(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return ""
+    return str(value)
+
+
+
+def manifest_value(*path, manifest_path=None, default=None):
+    """Return raw manifest value for a nested path, or default when absent.
+
+    Supports any of:
+      manifest_value("browser", "entry_url")
+      manifest_value("browser.entry_url")
+      manifest_value(["browser", "entry_url"])
+    """
+    if len(path) == 1:
+        first = path[0]
+        if isinstance(first, str) and "." in first:
+            path = tuple(part for part in first.split(".") if part)
+        elif isinstance(first, (list, tuple)):
+            path = tuple(str(part) for part in first if str(part))
+    data = _manifest_data(manifest_path=manifest_path)
+    if not path:
+        return data or default
+    value = _manifest_lookup(data, tuple(path))
+    return default if value is _MANIFEST_MISSING else value
+
+
+
+def manifest_path_field(*path, expected=None, manifest_path=None):
+    """Read a nested manifest field and normalize it to the legacy string API."""
+    value = manifest_value(*path, manifest_path=manifest_path, default=_MANIFEST_MISSING)
+    if expected is not None:
+        return _manifest_stringify(value) == expected
+    return _manifest_stringify(value)
+
+
+
+def manifest_path_exists(*path, manifest_path=None):
+    """Return True when the manifest contains the provided nested path."""
+    value = manifest_value(*path, manifest_path=manifest_path, default=_MANIFEST_MISSING)
+    return value is not _MANIFEST_MISSING
+
+
 
 def manifest_field(field):
-    """Read a scalar field from the manifest. Returns str or ''."""
-    return yaml_field(field, MANIFEST)
+    """Read a scalar top-level field from the manifest. Returns str or ''."""
+    return manifest_path_field(field)
+
 
 
 def is_harness_initialized(manifest_path=None):
@@ -232,6 +450,7 @@ def is_harness_initialized(manifest_path=None):
     return os.path.isfile(manifest_path)
 
 
+
 def exit_if_unmanaged_repo(manifest_path=None):
     """Exit the current hook silently when harness is not initialized."""
     if manifest_path is None:
@@ -240,44 +459,81 @@ def exit_if_unmanaged_repo(manifest_path=None):
         raise SystemExit(0)
 
 
+
 def manifest_section_field(section, field, expected=None):
     """Check a field inside a YAML section. Returns value str, or bool if expected given."""
-    if not os.path.isfile(MANIFEST):
-        return False if expected is not None else ""
-    try:
-        with open(MANIFEST, "r", encoding="utf-8") as fh:
-            lines = fh.readlines()
-    except OSError:
-        return False if expected is not None else ""
+    return manifest_path_field(section, field, expected=expected)
 
-    in_section = False
-    for line in lines:
-        if re.match(r"^" + re.escape(section) + r":", line):
-            in_section = True
-            continue
-        if in_section:
-            # Left the section if we hit a new top-level key
-            if re.match(r"^[a-zA-Z]", line):
-                break
-            m = re.match(r"^\s+" + re.escape(field) + r":\s*(.*)", line)
-            if m:
-                val = m.group(1).rstrip("\n").strip().strip('"').strip("'")
-                if expected is not None:
-                    return val == expected
-                return val
-    return False if expected is not None else ""
 
 
 def is_tooling_ready(field):
     """Return True if manifest tooling.<field> == 'true'."""
-    return manifest_section_field("tooling", field, "true")
+    value = manifest_value("tooling", field, default=False)
+    if isinstance(value, bool):
+        return value
+    return str(value).lower() == "true"
+
 
 
 def is_profile_enabled(field):
     """Return True if manifest profiles.<field> == 'true'."""
-    return manifest_section_field("profiles", field, "true")
+    value = manifest_value("profiles", field, default=False)
+    if isinstance(value, bool):
+        return value
+    return str(value).lower() == "true"
 
 
+
+def _flatten_manifest_paths(data, prefix=()):
+    paths = []
+    if isinstance(data, dict):
+        for key, value in data.items():
+            next_prefix = prefix + (str(key),)
+            if isinstance(value, dict):
+                nested = _flatten_manifest_paths(value, next_prefix)
+                if nested:
+                    paths.extend(nested)
+                else:
+                    paths.append(next_prefix)
+            else:
+                paths.append(next_prefix)
+    elif prefix:
+        paths.append(prefix)
+    return paths
+
+
+
+def manifest_sync_gaps(manifest_path=None, template_path=None):
+    """Return missing manifest leaf paths compared to the setup template.
+
+    This is a presence/self-sync check, not a value-equivalence check.
+    The goal is to catch schema drift where runtime readers expect fields that
+    the repo-local manifest no longer declares.
+    """
+    if manifest_path is None:
+        manifest_path = MANIFEST
+    if template_path is None:
+        template_path = _MANIFEST_TEMPLATE
+
+    template_data = _parse_simple_yaml_mapping(template_path)
+    if not template_data:
+        return []
+    manifest_data = _parse_simple_yaml_mapping(manifest_path)
+    if not manifest_data:
+        return ["manifest missing"]
+
+    gaps = []
+    for path in _flatten_manifest_paths(template_data):
+        if _manifest_lookup(manifest_data, path) is _MANIFEST_MISSING:
+            gaps.append(".".join(path))
+
+    top_type = _manifest_lookup(manifest_data, ("type",))
+    shape = _manifest_lookup(manifest_data, ("project_meta", "shape"))
+    if top_type is not _MANIFEST_MISSING and shape is not _MANIFEST_MISSING:
+        if str(top_type) != str(shape):
+            gaps.append("project_meta.shape!=type")
+
+    return sorted(set(gaps))
 # ---------------------------------------------------------------------------
 # Task state helpers
 # ---------------------------------------------------------------------------
@@ -514,39 +770,10 @@ def manifest_teams_field(field):
 
 def is_browser_first_project():
     """Return True if manifest declares browser.enabled or qa.browser_qa_supported."""
-    if not os.path.isfile(MANIFEST):
-        return False
-    try:
-        with open(MANIFEST, "r", encoding="utf-8") as fh:
-            lines = fh.readlines()
-    except OSError:
-        return False
-
-    # Check browser section for enabled: true
-    in_browser = False
-    for line in lines:
-        if re.match(r"^browser:", line):
-            in_browser = True
-            continue
-        if in_browser:
-            if re.match(r"^[a-zA-Z]", line):
-                in_browser = False
-            elif re.match(r"^\s+enabled\s*:\s*true", line):
-                return True
-
-    # Check qa.browser_qa_supported: true
-    in_qa = False
-    for line in lines:
-        if re.match(r"^qa:", line):
-            in_qa = True
-            continue
-        if in_qa:
-            if re.match(r"^[a-zA-Z]", line):
-                in_qa = False
-            elif re.match(r"^\s+browser_qa_supported\s*:\s*true", line):
-                return True
-
-    return False
+    return (
+        manifest_path_field("browser.enabled") == "true"
+        or manifest_path_field("qa.browser_qa_supported") == "true"
+    )
 
 
 def get_browser_qa_status():
@@ -560,46 +787,11 @@ def get_browser_qa_status():
     if not os.path.isfile(MANIFEST):
         return browser_qa
 
-    # Check qa: section for browser_qa_supported
-    in_qa = False
-    try:
-        with open(MANIFEST) as f:
-            for line in f:
-                if line.startswith("qa:"):
-                    in_qa = True
-                    continue
-                if in_qa:
-                    if line and not line[0].isspace():
-                        in_qa = False
-                        continue
-                    if "browser_qa_supported:" in line:
-                        val = line.split("browser_qa_supported:", 1)[1].strip().lower()
-                        if val == "true":
-                            browser_qa = "enabled"
-                        break
-    except (OSError, IOError):
-        pass
-
-    # Check browser: section for enabled
-    if browser_qa == "disabled":
-        in_browser = False
-        try:
-            with open(MANIFEST) as f:
-                for line in f:
-                    if line.startswith("browser:"):
-                        in_browser = True
-                        continue
-                    if in_browser:
-                        if line and not line[0].isspace():
-                            in_browser = False
-                            continue
-                        if "enabled:" in line:
-                            val = line.split("enabled:", 1)[1].strip().lower()
-                            if val == "true":
-                                browser_qa = "enabled"
-                            break
-        except (OSError, IOError):
-            pass
+    if (
+        manifest_path_field("qa.browser_qa_supported") == "true"
+        or manifest_path_field("browser.enabled") == "true"
+    ):
+        browser_qa = "enabled"
 
     # Check for blocked_env tasks requiring browser
     if browser_qa == "enabled" and os.path.isdir(TASK_DIR):

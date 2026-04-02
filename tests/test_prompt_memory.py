@@ -181,5 +181,11 @@ class TestSimilarFailureHint(unittest.TestCase):
                  mock.patch.object(prompt_memory_module, "select_relevant_notes", return_value=[]):
                 parts = prompt_memory_module.gather_context("fix src/api/users.py still broken")
 
-            self.assertTrue(any(part.startswith("similar:TASK__previous") for part in parts), parts)
+            repair_parts = [part for part in parts if part.startswith("repair:")]
+            self.assertTrue(repair_parts, parts)
+            self.assertIn("TASK__previous", repair_parts[0])
+            self.assertTrue(
+                "AC-001" in repair_parts[0] or "src/api/users.py" in repair_parts[0],
+                repair_parts[0],
+            )
             self.assertLessEqual(len(parts), 4)

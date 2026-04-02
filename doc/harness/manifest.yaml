@@ -8,10 +8,11 @@ type: library
 languages: [python, markdown]
 
 # --- Top-level runtime commands ---
-# test_command requires pytest: pip install pytest
+dev_command: ""
 test_command: "python3 -m pytest tests/ -x --tb=short"
-# smoke_command intentionally omitted — verify.py smoke SKIPs gracefully.
-# To enable: smoke_command: "python3 -m pytest tests/ -x --tb=line -q"
+build_command: ""
+smoke_command: ""
+healthcheck_command: ""
 
 # --- Verify commands (used by verify.py) ---
 verify_commands:
@@ -26,15 +27,42 @@ qa:
 
 browser:
   enabled: false
+  mcp_server: chrome-devtools
+  launch_config: doc/harness/launch.json
+  entry_url: ""
+  status: disabled
 
 # --- Capabilities ---
 capabilities:
   delegation_mode: auto
   strict_compliance_requires_delegation: true
 
+# --- Project metadata ---
+project_meta:
+  shape: library
+  package_managers: []
+  primary_frontend:
+    cwd: ""
+    framework: ""
+  ports: []
+
 # --- Registered doc roots ---
 registered_roots:
   - common
+
+# --- Tooling readiness ---
+tooling:
+  ast_grep_ready: false
+  lsp_ready: false
+  cclsp_ready: false
+  observability_ready: false
+  chrome_devtools_ready: false
+
+# --- Profiles ---
+profiles:
+  symbol_lane_enabled: false
+  ast_grep_enabled: false
+  observability_enabled: false
 
 # --- Teams ---
 teams:
@@ -43,4 +71,11 @@ teams:
   omc_ready: false
   auto_activate: true
   approval_mode: preapproved
+  teammate_mode: auto
+  default_size: 3
+  max_size: 5
   fallback: subagents
+  safe_only:
+    require_disjoint_files: true
+    forbid_same_file_edits: true
+    forbid_heavy_dependency_chains: true

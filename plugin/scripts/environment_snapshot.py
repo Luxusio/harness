@@ -20,7 +20,16 @@ import sys
 from typing import Iterable
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import MANIFEST, get_browser_qa_status, manifest_field, now_iso, yaml_array
+from _lib import (
+    MANIFEST,
+    get_browser_qa_status,
+    is_profile_enabled,
+    is_tooling_ready,
+    manifest_field,
+    manifest_path_field,
+    now_iso,
+    yaml_array,
+)
 
 SNAPSHOT_FILENAME = "ENVIRONMENT_SNAPSHOT.md"
 ROOT_LIST_LIMIT = 12
@@ -126,9 +135,9 @@ def collect_environment_snapshot(repo_root: str = ".") -> dict:
         "repo_root": repo_root,
         "cwd": os.getcwd(),
         "project_name": manifest_field("name") or "repo",
-        "project_type": manifest_field("type") or "unknown",
+        "project_type": manifest_path_field("project_meta.shape") or manifest_field("type") or "unknown",
         "browser": get_browser_qa_status(),
-        "observability": manifest_field("observability_enabled") or manifest_field("observability_ready") or "false",
+        "observability": "true" if (is_profile_enabled("observability_enabled") or is_tooling_ready("observability_ready")) else "false",
         "test_command": manifest_field("test_command") or "",
         "verify_commands": verify_commands[:3],
         "git_summary": _git_summary(repo_root),

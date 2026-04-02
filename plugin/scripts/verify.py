@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-from _lib import MANIFEST, manifest_field
+from _lib import MANIFEST, is_profile_enabled, manifest_field, manifest_path_field, manifest_sync_gaps
 
 RETRIES = 10
 CONSOLE_ERRORS = 0
@@ -119,7 +119,9 @@ def run_healthcheck() -> int:
 def run_browser() -> int:
     print("=== Browser Smoke Test ===")
 
-    frontend_url = manifest_field("frontend") if os.path.isfile(MANIFEST) else ""
+    frontend_url = manifest_path_field("browser.entry_url") if os.path.isfile(MANIFEST) else ""
+    if not frontend_url:
+        frontend_url = manifest_field("frontend") if os.path.isfile(MANIFEST) else ""
     if not frontend_url:
         frontend_url = "http://localhost:3000"
 
@@ -249,16 +251,36 @@ def _suite_step(mode: str, label: str, evidence_label: str) -> int:
 
 
 def _observability_enabled() -> bool:
-    if not os.path.isfile(MANIFEST):
-        return False
-    try:
-        with open(MANIFEST, "r", encoding="utf-8") as handle:
-            for line in handle:
-                if "observability_enabled:" in line and "true" in line:
-                    return True
-    except OSError:
-        pass
-    return False
+    return is_profile_enabled("observability_enabled")
+
+
+def _is_self_hosted_harness_repo() -> bool:
+    return os.path.isfile("plugin/skills/setup/templates/doc/harness/manifest.yaml") and (
+        manifest_field("name") == "harness-plugin" or os.path.isfile("plugin/.claude-plugin/plugin.json")
+    )
+
+
+def run_manifest_sync() -> int:
+    print("=== MANIFEST SYNC CHECK ===")
+
+    if not _is_self_hosted_harness_repo():
+        print("SKIP: manifest self-sync check only applies to the harness plugin repo")
+        print("[EVIDENCE] manifest: PASS — skipped (not self-hosted harness repo)")
+        return 0
+
+    gaps = manifest_sync_gaps()
+    if not gaps:
+        print("Manifest schema is aligned with the setup template.")
+        print("[EVIDENCE] manifest: PASS — manifest matches template schema")
+        return 0
+
+    preview = ", ".join(gaps[:8])
+    if len(gaps) > 8:
+        preview += f", (+{len(gaps) - 8} more)"
+    print("FAIL: manifest schema drift detected")
+    print(f"Missing or drifted paths: {preview}")
+    print(f"[EVIDENCE] manifest: FAIL — missing/drifted schema paths: {preview}")
+    return 1
 
 
 def run_suite() -> int:
@@ -267,6 +289,10 @@ def run_suite() -> int:
 
     print("=== HARNESS VERIFY ===")
     print(f"[EVIDENCE] verify: started at {timestamp}")
+
+    print("--- Running manifest self-sync check ---")
+    if run_manifest_sync() != 0:
+        failures += 1
 
     print("--- Running smoke tests ---")
     if _suite_step("smoke", "smoke", "smoke") != 0:
