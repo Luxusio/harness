@@ -81,6 +81,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             structured = result["structuredContent"]
             self.assertEqual(structured["task_context"]["task_id"], "TASK__mcp")
             self.assertIn("must_read", structured["task_context"])
+            self.assertIn("planning_mode", structured["task_context"])
 
     def test_unknown_tool_returns_error_payload(self):
         result = harness_server.call_tool("does_not_exist", {})

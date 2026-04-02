@@ -37,6 +37,7 @@ Use the returned task pack as the source of truth for:
 - `browser_required`
 - `workflow_locked`
 - `maintenance_task`
+- `planning_mode`
 - `compat.execution_mode`
 - `compat.orchestration_mode`
 - `must_read`
@@ -65,15 +66,17 @@ If a workable narrow contract is possible without asking, prefer writing the pla
 Capture the user request in their words.
 Keep it short and faithful.
 
-### 5. Optional broad-request narrowing
+### 5. Broad-build narrowing when selected
 
-If the request is broad, high-level, and lacks file anchors, you may create these brief high-level artifacts before `PLAN.md`:
+If `task_context.planning_mode == broad-build`, create these brief high-level artifacts before `PLAN.md`:
 
 - `01_product_spec.md`
 - `02_design_language.md`
 - `03_architecture.md`
 
 Use them only to narrow the task. Do not turn them into long implementation novels.
+
+If `planning_mode` is `standard`, skip this trio unless the user explicitly asked for that planning depth.
 
 ### 6. Transition the session to write mode
 

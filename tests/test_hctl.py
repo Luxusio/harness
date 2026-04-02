@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "plugin", "scripts"))
 os.environ["HARNESS_SKIP_STDIN"] = "1"
@@ -34,33 +35,42 @@ def _make_task(base_dir, task_id, lane="refactor", risk_tags=None,
     task_dir = os.path.join(base_dir, task_id)
     os.makedirs(task_dir, exist_ok=True)
     tags_str = str(risk_tags or [])
-    lines = [
-        f"task_id: {task_id}",
-        f"status: planned",
-        f"lane: {lane}",
-        f"risk_tags: {tags_str}",
-        "browser_required: false",
-        "runtime_verdict_fail_count: 0",
-        "qa_required: true",
-        "doc_sync_required: true",
-        "browser_required: false",
-        "parallelism: 1",
-        "workflow_locked: true",
-        "maintenance_task: false",
-        "routing_compiled: false",
-        "routing_source: pending",
-        "risk_level: pending",
-        "execution_mode: standard",
-        "orchestration_mode: solo",
-        "plan_verdict: PASS",
-        "updated: 2026-01-01T00:00:00Z",
-    ]
+    fields = {
+        "task_id": task_id,
+        "status": "planned",
+        "lane": lane,
+        "risk_tags": tags_str,
+        "browser_required": "false",
+        "runtime_verdict_fail_count": "0",
+        "qa_required": "true",
+        "doc_sync_required": "true",
+        "parallelism": "1",
+        "workflow_locked": "true",
+        "maintenance_task": "false",
+        "routing_compiled": "false",
+        "routing_source": "pending",
+        "risk_level": "pending",
+        "execution_mode": "standard",
+        "orchestration_mode": "solo",
+        "plan_verdict": "PASS",
+        "updated": "2026-01-01T00:00:00Z",
+    }
     if extra_fields:
         for k, v in extra_fields.items():
-            lines.append(f"{k}: {v}")
+            fields[k] = v
+    lines = [f"{k}: {v}" for k, v in fields.items()]
     with open(os.path.join(task_dir, "TASK_STATE.yaml"), "w") as f:
         f.write("\n".join(lines) + "\n")
     return task_dir
+
+
+def _write_request(task_dir, body):
+    with open(os.path.join(task_dir, "REQUEST.md"), "w", encoding="utf-8") as f:
+        f.write(
+            "# Request: TEST\n"
+            "created: 2026-01-01T00:00:00Z\n\n"
+            f"{body}\n"
+        )
 
 
 def _run_hctl(*args, cwd=None):
@@ -180,6 +190,23 @@ class TestHctlStart(unittest.TestCase):
         om = _yaml_field(state, "orchestration_mode")
         self.assertEqual(om, "solo")
 
+    def test_start_auto_promotes_planning_mode_broad_build(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__test",
+            lane="build",
+            extra_fields={"browser_required": "true", "planning_mode": "standard"},
+        )
+        _write_request(
+            task_dir,
+            "Create a new admin dashboard web app for customer operations. "
+            "Show key metrics and a detail workflow.",
+        )
+
+        _run_hctl("start", "--task-dir", task_dir)
+        state = os.path.join(task_dir, "TASK_STATE.yaml")
+        self.assertEqual(_yaml_field(state, "planning_mode"), "broad-build")
+
     def test_start_missing_task_dir_exits_nonzero(self):
         code, _, err = _run_hctl("start", "--task-dir", "/nonexistent/path")
         self.assertNotEqual(code, 0)
@@ -219,9 +246,9 @@ class TestHctlContextJson(unittest.TestCase):
         required = {
             "task_id", "status", "lane", "risk_level", "qa_required",
             "doc_sync_required", "browser_required", "parallelism",
-            "workflow_locked", "maintenance_task", "compat",
+            "workflow_locked", "maintenance_task", "planning_mode", "compat",
             "must_read", "commands", "checks", "open_failures", "notes",
-            "next_action",
+            "review_focus", "next_action",
         }
         for key in required:
             self.assertIn(key, ctx, f"required key '{key}' missing from context JSON")
@@ -283,6 +310,135 @@ class TestHctlContextJson(unittest.TestCase):
         ctx = self._context_json(lane="refactor",
                                  risk_tags=["maintenance-task"])
         self.assertTrue(ctx["maintenance_task"])
+
+    def test_review_focus_defaults_to_disabled(self):
+        ctx = self._context_json()
+        self.assertIn("review_focus", ctx)
+        self.assertFalse(ctx["review_focus"].get("evidence_first"))
+
+    def test_context_surfaces_broad_build_planning_mode(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx",
+            lane="build",
+            extra_fields={
+                "browser_required": "true",
+                "planning_mode": "standard",
+                "plan_verdict": "pending",
+            },
+        )
+        _write_request(
+            task_dir,
+            "Create a new admin dashboard web app for customer operations. "
+            "Show key metrics and a detail workflow.",
+        )
+
+        _run_hctl("start", "--task-dir", task_dir)
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json")
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertEqual(ctx["planning_mode"], "broad-build")
+        self.assertIn("01_product_spec.md", ctx["next_action"])
+
+    def test_runtime_fail_surfaces_failing_critic_in_must_read(self):
+        task_dir = _make_task(self.tmp.name, "TASK__ctx")
+        task_path = Path(task_dir)
+        (task_path / "PLAN.md").write_text("# Plan\n\nFix runtime bug.\n", encoding="utf-8")
+        (task_path / "CHECKS.yaml").write_text(
+            "checks:\n  - id: AC-001\n    status: failed\n    title: runtime failure\n",
+            encoding="utf-8",
+        )
+        (task_path / "HANDOFF.md").write_text(
+            "# Handoff\n\n## Result\n- repro: pytest tests/test_fail.py\n",
+            encoding="utf-8",
+        )
+        with open(task_path / "TASK_STATE.yaml", "a", encoding="utf-8") as fh:
+            fh.write("runtime_verdict: FAIL\n")
+        (task_path / "CRITIC__runtime.md").write_text(
+            "verdict: FAIL\n"
+            "summary: pytest still fails on AC-001\n\n"
+            "## Transcript\n"
+            "pytest tests/test_fail.py\n"
+            "AssertionError: expected 200 got 500\n",
+            encoding="utf-8",
+        )
+
+        _run_hctl("start", "--task-dir", task_dir)
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json")
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertTrue(ctx["review_focus"].get("evidence_first"))
+        self.assertEqual(ctx["review_focus"].get("trigger"), "runtime_fail")
+        self.assertTrue(ctx["must_read"][0].endswith("CRITIC__runtime.md"))
+        self.assertIn("CRITIC__runtime.md", ctx["review_focus"].get("critic_artifact", ""))
+        self.assertIn("pytest", ctx["review_focus"].get("evidence_excerpt", ""))
+        self.assertIn("runtime evidence first", ctx["next_action"].lower())
+
+    def test_session_handoff_is_prioritized_for_fix_round(self):
+        task_dir = _make_task(self.tmp.name, "TASK__ctx")
+        task_path = Path(task_dir)
+        (task_path / "PLAN.md").write_text("# Plan\n\nResume task.\n", encoding="utf-8")
+        (task_path / "CRITIC__runtime.md").write_text(
+            "verdict: FAIL\n"
+            "summary: failing verification\n\n"
+            "## Transcript\n"
+            "pytest tests/test_fail.py\n",
+            encoding="utf-8",
+        )
+        (task_path / "SESSION_HANDOFF.json").write_text(
+            json.dumps(
+                {
+                    "trigger": "runtime_fail_repeat",
+                    "next_step": "Reproduce the pytest failure before broad repo exploration.",
+                    "open_check_ids": ["AC-009"],
+                    "paths_in_focus": ["plugin/scripts/_lib.py"],
+                    "do_not_regress": ["existing CLI path remains stable"],
+                    "files_to_read_first": ["PLAN.md", "CRITIC__runtime.md"],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        _run_hctl("start", "--task-dir", task_dir)
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json")
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertTrue(ctx["review_focus"].get("evidence_first"))
+        self.assertEqual(
+            ctx["review_focus"].get("supporting_artifact"),
+            "doc/harness/tasks/TASK__ctx/SESSION_HANDOFF.json",
+        )
+        self.assertEqual(ctx["review_focus"].get("focus_check_ids"), ["AC-009"])
+        self.assertEqual(ctx["must_read"][0], "doc/harness/tasks/TASK__ctx/SESSION_HANDOFF.json")
+        self.assertIn("pytest", ctx["review_focus"].get("evidence_excerpt", ""))
+
+    def test_document_fail_surfaces_document_critic(self):
+        task_dir = _make_task(self.tmp.name, "TASK__ctx")
+        task_path = Path(task_dir)
+        (task_path / "PLAN.md").write_text("# Plan\n\nFix docs.\n", encoding="utf-8")
+        (task_path / "DOC_SYNC.md").write_text("# Doc Sync\n\nDocs drifted.\n", encoding="utf-8")
+        (task_path / "CRITIC__document.md").write_text(
+            "verdict: FAIL\n"
+            "summary: DOC_SYNC misses updated file list\n"
+            "issues: missing DOC_SYNC evidence\n",
+            encoding="utf-8",
+        )
+
+        _run_hctl("start", "--task-dir", task_dir)
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json")
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertTrue(ctx["review_focus"].get("evidence_first"))
+        self.assertEqual(ctx["review_focus"].get("trigger"), "document_fail")
+        self.assertIn("CRITIC__document.md", ctx["review_focus"].get("critic_artifact", ""))
+        self.assertIn("DOC_SYNC.md", ctx["review_focus"].get("supporting_artifact", ""))
+        self.assertIn("document evidence first", ctx["next_action"].lower())
 
 
 # ---------------------------------------------------------------------------

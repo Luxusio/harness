@@ -1,25 +1,49 @@
 #!/usr/bin/env python3
 """UserPromptSubmit hook: inject relevant context hints into the prompt."""
+
 import json
 import os
-import sys
 import re
+import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import read_hook_input, hook_json_get, yaml_field, yaml_array, TASK_DIR, MANIFEST
-from memory_selectors import select_relevant_notes, _get_registered_roots
+from _lib import (
+    MANIFEST,
+    TASK_DIR,
+    hook_json_get,
+    read_hook_input,
+    yaml_array,
+    yaml_field,
+)
+from memory_selectors import _get_registered_roots, select_relevant_notes
+
 
 def is_casual(prompt):
     """Detect casual/greeting prompts that don't need context injection."""
     if not prompt or len(prompt) < 10:
         return True
     casual_patterns = [
-        "hi", "hello", "hey", "thanks", "thank you", "ok", "okay",
-        "yes", "no", "sure", "bye", "goodbye", "good morning",
-        "good afternoon", "good evening", "what's up", "howdy"
+        "hi",
+        "hello",
+        "hey",
+        "thanks",
+        "thank you",
+        "ok",
+        "okay",
+        "yes",
+        "no",
+        "sure",
+        "bye",
+        "goodbye",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "what's up",
+        "howdy",
     ]
     lower = prompt.lower().strip().rstrip("!?.,:;")
     return lower in casual_patterns
+
 
 def extract_prompt(hook_input):
     """Extract the user prompt from hook input JSON."""
@@ -28,6 +52,7 @@ def extract_prompt(hook_input):
         if val:
             return val
     return ""
+
 
 def detect_lane_from_prompt(prompt):
     """Attempt to detect the most relevant lane from the prompt text.
@@ -75,11 +100,11 @@ def classify_prompt_intent(prompt):
 
     # File path references with action context → mutating
     # e.g. "@PLAN.md 구현해", "fix src/foo.py", "plugin/scripts/bar.py 수정"
-    has_file_ref = bool(re.search(r'[a-zA-Z0-9_/]+\.[a-zA-Z]{1,5}\b', stripped))
+    has_file_ref = bool(re.search(r"[a-zA-Z0-9_/]+\.[a-zA-Z]{1,5}\b", stripped))
     has_code_block = "```" in stripped
 
     # References to existing task artifacts → likely continuing work
-    if re.search(r'PLAN\.md|TASK_STATE|HANDOFF|CRITIC__', stripped):
+    if re.search(r"PLAN\.md|TASK_STATE|HANDOFF|CRITIC__", stripped):
         return "mutating"
 
     # Imperative + file reference = likely mutating
@@ -106,11 +131,14 @@ def classify_prompt_intent(prompt):
 def _get_complaint_summary(task_dir):
     """Return short complaint summary if active task has open complaints."""
     try:
-        import sys, os
+        import os
+        import sys
+
         scripts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)))
         if scripts_dir not in sys.path:
             sys.path.insert(0, scripts_dir)
         from feedback_capture import summarize_open_complaints
+
         summary = summarize_open_complaints(task_dir)
         return summary if summary else ""
     except Exception:
@@ -132,12 +160,32 @@ def _is_complaint_like(prompt):
 
     lower = stripped.lower()
     negation_outcome_en = [
-        "still", "again", "didn't", "not working", "doesn't work",
-        "not fixed", "still broken", "same issue", "still failing",
-        "didn't fix", "didn't work", "not done", "wrong",
-        "broken", "regressed",
+        "still",
+        "again",
+        "didn't",
+        "not working",
+        "doesn't work",
+        "not fixed",
+        "still broken",
+        "same issue",
+        "still failing",
+        "didn't fix",
+        "didn't work",
+        "not done",
+        "wrong",
+        "broken",
+        "regressed",
     ]
-    korean_signals = ["아직", "여전히", "안 됨", "안돼", "안됨", "안 돼", "못했", "틀렸"]
+    korean_signals = [
+        "아직",
+        "여전히",
+        "안 됨",
+        "안돼",
+        "안됨",
+        "안 돼",
+        "못했",
+        "틀렸",
+    ]
 
     return any(signal in lower for signal in negation_outcome_en) or any(
         signal in stripped for signal in korean_signals
@@ -176,6 +224,7 @@ def _get_active_task_dir():
     # Most recently updated task
     candidates.sort(key=lambda x: x[0], reverse=True)
     return candidates[0][1]
+
 
 def _is_fix_round(task_dir):
     """Heuristic: True if this looks like a fix round (runtime FAIL or open checks).
@@ -222,7 +271,9 @@ def _get_unplanned_hint(task_dir):
             content = f.read()
 
         # Check mutates_repo
-        is_non_mutating = bool(re.search(r"^mutates_repo:\s*false", content, re.MULTILINE))
+        is_non_mutating = bool(
+            re.search(r"^mutates_repo:\s*false", content, re.MULTILINE)
+        )
         if is_non_mutating:
             return ""
 
@@ -239,11 +290,11 @@ def _get_unplanned_hint(task_dir):
             return ""
 
         # Check for existing violations (even stronger signal)
-        has_violation = bool(re.search(
-            r"source_mutation_before_plan_pass", content
-        ))
+        has_violation = bool(re.search(r"source_mutation_before_plan_pass", content))
         if has_violation:
-            return "plan violation: stop source edits and repair PLAN.md before continuing"
+            return (
+                "plan violation: stop source edits and repair PLAN.md before continuing"
+            )
 
         return "plan required: critic-plan PASS before source edits"
     except OSError:
@@ -351,7 +402,9 @@ def gather_context(prompt):
     if active_task_dir:
         try:
             state_file = os.path.join(active_task_dir, "TASK_STATE.yaml")
-            task_id = yaml_field("task_id", state_file) or os.path.basename(active_task_dir)
+            task_id = yaml_field("task_id", state_file) or os.path.basename(
+                active_task_dir
+            )
             status = yaml_field("status", state_file) or "unknown"
             context_parts.append(f"active:{task_id}[{status}]")
         except Exception:
@@ -370,7 +423,9 @@ def gather_context(prompt):
             if complaint_summary:
                 context_parts.append(complaint_summary)
             elif _is_complaint_like(prompt):
-                context_parts.append("complaint hint: capture dissatisfaction before proceeding")
+                context_parts.append(
+                    "complaint hint: capture dissatisfaction before proceeding"
+                )
     except Exception:
         pass
 
@@ -384,6 +439,7 @@ def gather_context(prompt):
     try:
         if active_task_dir and _is_fix_round(active_task_dir):
             from checks_focus import get_checks_summary_for_task
+
             checks_summary = get_checks_summary_for_task(active_task_dir)
             if checks_summary:
                 context_parts.append(checks_summary)
@@ -409,6 +465,7 @@ def gather_context(prompt):
 
     return context_parts[:4]
 
+
 def main():
     hook_input = read_hook_input()
     prompt = extract_prompt(hook_input)
@@ -432,10 +489,11 @@ def main():
     output = {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
-            "additionalContext": context
+            "additionalContext": context,
         }
     }
     print(json.dumps(output))
+
 
 if __name__ == "__main__":
     try:

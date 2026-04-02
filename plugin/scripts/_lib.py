@@ -1047,6 +1047,276 @@ def get_planning_mode(state_file):
     return "standard"
 
 
+def _normalize_free_text(text):
+    """Normalize free text for lightweight routing heuristics."""
+    return re.sub(r"\s+", " ", str(text or "").lower()).strip()
+
+
+def _contains_any_phrase(text, phrases):
+    normalized = _normalize_free_text(text)
+    return any(phrase in normalized for phrase in phrases)
+
+
+def _count_path_anchors(text):
+    """Count likely file / directory anchors in free-form request text."""
+    if not text:
+        return 0
+    seen = set()
+    for match in re.findall(r"(?:^|[\s`'\"(])((?:[\w.-]+/)+[\w.-]+)", text):
+        cleaned = match.strip("`'\"()[]{}<>,.;:")
+        if cleaned:
+            seen.add(cleaned)
+    for match in re.findall(
+        r"\b[\w.-]+\.(?:py|ts|tsx|js|jsx|mjs|cjs|md|json|yaml|yml|css|scss|html|sql|sh|go|rs|java|kt|swift|rb|php)\b",
+        text,
+    ):
+        seen.add(match)
+    return len(seen)
+
+
+def _is_short_high_level_request(text):
+    """Return True for short, high-level requests (roughly 1-4 sentences)."""
+    if not text:
+        return False
+    sentence_count = len(
+        [
+            part
+            for part in re.split(r"[.!?。！？\n]+", text)
+            if re.search(r"[a-z0-9가-힣]", part, re.IGNORECASE)
+        ]
+    )
+    token_count = len(re.findall(r"[\w가-힣]+", text, re.UNICODE))
+    return 1 <= sentence_count <= 4 and token_count <= 80
+
+
+def _looks_like_detailed_spec(text):
+    """Conservative detector for already-detailed technical requests."""
+    if not text:
+        return False
+    normalized = _normalize_free_text(text)
+    token_count = len(re.findall(r"[\w가-힣]+", normalized, re.UNICODE))
+    if "```" in text:
+        return True
+    if token_count >= 120:
+        return True
+    if _count_path_anchors(text) >= 2:
+        return True
+
+    bullet_count = len(re.findall(r"^\s*(?:[-*]|\d+\.)\s+", text, flags=re.MULTILINE))
+    if bullet_count >= 3 and token_count >= 50:
+        return True
+
+    low_level_hints = {
+        "function", "class", "method", "module", "component api", "endpoint",
+        "route", "schema", "migration", "sql", "file", "directory", "path",
+        "api contract", "hook", "script", "테이블", "엔드포인트", "스키마",
+        "마이그레이션", "파일", "경로", "함수", "클래스",
+    }
+    hint_hits = sum(1 for hint in low_level_hints if hint in normalized)
+    return hint_hits >= 3 and token_count >= 40
+
+
+def _estimate_surface_count(text):
+    """Estimate how many repo surfaces / roots the request likely spans."""
+    normalized = _normalize_free_text(text)
+    if not normalized:
+        return 0
+
+    surface_hints = {
+        "app": {
+            "frontend", "front-end", "front end", "ui", "ux", "page", "screen",
+            "dashboard", "site", "website", "web app", "webapp", "admin",
+            "layout", "component", "browser", "responsive", "페이지", "화면",
+            "프론트", "대시보드", "웹앱", "사이트",
+        },
+        "api": {
+            "api", "backend", "back-end", "server", "endpoint", "route",
+            "controller", "service layer", "graphql", "rest", "백엔드", "서버",
+            "엔드포인트", "라우트",
+        },
+        "db": {
+            "database", "db", "schema", "migration", "postgres", "mysql",
+            "sqlite", "persistence", "persist", "query", "sql", "데이터베이스",
+            "스키마", "마이그레이션", "영속",
+        },
+        "infra": {
+            "deploy", "deployment", "docker", "kubernetes", "k8s", "infra",
+            "terraform", "ci", "cd", "pipeline", "hosting", "인프라", "배포",
+        },
+        "docs": {"docs", "documentation", "readme", "문서"},
+        "worker": {"worker", "queue", "job", "cron", "background", "워커", "큐"},
+    }
+
+    matched = set()
+    for surface, hints in surface_hints.items():
+        if any(hint in normalized for hint in hints):
+            matched.add(surface)
+
+    root_map = {
+        "app": "app",
+        "src": "app",
+        "web": "app",
+        "frontend": "app",
+        "ui": "app",
+        "api": "api",
+        "server": "api",
+        "backend": "api",
+        "db": "db",
+        "database": "db",
+        "infra": "infra",
+        "deploy": "infra",
+        "ops": "infra",
+        "docs": "docs",
+        "doc": "docs",
+        "worker": "worker",
+        "jobs": "worker",
+    }
+    for match in re.findall(r"(?:^|[\s`'\"(])((?:[\w.-]+/)+[\w.-]+)", normalized):
+        root = match.split("/", 1)[0]
+        surface = root_map.get(root)
+        if surface:
+            matched.add(surface)
+
+    return len(matched)
+
+
+def _clean_request_text(text):
+    """Strip REQUEST.md framing so heuristics see only the user request."""
+    if not text:
+        return ""
+    lines = []
+    for raw_line in str(text).splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        lower = stripped.lower()
+        if lower.startswith("# request:") or lower.startswith("created:"):
+            continue
+        if stripped.startswith("<!--") and stripped.endswith("-->"):
+            continue
+        lines.append(stripped)
+    return "\n".join(lines).strip()
+
+
+def load_request_text(task_dir, request_text=""):
+    """Load request text from explicit input or task-local REQUEST.md."""
+    cleaned = _clean_request_text(request_text)
+    if cleaned:
+        return cleaned
+
+    request_file = os.path.join(task_dir, "REQUEST.md")
+    if not os.path.isfile(request_file):
+        return ""
+    try:
+        with open(request_file, "r", encoding="utf-8") as fh:
+            return _clean_request_text(fh.read())
+    except OSError:
+        return ""
+
+
+def infer_planning_mode(task_dir, request_text=""):
+    """Infer planning_mode for a task.
+
+    broad-build is promoted conservatively and only before a plan contract exists.
+    Broad-build requires:
+      - lane == build
+      - a broad product/build request
+      - at least 2 supporting signals from the execution-modes reference
+
+    Explicit broad-build already present in TASK_STATE.yaml is preserved.
+    Existing PLAN.md keeps the current mode to avoid mid-task churn.
+    """
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    current_mode = get_planning_mode(state_file)
+    if current_mode == "broad-build":
+        return "broad-build"
+
+    lane = yaml_field("lane", state_file) or "unknown"
+    if lane != "build":
+        return "standard"
+
+    if os.path.isfile(os.path.join(task_dir, "PLAN.md")):
+        return current_mode
+
+    if str(yaml_field("maintenance_task", state_file) or "false").lower() == "true":
+        return "standard"
+
+    request_body = load_request_text(task_dir, request_text=request_text)
+    if not request_body:
+        return "standard"
+
+    normalized = _normalize_free_text(request_body)
+
+    exclusion_phrases = {
+        "fix", "bug", "broken", "failing", "regression", "repair", "patch",
+        "hotfix", "debug", "performance", "latency", "optimize", "refactor",
+        "rename", "enforcement", "lint", "docs", "documentation", "single endpoint",
+        "single component", "endpoint", "route", "component", "modal", "button",
+        "schema", "migration", "hook", "스크립트", "버그", "오류", "수정",
+        "고쳐", "회귀", "성능", "최적화", "리팩터", "문서", "엔드포인트",
+        "컴포넌트", "스키마", "마이그레이션",
+    }
+    if any(phrase in normalized for phrase in exclusion_phrases):
+        return "standard"
+
+    if _looks_like_detailed_spec(request_body):
+        return "standard"
+
+    build_verbs = {
+        "build", "create", "make", "design", "prototype", "launch", "scaffold",
+        "set up", "spin up", "assemble", "craft", "construct", "만들", "구축",
+        "설계", "제작", "생성", "출시", "시작",
+    }
+    product_nouns = {
+        "app", "application", "dashboard", "site", "website", "web app", "webapp",
+        "landing page", "portal", "platform", "admin", "admin panel", "workspace",
+        "product", "experience", "앱", "애플리케이션", "대시보드", "사이트",
+        "웹앱", "포털", "플랫폼", "관리자", "워크스페이스",
+    }
+    greenfield_hints = {
+        "greenfield", "from scratch", "new app", "new product", "new dashboard",
+        "new site", "new website", "blank repo", "starter", "mvp", "처음부터",
+        "신규", "새로운", "새 앱", "새 사이트", "초기 버전", "프로토타입",
+    }
+    ui_hints = {
+        "ui", "ux", "frontend", "front-end", "front end", "browser", "page",
+        "screen", "visual", "responsive", "layout", "design system", "화면",
+        "프론트", "브라우저", "페이지", "디자인", "반응형",
+    }
+
+    broad_request = (
+        any(verb in normalized for verb in build_verbs)
+        and any(noun in normalized for noun in product_nouns)
+    ) or any(hint in normalized for hint in greenfield_hints)
+    if not broad_request:
+        return "standard"
+
+    signals = 0
+    if _is_short_high_level_request(request_body):
+        signals += 1
+    if any(hint in normalized for hint in greenfield_hints):
+        signals += 1
+    if _count_path_anchors(request_body) == 0:
+        signals += 1
+
+    browser_required = (yaml_field("browser_required", state_file) or "false").lower()
+    if browser_required == "true" or any(hint in normalized for hint in ui_hints):
+        signals += 1
+
+    if _estimate_surface_count(request_body) >= 2:
+        signals += 1
+
+    needs_contract_narrowing = (
+        _is_short_high_level_request(request_body)
+        and _count_path_anchors(request_body) == 0
+        and not _looks_like_detailed_spec(request_body)
+    )
+    if needs_contract_narrowing:
+        signals += 1
+
+    return "broad-build" if signals >= 2 else "standard"
+
+
 # ---------------------------------------------------------------------------
 # Task-pack helpers (MCP-backed hctl support)
 # ---------------------------------------------------------------------------
@@ -1126,7 +1396,7 @@ def compile_routing(task_dir, request_text=""):
 
     Returns a dict of fields to set in TASK_STATE.yaml:
       risk_level, parallelism, workflow_locked, maintenance_task,
-      routing_compiled, routing_source,
+      routing_compiled, routing_source, planning_mode,
       execution_mode (compat), orchestration_mode (compat)
 
     Rules (from PLAN.md §9):
@@ -1155,6 +1425,7 @@ def compile_routing(task_dir, request_text=""):
     except (ValueError, TypeError):
         fail_count = 0
 
+    request_text = load_request_text(task_dir, request_text=request_text)
     req = request_text.lower()
 
     # --- maintenance_task ---
@@ -1209,6 +1480,7 @@ def compile_routing(task_dir, request_text=""):
     EXEC_MODE_MAP = {"low": "light", "medium": "standard", "high": "sprinted"}
     execution_mode = EXEC_MODE_MAP.get(risk_level, "standard")
     orchestration_mode = "solo" if parallelism <= 1 else "subagents"
+    planning_mode = infer_planning_mode(task_dir, request_text=request_text)
 
     return {
         "risk_level": risk_level,
@@ -1217,6 +1489,7 @@ def compile_routing(task_dir, request_text=""):
         "maintenance_task": maintenance_task,
         "routing_compiled": True,
         "routing_source": "hctl",
+        "planning_mode": planning_mode,
         "execution_mode": execution_mode,
         "orchestration_mode": orchestration_mode,
     }
@@ -1231,8 +1504,13 @@ def emit_compact_context(task_dir):
       - short notes / next_action hints
       - hctl commands only
 
+    When a task is in a fix round, the task pack switches to an evidence-first
+    posture: it elevates the most relevant failing critic / handoff artifact,
+    includes a short evidence excerpt, and surfaces the current repair focus.
+
     This keeps the runtime control plane small enough to replace repeated
-    rereads of global harness docs.
+    rereads of global harness docs while still making failing evidence hard to
+    miss during recovery work.
     """
     state_file = os.path.join(task_dir, "TASK_STATE.yaml")
 
@@ -1247,16 +1525,96 @@ def emit_compact_context(task_dir):
         except (ValueError, TypeError):
             return 0
 
-    def _display_path(path_value):
+    def _task_rel(name):
+        return f"{task_root}/{name}"
+
+    def _task_abs(name):
+        return os.path.join(task_dir, name)
+
+    def _read_text(path_value):
+        if not path_value or not os.path.isfile(path_value):
+            return ""
         try:
-            cwd = os.getcwd()
-            if os.path.isabs(path_value):
-                rel = os.path.relpath(path_value, cwd)
-                if not rel.startswith(".."):
-                    return rel
-        except (OSError, ValueError):
-            pass
-        return path_value
+            with open(path_value, "r", encoding="utf-8") as fh:
+                return fh.read()
+        except OSError:
+            return ""
+
+    def _compact_excerpt(text_value, limit=240):
+        compact = re.sub(r"\s+", " ", text_value or "").strip()
+        if len(compact) <= limit:
+            return compact
+        return compact[: limit - 3].rstrip() + "..."
+
+    def _load_handoff_json(path_value):
+        if not path_value or not os.path.isfile(path_value):
+            return {}
+        try:
+            with open(path_value, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {}
+
+    def _critic_verdict(path_value):
+        if not path_value or not os.path.isfile(path_value):
+            return ""
+        return (yaml_field("verdict", path_value) or "").upper()
+
+    def _excerpt_from_critic(path_value):
+        if not path_value or not os.path.isfile(path_value):
+            return ""
+        summary = yaml_field("summary", path_value)
+        verdict_reason = yaml_field("verdict_reason", path_value)
+        pieces = []
+        if summary:
+            pieces.append(summary)
+        if verdict_reason and verdict_reason.lower() != "none":
+            pieces.append(verdict_reason)
+
+        text_value = _read_text(path_value)
+        lines = text_value.splitlines()
+        transcript_started = False
+        transcript_bits = []
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.lower() == "## transcript":
+                transcript_started = True
+                continue
+            if not transcript_started:
+                continue
+            transcript_bits.append(stripped)
+            if len(" ".join(transcript_bits)) >= 160 or len(transcript_bits) >= 2:
+                break
+
+        if transcript_bits:
+            pieces.append(" ".join(transcript_bits))
+        if not pieces:
+            for line in lines:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("##"):
+                    continue
+                pieces.append(stripped)
+                break
+
+        return _compact_excerpt(" — ".join(pieces))
+
+    def _excerpt_from_handoff(handoff_data):
+        if not isinstance(handoff_data, dict):
+            return ""
+        pieces = []
+        next_step = handoff_data.get("next_step")
+        if isinstance(next_step, str) and next_step.strip():
+            pieces.append(next_step.strip())
+        open_ids = handoff_data.get("open_check_ids")
+        if isinstance(open_ids, list) and open_ids:
+            pieces.append("open checks: " + ", ".join(str(x) for x in open_ids[:3]))
+        paths = handoff_data.get("paths_in_focus")
+        if isinstance(paths, list) and paths:
+            pieces.append("paths: " + ", ".join(str(x) for x in paths[:2]))
+        return _compact_excerpt(" | ".join(pieces))
 
     task_id = yaml_field("task_id", state_file) or os.path.basename(task_dir)
     status = yaml_field("status", state_file) or "unknown"
@@ -1271,28 +1629,9 @@ def emit_compact_context(task_dir):
 
     execution_mode = yaml_field("execution_mode", state_file) or "standard"
     orchestration_mode = yaml_field("orchestration_mode", state_file) or "solo"
+    planning_mode = get_planning_mode(state_file)
 
     task_root = os.path.join(TASK_DIR, task_id)
-    must_read_pairs = [
-        (f"{task_root}/TASK_STATE.yaml", os.path.join(task_dir, "TASK_STATE.yaml")),
-        (f"{task_root}/PLAN.md", os.path.join(task_dir, "PLAN.md")),
-        (f"{task_root}/CHECKS.yaml", os.path.join(task_dir, "CHECKS.yaml")),
-        (f"{task_root}/HANDOFF.md", os.path.join(task_dir, "HANDOFF.md")),
-        (f"{task_root}/SESSION_HANDOFF.json", os.path.join(task_dir, "SESSION_HANDOFF.json")),
-        (f"{task_root}/RESULT.md", os.path.join(task_dir, "RESULT.md")),
-    ]
-    must_read = []
-    seen = set()
-    for rel_path, abs_path in must_read_pairs:
-        if rel_path in seen:
-            continue
-        if os.path.isfile(abs_path):
-            must_read.append(rel_path)
-            seen.add(rel_path)
-        if len(must_read) >= 4:
-            break
-
-    display_task_dir = _display_path(task_dir)
     commands = {
         "update": "mcp__plugin_harness_harness__task_update_from_git_diff",
         "verify": "mcp__plugin_harness_harness__task_verify",
@@ -1354,17 +1693,157 @@ def emit_compact_context(task_dir):
         "top_open_titles": top_open_titles,
     }
 
-    notes = []
+    def _pick_focus_paths(handoff_data):
+        raw_paths = handoff_data.get("paths_in_focus") if isinstance(handoff_data, dict) else None
+        if isinstance(raw_paths, list) and raw_paths:
+            return [str(x) for x in raw_paths[:4] if str(x).strip()]
+
+        verification_targets = yaml_array("verification_targets", state_file)
+        for candidates in (verification_targets, yaml_array("touched_paths", state_file)):
+            picked = [p for p in candidates if p and not is_doc_path(p)]
+            if picked:
+                return picked[:4]
+        return []
+
+    def _pick_open_check_ids(handoff_data):
+        raw_open = handoff_data.get("open_check_ids") if isinstance(handoff_data, dict) else None
+        if isinstance(raw_open, list) and raw_open:
+            return [str(x) for x in raw_open[:4] if str(x).strip()]
+        focus_ids = failed_ids + [cid for cid in candidate_ids if cid not in failed_ids]
+        focus_ids += [cid for cid in blocked_ids if cid not in focus_ids]
+        if focus_ids:
+            return focus_ids[:4]
+        return open_ids[:4]
+
+    def _pick_do_not_regress(handoff_data):
+        raw_items = handoff_data.get("do_not_regress") if isinstance(handoff_data, dict) else None
+        if isinstance(raw_items, list) and raw_items:
+            return [str(x) for x in raw_items[:3] if str(x).strip()]
+        return []
+
     routing_compiled = str(yaml_field("routing_compiled", state_file) or "false").lower()
     plan_verdict = yaml_field("plan_verdict", state_file) or "pending"
-    runtime_verdict = yaml_field("runtime_verdict", state_file) or "pending"
+    runtime_verdict = (yaml_field("runtime_verdict", state_file) or "pending").upper()
 
+    session_handoff_name = "SESSION_HANDOFF.json"
+    runtime_critic_name = "CRITIC__runtime.md"
+    document_critic_name = "CRITIC__document.md"
+    doc_sync_name = "DOC_SYNC.md"
+    handoff_name = "HANDOFF.md"
+
+    session_handoff_path = _task_abs(session_handoff_name)
+    runtime_critic_path = _task_abs(runtime_critic_name)
+    document_critic_path = _task_abs(document_critic_name)
+    doc_sync_path = _task_abs(doc_sync_name)
+    handoff_path = _task_abs(handoff_name)
+
+    handoff_data = _load_handoff_json(session_handoff_path)
+    runtime_critic_verdict = _critic_verdict(runtime_critic_path)
+    document_critic_verdict = _critic_verdict(document_critic_path)
+    runtime_fix_round = runtime_verdict == "FAIL" or runtime_critic_verdict == "FAIL"
+    document_fix_round = document_critic_verdict == "FAIL"
+
+    review_focus = {
+        "evidence_first": False,
+    }
+
+    focus_trigger = ""
+    focus_critic_name = ""
+    focus_support_name = ""
+    evidence_excerpt = ""
+
+    if runtime_fix_round or document_fix_round or handoff_data:
+        review_focus["evidence_first"] = True
+        if runtime_fix_round:
+            focus_trigger = "runtime_fail"
+            focus_critic_name = runtime_critic_name if os.path.isfile(runtime_critic_path) else ""
+            focus_support_name = handoff_name if os.path.isfile(handoff_path) else ""
+        elif document_fix_round:
+            focus_trigger = "document_fail"
+            focus_critic_name = document_critic_name if os.path.isfile(document_critic_path) else ""
+            focus_support_name = doc_sync_name if os.path.isfile(doc_sync_path) else ""
+        else:
+            focus_trigger = "session_handoff"
+
+        if focus_critic_name == runtime_critic_name:
+            evidence_excerpt = _excerpt_from_critic(runtime_critic_path)
+        elif focus_critic_name == document_critic_name:
+            evidence_excerpt = _excerpt_from_critic(document_critic_path)
+
+        if not evidence_excerpt:
+            evidence_excerpt = _excerpt_from_handoff(handoff_data)
+
+        if handoff_data:
+            review_focus["handoff_trigger"] = str(handoff_data.get("trigger") or "")
+        review_focus["trigger"] = focus_trigger
+        if focus_critic_name:
+            review_focus["critic_artifact"] = _task_rel(focus_critic_name)
+        if handoff_data:
+            review_focus["supporting_artifact"] = _task_rel(session_handoff_name)
+        elif focus_support_name:
+            review_focus["supporting_artifact"] = _task_rel(focus_support_name)
+        if evidence_excerpt:
+            review_focus["evidence_excerpt"] = evidence_excerpt
+
+        focus_check_ids = _pick_open_check_ids(handoff_data)
+        if focus_check_ids:
+            review_focus["focus_check_ids"] = focus_check_ids
+        paths_in_focus = _pick_focus_paths(handoff_data)
+        if paths_in_focus:
+            review_focus["paths_in_focus"] = paths_in_focus
+        do_not_regress = _pick_do_not_regress(handoff_data)
+        if do_not_regress:
+            review_focus["do_not_regress"] = do_not_regress
+
+    default_must_read_order = [
+        "TASK_STATE.yaml",
+        "PLAN.md",
+        "CHECKS.yaml",
+        "HANDOFF.md",
+        "SESSION_HANDOFF.json",
+        "RESULT.md",
+    ]
+
+    priority_must_read = []
+    if review_focus.get("evidence_first"):
+        if handoff_data:
+            priority_must_read.append(session_handoff_name)
+        if focus_critic_name:
+            priority_must_read.append(focus_critic_name)
+        for raw_name in handoff_data.get("files_to_read_first", []) if isinstance(handoff_data, dict) else []:
+            if isinstance(raw_name, str) and raw_name.strip():
+                priority_must_read.append(raw_name.strip())
+        if focus_support_name:
+            priority_must_read.append(focus_support_name)
+        priority_must_read.extend(["TASK_STATE.yaml", "PLAN.md", "CHECKS.yaml", "HANDOFF.md"])
+    else:
+        priority_must_read.extend(default_must_read_order)
+
+    must_read = []
+    seen = set()
+    for rel_name in priority_must_read + default_must_read_order:
+        if not rel_name or rel_name in seen:
+            continue
+        seen.add(rel_name)
+        abs_path = _task_abs(rel_name)
+        if os.path.isfile(abs_path):
+            must_read.append(_task_rel(rel_name))
+        if len(must_read) >= 4:
+            break
+
+    notes = []
     if routing_compiled != "true":
         notes.append("routing not compiled yet")
+    if planning_mode == "broad-build":
+        notes.append("planning_mode=broad-build")
     if plan_verdict != "PASS":
         notes.append(f"plan_verdict={plan_verdict}")
-    if runtime_verdict == "FAIL":
-        notes.append("runtime fix round open")
+    if runtime_fix_round:
+        notes.append("runtime fix round: evidence-first")
+    elif document_fix_round:
+        notes.append("document fix round: evidence-first")
+    elif handoff_data:
+        notes.append("session handoff present")
     if maintenance_task:
         notes.append("maintenance task: workflow surface unlocked")
     notes = notes[:3]
@@ -1372,9 +1851,19 @@ def emit_compact_context(task_dir):
     if routing_compiled != "true":
         next_action = "Run mcp__plugin_harness_harness__task_start, then re-open mcp__plugin_harness_harness__task_context before planning or implementation."
     elif plan_verdict != "PASS":
-        next_action = "Get PLAN.md to critic-plan PASS before mutating source files."
-    elif runtime_verdict == "FAIL":
-        next_action = "Fix open runtime failures, run mcp__plugin_harness_harness__task_verify, then re-check critics."
+        if planning_mode == "broad-build":
+            next_action = (
+                "Use the plan skill broad-build path to write 01_product_spec.md, "
+                "02_design_language.md, 03_architecture.md, then PLAN.md before source changes."
+            )
+        else:
+            next_action = "Get PLAN.md to critic-plan PASS before mutating source files."
+    elif runtime_fix_round:
+        next_action = "Read the surfaced runtime evidence first, fix the failing path, run mcp__plugin_harness_harness__task_verify, then re-check critics."
+    elif document_fix_round:
+        next_action = "Read the surfaced document evidence first, repair DOC_SYNC / notes, then re-run critic-document before closing."
+    elif handoff_data:
+        next_action = "Resume from SESSION_HANDOFF.json next_step and only then broaden repo exploration."
     elif lane == "investigate":
         next_action = "Write RESULT.md with findings and close after verification gates pass."
     else:
@@ -1388,6 +1877,7 @@ def emit_compact_context(task_dir):
         "qa_required": qa_required,
         "doc_sync_required": doc_sync_required,
         "browser_required": browser_required,
+        "planning_mode": planning_mode,
         "parallelism": parallelism,
         "workflow_locked": workflow_locked,
         "maintenance_task": maintenance_task,
@@ -1400,6 +1890,7 @@ def emit_compact_context(task_dir):
         "checks": checks,
         "open_failures": open_failures,
         "notes": notes,
+        "review_focus": review_focus,
         "next_action": next_action,
     }
 

@@ -19,7 +19,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "plugin", "scripts"))
 os.environ["HARNESS_SKIP_STDIN"] = "1"
 
-from _lib import get_planning_mode, yaml_field
+from _lib import compile_routing, get_planning_mode, yaml_field
 
 
 def _write(path, content):
@@ -85,6 +85,96 @@ class TestGetPlanningMode(unittest.TestCase):
         )
         result = get_planning_mode(path)
         self.assertEqual(result, "standard")
+
+
+class TestPlanningModeAutoPromotion(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _make_task(self, task_id="TASK__auto", lane="build", browser_required="false"):
+        task_dir = os.path.join(self.tmp.name, task_id)
+        os.makedirs(task_dir, exist_ok=True)
+        _write(
+            os.path.join(task_dir, "TASK_STATE.yaml"),
+            "task_id: {task_id}\n"
+            "status: created\n"
+            "lane: {lane}\n"
+            "planning_mode: standard\n"
+            "browser_required: {browser_required}\n"
+            "runtime_verdict_fail_count: 0\n"
+            "risk_tags: []\n"
+            "updated: 2026-01-01T00:00:00Z\n".format(
+                task_id=task_id,
+                lane=lane,
+                browser_required=browser_required,
+            ),
+        )
+        return task_dir
+
+    def _write_request(self, task_dir, body):
+        _write(
+            os.path.join(task_dir, "REQUEST.md"),
+            "# Request: TASK__auto\n"
+            "created: 2026-01-01T00:00:00Z\n\n"
+            f"{body}\n",
+        )
+
+    def test_compile_routing_promotes_broad_build_from_request_md(self):
+        task_dir = self._make_task(browser_required="true")
+        self._write_request(
+            task_dir,
+            "Create a new admin dashboard web app for customer operations. "
+            "Show key metrics, recent alerts, and a detail workflow.",
+        )
+
+        routing = compile_routing(task_dir)
+        self.assertEqual(routing["planning_mode"], "broad-build")
+
+    def test_compile_routing_promotes_broad_build_for_korean_request(self):
+        task_dir = self._make_task(browser_required="true")
+        self._write_request(
+            task_dir,
+            "새로운 관리자 대시보드 웹앱을 만들어줘. 고객 상태와 주요 지표를 한 화면에서 볼 수 있게 해줘.",
+        )
+
+        routing = compile_routing(task_dir)
+        self.assertEqual(routing["planning_mode"], "broad-build")
+
+    def test_compile_routing_keeps_standard_for_bugfix_request(self):
+        task_dir = self._make_task(browser_required="true")
+        self._write_request(
+            task_dir,
+            "Fix the failing /api/users endpoint in api/routes/users.py and add a regression test.",
+        )
+
+        routing = compile_routing(task_dir)
+        self.assertEqual(routing["planning_mode"], "standard")
+
+    def test_compile_routing_keeps_standard_for_detailed_spec(self):
+        task_dir = self._make_task(browser_required="true")
+        self._write_request(
+            task_dir,
+            "Create a dashboard. Use app/routes/dashboard.tsx, api/routes/metrics.py, "
+            "and db/schema.sql. Add three cards, one detail table, and a CSV export button.",
+        )
+
+        routing = compile_routing(task_dir)
+        self.assertEqual(routing["planning_mode"], "standard")
+
+    def test_existing_plan_preserves_standard_mode(self):
+        task_dir = self._make_task(browser_required="true")
+        self._write_request(
+            task_dir,
+            "Create a new admin dashboard web app for customer operations.",
+        )
+        _write(os.path.join(task_dir, "PLAN.md"), "# Plan\n\nExisting contract.\n")
+
+        routing = compile_routing(task_dir)
+        self.assertEqual(routing["planning_mode"], "standard")
 
 
 class TestTaskCreatedGatePlanningMode(unittest.TestCase):

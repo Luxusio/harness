@@ -16,11 +16,13 @@ Read in this order:
 
 1. `SESSION_HANDOFF.json` if it exists
 2. task-local `TASK_STATE.yaml`
-3. task-local `PLAN.md`
-4. task-local `CRITIC__plan.md` or task state to confirm plan PASS
-5. task-local `HANDOFF.md` if it exists
-6. only the source files needed for the current step
-7. manifest / constraints only if the plan or code path needs them
+3. `01_product_spec.md`, `02_design_language.md`, `03_architecture.md` when `planning_mode` is `broad-build` and those files exist
+4. task-local `PLAN.md`
+5. task-local `CRITIC__plan.md` or task state to confirm plan PASS
+6. the currently failing critic artifact (`CRITIC__runtime.md` or `CRITIC__document.md`) when the task is in a fix round
+7. task-local `HANDOFF.md` if it exists
+8. only the source files needed for the current step
+9. manifest / constraints only if the plan or code path needs them
 
 ## Hard rules
 

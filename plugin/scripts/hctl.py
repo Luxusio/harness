@@ -82,6 +82,7 @@ def cmd_start(args):
     print(f"  risk_level: {routing['risk_level']}")
     print(f"  maintenance_task: {routing['maintenance_task']}")
     print(f"  workflow_locked: {routing['workflow_locked']}")
+    print(f"  planning_mode: {routing['planning_mode']}")
     print(f"  execution_mode: {routing['execution_mode']} (compat)")
     return 0
 
@@ -116,8 +117,16 @@ def cmd_context(args):
                 orchestration_mode=ctx["compat"]["orchestration_mode"],
             )
         )
+        print(f"Planning: {ctx.get('planning_mode', 'standard')}")
         if ctx.get("must_read"):
             print(f"Must read: {', '.join(ctx['must_read'])}")
+        review_focus = ctx.get("review_focus") or {}
+        if review_focus.get("evidence_first"):
+            trigger = review_focus.get("trigger", "fix_round")
+            print(f"Review focus: {trigger} (evidence-first)")
+            excerpt = review_focus.get("evidence_excerpt")
+            if excerpt:
+                print(f"Evidence: {excerpt}")
         if checks:
             print(
                 "Checks: total={total} open={open_count} failed={failed_count} blocked={blocked_count}".format(
