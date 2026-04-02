@@ -3,6 +3,9 @@
 .claude/harness/
 __pycache__
 .DS_Store
+*.pyc
+__MACOSX/
+.pytest_cache/
 
 # harness — operational artifacts (ephemeral, not durable knowledge)
 doc/harness/tasks/

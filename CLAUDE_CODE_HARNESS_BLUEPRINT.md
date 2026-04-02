@@ -546,11 +546,11 @@ optional architecture constraint checks도 실행한다.
 - stdin JSON을 파싱한다 (jq 또는 grep fallback)
 - blocking이 필요하면 exit 2를 사용한다 (exit 1은 non-blocking error — 로그만 남기고 진행됨)
 - 실행 가능 상태이거나 `bash` 경유로 호출된다
-- `FileChanged` hook으로 PASS verdict를 invalidation한다 (stale PASS 방지)
+- write-tool `PostToolUse` matcher로 PASS verdict를 invalidation한다 (stale PASS 방지)
 
 ### 10.1 hook 역할 (v3)
 
-- `TaskCreated`: REQUEST.md, TASK_STATE.yaml, HANDOFF.md 확인. TASK_STATE.yaml 없으면 기본값 초기화.
+- 기본 task bootstrap: task 폴더 생성 시 REQUEST.md / TASK_STATE.yaml을 준비한다. 필요하면 `task_created_gate.py`를 수동 bootstrap helper로만 사용한다 (기본 hooks.json에는 연결하지 않음).
 - `SubagentStop`:
   - developer: PLAN.md, CRITIC__plan.md, TASK_STATE.yaml, HANDOFF.md 필요
   - writer: TASK_STATE.yaml, DOC_SYNC.md (durable docs 변경 시) 필요

@@ -17,6 +17,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (
     read_hook_input,
     yaml_field,
+    team_artifact_status,
+    is_team_task,
+    get_team_worker_identity,
+    check_team_write_ownership,
     TASK_DIR,
     MANIFEST,
 )
@@ -218,6 +222,34 @@ def _find_active_task_dir():
     return best
 
 
+def _check_team_plan_ready(task_dir):
+    """Return (allowed, message) for team-task source writes.
+
+    Team tasks must complete TEAM_PLAN.md before source writes begin.
+    """
+    if not task_dir or not is_team_task(task_dir):
+        return True, ""
+
+    artifact_state = team_artifact_status(task_dir)
+    if artifact_state.get("plan_ready"):
+        return True, ""
+
+    reasons = []
+    missing_sections = artifact_state.get("plan_missing_sections") or []
+    if missing_sections:
+        reasons.append("missing sections: " + ", ".join(missing_sections))
+    if artifact_state.get("plan_has_placeholders"):
+        reasons.append("remove TODO/TBD placeholders")
+    validation_errors = artifact_state.get("plan_validation_errors") or []
+    if validation_errors:
+        reasons.append("ownership errors: " + "; ".join(validation_errors[:3]))
+
+    return False, (
+        "BLOCKED: team task source writes require completed TEAM_PLAN.md first. "
+        + ("; ".join(reasons) if reasons else "Finish TEAM_PLAN.md before worker execution.")
+    )
+
+
 def _is_workflow_control_surface(filepath):
     """Return True if filepath is a workflow control surface file.
 
@@ -390,12 +422,26 @@ def main():
         )
         sys.exit(2)
 
-    # Source file write — check actor is developer
+    active_task_dir = _find_active_task_dir()
+    team_ready, team_message = _check_team_plan_ready(active_task_dir)
+    if not team_ready:
+        print(team_message)
+        sys.exit(2)
+
+    team_worker = ""
+    if active_task_dir and is_team_task(active_task_dir):
+        allowed, message, meta = check_team_write_ownership(active_task_dir, filepath)
+        team_worker = (meta or {}).get("worker") or get_team_worker_identity()
+        if not allowed:
+            print(message)
+            sys.exit(2)
+
+    # Source file write — check actor is developer unless this is an owned team worker write
     current_role = _get_agent_role()
-    if current_role and current_role not in ("developer", "harness", ""):
+    if current_role and current_role not in ("developer", "harness", "") and not team_worker:
         print(
             f"BLOCKED: Source file write by non-developer role '{current_role}'. "
-            f"Only developer role may write source files. "
+            f"Only developer role or a declared team worker may write source files. "
             f"(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
         )
         sys.exit(2)

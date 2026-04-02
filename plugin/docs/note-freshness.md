@@ -122,9 +122,9 @@ If the only note on a topic is `stale`, flag it as needing re-verification and d
 
 ## Integration with file-changed-sync
 
-The file-changed-sync hook (FileChanged harness hook) is responsible for marking notes `suspect` when their `invalidated_by_paths` are modified:
+The file-changed-sync hook (wired through `PostToolUse` with matcher `Write|Edit|MultiEdit`) is responsible for marking notes `suspect` when their `invalidated_by_paths` are modified:
 
-1. On each `FileChanged` event, collect the changed file paths.
+1. On each matching `PostToolUse` event, collect the changed file paths.
 2. For each active note, parse `invalidated_by_paths` structurally via `parse_note_metadata()`.
 3. If any path matches (exact or directory-prefix — NOT substring), transition `freshness: current` → `suspect`.
 4. Notes already at `suspect` are not re-marked (idempotent).

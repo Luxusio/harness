@@ -6,7 +6,7 @@ from _lib import (read_hook_input, hook_json_get, json_field, json_array, yaml_f
                   extract_roots, TASK_DIR, MANIFEST, now_iso,
                   exit_if_unmanaged_repo)
 
-# TaskCreated hook — initializes minimal task artifacts.
+# Legacy task bootstrap helper — initializes minimal task artifacts when invoked manually.
 # Non-blocking (exit 0 always).
 # stdin: JSON | exit 0: success | exit 2: block (unused)
 

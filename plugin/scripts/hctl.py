@@ -32,6 +32,8 @@ from _lib import (
     set_task_state_field,
     compile_routing,
     emit_compact_context,
+    ensure_team_artifacts,
+    sync_team_status,
     TASK_DIR,
 )
 from environment_snapshot import write_environment_snapshot
@@ -115,6 +117,18 @@ def cmd_start(args):
     for field, value in routing.items():
         set_task_state_field(task_dir, field, value)
 
+    team_artifact_result = []
+    if routing.get("orchestration_mode") == "team":
+        try:
+            team_artifact_result = ensure_team_artifacts(task_dir, routing=routing)
+        except Exception:
+            team_artifact_result = []
+
+    try:
+        sync_team_status(task_dir)
+    except Exception:
+        pass
+
     snapshot_path = ""
     try:
         snapshot_path = write_environment_snapshot(task_dir, repo_root=os.getcwd(), reason="task_start")
@@ -134,6 +148,22 @@ def cmd_start(args):
     print(f"  workflow_locked: {routing['workflow_locked']}")
     print(f"  planning_mode: {routing['planning_mode']}")
     print(f"  execution_mode: {routing['execution_mode']} (compat)")
+    print(f"  orchestration_mode: {routing['orchestration_mode']} (compat)")
+    if routing.get("orchestration_mode") != "solo" or routing.get("team_status") not in (None, "n/a", "skipped"):
+        print(
+            "  team: provider={provider} status={status} size={size} fallback={fallback}".format(
+                provider=routing.get("team_provider", "none"),
+                status=routing.get("team_status", "n/a"),
+                size=routing.get("team_size", 0),
+                fallback=routing.get("fallback_used", "none"),
+            )
+        )
+        if routing.get("team_reason"):
+            print(f"  team_reason: {routing['team_reason']}")
+    if team_artifact_result:
+        print(
+            "  team_artifacts: " + ", ".join(os.path.basename(item) for item in team_artifact_result)
+        )
     if snapshot_path:
         print(f"  env_snapshot: {os.path.basename(snapshot_path)}")
     if case_path:
@@ -152,6 +182,11 @@ def cmd_context(args):
 
     try:
         write_failure_case_snapshot(task_dir)
+    except Exception:
+        pass
+
+    try:
+        sync_team_status(task_dir)
     except Exception:
         pass
 
@@ -178,6 +213,35 @@ def cmd_context(args):
             )
         )
         print(f"Planning: {ctx.get('planning_mode', 'standard')}")
+        team = ctx.get("team") or {}
+        if team:
+            print(
+                "Team: provider={provider} status={status} size={size} fallback={fallback}".format(
+                    provider=team.get("provider", "none"),
+                    status=team.get("status", "n/a"),
+                    size=team.get("size", 0),
+                    fallback=team.get("fallback_used", "none"),
+                )
+            )
+            if team.get("reason"):
+                print(f"Team reason: {team['reason']}")
+            if team.get("plan_required") or team.get("synthesis_required") or team.get("provider") not in ("none", ""):
+                print(
+                    "Team plan: ready={ready} placeholders={placeholders} artifact={artifact}".format(
+                        ready="yes" if team.get("plan_ready") else "no",
+                        placeholders="yes" if team.get("plan_has_placeholders") else "no",
+                        artifact=team.get("plan_artifact", "TEAM_PLAN.md"),
+                    )
+                )
+                if team.get("plan_validation_errors"):
+                    print("Team plan ownership: " + "; ".join(team.get("plan_validation_errors", [])[:3]))
+                print(
+                    "Team synthesis: ready={ready} placeholders={placeholders} artifact={artifact}".format(
+                        ready="yes" if team.get("synthesis_ready") else "no",
+                        placeholders="yes" if team.get("synthesis_has_placeholders") else "no",
+                        artifact=team.get("synthesis_artifact", "TEAM_SYNTHESIS.md"),
+                    )
+                )
         if ctx.get("must_read"):
             print(f"Must read: {', '.join(ctx['must_read'])}")
         review_focus = ctx.get("review_focus") or {}
@@ -352,6 +416,12 @@ def cmd_update(args):
         set_task_state_field(task_dir, "roots_touched", roots_touched)
         set_task_state_field(task_dir, "verification_targets", verification_targets)
 
+        team_state = None
+        try:
+            team_state = sync_team_status(task_dir)
+        except Exception:
+            team_state = None
+
         try:
             write_failure_case_snapshot(task_dir)
         except Exception:
@@ -360,6 +430,8 @@ def cmd_update(args):
         print(f"Updated touched_paths: {len(touched_paths)} files")
         print(f"Updated roots_touched: {roots_touched}")
         print(f"Updated verification_targets: {len(verification_targets)} files")
+        if team_state and team_state.get("orchestration_mode") == "team":
+            print(f"Team status: {team_state.get('derived_status', team_state.get('current_status', 'n/a'))} (artifact-driven)")
     else:
         print("Nothing to update. Use --from-git-diff to sync from git.")
 
@@ -399,6 +471,11 @@ def cmd_close(args):
     env = os.environ.copy()
     env["HARNESS_TASK_ID"] = task_id
     env["HARNESS_SKIP_STDIN"] = "1"
+
+    try:
+        sync_team_status(task_dir)
+    except Exception:
+        pass
 
     result = subprocess.run(
         ["python3", gate_script],

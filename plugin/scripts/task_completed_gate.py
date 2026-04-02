@@ -6,7 +6,7 @@ from _lib import (read_hook_input, hook_json_get, json_field, json_array, yaml_f
                   extract_roots, TASK_DIR, MANIFEST, now_iso,
                   exit_if_unmanaged_repo,
                   get_workflow_violations, get_agent_run_count,
-                  needs_document_critic, is_handoff_stub,
+                  needs_document_critic, is_handoff_stub, team_artifact_status,
                   parse_checks_close_gate)
 
 # TaskCompleted hook — completion firewall.
@@ -408,14 +408,46 @@ def compute_completion_failures(task_dir):
     # --- Team mode gates ---
     orch_mode = yaml_field("orchestration_mode", state_file) or "solo"
     if orch_mode == "team":
-        if not os.path.exists(os.path.join(task_dir, "TEAM_PLAN.md")):
+        team_state = team_artifact_status(task_dir)
+        if not team_state.get("plan_exists"):
             failures.append("team task requires TEAM_PLAN.md")
-        if not os.path.exists(os.path.join(task_dir, "TEAM_SYNTHESIS.md")):
+        elif not team_state.get("plan_ready"):
+            reasons = []
+            missing_sections = team_state.get("plan_missing_sections") or []
+            if missing_sections:
+                reasons.append("missing sections: " + ", ".join(missing_sections))
+            if team_state.get("plan_has_placeholders"):
+                reasons.append("remove TODO/TBD placeholders")
+            validation_errors = team_state.get("plan_validation_errors") or []
+            if validation_errors:
+                reasons.append("ownership errors: " + "; ".join(validation_errors[:3]))
+            failures.append(
+                "TEAM_PLAN.md is incomplete — " + "; ".join(reasons or ["fill required sections"])
+            )
+        if not team_state.get("synthesis_exists"):
             failures.append("team task requires TEAM_SYNTHESIS.md")
-        team_status_val = yaml_field("team_status", state_file) or ""
+        elif not team_state.get("synthesis_ready"):
+            reasons = []
+            missing_sections = team_state.get("synthesis_missing_sections") or []
+            if missing_sections:
+                reasons.append("missing sections: " + ", ".join(missing_sections))
+            if team_state.get("synthesis_has_placeholders"):
+                reasons.append("remove TODO/TBD placeholders")
+            failures.append(
+                "TEAM_SYNTHESIS.md is incomplete — " + "; ".join(reasons or ["fill required sections"])
+            )
+        team_status_val = team_state.get("derived_status") or yaml_field("team_status", state_file) or ""
         if team_status_val not in ("complete", "fallback"):
             failures.append(
-                f"team_status must be 'complete' or 'fallback', got '{team_status_val}'"
+                f"team_status must resolve to 'complete' or 'fallback' before close, got '{team_status_val}'"
+            )
+        if (
+            (yaml_field("team_status", state_file) or "") == "degraded"
+            and team_state.get("synthesis_ready")
+            and not team_state.get("synthesis_refreshed_after_degraded")
+        ):
+            failures.append(
+                "TEAM_SYNTHESIS.md must be refreshed after the degraded team round before close"
             )
         if team_status_val == "fallback":
             fallback_val = yaml_field("fallback_used", state_file) or "none"
