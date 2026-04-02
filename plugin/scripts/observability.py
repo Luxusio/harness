@@ -27,7 +27,7 @@ from _lib import (
     is_profile_enabled,
     is_tooling_ready,
     manifest_field,
-    manifest_section_field,
+    manifest_path_field,
     should_activate_observability,
     yaml_array,
     yaml_field,
@@ -68,17 +68,15 @@ def detect() -> dict:
 
     manifest = "doc/harness/manifest.yaml"
     if os.path.isfile(manifest):
-        with open(manifest, encoding="utf-8") as handle:
-            content = handle.read()
-        suitable_kinds = ["web", "api", "fullstack", "web_frontend", "fullstack_web"]
-        for kind in suitable_kinds:
-            if f"shape: {kind}" in content or f"kind: {kind}" in content:
-                result["project_suitable"] = True
-                result["details"].append("Project kind suitable for observability")
-                break
-        if not result["project_suitable"]:
+        project_kind = manifest_path_field("project_meta.shape") or manifest_field("type")
+        suitable_kinds = ["web", "api", "fullstack", "web_frontend", "fullstack_web", "service", "worker"]
+        kind_lower = (project_kind or "").lower().replace("-", "_").replace(" ", "_")
+        if any(kind.replace("-", "_") in kind_lower for kind in suitable_kinds):
+            result["project_suitable"] = True
+            result["details"].append(f"Project kind suitable for observability ({project_kind})")
+        else:
             result["reason"] = "Project type not suitable (library/cli/unknown)"
-            result["details"].append("Project kind not web/api/fullstack")
+            result["details"].append(f"Project kind not web/api/fullstack ({project_kind or 'unknown'})")
 
     for compose_file in ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]:
         if not os.path.isfile(compose_file):
@@ -260,7 +258,7 @@ def evaluate_policy(task_dir: str | None) -> dict:
         return {"activate": False, "reason": "no task directory provided"}
 
     manifest_ready = is_tooling_ready("observability_ready")
-    project_kind = manifest_field("type") or manifest_section_field("project", "type") or ""
+    project_kind = manifest_path_field("project_meta.shape") or manifest_field("type") or ""
     state_file = os.path.join(task_dir, "TASK_STATE.yaml")
     review_overlays = yaml_array("review_overlays", state_file) if os.path.isfile(state_file) else []
     runtime_fail_count = yaml_field("runtime_verdict_fail_count", state_file) if os.path.isfile(state_file) else "0"

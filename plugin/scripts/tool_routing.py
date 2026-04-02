@@ -5,7 +5,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import (read_hook_input, json_field, manifest_field, is_tooling_ready,
+from _lib import (read_hook_input, json_field, manifest_field, manifest_path_field, is_tooling_ready,
                   is_profile_enabled, exit_if_unmanaged_repo)
 
 ROUTING_STATE_FILE = "doc/harness/.routing-state.json"
@@ -17,15 +17,12 @@ def read_manifest():
     if not os.path.isfile(manifest_path):
         return data
     try:
-        with open(manifest_path) as f:
-            content = f.read()
-        # Extract known commands
         for field in ["dev_command", "test_command", "build_command", "smoke_command", "healthcheck_command"]:
-            for line in content.split("\n"):
-                if "{}:".format(field) in line:
-                    val = line.split(":", 1)[1].strip().strip('"').strip("'")
-                    if val and not val.startswith("{{"):
-                        data[field] = val
+            val = manifest_field(field)
+            if val and not val.startswith("{{"):
+                data[field] = val
+        data["browser_entry_url"] = manifest_path_field("browser.entry_url") or ""
+        data["project_shape"] = manifest_path_field("project_meta.shape") or manifest_field("type") or ""
         # Extract tooling flags using _lib helpers
         data["ast_grep_enabled"] = is_profile_enabled("ast_grep_enabled")
         data["symbol_lane_enabled"] = is_profile_enabled("symbol_lane_enabled")

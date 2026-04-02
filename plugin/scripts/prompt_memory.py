@@ -17,7 +17,13 @@ from _lib import (
     yaml_field,
 )
 from memory_selectors import _get_registered_roots, select_relevant_notes
-from failure_memory import find_similar_failure, format_similar_failure_hint
+from failure_memory import (
+    build_failure_case,
+    find_similar_failure,
+    find_similar_failures,
+    format_similar_failure_hint,
+    format_similar_failures_hint,
+)
 
 
 def is_casual(prompt):
@@ -372,6 +378,76 @@ def _latest_task_verdict(task_dir):
     return ""
 
 
+def _compact_hint(text, max_chars=120):
+    compact = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not compact:
+        return ""
+    if len(compact) <= max_chars:
+        return compact
+    return compact[: max_chars - 3].rstrip() + "..."
+
+
+def _read_session_handoff(task_dir):
+    path = os.path.join(task_dir, "SESSION_HANDOFF.json")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def _get_repair_focus_hint(task_dir, prompt):
+    """Build an evidence-first repair hint for fix rounds.
+
+    The goal is to surface the *current failing evidence* first, then the
+    narrowest repair target from SESSION_HANDOFF / CHECKS, and finally a small
+    amount of similar-failure history.
+    """
+    if not task_dir or not os.path.isdir(task_dir):
+        return ""
+
+    case = build_failure_case(task_dir, prompt=prompt) or {}
+    handoff = _read_session_handoff(task_dir)
+    if not case and not handoff:
+        return ""
+
+    focus_ids = [str(x).strip() for x in (handoff.get("open_check_ids") or []) if str(x).strip()]
+    if not focus_ids:
+        focus_ids = sorted(str(x).strip() for x in (case.get("check_ids") or []) if str(x).strip())[:2]
+
+    paths = [str(x).strip() for x in (handoff.get("paths_in_focus") or case.get("path_examples") or []) if str(x).strip()]
+    next_step = _compact_hint(handoff.get("next_step", ""), max_chars=88)
+    current_excerpt = _compact_hint(case.get("excerpt", ""), max_chars=110)
+
+    similar_matches = find_similar_failures(
+        task_dir,
+        tasks_dir=TASK_DIR,
+        prompt=prompt,
+        limit=2,
+    )
+    prior_hint = format_similar_failures_hint(similar_matches, max_chars=150)
+
+    pieces = []
+    if current_excerpt:
+        pieces.append(f"current {current_excerpt}")
+    if focus_ids:
+        pieces.append("focus " + ", ".join(focus_ids[:2]))
+    if paths:
+        pieces.append("path " + _compact_hint(paths[0], max_chars=48))
+    if next_step:
+        pieces.append(f"next {next_step}")
+    if prior_hint:
+        pieces.append("prior " + prior_hint)
+
+    if not pieces:
+        return ""
+
+    return _compact_hint("repair: " + " | ".join(pieces), max_chars=320)
+
+
 def _prioritize_context_parts(parts):
     """Keep the prompt injection compact while favoring actionable evidence."""
     if not parts:
@@ -382,19 +458,21 @@ def _prioritize_context_parts(parts):
             return 0
         if item.startswith("plan required:") or item.startswith("directives pending:"):
             return 1
-        if item.startswith("Complaints:") or item.startswith("complaint hint:"):
+        if item.startswith("repair:"):
             return 2
-        if item.startswith("similar:"):
+        if item.startswith("Complaints:") or item.startswith("complaint hint:"):
             return 3
-        if item.startswith("runtime=") or item.startswith("document=") or item.startswith("plan="):
+        if item.startswith("similar:"):
             return 4
-        if item.startswith("Checks:"):
+        if item.startswith("runtime=") or item.startswith("document=") or item.startswith("plan="):
             return 5
-        if item.startswith("active:"):
+        if item.startswith("Checks:"):
             return 6
-        if item.startswith("note"):
+        if item.startswith("active:"):
             return 7
-        return 6
+        if item.startswith("note"):
+            return 8
+        return 7
 
     indexed = list(enumerate(parts))
     indexed.sort(key=lambda pair: (_priority(pair[1]), pair[0]))
@@ -475,10 +553,14 @@ def gather_context(prompt):
             if checks_summary:
                 context_parts.append(checks_summary)
 
-            similar_failure = find_similar_failure(active_task_dir, tasks_dir=TASK_DIR, prompt=prompt)
-            similar_hint = format_similar_failure_hint(similar_failure)
-            if similar_hint:
-                context_parts.append(similar_hint)
+            repair_hint = _get_repair_focus_hint(active_task_dir, prompt)
+            if repair_hint:
+                context_parts.append(repair_hint)
+            else:
+                similar_failure = find_similar_failure(active_task_dir, tasks_dir=TASK_DIR, prompt=prompt)
+                similar_hint = format_similar_failure_hint(similar_failure)
+                if similar_hint:
+                    context_parts.append(similar_hint)
     except Exception:
         pass
 
@@ -518,10 +600,12 @@ def main():
     if not context_parts:
         sys.exit(0)
 
-    # Format as additionalContext (keep it small — this runs every turn)
+    # Format as additionalContext (keep it small, but allow slightly more
+    # room for fix-round evidence-first repair hints).
     context = " | ".join(context_parts)
-    if len(context) > 320:
-        context = context[:317] + "..."
+    max_chars = 520 if any(part.startswith("repair:") for part in context_parts) else 320
+    if len(context) > max_chars:
+        context = context[: max_chars - 3] + "..."
 
     # Output for hook — hookSpecificOutput schema
     output = {
