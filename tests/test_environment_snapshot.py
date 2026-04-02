@@ -75,6 +75,24 @@ class EnvironmentSnapshotTests(unittest.TestCase):
             self.assertIn(f"doc/harness/tasks/{task_dir.name}/{SNAPSHOT_FILENAME}", must_read)
             self.assertIn("ENVIRONMENT_SNAPSHOT.md", ctx.get("next_action", ""))
 
+    def test_task_context_surfaces_snapshot_for_sprinted_team_task(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "TASK__sprinted"
+            task_dir.mkdir(parents=True, exist_ok=True)
+            self._write_task_state(
+                task_dir,
+                plan_verdict="PASS",
+                execution_mode="sprinted",
+                orchestration_mode="team",
+                runtime_verdict="pending",
+            )
+            (task_dir / "REQUEST.md").write_text("Implement the service safely.\n", encoding="utf-8")
+            write_environment_snapshot(str(task_dir), repo_root=str(REPO_ROOT))
+
+            ctx = emit_compact_context(str(task_dir))
+            self.assertIn(f"doc/harness/tasks/{task_dir.name}/{SNAPSHOT_FILENAME}", ctx.get("must_read", []))
+            self.assertIn("ENVIRONMENT_SNAPSHOT.md", ctx.get("next_action", ""))
+
     def test_task_context_prioritizes_snapshot_for_blocked_env(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = Path(tmp) / "TASK__blocked"

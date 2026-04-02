@@ -2,12 +2,15 @@
 """hctl — harness CLI control plane.
 
 Single entry point for task lifecycle management:
-  start    — compile routing fields into TASK_STATE.yaml
-  context  — emit compact task pack (--json for machine-readable)
-  update   — sync touched_paths/roots_touched/verification_targets
-  verify   — delegate to verify.py (suite / smoke / healthcheck modes)
-  close    — wrap task_completed_gate.py
-  artifact — wrap write_artifact.py
+  start        — compile routing fields into TASK_STATE.yaml
+  context      — emit compact task pack (--json for machine-readable)
+  history      — list indexed failure cases across task history
+  top-failures — surface top similar historical failures for a task
+  diff-case    — compare two failure cases
+  update       — sync touched_paths/roots_touched/verification_targets
+  verify       — delegate to verify.py (suite / smoke / healthcheck modes)
+  close        — wrap task_completed_gate.py
+  artifact     — wrap write_artifact.py
 
 stdlib only (no pip packages).
 """
@@ -24,7 +27,6 @@ sys.path.insert(0, SCRIPT_DIR)
 
 from _lib import (
     yaml_field,
-    yaml_array,
     is_doc_path,
     extract_roots,
     set_task_state_field,
@@ -32,13 +34,19 @@ from _lib import (
     emit_compact_context,
     TASK_DIR,
 )
-
 from environment_snapshot import write_environment_snapshot
+from failure_memory import (
+    write_failure_case_snapshot,
+    list_failure_cases,
+    find_similar_failures,
+    diff_failure_cases,
+)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _require_task_dir(args):
     """Resolve and validate --task-dir. Exits on failure."""
@@ -46,7 +54,6 @@ def _require_task_dir(args):
     if not task_dir:
         print("ERROR: --task-dir is required", file=sys.stderr)
         sys.exit(1)
-    # Support relative paths from cwd
     if not os.path.isabs(task_dir):
         task_dir = os.path.join(os.getcwd(), task_dir)
     task_dir = os.path.normpath(task_dir)
@@ -57,9 +64,38 @@ def _require_task_dir(args):
     return task_dir
 
 
+def _resolve_tasks_dir(raw_tasks_dir):
+    tasks_dir = raw_tasks_dir or TASK_DIR
+    if not os.path.isabs(tasks_dir):
+        tasks_dir = os.path.join(os.getcwd(), tasks_dir)
+    tasks_dir = os.path.normpath(tasks_dir)
+    if not os.path.isdir(tasks_dir):
+        print(f"ERROR: tasks dir not found: {tasks_dir}", file=sys.stderr)
+        sys.exit(1)
+    return tasks_dir
+
+
+def _print_case_summary(case, prefix=""):
+    head = (
+        f"{prefix}{case.get('task_id')}: signals={case.get('failure_signals', 0)} "
+        f"lane={case.get('lane', 'unknown')} artifact={case.get('artifact', 'TASK_STATE.yaml')}"
+    )
+    print(head)
+    excerpt = str(case.get("excerpt") or "").strip()
+    if excerpt:
+        print(f"  excerpt: {excerpt}")
+    check_ids = case.get("check_ids") or case.get("matching_check_ids") or []
+    if check_ids:
+        print(f"  checks: {', '.join(str(x) for x in check_ids[:4])}")
+    paths = case.get("path_examples") or case.get("matching_paths") or []
+    if paths:
+        print(f"  paths: {', '.join(str(x) for x in paths[:4])}")
+
+
 # ---------------------------------------------------------------------------
 # Subcommand: start
 # ---------------------------------------------------------------------------
+
 
 def cmd_start(args):
     """Compile routing and write canonical fields to TASK_STATE.yaml."""
@@ -85,6 +121,12 @@ def cmd_start(args):
     except Exception:
         snapshot_path = ""
 
+    case_path = ""
+    try:
+        case_path = write_failure_case_snapshot(task_dir, prompt=request_text)
+    except Exception:
+        case_path = ""
+
     task_id = yaml_field("task_id", os.path.join(task_dir, "TASK_STATE.yaml")) or os.path.basename(task_dir)
     print(f"routing compiled for {task_id}")
     print(f"  risk_level: {routing['risk_level']}")
@@ -94,6 +136,8 @@ def cmd_start(args):
     print(f"  execution_mode: {routing['execution_mode']} (compat)")
     if snapshot_path:
         print(f"  env_snapshot: {os.path.basename(snapshot_path)}")
+    if case_path:
+        print(f"  failure_case: {os.path.basename(case_path)}")
     return 0
 
 
@@ -101,9 +145,15 @@ def cmd_start(args):
 # Subcommand: context
 # ---------------------------------------------------------------------------
 
+
 def cmd_context(args):
     """Emit compact task pack."""
     task_dir = _require_task_dir(args)
+
+    try:
+        write_failure_case_snapshot(task_dir)
+    except Exception:
+        pass
 
     ctx = emit_compact_context(task_dir)
 
@@ -137,6 +187,16 @@ def cmd_context(args):
             excerpt = review_focus.get("evidence_excerpt")
             if excerpt:
                 print(f"Evidence: {excerpt}")
+        if review_focus.get("environment_artifact"):
+            reasons = review_focus.get("environment_reasons") or []
+            tail = f" ({', '.join(reasons)})" if reasons else ""
+            print(f"Environment: {review_focus['environment_artifact']}{tail}")
+        similar_cases = review_focus.get("prior_similar_cases") or []
+        if similar_cases:
+            print("Similar failures:")
+            for item in similar_cases[:3]:
+                score = item.get("score", 0.0)
+                print(f"  - {item.get('task_id')} score={score:.2f} {item.get('artifact')}")
         if checks:
             print(
                 "Checks: total={total} open={open_count} failed={failed_count} blocked={blocked_count}".format(
@@ -156,8 +216,107 @@ def cmd_context(args):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: history
+# ---------------------------------------------------------------------------
+
+
+def cmd_history(args):
+    """List failure cases across task history."""
+    tasks_dir = _resolve_tasks_dir(getattr(args, "tasks_dir", None))
+    cases = list_failure_cases(
+        tasks_dir=tasks_dir,
+        limit=getattr(args, "limit", 20),
+        lane=getattr(args, "lane", ""),
+        min_failure_signals=getattr(args, "min_failure_signals", 1),
+    )
+
+    if getattr(args, "json", False):
+        print(json.dumps(cases, indent=2))
+        return 0
+
+    if not cases:
+        print("No failure cases found.")
+        return 0
+
+    for case in cases:
+        _print_case_summary(case)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: top-failures
+# ---------------------------------------------------------------------------
+
+
+def cmd_top_failures(args):
+    """Show top similar failures for the given task."""
+    task_dir = _require_task_dir(args)
+    tasks_dir = _resolve_tasks_dir(getattr(args, "tasks_dir", None))
+
+    try:
+        write_failure_case_snapshot(task_dir)
+    except Exception:
+        pass
+
+    matches = find_similar_failures(
+        task_dir,
+        tasks_dir=tasks_dir,
+        limit=getattr(args, "limit", 3),
+    )
+
+    if getattr(args, "json", False):
+        print(json.dumps(matches, indent=2))
+        return 0
+
+    if not matches:
+        print("No similar failures found.")
+        return 0
+
+    for idx, match in enumerate(matches, start=1):
+        _print_case_summary(match, prefix=f"#{idx} ")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: diff-case
+# ---------------------------------------------------------------------------
+
+
+def cmd_diff_case(args):
+    """Compare two failure cases."""
+    tasks_dir = _resolve_tasks_dir(getattr(args, "tasks_dir", None))
+    diff = diff_failure_cases(args.case_a, args.case_b, tasks_dir=tasks_dir)
+    if not diff:
+        print("ERROR: unable to diff cases", file=sys.stderr)
+        return 1
+
+    if getattr(args, "json", False):
+        print(json.dumps(diff, indent=2))
+        return 0
+
+    case_a = diff.get("case_a") or {}
+    case_b = diff.get("case_b") or {}
+    print(f"Case A: {case_a.get('task_id')} signals={case_a.get('failure_signals', 0)} lane={case_a.get('lane', 'unknown')}")
+    print(f"Case B: {case_b.get('task_id')} signals={case_b.get('failure_signals', 0)} lane={case_b.get('lane', 'unknown')}")
+    if diff.get("same_lane"):
+        print("Lane: same")
+    else:
+        print("Lane: different")
+    if diff.get("shared_check_ids"):
+        print("Shared checks: " + ", ".join(diff["shared_check_ids"]))
+    if diff.get("shared_paths"):
+        print("Shared paths: " + ", ".join(diff["shared_paths"]))
+    if diff.get("shared_keywords"):
+        print("Shared keywords: " + ", ".join(diff["shared_keywords"]))
+    if diff.get("more_severe"):
+        print(f"More severe: {diff['more_severe']}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: update
 # ---------------------------------------------------------------------------
+
 
 def cmd_update(args):
     """Update touched_paths/roots_touched/verification_targets in TASK_STATE.yaml."""
@@ -171,7 +330,6 @@ def cmd_update(args):
             cwd=os.getcwd(),
         )
         if result.returncode != 0:
-            # Try staged+unstaged
             result = subprocess.run(
                 ["git", "diff", "--name-only"],
                 capture_output=True,
@@ -194,6 +352,11 @@ def cmd_update(args):
         set_task_state_field(task_dir, "roots_touched", roots_touched)
         set_task_state_field(task_dir, "verification_targets", verification_targets)
 
+        try:
+            write_failure_case_snapshot(task_dir)
+        except Exception:
+            pass
+
         print(f"Updated touched_paths: {len(touched_paths)} files")
         print(f"Updated roots_touched: {roots_touched}")
         print(f"Updated verification_targets: {len(verification_targets)} files")
@@ -207,9 +370,10 @@ def cmd_update(args):
 # Subcommand: verify
 # ---------------------------------------------------------------------------
 
+
 def cmd_verify(args):
     """Run verification suite (delegates to verify.py)."""
-    task_dir = _require_task_dir(args)
+    _require_task_dir(args)
 
     verify_script = os.path.join(SCRIPT_DIR, "verify.py")
     result = subprocess.run(
@@ -223,14 +387,12 @@ def cmd_verify(args):
 # Subcommand: close
 # ---------------------------------------------------------------------------
 
+
 def cmd_close(args):
     """Run completion gate (delegates to task_completed_gate.py)."""
     task_dir = _require_task_dir(args)
 
     gate_script = os.path.join(SCRIPT_DIR, "task_completed_gate.py")
-
-    # task_completed_gate.py reads task_id from stdin JSON or env.
-    # Pass via environment variable.
     state_file = os.path.join(task_dir, "TASK_STATE.yaml")
     task_id = yaml_field("task_id", state_file) or os.path.basename(task_dir)
 
@@ -254,6 +416,7 @@ def cmd_close(args):
 # Subcommand: artifact
 # ---------------------------------------------------------------------------
 
+
 def cmd_artifact(args):
     """Delegate to write_artifact.py with remaining args."""
     write_artifact_script = os.path.join(SCRIPT_DIR, "write_artifact.py")
@@ -275,6 +438,7 @@ def cmd_artifact(args):
 # Argument parser
 # ---------------------------------------------------------------------------
 
+
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="hctl",
@@ -283,49 +447,57 @@ def build_parser():
     subparsers = parser.add_subparsers(dest="subcommand", metavar="SUBCOMMAND")
     subparsers.required = True
 
-    # start
     p_start = subparsers.add_parser("start", help="compile routing into TASK_STATE.yaml")
-    p_start.add_argument("--task-dir", required=True, metavar="DIR",
-                         help="task directory containing TASK_STATE.yaml")
-    p_start.add_argument("--request-file", metavar="FILE",
-                         help="optional REQUEST.md for request-text heuristics")
+    p_start.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_start.add_argument("--request-file", metavar="FILE", help="optional REQUEST.md for request-text heuristics")
     p_start.set_defaults(func=cmd_start)
 
-    # context
     p_ctx = subparsers.add_parser("context", help="emit compact task pack")
-    p_ctx.add_argument("--task-dir", required=True, metavar="DIR",
-                       help="task directory containing TASK_STATE.yaml")
-    p_ctx.add_argument("--json", action="store_true",
-                       help="output machine-readable JSON")
+    p_ctx.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_ctx.add_argument("--json", action="store_true", help="output machine-readable JSON")
     p_ctx.set_defaults(func=cmd_context)
 
-    # update
+    p_hist = subparsers.add_parser("history", help="list failure cases across task history")
+    p_hist.add_argument("--tasks-dir", metavar="DIR", help="optional tasks directory (defaults to doc/harness/tasks)")
+    p_hist.add_argument("--lane", metavar="LANE", default="", help="optional lane filter")
+    p_hist.add_argument("--limit", type=int, default=20, help="maximum cases to show")
+    p_hist.add_argument("--min-failure-signals", type=int, default=1, help="minimum failure_signals required")
+    p_hist.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p_hist.set_defaults(func=cmd_history)
+
+    p_top = subparsers.add_parser("top-failures", help="show top similar failures for a task")
+    p_top.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_top.add_argument("--tasks-dir", metavar="DIR", help="optional tasks directory (defaults to doc/harness/tasks)")
+    p_top.add_argument("--limit", type=int, default=3, help="maximum similar failures to show")
+    p_top.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p_top.set_defaults(func=cmd_top_failures)
+
+    p_diff = subparsers.add_parser("diff-case", help="diff two failure cases")
+    p_diff.add_argument("--case-a", required=True, metavar="TASK_ID", help="first task id or task dir")
+    p_diff.add_argument("--case-b", required=True, metavar="TASK_ID", help="second task id or task dir")
+    p_diff.add_argument("--tasks-dir", metavar="DIR", help="optional tasks directory (defaults to doc/harness/tasks)")
+    p_diff.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p_diff.set_defaults(func=cmd_diff_case)
+
     p_upd = subparsers.add_parser("update", help="sync task state from git diff")
-    p_upd.add_argument("--task-dir", required=True, metavar="DIR",
-                       help="task directory containing TASK_STATE.yaml")
-    p_upd.add_argument("--from-git-diff", action="store_true",
-                       help="update touched_paths from `git diff --name-only HEAD`")
+    p_upd.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_upd.add_argument("--from-git-diff", action="store_true", help="update touched_paths from `git diff --name-only HEAD`")
     p_upd.set_defaults(func=cmd_update)
 
-    # verify
     p_ver = subparsers.add_parser("verify", help="run verification suite")
-    p_ver.add_argument("--task-dir", required=True, metavar="DIR",
-                       help="task directory containing TASK_STATE.yaml")
+    p_ver.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
     p_ver.set_defaults(func=cmd_verify)
 
-    # close
     p_cls = subparsers.add_parser("close", help="run task completion gate")
-    p_cls.add_argument("--task-dir", required=True, metavar="DIR",
-                       help="task directory containing TASK_STATE.yaml")
+    p_cls.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
     p_cls.set_defaults(func=cmd_close)
 
-    # artifact
     p_art = subparsers.add_parser("artifact", help="write harness artifact (wraps write_artifact.py)")
-    p_art.add_argument("artifact_args", nargs=argparse.REMAINDER,
-                       help="arguments passed through to write_artifact.py")
+    p_art.add_argument("artifact_args", nargs=argparse.REMAINDER, help="arguments passed through to write_artifact.py")
     p_art.set_defaults(func=cmd_artifact)
 
     return parser
+
 
 
 def main():

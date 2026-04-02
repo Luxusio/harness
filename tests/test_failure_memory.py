@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import tempfile
@@ -7,7 +8,15 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "plugin" / "scripts"))
 
-from failure_memory import find_similar_failure, format_similar_failure_hint
+from failure_memory import (
+    CASE_FILENAME,
+    diff_failure_cases,
+    find_similar_failure,
+    find_similar_failures,
+    format_similar_failure_hint,
+    list_failure_cases,
+    write_failure_case_snapshot,
+)
 
 
 class FailureMemoryTests(unittest.TestCase):
@@ -93,6 +102,88 @@ class FailureMemoryTests(unittest.TestCase):
             self.assertIsNotNone(match)
             self.assertEqual(match["task_id"], "TASK__close_match")
             self.assertIn("src", match.get("matching_paths", []))
+
+    def test_find_similar_failures_returns_top_k(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            current = self._make_task(
+                root,
+                "TASK__current",
+                runtime_verdict="FAIL",
+                fail_count=1,
+                critic_summary="users persistence still broken",
+            )
+            self._make_task(
+                root,
+                "TASK__best",
+                fail_count=2,
+                verification_target="src/api/users.py",
+                critic_summary="same users persistence problem after reload",
+                check_id="AC-001",
+            )
+            self._make_task(
+                root,
+                "TASK__second",
+                fail_count=1,
+                verification_target="src/api/profile.py",
+                request_text="Fix profile persistence after save.",
+                critic_summary="profile persistence issue",
+                check_id="AC-002",
+            )
+
+            matches = find_similar_failures(str(current), tasks_dir=str(root), limit=2)
+            self.assertEqual(len(matches), 2)
+            self.assertEqual(matches[0]["task_id"], "TASK__best")
+            self.assertGreaterEqual(matches[0]["score"], matches[1]["score"])
+
+    def test_write_failure_case_snapshot_writes_json_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            task_dir = self._make_task(
+                root,
+                "TASK__case",
+                runtime_verdict="FAIL",
+                fail_count=2,
+                critic_summary="users persistence still broken",
+            )
+
+            case_path = write_failure_case_snapshot(str(task_dir))
+            self.assertTrue(case_path.endswith(CASE_FILENAME))
+            self.assertTrue((task_dir / CASE_FILENAME).is_file())
+            payload = json.loads((task_dir / CASE_FILENAME).read_text(encoding="utf-8"))
+            self.assertEqual(payload["task_id"], "TASK__case")
+            self.assertEqual(payload["runtime_verdict"], "FAIL")
+            self.assertGreaterEqual(payload["failure_signals"], 2)
+
+    def test_list_failure_cases_and_diff_case(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._make_task(
+                root,
+                "TASK__a",
+                runtime_verdict="FAIL",
+                fail_count=2,
+                critic_summary="users persistence still broken",
+                check_id="AC-001",
+            )
+            self._make_task(
+                root,
+                "TASK__b",
+                runtime_verdict="FAIL",
+                fail_count=1,
+                verification_target="src/api/users.py",
+                critic_summary="users api still broken",
+                check_id="AC-001",
+            )
+
+            cases = list_failure_cases(tasks_dir=str(root), limit=5)
+            self.assertGreaterEqual(len(cases), 2)
+            self.assertEqual(cases[0]["task_id"], "TASK__a")
+
+            diff = diff_failure_cases("TASK__a", "TASK__b", tasks_dir=str(root))
+            self.assertIsNotNone(diff)
+            self.assertIn("AC-001", diff.get("shared_check_ids", []))
+            self.assertIn("src", diff.get("shared_paths", []))
 
     def test_format_similar_failure_hint_includes_task_id(self):
         hint = format_similar_failure_hint(

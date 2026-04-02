@@ -106,7 +106,7 @@ class TestHctlHelp(unittest.TestCase):
 
     def test_subcommands_listed(self):
         code, out, _ = _run_hctl("--help")
-        for sub in ("start", "context", "update", "verify", "close", "artifact"):
+        for sub in ("start", "context", "history", "top-failures", "diff-case", "update", "verify", "close", "artifact"):
             self.assertIn(sub, out, f"subcommand '{sub}' missing from --help")
 
 
@@ -189,6 +189,13 @@ class TestHctlStart(unittest.TestCase):
         state = os.path.join(task_dir, "TASK_STATE.yaml")
         om = _yaml_field(state, "orchestration_mode")
         self.assertEqual(om, "solo")
+
+    def test_start_writes_failure_case_sidecar(self):
+        task_dir = _make_task(self.tmp.name, "TASK__test", lane="debug")
+        code, out, err = _run_hctl("start", "--task-dir", task_dir)
+        self.assertEqual(code, 0, err)
+        self.assertIn("failure_case:", out)
+        self.assertTrue(os.path.isfile(os.path.join(task_dir, "FAILURE_CASE.json")))
 
     def test_start_auto_promotes_planning_mode_broad_build(self):
         task_dir = _make_task(
@@ -511,6 +518,86 @@ class TestCompatibilityFields(unittest.TestCase):
     def test_orchestration_mode_solo_when_parallelism_1(self):
         fields = self._start_and_read("build")
         self.assertEqual(fields["orchestration_mode"], "solo")
+
+
+# ---------------------------------------------------------------------------
+# Test: failure history CLI surfaces indexed cases
+# ---------------------------------------------------------------------------
+
+class TestHctlFailureHistoryCli(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _make_failure_task(self, task_id, *, verification_target="src/api/users.py", check_id="AC-001", critic_summary="users persistence failed", runtime_verdict="FAIL", fail_count="1"):
+        task_dir = _make_task(
+            self.tmp.name,
+            task_id,
+            lane="debug",
+            extra_fields={
+                "runtime_verdict": runtime_verdict,
+                "runtime_verdict_fail_count": fail_count,
+                "verification_targets": f"[{verification_target}]",
+                "plan_verdict": "PASS",
+            },
+        )
+        task_path = Path(task_dir)
+        (task_path / "REQUEST.md").write_text("Fix users persistence.\n", encoding="utf-8")
+        (task_path / "CHECKS.yaml").write_text(
+            f"checks:\n  - id: {check_id}\n    status: failed\n    title: persistence\n",
+            encoding="utf-8",
+        )
+        (task_path / "CRITIC__runtime.md").write_text(
+            f"verdict: FAIL\nsummary: {critic_summary}\n",
+            encoding="utf-8",
+        )
+        _run_hctl("start", "--task-dir", task_dir)
+        return task_dir
+
+    def test_history_lists_failure_cases(self):
+        self._make_failure_task("TASK__a", fail_count="2")
+        self._make_failure_task("TASK__b", verification_target="src/api/profile.py", check_id="AC-002")
+
+        code, out, err = _run_hctl("history", "--tasks-dir", self.tmp.name, "--json")
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+        self.assertGreaterEqual(len(payload), 2)
+        self.assertEqual(payload[0]["task_id"], "TASK__a")
+
+    def test_top_failures_returns_similar_cases(self):
+        current = self._make_failure_task("TASK__current", fail_count="1")
+        self._make_failure_task("TASK__match", fail_count="2")
+        self._make_failure_task("TASK__other", verification_target="docs/README.md", check_id="DOC-001", critic_summary="docs drift")
+
+        code, out, err = _run_hctl(
+            "top-failures",
+            "--task-dir", current,
+            "--tasks-dir", self.tmp.name,
+            "--json",
+        )
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+        self.assertTrue(payload)
+        self.assertEqual(payload[0]["task_id"], "TASK__match")
+
+    def test_diff_case_compares_overlap(self):
+        self._make_failure_task("TASK__a", fail_count="2")
+        self._make_failure_task("TASK__b", fail_count="1")
+
+        code, out, err = _run_hctl(
+            "diff-case",
+            "--tasks-dir", self.tmp.name,
+            "--case-a", "TASK__a",
+            "--case-b", "TASK__b",
+            "--json",
+        )
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+        self.assertIn("AC-001", payload.get("shared_check_ids", []))
+        self.assertIn("src", payload.get("shared_paths", []))
 
 
 # ---------------------------------------------------------------------------
