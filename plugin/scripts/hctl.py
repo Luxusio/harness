@@ -33,6 +33,8 @@ from _lib import (
     TASK_DIR,
 )
 
+from environment_snapshot import write_environment_snapshot
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -77,6 +79,12 @@ def cmd_start(args):
     for field, value in routing.items():
         set_task_state_field(task_dir, field, value)
 
+    snapshot_path = ""
+    try:
+        snapshot_path = write_environment_snapshot(task_dir, repo_root=os.getcwd(), reason="task_start")
+    except Exception:
+        snapshot_path = ""
+
     task_id = yaml_field("task_id", os.path.join(task_dir, "TASK_STATE.yaml")) or os.path.basename(task_dir)
     print(f"routing compiled for {task_id}")
     print(f"  risk_level: {routing['risk_level']}")
@@ -84,6 +92,8 @@ def cmd_start(args):
     print(f"  workflow_locked: {routing['workflow_locked']}")
     print(f"  planning_mode: {routing['planning_mode']}")
     print(f"  execution_mode: {routing['execution_mode']} (compat)")
+    if snapshot_path:
+        print(f"  env_snapshot: {os.path.basename(snapshot_path)}")
     return 0
 
 

@@ -16,6 +16,7 @@ from _lib import (
     yaml_field,
 )
 from memory_selectors import _get_registered_roots, select_relevant_notes
+from failure_memory import find_similar_failure, format_similar_failure_hint
 
 
 def is_casual(prompt):
@@ -242,7 +243,7 @@ def _is_fix_round(task_dir):
         try:
             with open(state_file) as f:
                 content = f.read()
-            if re.search(r"^runtime_verdict:\s*FAIL", content, re.MULTILINE):
+            if re.search(r"^runtime_verdict:\s*(FAIL|BLOCKED_ENV)", content, re.MULTILINE):
                 return True
         except OSError:
             pass
@@ -370,6 +371,35 @@ def _latest_task_verdict(task_dir):
     return ""
 
 
+def _prioritize_context_parts(parts):
+    """Keep the prompt injection compact while favoring actionable evidence."""
+    if not parts:
+        return []
+
+    def _priority(item):
+        if item.startswith("task required:") or item.startswith("plan violation:"):
+            return 0
+        if item.startswith("plan required:") or item.startswith("directives pending:"):
+            return 1
+        if item.startswith("Complaints:") or item.startswith("complaint hint:"):
+            return 2
+        if item.startswith("similar:"):
+            return 3
+        if item.startswith("runtime=") or item.startswith("document=") or item.startswith("plan="):
+            return 4
+        if item.startswith("Checks:"):
+            return 5
+        if item.startswith("active:"):
+            return 6
+        if item.startswith("note"):
+            return 7
+        return 6
+
+    indexed = list(enumerate(parts))
+    indexed.sort(key=lambda pair: (_priority(pair[1]), pair[0]))
+    return [item for _, item in indexed[:4]]
+
+
 def gather_context(prompt):
     """Gather a small amount of high-signal context for the next turn."""
     context_parts = []
@@ -443,6 +473,11 @@ def gather_context(prompt):
             checks_summary = get_checks_summary_for_task(active_task_dir)
             if checks_summary:
                 context_parts.append(checks_summary)
+
+            similar_failure = find_similar_failure(active_task_dir, tasks_dir=TASK_DIR, prompt=prompt)
+            similar_hint = format_similar_failure_hint(similar_failure)
+            if similar_hint:
+                context_parts.append(similar_hint)
     except Exception:
         pass
 
@@ -463,7 +498,7 @@ def gather_context(prompt):
     except Exception:
         pass
 
-    return context_parts[:4]
+    return _prioritize_context_parts(context_parts)
 
 
 def main():
