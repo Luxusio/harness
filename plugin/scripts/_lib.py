@@ -4,14 +4,15 @@ Import at the top of each hook script: from _lib import *
 """
 
 import json
+import hashlib
 import os
 import re
+import shlex
 import sys
 import shutil
+import subprocess
 import glob as _glob
-import fnmatch
 from datetime import datetime, timezone
-from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -777,6 +778,13 @@ TEAM_SYNTHESIS_REQUIRED_HEADINGS = (
     "## Residual Risks",
 )
 
+TEAM_WORKER_SUMMARY_REQUIRED_HEADINGS = (
+    "## Completed Work",
+    "## Owned Paths Handled",
+    "## Verification",
+    "## Residual Risks",
+)
+
 TEAM_PLACEHOLDER_MARKERS = (
     "TODO:",
     "TBD",
@@ -785,348 +793,902 @@ TEAM_PLACEHOLDER_MARKERS = (
     "[todo]",
 )
 
-TEAM_NO_PATH_MARKERS = {"none", "n/a", "na", "-", "(none)"}
-TEAM_WORKER_ENV_KEYS = ("HARNESS_TEAM_WORKER",)
-_TEAM_GLOB_MAGIC = set("*?[]")
+GLOB_META_CHARS = set("*?[")
+
+TEAM_CANONICAL_ROLES = {
+    "developer",
+    "writer",
+    "critic-plan",
+    "critic-runtime",
+    "critic-document",
+    "harness",
+    "plan-skill",
+}
+
+# Bump when bootstrap / dispatch / launch artifacts change shape so existing
+# task-local packs refresh automatically instead of silently reusing stale files.
+TEAM_BOOTSTRAP_SCHEMA_VERSION = 2
+TEAM_RELAUNCH_SCHEMA_VERSION = 1
+
+AGENT_ROLE_PREFIXES = (
+    ("harness:critic-document", "critic-document"),
+    ("harness:critic-runtime", "critic-runtime"),
+    ("harness:critic-plan", "critic-plan"),
+    ("harness:developer", "developer"),
+    ("harness:writer", "writer"),
+    ("harness:harness", "harness"),
+    ("critic-document", "critic-document"),
+    ("critic-runtime", "critic-runtime"),
+    ("critic-plan", "critic-plan"),
+    ("developer", "developer"),
+    ("writer", "writer"),
+    ("harness", "harness"),
+)
+
+TEAM_DOCUMENTATION_ROLE_ALIASES = {
+    "writer": "doc_sync",
+    "doc-sync": "doc_sync",
+    "docsync": "doc_sync",
+    "doc-writer": "doc_sync",
+    "documentation": "doc_sync",
+    "documentation-writer": "doc_sync",
+    "docs": "doc_sync",
+    "critic-document": "document_critic",
+    "document-critic": "document_critic",
+    "doc-critic": "document_critic",
+    "doc-review": "document_critic",
+    "doc-reviewer": "document_critic",
+    "documentation-review": "document_critic",
+    "documentation-reviewer": "document_critic",
+}
 
 
-def _normalize_worker_name(value):
-    """Normalize worker identifiers so env values and TEAM_PLAN entries align."""
-    raw = str(value or "").strip().strip("`").strip('"').strip("'")
+def get_agent_role(raw_agent_name=None):
+    """Return the canonical harness role from CLAUDE_AGENT_NAME when available."""
+    raw = str(
+        raw_agent_name
+        if raw_agent_name is not None
+        else os.environ.get("CLAUDE_AGENT_NAME", "")
+    ).strip()
     if not raw:
         return ""
-    raw = raw.replace("_", "-")
-    raw = re.sub(r"\s+", "-", raw)
-    return raw.lower()
-
-
-def _normalize_team_path_pattern(value):
-    """Normalize TEAM_PLAN path patterns to repo-relative POSIX style."""
-    raw = str(value or "").strip().strip("`").strip('"').strip("'")
-    if not raw:
-        return ""
-    raw = raw.replace("\\", "/")
-    while raw.startswith("./"):
-        raw = raw[2:]
-    raw = raw.strip()
-    if raw.endswith("/") and not raw.endswith("/**"):
-        raw = raw.rstrip("/")
+    for prefix, role in AGENT_ROLE_PREFIXES:
+        if raw == prefix:
+            return role
+        if any(raw.startswith(prefix + sep) for sep in (":", "/", "@")):
+            return role
     return raw
 
 
-def _markdown_section_body(text_value, heading):
-    """Return the body of a markdown ## section, or an empty string."""
-    if not text_value or not heading:
+def get_team_worker_name(known_workers=None, raw_agent_name=None, explicit_worker=None):
+    """Best-effort worker identity from env or worker-suffixed agent names."""
+    explicit = str(
+        explicit_worker
+        if explicit_worker is not None
+        else os.environ.get("HARNESS_TEAM_WORKER", "")
+    ).strip()
+    known = [str(item).strip() for item in (known_workers or []) if str(item).strip()]
+    if explicit:
+        return explicit
+
+    raw = str(
+        raw_agent_name
+        if raw_agent_name is not None
+        else os.environ.get("CLAUDE_AGENT_NAME", "")
+    ).strip()
+    if not raw:
         return ""
-    normalized = text_value.replace("\r\n", "\n")
-    pattern = re.compile(
-        rf"(?ms)^" + re.escape(heading) + r"\s*$\n(.*?)(?=^##\s|\Z)"
-    )
-    match = pattern.search(normalized)
-    return match.group(1).strip("\n") if match else ""
 
+    candidates = [raw]
+    for sep in (":", "/", "@"):
+        if sep in raw:
+            candidates.append(raw.split(sep)[-1])
 
-def _markdown_bullets(section_body):
-    """Return top-level bullet items from a markdown section body."""
-    bullets = []
-    for raw_line in str(section_body or "").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("<!--"):
+    seen = set()
+    for candidate in candidates:
+        worker = candidate.strip()
+        if not worker or worker in seen:
             continue
-        if re.match(r"^[-*]\s+", line):
-            bullets.append(re.sub(r"^[-*]\s+", "", line).strip())
-    return bullets
+        seen.add(worker)
+        if known and worker in known:
+            return worker
+        if worker in TEAM_CANONICAL_ROLES or worker.startswith("harness:"):
+            continue
+        if re.match(r"^[A-Za-z0-9_.-]+$", worker) and (
+            worker.startswith("worker-")
+            or worker.startswith("lead")
+            or worker.startswith("integrator")
+            or worker.startswith("reviewer")
+        ):
+            return worker
+    return ""
 
 
-def _split_path_values(payload):
-    values = []
-    for part in re.split(r"\s*,\s*", str(payload or "")):
-        norm = _normalize_team_path_pattern(part)
+def _team_markdown_sections(text_value):
+    """Return {heading -> body} for top-level ## markdown sections."""
+    sections = {}
+    current = None
+    lines = []
+    for raw_line in (text_value or "").splitlines():
+        line = raw_line.rstrip("\n")
+        if line.startswith("## "):
+            if current is not None:
+                sections[current] = "\n".join(lines).strip()
+            current = line.strip()
+            lines = []
+            continue
+        if current is not None:
+            lines.append(line)
+    if current is not None:
+        sections[current] = "\n".join(lines).strip()
+    return sections
+
+
+def _team_bullet_lines(section_text):
+    items = []
+    for raw_line in (section_text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if re.match(r"^[-*+]\s+", line):
+            items.append(re.sub(r"^[-*+]\s+", "", line).strip())
+    return items
+
+
+def _team_first_meaningful_line(section_text):
+    for raw_line in (section_text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = re.sub(r"^[-*+]\s+", "", line).strip()
+        if not line:
+            continue
+        return line[:180]
+    return ""
+
+
+def _split_path_specs(raw_value):
+    if raw_value is None:
+        return []
+    pieces = re.split(r"[;,]", str(raw_value))
+    result = []
+    for piece in pieces:
+        norm = normalize_path(piece.strip())
         if not norm:
             continue
-        if norm.lower() in TEAM_NO_PATH_MARKERS:
+        if norm.lower() in ("none", "n/a"):
             continue
-        values.append(norm)
-    return values
+        result.append(norm)
+    return result
 
 
-def _has_glob_magic(pattern):
-    return any(ch in str(pattern or "") for ch in _TEAM_GLOB_MAGIC)
-
-
-def _pattern_prefix(pattern):
-    pat = _normalize_team_path_pattern(pattern)
-    if not pat:
+def _normalize_team_worker_name(raw_value):
+    worker = str(raw_value or "").strip()
+    if not worker:
         return ""
-    first_magic = min((pat.find(ch) for ch in _TEAM_GLOB_MAGIC if ch in pat), default=-1)
-    if first_magic == -1:
-        return pat
-    prefix = pat[:first_magic]
+    return re.sub(r"\s+", "-", worker)
+
+
+def _parse_team_roster(section_text):
+    workers = []
+    worker_roles = {}
+    errors = []
+    for item in _team_bullet_lines(section_text):
+        m = re.match(r"^([^:–—]+?)(?:\s*[:–—]\s*(.+))?$", item)
+        if not m:
+            errors.append(f"invalid worker roster entry '{item}'")
+            continue
+        worker = _normalize_team_worker_name(m.group(1))
+        if not worker:
+            errors.append(f"invalid worker roster entry '{item}'")
+            continue
+        if worker not in workers:
+            workers.append(worker)
+        role = (m.group(2) or "").strip()
+        if role:
+            worker_roles[worker] = role
+    return workers, worker_roles, errors
+
+
+def _parse_team_assignment_section(section_text, workers):
+    mapping = {}
+    errors = []
+    roster = list(workers or [])
+    implicit_single_worker = roster[0] if len(roster) == 1 else ""
+    for item in _team_bullet_lines(section_text):
+        m = re.match(r"^([^:–—]+?)\s*[:–—]\s*(.+)$", item)
+        worker = ""
+        payload = ""
+        if m:
+            worker = _normalize_team_worker_name(m.group(1))
+            payload = (m.group(2) or "").strip()
+        elif implicit_single_worker:
+            worker = implicit_single_worker
+            payload = item
+        else:
+            errors.append(f"assignment '{item}' must use '<worker>: <path>' format")
+            continue
+
+        paths = _split_path_specs(payload)
+        if not paths and str(payload).strip().lower() not in ("none", "n/a"):
+            errors.append(f"assignment for '{worker}' has no writable paths")
+            continue
+        mapping.setdefault(worker, []).extend(paths)
+    return mapping, errors
+
+
+def _parse_team_shared_paths(section_text):
+    shared_paths = []
+    for item in _team_bullet_lines(section_text):
+        shared_paths.extend(_split_path_specs(item))
+    return shared_paths
+
+
+def _parse_team_synthesis_strategy(section_text, workers, worker_roles):
+    """Infer which worker(s) act as synthesis owners / lead integrators.
+
+    Heuristic and deliberately conservative:
+      - strong signal: worker name starts with lead/integrator
+      - strong signal: worker role text includes lead/integrator/synthesis/merge
+      - strong signal: synthesis strategy mentions a worker near merge/integrate/synthesis terms
+      - if there is only one worker, that worker is implicitly the synthesis owner
+
+    When no explicit synthesis owner is recoverable, we keep all workers in the
+    summary-required set for backward compatibility.
+    """
+    roster = [str(item).strip() for item in (workers or []) if str(item).strip()]
+    roles = {str(k).strip(): str(v or '').strip() for k, v in (worker_roles or {}).items()}
+    normalized_section = re.sub(r"\s+", " ", str(section_text or "").lower())
+
+    strong_candidates = []
+    for worker in roster:
+        worker_norm = str(worker or "").strip().lower()
+        role_norm = roles.get(worker, "").lower()
+        strong = False
+        if worker_norm.startswith(("lead", "integrator")):
+            strong = True
+        elif any(token in role_norm for token in ("lead", "integrat", "synthes", "merge")):
+            strong = True
+        else:
+            escaped = re.escape(worker_norm)
+            patterns = (
+                rf"\b{escaped}\b[^.\n]{{0,60}}\b(merge|integrat|synthes)\w*\b",
+                rf"\b(merge|integrat|synthes)\w*\b[^.\n]{{0,60}}\b{escaped}\b",
+            )
+            strong = any(re.search(pattern, normalized_section) for pattern in patterns)
+        if strong and worker not in strong_candidates:
+            strong_candidates.append(worker)
+
+    generic_role_hint = ""
+    if re.search(r"\blead\b", normalized_section):
+        generic_role_hint = "lead"
+    elif re.search(r"\bintegrator\b", normalized_section):
+        generic_role_hint = "integrator"
+
+    synthesis_workers = list(strong_candidates)
+    if not synthesis_workers and len(roster) == 1:
+        synthesis_workers = [roster[0]]
+
+    summary_workers = [worker for worker in roster if worker not in synthesis_workers]
+    if not synthesis_workers:
+        summary_workers = list(roster)
+
+    return {
+        "synthesis_workers": synthesis_workers,
+        "summary_workers": summary_workers,
+        "generic_role_hint": generic_role_hint,
+        "has_explicit_synthesis_owner": bool(synthesis_workers),
+    }
+
+
+def _split_team_names(raw_value):
+    names = []
+    for piece in re.split(r"[;,]", str(raw_value or "")):
+        worker = _normalize_team_worker_name(piece)
+        if not worker:
+            continue
+        if worker.lower() in ("none", "n/a"):
+            continue
+        if worker not in names:
+            names.append(worker)
+    return names
+
+
+def _normalize_documentation_role_name(raw_value):
+    key = re.sub(r"\s+", "-", str(raw_value or "").strip().lower()).replace("_", "-")
+    return TEAM_DOCUMENTATION_ROLE_ALIASES.get(key, "")
+
+
+def _infer_documentation_workers(workers, worker_roles, synthesis_workers):
+    roster = [str(item).strip() for item in (workers or []) if str(item).strip()]
+    roles = {str(k).strip(): str(v or "").strip() for k, v in (worker_roles or {}).items()}
+    doc_sync = []
+    document_critic = []
+
+    def _add(target, worker):
+        if worker and worker not in target:
+            target.append(worker)
+
+    for worker in roster:
+        combined = f"{worker} {roles.get(worker, '')}".lower()
+        writer_hint = bool(
+            re.search(r"\b(writer|doc-writer|docsync|doc-sync|documentation|docs)\b", combined)
+        )
+        document_hint = bool(
+            re.search(r"\b(doc|docs|documentation)\b", combined)
+        )
+        critic_hint = bool(
+            re.search(r"\b(critic|review|reviewer|qa)\b", combined)
+        )
+        if writer_hint:
+            _add(doc_sync, worker)
+        if critic_hint and (document_hint or worker.startswith("reviewer") or "critic-document" in combined):
+            _add(document_critic, worker)
+
+    doc_sync_source = ""
+    document_critic_source = ""
+    if doc_sync:
+        doc_sync_source = "inferred"
+    elif synthesis_workers:
+        doc_sync = [worker for worker in (synthesis_workers or []) if worker in roster]
+        if doc_sync:
+            doc_sync_source = "fallback"
+    elif len(roster) == 1:
+        doc_sync = [roster[0]]
+        doc_sync_source = "fallback"
+
+    if document_critic:
+        document_critic_source = "inferred"
+    elif len(roster) == 1:
+        document_critic = [roster[0]]
+        document_critic_source = "fallback"
+
+    return {
+        "doc_sync_workers": doc_sync,
+        "doc_sync_owner_source": doc_sync_source,
+        "document_critic_workers": document_critic,
+        "document_critic_owner_source": document_critic_source,
+    }
+
+
+def _parse_team_documentation_ownership(section_text, workers, worker_roles, synthesis_workers):
+    explicit_doc_sync = []
+    explicit_document_critic = []
+    errors = []
+
+    for item in _team_bullet_lines(section_text):
+        match = re.match(r"^([^:–—]+?)\s*[:–—]\s*(.+)$", item)
+        if not match:
+            errors.append(f"documentation ownership entry '{item}' must use '<role>: <worker>' format")
+            continue
+        role_key = _normalize_documentation_role_name(match.group(1))
+        if not role_key:
+            errors.append(
+                f"documentation ownership entry '{item}' must target writer or critic-document"
+            )
+            continue
+        names = _split_team_names(match.group(2))
+        if not names:
+            errors.append(f"documentation ownership for '{match.group(1).strip()}' has no workers")
+            continue
+        unknown = [name for name in names if name not in (workers or [])]
+        if unknown:
+            errors.append(
+                f"documentation ownership for '{match.group(1).strip()}' references unknown workers: "
+                + ", ".join(unknown)
+            )
+            continue
+        target = explicit_doc_sync if role_key == "doc_sync" else explicit_document_critic
+        for name in names:
+            if name not in target:
+                target.append(name)
+
+    inferred = _infer_documentation_workers(workers, worker_roles, synthesis_workers)
+    doc_sync_workers = list(explicit_doc_sync or inferred.get("doc_sync_workers") or [])
+    doc_sync_source = "explicit" if explicit_doc_sync else str(inferred.get("doc_sync_owner_source") or "")
+    document_critic_workers = list(explicit_document_critic or inferred.get("document_critic_workers") or [])
+    document_critic_source = "explicit" if explicit_document_critic else str(inferred.get("document_critic_owner_source") or "")
+
+    return {
+        "doc_sync_workers": doc_sync_workers,
+        "doc_sync_owner_source": doc_sync_source,
+        "document_critic_workers": document_critic_workers,
+        "document_critic_owner_source": document_critic_source,
+        "has_explicit_documentation_owner": bool(explicit_doc_sync or explicit_document_critic),
+        "errors": errors,
+    }
+
+def _team_glob_to_regex(pattern_value):
+    pattern = normalize_path(str(pattern_value or "").strip())
+    if not pattern:
+        return re.compile(r"a^")
+
+    out = ["^"]
+    i = 0
+    while i < len(pattern):
+        char = pattern[i]
+        if char == "*":
+            if i + 1 < len(pattern) and pattern[i + 1] == "*":
+                i += 2
+                if i < len(pattern) and pattern[i] == "/":
+                    out.append("(?:.*/)?")
+                    i += 1
+                else:
+                    out.append(".*")
+                continue
+            out.append("[^/]*")
+        elif char == "?":
+            out.append("[^/]")
+        elif char == "[":
+            closing = pattern.find("]", i + 1)
+            if closing == -1:
+                out.append(r"\[")
+            else:
+                out.append(pattern[i:closing + 1])
+                i = closing
+        else:
+            out.append(re.escape(char))
+        i += 1
+    out.append("$")
+    return re.compile("".join(out))
+
+
+def team_glob_match(path_value, pattern_value):
+    """Return True when normalized path_value matches the ownership glob."""
+    path_norm = normalize_path(str(path_value or "").strip())
+    pattern_norm = normalize_path(str(pattern_value or "").strip())
+    if not path_norm or not pattern_norm:
+        return False
+    try:
+        return bool(_team_glob_to_regex(pattern_norm).match(path_norm))
+    except re.error:
+        return path_norm == pattern_norm
+
+
+def _team_glob_samples(pattern_value):
+    pattern = normalize_path(str(pattern_value or "").strip())
+    if not pattern:
+        return []
+
+    def _build(replacement_for_double_star):
+        chars = []
+        i = 0
+        while i < len(pattern):
+            char = pattern[i]
+            if char == "*":
+                if i + 1 < len(pattern) and pattern[i + 1] == "*":
+                    chars.append(replacement_for_double_star)
+                    i += 2
+                    continue
+                chars.append("item")
+            elif char == "?":
+                chars.append("q")
+            elif char == "[":
+                closing = pattern.find("]", i + 1)
+                if closing == -1:
+                    chars.append("x")
+                else:
+                    inner = pattern[i + 1:closing]
+                    chars.append(inner[:1] or "x")
+                    i = closing
+            else:
+                chars.append(char)
+            i += 1
+        sample = normalize_path("".join(chars).replace("//", "/"))
+        return sample or pattern
+
+    samples = []
+    for repl in ("nested/file", "file"):
+        sample = _build(repl)
+        if sample and sample not in samples:
+            samples.append(sample)
+    literal_fallback = re.sub(r"[*?\[\]]", "", pattern).replace("//", "/")
+    literal_fallback = normalize_path(literal_fallback)
+    if literal_fallback and literal_fallback not in samples:
+        samples.append(literal_fallback)
+    return samples
+
+
+def _team_static_prefix(pattern_value):
+    pattern = normalize_path(str(pattern_value or "").strip())
+    if not pattern:
+        return ""
+    stop = len(pattern)
+    for idx, char in enumerate(pattern):
+        if char in GLOB_META_CHARS:
+            stop = idx
+            break
+    prefix = pattern[:stop]
+    if prefix.endswith("/"):
+        return prefix.rstrip("/")
     if "/" in prefix:
-        prefix = prefix.rsplit("/", 1)[0]
-    return prefix.strip("/")
+        return prefix.rsplit("/", 1)[0]
+    return prefix
 
 
-def _match_team_path_pattern(pattern, repo_path):
-    """Conservative matcher for TEAM_PLAN patterns against repo-relative paths."""
-    pat = _normalize_team_path_pattern(pattern)
-    target = _normalize_team_path_pattern(repo_path)
-    if not pat or not target:
+def team_patterns_overlap(left_pattern, right_pattern):
+    """Best-effort conservative overlap test for two ownership globs."""
+    left = normalize_path(str(left_pattern or "").strip())
+    right = normalize_path(str(right_pattern or "").strip())
+    if not left or not right:
         return False
-    if pat == target:
+    if left == right:
         return True
-    if pat.endswith("/**"):
-        prefix = pat[:-3]
-        return target == prefix or target.startswith(prefix + "/")
-    if pat.endswith("/*"):
-        prefix = pat[:-2]
-        if not (target == prefix or target.startswith(prefix + "/")):
-            return False
-        remainder = target[len(prefix):].lstrip("/")
-        return remainder != "" and "/" not in remainder
-    if _has_glob_magic(pat):
-        if fnmatch.fnmatch(target, pat):
-            return True
-    return target.startswith(pat + "/")
 
+    left_meta = any(char in left for char in GLOB_META_CHARS)
+    right_meta = any(char in right for char in GLOB_META_CHARS)
+    if not left_meta and not right_meta:
+        return left == right
+    if not left_meta:
+        return team_glob_match(left, right)
+    if not right_meta:
+        return team_glob_match(right, left)
 
-def _team_patterns_overlap(pattern_a, pattern_b):
-    """Return True when two TEAM_PLAN writable patterns clearly overlap."""
-    a = _normalize_team_path_pattern(pattern_a)
-    b = _normalize_team_path_pattern(pattern_b)
-    if not a or not b:
-        return False
-    if a == b:
-        return True
-    if _match_team_path_pattern(a, b) or _match_team_path_pattern(b, a):
-        return True
-    prefix_a = _pattern_prefix(a)
-    prefix_b = _pattern_prefix(b)
-    if prefix_a and prefix_b:
-        if prefix_a == prefix_b:
-            broad_a = a.endswith("/**") or a.endswith("/*") or not _has_glob_magic(a)
-            broad_b = b.endswith("/**") or b.endswith("/*") or not _has_glob_magic(b)
-            if broad_a or broad_b:
-                return True
-        if prefix_a.startswith(prefix_b + "/") or prefix_b.startswith(prefix_a + "/"):
+    for sample in _team_glob_samples(left):
+        if team_glob_match(sample, right):
             return True
+    for sample in _team_glob_samples(right):
+        if team_glob_match(sample, left):
+            return True
+
+    left_prefix = _team_static_prefix(left)
+    right_prefix = _team_static_prefix(right)
+    if left_prefix and right_prefix:
+        return (
+            left_prefix == right_prefix
+            or left_prefix.startswith(right_prefix + "/")
+            or right_prefix.startswith(left_prefix + "/")
+        )
     return False
 
 
-def parse_team_plan_ownership(plan_path):
-    """Parse TEAM_PLAN.md into worker/path ownership metadata."""
-    result = {
+def parse_team_plan(path_value):
+    """Parse TEAM_PLAN.md into worker ownership + synthesis metadata."""
+    empty = {
         "exists": False,
         "workers": [],
-        "worker_labels": {},
-        "owned_writable_paths": {},
+        "worker_roles": {},
+        "owned_paths": {},
         "shared_read_only_paths": [],
-        "forbidden_writes": {},
-        "validation_errors": [],
-        "raw_text": "",
+        "forbidden_paths": {},
+        "synthesis_workers": [],
+        "summary_workers": [],
+        "synthesis_role_hint": "",
+        "has_explicit_synthesis_owner": False,
+        "doc_sync_workers": [],
+        "doc_sync_owner_source": "",
+        "document_critic_workers": [],
+        "document_critic_owner_source": "",
+        "has_explicit_documentation_owner": False,
+        "errors": [],
+        "ownership_ready": False,
+        "owned_path_count": 0,
     }
-    if not plan_path or not os.path.isfile(plan_path):
-        result["validation_errors"] = ["TEAM_PLAN.md missing"]
-        return result
+    if not path_value or not os.path.isfile(path_value):
+        return dict(empty)
+
     try:
-        text_value = Path(plan_path).read_text(encoding="utf-8")
+        with open(path_value, "r", encoding="utf-8") as fh:
+            text_value = fh.read()
     except OSError:
-        result["validation_errors"] = ["TEAM_PLAN.md unreadable"]
-        return result
+        return dict(empty)
 
-    result["exists"] = True
-    result["raw_text"] = text_value
+    sections = _team_markdown_sections(text_value)
+    workers, worker_roles, roster_errors = _parse_team_roster(sections.get("## Worker Roster", ""))
+    owned_paths, owned_errors = _parse_team_assignment_section(
+        sections.get("## Owned Writable Paths", ""),
+        workers,
+    )
+    forbidden_paths, forbidden_errors = _parse_team_assignment_section(
+        sections.get("## Forbidden Writes", ""),
+        workers,
+    )
+    shared_paths = _parse_team_shared_paths(sections.get("## Shared Read-Only Paths", ""))
+    synthesis_meta = _parse_team_synthesis_strategy(
+        sections.get("## Synthesis Strategy", ""),
+        workers,
+        worker_roles,
+    )
+    documentation_meta = _parse_team_documentation_ownership(
+        sections.get("## Documentation Ownership", ""),
+        workers,
+        worker_roles,
+        synthesis_meta.get("synthesis_workers") or [],
+    )
 
-    roster_body = _markdown_section_body(text_value, "## Worker Roster")
-    owned_body = _markdown_section_body(text_value, "## Owned Writable Paths")
-    shared_body = _markdown_section_body(text_value, "## Shared Read-Only Paths")
-    forbidden_body = _markdown_section_body(text_value, "## Forbidden Writes")
-
-    errors = []
-
-    worker_labels = {}
-    workers = []
-    for item in _markdown_bullets(roster_body):
-        if ":" not in item:
-            errors.append(f"worker roster entry must use '<worker>: <scope>', got '{item}'")
-            continue
-        worker_raw, label_raw = item.split(":", 1)
-        worker = _normalize_worker_name(worker_raw)
-        if not worker:
-            errors.append(f"worker roster entry has empty worker name: '{item}'")
-            continue
-        if worker in worker_labels:
-            errors.append(f"duplicate worker '{worker}' in worker roster")
-            continue
-        worker_labels[worker] = label_raw.strip()
-        workers.append(worker)
+    errors = list(roster_errors) + list(owned_errors) + list(forbidden_errors) + list(documentation_meta.get("errors") or [])
 
     if not workers:
         errors.append("worker roster must list at least one worker")
 
-    owned = {worker: [] for worker in workers}
-    for item in _markdown_bullets(owned_body):
-        if ":" not in item:
-            errors.append(f"owned writable paths entry must use '<worker>: <path>', got '{item}'")
-            continue
-        worker_raw, payload = item.split(":", 1)
-        worker = _normalize_worker_name(worker_raw)
-        if worker not in owned:
-            errors.append(f"owned writable paths references unknown worker '{worker_raw.strip()}'")
-            continue
-        paths = _split_path_values(payload)
-        if not paths:
-            errors.append(f"owned writable paths must list at least one path for worker '{worker}'")
-            continue
-        owned[worker].extend(paths)
+    unknown_owned = sorted(worker for worker in owned_paths if worker not in workers)
+    if unknown_owned:
+        errors.append("owned writable paths reference unknown workers: " + ", ".join(unknown_owned))
 
+    unknown_forbidden = sorted(worker for worker in forbidden_paths if worker not in workers)
+    if unknown_forbidden:
+        errors.append("forbidden writes reference unknown workers: " + ", ".join(unknown_forbidden))
+
+    missing_owned = [worker for worker in workers if not owned_paths.get(worker)]
+    if missing_owned:
+        errors.append("owned writable paths missing for: " + ", ".join(missing_owned))
+
+    missing_forbidden = [worker for worker in workers if worker not in forbidden_paths]
+    if missing_forbidden and len(workers) > 1:
+        errors.append("forbidden writes missing for: " + ", ".join(missing_forbidden))
+
+    overlap_messages = []
+    for idx, worker_a in enumerate(workers):
+        for worker_b in workers[idx + 1:]:
+            for left in owned_paths.get(worker_a, []):
+                for right in owned_paths.get(worker_b, []):
+                    if team_patterns_overlap(left, right):
+                        overlap_messages.append(f"{worker_a}:{left} overlaps {worker_b}:{right}")
+    if overlap_messages:
+        errors.append("overlapping writable ownership: " + "; ".join(overlap_messages[:4]))
+
+    shared_conflicts = []
+    for shared in shared_paths:
+        for worker in workers:
+            for owned in owned_paths.get(worker, []):
+                if team_patterns_overlap(shared, owned):
+                    shared_conflicts.append(f"{shared} overlaps {worker}:{owned}")
+    if shared_conflicts:
+        errors.append("shared read-only paths overlap writable ownership: " + "; ".join(shared_conflicts[:4]))
+
+    self_conflicts = []
     for worker in workers:
-        if not owned.get(worker):
-            errors.append(f"worker '{worker}' must own at least one writable path")
+        forbidden_for_worker = forbidden_paths.get(worker, [])
+        for owned in owned_paths.get(worker, []):
+            for forbidden in forbidden_for_worker:
+                if team_patterns_overlap(owned, forbidden):
+                    self_conflicts.append(f"{worker}:{owned} conflicts with forbidden {forbidden}")
+    if self_conflicts:
+        errors.append("worker owned paths overlap their forbidden paths: " + "; ".join(self_conflicts[:4]))
 
-    shared_read_only = []
-    for item in _markdown_bullets(shared_body):
-        shared_read_only.extend(_split_path_values(item))
-
-    forbidden = {worker: [] for worker in workers}
-    for item in _markdown_bullets(forbidden_body):
-        if ":" not in item:
-            errors.append(f"forbidden writes entry must use '<worker>: <path>', got '{item}'")
-            continue
-        worker_raw, payload = item.split(":", 1)
-        worker = _normalize_worker_name(worker_raw)
-        if worker not in forbidden:
-            errors.append(f"forbidden writes references unknown worker '{worker_raw.strip()}'")
-            continue
-        forbidden[worker].extend(_split_path_values(payload))
-
-    ownership_pairs = []
-    for worker, patterns in owned.items():
-        for pattern in patterns:
-            ownership_pairs.append((worker, pattern))
-
-    for idx, (worker_a, pattern_a) in enumerate(ownership_pairs):
-        for worker_b, pattern_b in ownership_pairs[idx + 1:]:
-            if worker_a == worker_b:
+    cross_coverage = []
+    for worker in workers:
+        other_owned = []
+        for other_worker in workers:
+            if other_worker == worker:
                 continue
-            if _team_patterns_overlap(pattern_a, pattern_b):
-                errors.append(
-                    f"overlapping writable ownership between '{worker_a}' ({pattern_a}) and '{worker_b}' ({pattern_b})"
-                )
+            other_owned.extend(owned_paths.get(other_worker, []))
+        forbidden_for_worker = forbidden_paths.get(worker, [])
+        missing_coverage = [
+            pattern for pattern in other_owned
+            if not any(team_patterns_overlap(pattern, forbidden) for forbidden in forbidden_for_worker)
+        ]
+        if missing_coverage:
+            cross_coverage.append(
+                f"{worker} missing coverage for: " + ", ".join(missing_coverage[:3])
+            )
+    if cross_coverage:
+        errors.append("forbidden writes do not cover peer-owned paths: " + "; ".join(cross_coverage[:3]))
 
-    for shared_pattern in shared_read_only:
-        for worker, pattern in ownership_pairs:
-            if _team_patterns_overlap(shared_pattern, pattern):
-                errors.append(
-                    f"shared read-only path '{shared_pattern}' overlaps writable ownership for '{worker}' ({pattern})"
-                )
+    synthesis_workers = [worker for worker in (synthesis_meta.get("synthesis_workers") or []) if worker in workers]
+    summary_workers = [worker for worker in (synthesis_meta.get("summary_workers") or []) if worker in workers]
+    if not synthesis_workers:
+        summary_workers = list(workers)
 
-    result.update({
+    owned_path_count = sum(len(values) for values in owned_paths.values())
+    return {
+        "exists": True,
         "workers": workers,
-        "worker_labels": worker_labels,
-        "owned_writable_paths": owned,
-        "shared_read_only_paths": shared_read_only,
-        "forbidden_writes": forbidden,
-        "validation_errors": sorted(set(errors)),
-    })
+        "worker_roles": worker_roles,
+        "owned_paths": {worker: list(values) for worker, values in owned_paths.items()},
+        "shared_read_only_paths": list(shared_paths),
+        "forbidden_paths": {worker: list(values) for worker, values in forbidden_paths.items()},
+        "synthesis_workers": synthesis_workers,
+        "summary_workers": summary_workers,
+        "synthesis_role_hint": str(synthesis_meta.get("generic_role_hint") or ""),
+        "has_explicit_synthesis_owner": bool(synthesis_meta.get("has_explicit_synthesis_owner")),
+        "doc_sync_workers": list(documentation_meta.get("doc_sync_workers") or []),
+        "doc_sync_owner_source": str(documentation_meta.get("doc_sync_owner_source") or ""),
+        "document_critic_workers": list(documentation_meta.get("document_critic_workers") or []),
+        "document_critic_owner_source": str(documentation_meta.get("document_critic_owner_source") or ""),
+        "has_explicit_documentation_owner": bool(documentation_meta.get("has_explicit_documentation_owner")),
+        "errors": errors,
+        "ownership_ready": not errors and bool(workers) and owned_path_count > 0,
+        "owned_path_count": owned_path_count,
+    }
+
+
+def resolve_team_path_ownership(plan_data, filepath):
+    """Return ownership facts for a candidate repo write under TEAM_PLAN.md."""
+    normalized_path = normalize_path(str(filepath or "").strip())
+    info = {
+        "path": normalized_path,
+        "owners": [],
+        "shared_read_only": False,
+        "forbidden_by": [],
+    }
+    if not normalized_path or not isinstance(plan_data, dict):
+        return info
+
+    for shared_pattern in plan_data.get("shared_read_only_paths", []):
+        if team_glob_match(normalized_path, shared_pattern):
+            info["shared_read_only"] = True
+            break
+
+    for worker, patterns in (plan_data.get("owned_paths") or {}).items():
+        if any(team_glob_match(normalized_path, pattern) for pattern in patterns):
+            info["owners"].append(worker)
+
+    for worker, patterns in (plan_data.get("forbidden_paths") or {}).items():
+        if any(team_glob_match(normalized_path, pattern) for pattern in patterns):
+            info["forbidden_by"].append(worker)
+
+    return info
+
+
+def team_worker_summary_relpath(worker_name):
+    """Return canonical relative path for a team worker summary artifact."""
+    worker = _normalize_team_worker_name(worker_name)
+    if not worker:
+        return ""
+    filename = worker if worker.startswith("worker-") else f"worker-{worker}"
+    return normalize_path(os.path.join("team", filename + ".md"))
+
+
+def _team_worker_summary_parse(path_value, worker_name, plan_data=None):
+    """Parse one worker summary and validate its claimed owned paths."""
+    readiness = _team_artifact_readiness(path_value, TEAM_WORKER_SUMMARY_REQUIRED_HEADINGS)
+    result = {
+        "exists": bool(readiness.get("exists")),
+        "ready": bool(readiness.get("ready")),
+        "missing_sections": list(readiness.get("missing_sections") or []),
+        "has_placeholders": bool(readiness.get("has_placeholders")),
+        "errors": list(readiness.get("semantic_errors") or []),
+        "mtime": float(readiness.get("mtime") or 0.0),
+        "owned_paths_handled": [],
+        "explicit_none": False,
+        "completed_excerpt": "",
+        "verification_excerpt": "",
+        "residual_risks_excerpt": "",
+    }
+    if not result["exists"]:
+        return result
+
+    try:
+        with open(path_value, "r", encoding="utf-8") as fh:
+            text_value = fh.read()
+    except OSError:
+        return result
+
+    sections = _team_markdown_sections(text_value)
+    completed_body = sections.get("## Completed Work", "").strip()
+    verification_body = sections.get("## Verification", "").strip()
+    risk_body = sections.get("## Residual Risks", "").strip()
+    owned_body = sections.get("## Owned Paths Handled", "").strip()
+
+    result["completed_excerpt"] = _team_first_meaningful_line(completed_body)
+    result["verification_excerpt"] = _team_first_meaningful_line(verification_body)
+    result["residual_risks_excerpt"] = _team_first_meaningful_line(risk_body)
+
+    if not completed_body:
+        result["errors"].append("completed work section must not be empty")
+    if not verification_body:
+        result["errors"].append("verification section must not be empty")
+    if not risk_body:
+        result["errors"].append("residual risks section must not be empty")
+
+    owned_items = _team_bullet_lines(owned_body)
+    owned_paths = []
+    explicit_none = False
+    for item in owned_items:
+        if str(item).strip().lower() in ("none", "n/a"):
+            explicit_none = True
+            continue
+        owned_paths.extend(_split_path_specs(item))
+    if not owned_paths and not explicit_none:
+        result["errors"].append("owned paths handled must list at least one path or `none`")
+
+    worker = _normalize_team_worker_name(worker_name)
+    for handled_path in owned_paths:
+        ownership = resolve_team_path_ownership(plan_data or {}, handled_path)
+        owners = list(ownership.get("owners") or [])
+        if ownership.get("shared_read_only"):
+            result["errors"].append(
+                f"owned paths handled includes shared read-only path '{handled_path}'"
+            )
+            continue
+        if worker and worker not in owners:
+            if owners:
+                result["errors"].append(
+                    f"owned path '{handled_path}' is owned by {', '.join(owners)}"
+                )
+            else:
+                result["errors"].append(
+                    f"owned path '{handled_path}' falls outside TEAM_PLAN.md ownership"
+                )
+        if worker and worker in (ownership.get("forbidden_by") or []):
+            result["errors"].append(
+                f"owned path '{handled_path}' is forbidden for '{worker}'"
+            )
+
+    result["owned_paths_handled"] = owned_paths
+    result["explicit_none"] = explicit_none
+    result["ready"] = (
+        not result["missing_sections"]
+        and not result["has_placeholders"]
+        and not result["errors"]
+    )
     return result
 
+def team_worker_summary_status(task_dir, plan_data=None, plan_ready=False):
+    """Return readiness for expected team/worker summary artifacts."""
+    plan_workers = list((plan_data or {}).get("workers") or [])
+    expected_workers = list((plan_data or {}).get("summary_workers") or plan_workers)
+    synthesis_workers = list((plan_data or {}).get("synthesis_workers") or [])
+    team_dir = os.path.join(task_dir, "team")
+    required = bool(plan_ready and expected_workers)
+    state = {
+        "required": required,
+        "team_dir": team_dir,
+        "expected_workers": expected_workers,
+        "synthesis_workers": synthesis_workers,
+        "all_workers": plan_workers,
+        "expected_count": len(expected_workers),
+        "present_count": 0,
+        "ready_count": 0,
+        "ready": not required,
+        "missing_workers": [],
+        "errors": [],
+        "artifacts": [],
+        "latest_mtime": 0.0,
+        "extra_files": [],
+        "per_worker": {},
+    }
+    if not required:
+        return state
 
-def get_team_worker_identity():
-    """Return normalized team worker identity from env, or ''."""
-    for env_key in TEAM_WORKER_ENV_KEYS:
-        raw = os.environ.get(env_key, "")
-        norm = _normalize_worker_name(raw)
-        if norm:
-            return norm
+    expected_basenames = {}
+    owned_paths = dict((plan_data or {}).get("owned_paths") or {})
+    for worker in list(expected_workers) + [w for w in synthesis_workers if w not in expected_workers]:
+        relpath = team_worker_summary_relpath(worker)
+        if relpath:
+            expected_basenames[os.path.basename(relpath)] = worker
+    for worker in expected_workers:
+        relpath = team_worker_summary_relpath(worker)
+        if relpath:
+            state["artifacts"].append(relpath)
+        abs_path = os.path.join(task_dir, relpath) if relpath else ""
+        parsed = _team_worker_summary_parse(abs_path, worker, plan_data=plan_data)
+        parsed["artifact"] = relpath
+        parsed["planned_owned_paths"] = list(owned_paths.get(worker) or [])
+        parsed["status"] = "ready"
+        state["per_worker"][worker] = parsed
+        state["latest_mtime"] = max(state["latest_mtime"], float(parsed.get("mtime") or 0.0))
+        if parsed.get("exists"):
+            state["present_count"] += 1
+        else:
+            parsed["status"] = "missing"
+            state["missing_workers"].append(worker)
+            continue
+        if parsed.get("ready"):
+            state["ready_count"] += 1
+        else:
+            parsed["status"] = "incomplete"
+            reasons = []
+            if parsed.get("missing_sections"):
+                reasons.append("missing sections: " + ", ".join(parsed.get("missing_sections") or []))
+            if parsed.get("has_placeholders"):
+                reasons.append("remove TODO/TBD placeholders")
+            reasons.extend(list(parsed.get("errors") or [])[:3])
+            joined = "; ".join(reasons or ["fill required sections"])
+            state["errors"].append(f"{worker} ({joined})")
 
-    raw_agent = str(os.environ.get("CLAUDE_AGENT_NAME", "")).strip()
-    if not raw_agent:
-        return ""
-    candidates = [raw_agent]
-    if ":" in raw_agent:
-        candidates.append(raw_agent.split(":")[-1])
-    for item in candidates:
-        norm = _normalize_worker_name(item)
-        if norm.startswith("worker-") or norm.startswith("team-"):
-            return norm
-    return ""
+    if os.path.isdir(team_dir):
+        for entry in sorted(os.listdir(team_dir)):
+            if not entry.startswith("worker-") or not entry.endswith(".md"):
+                continue
+            if entry not in expected_basenames:
+                state["extra_files"].append(normalize_path(os.path.join("team", entry)))
 
+    state["ready"] = not state["missing_workers"] and not state["errors"]
+    return state
 
-def check_team_write_ownership(task_dir, repo_path, worker_name=""):
-    """Return (allowed, message, metadata) for team-mode source writes."""
-    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
-    if yaml_field("orchestration_mode", state_file) != "team":
-        return True, "", {}
-
-    plan_path = os.path.join(task_dir, "TEAM_PLAN.md")
-    plan = parse_team_plan_ownership(plan_path)
-    errors = list(plan.get("validation_errors") or [])
-    if errors:
-        return False, (
-            "BLOCKED: TEAM_PLAN.md ownership map is invalid. " + "; ".join(errors[:4])
-        ), {"plan": plan, "target": _normalize_team_path_pattern(repo_path)}
-
-    target = _normalize_team_path_pattern(repo_path)
-    if not target:
-        return False, "BLOCKED: could not normalize team write target path.", {"plan": plan, "target": ""}
-
-    shared_matches = [
-        pattern for pattern in plan.get("shared_read_only_paths", [])
-        if _match_team_path_pattern(pattern, target)
-    ]
-    if shared_matches:
-        return False, (
-            f"BLOCKED: '{target}' is declared shared read-only in TEAM_PLAN.md "
-            f"({', '.join(shared_matches[:3])})."
-        ), {"plan": plan, "target": target, "shared_matches": shared_matches}
-
-    owner_matches = []
-    for worker, patterns in (plan.get("owned_writable_paths") or {}).items():
-        if any(_match_team_path_pattern(pattern, target) for pattern in patterns):
-            owner_matches.append(worker)
-
-    if not owner_matches:
-        return False, (
-            f"BLOCKED: '{target}' is outside TEAM_PLAN.md owned writable paths. "
-            "Only declared worker-owned paths may be mutated in team mode."
-        ), {"plan": plan, "target": target, "owner_matches": owner_matches}
-
-    if len(owner_matches) > 1:
-        return False, (
-            f"BLOCKED: '{target}' matches multiple worker ownership entries "
-            f"({', '.join(owner_matches)}). Fix TEAM_PLAN.md overlap before writing."
-        ), {"plan": plan, "target": target, "owner_matches": owner_matches}
-
-    worker = _normalize_worker_name(worker_name) or get_team_worker_identity()
-    if worker:
-        if worker not in plan.get("workers", []):
-            return False, (
-                f"BLOCKED: team worker '{worker}' is not declared in TEAM_PLAN.md. "
-                "Set HARNESS_TEAM_WORKER to a declared worker name before source writes."
-            ), {"plan": plan, "target": target, "worker": worker, "owner_matches": owner_matches}
-
-        forbidden_matches = [
-            pattern for pattern in (plan.get("forbidden_writes") or {}).get(worker, [])
-            if _match_team_path_pattern(pattern, target)
-        ]
-        if forbidden_matches:
-            return False, (
-                f"BLOCKED: team worker '{worker}' may not write '{target}' per TEAM_PLAN.md "
-                f"forbidden writes ({', '.join(forbidden_matches[:3])})."
-            ), {"plan": plan, "target": target, "worker": worker, "owner_matches": owner_matches}
-
-        expected_owner = owner_matches[0]
-        if worker != expected_owner:
-            return False, (
-                f"BLOCKED: '{target}' is owned by team worker '{expected_owner}', not '{worker}'. "
-                "Respect TEAM_PLAN.md writable ownership."
-            ), {"plan": plan, "target": target, "worker": worker, "owner_matches": owner_matches}
-
-    return True, "", {"plan": plan, "target": target, "owner_matches": owner_matches, "worker": worker}
-
-
-def _team_artifact_readiness(path_value, required_headings):
+def _team_artifact_readiness(path_value, required_headings, artifact_kind="generic"):
     """Return structured readiness for TEAM_PLAN / TEAM_SYNTHESIS artifacts."""
     if not path_value or not os.path.isfile(path_value):
         return {
@@ -1134,6 +1696,8 @@ def _team_artifact_readiness(path_value, required_headings):
             "ready": False,
             "missing_sections": list(required_headings),
             "has_placeholders": True,
+            "semantic_errors": [],
+            "parsed": {},
             "mtime": 0.0,
         }
 
@@ -1146,6 +1710,8 @@ def _team_artifact_readiness(path_value, required_headings):
             "ready": False,
             "missing_sections": list(required_headings),
             "has_placeholders": True,
+            "semantic_errors": [],
+            "parsed": {},
             "mtime": 0.0,
         }
 
@@ -1155,6 +1721,12 @@ def _team_artifact_readiness(path_value, required_headings):
     normalized = text_value.lower()
     has_placeholders = any(marker.lower() in normalized for marker in TEAM_PLACEHOLDER_MARKERS)
 
+    parsed = {}
+    semantic_errors = []
+    if artifact_kind == "plan":
+        parsed = parse_team_plan(path_value)
+        semantic_errors = list(parsed.get("errors") or [])
+
     try:
         mtime = os.path.getmtime(path_value)
     except OSError:
@@ -1162,10 +1734,289 @@ def _team_artifact_readiness(path_value, required_headings):
 
     return {
         "exists": True,
-        "ready": not missing_sections and not has_placeholders,
+        "ready": not missing_sections and not has_placeholders and not semantic_errors,
         "missing_sections": missing_sections,
         "has_placeholders": has_placeholders,
+        "semantic_errors": semantic_errors,
+        "parsed": parsed,
         "mtime": mtime,
+    }
+
+
+def _team_owner_label(workers, fallback_label):
+    owners = [str(item).strip() for item in (workers or []) if str(item).strip()]
+    if owners:
+        return ", ".join(owners[:3])
+    return str(fallback_label or "")
+
+
+def team_runtime_verification_status(task_dir, team_state=None):
+    """Return freshness for the final runtime verification after synthesis.
+
+    Team tasks often finish with a lead / integrator pass that writes
+    TEAM_SYNTHESIS.md and then runs the final runtime verification. We treat the
+    latest runtime critic artifact as stale when it predates the current
+    TEAM_SYNTHESIS.md revision.
+    """
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    orch_mode = yaml_field("orchestration_mode", state_file) or "solo"
+    runtime_verdict = (yaml_field("runtime_verdict", state_file) or "pending").upper()
+    mutates_repo = str(yaml_field("mutates_repo", state_file) or "false").strip().lower() in ("true", "1", "yes")
+
+    artifact_candidates = []
+    for relpath in ("CRITIC__runtime.md", "QA__runtime.md"):
+        abs_path = os.path.join(task_dir, relpath)
+        if not os.path.isfile(abs_path):
+            continue
+        try:
+            artifact_candidates.append((os.path.getmtime(abs_path), relpath))
+        except OSError:
+            pass
+
+    runtime_artifact_mtime = 0.0
+    runtime_artifact = ""
+    if artifact_candidates:
+        runtime_artifact_mtime, runtime_artifact = max(artifact_candidates, key=lambda item: item[0])
+
+    synthesis_ready = bool((team_state or {}).get("synthesis_ready"))
+    synthesis_mtime = float((team_state or {}).get("synthesis_mtime") or 0.0)
+    synthesis_workers = [
+        str(item).strip()
+        for item in ((team_state or {}).get("synthesis_workers") or [])
+        if str(item).strip()
+    ]
+
+    active = bool(orch_mode == "team" and synthesis_ready and mutates_repo)
+    runtime_artifact_exists = bool(runtime_artifact)
+    stale_after_synthesis = bool(active and synthesis_mtime and runtime_artifact_exists and runtime_artifact_mtime < synthesis_mtime)
+    missing_after_synthesis = bool(active and not runtime_artifact_exists)
+    verification_needed = bool(active and (runtime_verdict != "PASS" or stale_after_synthesis or missing_after_synthesis))
+    verification_ready = bool(active and runtime_verdict == "PASS" and runtime_artifact_exists and not stale_after_synthesis)
+
+    reason = ""
+    if verification_needed:
+        if missing_after_synthesis:
+            reason = "record final runtime verification after TEAM_SYNTHESIS.md before close"
+        elif runtime_verdict != "PASS":
+            reason = "run final runtime verification after TEAM_SYNTHESIS.md before close"
+        elif stale_after_synthesis:
+            reason = "rerun final runtime verification after the latest TEAM_SYNTHESIS.md update"
+        else:
+            reason = "refresh final runtime verification before close"
+
+    owner_label = ", ".join(synthesis_workers[:3]) if synthesis_workers else "the synthesis owner"
+    return {
+        "active": active,
+        "runtime_verdict": runtime_verdict,
+        "runtime_artifact": runtime_artifact,
+        "runtime_artifact_exists": runtime_artifact_exists,
+        "runtime_artifact_mtime": runtime_artifact_mtime,
+        "verification_needed": verification_needed,
+        "verification_ready": verification_ready,
+        "verification_reason": reason,
+        "verification_owners": synthesis_workers,
+        "verification_owner_label": owner_label,
+        "stale_after_synthesis": stale_after_synthesis,
+        "missing_after_synthesis": missing_after_synthesis,
+    }
+
+
+def team_documentation_status(task_dir, team_state=None):
+    """Return freshness for team documentation sync after final verification.
+
+    Team repo-mutating tasks should refresh DOC_SYNC.md after the final runtime
+    verification pass so close artifacts reflect the last verified state. When
+    document review is required, critic-document should then re-run against the
+    refreshed DOC_SYNC.md / final verification pair.
+    """
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    orch_mode = yaml_field("orchestration_mode", state_file) or "solo"
+    mutates_repo = str(yaml_field("mutates_repo", state_file) or "false").strip().lower() in ("true", "1", "yes")
+    document_verdict = (yaml_field("document_verdict", state_file) or "pending").upper()
+
+    synthesis_ready = bool((team_state or {}).get("synthesis_ready"))
+    runtime_ready = bool((team_state or {}).get("runtime_verification_ready"))
+    runtime_mtime = float((team_state or {}).get("runtime_verification_mtime") or 0.0)
+    runtime_artifact = str((team_state or {}).get("runtime_verification_artifact") or "")
+    doc_sync_workers = [
+        str(item).strip()
+        for item in ((team_state or {}).get("doc_sync_workers") or [])
+        if str(item).strip()
+    ]
+    doc_sync_owner_source = str((team_state or {}).get("doc_sync_owner_source") or "")
+    document_critic_workers = [
+        str(item).strip()
+        for item in ((team_state or {}).get("document_critic_workers") or [])
+        if str(item).strip()
+    ]
+    document_critic_owner_source = str((team_state or {}).get("document_critic_owner_source") or "")
+
+    active = bool(orch_mode == "team" and mutates_repo and synthesis_ready and runtime_ready)
+
+    doc_sync_path = os.path.join(task_dir, "DOC_SYNC.md")
+    doc_sync_exists = os.path.isfile(doc_sync_path)
+    try:
+        doc_sync_mtime = os.path.getmtime(doc_sync_path) if doc_sync_exists else 0.0
+    except OSError:
+        doc_sync_mtime = 0.0
+
+    doc_sync_missing_after_verification = bool(active and not doc_sync_exists)
+    doc_sync_stale_after_verification = bool(
+        active and doc_sync_exists and runtime_mtime and doc_sync_mtime < runtime_mtime
+    )
+    doc_sync_needed = bool(
+        active and (doc_sync_missing_after_verification or doc_sync_stale_after_verification)
+    )
+
+    document_critic_needed = bool(active and needs_document_critic(task_dir))
+    document_artifact = "CRITIC__document.md"
+    document_path = os.path.join(task_dir, document_artifact)
+    document_exists = os.path.isfile(document_path)
+    try:
+        document_mtime = os.path.getmtime(document_path) if document_exists else 0.0
+    except OSError:
+        document_mtime = 0.0
+
+    documentation_baseline_mtime = max(runtime_mtime, doc_sync_mtime)
+    document_critic_missing_after_docs = bool(active and document_critic_needed and not document_exists)
+    document_critic_stale_after_docs = bool(
+        active
+        and document_critic_needed
+        and document_exists
+        and documentation_baseline_mtime
+        and document_mtime < documentation_baseline_mtime
+    )
+    document_critic_pending = bool(
+        active and document_critic_needed and document_verdict != "PASS"
+    )
+
+    documentation_needed = bool(
+        active and (
+            doc_sync_needed
+            or (
+                document_critic_needed
+                and (
+                    document_critic_missing_after_docs
+                    or document_critic_stale_after_docs
+                    or document_critic_pending
+                )
+            )
+        )
+    )
+    documentation_ready = bool(active and not documentation_needed)
+
+    reason = ""
+    if documentation_needed:
+        if doc_sync_missing_after_verification:
+            reason = "refresh DOC_SYNC.md after final team runtime verification"
+        elif doc_sync_stale_after_verification:
+            reason = "refresh DOC_SYNC.md after the latest final team runtime verification"
+        elif document_critic_missing_after_docs:
+            reason = "run critic-document after the latest DOC_SYNC.md / final team runtime verification"
+        elif document_critic_stale_after_docs:
+            reason = "rerun critic-document after the latest DOC_SYNC.md / final team runtime verification"
+        elif document_critic_pending:
+            reason = "rerun critic-document after refreshing DOC_SYNC.md and final team runtime verification"
+        else:
+            reason = "refresh team documentation sync before close"
+
+    doc_sync_owner_label = _team_owner_label(doc_sync_workers, "writer")
+    document_critic_owner_label = _team_owner_label(document_critic_workers, "critic-document")
+    owner_label = doc_sync_owner_label
+    if document_critic_needed:
+        owner_label = f"writer={doc_sync_owner_label}; critic-document={document_critic_owner_label}"
+
+    return {
+        "active": active,
+        "documentation_needed": documentation_needed,
+        "documentation_ready": documentation_ready,
+        "documentation_reason": reason,
+        "documentation_owner_label": owner_label,
+        "doc_sync_workers": doc_sync_workers,
+        "doc_sync_owner_label": doc_sync_owner_label,
+        "doc_sync_owner_source": doc_sync_owner_source,
+        "doc_sync_exists": doc_sync_exists,
+        "doc_sync_mtime": doc_sync_mtime,
+        "doc_sync_needed": doc_sync_needed,
+        "doc_sync_missing_after_verification": doc_sync_missing_after_verification,
+        "doc_sync_stale_after_verification": doc_sync_stale_after_verification,
+        "doc_sync_artifact": "DOC_SYNC.md",
+        "document_critic_workers": document_critic_workers,
+        "document_critic_owner_label": document_critic_owner_label,
+        "document_critic_owner_source": document_critic_owner_source,
+        "document_critic_needed": document_critic_needed,
+        "document_critic_pending": document_critic_pending,
+        "document_critic_exists": document_exists,
+        "document_critic_mtime": document_mtime,
+        "document_critic_missing_after_docs": document_critic_missing_after_docs,
+        "document_critic_stale_after_docs": document_critic_stale_after_docs,
+        "document_critic_artifact": document_artifact,
+        "document_verdict": document_verdict,
+        "runtime_artifact": runtime_artifact,
+    }
+
+
+def team_handoff_status(task_dir, team_state=None):
+    """Return HANDOFF freshness relative to the latest team artifact updates."""
+    handoff_path = os.path.join(task_dir, "HANDOFF.md")
+    exists = os.path.isfile(handoff_path)
+    try:
+        handoff_mtime = os.path.getmtime(handoff_path) if exists else 0.0
+    except OSError:
+        handoff_mtime = 0.0
+
+    latest_candidates = []
+    plan_mtime = float((team_state or {}).get("plan_mtime") or 0.0)
+    if plan_mtime:
+        latest_candidates.append((plan_mtime, "TEAM_PLAN.md"))
+    worker_mtime = float((team_state or {}).get("worker_summary_latest_mtime") or 0.0)
+    if worker_mtime:
+        latest_candidates.append((worker_mtime, "team/worker-<name>.md"))
+    synthesis_mtime = float((team_state or {}).get("synthesis_mtime") or 0.0)
+    if synthesis_mtime:
+        latest_candidates.append((synthesis_mtime, "TEAM_SYNTHESIS.md"))
+    runtime_mtime = float((team_state or {}).get("runtime_verification_mtime") or 0.0)
+    runtime_artifact = str((team_state or {}).get("runtime_verification_artifact") or "")
+    if runtime_mtime:
+        latest_candidates.append((runtime_mtime, runtime_artifact or "CRITIC__runtime.md"))
+    doc_sync_mtime = float((team_state or {}).get("documentation_sync_mtime") or 0.0)
+    if doc_sync_mtime:
+        latest_candidates.append((doc_sync_mtime, "DOC_SYNC.md"))
+    document_mtime = float((team_state or {}).get("document_critic_mtime") or 0.0)
+    if document_mtime:
+        latest_candidates.append((document_mtime, "CRITIC__document.md"))
+
+    latest_team_mtime = 0.0
+    latest_team_artifact = ""
+    if latest_candidates:
+        latest_team_mtime, latest_team_artifact = max(latest_candidates, key=lambda item: item[0])
+
+    refresh_needed = bool(exists and latest_team_mtime and latest_team_mtime > handoff_mtime)
+    refresh_reason = ""
+    if refresh_needed:
+        if latest_team_artifact == "TEAM_SYNTHESIS.md":
+            refresh_reason = "refresh HANDOFF.md after TEAM_SYNTHESIS.md"
+        elif latest_team_artifact.startswith("team/"):
+            refresh_reason = "refresh HANDOFF.md after the latest worker summary update"
+        elif latest_team_artifact == "TEAM_PLAN.md":
+            refresh_reason = "refresh HANDOFF.md after TEAM_PLAN.md"
+        elif latest_team_artifact in ("CRITIC__runtime.md", "QA__runtime.md"):
+            refresh_reason = "refresh HANDOFF.md after final team runtime verification"
+        elif latest_team_artifact == "DOC_SYNC.md":
+            refresh_reason = "refresh HANDOFF.md after DOC_SYNC.md"
+        elif latest_team_artifact == "CRITIC__document.md":
+            refresh_reason = "refresh HANDOFF.md after critic-document"
+        else:
+            refresh_reason = "refresh HANDOFF.md after the latest team artifact update"
+
+    return {
+        "handoff_exists": exists,
+        "handoff_mtime": handoff_mtime,
+        "handoff_stub": is_handoff_stub(handoff_path) if exists else True,
+        "handoff_refresh_needed": refresh_needed,
+        "handoff_refresh_reason": refresh_reason,
+        "latest_team_mtime": latest_team_mtime,
+        "latest_team_artifact": latest_team_artifact,
     }
 
 
@@ -1178,13 +2029,43 @@ def team_artifact_status(task_dir):
 
     plan_path = os.path.join(task_dir, "TEAM_PLAN.md")
     synthesis_path = os.path.join(task_dir, "TEAM_SYNTHESIS.md")
-    plan_state = _team_artifact_readiness(plan_path, TEAM_PLAN_REQUIRED_HEADINGS)
-    plan_ownership = parse_team_plan_ownership(plan_path)
-    plan_validation_errors = list(plan_ownership.get("validation_errors") or [])
-    if plan_validation_errors:
-        plan_state["ready"] = False
+    plan_state = _team_artifact_readiness(plan_path, TEAM_PLAN_REQUIRED_HEADINGS, artifact_kind="plan")
+    parsed_plan = plan_state.get("parsed") or {}
+    worker_state = team_worker_summary_status(
+        task_dir,
+        parsed_plan,
+        plan_ready=bool(plan_state.get("ready")),
+    )
     synthesis_state = _team_artifact_readiness(
         synthesis_path, TEAM_SYNTHESIS_REQUIRED_HEADINGS
+    )
+
+    synthesis_semantic_errors = list(synthesis_state.get("semantic_errors") or [])
+    if worker_state.get("required"):
+        missing_workers = list(worker_state.get("missing_workers") or [])
+        if missing_workers:
+            synthesis_semantic_errors.append(
+                "missing worker summaries: " + ", ".join(missing_workers[:6])
+            )
+        worker_errors = list(worker_state.get("errors") or [])
+        if worker_errors:
+            synthesis_semantic_errors.append(
+                "incomplete worker summaries: " + " | ".join(worker_errors[:3])
+            )
+        if (
+            synthesis_state.get("exists")
+            and worker_state.get("ready")
+            and float(worker_state.get("latest_mtime") or 0.0) > float(synthesis_state.get("mtime") or 0.0)
+        ):
+            synthesis_semantic_errors.append(
+                "refresh TEAM_SYNTHESIS.md after the latest worker summary update"
+            )
+
+    synthesis_ready = bool(
+        synthesis_state.get("exists")
+        and not synthesis_state.get("missing_sections")
+        and not synthesis_state.get("has_placeholders")
+        and not synthesis_semantic_errors
     )
 
     try:
@@ -1193,22 +2074,59 @@ def team_artifact_status(task_dir):
         state_mtime = 0.0
 
     synthesis_refreshed_after_degraded = bool(
-        synthesis_state["ready"] and synthesis_state["mtime"] > state_mtime
+        synthesis_ready and synthesis_state["mtime"] > state_mtime
     )
 
-    derived_status = current_status
     if orch_mode != "team":
         derived_status = current_status
     elif fallback_used != "none":
         derived_status = "fallback"
     elif current_status == "degraded" and not synthesis_refreshed_after_degraded:
         derived_status = "degraded"
-    elif synthesis_state["ready"]:
+    elif synthesis_ready:
         derived_status = "complete"
     elif plan_state["ready"]:
         derived_status = "running"
     else:
         derived_status = "planned"
+
+    verification_state = team_runtime_verification_status(
+        task_dir,
+        {
+            "orchestration_mode": orch_mode,
+            "plan_ready": bool(plan_state.get("ready")),
+            "synthesis_ready": bool(synthesis_ready),
+            "synthesis_mtime": float(synthesis_state.get("mtime") or 0.0),
+            "synthesis_workers": list(parsed_plan.get("synthesis_workers") or []),
+        },
+    )
+
+    documentation_state = team_documentation_status(
+        task_dir,
+        {
+            "synthesis_ready": bool(synthesis_ready),
+            "runtime_verification_ready": bool(verification_state.get("verification_ready")),
+            "runtime_verification_mtime": float(verification_state.get("runtime_artifact_mtime") or 0.0),
+            "runtime_verification_artifact": str(verification_state.get("runtime_artifact") or ""),
+            "doc_sync_workers": list(parsed_plan.get("doc_sync_workers") or []),
+            "doc_sync_owner_source": str(parsed_plan.get("doc_sync_owner_source") or ""),
+            "document_critic_workers": list(parsed_plan.get("document_critic_workers") or []),
+            "document_critic_owner_source": str(parsed_plan.get("document_critic_owner_source") or ""),
+        },
+    )
+
+    handoff_state = team_handoff_status(
+        task_dir,
+        {
+            "plan_mtime": float(plan_state.get("mtime") or 0.0),
+            "worker_summary_latest_mtime": float(worker_state.get("latest_mtime") or 0.0),
+            "synthesis_mtime": float(synthesis_state.get("mtime") or 0.0),
+            "runtime_verification_mtime": float(verification_state.get("runtime_artifact_mtime") or 0.0) if verification_state.get("active") else 0.0,
+            "runtime_verification_artifact": str(verification_state.get("runtime_artifact") or "") if verification_state.get("active") else "",
+            "documentation_sync_mtime": float(documentation_state.get("doc_sync_mtime") or 0.0) if documentation_state.get("active") else 0.0,
+            "document_critic_mtime": float(documentation_state.get("document_critic_mtime") or 0.0) if documentation_state.get("active") else 0.0,
+        },
+    )
 
     return {
         "orchestration_mode": orch_mode,
@@ -1220,19 +2138,89 @@ def team_artifact_status(task_dir):
         "plan_ready": plan_state["ready"],
         "plan_missing_sections": plan_state["missing_sections"],
         "plan_has_placeholders": plan_state["has_placeholders"],
-        "plan_validation_errors": plan_validation_errors,
-        "plan_workers": list(plan_ownership.get("workers") or []),
-        "plan_owned_writable_paths": dict(plan_ownership.get("owned_writable_paths") or {}),
-        "plan_shared_read_only_paths": list(plan_ownership.get("shared_read_only_paths") or []),
-        "plan_forbidden_writes": dict(plan_ownership.get("forbidden_writes") or {}),
+        "plan_semantic_errors": list(plan_state.get("semantic_errors") or []),
+        "plan_workers": list(parsed_plan.get("workers") or []),
+        "plan_worker_roles": dict(parsed_plan.get("worker_roles") or {}),
+        "plan_owned_paths": dict(parsed_plan.get("owned_paths") or {}),
+        "plan_forbidden_paths": dict(parsed_plan.get("forbidden_paths") or {}),
+        "plan_shared_read_only_paths": list(parsed_plan.get("shared_read_only_paths") or []),
+        "plan_synthesis_workers": list(parsed_plan.get("synthesis_workers") or []),
+        "plan_summary_workers": list(parsed_plan.get("summary_workers") or []),
+        "plan_synthesis_role_hint": str(parsed_plan.get("synthesis_role_hint") or ""),
+        "plan_doc_sync_workers": list(parsed_plan.get("doc_sync_workers") or []),
+        "plan_doc_sync_owner_source": str(parsed_plan.get("doc_sync_owner_source") or ""),
+        "plan_document_critic_workers": list(parsed_plan.get("document_critic_workers") or []),
+        "plan_document_critic_owner_source": str(parsed_plan.get("document_critic_owner_source") or ""),
+        "plan_owned_path_count": int(parsed_plan.get("owned_path_count") or 0),
+        "plan_ownership_ready": bool(parsed_plan.get("ownership_ready")),
+        "plan_mtime": float(plan_state.get("mtime") or 0.0),
+        "worker_summary_dir": os.path.join(task_dir, "team"),
+        "worker_summary_required": bool(worker_state.get("required")),
+        "worker_summary_ready": bool(worker_state.get("ready")),
+        "worker_summary_expected_workers": list(worker_state.get("expected_workers") or []),
+        "worker_summary_synthesis_workers": list(worker_state.get("synthesis_workers") or []),
+        "worker_summary_expected_count": int(worker_state.get("expected_count") or 0),
+        "worker_summary_present_count": int(worker_state.get("present_count") or 0),
+        "worker_summary_ready_count": int(worker_state.get("ready_count") or 0),
+        "worker_summary_missing_workers": list(worker_state.get("missing_workers") or []),
+        "worker_summary_errors": list(worker_state.get("errors") or []),
+        "worker_summary_artifacts": list(worker_state.get("artifacts") or []),
+        "worker_summary_latest_mtime": float(worker_state.get("latest_mtime") or 0.0),
+        "worker_summary_extra_files": list(worker_state.get("extra_files") or []),
+        "worker_summary_per_worker": dict(worker_state.get("per_worker") or {}),
+        "summary_workers": list(parsed_plan.get("summary_workers") or []),
+        "synthesis_workers": list(parsed_plan.get("synthesis_workers") or []),
         "synthesis_path": synthesis_path,
         "synthesis_exists": synthesis_state["exists"],
-        "synthesis_ready": synthesis_state["ready"],
+        "synthesis_ready": synthesis_ready,
         "synthesis_missing_sections": synthesis_state["missing_sections"],
         "synthesis_has_placeholders": synthesis_state["has_placeholders"],
+        "synthesis_semantic_errors": synthesis_semantic_errors,
         "synthesis_refreshed_after_degraded": synthesis_refreshed_after_degraded,
+        "synthesis_mtime": float(synthesis_state.get("mtime") or 0.0),
+        "team_runtime_verification_active": bool(verification_state.get("active")),
+        "team_runtime_verification_needed": bool(verification_state.get("verification_needed")),
+        "team_runtime_verification_ready": bool(verification_state.get("verification_ready")),
+        "team_runtime_verification_reason": str(verification_state.get("verification_reason") or ""),
+        "team_runtime_verification_owners": list(verification_state.get("verification_owners") or []),
+        "team_runtime_verification_owner_label": str(verification_state.get("verification_owner_label") or ""),
+        "team_runtime_artifact": str(verification_state.get("runtime_artifact") or ""),
+        "team_runtime_artifact_exists": bool(verification_state.get("runtime_artifact_exists")),
+        "team_runtime_mtime": float(verification_state.get("runtime_artifact_mtime") or 0.0),
+        "team_runtime_stale_after_synthesis": bool(verification_state.get("stale_after_synthesis")),
+        "team_documentation_active": bool(documentation_state.get("active")),
+        "team_documentation_needed": bool(documentation_state.get("documentation_needed")),
+        "team_documentation_ready": bool(documentation_state.get("documentation_ready")),
+        "team_documentation_reason": str(documentation_state.get("documentation_reason") or ""),
+        "team_documentation_owner_label": str(documentation_state.get("documentation_owner_label") or ""),
+        "team_doc_sync_exists": bool(documentation_state.get("doc_sync_exists")),
+        "team_doc_sync_mtime": float(documentation_state.get("doc_sync_mtime") or 0.0),
+        "team_doc_sync_needed": bool(documentation_state.get("doc_sync_needed")),
+        "team_doc_sync_owners": list(documentation_state.get("doc_sync_workers") or []),
+        "team_doc_sync_owner_label": str(documentation_state.get("doc_sync_owner_label") or ""),
+        "team_doc_sync_owner_source": str(documentation_state.get("doc_sync_owner_source") or ""),
+        "team_doc_sync_missing_after_verification": bool(documentation_state.get("doc_sync_missing_after_verification")),
+        "team_doc_sync_stale_after_verification": bool(documentation_state.get("doc_sync_stale_after_verification")),
+        "team_doc_sync_artifact": str(documentation_state.get("doc_sync_artifact") or "DOC_SYNC.md"),
+        "team_document_critic_needed": bool(documentation_state.get("document_critic_needed")),
+        "team_document_critic_pending": bool(documentation_state.get("document_critic_pending")),
+        "team_document_critic_exists": bool(documentation_state.get("document_critic_exists")),
+        "team_document_critic_mtime": float(documentation_state.get("document_critic_mtime") or 0.0),
+        "team_document_critic_owners": list(documentation_state.get("document_critic_workers") or []),
+        "team_document_critic_owner_label": str(documentation_state.get("document_critic_owner_label") or ""),
+        "team_document_critic_owner_source": str(documentation_state.get("document_critic_owner_source") or ""),
+        "team_document_critic_missing_after_docs": bool(documentation_state.get("document_critic_missing_after_docs")),
+        "team_document_critic_stale_after_docs": bool(documentation_state.get("document_critic_stale_after_docs")),
+        "team_document_critic_artifact": str(documentation_state.get("document_critic_artifact") or "CRITIC__document.md"),
+        "team_document_verdict": str(documentation_state.get("document_verdict") or "pending"),
+        "handoff_exists": bool(handoff_state.get("handoff_exists")),
+        "handoff_stub": bool(handoff_state.get("handoff_stub")),
+        "handoff_mtime": float(handoff_state.get("handoff_mtime") or 0.0),
+        "handoff_refresh_needed": bool(handoff_state.get("handoff_refresh_needed")),
+        "handoff_refresh_reason": str(handoff_state.get("handoff_refresh_reason") or ""),
+        "latest_team_artifact": str(handoff_state.get("latest_team_artifact") or ""),
+        "latest_team_mtime": float(handoff_state.get("latest_team_mtime") or 0.0),
     }
-
 
 def sync_team_status(task_dir):
     """Synchronize TASK_STATE.yaml team_status from artifact readiness."""
@@ -1259,6 +2247,10 @@ def ensure_team_artifacts(task_dir, routing=None):
 
     created = []
 
+    team_dir = os.path.join(task_dir, "team")
+    if not os.path.isdir(team_dir):
+        os.makedirs(team_dir, exist_ok=True)
+
     plan_path = os.path.join(task_dir, "TEAM_PLAN.md")
     if not os.path.isfile(plan_path):
         with open(plan_path, "w", encoding="utf-8") as fh:
@@ -1273,7 +2265,9 @@ def ensure_team_artifacts(task_dir, routing=None):
                 "## Forbidden Writes\n"
                 "- TBD\n\n"
                 "## Synthesis Strategy\n"
-                "- TODO: describe merge + verification flow\n"
+                "- TODO: describe merge + verification flow\n\n"
+                "## Documentation Ownership (optional)\n"
+                "Use bullet assignments like `- writer: lead` and `- critic-document: reviewer` only when docs / document review should be limited to specific workers.\n"
             )
         created.append(plan_path)
 
@@ -1294,6 +2288,1721 @@ def ensure_team_artifacts(task_dir, routing=None):
         created.append(synthesis_path)
 
     return created
+
+
+def team_bootstrap_signature(task_dir, team_state=None, provider=None):
+    """Return a stable signature for the current team bootstrap inputs."""
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    if team_state is None:
+        team_state = team_artifact_status(task_dir)
+    if provider is None:
+        provider = yaml_field("team_provider", state_file) or "none"
+
+    payload = {
+        "schema_version": TEAM_BOOTSTRAP_SCHEMA_VERSION,
+        "provider": str(provider or "none"),
+        "orchestration_mode": str(team_state.get("orchestration_mode") or "solo"),
+        "team_status": str(team_state.get("derived_status") or team_state.get("current_status") or "n/a"),
+        "plan_ready": bool(team_state.get("plan_ready")),
+        "plan_ownership_ready": bool(team_state.get("plan_ownership_ready")),
+        "workers": list(team_state.get("plan_workers") or []),
+        "owned_paths": dict(team_state.get("plan_owned_paths") or {}),
+        "forbidden_paths": dict(team_state.get("plan_forbidden_paths") or {}),
+        "shared_read_only_paths": list(team_state.get("plan_shared_read_only_paths") or []),
+        "worker_roles": dict(team_state.get("plan_worker_roles") or {}),
+        "summary_workers": list(team_state.get("summary_workers") or []),
+        "synthesis_workers": list(team_state.get("synthesis_workers") or []),
+        "runtime_workers": list(team_state.get("team_runtime_verification_owners") or []),
+        "doc_sync_workers": list(team_state.get("team_doc_sync_owners") or []),
+        "document_critic_workers": list(team_state.get("team_document_critic_owners") or []),
+        "runtime_artifact": str(team_state.get("team_runtime_artifact") or "CRITIC__runtime.md"),
+        "doc_sync_artifact": str(team_state.get("team_doc_sync_artifact") or "DOC_SYNC.md"),
+        "document_critic_artifact": str(team_state.get("team_document_critic_artifact") or "CRITIC__document.md"),
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
+
+
+def _team_bootstrap_phase_roles(team_state, worker_name):
+    """Return ordered phase-role names for a worker in the bootstrap pack."""
+    roles = ["developer"]
+    runtime_workers = [str(x) for x in (team_state.get("team_runtime_verification_owners") or []) if str(x).strip()]
+    doc_sync_workers = [str(x) for x in (team_state.get("team_doc_sync_owners") or []) if str(x).strip()]
+    document_critic_workers = [str(x) for x in (team_state.get("team_document_critic_owners") or []) if str(x).strip()]
+    if worker_name in runtime_workers and "critic-runtime" not in roles:
+        roles.append("critic-runtime")
+    if worker_name in doc_sync_workers and "writer" not in roles:
+        roles.append("writer")
+    if worker_name in document_critic_workers and "critic-document" not in roles:
+        roles.append("critic-document")
+    return roles
+
+
+def _team_bootstrap_expected_relpaths(task_dir, team_state=None):
+    """Return expected task-relative bootstrap relpaths without reading context."""
+    if team_state is None:
+        team_state = team_artifact_status(task_dir)
+    relpaths = [normalize_path(os.path.join("team", "bootstrap", "index.json"))]
+    workers = [str(x) for x in (team_state.get("plan_workers") or []) if str(x).strip()]
+    for worker_name in workers:
+        relpaths.append(normalize_path(os.path.join("team", "bootstrap", f"{worker_name}.md")))
+        for role_name in _team_bootstrap_phase_roles(team_state, worker_name):
+            relpaths.append(normalize_path(os.path.join("team", "bootstrap", f"{worker_name}.{role_name}.env")))
+    seen = []
+    for relpath in relpaths:
+        if relpath and relpath not in seen:
+            seen.append(relpath)
+    return seen
+
+
+def team_bootstrap_status(task_dir, team_state=None):
+    """Return freshness + completeness state for team/bootstrap artifacts."""
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    task_id = yaml_field("task_id", state_file) or os.path.basename(task_dir.rstrip("/"))
+    if team_state is None:
+        team_state = team_artifact_status(task_dir)
+    provider = yaml_field("team_provider", state_file) or "none"
+    task_root = os.path.join(TASK_DIR, task_id)
+    rel_dir = normalize_path(os.path.join("team", "bootstrap"))
+    rel_index = normalize_path(os.path.join(rel_dir, "index.json"))
+    status = {
+        "task_id": task_id,
+        "provider": str(provider or "none"),
+        "available": False,
+        "generated": False,
+        "stale": False,
+        "refresh_needed": False,
+        "reason": "",
+        "bootstrap_dir": rel_dir,
+        "bootstrap_index": rel_index,
+        "current_signature": "",
+        "generated_signature": "",
+        "generated_at": "",
+        "expected_files": [],
+        "missing_files": [],
+        "refresh_command": f"python3 plugin/scripts/hctl.py team-bootstrap --task-dir {task_root} --write-files",
+    }
+
+    if team_state.get("orchestration_mode") != "team":
+        status["reason"] = "orchestration_mode is not team"
+        return status
+    if not team_state.get("plan_ready"):
+        status["reason"] = "TEAM_PLAN.md is not ready"
+        return status
+    if not team_state.get("plan_ownership_ready"):
+        status["reason"] = "TEAM_PLAN.md ownership semantics are incomplete"
+        return status
+    workers = [str(x) for x in (team_state.get("plan_workers") or []) if str(x).strip()]
+    if not workers:
+        status["reason"] = "no workers declared in TEAM_PLAN.md"
+        return status
+
+    status["available"] = True
+    status["expected_files"] = _team_bootstrap_expected_relpaths(task_dir, team_state=team_state)
+    status["current_signature"] = team_bootstrap_signature(task_dir, team_state=team_state, provider=provider)
+
+    index_abs = os.path.join(task_dir, rel_index)
+    if not os.path.isfile(index_abs):
+        status["reason"] = "team/bootstrap has not been generated yet"
+        return status
+    status["generated"] = True
+
+    try:
+        with open(index_abs, "r", encoding="utf-8") as fh:
+            parsed = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        status["stale"] = True
+        status["refresh_needed"] = True
+        status["reason"] = "team/bootstrap/index.json is unreadable"
+        return status
+
+    status["generated_signature"] = str(parsed.get("bootstrap_signature") or "")
+    status["generated_at"] = str(parsed.get("generated_at") or "")
+
+    expected_files = status["expected_files"] or [
+        normalize_path(str(path or "").replace(f"{task_root}/", "", 1))
+        for path in (parsed.get("expected_files") or [])
+        if str(path or "").strip()
+    ]
+    if expected_files:
+        status["expected_files"] = expected_files
+
+    missing = []
+    for relpath in status["expected_files"]:
+        if relpath and not os.path.isfile(os.path.join(task_dir, relpath)):
+            missing.append(relpath)
+    status["missing_files"] = missing
+    if missing:
+        status["stale"] = True
+        status["refresh_needed"] = True
+        status["reason"] = f"bootstrap files missing: {', '.join(missing[:4])}"
+        return status
+
+    generated_provider = str(parsed.get("provider") or "none")
+    if generated_provider != str(provider or "none"):
+        status["stale"] = True
+        status["refresh_needed"] = True
+        status["reason"] = f"bootstrap provider changed ({generated_provider} → {provider})"
+        return status
+
+    if not status["generated_signature"]:
+        status["stale"] = True
+        status["refresh_needed"] = True
+        status["reason"] = "bootstrap signature is missing"
+        return status
+
+    if status["generated_signature"] != status["current_signature"]:
+        status["stale"] = True
+        status["refresh_needed"] = True
+        status["reason"] = "TEAM_PLAN.md or team ownership changed since bootstrap generation"
+        return status
+
+    status["reason"] = "current"
+    return status
+
+
+def build_team_bootstrap(task_dir, write_files=False):
+    """Return provider-agnostic per-worker bootstrap specs for team tasks.
+
+    The output is designed to help the lead spawn or resume workers without
+    hand-copying identity/env details. When ``write_files`` is true, the
+    function materializes task-local bootstrap artifacts under ``team/bootstrap``:
+
+      - ``index.json`` — machine-readable bootstrap manifest
+      - ``<worker>.md`` — human/LLM-readable worker brief
+      - ``<worker>.<role>.env`` — sourceable env snippets for each role phase
+
+    The env snippets stay provider-agnostic on purpose: they only export the
+    task id, worker id, and recommended ``CLAUDE_AGENT_NAME`` for that phase.
+    """
+
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    task_id = yaml_field("task_id", state_file) or os.path.basename(task_dir.rstrip("/"))
+    team_state = team_artifact_status(task_dir)
+    provider = yaml_field("team_provider", state_file) or "none"
+    task_root = os.path.join(TASK_DIR, task_id)
+    bootstrap_signature_value = team_bootstrap_signature(task_dir, team_state=team_state, provider=provider)
+
+    def _task_rel(name):
+        return f"{task_root}/{normalize_path(name)}"
+
+    def _env_lines(worker_name, agent_name):
+        return [
+            f"export HARNESS_TASK_ID='{task_id}'",
+            f"export HARNESS_TEAM_WORKER='{worker_name}'",
+            f"export CLAUDE_AGENT_NAME='{agent_name}'",
+        ]
+
+    def _context_command(worker_name, agent_name):
+        return (
+            "python3 plugin/scripts/hctl.py context "
+            f"--task-dir {task_root} --json --team-worker {worker_name} --agent-name {agent_name}"
+        )
+
+    def _worker_brief_lines(spec):
+        worker_name = spec["worker"]
+        phases = spec.get("phases") or []
+        role_scope = spec.get("role_scope") or "worker"
+        lines = [
+            f"# Team Worker Bootstrap — {worker_name}",
+            "",
+            "## Task",
+            f"- task_id: {task_id}",
+            f"- provider: {provider}",
+            f"- team_status: {team_state.get('derived_status') or team_state.get('current_status') or 'n/a'}",
+            f"- refresh command: {spec.get('refresh_command') or ''}",
+            "",
+            "## Identity",
+            f"- worker: {worker_name}",
+            f"- scope: {role_scope}",
+            f"- default agent session: {spec.get('default_agent_name') or ''}",
+            f"- default env: {spec.get('default_env_file') or ''}",
+            f"- default context command: {spec.get('default_context_command') or ''}",
+            "",
+            "## Must Read",
+        ]
+        must_read = list(spec.get("must_read") or [])
+        if must_read:
+            lines.extend([f"- {item}" for item in must_read[:6]])
+        else:
+            lines.append("- none")
+
+        lines.extend([
+            "",
+            "## Owned Writable Paths",
+        ])
+        owned_paths = list(spec.get("owned_paths") or [])
+        if owned_paths:
+            lines.extend([f"- {item}" for item in owned_paths])
+        else:
+            lines.append("- none")
+
+        lines.extend([
+            "",
+            "## Forbidden Writes",
+        ])
+        forbidden_paths = list(spec.get("forbidden_paths") or [])
+        if forbidden_paths:
+            lines.extend([f"- {item}" for item in forbidden_paths])
+        else:
+            lines.append("- none")
+
+        lines.extend([
+            "",
+            "## Shared Read-Only Paths",
+        ])
+        shared_paths = list(spec.get("shared_read_only_paths") or [])
+        if shared_paths:
+            lines.extend([f"- {item}" for item in shared_paths])
+        else:
+            lines.append("- none")
+
+        lines.extend([
+            "",
+            "## Deliverables",
+            f"- worker summary: {spec.get('summary_artifact') or 'none'}",
+        ])
+        extra_artifacts = []
+        for phase in phases:
+            artifact = str(phase.get("artifact") or "").strip()
+            if artifact and artifact != spec.get("summary_artifact"):
+                extra_artifacts.append(f"- {phase.get('phase')}: {artifact}")
+        if extra_artifacts:
+            lines.extend(extra_artifacts)
+
+        lines.extend([
+            "",
+            "## Recommended First Action",
+            f"- {spec.get('next_action') or 'Read TEAM_PLAN.md, stay inside owned paths, verify, then update your worker summary.'}",
+            "",
+            "## Role Phases",
+        ])
+        if phases:
+            for phase in phases:
+                lines.append(
+                    f"- {phase.get('phase')}: agent={phase.get('agent_name')} env={phase.get('env_file')} artifact={phase.get('artifact')}"
+                )
+                lines.append(f"  context command: {phase.get('context_command')}")
+        else:
+            lines.append("- none")
+        return lines
+
+    bootstrap = {
+        "task_id": task_id,
+        "task_dir": task_dir,
+        "provider": provider,
+        "orchestration_mode": str(team_state.get("orchestration_mode") or "solo"),
+        "team_status": str(team_state.get("derived_status") or team_state.get("current_status") or "n/a"),
+        "ready": False,
+        "reason": "",
+        "bootstrap_dir": _task_rel(os.path.join("team", "bootstrap")),
+        "bootstrap_index": _task_rel(os.path.join("team", "bootstrap", "index.json")),
+        "refresh_command": f"python3 plugin/scripts/hctl.py team-bootstrap --task-dir {task_root} --write-files",
+        "bootstrap_signature": bootstrap_signature_value,
+        "workers": [],
+        "expected_files": [],
+        "generated_files": [],
+    }
+
+    if team_state.get("orchestration_mode") != "team":
+        bootstrap["reason"] = "orchestration_mode is not team"
+        return bootstrap
+    if not team_state.get("plan_ready"):
+        bootstrap["reason"] = "TEAM_PLAN.md is not ready"
+        return bootstrap
+    if not team_state.get("plan_ownership_ready"):
+        bootstrap["reason"] = "TEAM_PLAN.md ownership semantics are incomplete"
+        return bootstrap
+
+    workers = list(team_state.get("plan_workers") or [])
+    if not workers:
+        bootstrap["reason"] = "no workers declared in TEAM_PLAN.md"
+        return bootstrap
+
+    bootstrap["ready"] = True
+    bootstrap["reason"] = "ready"
+
+    shared_paths = list(team_state.get("plan_shared_read_only_paths") or [])
+    owned_paths_map = dict(team_state.get("plan_owned_paths") or {})
+    forbidden_paths_map = dict(team_state.get("plan_forbidden_paths") or {})
+    synthesis_workers = list(team_state.get("synthesis_workers") or [])
+    runtime_workers = list(team_state.get("team_runtime_verification_owners") or synthesis_workers)
+    doc_sync_workers = list(team_state.get("team_doc_sync_owners") or [])
+    document_critic_workers = list(team_state.get("team_document_critic_owners") or [])
+    worker_roles = dict(team_state.get("plan_worker_roles") or {})
+
+    def _phase_spec(worker_name, role_name, phase_name, artifact_name, context):
+        env_rel = normalize_path(os.path.join("team", "bootstrap", f"{worker_name}.{role_name}.env"))
+        agent_name = f"harness:{role_name}:{worker_name}"
+        return {
+            "phase": phase_name,
+            "role": role_name,
+            "agent_name": agent_name,
+            "env_file": _task_rel(env_rel),
+            "artifact": _task_rel(artifact_name) if artifact_name else "",
+            "must_read": list(context.get("must_read") or [])[:6],
+            "next_action": str(context.get("next_action") or ""),
+            "notes": list(context.get("notes") or [])[:4],
+            "env_lines": _env_lines(worker_name, agent_name),
+            "env_relpath": env_rel,
+            "context_command": _context_command(worker_name, agent_name),
+        }
+
+    for worker_name in workers:
+        developer_context = emit_compact_context(
+            task_dir,
+            raw_agent_name=f"harness:developer:{worker_name}",
+            explicit_worker=worker_name,
+        )
+        phases = [
+            _phase_spec(
+                worker_name,
+                "developer",
+                "implement",
+                team_worker_summary_relpath(worker_name),
+                developer_context,
+            )
+        ]
+        if worker_name in synthesis_workers:
+            phases.append(
+                _phase_spec(
+                    worker_name,
+                    "developer",
+                    "synthesis",
+                    "TEAM_SYNTHESIS.md",
+                    developer_context,
+                )
+            )
+        if worker_name in runtime_workers:
+            runtime_context = emit_compact_context(
+                task_dir,
+                raw_agent_name=f"harness:critic-runtime:{worker_name}",
+                explicit_worker=worker_name,
+            )
+            phases.append(
+                _phase_spec(
+                    worker_name,
+                    "critic-runtime",
+                    "final_runtime_verification",
+                    team_state.get("team_runtime_artifact") or "CRITIC__runtime.md",
+                    runtime_context,
+                )
+            )
+        if worker_name in doc_sync_workers:
+            writer_context = emit_compact_context(
+                task_dir,
+                raw_agent_name=f"harness:writer:{worker_name}",
+                explicit_worker=worker_name,
+            )
+            phases.append(
+                _phase_spec(
+                    worker_name,
+                    "writer",
+                    "documentation_sync",
+                    team_state.get("team_doc_sync_artifact") or "DOC_SYNC.md",
+                    writer_context,
+                )
+            )
+        if worker_name in document_critic_workers:
+            critic_context = emit_compact_context(
+                task_dir,
+                raw_agent_name=f"harness:critic-document:{worker_name}",
+                explicit_worker=worker_name,
+            )
+            phases.append(
+                _phase_spec(
+                    worker_name,
+                    "critic-document",
+                    "documentation_review",
+                    team_state.get("team_document_critic_artifact") or "CRITIC__document.md",
+                    critic_context,
+                )
+            )
+        if worker_name in synthesis_workers:
+            phases.append(
+                _phase_spec(
+                    worker_name,
+                    "developer",
+                    "handoff_refresh",
+                    "HANDOFF.md",
+                    developer_context,
+                )
+            )
+
+        spec = {
+            "worker": worker_name,
+            "role_scope": str(worker_roles.get(worker_name) or "worker"),
+            "owned_paths": list(owned_paths_map.get(worker_name, []) or []),
+            "forbidden_paths": list(forbidden_paths_map.get(worker_name, []) or []),
+            "shared_read_only_paths": list(shared_paths or []),
+            "summary_artifact": _task_rel(team_worker_summary_relpath(worker_name)),
+            "must_read": list(developer_context.get("must_read") or [])[:6],
+            "next_action": str(developer_context.get("next_action") or ""),
+            "notes": list(developer_context.get("notes") or [])[:4],
+            "default_agent_name": f"harness:developer:{worker_name}",
+            "default_env_file": _task_rel(os.path.join("team", "bootstrap", f"{worker_name}.developer.env")),
+            "default_context_command": _context_command(worker_name, f"harness:developer:{worker_name}"),
+            "refresh_command": bootstrap["refresh_command"],
+            "phases": phases,
+            "is_synthesis_owner": worker_name in synthesis_workers,
+            "is_handoff_owner": worker_name in synthesis_workers,
+            "is_runtime_verification_owner": worker_name in runtime_workers,
+            "is_doc_sync_owner": worker_name in doc_sync_workers,
+            "is_document_critic_owner": worker_name in document_critic_workers,
+        }
+        bootstrap["workers"].append(spec)
+
+    bootstrap["expected_files"] = [
+        _task_rel(relpath) for relpath in _team_bootstrap_expected_relpaths(task_dir, team_state=team_state)
+    ]
+
+    if not write_files:
+        return bootstrap
+
+    bootstrap_dir_abs = os.path.join(task_dir, "team", "bootstrap")
+    os.makedirs(bootstrap_dir_abs, exist_ok=True)
+    generated = []
+
+    index_payload = {
+        "task_id": bootstrap["task_id"],
+        "provider": bootstrap["provider"],
+        "team_status": bootstrap["team_status"],
+        "generated_at": now_iso(),
+        "bootstrap_signature": bootstrap_signature_value,
+        "refresh_command": bootstrap["refresh_command"],
+        "expected_files": bootstrap["expected_files"],
+        "workers": bootstrap["workers"],
+    }
+    index_abs = os.path.join(bootstrap_dir_abs, "index.json")
+    with open(index_abs, "w", encoding="utf-8") as fh:
+        json.dump(index_payload, fh, indent=2, ensure_ascii=False, sort_keys=True)
+        fh.write("\n")
+    generated.append(_task_rel(os.path.join("team", "bootstrap", "index.json")))
+
+    for spec in bootstrap["workers"]:
+        brief_rel = normalize_path(os.path.join("team", "bootstrap", f"{spec['worker']}.md"))
+        brief_abs = os.path.join(task_dir, brief_rel)
+        with open(brief_abs, "w", encoding="utf-8") as fh:
+            fh.write("\n".join(_worker_brief_lines(spec)).rstrip() + "\n")
+        generated.append(_task_rel(brief_rel))
+
+        for phase in spec.get("phases") or []:
+            env_rel = normalize_path(str(phase.get("env_relpath") or ""))
+            if not env_rel:
+                continue
+            env_abs = os.path.join(task_dir, env_rel)
+            with open(env_abs, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(phase.get("env_lines") or []).rstrip() + "\n")
+            generated.append(_task_rel(env_rel))
+
+    bootstrap["generated_files"] = generated
+    return bootstrap
+
+
+def repo_root_for_task_dir(task_dir):
+    """Best-effort repository root inference from a task directory."""
+    abs_task_dir = os.path.abspath(task_dir)
+    marker_rel = os.path.join(*normalize_path(TASK_DIR).split("/"))
+    marker = f"{os.sep}{marker_rel}{os.sep}"
+    if marker in abs_task_dir:
+        return abs_task_dir.split(marker, 1)[0] or os.getcwd()
+    return os.getcwd()
+
+
+def build_team_dispatch(task_dir, write_files=False):
+    """Build provider-ready launch artifacts from a fresh team bootstrap pack."""
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    task_id = yaml_field("task_id", state_file) or os.path.basename(task_dir.rstrip("/"))
+    provider = yaml_field("team_provider", state_file) or "none"
+    team_state = team_artifact_status(task_dir)
+    bootstrap = build_team_bootstrap(task_dir, write_files=False)
+    bootstrap_state = team_bootstrap_status(task_dir, team_state=team_state)
+    repo_root = repo_root_for_task_dir(task_dir)
+    task_root = os.path.join(TASK_DIR, task_id)
+    dispatch_dir_rel = normalize_path(os.path.join("team", "bootstrap", "provider"))
+    dispatch_index_rel = normalize_path(os.path.join(dispatch_dir_rel, "dispatch.json"))
+
+    def _task_rel(name):
+        return f"{task_root}/{normalize_path(name)}"
+
+    dispatch = {
+        "task_id": task_id,
+        "task_dir": task_dir,
+        "provider": provider,
+        "bootstrap_signature": str(bootstrap_state.get("current_signature") or ""),
+        "bootstrap_refresh_needed": bool(bootstrap_state.get("refresh_needed")),
+        "bootstrap_refresh_reason": str(bootstrap_state.get("reason") or ""),
+        "ready": False,
+        "reason": "",
+        "dispatch_dir": _task_rel(dispatch_dir_rel),
+        "dispatch_index": _task_rel(dispatch_index_rel),
+        "provider_prompt": "",
+        "provider_launcher": "",
+        "launch_command_preview": "",
+        "implement_dispatcher": "",
+        "workers": [],
+        "expected_files": [],
+        "generated_files": [],
+    }
+
+    if not bootstrap.get("ready"):
+        dispatch["reason"] = str(bootstrap.get("reason") or "team bootstrap is not ready")
+        return dispatch
+    if bootstrap_state.get("refresh_needed"):
+        dispatch["reason"] = str(bootstrap_state.get("reason") or "refresh the bootstrap pack first")
+        return dispatch
+
+    workers = list(bootstrap.get("workers") or [])
+    if not workers:
+        dispatch["reason"] = "no workers declared in bootstrap"
+        return dispatch
+
+    allowed_tools = [
+        "Read", "Glob", "Grep", "Write", "Edit", "MultiEdit", "Bash", "Skill", "TodoWrite",
+        "TaskCreate", "TaskGet", "TaskList", "TaskUpdate",
+        "mcp__plugin_harness_harness__task_context",
+        "mcp__plugin_harness_harness__task_update_from_git_diff",
+        "mcp__plugin_harness_harness__task_verify",
+        "mcp__plugin_harness_harness__task_close",
+        "mcp__plugin_harness_harness__write_critic_runtime",
+        "mcp__plugin_harness_harness__write_critic_document",
+        "mcp__plugin_harness_harness__write_critic_plan",
+        "mcp__plugin_harness_harness__write_doc_sync",
+        "mcp__plugin_harness_harness__write_handoff",
+    ]
+
+    def _phase_prompt_text(spec, phase):
+        worker_name = str(spec.get("worker") or "worker")
+        role_name = str(phase.get("role") or "worker")
+        phase_name = str(phase.get("phase") or "implement")
+        lines = [
+            f"# Team Worker Phase Prompt — {worker_name} / {phase_name}",
+            "",
+            f"You are `{worker_name}` for task `{task_id}`.",
+            f"Current phase: `{phase_name}`.",
+            f"Current role: `{role_name}`.",
+            "",
+            "## Read first",
+            f"- {_task_rel('TEAM_PLAN.md')}",
+            f"- {_task_rel(os.path.join('team', 'bootstrap', f'{worker_name}.md'))}",
+            f"- env snippet: {phase.get('env_file')}",
+            "",
+            "## Hard rules",
+            f"- Only mutate paths owned by `{worker_name}`.",
+            "- Never edit another worker's owned paths, shared read-only paths, or forbidden paths.",
+            "- Verify before claiming completion.",
+            "- Leave the expected artifact(s) before you stop.",
+            "",
+            "## Owned writable paths",
+        ]
+        lines.extend([f"- {item}" for item in (spec.get("owned_paths") or [])] or ["- none"])
+        lines.extend(["", "## Forbidden writes"])
+        lines.extend([f"- {item}" for item in (spec.get("forbidden_paths") or [])] or ["- none"])
+        lines.extend(["", "## Shared read-only paths"])
+        lines.extend([f"- {item}" for item in (spec.get("shared_read_only_paths") or [])] or ["- none"])
+        lines.extend([
+            "",
+            "## Deliverables",
+            f"- phase artifact: {phase.get('artifact') or 'none'}",
+            f"- worker summary: {spec.get('summary_artifact') or 'none'}",
+            "",
+            "## First action",
+            f"- {phase.get('next_action') or spec.get('next_action') or 'Read TEAM_PLAN.md, stay inside owned paths, then verify and summarize your slice.'}",
+            "",
+            "## Refresh worker-specific context",
+            f"- {phase.get('context_command') or 'python3 plugin/scripts/hctl.py context --json'}",
+        ])
+        return "\n".join(lines).rstrip() + "\n"
+
+    def _run_script_text(prompt_rel, env_rel, log_rel, session_name):
+        lines = [
+            "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            f"REPO_ROOT={shlex.quote(repo_root)}",
+            f"PROMPT_FILE={shlex.quote(os.path.join(task_dir, normalize_path(prompt_rel)))}",
+            f"ENV_FILE={shlex.quote(os.path.join(task_dir, normalize_path(env_rel)))}",
+            f"LOG_FILE={shlex.quote(os.path.join(task_dir, normalize_path(log_rel)))}",
+            f"SESSION_NAME={shlex.quote(session_name)}",
+            'if [ ! -f "$PROMPT_FILE" ]; then echo "missing prompt file: $PROMPT_FILE" >&2; exit 1; fi',
+            'if [ ! -f "$ENV_FILE" ]; then echo "missing env file: $ENV_FILE" >&2; exit 1; fi',
+            'mkdir -p "$(dirname "$LOG_FILE")"',
+            "set -a",
+            'source "$ENV_FILE"',
+            "set +a",
+            'cd "$REPO_ROOT"',
+            'CMD=(claude -p "$(cat \"$PROMPT_FILE\")" --output-format json --permission-mode dontAsk --max-turns 80 --name "$SESSION_NAME")',
+        ]
+        for tool_name in allowed_tools:
+            lines.append(f'CMD+=(--allowedTools {shlex.quote(tool_name)})')
+        lines.extend(['"${CMD[@]}" > "$LOG_FILE" 2>&1', 'echo "$LOG_FILE"'])
+        return "\n".join(lines).rstrip() + "\n"
+
+    provider_prompt_rel = normalize_path(os.path.join(dispatch_dir_rel, f"{provider or 'none'}-team.prompt.md"))
+    provider_launcher_rel = normalize_path(os.path.join(dispatch_dir_rel, f"launch-{provider or 'none'}-team.sh"))
+    implement_dispatcher_rel = normalize_path(os.path.join(dispatch_dir_rel, "dispatch-implementers.sh"))
+    dispatch["provider_prompt"] = _task_rel(provider_prompt_rel)
+    dispatch["provider_launcher"] = _task_rel(provider_launcher_rel)
+    dispatch["implement_dispatcher"] = _task_rel(implement_dispatcher_rel)
+
+    phase_prompt_files = []
+    phase_run_scripts = []
+    implement_launches = []
+    provider_worker_lines = []
+    for spec in workers:
+        worker_name = str(spec.get("worker") or "worker")
+        owned_preview = ", ".join(spec.get("owned_paths") or []) or "none"
+        provider_worker_lines.append(f"- {worker_name}: owned={owned_preview}; bootstrap={_task_rel(os.path.join('team', 'bootstrap', f'{worker_name}.md'))}")
+        worker_entry = {"worker": worker_name, "role_scope": str(spec.get("role_scope") or "worker"), "owned_paths": list(spec.get("owned_paths") or []), "phases": []}
+        for phase in spec.get("phases") or []:
+            role_name = str(phase.get("role") or "worker")
+            phase_name = str(phase.get("phase") or "implement")
+            prompt_rel = normalize_path(os.path.join("team", "bootstrap", f"{worker_name}.{phase_name}.{role_name}.prompt.md"))
+            env_rel = normalize_path(str(phase.get("env_file") or "").replace(f"{task_root}/", "", 1))
+            run_rel = normalize_path(os.path.join("team", "bootstrap", f"run-{worker_name}-{phase_name}.sh"))
+            log_rel = normalize_path(os.path.join("team", "bootstrap", "logs", f"{worker_name}-{phase_name}.json"))
+            session_name = f"{task_id.lower()}-{worker_name}-{phase_name}".replace("_", "-")
+            phase_prompt_files.append((prompt_rel, _phase_prompt_text(spec, phase)))
+            phase_run_scripts.append((run_rel, _run_script_text(prompt_rel, env_rel, log_rel, session_name)))
+            phase_entry = {
+                "phase": phase_name,
+                "role": role_name,
+                "agent_name": str(phase.get("agent_name") or ""),
+                "artifact": str(phase.get("artifact") or ""),
+                "prompt_file": _task_rel(prompt_rel),
+                "env_file": str(phase.get("env_file") or ""),
+                "run_script": _task_rel(run_rel),
+                "log_file": _task_rel(log_rel),
+                "session_name": session_name,
+                "command_preview": "bash " + shlex.quote(os.path.join(repo_root, normalize_path(run_rel))),
+            }
+            worker_entry["phases"].append(phase_entry)
+            if phase_name == "implement":
+                implement_launches.append(phase_entry["command_preview"])
+        dispatch["workers"].append(worker_entry)
+
+    expected = [provider_prompt_rel, provider_launcher_rel, implement_dispatcher_rel, dispatch_index_rel]
+    for worker_entry in dispatch["workers"]:
+        for phase_entry in worker_entry.get("phases") or []:
+            prompt_rel = normalize_path(str(phase_entry.get("prompt_file") or "").replace(f"{task_root}/", "", 1))
+            run_rel = normalize_path(str(phase_entry.get("run_script") or "").replace(f"{task_root}/", "", 1))
+            if prompt_rel:
+                expected.append(prompt_rel)
+            if run_rel:
+                expected.append(run_rel)
+    seen_expected = []
+    for relpath in expected:
+        if relpath and relpath not in seen_expected:
+            seen_expected.append(relpath)
+    dispatch["expected_files"] = [_task_rel(relpath) for relpath in seen_expected]
+
+    provider_prompt_lines = [
+        f"# Team Dispatch Prompt — {task_id}",
+        "",
+        f"Create or resume a team for task `{task_id}`.",
+        f"Preferred provider: `{provider}`.",
+        f"Planned worker count: {len(workers)}.",
+        "",
+        "## Ground truth",
+        f"- TEAM_PLAN.md: {_task_rel('TEAM_PLAN.md')}",
+        f"- TEAM_SYNTHESIS.md: {_task_rel('TEAM_SYNTHESIS.md')}",
+        f"- bootstrap index: {bootstrap.get('bootstrap_index')}",
+        "",
+        "## Non-negotiable rules",
+        "- Each worker must stay inside its owned writable paths.",
+        "- Shared read-only and forbidden paths are off-limits.",
+        "- Contributors must leave team/worker-<name>.md before synthesis.",
+        "- Lead / synthesis owners must finish TEAM_SYNTHESIS.md, final verification, docs sync, and HANDOFF refresh in order.",
+        "",
+        "## Planned workers",
+        *provider_worker_lines,
+        "",
+        "## Dispatch order",
+        "1. Read TEAM_PLAN.md and team/bootstrap/index.json.",
+        "2. Spawn or message each worker with its bootstrap brief and phase prompt.",
+        "3. Keep writable ownership disjoint.",
+        "4. Wait for worker summaries before synthesis.",
+        "5. After synthesis, follow runtime verification → documentation → HANDOFF refresh → close.",
+    ]
+    provider_prompt_text = "\n".join(provider_prompt_lines).rstrip() + "\n"
+
+    if provider == "omc":
+        launcher_lines = [
+            "#!/usr/bin/env bash", "set -euo pipefail", f"REPO_ROOT={shlex.quote(repo_root)}",
+            f"PROMPT_FILE={shlex.quote(os.path.join(task_dir, provider_prompt_rel))}",
+            'if [ ! -f "$PROMPT_FILE" ]; then echo "missing provider prompt: $PROMPT_FILE" >&2; exit 1; fi',
+            'cd "$REPO_ROOT"', 'TEAM_PROMPT="$(cat "$PROMPT_FILE")"', f"exec omc team {len(workers)}:executor \"$TEAM_PROMPT\"",
+        ]
+        dispatch["launch_command_preview"] = "bash " + shlex.quote(os.path.join(repo_root, provider_launcher_rel))
+    elif provider == "native":
+        launcher_lines = [
+            "#!/usr/bin/env bash", "set -euo pipefail", f"PROMPT_FILE={shlex.quote(os.path.join(task_dir, provider_prompt_rel))}",
+            'cat <<"EOF"',
+            "Native Claude Code teams are created from a running Claude lead session.",
+            "1. Ensure CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 is enabled for the lead session.",
+            "2. Open or resume the lead Claude Code session in the repo root.",
+            '3. Paste the contents of "$PROMPT_FILE" into that lead session.',
+            "4. Let the lead create teammates that match the planned worker ids and owned paths.",
+            "EOF", 'echo "$PROMPT_FILE"',
+        ]
+        dispatch["launch_command_preview"] = "cat " + shlex.quote(os.path.join(repo_root, provider_prompt_rel))
+    else:
+        launcher_lines = ["#!/usr/bin/env bash", "set -euo pipefail", 'cat <<"EOF"', "No native team provider is active. Use the generated per-worker run-*.sh helpers as a headless multi-session fallback.", "EOF"]
+        dispatch["launch_command_preview"] = implement_launches[0] if implement_launches else ""
+
+    dispatch["ready"] = True
+    dispatch["reason"] = "ready"
+    if not write_files:
+        return dispatch
+
+    provider_dir_abs = os.path.join(task_dir, dispatch_dir_rel)
+    logs_dir_abs = os.path.join(task_dir, "team", "bootstrap", "logs")
+    os.makedirs(provider_dir_abs, exist_ok=True)
+    os.makedirs(logs_dir_abs, exist_ok=True)
+    generated = []
+    for relpath, content in phase_prompt_files:
+        abs_path = os.path.join(task_dir, relpath)
+        with open(abs_path, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        generated.append(_task_rel(relpath))
+    for relpath, content in phase_run_scripts:
+        abs_path = os.path.join(task_dir, relpath)
+        with open(abs_path, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        try:
+            os.chmod(abs_path, 0o755)
+        except OSError:
+            pass
+        generated.append(_task_rel(relpath))
+    provider_prompt_abs = os.path.join(task_dir, provider_prompt_rel)
+    with open(provider_prompt_abs, "w", encoding="utf-8") as fh:
+        fh.write(provider_prompt_text)
+    generated.append(_task_rel(provider_prompt_rel))
+    provider_launcher_abs = os.path.join(task_dir, provider_launcher_rel)
+    with open(provider_launcher_abs, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(launcher_lines).rstrip() + "\n")
+    try:
+        os.chmod(provider_launcher_abs, 0o755)
+    except OSError:
+        pass
+    generated.append(_task_rel(provider_launcher_rel))
+    dispatcher_lines = ["#!/usr/bin/env bash", "set -euo pipefail", f"REPO_ROOT={shlex.quote(repo_root)}", 'cd "$REPO_ROOT"']
+    for command_preview in implement_launches:
+        dispatcher_lines.append(f"{command_preview} &")
+    dispatcher_lines.append("wait")
+    dispatcher_abs = os.path.join(task_dir, implement_dispatcher_rel)
+    with open(dispatcher_abs, "w", encoding="utf-8") as fh:
+        fh.write("\n".join(dispatcher_lines).rstrip() + "\n")
+    try:
+        os.chmod(dispatcher_abs, 0o755)
+    except OSError:
+        pass
+    generated.append(_task_rel(implement_dispatcher_rel))
+    dispatch_index_abs = os.path.join(task_dir, dispatch_index_rel)
+    dispatch_index_payload = {
+        "task_id": task_id, "provider": provider, "bootstrap_signature": dispatch["bootstrap_signature"], "generated_at": now_iso(),
+        "provider_prompt": dispatch["provider_prompt"], "provider_launcher": dispatch["provider_launcher"],
+        "launch_command_preview": dispatch["launch_command_preview"], "implement_dispatcher": dispatch["implement_dispatcher"],
+        "workers": dispatch["workers"], "generated_files": generated + [_task_rel(dispatch_index_rel)],
+    }
+    with open(dispatch_index_abs, "w", encoding="utf-8") as fh:
+        json.dump(dispatch_index_payload, fh, indent=2, ensure_ascii=False, sort_keys=True)
+        fh.write("\n")
+    generated.append(_task_rel(dispatch_index_rel))
+    dispatch["generated_files"] = generated
+    return dispatch
+
+
+def team_dispatch_status(task_dir, team_state=None):
+    """Return freshness + completeness state for provider dispatch artifacts."""
+    if team_state is None:
+        team_state = team_artifact_status(task_dir)
+    bootstrap_state = team_bootstrap_status(task_dir, team_state=team_state)
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    task_id = yaml_field("task_id", state_file) or os.path.basename(task_dir.rstrip("/"))
+    provider = yaml_field("team_provider", state_file) or "none"
+    task_root = os.path.join(TASK_DIR, task_id)
+    rel_dir = normalize_path(os.path.join("team", "bootstrap", "provider"))
+    rel_index = normalize_path(os.path.join(rel_dir, "dispatch.json"))
+    status = {
+        "provider": str(provider or "none"), "available": bool(bootstrap_state.get("available") and not bootstrap_state.get("refresh_needed")),
+        "generated": False, "stale": False, "refresh_needed": False, "reason": "", "dispatch_dir": rel_dir, "dispatch_index": rel_index,
+        "generated_at": "", "generated_signature": "", "current_signature": str(bootstrap_state.get("current_signature") or ""),
+        "expected_files": [], "missing_files": [],
+        "refresh_command": f"python3 plugin/scripts/hctl.py team-dispatch --task-dir {task_root} --write-files",
+    }
+    if not status["available"]:
+        status["reason"] = str(bootstrap_state.get("reason") or "team bootstrap is not ready")
+        return status
+    index_abs = os.path.join(task_dir, rel_index)
+    if not os.path.isfile(index_abs):
+        status["reason"] = "team dispatch has not been generated yet"
+        return status
+    status["generated"] = True
+    try:
+        with open(index_abs, "r", encoding="utf-8") as fh:
+            parsed = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        status["stale"] = True; status["refresh_needed"] = True; status["reason"] = "team/bootstrap/provider/dispatch.json is unreadable"; return status
+    status["generated_at"] = str(parsed.get("generated_at") or "")
+    status["generated_signature"] = str(parsed.get("bootstrap_signature") or "")
+    status["expected_files"] = [normalize_path(str(relpath or "").replace(f"{task_root}/", "", 1)) for relpath in (parsed.get("generated_files") or []) if str(relpath or "").strip()]
+    missing = []
+    for relpath in status["expected_files"]:
+        if relpath and not os.path.isfile(os.path.join(task_dir, relpath)):
+            missing.append(relpath)
+    status["missing_files"] = missing
+    if missing:
+        status["stale"] = True; status["refresh_needed"] = True; status["reason"] = f"dispatch files missing: {', '.join(missing[:4])}"; return status
+    generated_provider = str(parsed.get("provider") or "none")
+    if generated_provider != str(provider or "none"):
+        status["stale"] = True; status["refresh_needed"] = True; status["reason"] = f"dispatch provider changed ({generated_provider} → {provider})"; return status
+    if not status["generated_signature"]:
+        status["stale"] = True; status["refresh_needed"] = True; status["reason"] = "dispatch signature is missing"; return status
+    if status["generated_signature"] != status["current_signature"]:
+        status["stale"] = True; status["refresh_needed"] = True; status["reason"] = "team dispatch is out of date with the current bootstrap signature"; return status
+    status["reason"] = "current"
+    return status
+
+
+
+def _team_launch_default_target(provider):
+    """Return the default launch target for a provider."""
+    provider_name = str(provider or "none").strip().lower() or "none"
+    return "provider" if provider_name in ("native", "omc") else "implementers"
+
+
+
+def _team_launch_target_metadata(task_dir, task_root, dispatch_index, provider, target_name):
+    """Return launch metadata for a concrete provider or implementers target."""
+    repo_root = repo_root_for_task_dir(task_dir)
+    provider_prompt = normalize_path(str(dispatch_index.get("provider_prompt") or "").replace(f"{task_root}/", "", 1))
+    provider_launcher = normalize_path(str(dispatch_index.get("provider_launcher") or "").replace(f"{task_root}/", "", 1))
+    implement_dispatcher = normalize_path(str(dispatch_index.get("implement_dispatcher") or "").replace(f"{task_root}/", "", 1))
+
+    if target_name == "provider":
+        launch_script_rel = provider_launcher
+        command_preview = str(dispatch_index.get("launch_command_preview") or "")
+    else:
+        launch_script_rel = implement_dispatcher
+        command_preview = (
+            f"bash {shlex.quote(os.path.join(repo_root, implement_dispatcher))}"
+            if implement_dispatcher else ""
+        )
+
+    interactive_required = target_name == "provider" and str(provider or "none") == "native"
+    execute_blocker = ""
+    if not launch_script_rel:
+        execute_blocker = "team launch script is missing from the dispatch pack"
+    elif interactive_required:
+        execute_blocker = "native team launch requires an interactive lead Claude session"
+    elif target_name == "provider" and str(provider or "none") == "omc":
+        omc_ready = str(manifest_teams_field("omc_ready") or "").strip().lower() == "true" or shutil.which("omc") is not None
+        if not omc_ready:
+            execute_blocker = "omc CLI not found for provider launch"
+    elif target_name == "implementers":
+        if shutil.which("claude") is None:
+            execute_blocker = "claude CLI not found for worker run helpers"
+
+    return {
+        "target": target_name,
+        "launch_script": launch_script_rel,
+        "launch_command_preview": command_preview,
+        "interactive_required": bool(interactive_required),
+        "execute_supported": bool(launch_script_rel) and not bool(execute_blocker),
+        "execute_blocker": execute_blocker,
+        "provider_prompt": provider_prompt,
+        "implement_dispatcher": implement_dispatcher,
+        "ready": bool(launch_script_rel),
+    }
+
+
+
+def _team_launch_auto_execute_target(task_dir, task_root, dispatch_index, provider, preferred_meta):
+    """Return the best auto-execute target for team-launch.
+
+    The default team plan remains provider-first for native/omc, but when the
+    preferred target cannot be executed headlessly we allow ``team-launch
+    --execute`` to fall back to the implementer dispatcher instead of failing.
+    """
+    if preferred_meta.get("execute_supported"):
+        return preferred_meta, ""
+    fallback_meta = _team_launch_target_metadata(
+        task_dir,
+        task_root,
+        dispatch_index,
+        provider,
+        "implementers",
+    )
+    if fallback_meta.get("execute_supported"):
+        reason = (
+            f"preferred target '{preferred_meta.get('target')}' is not auto-executable "
+            f"({preferred_meta.get('execute_blocker') or 'blocked'}); falling back to 'implementers'"
+        )
+        return fallback_meta, reason
+    return preferred_meta, ""
+
+
+
+def team_launch_signature(task_dir, team_state=None):
+    """Signature for the current default team launch plan."""
+    if team_state is None:
+        team_state = team_artifact_status(task_dir)
+    dispatch_state = team_dispatch_status(task_dir, team_state=team_state)
+    provider = yaml_field("team_provider", os.path.join(task_dir, "TASK_STATE.yaml")) or "none"
+    return f"{dispatch_state.get('current_signature') or ''}:{_team_launch_default_target(provider)}"
+
+
+
+def team_launch_status(task_dir, team_state=None):
+    """Return readiness + freshness state for the default team launch plan."""
+    if team_state is None:
+        team_state = team_artifact_status(task_dir)
+    dispatch_state = team_dispatch_status(task_dir, team_state=team_state)
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    task_id = yaml_field("task_id", state_file) or os.path.basename(task_dir.rstrip("/"))
+    provider = yaml_field("team_provider", state_file) or "none"
+    task_root = os.path.join(TASK_DIR, task_id)
+    launch_manifest_rel = normalize_path(os.path.join("team", "bootstrap", "provider", "launch.json"))
+    target = _team_launch_default_target(provider)
+    status = {
+        "provider": str(provider or "none"),
+        "target": target,
+        "available": False,
+        "ready": False,
+        "generated": False,
+        "stale": False,
+        "refresh_needed": False,
+        "reason": "",
+        "launch_manifest": launch_manifest_rel,
+        "launch_script": "",
+        "launch_command_preview": "",
+        "provider_prompt": "",
+        "implement_dispatcher": "",
+        "interactive_required": False,
+        "execute_supported": False,
+        "execute_blocker": "",
+        "preferred_execute_blocker": "",
+        "execute_target": "",
+        "execute_launch_script": "",
+        "execute_command_preview": "",
+        "execute_fallback_available": False,
+        "execute_resolution_reason": "",
+        "generated_at": "",
+        "generated_signature": "",
+        "current_signature": str(team_launch_signature(task_dir, team_state=team_state) or ""),
+        "refresh_command": f"python3 plugin/scripts/hctl.py team-launch --task-dir {task_root} --write-files",
+    }
+    if not dispatch_state.get("available"):
+        status["reason"] = str(dispatch_state.get("reason") or "team dispatch is not ready")
+        return status
+    if not dispatch_state.get("generated"):
+        status["reason"] = "team dispatch has not been generated yet"
+        return status
+    if dispatch_state.get("refresh_needed"):
+        status["reason"] = str(dispatch_state.get("reason") or "team dispatch is stale")
+        status["refresh_needed"] = True
+        return status
+
+    index_abs = os.path.join(task_dir, str(dispatch_state.get("dispatch_index") or ""))
+    try:
+        with open(index_abs, "r", encoding="utf-8") as fh:
+            dispatch_index = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        status["reason"] = "team/bootstrap/provider/dispatch.json is unreadable"
+        status["refresh_needed"] = True
+        return status
+
+    preferred_meta = _team_launch_target_metadata(task_dir, task_root, dispatch_index, provider, target)
+    auto_execute_meta, execute_reason = _team_launch_auto_execute_target(
+        task_dir,
+        task_root,
+        dispatch_index,
+        provider,
+        preferred_meta,
+    )
+
+    status["available"] = bool(preferred_meta.get("ready"))
+    status["ready"] = bool(preferred_meta.get("ready"))
+    status["launch_script"] = str(preferred_meta.get("launch_script") or "")
+    status["launch_command_preview"] = str(preferred_meta.get("launch_command_preview") or "")
+    status["provider_prompt"] = str(preferred_meta.get("provider_prompt") or "")
+    status["implement_dispatcher"] = str(preferred_meta.get("implement_dispatcher") or "")
+    status["interactive_required"] = bool(preferred_meta.get("interactive_required"))
+    status["preferred_execute_blocker"] = str(preferred_meta.get("execute_blocker") or "")
+    status["execute_target"] = str(auto_execute_meta.get("target") or "")
+    status["execute_launch_script"] = str(auto_execute_meta.get("launch_script") or "")
+    status["execute_command_preview"] = str(auto_execute_meta.get("launch_command_preview") or "")
+    status["execute_fallback_available"] = bool(
+        auto_execute_meta.get("execute_supported") and auto_execute_meta.get("target") != target
+    )
+    status["execute_resolution_reason"] = str(execute_reason or "")
+    status["execute_supported"] = bool(auto_execute_meta.get("execute_supported"))
+    status["execute_blocker"] = "" if status["execute_supported"] else str(
+        auto_execute_meta.get("execute_blocker") or preferred_meta.get("execute_blocker") or ""
+    )
+
+    manifest_abs = os.path.join(task_dir, launch_manifest_rel)
+    if not os.path.isfile(manifest_abs):
+        status["reason"] = "team launch plan has not been generated yet"
+        return status
+
+    status["generated"] = True
+    try:
+        with open(manifest_abs, "r", encoding="utf-8") as fh:
+            launch_manifest = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        status["stale"] = True
+        status["refresh_needed"] = True
+        status["reason"] = "team/bootstrap/provider/launch.json is unreadable"
+        return status
+
+    status["generated_at"] = str(launch_manifest.get("generated_at") or "")
+    status["generated_signature"] = str(launch_manifest.get("launch_signature") or "")
+    recorded_target = str(launch_manifest.get("target") or target)
+    recorded_script = normalize_path(str(launch_manifest.get("launch_script") or preferred_meta.get("launch_script") or "").replace(f"{task_root}/", "", 1))
+    if recorded_target != target:
+        status["stale"] = True
+        status["refresh_needed"] = True
+        status["reason"] = f"launch target changed ({recorded_target} → {target})"
+        return status
+    if status["generated_signature"] and status["generated_signature"] != status["current_signature"]:
+        status["stale"] = True
+        status["refresh_needed"] = True
+        status["reason"] = "team launch plan is out of date with the current dispatch signature"
+        return status
+    if not status["generated_signature"]:
+        status["stale"] = True
+        status["refresh_needed"] = True
+        status["reason"] = "team launch signature is missing"
+        return status
+    if recorded_script and not os.path.isfile(os.path.join(task_dir, recorded_script)):
+        status["stale"] = True
+        status["refresh_needed"] = True
+        status["reason"] = f"launch script missing: {recorded_script}"
+        return status
+    status["reason"] = "current"
+    return status
+
+
+
+def build_team_launch(task_dir, write_files=False, execute=False, auto_refresh=True, target="auto"):
+    """Build or execute the provider/worker launch entrypoint for a team task.
+
+    The helper sits one step above bootstrap + dispatch. With ``auto_refresh`` it
+    regenerates stale or missing bootstrap/dispatch artifacts before producing a
+    launch manifest. ``execute`` uses a detached background spawn so the caller
+    gets a PID + log paths without blocking on the child process. For native team
+    providers, auto-execute can fall back to the implementer dispatcher while the
+    frozen launch manifest still points at the provider-first control surface.
+    """
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    task_id = yaml_field("task_id", state_file) or os.path.basename(task_dir.rstrip("/"))
+    provider = yaml_field("team_provider", state_file) or "none"
+    repo_root = repo_root_for_task_dir(task_dir)
+    task_root = os.path.join(TASK_DIR, task_id)
+    launch_manifest_rel = normalize_path(os.path.join("team", "bootstrap", "provider", "launch.json"))
+    stdout_log_rel = normalize_path(os.path.join("team", "bootstrap", "provider", "launch.stdout.log"))
+    stderr_log_rel = normalize_path(os.path.join("team", "bootstrap", "provider", "launch.stderr.log"))
+
+    def _task_rel(name):
+        return f"{task_root}/{normalize_path(name)}"
+
+    payload = {
+        "task_id": task_id,
+        "task_dir": task_dir,
+        "provider": provider,
+        "requested_target": str(target or "auto"),
+        "target": "",
+        "ready": False,
+        "reason": "",
+        "auto_refresh": bool(auto_refresh),
+        "bootstrap_refreshed": False,
+        "dispatch_refreshed": False,
+        "launch_manifest": _task_rel(launch_manifest_rel),
+        "launch_script": "",
+        "launch_command_preview": "",
+        "provider_prompt": "",
+        "implement_dispatcher": "",
+        "interactive_required": False,
+        "execute_supported": False,
+        "execute_blocker": "",
+        "execute_target": "",
+        "execute_launch_script": "",
+        "execute_command_preview": "",
+        "execute_fallback_available": False,
+        "execute_resolution_reason": "",
+        "stdout_log": _task_rel(stdout_log_rel),
+        "stderr_log": _task_rel(stderr_log_rel),
+        "generated_files": [],
+        "execution": {},
+    }
+
+    team_state = team_artifact_status(task_dir)
+    if auto_refresh:
+        bootstrap_state = team_bootstrap_status(task_dir, team_state=team_state)
+        if bootstrap_state.get("available") and (not bootstrap_state.get("generated") or bootstrap_state.get("refresh_needed")):
+            build_team_bootstrap(task_dir, write_files=True)
+            payload["bootstrap_refreshed"] = True
+            team_state = team_artifact_status(task_dir)
+        dispatch_state = team_dispatch_status(task_dir, team_state=team_state)
+        if dispatch_state.get("available") and (not dispatch_state.get("generated") or dispatch_state.get("refresh_needed")):
+            build_team_dispatch(task_dir, write_files=True)
+            payload["dispatch_refreshed"] = True
+            team_state = team_artifact_status(task_dir)
+
+    dispatch_state = team_dispatch_status(task_dir, team_state=team_state)
+    if not dispatch_state.get("available"):
+        payload["reason"] = str(dispatch_state.get("reason") or "team launch is not ready")
+        return payload
+    if not dispatch_state.get("generated"):
+        payload["reason"] = "team dispatch has not been generated yet"
+        return payload
+    if dispatch_state.get("refresh_needed"):
+        payload["reason"] = str(dispatch_state.get("reason") or "team dispatch is stale")
+        return payload
+
+    dispatch_index_path = os.path.join(task_dir, str(dispatch_state.get("dispatch_index") or ""))
+    try:
+        with open(dispatch_index_path, "r", encoding="utf-8") as fh:
+            dispatch_index = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        payload["reason"] = "team/bootstrap/provider/dispatch.json is unreadable"
+        return payload
+
+    requested_target = str(target or "auto").strip().lower() or "auto"
+    if requested_target == "auto":
+        target_name = _team_launch_default_target(provider)
+    elif requested_target in ("provider", "implementers"):
+        target_name = requested_target
+    else:
+        payload["reason"] = "target must be one of: auto, provider, implementers"
+        return payload
+
+    target_meta = _team_launch_target_metadata(task_dir, task_root, dispatch_index, provider, target_name)
+    auto_execute_meta = target_meta
+    execute_reason = ""
+    if requested_target == "auto":
+        auto_execute_meta, execute_reason = _team_launch_auto_execute_target(
+            task_dir,
+            task_root,
+            dispatch_index,
+            provider,
+            target_meta,
+        )
+
+    payload["target"] = target_name
+    payload["launch_script"] = _task_rel(target_meta["launch_script"]) if target_meta.get("launch_script") else ""
+    payload["launch_command_preview"] = str(target_meta.get("launch_command_preview") or "")
+    payload["provider_prompt"] = _task_rel(target_meta["provider_prompt"]) if target_meta.get("provider_prompt") else ""
+    payload["implement_dispatcher"] = _task_rel(target_meta["implement_dispatcher"]) if target_meta.get("implement_dispatcher") else ""
+    payload["interactive_required"] = bool(target_meta.get("interactive_required"))
+    payload["execute_target"] = str(auto_execute_meta.get("target") or "")
+    payload["execute_launch_script"] = _task_rel(auto_execute_meta["launch_script"]) if auto_execute_meta.get("launch_script") else ""
+    payload["execute_command_preview"] = str(auto_execute_meta.get("launch_command_preview") or "")
+    payload["execute_fallback_available"] = bool(
+        auto_execute_meta.get("execute_supported") and auto_execute_meta.get("target") != target_name
+    )
+    payload["execute_resolution_reason"] = str(execute_reason or "")
+    payload["execute_supported"] = bool(auto_execute_meta.get("execute_supported"))
+    payload["execute_blocker"] = "" if payload["execute_supported"] else str(
+        auto_execute_meta.get("execute_blocker") or target_meta.get("execute_blocker") or ""
+    )
+
+    if not target_meta.get("ready"):
+        payload["reason"] = str(target_meta.get("execute_blocker") or "team launch script is missing from the dispatch pack")
+        return payload
+
+    payload["ready"] = True
+    payload["reason"] = "ready"
+
+    launch_signature_value = f"{dispatch_state.get('current_signature') or ''}:{target_name}"
+    manifest_payload = {
+        "task_id": task_id,
+        "provider": provider,
+        "requested_target": requested_target,
+        "target": target_name,
+        "generated_at": now_iso(),
+        "launch_signature": launch_signature_value,
+        "dispatch_signature": str(dispatch_state.get("current_signature") or ""),
+        "launch_script": payload["launch_script"],
+        "launch_command_preview": payload["launch_command_preview"],
+        "provider_prompt": payload["provider_prompt"],
+        "implement_dispatcher": payload["implement_dispatcher"],
+        "interactive_required": payload["interactive_required"],
+        "execute_supported": payload["execute_supported"],
+        "execute_blocker": payload["execute_blocker"],
+        "execute_target": payload["execute_target"],
+        "execute_launch_script": payload["execute_launch_script"],
+        "execute_command_preview": payload["execute_command_preview"],
+        "execute_fallback_available": payload["execute_fallback_available"],
+        "execute_resolution_reason": payload["execute_resolution_reason"],
+        "auto_refresh": bool(auto_refresh),
+        "bootstrap_refreshed": bool(payload["bootstrap_refreshed"]),
+        "dispatch_refreshed": bool(payload["dispatch_refreshed"]),
+        "stdout_log": payload["stdout_log"],
+        "stderr_log": payload["stderr_log"],
+        "workers": list(dispatch_index.get("workers") or []),
+    }
+
+    launch_manifest_abs = os.path.join(task_dir, launch_manifest_rel)
+    stdout_log_abs = os.path.join(task_dir, stdout_log_rel)
+    stderr_log_abs = os.path.join(task_dir, stderr_log_rel)
+    if write_files or execute:
+        os.makedirs(os.path.dirname(launch_manifest_abs), exist_ok=True)
+        with open(launch_manifest_abs, "w", encoding="utf-8") as fh:
+            json.dump(manifest_payload, fh, indent=2, ensure_ascii=False, sort_keys=True)
+            fh.write("\n")
+        payload["generated_files"] = [_task_rel(launch_manifest_rel)]
+
+    if execute:
+        if not payload["execute_supported"]:
+            payload["execution"] = {
+                "requested": True,
+                "spawned": False,
+                "error": payload["execute_blocker"] or "launch spawn failed",
+            }
+            return payload
+        launch_script_abs = os.path.join(task_dir, normalize_path(str(auto_execute_meta.get("launch_script") or "")))
+        os.makedirs(os.path.dirname(stdout_log_abs), exist_ok=True)
+        with open(stdout_log_abs, "a", encoding="utf-8") as out_fh, open(stderr_log_abs, "a", encoding="utf-8") as err_fh:
+            proc = subprocess.Popen(
+                ["bash", launch_script_abs],
+                cwd=repo_root,
+                stdout=out_fh,
+                stderr=err_fh,
+                start_new_session=True,
+            )
+        payload["execution"] = {
+            "requested": True,
+            "spawned": True,
+            "mode": "detached",
+            "pid": proc.pid,
+            "started_at": now_iso(),
+            "requested_target": requested_target,
+            "resolved_target": payload["execute_target"],
+            "target_resolution_reason": payload["execute_resolution_reason"],
+            "launch_script": payload["execute_launch_script"],
+            "command_preview": payload["execute_command_preview"],
+            "stdout_log": payload["stdout_log"],
+            "stderr_log": payload["stderr_log"],
+        }
+        if write_files or execute:
+            manifest_payload["execution"] = payload["execution"]
+            with open(launch_manifest_abs, "w", encoding="utf-8") as fh:
+                json.dump(manifest_payload, fh, indent=2, ensure_ascii=False, sort_keys=True)
+                fh.write("\n")
+        for relpath in (stdout_log_rel, stderr_log_rel):
+            if _task_rel(relpath) not in payload["generated_files"]:
+                payload["generated_files"].append(_task_rel(relpath))
+    return payload
+
+def _normalize_team_phase_name(phase_name):
+    """Return a canonical worker-phase identifier."""
+    value = str(phase_name or "").strip().lower().replace("-", "_").replace(" ", "_")
+    aliases = {
+        "": "",
+        "auto": "auto",
+        "implement": "implement",
+        "worker_summary": "implement",
+        "worker_summaries": "implement",
+        "summary": "implement",
+        "synthesis": "synthesis",
+        "team_synthesis": "synthesis",
+        "final_runtime_verification": "final_runtime_verification",
+        "runtime": "final_runtime_verification",
+        "runtime_verification": "final_runtime_verification",
+        "documentation_sync": "documentation_sync",
+        "doc_sync": "documentation_sync",
+        "docs": "documentation_sync",
+        "writer": "documentation_sync",
+        "documentation_review": "documentation_review",
+        "doc_review": "documentation_review",
+        "critic_document": "documentation_review",
+        "document_critic": "documentation_review",
+        "handoff": "handoff_refresh",
+        "handoff_refresh": "handoff_refresh",
+    }
+    return aliases.get(value, value)
+
+
+def _load_team_dispatch_index(task_dir, team_state=None):
+    """Return parsed dispatch index + state when current and readable."""
+    if team_state is None:
+        team_state = team_artifact_status(task_dir)
+    dispatch_state = team_dispatch_status(task_dir, team_state=team_state)
+    if not dispatch_state.get("available"):
+        return None, dispatch_state
+    if not dispatch_state.get("generated") or dispatch_state.get("refresh_needed"):
+        return None, dispatch_state
+    dispatch_index_rel = str(dispatch_state.get("dispatch_index") or "")
+    if not dispatch_index_rel:
+        dispatch_state = dict(dispatch_state)
+        dispatch_state["reason"] = str(dispatch_state.get("reason") or "team dispatch index is missing")
+        return None, dispatch_state
+    dispatch_index_abs = os.path.join(task_dir, dispatch_index_rel)
+    try:
+        with open(dispatch_index_abs, "r", encoding="utf-8") as fh:
+            parsed = json.load(fh)
+        if not isinstance(parsed, dict):
+            raise ValueError("dispatch index is not a dict")
+    except (OSError, ValueError, json.JSONDecodeError):
+        dispatch_state = dict(dispatch_state)
+        dispatch_state["reason"] = "team/bootstrap/provider/dispatch.json is unreadable"
+        dispatch_state["refresh_needed"] = True
+        return None, dispatch_state
+    return parsed, dispatch_state
+
+
+def select_team_relaunch_target(task_dir, team_state=None, worker=None, phase="auto", raw_agent_name=None, explicit_worker=None):
+    """Return the best worker/phase relaunch target for the current team state."""
+    if team_state is None:
+        team_state = team_artifact_status(task_dir)
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    task_id = yaml_field("task_id", state_file) or os.path.basename(task_dir.rstrip("/"))
+    task_root = os.path.join(TASK_DIR, task_id)
+    payload = {
+        "task_id": task_id,
+        "available": False,
+        "ready": False,
+        "reason": "",
+        "selection_reason": "",
+        "selection_source": "",
+        "worker": "",
+        "phase": "",
+        "artifact": "",
+        "prompt_file": "",
+        "env_file": "",
+        "run_script": "",
+        "log_file": "",
+        "session_name": "",
+        "command_preview": "",
+        "dispatch_index": "team/bootstrap/provider/dispatch.json",
+        "refresh_command": f"python3 plugin/scripts/hctl.py team-relaunch --task-dir {task_root} --write-files",
+    }
+    if team_state.get("orchestration_mode") != "team":
+        payload["reason"] = "orchestration_mode is not team"
+        return payload
+
+    dispatch_index, dispatch_state = _load_team_dispatch_index(task_dir, team_state=team_state)
+    payload["dispatch_index"] = str(dispatch_state.get("dispatch_index") or payload["dispatch_index"])
+    if dispatch_index is None:
+        payload["reason"] = str(dispatch_state.get("reason") or "team dispatch is not ready")
+        return payload
+
+    phase_by_worker = {}
+    phase_order_by_worker = {}
+    workers = []
+    for worker_entry in (dispatch_index.get("workers") or []):
+        if not isinstance(worker_entry, dict):
+            continue
+        worker_name = str(worker_entry.get("worker") or "").strip()
+        if not worker_name:
+            continue
+        workers.append(worker_name)
+        phase_map = {}
+        phase_order = []
+        for phase_entry in (worker_entry.get("phases") or []):
+            if not isinstance(phase_entry, dict):
+                continue
+            canonical_phase = _normalize_team_phase_name(phase_entry.get("phase"))
+            if not canonical_phase:
+                continue
+            phase_copy = dict(phase_entry)
+            phase_copy["phase"] = canonical_phase
+            phase_map[canonical_phase] = phase_copy
+            if canonical_phase not in phase_order:
+                phase_order.append(canonical_phase)
+        phase_by_worker[worker_name] = phase_map
+        phase_order_by_worker[worker_name] = phase_order
+
+    if not phase_by_worker:
+        payload["reason"] = "team dispatch has no worker phase entries"
+        return payload
+
+    requested_worker = str(worker or "").strip()
+    requested_phase = _normalize_team_phase_name(phase)
+    missing_workers = [str(x).strip() for x in (team_state.get("worker_summary_missing_workers") or []) if str(x).strip()]
+    synthesis_workers = [str(x).strip() for x in (team_state.get("synthesis_workers") or []) if str(x).strip()]
+    runtime_workers = [str(x).strip() for x in (team_state.get("team_runtime_verification_owners") or []) if str(x).strip()]
+    doc_sync_workers = [str(x).strip() for x in (team_state.get("team_doc_sync_owners") or []) if str(x).strip()]
+    document_critic_workers = [str(x).strip() for x in (team_state.get("team_document_critic_owners") or []) if str(x).strip()]
+
+    current_worker = get_team_worker_name(
+        known_workers=list(phase_by_worker.keys()),
+        raw_agent_name=raw_agent_name,
+        explicit_worker=explicit_worker,
+    )
+
+    selection_source = ""
+    selection_reason = ""
+    selected_worker = requested_worker
+    if selected_worker:
+        if selected_worker not in phase_by_worker:
+            payload["reason"] = f"worker '{selected_worker}' is not present in the current dispatch pack"
+            return payload
+        selection_source = "requested_worker"
+    elif current_worker and current_worker in phase_by_worker:
+        selected_worker = current_worker
+        selection_source = "current_worker"
+    elif team_state.get("worker_summary_required") and not team_state.get("worker_summary_ready") and missing_workers:
+        selected_worker = next((item for item in missing_workers if item in phase_by_worker), "")
+        selection_source = "pending_worker_summary"
+    elif not team_state.get("synthesis_ready") and synthesis_workers:
+        selected_worker = next((item for item in synthesis_workers if item in phase_by_worker), "")
+        selection_source = "synthesis_owner"
+    elif team_state.get("team_runtime_verification_needed") and runtime_workers:
+        selected_worker = next((item for item in runtime_workers if item in phase_by_worker), "")
+        selection_source = "runtime_owner"
+    elif team_state.get("team_documentation_needed") and team_state.get("team_doc_sync_needed") and doc_sync_workers:
+        selected_worker = next((item for item in doc_sync_workers if item in phase_by_worker), "")
+        selection_source = "doc_sync_owner"
+    elif team_state.get("team_documentation_needed") and (
+        team_state.get("team_document_critic_missing_after_docs")
+        or team_state.get("team_document_critic_stale_after_docs")
+        or team_state.get("team_document_critic_pending")
+    ) and document_critic_workers:
+        selected_worker = next((item for item in document_critic_workers if item in phase_by_worker), "")
+        selection_source = "document_critic_owner"
+    elif team_state.get("handoff_refresh_needed") and synthesis_workers:
+        selected_worker = next((item for item in synthesis_workers if item in phase_by_worker), "")
+        selection_source = "handoff_owner"
+    else:
+        selected_worker = workers[0]
+        selection_source = "first_worker"
+
+    if not selected_worker:
+        payload["reason"] = "could not determine a relaunch worker from the current dispatch pack"
+        return payload
+
+    phase_map = phase_by_worker.get(selected_worker) or {}
+    phase_order = phase_order_by_worker.get(selected_worker) or []
+    selected_phase = requested_phase
+    if selected_phase and selected_phase != "auto":
+        if selected_phase not in phase_map:
+            payload["reason"] = f"worker '{selected_worker}' has no phase '{selected_phase}' in the current dispatch pack"
+            return payload
+        selection_reason = f"requested phase '{selected_phase}'"
+    else:
+        if selected_worker in missing_workers and "implement" in phase_map:
+            selected_phase = "implement"
+            selection_reason = "worker summary is still missing or incomplete"
+        elif not team_state.get("synthesis_ready") and selected_worker in synthesis_workers and "synthesis" in phase_map:
+            selected_phase = "synthesis"
+            selection_reason = "TEAM_SYNTHESIS.md is still pending"
+        elif team_state.get("team_runtime_verification_needed") and selected_worker in runtime_workers and "final_runtime_verification" in phase_map:
+            selected_phase = "final_runtime_verification"
+            selection_reason = str(team_state.get("team_runtime_verification_reason") or "final runtime verification is still pending")
+        elif team_state.get("team_documentation_needed") and team_state.get("team_doc_sync_needed") and selected_worker in doc_sync_workers and "documentation_sync" in phase_map:
+            selected_phase = "documentation_sync"
+            selection_reason = str(team_state.get("team_documentation_reason") or "documentation sync is still pending")
+        elif team_state.get("team_documentation_needed") and (
+            team_state.get("team_document_critic_missing_after_docs")
+            or team_state.get("team_document_critic_stale_after_docs")
+            or team_state.get("team_document_critic_pending")
+        ) and selected_worker in document_critic_workers and "documentation_review" in phase_map:
+            selected_phase = "documentation_review"
+            selection_reason = str(team_state.get("team_documentation_reason") or "document review is still pending")
+        elif team_state.get("handoff_refresh_needed") and selected_worker in synthesis_workers and "handoff_refresh" in phase_map:
+            selected_phase = "handoff_refresh"
+            selection_reason = str(team_state.get("handoff_refresh_reason") or "team handoff is stale")
+        elif "implement" in phase_map:
+            selected_phase = "implement"
+            selection_reason = "default implementer rerun"
+        elif phase_order:
+            selected_phase = phase_order[0]
+            selection_reason = f"defaulted to the first available phase '{selected_phase}'"
+        else:
+            payload["reason"] = f"worker '{selected_worker}' has no launchable phases"
+            return payload
+
+    phase_entry = dict(phase_map.get(selected_phase) or {})
+    if not phase_entry:
+        payload["reason"] = f"worker '{selected_worker}' phase '{selected_phase}' is missing from the dispatch pack"
+        return payload
+
+    payload.update({
+        "available": True,
+        "ready": True,
+        "reason": "ready",
+        "selection_source": selection_source,
+        "selection_reason": selection_reason,
+        "worker": selected_worker,
+        "phase": selected_phase,
+        "artifact": str(phase_entry.get("artifact") or ""),
+        "prompt_file": str(phase_entry.get("prompt_file") or ""),
+        "env_file": str(phase_entry.get("env_file") or ""),
+        "run_script": str(phase_entry.get("run_script") or ""),
+        "log_file": str(phase_entry.get("log_file") or ""),
+        "session_name": str(phase_entry.get("session_name") or ""),
+        "command_preview": str(phase_entry.get("command_preview") or ""),
+    })
+    return payload
+
+
+def build_team_relaunch(task_dir, worker=None, phase="auto", write_files=False, execute=False, auto_refresh=True, raw_agent_name=None, explicit_worker=None):
+    """Build or execute a worker/phase-specific relaunch manifest for team recovery."""
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    task_id = yaml_field("task_id", state_file) or os.path.basename(task_dir.rstrip("/"))
+    provider = yaml_field("team_provider", state_file) or "none"
+    task_root = os.path.join(TASK_DIR, task_id)
+    repo_root = repo_root_for_task_dir(task_dir)
+    relaunch_manifest_rel = normalize_path(os.path.join("team", "bootstrap", "provider", "relaunch.json"))
+    stdout_log_rel = normalize_path(os.path.join("team", "bootstrap", "provider", "relaunch.stdout.log"))
+    stderr_log_rel = normalize_path(os.path.join("team", "bootstrap", "provider", "relaunch.stderr.log"))
+
+    def _task_rel(name):
+        return f"{task_root}/{normalize_path(name)}"
+
+    payload = {
+        "task_id": task_id,
+        "task_dir": task_dir,
+        "provider": provider,
+        "worker": "",
+        "phase": "",
+        "ready": False,
+        "reason": "",
+        "selection_reason": "",
+        "selection_source": "",
+        "auto_refresh": bool(auto_refresh),
+        "bootstrap_refreshed": False,
+        "dispatch_refreshed": False,
+        "artifact": "",
+        "prompt_file": "",
+        "env_file": "",
+        "run_script": "",
+        "log_file": "",
+        "session_name": "",
+        "command_preview": "",
+        "relaunch_manifest": _task_rel(relaunch_manifest_rel),
+        "stdout_log": _task_rel(stdout_log_rel),
+        "stderr_log": _task_rel(stderr_log_rel),
+        "execute_supported": False,
+        "execute_blocker": "",
+        "generated_files": [],
+        "execution": {},
+    }
+
+    if auto_refresh:
+        team_state = team_artifact_status(task_dir)
+        bootstrap_state = team_bootstrap_status(task_dir, team_state=team_state)
+        if bootstrap_state.get("available") and (not bootstrap_state.get("generated") or bootstrap_state.get("refresh_needed")):
+            build_team_bootstrap(task_dir, write_files=True)
+            payload["bootstrap_refreshed"] = True
+            team_state = team_artifact_status(task_dir)
+        dispatch_state = team_dispatch_status(task_dir, team_state=team_state)
+        if dispatch_state.get("available") and (not dispatch_state.get("generated") or dispatch_state.get("refresh_needed")):
+            build_team_dispatch(task_dir, write_files=True)
+            payload["dispatch_refreshed"] = True
+
+    team_state = team_artifact_status(task_dir)
+    selection = select_team_relaunch_target(
+        task_dir,
+        team_state=team_state,
+        worker=worker,
+        phase=phase,
+        raw_agent_name=raw_agent_name,
+        explicit_worker=explicit_worker,
+    )
+    payload.update({
+        "worker": str(selection.get("worker") or ""),
+        "phase": str(selection.get("phase") or ""),
+        "selection_reason": str(selection.get("selection_reason") or ""),
+        "selection_source": str(selection.get("selection_source") or ""),
+        "artifact": str(selection.get("artifact") or ""),
+        "prompt_file": str(selection.get("prompt_file") or ""),
+        "env_file": str(selection.get("env_file") or ""),
+        "run_script": str(selection.get("run_script") or ""),
+        "log_file": str(selection.get("log_file") or ""),
+        "session_name": str(selection.get("session_name") or ""),
+        "command_preview": str(selection.get("command_preview") or ""),
+    })
+    if not selection.get("available"):
+        payload["reason"] = str(selection.get("reason") or "team relaunch is not ready")
+        return payload
+
+    execute_blocker = ""
+    run_script_rel = normalize_path(str(selection.get("run_script") or "").replace(f"{task_root}/", "", 1))
+    if not run_script_rel:
+        execute_blocker = "worker relaunch script is missing"
+    elif shutil.which("claude") is None:
+        execute_blocker = "claude CLI not found for worker phase relaunch"
+    payload["execute_blocker"] = execute_blocker
+    payload["execute_supported"] = not bool(execute_blocker)
+    payload["ready"] = True
+    payload["reason"] = "ready"
+
+    manifest_payload = {
+        "task_id": task_id,
+        "provider": provider,
+        "generated_at": now_iso(),
+        "schema_version": TEAM_RELAUNCH_SCHEMA_VERSION,
+        "worker": payload["worker"],
+        "phase": payload["phase"],
+        "selection_reason": payload["selection_reason"],
+        "selection_source": payload["selection_source"],
+        "artifact": payload["artifact"],
+        "prompt_file": payload["prompt_file"],
+        "env_file": payload["env_file"],
+        "run_script": payload["run_script"],
+        "log_file": payload["log_file"],
+        "session_name": payload["session_name"],
+        "command_preview": payload["command_preview"],
+        "auto_refresh": bool(auto_refresh),
+        "bootstrap_refreshed": bool(payload["bootstrap_refreshed"]),
+        "dispatch_refreshed": bool(payload["dispatch_refreshed"]),
+        "execute_supported": payload["execute_supported"],
+        "execute_blocker": payload["execute_blocker"],
+        "stdout_log": payload["stdout_log"],
+        "stderr_log": payload["stderr_log"],
+    }
+
+    relaunch_manifest_abs = os.path.join(task_dir, relaunch_manifest_rel)
+    stdout_log_abs = os.path.join(task_dir, stdout_log_rel)
+    stderr_log_abs = os.path.join(task_dir, stderr_log_rel)
+    if write_files or execute:
+        os.makedirs(os.path.dirname(relaunch_manifest_abs), exist_ok=True)
+        with open(relaunch_manifest_abs, "w", encoding="utf-8") as fh:
+            json.dump(manifest_payload, fh, indent=2, ensure_ascii=False, sort_keys=True)
+            fh.write("\n")
+        payload["generated_files"] = [_task_rel(relaunch_manifest_rel)]
+
+    if execute:
+        if execute_blocker:
+            payload["execution"] = {
+                "requested": True,
+                "spawned": False,
+                "error": execute_blocker,
+            }
+            return payload
+        run_script_abs = os.path.join(task_dir, run_script_rel)
+        os.makedirs(os.path.dirname(stdout_log_abs), exist_ok=True)
+        with open(stdout_log_abs, "a", encoding="utf-8") as out_fh, open(stderr_log_abs, "a", encoding="utf-8") as err_fh:
+            proc = subprocess.Popen(
+                ["bash", run_script_abs],
+                cwd=repo_root,
+                stdout=out_fh,
+                stderr=err_fh,
+                start_new_session=True,
+            )
+        payload["execution"] = {
+            "requested": True,
+            "spawned": True,
+            "mode": "detached",
+            "pid": proc.pid,
+            "started_at": now_iso(),
+            "stdout_log": payload["stdout_log"],
+            "stderr_log": payload["stderr_log"],
+            "phase_log": payload["log_file"],
+        }
+        manifest_payload["execution"] = payload["execution"]
+        with open(relaunch_manifest_abs, "w", encoding="utf-8") as fh:
+            json.dump(manifest_payload, fh, indent=2, ensure_ascii=False, sort_keys=True)
+            fh.write("\n")
+        for relpath in (stdout_log_rel, stderr_log_rel):
+            task_rel = _task_rel(relpath)
+            if task_rel not in payload["generated_files"]:
+                payload["generated_files"].append(task_rel)
+    return payload
 
 def manifest_teams_field(field):
     """Read a field from the teams: section of the manifest."""
@@ -2349,7 +5058,7 @@ def compile_routing(task_dir, request_text=""):
     }
 
 
-def emit_compact_context(task_dir):
+def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
     """Return a brief task pack for runtime control.
 
     The default task pack is intentionally compact:
@@ -2510,8 +5219,66 @@ def emit_compact_context(task_dir):
     runtime_fail_count = _int(yaml_field("runtime_verdict_fail_count", state_file) or "0")
     team_artifacts = team_artifact_status(task_dir)
     team_status = team_artifacts.get("derived_status", team_status)
+    current_team_worker = get_team_worker_name(
+        team_artifacts.get("plan_workers") or [],
+        raw_agent_name=raw_agent_name,
+        explicit_worker=explicit_worker,
+    )
+    current_worker_owned_paths = list((team_artifacts.get("plan_owned_paths") or {}).get(current_team_worker, []) or [])
+    current_worker_summary = dict((team_artifacts.get("worker_summary_per_worker") or {}).get(current_team_worker) or {})
+    current_worker_relpath = team_worker_summary_relpath(current_team_worker) if current_team_worker else ""
+    current_worker_pending = bool(
+        current_team_worker
+        and (
+            current_team_worker in (team_artifacts.get("worker_summary_missing_workers") or [])
+            or current_worker_summary.get("status") == "incomplete"
+        )
+    )
+    current_agent_role = get_agent_role(raw_agent_name)
+    team_synthesis_workers = list(team_artifacts.get("synthesis_workers") or [])
+    team_summary_workers = list(team_artifacts.get("summary_workers") or [])
+    team_doc_sync_workers = list(team_artifacts.get("team_doc_sync_owners") or [])
+    team_document_critic_workers = list(team_artifacts.get("team_document_critic_owners") or [])
+    current_worker_is_synthesis_owner = bool(
+        current_team_worker and current_team_worker in team_synthesis_workers
+    )
+    current_worker_is_doc_sync_owner = bool(
+        current_team_worker and current_team_worker in team_doc_sync_workers
+    )
+    current_worker_is_document_critic_owner = bool(
+        current_team_worker and current_team_worker in team_document_critic_workers
+    )
     team_plan_name = "TEAM_PLAN.md"
     team_synthesis_name = "TEAM_SYNTHESIS.md"
+    team_bootstrap = team_bootstrap_status(task_dir, team_state=team_artifacts)
+    team_bootstrap_dir_name = normalize_path(str(team_bootstrap.get("bootstrap_dir") or os.path.join("team", "bootstrap")))
+    team_bootstrap_index_name = normalize_path(str(team_bootstrap.get("bootstrap_index") or os.path.join(team_bootstrap_dir_name, "index.json")))
+    team_bootstrap_ready = bool(team_bootstrap.get("available"))
+    team_bootstrap_generated = bool(team_bootstrap.get("generated"))
+    team_bootstrap_stale = bool(team_bootstrap.get("stale"))
+    team_bootstrap_refresh_needed = bool(team_bootstrap.get("refresh_needed"))
+    team_bootstrap_reason = str(team_bootstrap.get("reason") or "")
+    team_dispatch = team_dispatch_status(task_dir, team_state=team_artifacts)
+    team_dispatch_dir_name = normalize_path(str(team_dispatch.get("dispatch_dir") or os.path.join("team", "bootstrap", "provider")))
+    team_dispatch_index_name = normalize_path(str(team_dispatch.get("dispatch_index") or os.path.join(team_dispatch_dir_name, "dispatch.json")))
+    team_dispatch_available = bool(team_dispatch.get("available"))
+    team_dispatch_generated = bool(team_dispatch.get("generated"))
+    team_dispatch_stale = bool(team_dispatch.get("stale"))
+    team_dispatch_refresh_needed = bool(team_dispatch.get("refresh_needed"))
+    team_dispatch_reason = str(team_dispatch.get("reason") or "")
+    team_launch = team_launch_status(task_dir, team_state=team_artifacts)
+    team_launch_manifest_name = normalize_path(str(team_launch.get("launch_manifest") or os.path.join("team", "bootstrap", "provider", "launch.json")))
+    team_launch_available = bool(team_launch.get("available"))
+    team_launch_generated = bool(team_launch.get("generated"))
+    team_launch_stale = bool(team_launch.get("stale"))
+    team_launch_refresh_needed = bool(team_launch.get("refresh_needed"))
+    team_launch_reason = str(team_launch.get("reason") or "")
+    team_relaunch = select_team_relaunch_target(
+        task_dir,
+        team_state=team_artifacts,
+        raw_agent_name=raw_agent_name,
+        explicit_worker=explicit_worker,
+    )
 
     task_root = os.path.join(TASK_DIR, task_id)
     commands = {
@@ -2665,6 +5432,43 @@ def emit_compact_context(task_dir):
     review_focus = {
         "evidence_first": False,
     }
+    if team_synthesis_workers:
+        review_focus["team_synthesis_workers"] = team_synthesis_workers[:4]
+    if current_team_worker:
+        review_focus["team_current_worker"] = current_team_worker
+        if current_agent_role:
+            review_focus["team_current_agent_role"] = current_agent_role
+        review_focus["team_current_worker_is_synthesis_owner"] = bool(current_worker_is_synthesis_owner)
+        review_focus["team_current_worker_is_doc_sync_owner"] = bool(current_worker_is_doc_sync_owner)
+        review_focus["team_current_worker_is_document_critic_owner"] = bool(current_worker_is_document_critic_owner)
+        if current_worker_owned_paths:
+            review_focus["team_current_worker_owned_paths"] = current_worker_owned_paths[:4]
+        if current_worker_relpath:
+            review_focus["team_current_worker_artifact"] = _task_rel(current_worker_relpath)
+        if current_worker_summary.get("verification_excerpt"):
+            review_focus["team_current_worker_verification"] = str(current_worker_summary.get("verification_excerpt"))
+    if team_artifacts.get("team_runtime_verification_needed"):
+        review_focus["team_final_verification_needed"] = True
+        if team_artifacts.get("team_runtime_verification_reason"):
+            review_focus["team_final_verification_reason"] = str(team_artifacts.get("team_runtime_verification_reason"))
+        if team_artifacts.get("team_runtime_verification_owners"):
+            review_focus["team_final_verification_owners"] = list(team_artifacts.get("team_runtime_verification_owners") or [])[:4]
+        runtime_artifact_name = str(team_artifacts.get("team_runtime_artifact") or "")
+        if runtime_artifact_name:
+            review_focus["team_final_verification_artifact"] = _task_rel(runtime_artifact_name)
+    if team_artifacts.get("team_documentation_needed"):
+        review_focus["team_documentation_needed"] = True
+        if team_artifacts.get("team_documentation_reason"):
+            review_focus["team_documentation_reason"] = str(team_artifacts.get("team_documentation_reason"))
+        if team_artifacts.get("team_doc_sync_owners"):
+            review_focus["team_doc_sync_owners"] = list(team_artifacts.get("team_doc_sync_owners") or [])[:4]
+        if team_artifacts.get("team_doc_sync_artifact"):
+            review_focus["team_doc_sync_artifact"] = _task_rel(team_artifacts.get("team_doc_sync_artifact") or doc_sync_name)
+        if team_artifacts.get("team_document_critic_owners"):
+            review_focus["team_document_critic_owners"] = list(team_artifacts.get("team_document_critic_owners") or [])[:4]
+        if team_artifacts.get("team_document_critic_artifact"):
+            review_focus["team_document_critic_artifact"] = _task_rel(team_artifacts.get("team_document_critic_artifact") or document_critic_name)
+        review_focus["team_document_critic_needed"] = bool(team_artifacts.get("team_document_critic_needed"))
 
     focus_trigger = ""
     focus_critic_name = ""
@@ -2700,6 +5504,84 @@ def emit_compact_context(task_dir):
 
         if handoff_data:
             review_focus["handoff_trigger"] = str(handoff_data.get("trigger") or "")
+            team_recovery = handoff_data.get("team_recovery")
+            if isinstance(team_recovery, dict):
+                phase = str(team_recovery.get("phase") or "")
+                if phase:
+                    review_focus["team_recovery_phase"] = phase
+                pending_workers = [
+                    str(item).strip()
+                    for item in (team_recovery.get("pending_workers") or [])
+                    if str(item).strip()
+                ]
+                if pending_workers:
+                    review_focus["team_pending_workers"] = pending_workers[:4]
+                pending_artifacts = [
+                    _task_rel(str(item).strip())
+                    for item in (team_recovery.get("pending_artifacts") or [])
+                    if str(item).strip()
+                ]
+                if pending_artifacts:
+                    review_focus["team_pending_artifacts"] = pending_artifacts[:4]
+                if team_recovery.get("handoff_refresh_needed"):
+                    review_focus["team_handoff_refresh_needed"] = True
+                    reason = str(team_recovery.get("handoff_refresh_reason") or "")
+                    if reason:
+                        review_focus["team_handoff_refresh_reason"] = reason
+                if team_recovery.get("documentation_needed"):
+                    review_focus["team_documentation_needed"] = True
+                    documentation_reason = str(team_recovery.get("documentation_reason") or "")
+                    if documentation_reason:
+                        review_focus["team_documentation_reason"] = documentation_reason
+                    doc_sync_owners = [
+                        str(item).strip()
+                        for item in (team_recovery.get("doc_sync_owners") or [])
+                        if str(item).strip()
+                    ]
+                    if doc_sync_owners:
+                        review_focus["team_doc_sync_owners"] = doc_sync_owners[:4]
+                    doc_sync_artifact = str(team_recovery.get("doc_sync_artifact") or "").strip()
+                    if doc_sync_artifact:
+                        review_focus["team_doc_sync_artifact"] = _task_rel(doc_sync_artifact)
+                    document_critic_owners = [
+                        str(item).strip()
+                        for item in (team_recovery.get("document_critic_owners") or [])
+                        if str(item).strip()
+                    ]
+                    if document_critic_owners:
+                        review_focus["team_document_critic_owners"] = document_critic_owners[:4]
+                    document_artifact = str(team_recovery.get("document_critic_artifact") or "").strip()
+                    if document_artifact:
+                        review_focus["team_document_critic_artifact"] = _task_rel(document_artifact)
+                    review_focus["team_document_critic_needed"] = bool(team_recovery.get("document_critic_needed"))
+                if team_recovery.get("verification_needed"):
+                    review_focus["team_final_verification_needed"] = True
+                    verification_reason = str(team_recovery.get("verification_reason") or "")
+                    if verification_reason:
+                        review_focus["team_final_verification_reason"] = verification_reason
+                    verification_owners = [
+                        str(item).strip()
+                        for item in (team_recovery.get("verification_owners") or [])
+                        if str(item).strip()
+                    ]
+                    if verification_owners:
+                        review_focus["team_final_verification_owners"] = verification_owners[:4]
+                    runtime_artifact = str(team_recovery.get("runtime_artifact") or "").strip()
+                    if runtime_artifact:
+                        review_focus["team_final_verification_artifact"] = _task_rel(runtime_artifact)
+                if current_team_worker:
+                    workers = team_recovery.get("workers") or {}
+                    current_worker_recovery = workers.get(current_team_worker) if isinstance(workers, dict) else None
+                    if isinstance(current_worker_recovery, dict):
+                        review_focus["team_current_worker_pending"] = bool(current_worker_recovery.get("pending"))
+                        if current_worker_recovery.get("artifact"):
+                            review_focus["team_current_worker_artifact"] = _task_rel(str(current_worker_recovery.get("artifact")))
+                        if current_worker_recovery.get("owned_writable_paths"):
+                            review_focus["team_current_worker_owned_paths"] = list(current_worker_recovery.get("owned_writable_paths") or [])[:4]
+                        if current_worker_recovery.get("verification_excerpt"):
+                            review_focus["team_current_worker_verification"] = str(current_worker_recovery.get("verification_excerpt"))
+                        if current_worker_recovery.get("residual_risks_excerpt"):
+                            review_focus["team_current_worker_risks"] = str(current_worker_recovery.get("residual_risks_excerpt"))
         review_focus["trigger"] = focus_trigger
         if focus_critic_name:
             review_focus["critic_artifact"] = _task_rel(focus_critic_name)
@@ -2782,11 +5664,61 @@ def emit_compact_context(task_dir):
         priority_must_read.extend([team_plan_name, "TASK_STATE.yaml", request_name, "PLAN.md", "CHECKS.yaml"])
     elif (
         orchestration_mode == "team"
+        and team_artifacts.get("worker_summary_required")
+        and not team_artifacts.get("worker_summary_ready")
+    ):
+        worker_artifacts = list(team_artifacts.get("worker_summary_artifacts") or [])
+        prioritized_worker_artifacts = []
+        if current_worker_relpath:
+            prioritized_worker_artifacts.append(current_worker_relpath)
+        prioritized_worker_artifacts.extend(
+            [item for item in worker_artifacts if item != current_worker_relpath][:2]
+        )
+        priority_must_read.extend(
+            [
+                team_plan_name,
+                *prioritized_worker_artifacts,
+                "TASK_STATE.yaml",
+                request_name,
+                "CHECKS.yaml",
+            ]
+        )
+    elif (
+        orchestration_mode == "team"
         and team_synthesis_required
         and team_artifacts.get("plan_ready")
         and team_status in ("running", "degraded")
     ):
-        priority_must_read.extend([team_plan_name, team_synthesis_name, "TASK_STATE.yaml", request_name, "CHECKS.yaml"])
+        priority_must_read.extend([
+            team_plan_name,
+            current_worker_relpath,
+            team_synthesis_name,
+            "TASK_STATE.yaml",
+            request_name,
+            "CHECKS.yaml",
+        ])
+    elif orchestration_mode == "team" and team_artifacts.get("team_runtime_verification_needed"):
+        priority_must_read.extend([
+            team_plan_name,
+            team_synthesis_name,
+            team_artifacts.get("team_runtime_artifact") or runtime_critic_name,
+            team_artifacts.get("team_doc_sync_artifact") or doc_sync_name,
+            team_artifacts.get("team_document_critic_artifact") or document_critic_name,
+            "TASK_STATE.yaml",
+            "CHECKS.yaml",
+            "HANDOFF.md",
+        ])
+    elif orchestration_mode == "team" and team_artifacts.get("team_documentation_needed"):
+        priority_must_read.extend([
+            team_plan_name,
+            team_synthesis_name,
+            team_artifacts.get("team_runtime_artifact") or runtime_critic_name,
+            team_artifacts.get("team_doc_sync_artifact") or doc_sync_name,
+            team_artifacts.get("team_document_critic_artifact") or document_critic_name,
+            "TASK_STATE.yaml",
+            "CHECKS.yaml",
+            "HANDOFF.md",
+        ])
     elif planning_mode == "broad-build" and plan_verdict != "PASS":
         priority_must_read.extend(["TASK_STATE.yaml", request_name, env_snapshot_name, "PLAN.md", "CHECKS.yaml"])
     elif env_snapshot_surface:
@@ -2817,12 +5749,26 @@ def emit_compact_context(task_dir):
         notes.append("team plan pending")
     elif (
         orchestration_mode == "team"
+        and team_artifacts.get("worker_summary_required")
+        and not team_artifacts.get("worker_summary_ready")
+    ):
+        notes.append("worker summaries pending")
+    elif (
+        orchestration_mode == "team"
         and team_synthesis_required
         and team_artifacts.get("plan_ready")
         and team_status in ("running", "degraded")
         and not team_artifacts.get("synthesis_ready")
     ):
         notes.append("team synthesis pending")
+    elif orchestration_mode == "team" and team_artifacts.get("team_runtime_verification_needed"):
+        notes.append("team final verification pending")
+    elif orchestration_mode == "team" and team_artifacts.get("team_documentation_needed"):
+        notes.append("team documentation pending")
+    if orchestration_mode == "team" and team_artifacts.get("handoff_refresh_needed") and not team_artifacts.get("team_documentation_needed"):
+        notes.append("team handoff stale")
+    if current_team_worker:
+        notes.append(f"worker={current_team_worker}")
     if blocked_env_round:
         notes.append("blocked env: read environment snapshot")
     elif runtime_fix_round:
@@ -2853,12 +5799,205 @@ def emit_compact_context(task_dir):
         next_action = "Complete TEAM_PLAN.md first — assign worker ownership, writable paths, and synthesis rules before spawning workers or mutating source files."
     elif (
         orchestration_mode == "team"
+        and team_artifacts.get("worker_summary_required")
+        and not team_artifacts.get("worker_summary_ready")
+    ):
+        synthesis_preview = ", ".join(team_synthesis_workers[:3]) or "the synthesis owner"
+        if current_team_worker and current_worker_pending:
+            owned_preview = ", ".join(current_worker_owned_paths[:3]) or "your owned writable paths"
+            artifact_name = current_worker_relpath or "team/worker-<name>.md"
+            next_action = (
+                f"As {current_team_worker}, finish or verify {owned_preview}, then update {artifact_name} with completed work, "
+                f"owned paths handled, verification, and residual risks before {synthesis_preview} refreshes TEAM_SYNTHESIS.md."
+            )
+        elif current_team_worker and current_worker_is_synthesis_owner:
+            missing_workers = list(team_artifacts.get("worker_summary_missing_workers") or [])
+            pending_preview = ", ".join(missing_workers[:3]) or "the remaining workers"
+            next_action = (
+                f"As synthesis owner {current_team_worker}, wait for or unblock {pending_preview}, then refresh TEAM_SYNTHESIS.md once the last worker summaries land."
+            )
+        elif current_team_worker:
+            next_action = (
+                f"Your summary for {current_team_worker} is already present — help unblock the remaining workers, "
+                f"then hand off to {synthesis_preview} for TEAM_SYNTHESIS.md."
+            )
+        else:
+            if team_bootstrap_ready and team_bootstrap_generated and team_bootstrap_refresh_needed:
+                next_action = (
+                    "TEAM_PLAN.md or team ownership changed since the last bootstrap — rerun mcp__plugin_harness_harness__team_bootstrap to refresh worker briefs and env snippets "
+                    f"before further fan-out. Reason: {team_bootstrap_reason or 'bootstrap is stale'}."
+                )
+            elif team_dispatch_available and team_dispatch_generated and team_dispatch_refresh_needed:
+                next_action = (
+                    "The provider dispatch pack is stale — rerun mcp__plugin_harness_harness__team_dispatch to refresh launch prompts, run scripts, "
+                    f"and provider helpers before further fan-out. Reason: {team_dispatch_reason or 'dispatch is stale'}."
+                )
+            elif team_bootstrap_ready and not team_bootstrap_generated:
+                next_action = (
+                    "Generate worker briefs with mcp__plugin_harness_harness__team_bootstrap first, then fan out contributors — each planned worker should use its bootstrap brief, "
+                    "implement only its owned writable paths, and leave worker summaries under team/worker-<name>.md before "
+                    f"{synthesis_preview} refreshes TEAM_SYNTHESIS.md."
+                )
+            elif team_dispatch_available and not team_dispatch_generated:
+                next_action = (
+                    "Generate the provider dispatch pack with mcp__plugin_harness_harness__team_dispatch after bootstrap — it will freeze the launch prompt, per-phase worker prompts, "
+                    f"and run helpers before contributors start work and {synthesis_preview} later refreshes TEAM_SYNTHESIS.md."
+                )
+            elif team_launch_available and team_launch_generated and team_launch_refresh_needed:
+                if team_launch.get("execute_fallback_available"):
+                    next_action = (
+                        "The default team launch plan is stale — rerun mcp__plugin_harness_harness__team_launch with write_files=true to refresh the launch manifest, native lead prompt, "
+                        f"and implementer fallback before fan-out. Reason: {team_launch_reason or 'team launch is stale'}."
+                    )
+                else:
+                    next_action = (
+                        "The default team launch plan is stale — rerun mcp__plugin_harness_harness__team_launch with write_files=true to refresh the launch manifest "
+                        f"before fan-out. Reason: {team_launch_reason or 'team launch is stale'}."
+                    )
+            elif team_launch_available and not team_launch_generated:
+                if team_launch.get("interactive_required") and team_launch.get("execute_fallback_available"):
+                    next_action = (
+                        "Prepare the default fan-out entrypoint with mcp__plugin_harness_harness__team_launch(write_files=true) — it will auto-refresh stale bootstrap / dispatch artifacts, "
+                        f"materialize the native lead prompt plus the implementer fallback, and hand contributors the current owned-path prompts before {synthesis_preview} later refreshes TEAM_SYNTHESIS.md."
+                    )
+                elif team_launch.get("interactive_required"):
+                    next_action = (
+                        "Prepare the default fan-out entrypoint with mcp__plugin_harness_harness__team_launch(write_files=true) — it will auto-refresh stale bootstrap / dispatch artifacts, "
+                        f"materialize the native lead prompt, and hand contributors the current owned-path prompts before {synthesis_preview} later refreshes TEAM_SYNTHESIS.md."
+                    )
+                else:
+                    next_action = (
+                        "Prepare the default fan-out entrypoint with mcp__plugin_harness_harness__team_launch(write_files=true) — it will auto-refresh stale bootstrap / dispatch artifacts, "
+                        f"materialize the provider launch plan, and hand contributors the current owned-path prompts before {synthesis_preview} later refreshes TEAM_SYNTHESIS.md."
+                    )
+            elif team_launch_available and team_launch_generated:
+                if team_launch.get("interactive_required") and team_launch.get("execute_fallback_available"):
+                    next_action = (
+                        "Use the current team launch plan to fan out contributors — paste the frozen native provider prompt into the lead session, or run team_launch --execute to use the implementer fallback. "
+                        f"Keep each worker inside owned writable paths, update team/worker-<name>.md, and hand off to {synthesis_preview} for TEAM_SYNTHESIS.md."
+                    )
+                elif team_launch.get("interactive_required"):
+                    next_action = (
+                        "Use the current team launch plan to fan out contributors — paste the frozen native provider prompt into the lead session, keep each worker inside owned writable paths, "
+                        f"update team/worker-<name>.md, and hand off to {synthesis_preview} for TEAM_SYNTHESIS.md."
+                    )
+                else:
+                    next_action = (
+                        "Use the current team launch plan to fan out contributors — it already captures the provider launcher, implementer dispatcher, and current bootstrap state. "
+                        f"Keep each worker inside owned writable paths, update team/worker-<name>.md, and hand off to {synthesis_preview} for TEAM_SYNTHESIS.md."
+                    )
+            elif team_bootstrap_ready and team_bootstrap_generated:
+                next_action = (
+                    "Use the current team/bootstrap briefs and provider dispatch helpers for fan-out — each planned worker should stay inside owned writable paths, "
+                    f"update team/worker-<name>.md, and hand off to {synthesis_preview} for TEAM_SYNTHESIS.md."
+                )
+            else:
+                next_action = (
+                    "Collect per-worker summaries under team/worker-<name>.md first — each planned contributor should record completed work, "
+                    f"owned paths handled, verification, and residual risks before {synthesis_preview} writes TEAM_SYNTHESIS.md."
+                )
+    elif (
+        orchestration_mode == "team"
         and team_synthesis_required
         and team_artifacts.get("plan_ready")
         and team_status in ("running", "degraded")
         and not team_artifacts.get("synthesis_ready")
     ):
-        next_action = "Write TEAM_SYNTHESIS.md with integrated result, cross-checks, and verification summary before running task_close."
+        if current_team_worker and current_worker_is_synthesis_owner:
+            next_action = "As the synthesis owner, write TEAM_SYNTHESIS.md with integrated result, cross-checks, and verification summary before running task_close."
+        elif team_synthesis_workers:
+            next_action = (
+                "Worker summaries are ready — hand off to "
+                + ", ".join(team_synthesis_workers[:3])
+                + " to refresh TEAM_SYNTHESIS.md before task_close."
+            )
+        else:
+            next_action = "Write TEAM_SYNTHESIS.md with integrated result, cross-checks, and verification summary before running task_close."
+    elif orchestration_mode == "team" and team_artifacts.get("team_runtime_verification_needed"):
+        verification_reason = team_artifacts.get("team_runtime_verification_reason") or "run final runtime verification after TEAM_SYNTHESIS.md"
+        runtime_artifact_name = team_artifacts.get("team_runtime_artifact") or runtime_critic_name
+        if current_team_worker and current_worker_is_synthesis_owner:
+            next_action = (
+                f"As synthesis owner {current_team_worker}, {verification_reason}, refresh {runtime_artifact_name}, "
+                "then refresh HANDOFF.md before task_close."
+            )
+        elif team_synthesis_workers:
+            next_action = (
+                "TEAM_SYNTHESIS.md is ready — hand off to "
+                + ", ".join(team_synthesis_workers[:3])
+                + f" for final runtime verification and {runtime_artifact_name}, then refresh HANDOFF.md before close."
+            )
+        else:
+            next_action = (
+                f"Rerun final runtime verification after TEAM_SYNTHESIS.md, refresh {runtime_artifact_name}, "
+                "then refresh HANDOFF.md before task_close."
+            )
+    elif orchestration_mode == "team" and team_artifacts.get("team_documentation_needed"):
+        documentation_reason = team_artifacts.get("team_documentation_reason") or "refresh DOC_SYNC.md after final team runtime verification"
+        doc_sync_artifact = team_artifacts.get("team_doc_sync_artifact") or doc_sync_name
+        document_artifact = team_artifacts.get("team_document_critic_artifact") or document_critic_name
+        doc_sync_preview = ", ".join(team_doc_sync_workers[:3]) or "the writer"
+        doc_critic_preview = ", ".join(team_document_critic_workers[:3]) or "critic-document"
+        doc_sync_needed = bool(team_artifacts.get("team_doc_sync_needed"))
+        document_critic_needed = bool(team_artifacts.get("team_document_critic_needed"))
+        if doc_sync_needed and current_team_worker and current_worker_is_doc_sync_owner:
+            actor = f"As {current_team_worker}" if current_agent_role == "writer" else f"As documentation owner {current_team_worker}"
+            role_suffix = "" if current_agent_role == "writer" else " using the writer role"
+            if document_critic_needed:
+                next_action = (
+                    f"Complete the documentation pass — {actor}{role_suffix}, {documentation_reason}, refresh {doc_sync_artifact}, then hand off to {doc_critic_preview} "
+                    f"for {document_artifact} before the synthesis owner refreshes HANDOFF.md and closes."
+                )
+            else:
+                next_action = (
+                    f"Complete the documentation pass — {actor}{role_suffix}, {documentation_reason}, refresh {doc_sync_artifact}, then hand off to the synthesis owner "
+                    "for the final HANDOFF.md refresh before close."
+                )
+        elif (
+            not doc_sync_needed
+            and document_critic_needed
+            and current_team_worker
+            and current_worker_is_document_critic_owner
+        ):
+            role_prefix = f"As {current_team_worker}" if current_agent_role == "critic-document" else f"As document critic owner {current_team_worker}"
+            role_suffix = "" if current_agent_role == "critic-document" else " using the critic-document role"
+            next_action = (
+                f"Complete the documentation pass — {role_prefix}{role_suffix}, rerun {document_artifact} after the refreshed {doc_sync_artifact} / final verification pair, "
+                "then hand off to the synthesis owner for the final HANDOFF.md refresh before close."
+            )
+        elif current_team_worker and current_worker_is_synthesis_owner and (doc_sync_preview or doc_critic_preview):
+            if doc_sync_needed:
+                next_action = (
+                    f"As synthesis owner {current_team_worker}, wait for {doc_sync_preview} to refresh {doc_sync_artifact}, "
+                    f"then wait for {doc_critic_preview} to finish {document_artifact} before refreshing HANDOFF.md and closing."
+                    if document_critic_needed
+                    else f"As synthesis owner {current_team_worker}, wait for {doc_sync_preview} to refresh {doc_sync_artifact}, then refresh HANDOFF.md before close."
+                )
+            else:
+                next_action = (
+                    f"As synthesis owner {current_team_worker}, wait for {doc_critic_preview} to finish {document_artifact}, then refresh HANDOFF.md before close."
+                )
+        elif document_critic_needed:
+            next_action = (
+                f"Complete the documentation pass after final team verification — {doc_sync_preview} should {documentation_reason}, refresh {doc_sync_artifact}, "
+                f"then {doc_critic_preview} should rerun {document_artifact} before the synthesis owner refreshes HANDOFF.md and closes."
+            )
+        else:
+            next_action = (
+                f"Complete the documentation pass after final team verification — {doc_sync_preview} should {documentation_reason}, refresh {doc_sync_artifact}, "
+                "then the synthesis owner should refresh HANDOFF.md before close."
+            )
+    elif orchestration_mode == "team" and team_artifacts.get("handoff_refresh_needed"):
+        if current_team_worker and current_worker_is_synthesis_owner:
+            next_action = "Refresh HANDOFF.md from the latest team worker summaries and TEAM_SYNTHESIS.md before closing or handing off."
+        elif team_synthesis_workers:
+            next_action = (
+                "TEAM_SYNTHESIS.md is newer than HANDOFF.md — hand off to "
+                + ", ".join(team_synthesis_workers[:3])
+                + " to refresh HANDOFF.md before close or resume."
+            )
+        else:
+            next_action = "Refresh HANDOFF.md from the latest team worker summaries and TEAM_SYNTHESIS.md before closing or handing off."
     elif blocked_env_round:
         next_action = "Read ENVIRONMENT_SNAPSHOT.md first, repair the missing tool or setup assumption, then rerun task_verify before continuing."
     elif runtime_fix_round:
@@ -2907,16 +6046,134 @@ def emit_compact_context(task_dir):
             "plan_ready": bool(team_artifacts.get("plan_ready")),
             "plan_missing_sections": list(team_artifacts.get("plan_missing_sections") or []),
             "plan_has_placeholders": bool(team_artifacts.get("plan_has_placeholders")),
-            "plan_validation_errors": list(team_artifacts.get("plan_validation_errors") or []),
+            "plan_semantic_errors": list(team_artifacts.get("plan_semantic_errors") or []),
+            "plan_ownership_ready": bool(team_artifacts.get("plan_ownership_ready")),
             "plan_workers": list(team_artifacts.get("plan_workers") or []),
-            "plan_owned_writable_paths": dict(team_artifacts.get("plan_owned_writable_paths") or {}),
+            "bootstrap_available": bool(team_bootstrap_ready),
+            "bootstrap_generated": bool(team_bootstrap_generated),
+            "bootstrap_stale": bool(team_bootstrap_stale),
+            "bootstrap_refresh_needed": bool(team_bootstrap_refresh_needed),
+            "bootstrap_reason": str(team_bootstrap_reason or ""),
+            "bootstrap_generated_at": str(team_bootstrap.get("generated_at") or ""),
+            "bootstrap_signature": str(team_bootstrap.get("current_signature") or ""),
+            "bootstrap_generated_signature": str(team_bootstrap.get("generated_signature") or ""),
+            "bootstrap_missing_files": [_task_rel(relpath) for relpath in (team_bootstrap.get("missing_files") or []) if relpath],
+            "bootstrap_expected_files": [_task_rel(relpath) for relpath in (team_bootstrap.get("expected_files") or []) if relpath],
+            "bootstrap_refresh_command": f"mcp__plugin_harness_harness__team_bootstrap({{task_dir: '{task_root}', write_files: true}})",
+            "bootstrap_dir": _task_rel(team_bootstrap_dir_name),
+            "bootstrap_index": _task_rel(team_bootstrap_index_name),
+            "dispatch_available": bool(team_dispatch_available),
+            "dispatch_generated": bool(team_dispatch_generated),
+            "dispatch_stale": bool(team_dispatch_stale),
+            "dispatch_refresh_needed": bool(team_dispatch_refresh_needed),
+            "dispatch_reason": str(team_dispatch_reason or ""),
+            "dispatch_generated_at": str(team_dispatch.get("generated_at") or ""),
+            "dispatch_signature": str(team_dispatch.get("current_signature") or ""),
+            "dispatch_generated_signature": str(team_dispatch.get("generated_signature") or ""),
+            "dispatch_missing_files": [_task_rel(relpath) for relpath in (team_dispatch.get("missing_files") or []) if relpath],
+            "dispatch_expected_files": [_task_rel(relpath) for relpath in (team_dispatch.get("expected_files") or []) if relpath],
+            "dispatch_refresh_command": f"mcp__plugin_harness_harness__team_dispatch({{task_dir: '{task_root}', write_files: true}})",
+            "dispatch_dir": _task_rel(team_dispatch_dir_name),
+            "dispatch_index": _task_rel(team_dispatch_index_name),
+            "launch_available": bool(team_launch_available),
+            "launch_generated": bool(team_launch_generated),
+            "launch_stale": bool(team_launch_stale),
+            "launch_refresh_needed": bool(team_launch_refresh_needed),
+            "launch_reason": str(team_launch_reason or ""),
+            "launch_generated_at": str(team_launch.get("generated_at") or ""),
+            "launch_signature": str(team_launch.get("current_signature") or ""),
+            "launch_generated_signature": str(team_launch.get("generated_signature") or ""),
+            "launch_manifest": _task_rel(team_launch_manifest_name),
+            "launch_target": str(team_launch.get("target") or "auto"),
+            "launch_script": _task_rel(str(team_launch.get("launch_script") or team_launch_manifest_name)) if team_launch.get("launch_script") else "",
+            "launch_command_preview": str(team_launch.get("launch_command_preview") or ""),
+            "launch_provider_prompt": _task_rel(str(team_launch.get("provider_prompt") or "")) if team_launch.get("provider_prompt") else "",
+            "launch_implement_dispatcher": _task_rel(str(team_launch.get("implement_dispatcher") or "")) if team_launch.get("implement_dispatcher") else "",
+            "launch_interactive_required": bool(team_launch.get("interactive_required")),
+            "launch_execute_supported": bool(team_launch.get("execute_supported")),
+            "launch_execute_blocker": str(team_launch.get("execute_blocker") or ""),
+            "launch_execute_target": str(team_launch.get("execute_target") or ""),
+            "launch_execute_launch_script": _task_rel(str(team_launch.get("execute_launch_script") or "")) if team_launch.get("execute_launch_script") else "",
+            "launch_execute_command_preview": str(team_launch.get("execute_command_preview") or ""),
+            "launch_execute_fallback_available": bool(team_launch.get("execute_fallback_available")),
+            "launch_execute_resolution_reason": str(team_launch.get("execute_resolution_reason") or ""),
+            "launch_refresh_command": f"mcp__plugin_harness_harness__team_launch({{task_dir: '{task_root}', write_files: true}})",
+            "relaunch_available": bool(team_relaunch.get("available")),
+            "relaunch_ready": bool(team_relaunch.get("ready")),
+            "relaunch_reason": str(team_relaunch.get("reason") or ""),
+            "relaunch_selection_reason": str(team_relaunch.get("selection_reason") or ""),
+            "relaunch_selection_source": str(team_relaunch.get("selection_source") or ""),
+            "relaunch_worker": str(team_relaunch.get("worker") or ""),
+            "relaunch_phase": str(team_relaunch.get("phase") or ""),
+            "relaunch_artifact": str(team_relaunch.get("artifact") or ""),
+            "relaunch_prompt_file": str(team_relaunch.get("prompt_file") or ""),
+            "relaunch_run_script": str(team_relaunch.get("run_script") or ""),
+            "relaunch_log_file": str(team_relaunch.get("log_file") or ""),
+            "relaunch_command_preview": str(team_relaunch.get("command_preview") or ""),
+            "relaunch_refresh_command": "mcp__plugin_harness_harness__team_relaunch({task_dir: '" + task_root + "', write_files: true})",
+            "summary_workers": list(team_summary_workers or []),
+            "synthesis_workers": list(team_synthesis_workers or []),
+            "plan_owned_path_count": int(team_artifacts.get("plan_owned_path_count") or 0),
             "plan_shared_read_only_paths": list(team_artifacts.get("plan_shared_read_only_paths") or []),
-            "plan_forbidden_writes": dict(team_artifacts.get("plan_forbidden_writes") or {}),
+            "worker_summary_dir": _task_rel("team"),
+            "worker_summary_required": bool(team_artifacts.get("worker_summary_required")),
+            "worker_summary_ready": bool(team_artifacts.get("worker_summary_ready")),
+            "worker_summary_expected_workers": list(team_artifacts.get("worker_summary_expected_workers") or []),
+            "worker_summary_expected_count": int(team_artifacts.get("worker_summary_expected_count") or 0),
+            "worker_summary_present_count": int(team_artifacts.get("worker_summary_present_count") or 0),
+            "worker_summary_ready_count": int(team_artifacts.get("worker_summary_ready_count") or 0),
+            "worker_summary_missing_workers": list(team_artifacts.get("worker_summary_missing_workers") or []),
+            "worker_summary_errors": list(team_artifacts.get("worker_summary_errors") or []),
+            "worker_summary_artifacts": [
+                _task_rel(item)
+                for item in list(team_artifacts.get("worker_summary_artifacts") or [])
+            ],
+            "current_worker": current_team_worker,
+            "current_agent_role": current_agent_role,
+            "current_worker_is_synthesis_owner": bool(current_worker_is_synthesis_owner),
+            "current_worker_is_doc_sync_owner": bool(current_worker_is_doc_sync_owner),
+            "current_worker_is_document_critic_owner": bool(current_worker_is_document_critic_owner),
+            "current_worker_pending": bool(current_worker_pending),
+            "current_worker_owned_paths": list(current_worker_owned_paths or []),
+            "current_worker_summary_artifact": _task_rel(current_worker_relpath) if current_worker_relpath else "",
+            "current_worker_summary_status": str(current_worker_summary.get("status") or "missing"),
+            "current_worker_summary_ready": bool(current_worker_summary.get("ready")),
+            "current_worker_handled_paths": list(current_worker_summary.get("owned_paths_handled") or []),
+            "current_worker_verification_excerpt": str(current_worker_summary.get("verification_excerpt") or ""),
+            "current_worker_residual_risks_excerpt": str(current_worker_summary.get("residual_risks_excerpt") or ""),
+            "runtime_verification_needed": bool(team_artifacts.get("team_runtime_verification_needed")),
+            "runtime_verification_ready": bool(team_artifacts.get("team_runtime_verification_ready")),
+            "runtime_verification_reason": str(team_artifacts.get("team_runtime_verification_reason") or ""),
+            "runtime_verification_owners": list(team_artifacts.get("team_runtime_verification_owners") or []),
+            "runtime_verification_artifact": _task_rel(team_artifacts.get("team_runtime_artifact") or runtime_critic_name),
+            "runtime_verification_artifact_exists": bool(team_artifacts.get("team_runtime_artifact_exists")),
+            "documentation_needed": bool(team_artifacts.get("team_documentation_needed")),
+            "documentation_ready": bool(team_artifacts.get("team_documentation_ready")),
+            "documentation_reason": str(team_artifacts.get("team_documentation_reason") or ""),
+            "documentation_owner_label": str(team_artifacts.get("team_documentation_owner_label") or ""),
+            "doc_sync_artifact": _task_rel(team_artifacts.get("team_doc_sync_artifact") or doc_sync_name),
+            "doc_sync_exists": bool(team_artifacts.get("team_doc_sync_exists")),
+            "doc_sync_needed": bool(team_artifacts.get("team_doc_sync_needed")),
+            "doc_sync_owners": list(team_artifacts.get("team_doc_sync_owners") or []),
+            "doc_sync_owner_label": str(team_artifacts.get("team_doc_sync_owner_label") or ""),
+            "doc_sync_stale_after_verification": bool(team_artifacts.get("team_doc_sync_stale_after_verification")),
+            "document_critic_needed": bool(team_artifacts.get("team_document_critic_needed")),
+            "document_critic_artifact": _task_rel(team_artifacts.get("team_document_critic_artifact") or document_critic_name),
+            "document_critic_exists": bool(team_artifacts.get("team_document_critic_exists")),
+            "document_critic_pending": bool(team_artifacts.get("team_document_critic_pending")),
+            "document_critic_owners": list(team_artifacts.get("team_document_critic_owners") or []),
+            "document_critic_owner_label": str(team_artifacts.get("team_document_critic_owner_label") or ""),
+            "document_critic_stale_after_docs": bool(team_artifacts.get("team_document_critic_stale_after_docs")),
+            "document_verdict": str(team_artifacts.get("team_document_verdict") or "pending"),
+            "handoff_refresh_needed": bool(team_artifacts.get("handoff_refresh_needed")),
+            "handoff_refresh_reason": str(team_artifacts.get("handoff_refresh_reason") or ""),
+            "latest_team_artifact": str(team_artifacts.get("latest_team_artifact") or ""),
             "synthesis_artifact": _task_rel(team_synthesis_name),
             "synthesis_exists": bool(team_artifacts.get("synthesis_exists")),
             "synthesis_ready": bool(team_artifacts.get("synthesis_ready")),
             "synthesis_missing_sections": list(team_artifacts.get("synthesis_missing_sections") or []),
             "synthesis_has_placeholders": bool(team_artifacts.get("synthesis_has_placeholders")),
+            "synthesis_semantic_errors": list(team_artifacts.get("synthesis_semantic_errors") or []),
             "synthesis_refreshed_after_degraded": bool(team_artifacts.get("synthesis_refreshed_after_degraded")),
         },
         "team_plan_name": team_plan_name,

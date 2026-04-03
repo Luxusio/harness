@@ -137,9 +137,8 @@ Provider preference is read from `manifest.teams.provider`. If not set, default 
 When `manifest.teams.auto_activate: true` and `manifest.teams.approval_mode: preapproved`:
 - No user confirmation is required before spawning workers
 - `task_start` scaffolds `TEAM_PLAN.md` and `TEAM_SYNTHESIS.md`
-- Source writes stay blocked until `TEAM_PLAN.md` is completed and the ownership map is valid
-- During execution, source writes are limited to TEAM_PLAN-declared writable paths; shared read-only paths remain blocked
-- If `HARNESS_TEAM_WORKER` is set, the prewrite gate additionally enforces per-worker path ownership
+- Source writes stay blocked until `TEAM_PLAN.md` is semantically complete (required headings, no placeholders, explicit worker ownership, no overlapping writable paths)
+- After that, source writes are restricted to declared owned writable paths; shared read-only or unowned paths are blocked
 - All worker activity is recorded in TASK_STATE.yaml for auditability
 
 ---
@@ -165,10 +164,15 @@ Minimum required fields:
 | Field | Description |
 |-------|-------------|
 | Worker roster | List of workers with role names |
-| Owned writable paths | Exhaustive per-worker path list |
+| Owned writable paths | Exhaustive per-worker path list; must be disjoint across workers |
 | Shared read-only paths | Paths all workers may read but not write |
 | Forbidden writes | Paths each worker must not touch |
 | Synthesis strategy | How lead will merge worker outputs |
+| Documentation ownership (optional) | Explicit workers for `DOC_SYNC.md` (`writer`) and `CRITIC__document.md` (`critic-document`) |
+
+Once those sections are complete and ownership is semantically valid, the lead should run `mcp__plugin_harness_harness__team_bootstrap` (or `hctl.py team-bootstrap --task-dir ... --write-files`) before fan-out. That writes `team/bootstrap/index.json`, per-worker briefs, and role-scoped env snippets such as `team/bootstrap/worker-a.developer.env` or `team/bootstrap/reviewer.writer.env`.
+
+After that bootstrap step, `mcp__plugin_harness_harness__team_dispatch` (or `hctl.py team-dispatch --task-dir ... --write-files`) can freeze the actual launch surface under `team/bootstrap/provider/`: a provider prompt, provider-specific launcher helper, per-phase worker prompts, and headless `run-*.sh` helpers. Synthesis owners also receive explicit `synthesis` and `handoff_refresh` phase helpers so `TEAM_SYNTHESIS.md` / `HANDOFF.md` refreshes can be relaunched from the same generated pack. Then `mcp__plugin_harness_harness__team_launch` (or `hctl.py team-launch --task-dir ... --write-files`) becomes the default fan-out entrypoint: it auto-refreshes stale bootstrap/dispatch artifacts if needed, writes `team/bootstrap/provider/launch.json`, and points the lead at the provider launcher or implementer dispatcher from one command. For native Claude teams, that launch surface now exposes the frozen lead prompt and an auto-execute fallback to the implementer dispatcher so `team-launch --execute` can still fan out when the provider path itself is interactive-only. Once fan-out has started, `mcp__plugin_harness_harness__team_relaunch` (or `hctl.py team-relaunch --task-dir ... --write-files`) can select and optionally spawn the current best worker/phase recovery target without rebuilding prompts by hand. `task_context` and `SESSION_HANDOFF.json` surface when this launch layer is missing or stale so the lead refreshes it before contributors fan out.
 
 ### Artifact-driven team status
 
@@ -180,6 +184,8 @@ Minimum required fields:
 - `degraded` — a degraded round was recorded and synthesis has not been refreshed yet
 - `fallback` — a fallback path (for example `subagents`) was used
 
+`task_context` can also be personalized without mutating the parent shell environment: pass `team_worker` and `agent_name` to the MCP `task_context` tool (or `hctl.py context --team-worker ... --agent-name ...`) to preview the exact contributor / writer / critic-document pack that will be handed to a spawned worker.
+
 ### TEAM_SYNTHESIS.md (required before close)
 
 Minimum required fields:
@@ -189,6 +195,29 @@ Minimum required fields:
 | Merge summary | What each worker produced and how results were combined |
 | Conflict resolutions | Any path or logical conflicts encountered and how resolved |
 | Final artifact list | All artifacts produced across all workers |
+
+### team/worker-<name>.md (required before synthesis)
+
+Each contributor worker listed in `TEAM_PLAN.md` should leave a summary under `team/worker-<name>.md`. When the roster includes an explicit `lead` / `integrator` synthesis owner, that worker may skip a worker summary and instead own `TEAM_SYNTHESIS.md`, the final runtime verification (`CRITIC__runtime.md` / `QA__runtime.md`), and the final `HANDOFF.md` refresh.
+
+Minimum required fields:
+
+| Field | Description |
+|-------|-------------|
+| Completed work | What the worker finished or explicitly left incomplete |
+| Owned paths handled | Concrete owned paths or globs that this worker actually touched; may be `none` only when no write happened |
+| Verification | Commands or checks the worker ran |
+| Residual risks | Remaining risks, or `none` |
+
+`TEAM_SYNTHESIS.md` should be refreshed after the latest worker summary update. A stale synthesis file does not satisfy close.
+
+`TEAM_SYNTHESIS.md` is not the last step for repo-mutating team tasks: the synthesis owner must rerun final runtime verification after the latest synthesis refresh. If `CRITIC__runtime.md` predates the newest `TEAM_SYNTHESIS.md`, close is blocked until verification is rerun.
+
+After that final runtime verification, the writer must refresh `DOC_SYNC.md`. If `TEAM_PLAN.md` explicitly names documentation owners, the documentation pass becomes worker-scoped as well: those workers are surfaced in `hctl context`, copied into `SESSION_HANDOFF.json`, and enforced by both the prewrite gate and the `write_artifact.py` backend for `DOC_SYNC.md` / `CRITIC__document.md`. Pass `team_worker` (or set `HARNESS_TEAM_WORKER`) when calling the MCP `write_*` tools for these artifacts so the backend can verify the correct worker owner. If documentation review is required, `critic-document` must then rerun against the refreshed `DOC_SYNC.md` / final verification state before team close can continue.
+
+`HANDOFF.md` must also be refreshed after the newest close artifact, including final runtime verification, `DOC_SYNC.md`, and `CRITIC__document.md` when present. A stale handoff blocks team close for the same reason a stale synthesis does.
+
+When a team task is interrupted or repeatedly fails, `SESSION_HANDOFF.json` now carries a `team_recovery` block so the next session can resume from the blocked phase (`TEAM_PLAN.md`, pending worker summaries, `TEAM_SYNTHESIS.md`, final runtime verification, or documentation sync) instead of reopening broad repo exploration. That block also includes per-worker recovery facts (artifact path, owned writable paths, handled paths, verification excerpt, residual-risk excerpt), explicit `synthesis_workers`, documentation owners for the doc pass, and a signal when `HANDOFF.md` must be refreshed from newer close artifacts.
 
 ---
 

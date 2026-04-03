@@ -56,6 +56,10 @@ class HarnessMcpServerTests(unittest.TestCase):
         expected = {
             "task_start",
             "task_context",
+            "team_bootstrap",
+            "team_dispatch",
+            "team_launch",
+            "team_relaunch",
             "task_update_from_git_diff",
             "task_verify",
             "task_close",
@@ -83,6 +87,35 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("must_read", structured["task_context"])
             self.assertIn("planning_mode", structured["task_context"])
 
+    def test_task_context_forwards_personalization_args(self):
+        captured = {}
+
+        def fake_run_script(script_name, argv, env=None):
+            captured["script_name"] = script_name
+            captured["argv"] = list(argv)
+            return {"ok": True, "stdout": json.dumps({"task_id": "TASK__mcp", "must_read": [], "planning_mode": "standard"}), "stderr": "", "returncode": 0}
+
+        original = harness_server._run_script
+        harness_server._run_script = fake_run_script
+        try:
+            result = harness_server.call_tool(
+                "task_context",
+                {
+                    "task_dir": "/tmp/TASK__mcp",
+                    "team_worker": "reviewer",
+                    "agent_name": "harness:writer:reviewer",
+                },
+            )
+        finally:
+            harness_server._run_script = original
+
+        self.assertNotIn("isError", result)
+        self.assertEqual(captured["script_name"], "hctl.py")
+        self.assertIn("--team-worker", captured["argv"])
+        self.assertIn("reviewer", captured["argv"])
+        self.assertIn("--agent-name", captured["argv"])
+        self.assertIn("harness:writer:reviewer", captured["argv"])
+
     def test_unknown_tool_returns_error_payload(self):
         result = harness_server.call_tool("does_not_exist", {})
         self.assertTrue(result.get("isError"))
@@ -92,6 +125,152 @@ class HarnessMcpServerTests(unittest.TestCase):
         result = harness_server.call_tool("verify_run", {"mode": "nope"})
         self.assertTrue(result.get("isError"))
         self.assertIn("mode must be one of", result["structuredContent"]["error"])
+
+    def test_write_doc_sync_forwards_team_worker_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__team_doc_sync")
+            captured = {}
+
+            def fake_run_script(script_name, argv, env=None):
+                captured["script_name"] = script_name
+                captured["argv"] = list(argv)
+                captured["env"] = dict(env or {})
+                return {"ok": True, "stdout": "ok", "stderr": "", "returncode": 0}
+
+            original = harness_server._run_script
+            harness_server._run_script = fake_run_script
+            try:
+                result = harness_server.call_tool(
+                    "write_doc_sync",
+                    {
+                        "task_dir": task_dir,
+                        "what_changed": "aligned docs",
+                        "team_worker": "reviewer",
+                        "agent_name": "harness:writer@reviewer",
+                    },
+                )
+            finally:
+                harness_server._run_script = original
+
+            self.assertNotIn("isError", result)
+            self.assertEqual(captured["script_name"], "write_artifact.py")
+            self.assertEqual(captured["env"].get("HARNESS_SKIP_PREWRITE"), "1")
+            self.assertEqual(captured["env"].get("HARNESS_TEAM_WORKER"), "reviewer")
+            self.assertEqual(captured["env"].get("CLAUDE_AGENT_NAME"), "harness:writer@reviewer")
+
+    def test_team_bootstrap_forwards_write_files_flag(self):
+        captured = {}
+
+        def fake_run_script(script_name, argv, env=None):
+            captured["script_name"] = script_name
+            captured["argv"] = list(argv)
+            return {"ok": True, "stdout": json.dumps({"task_id": "TASK__team", "ready": True, "workers": []}), "stderr": "", "returncode": 0}
+
+        original = harness_server._run_script
+        harness_server._run_script = fake_run_script
+        try:
+            result = harness_server.call_tool(
+                "team_bootstrap",
+                {"task_dir": "/tmp/TASK__team", "write_files": True},
+            )
+        finally:
+            harness_server._run_script = original
+
+        self.assertNotIn("isError", result)
+        self.assertEqual(captured["script_name"], "hctl.py")
+        self.assertEqual(captured["argv"][:4], ["team-bootstrap", "--task-dir", "/tmp/TASK__team", "--json"])
+        self.assertIn("--write-files", captured["argv"])
+
+    def test_team_dispatch_forwards_write_files_flag(self):
+        captured = {}
+
+        def fake_run_script(script_name, argv, env=None):
+            captured["script_name"] = script_name
+            captured["argv"] = list(argv)
+            return {"ok": True, "stdout": json.dumps({"task_id": "TASK__team", "ready": True, "workers": []}), "stderr": "", "returncode": 0}
+
+        original = harness_server._run_script
+        harness_server._run_script = fake_run_script
+        try:
+            result = harness_server.call_tool(
+                "team_dispatch",
+                {"task_dir": "/tmp/TASK__team", "write_files": True},
+            )
+        finally:
+            harness_server._run_script = original
+
+        self.assertNotIn("isError", result)
+        self.assertEqual(captured["script_name"], "hctl.py")
+        self.assertEqual(captured["argv"][:4], ["team-dispatch", "--task-dir", "/tmp/TASK__team", "--json"])
+        self.assertIn("--write-files", captured["argv"])
+
+    def test_team_launch_forwards_execute_and_refresh_flags(self):
+        captured = {}
+
+        def fake_run_script(script_name, argv, env=None):
+            captured["script_name"] = script_name
+            captured["argv"] = list(argv)
+            return {"ok": True, "stdout": json.dumps({"task_id": "TASK__team", "ready": True, "target": "implementers", "execution": {"spawned": True}}), "stderr": "", "returncode": 0}
+
+        original = harness_server._run_script
+        harness_server._run_script = fake_run_script
+        try:
+            result = harness_server.call_tool(
+                "team_launch",
+                {
+                    "task_dir": "/tmp/TASK__team",
+                    "write_files": True,
+                    "execute": True,
+                    "no_auto_refresh": True,
+                    "target": "implementers",
+                },
+            )
+        finally:
+            harness_server._run_script = original
+
+        self.assertNotIn("isError", result)
+        self.assertEqual(captured["script_name"], "hctl.py")
+        self.assertEqual(captured["argv"][:4], ["team-launch", "--task-dir", "/tmp/TASK__team", "--json"])
+        self.assertIn("--write-files", captured["argv"])
+        self.assertIn("--execute", captured["argv"])
+        self.assertIn("--no-auto-refresh", captured["argv"])
+        self.assertIn("implementers", captured["argv"])
+
+    def test_team_relaunch_forwards_worker_phase_and_refresh_flags(self):
+        captured = {}
+
+        def fake_run_script(script_name, argv, env=None):
+            captured["script_name"] = script_name
+            captured["argv"] = list(argv)
+            return {"ok": True, "stdout": json.dumps({"task_id": "TASK__team", "ready": True, "worker": "lead", "phase": "synthesis", "execution": {"spawned": True}}), "stderr": "", "returncode": 0}
+
+        original = harness_server._run_script
+        harness_server._run_script = fake_run_script
+        try:
+            result = harness_server.call_tool(
+                "team_relaunch",
+                {
+                    "task_dir": "/tmp/TASK__team",
+                    "write_files": True,
+                    "execute": True,
+                    "no_auto_refresh": True,
+                    "worker": "lead",
+                    "phase": "synthesis",
+                },
+            )
+        finally:
+            harness_server._run_script = original
+
+        self.assertNotIn("isError", result)
+        self.assertEqual(captured["script_name"], "hctl.py")
+        self.assertEqual(captured["argv"][:4], ["team-relaunch", "--task-dir", "/tmp/TASK__team", "--json"])
+        self.assertIn("--write-files", captured["argv"])
+        self.assertIn("--execute", captured["argv"])
+        self.assertIn("--no-auto-refresh", captured["argv"])
+        self.assertIn("--worker", captured["argv"])
+        self.assertIn("lead", captured["argv"])
+        self.assertIn("--phase", captured["argv"])
+        self.assertIn("synthesis", captured["argv"])
 
 
 if __name__ == "__main__":

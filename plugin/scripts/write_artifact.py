@@ -19,6 +19,17 @@ import re
 import sys
 from datetime import datetime, timezone
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+try:
+    from _lib import team_artifact_status, get_team_worker_name, get_agent_role
+except Exception:  # pragma: no cover - defensive fallback for standalone CLI use
+    team_artifact_status = None
+    get_team_worker_name = None
+    get_agent_role = None
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -40,7 +51,7 @@ def write_file(path, content):
         fh.write(content)
 
 
-def write_meta(path, artifact_name, task_id, author_role, verdict=None):
+def write_meta(path, artifact_name, task_id, author_role, verdict=None, team_context=None):
     meta = {
         "artifact": artifact_name,
         "task_id": task_id,
@@ -50,6 +61,29 @@ def write_meta(path, artifact_name, task_id, author_role, verdict=None):
     }
     if verdict is not None:
         meta["verdict"] = verdict
+    if team_context:
+        meta["orchestration_mode"] = "team"
+        if team_context.get("team_status"):
+            meta["team_status"] = team_context["team_status"]
+        if team_context.get("current_worker"):
+            meta["team_worker"] = team_context["current_worker"]
+        if team_context.get("current_role"):
+            meta["agent_name"] = team_context["current_role"]
+        if team_context.get("phase"):
+            meta["team_phase"] = team_context["phase"]
+        owners = [str(item).strip() for item in (team_context.get("expected_workers") or []) if str(item).strip()]
+        if owners:
+            meta["team_expected_workers"] = owners
+        if team_context.get("expected_owner_label"):
+            meta["team_expected_owner"] = team_context["expected_owner_label"]
+        if team_context.get("expected_owner_source"):
+            meta["team_expected_owner_source"] = team_context["expected_owner_source"]
+        if team_context.get("owner_match") is not None:
+            meta["team_owner_match"] = bool(team_context["owner_match"])
+        if team_context.get("owner_enforced"):
+            meta["team_owner_enforced"] = True
+        if team_context.get("current_worker_inferred"):
+            meta["team_worker_inferred"] = True
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(meta, fh, indent=2)
         fh.write("\n")
@@ -126,6 +160,160 @@ def parse_checks_arg(checks_str):
     return result
 
 
+def _clean_workers(values):
+    result = []
+    for value in values or []:
+        worker = str(value or "").strip()
+        if worker and worker not in result:
+            result.append(worker)
+    return result
+
+
+def _current_team_worker(task_dir, known_workers=None):
+    explicit = os.environ.get("HARNESS_TEAM_WORKER", "").strip()
+    if explicit:
+        return explicit, False
+    if get_team_worker_name is None:
+        return "", False
+    worker = get_team_worker_name(known_workers=known_workers or [])
+    return worker, False
+
+
+def _expected_team_owners(artifact_name, team_state):
+    owners = []
+    owner_label = ""
+    owner_source = ""
+    phase = ""
+    enforce = False
+
+    if artifact_name in ("CRITIC__runtime.md", "QA__runtime.md"):
+        owners = _clean_workers(
+            team_state.get("team_runtime_verification_owners") or team_state.get("synthesis_workers") or []
+        )
+        owner_label = str(
+            team_state.get("team_runtime_verification_owner_label")
+            or ", ".join(owners)
+            or "lead/integrator"
+        )
+        owner_source = "team-runtime"
+        phase = "verification"
+        final_phase_started = bool(
+            team_state.get("synthesis_ready") or team_state.get("team_runtime_verification_needed")
+        )
+        enforce = bool(final_phase_started and owners)
+    elif artifact_name == "DOC_SYNC.md":
+        owners = _clean_workers(team_state.get("team_doc_sync_owners") or [])
+        owner_label = str(team_state.get("team_doc_sync_owner_label") or ", ".join(owners) or "writer")
+        owner_source = str(team_state.get("team_doc_sync_owner_source") or "")
+        phase = "documentation"
+        enforce = bool(owners and owner_source in ("explicit", "inferred"))
+    elif artifact_name == "CRITIC__document.md":
+        owners = _clean_workers(team_state.get("team_document_critic_owners") or [])
+        owner_label = str(
+            team_state.get("team_document_critic_owner_label")
+            or ", ".join(owners)
+            or "critic-document"
+        )
+        owner_source = str(team_state.get("team_document_critic_owner_source") or "")
+        phase = "documentation"
+        enforce = bool(owners and owner_source in ("explicit", "inferred"))
+    elif artifact_name == "HANDOFF.md":
+        owners = _clean_workers(team_state.get("synthesis_workers") or [])
+        owner_label = ", ".join(owners) or "lead/integrator"
+        owner_source = "team-synthesis"
+        phase = "handoff"
+        enforce = bool(owners)
+
+    return {
+        "owners": owners,
+        "owner_label": owner_label,
+        "owner_source": owner_source,
+        "phase": phase,
+        "enforce": enforce,
+    }
+
+
+def get_team_artifact_context(task_dir, artifact_name):
+    if team_artifact_status is None:
+        return {}
+    try:
+        team_state = team_artifact_status(task_dir)
+    except Exception:
+        return {}
+    if team_state.get("orchestration_mode") != "team":
+        return {}
+
+    owner_info = _expected_team_owners(artifact_name, team_state)
+    known_workers = _clean_workers(team_state.get("plan_workers") or [])
+    current_worker, inferred_worker = _current_team_worker(task_dir, known_workers)
+    if not current_worker and owner_info.get("enforce") and len(owner_info.get("owners") or []) == 1:
+        current_worker = owner_info["owners"][0]
+        inferred_worker = True
+
+    current_role = get_agent_role() if get_agent_role is not None else os.environ.get("CLAUDE_AGENT_NAME", "").strip()
+    owner_match = None
+    if owner_info.get("owners"):
+        owner_match = bool(current_worker and current_worker in owner_info["owners"])
+
+    return {
+        "team_enabled": True,
+        "team_status": str(team_state.get("derived_status") or team_state.get("current_status") or "planned"),
+        "plan_workers": known_workers,
+        "current_worker": current_worker,
+        "current_worker_inferred": inferred_worker,
+        "current_role": str(current_role or ""),
+        "expected_workers": list(owner_info.get("owners") or []),
+        "expected_owner_label": str(owner_info.get("owner_label") or ""),
+        "expected_owner_source": str(owner_info.get("owner_source") or ""),
+        "phase": str(owner_info.get("phase") or ""),
+        "owner_enforced": bool(owner_info.get("enforce")),
+        "owner_match": owner_match,
+    }
+
+
+def enforce_team_artifact_owner(task_dir, artifact_name):
+    context = get_team_artifact_context(task_dir, artifact_name)
+    if not context or not context.get("owner_enforced"):
+        return context
+
+    owners = context.get("expected_workers") or []
+    current_worker = str(context.get("current_worker") or "").strip()
+    if owners and not current_worker:
+        preview = ", ".join(owners[:4])
+        raise ValueError(
+            f"{artifact_name} is reserved for team owner(s) [{preview}]. "
+            "Set HARNESS_TEAM_WORKER (or pass team_worker via the MCP write_* tool) before writing it."
+        )
+    if owners and current_worker not in owners:
+        preview = ", ".join(owners[:4])
+        raise ValueError(
+            f"{artifact_name} is reserved for team owner(s) [{preview}]. "
+            f"Current worker is '{current_worker}'."
+        )
+    return context
+
+
+def artifact_team_header_lines(team_context):
+    if not team_context:
+        return []
+    lines = []
+    worker = str(team_context.get("current_worker") or "").strip()
+    if worker:
+        lines.append(f"team_worker: {worker}")
+    phase = str(team_context.get("phase") or "").strip()
+    if phase:
+        lines.append(f"team_phase: {phase}")
+    owner_label = str(team_context.get("expected_owner_label") or "").strip()
+    if owner_label:
+        lines.append(f"team_owner: {owner_label}")
+    owners = [str(item).strip() for item in (team_context.get("expected_workers") or []) if str(item).strip()]
+    if owners:
+        lines.append("team_expected_workers: " + ", ".join(owners))
+    if team_context.get("current_worker_inferred"):
+        lines.append("team_worker_inferred: true")
+    return lines
+
+
 def update_checks_yaml(task_dir, checks_dict):
     """Update CHECKS.yaml criteria statuses from a dict {id: PASS|FAIL}."""
     if not checks_dict:
@@ -171,6 +359,9 @@ def cmd_critic_runtime(args):
     task_dir = os.path.abspath(args.task_dir)
     task_id = task_id_from_dir(task_dir)
     ts = now_iso()
+    artifact_name = "CRITIC__runtime.md"
+    team_context = enforce_team_artifact_owner(task_dir, artifact_name)
+    team_header = artifact_team_header_lines(team_context)
 
     checks_str = getattr(args, "checks", None) or "none"
     checks_dict = parse_checks_arg(checks_str)
@@ -187,18 +378,20 @@ def cmd_critic_runtime(args):
         "## Transcript",
         args.transcript,
     ]
+    if team_header:
+        md_lines[2:2] = team_header
     if verdict_reason:
-        md_lines.insert(5, f"verdict_reason: {verdict_reason}")
+        blank_idx = md_lines.index("") if "" in md_lines else len(md_lines)
+        md_lines.insert(blank_idx, f"verdict_reason: {verdict_reason}")
 
     md_content = "\n".join(md_lines) + "\n"
 
     # Write artifact
-    artifact_name = "CRITIC__runtime.md"
     artifact_path = os.path.join(task_dir, artifact_name)
     meta_path = os.path.join(task_dir, "CRITIC__runtime.meta.json")
 
     write_file(artifact_path, md_content)
-    write_meta(meta_path, artifact_name, task_id, "critic-runtime", verdict=args.verdict)
+    write_meta(meta_path, artifact_name, task_id, "critic-runtime", verdict=args.verdict, team_context=team_context)
 
     # Update TASK_STATE.yaml
     update_task_state_field(task_dir, "runtime_verdict", args.verdict)
@@ -222,6 +415,9 @@ def cmd_critic_runtime(args):
 def cmd_critic_plan(args):
     task_dir = os.path.abspath(args.task_dir)
     task_id = task_id_from_dir(task_dir)
+    artifact_name = "CRITIC__plan.md"
+    team_context = enforce_team_artifact_owner(task_dir, artifact_name)
+    team_header = artifact_team_header_lines(team_context)
 
     checks_str = getattr(args, "checks", None) or "none"
     checks_dict = parse_checks_arg(checks_str)
@@ -234,14 +430,15 @@ def cmd_critic_plan(args):
         f"issues: {issues}",
         f"checks_updated: {checks_str if checks_str else 'none'}",
     ]
+    if team_header:
+        md_lines[2:2] = team_header
     md_content = "\n".join(md_lines) + "\n"
 
-    artifact_name = "CRITIC__plan.md"
     artifact_path = os.path.join(task_dir, artifact_name)
     meta_path = os.path.join(task_dir, "CRITIC__plan.meta.json")
 
     write_file(artifact_path, md_content)
-    write_meta(meta_path, artifact_name, task_id, "critic-plan", verdict=args.verdict)
+    write_meta(meta_path, artifact_name, task_id, "critic-plan", verdict=args.verdict, team_context=team_context)
 
     # Update TASK_STATE.yaml
     update_task_state_field(task_dir, "plan_verdict", args.verdict)
@@ -261,6 +458,9 @@ def cmd_critic_plan(args):
 def cmd_critic_document(args):
     task_dir = os.path.abspath(args.task_dir)
     task_id = task_id_from_dir(task_dir)
+    artifact_name = "CRITIC__document.md"
+    team_context = enforce_team_artifact_owner(task_dir, artifact_name)
+    team_header = artifact_team_header_lines(team_context)
 
     checks_str = getattr(args, "checks", None) or "none"
     checks_dict = parse_checks_arg(checks_str)
@@ -273,14 +473,15 @@ def cmd_critic_document(args):
         f"issues: {issues}",
         f"checks_updated: {checks_str if checks_str else 'none'}",
     ]
+    if team_header:
+        md_lines[2:2] = team_header
     md_content = "\n".join(md_lines) + "\n"
 
-    artifact_name = "CRITIC__document.md"
     artifact_path = os.path.join(task_dir, artifact_name)
     meta_path = os.path.join(task_dir, "CRITIC__document.meta.json")
 
     write_file(artifact_path, md_content)
-    write_meta(meta_path, artifact_name, task_id, "critic-document", verdict=args.verdict)
+    write_meta(meta_path, artifact_name, task_id, "critic-document", verdict=args.verdict, team_context=team_context)
 
     # Update TASK_STATE.yaml
     update_task_state_field(task_dir, "document_verdict", args.verdict)
@@ -301,6 +502,9 @@ def cmd_handoff(args):
     task_dir = os.path.abspath(args.task_dir)
     task_id = task_id_from_dir(task_dir)
     ts = now_iso()
+    artifact_name = "HANDOFF.md"
+    team_context = enforce_team_artifact_owner(task_dir, artifact_name)
+    team_header = artifact_team_header_lines(team_context)
 
     expected_output = getattr(args, "expected_output", None) or "see transcript"
     do_not_regress = getattr(args, "do_not_regress", None) or "n/a"
@@ -321,14 +525,15 @@ def cmd_handoff(args):
         "## Do not regress",
         do_not_regress,
     ]
+    if team_header:
+        md_lines[2:2] = team_header
     md_content = "\n".join(md_lines) + "\n"
 
-    artifact_name = "HANDOFF.md"
     artifact_path = os.path.join(task_dir, artifact_name)
     meta_path = os.path.join(task_dir, "HANDOFF.meta.json")
 
     write_file(artifact_path, md_content)
-    write_meta(meta_path, artifact_name, task_id, "developer")
+    write_meta(meta_path, artifact_name, task_id, "developer", team_context=team_context)
 
     print(f"wrote {artifact_name} + HANDOFF.meta.json")
     return 0
@@ -343,6 +548,9 @@ def cmd_doc_sync(args):
     task_dir = os.path.abspath(args.task_dir)
     task_id = task_id_from_dir(task_dir)
     ts = now_iso()
+    artifact_name = "DOC_SYNC.md"
+    team_context = enforce_team_artifact_owner(task_dir, artifact_name)
+    team_header = artifact_team_header_lines(team_context)
 
     new_files = getattr(args, "new_files", None) or "none"
     updated_files = getattr(args, "updated_files", None) or "none"
@@ -368,14 +576,15 @@ def cmd_doc_sync(args):
         "## Notes",
         notes,
     ]
+    if team_header:
+        md_lines[2:2] = team_header
     md_content = "\n".join(md_lines) + "\n"
 
-    artifact_name = "DOC_SYNC.md"
     artifact_path = os.path.join(task_dir, artifact_name)
     meta_path = os.path.join(task_dir, "DOC_SYNC.meta.json")
 
     write_file(artifact_path, md_content)
-    write_meta(meta_path, artifact_name, task_id, "writer")
+    write_meta(meta_path, artifact_name, task_id, "writer", team_context=team_context)
 
     print(f"wrote {artifact_name} + DOC_SYNC.meta.json")
     return 0
