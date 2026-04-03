@@ -47,6 +47,8 @@ from failure_memory import (
     find_similar_failures,
     diff_failure_cases,
 )
+from harness_api import get_task_context
+from task_index import clear_active_task, update_active_task
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +147,11 @@ def cmd_start(args):
     except Exception:
         case_path = ""
 
+    try:
+        update_active_task(task_dir, tasks_dir=os.path.dirname(task_dir))
+    except Exception:
+        pass
+
     task_id = yaml_field("task_id", os.path.join(task_dir, "TASK_STATE.yaml")) or os.path.basename(task_dir)
     print(f"routing compiled for {task_id}")
     print(f"  risk_level: {routing['risk_level']}")
@@ -184,20 +191,10 @@ def cmd_context(args):
     """Emit compact task pack."""
     task_dir = _require_task_dir(args)
 
-    try:
-        write_failure_case_snapshot(task_dir)
-    except Exception:
-        pass
-
-    try:
-        sync_team_status(task_dir)
-    except Exception:
-        pass
-
-    ctx = emit_compact_context(
+    ctx = get_task_context(
         task_dir,
-        raw_agent_name=getattr(args, "agent_name", None),
-        explicit_worker=getattr(args, "team_worker", None),
+        team_worker=getattr(args, "team_worker", None),
+        agent_name=getattr(args, "agent_name", None),
     )
 
     if getattr(args, "json", False):
@@ -828,6 +825,11 @@ def cmd_update(args):
         except Exception:
             pass
 
+        try:
+            update_active_task(task_dir, tasks_dir=os.path.dirname(task_dir))
+        except Exception:
+            pass
+
         print(f"Updated touched_paths: {len(touched_paths)} files")
         print(f"Updated roots_touched: {roots_touched}")
         print(f"Updated verification_targets: {len(verification_targets)} files")
@@ -883,6 +885,14 @@ def cmd_close(args):
         env=env,
         cwd=os.getcwd(),
     )
+    try:
+        state_status = (yaml_field("status", state_file) or "").strip().lower()
+        if result.returncode == 0 or state_status in ("closed", "archived", "stale"):
+            clear_active_task(task_dir=task_dir, tasks_dir=os.path.dirname(task_dir))
+        else:
+            update_active_task(task_dir, tasks_dir=os.path.dirname(task_dir))
+    except Exception:
+        pass
     if result.returncode == 0:
         print(f"close gate PASSED for {task_id}")
     else:

@@ -27,6 +27,7 @@ MANIFEST = "doc/harness/manifest.yaml"
 
 _HOOK_INPUT = None
 _HOOK_INPUT_READ = False
+_YAML_LINES_CACHE = {}
 
 
 def read_hook_input():
@@ -137,22 +138,47 @@ def json_array(field, input_str=None):
 # ---------------------------------------------------------------------------
 
 
-def yaml_field(field, filepath):
-    """Parse a scalar field from a YAML file. Returns str or ''."""
+def _yaml_read_lines(filepath):
+    """Read YAML file lines with a tiny mtime-based cache.
+
+    The harness hot paths repeatedly look up many scalar / array fields from the
+    same small TASK_STATE.yaml file. Re-opening the file dozens of times is
+    wasted I/O, so cache the raw lines keyed by (mtime_ns, size) and let the
+    existing lightweight parsers reuse them.
+    """
     if not filepath or not os.path.isfile(filepath):
-        return ""
+        return []
+    try:
+        stat_result = os.stat(filepath)
+    except OSError:
+        return []
+
+    cache_key = (int(getattr(stat_result, "st_mtime_ns", 0)), int(getattr(stat_result, "st_size", 0)))
+    cached = _YAML_LINES_CACHE.get(filepath)
+    if cached and cached.get("key") == cache_key:
+        return list(cached.get("lines") or [])
+
     try:
         with open(filepath, "r", encoding="utf-8") as fh:
-            for line in fh:
-                m = re.match(r"^\s*" + re.escape(field) + r":\s*(.*)", line)
-                if m:
-                    raw = m.group(1).rstrip("\n")
-                    # Strip surrounding quotes
-                    raw = raw.strip()
-                    raw = raw.strip('"').strip("'")
-                    return raw
+            lines = fh.readlines()
     except OSError:
-        pass
+        return []
+
+    _YAML_LINES_CACHE[filepath] = {"key": cache_key, "lines": list(lines)}
+    return list(lines)
+
+
+def yaml_field(field, filepath):
+    """Parse a scalar field from a YAML file. Returns str or ''."""
+    lines = _yaml_read_lines(filepath)
+    for line in lines:
+        m = re.match(r"^\s*" + re.escape(field) + r":\s*(.*)", line)
+        if m:
+            raw = m.group(1).rstrip("\n")
+            # Strip surrounding quotes
+            raw = raw.strip()
+            raw = raw.strip('"').strip("'")
+            return raw
     return ""
 
 
@@ -165,12 +191,8 @@ def yaml_array(field, filepath):
         - a
         - b
     """
-    if not filepath or not os.path.isfile(filepath):
-        return []
-    try:
-        with open(filepath, "r", encoding="utf-8") as fh:
-            lines = fh.readlines()
-    except OSError:
+    lines = _yaml_read_lines(filepath)
+    if not lines:
         return []
 
     # Find the field line
@@ -2020,12 +2042,111 @@ def team_handoff_status(task_dir, team_state=None):
     }
 
 
+def _team_artifact_skip_state(task_dir, orch_mode, current_status, fallback_used):
+    """Return a lightweight default team artifact payload for non-team modes."""
+    return {
+        "orchestration_mode": str(orch_mode or "solo"),
+        "current_status": str(current_status or "n/a"),
+        "derived_status": str(current_status or "n/a"),
+        "fallback_used": str(fallback_used or "none"),
+        "plan_path": os.path.join(task_dir, "TEAM_PLAN.md"),
+        "plan_exists": False,
+        "plan_ready": False,
+        "plan_missing_sections": list(TEAM_PLAN_REQUIRED_HEADINGS),
+        "plan_has_placeholders": True,
+        "plan_semantic_errors": [],
+        "plan_workers": [],
+        "plan_owned_paths": {},
+        "plan_forbidden_paths": {},
+        "plan_shared_read_only_paths": [],
+        "plan_synthesis_workers": [],
+        "plan_summary_workers": [],
+        "plan_synthesis_role_hint": "",
+        "plan_doc_sync_workers": [],
+        "plan_doc_sync_owner_source": "",
+        "plan_document_critic_workers": [],
+        "plan_document_critic_owner_source": "",
+        "plan_owned_path_count": 0,
+        "plan_ownership_ready": False,
+        "plan_mtime": 0.0,
+        "worker_summary_dir": os.path.join(task_dir, "team"),
+        "worker_summary_required": False,
+        "worker_summary_ready": True,
+        "worker_summary_expected_workers": [],
+        "worker_summary_synthesis_workers": [],
+        "worker_summary_expected_count": 0,
+        "worker_summary_present_count": 0,
+        "worker_summary_ready_count": 0,
+        "worker_summary_missing_workers": [],
+        "worker_summary_errors": [],
+        "worker_summary_artifacts": [],
+        "worker_summary_latest_mtime": 0.0,
+        "worker_summary_extra_files": [],
+        "worker_summary_per_worker": {},
+        "summary_workers": [],
+        "synthesis_workers": [],
+        "synthesis_path": os.path.join(task_dir, "TEAM_SYNTHESIS.md"),
+        "synthesis_exists": False,
+        "synthesis_ready": False,
+        "synthesis_missing_sections": list(TEAM_SYNTHESIS_REQUIRED_HEADINGS),
+        "synthesis_has_placeholders": True,
+        "synthesis_semantic_errors": [],
+        "synthesis_refreshed_after_degraded": False,
+        "synthesis_mtime": 0.0,
+        "team_runtime_verification_active": False,
+        "team_runtime_verification_needed": False,
+        "team_runtime_verification_ready": False,
+        "team_runtime_verification_reason": "",
+        "team_runtime_verification_owners": [],
+        "team_runtime_verification_owner_label": "",
+        "team_runtime_artifact": "",
+        "team_runtime_artifact_exists": False,
+        "team_runtime_mtime": 0.0,
+        "team_runtime_stale_after_synthesis": False,
+        "team_documentation_active": False,
+        "team_documentation_needed": False,
+        "team_documentation_ready": False,
+        "team_documentation_reason": "",
+        "team_documentation_owner_label": "",
+        "team_doc_sync_exists": False,
+        "team_doc_sync_mtime": 0.0,
+        "team_doc_sync_needed": False,
+        "team_doc_sync_owners": [],
+        "team_doc_sync_owner_label": "",
+        "team_doc_sync_owner_source": "",
+        "team_doc_sync_missing_after_verification": False,
+        "team_doc_sync_stale_after_verification": False,
+        "team_doc_sync_artifact": "DOC_SYNC.md",
+        "team_document_critic_needed": False,
+        "team_document_critic_pending": False,
+        "team_document_critic_exists": False,
+        "team_document_critic_mtime": 0.0,
+        "team_document_critic_owners": [],
+        "team_document_critic_owner_label": "",
+        "team_document_critic_owner_source": "",
+        "team_document_critic_missing_after_docs": False,
+        "team_document_critic_stale_after_docs": False,
+        "team_document_critic_artifact": "CRITIC__document.md",
+        "team_document_verdict": "pending",
+        "handoff_exists": False,
+        "handoff_stub": True,
+        "handoff_mtime": 0.0,
+        "handoff_refresh_needed": False,
+        "handoff_refresh_reason": "",
+        "latest_team_artifact": "",
+        "latest_team_mtime": 0.0,
+    }
+
+
 def team_artifact_status(task_dir):
     """Return readiness + derived status for team artifacts in a task dir."""
     state_file = os.path.join(task_dir, "TASK_STATE.yaml")
     orch_mode = yaml_field("orchestration_mode", state_file) or "solo"
     current_status = yaml_field("team_status", state_file) or "n/a"
     fallback_used = yaml_field("fallback_used", state_file) or "none"
+
+    if orch_mode != "team":
+        return _team_artifact_skip_state(task_dir, orch_mode, current_status, fallback_used)
 
     plan_path = os.path.join(task_dir, "TEAM_PLAN.md")
     synthesis_path = os.path.join(task_dir, "TEAM_SYNTHESIS.md")
@@ -5208,6 +5329,7 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
 
     execution_mode = yaml_field("execution_mode", state_file) or "standard"
     orchestration_mode = yaml_field("orchestration_mode", state_file) or "solo"
+    is_team_mode = orchestration_mode == "team"
     team_provider = yaml_field("team_provider", state_file) or "none"
     team_status = yaml_field("team_status", state_file) or "n/a"
     team_size = _int(yaml_field("team_size", state_file) or "0")
@@ -5217,68 +5339,107 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
     fallback_used = yaml_field("fallback_used", state_file) or "none"
     planning_mode = get_planning_mode(state_file)
     runtime_fail_count = _int(yaml_field("runtime_verdict_fail_count", state_file) or "0")
-    team_artifacts = team_artifact_status(task_dir)
-    team_status = team_artifacts.get("derived_status", team_status)
-    current_team_worker = get_team_worker_name(
-        team_artifacts.get("plan_workers") or [],
-        raw_agent_name=raw_agent_name,
-        explicit_worker=explicit_worker,
-    )
-    current_worker_owned_paths = list((team_artifacts.get("plan_owned_paths") or {}).get(current_team_worker, []) or [])
-    current_worker_summary = dict((team_artifacts.get("worker_summary_per_worker") or {}).get(current_team_worker) or {})
-    current_worker_relpath = team_worker_summary_relpath(current_team_worker) if current_team_worker else ""
-    current_worker_pending = bool(
-        current_team_worker
-        and (
-            current_team_worker in (team_artifacts.get("worker_summary_missing_workers") or [])
-            or current_worker_summary.get("status") == "incomplete"
-        )
-    )
+    team_artifacts = _team_artifact_skip_state(task_dir, orchestration_mode, team_status, fallback_used)
+    current_team_worker = ""
+    current_worker_owned_paths = []
+    current_worker_summary = {}
+    current_worker_relpath = ""
+    current_worker_pending = False
     current_agent_role = get_agent_role(raw_agent_name)
-    team_synthesis_workers = list(team_artifacts.get("synthesis_workers") or [])
-    team_summary_workers = list(team_artifacts.get("summary_workers") or [])
-    team_doc_sync_workers = list(team_artifacts.get("team_doc_sync_owners") or [])
-    team_document_critic_workers = list(team_artifacts.get("team_document_critic_owners") or [])
-    current_worker_is_synthesis_owner = bool(
-        current_team_worker and current_team_worker in team_synthesis_workers
-    )
-    current_worker_is_doc_sync_owner = bool(
-        current_team_worker and current_team_worker in team_doc_sync_workers
-    )
-    current_worker_is_document_critic_owner = bool(
-        current_team_worker and current_team_worker in team_document_critic_workers
-    )
+    team_synthesis_workers = []
+    team_summary_workers = []
+    team_doc_sync_workers = []
+    team_document_critic_workers = []
+    current_worker_is_synthesis_owner = False
+    current_worker_is_doc_sync_owner = False
+    current_worker_is_document_critic_owner = False
     team_plan_name = "TEAM_PLAN.md"
     team_synthesis_name = "TEAM_SYNTHESIS.md"
-    team_bootstrap = team_bootstrap_status(task_dir, team_state=team_artifacts)
-    team_bootstrap_dir_name = normalize_path(str(team_bootstrap.get("bootstrap_dir") or os.path.join("team", "bootstrap")))
-    team_bootstrap_index_name = normalize_path(str(team_bootstrap.get("bootstrap_index") or os.path.join(team_bootstrap_dir_name, "index.json")))
-    team_bootstrap_ready = bool(team_bootstrap.get("available"))
-    team_bootstrap_generated = bool(team_bootstrap.get("generated"))
-    team_bootstrap_stale = bool(team_bootstrap.get("stale"))
-    team_bootstrap_refresh_needed = bool(team_bootstrap.get("refresh_needed"))
-    team_bootstrap_reason = str(team_bootstrap.get("reason") or "")
-    team_dispatch = team_dispatch_status(task_dir, team_state=team_artifacts)
-    team_dispatch_dir_name = normalize_path(str(team_dispatch.get("dispatch_dir") or os.path.join("team", "bootstrap", "provider")))
-    team_dispatch_index_name = normalize_path(str(team_dispatch.get("dispatch_index") or os.path.join(team_dispatch_dir_name, "dispatch.json")))
-    team_dispatch_available = bool(team_dispatch.get("available"))
-    team_dispatch_generated = bool(team_dispatch.get("generated"))
-    team_dispatch_stale = bool(team_dispatch.get("stale"))
-    team_dispatch_refresh_needed = bool(team_dispatch.get("refresh_needed"))
-    team_dispatch_reason = str(team_dispatch.get("reason") or "")
-    team_launch = team_launch_status(task_dir, team_state=team_artifacts)
-    team_launch_manifest_name = normalize_path(str(team_launch.get("launch_manifest") or os.path.join("team", "bootstrap", "provider", "launch.json")))
-    team_launch_available = bool(team_launch.get("available"))
-    team_launch_generated = bool(team_launch.get("generated"))
-    team_launch_stale = bool(team_launch.get("stale"))
-    team_launch_refresh_needed = bool(team_launch.get("refresh_needed"))
-    team_launch_reason = str(team_launch.get("reason") or "")
-    team_relaunch = select_team_relaunch_target(
-        task_dir,
-        team_state=team_artifacts,
-        raw_agent_name=raw_agent_name,
-        explicit_worker=explicit_worker,
-    )
+    team_bootstrap = {}
+    team_bootstrap_dir_name = normalize_path(os.path.join("team", "bootstrap"))
+    team_bootstrap_index_name = normalize_path(os.path.join(team_bootstrap_dir_name, "index.json"))
+    team_bootstrap_ready = False
+    team_bootstrap_generated = False
+    team_bootstrap_stale = False
+    team_bootstrap_refresh_needed = False
+    team_bootstrap_reason = ""
+    team_dispatch = {}
+    team_dispatch_dir_name = normalize_path(os.path.join("team", "bootstrap", "provider"))
+    team_dispatch_index_name = normalize_path(os.path.join(team_dispatch_dir_name, "dispatch.json"))
+    team_dispatch_available = False
+    team_dispatch_generated = False
+    team_dispatch_stale = False
+    team_dispatch_refresh_needed = False
+    team_dispatch_reason = ""
+    team_launch = {}
+    team_launch_manifest_name = normalize_path(os.path.join("team", "bootstrap", "provider", "launch.json"))
+    team_launch_available = False
+    team_launch_generated = False
+    team_launch_stale = False
+    team_launch_refresh_needed = False
+    team_launch_reason = ""
+    team_relaunch = {}
+
+    if is_team_mode:
+        team_artifacts = team_artifact_status(task_dir)
+        team_status = team_artifacts.get("derived_status", team_status)
+        current_team_worker = get_team_worker_name(
+            team_artifacts.get("plan_workers") or [],
+            raw_agent_name=raw_agent_name,
+            explicit_worker=explicit_worker,
+        )
+        current_worker_owned_paths = list((team_artifacts.get("plan_owned_paths") or {}).get(current_team_worker, []) or [])
+        current_worker_summary = dict((team_artifacts.get("worker_summary_per_worker") or {}).get(current_team_worker) or {})
+        current_worker_relpath = team_worker_summary_relpath(current_team_worker) if current_team_worker else ""
+        current_worker_pending = bool(
+            current_team_worker
+            and (
+                current_team_worker in (team_artifacts.get("worker_summary_missing_workers") or [])
+                or current_worker_summary.get("status") == "incomplete"
+            )
+        )
+        team_synthesis_workers = list(team_artifacts.get("synthesis_workers") or [])
+        team_summary_workers = list(team_artifacts.get("summary_workers") or [])
+        team_doc_sync_workers = list(team_artifacts.get("team_doc_sync_owners") or [])
+        team_document_critic_workers = list(team_artifacts.get("team_document_critic_owners") or [])
+        current_worker_is_synthesis_owner = bool(
+            current_team_worker and current_team_worker in team_synthesis_workers
+        )
+        current_worker_is_doc_sync_owner = bool(
+            current_team_worker and current_team_worker in team_doc_sync_workers
+        )
+        current_worker_is_document_critic_owner = bool(
+            current_team_worker and current_team_worker in team_document_critic_workers
+        )
+        team_bootstrap = team_bootstrap_status(task_dir, team_state=team_artifacts)
+        team_bootstrap_dir_name = normalize_path(str(team_bootstrap.get("bootstrap_dir") or os.path.join("team", "bootstrap")))
+        team_bootstrap_index_name = normalize_path(str(team_bootstrap.get("bootstrap_index") or os.path.join(team_bootstrap_dir_name, "index.json")))
+        team_bootstrap_ready = bool(team_bootstrap.get("available"))
+        team_bootstrap_generated = bool(team_bootstrap.get("generated"))
+        team_bootstrap_stale = bool(team_bootstrap.get("stale"))
+        team_bootstrap_refresh_needed = bool(team_bootstrap.get("refresh_needed"))
+        team_bootstrap_reason = str(team_bootstrap.get("reason") or "")
+        team_dispatch = team_dispatch_status(task_dir, team_state=team_artifacts)
+        team_dispatch_dir_name = normalize_path(str(team_dispatch.get("dispatch_dir") or os.path.join("team", "bootstrap", "provider")))
+        team_dispatch_index_name = normalize_path(str(team_dispatch.get("dispatch_index") or os.path.join(team_dispatch_dir_name, "dispatch.json")))
+        team_dispatch_available = bool(team_dispatch.get("available"))
+        team_dispatch_generated = bool(team_dispatch.get("generated"))
+        team_dispatch_stale = bool(team_dispatch.get("stale"))
+        team_dispatch_refresh_needed = bool(team_dispatch.get("refresh_needed"))
+        team_dispatch_reason = str(team_dispatch.get("reason") or "")
+        team_launch = team_launch_status(task_dir, team_state=team_artifacts)
+        team_launch_manifest_name = normalize_path(str(team_launch.get("launch_manifest") or os.path.join("team", "bootstrap", "provider", "launch.json")))
+        team_launch_available = bool(team_launch.get("available"))
+        team_launch_generated = bool(team_launch.get("generated"))
+        team_launch_stale = bool(team_launch.get("stale"))
+        team_launch_refresh_needed = bool(team_launch.get("refresh_needed"))
+        team_launch_reason = str(team_launch.get("reason") or "")
+        team_relaunch = select_team_relaunch_target(
+            task_dir,
+            team_state=team_artifacts,
+            raw_agent_name=raw_agent_name,
+            explicit_worker=explicit_worker,
+        )
 
     task_root = os.path.join(TASK_DIR, task_id)
     commands = {
@@ -6017,23 +6178,8 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
         else:
             next_action = "Implement the smallest diff for open checks, then run mcp__plugin_harness_harness__task_update_from_git_diff, task_verify, and task_close."
 
-    return {
-        "task_id": task_id,
-        "status": status,
-        "lane": lane,
-        "risk_level": risk_level,
-        "qa_required": qa_required,
-        "doc_sync_required": doc_sync_required,
-        "browser_required": browser_required,
-        "planning_mode": planning_mode,
-        "parallelism": parallelism,
-        "workflow_locked": workflow_locked,
-        "maintenance_task": maintenance_task,
-        "compat": {
-            "execution_mode": execution_mode,
-            "orchestration_mode": orchestration_mode,
-        },
-        "team": {
+    if is_team_mode:
+        team_payload = {
             "provider": team_provider,
             "status": team_status,
             "size": team_size,
@@ -6175,7 +6321,33 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
             "synthesis_has_placeholders": bool(team_artifacts.get("synthesis_has_placeholders")),
             "synthesis_semantic_errors": list(team_artifacts.get("synthesis_semantic_errors") or []),
             "synthesis_refreshed_after_degraded": bool(team_artifacts.get("synthesis_refreshed_after_degraded")),
+        }
+    else:
+        team_payload = {
+            "provider": team_provider,
+            "status": team_status,
+            "size": team_size,
+            "reason": team_reason,
+            "fallback_used": fallback_used,
+        }
+
+    return {
+        "task_id": task_id,
+        "status": status,
+        "lane": lane,
+        "risk_level": risk_level,
+        "qa_required": qa_required,
+        "doc_sync_required": doc_sync_required,
+        "browser_required": browser_required,
+        "planning_mode": planning_mode,
+        "parallelism": parallelism,
+        "workflow_locked": workflow_locked,
+        "maintenance_task": maintenance_task,
+        "compat": {
+            "execution_mode": execution_mode,
+            "orchestration_mode": orchestration_mode,
         },
+        "team": team_payload,
         "team_plan_name": team_plan_name,
         "team_synthesis_name": team_synthesis_name,
         "team_plan_path": _task_rel(team_plan_name),

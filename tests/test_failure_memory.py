@@ -17,6 +17,7 @@ from failure_memory import (
     list_failure_cases,
     write_failure_case_snapshot,
 )
+from task_index import FAILURE_INDEX_FILENAME
 
 
 class FailureMemoryTests(unittest.TestCase):
@@ -154,6 +155,9 @@ class FailureMemoryTests(unittest.TestCase):
             self.assertEqual(payload["task_id"], "TASK__case")
             self.assertEqual(payload["runtime_verdict"], "FAIL")
             self.assertGreaterEqual(payload["failure_signals"], 2)
+
+            failure_index = json.loads((root / FAILURE_INDEX_FILENAME).read_text(encoding="utf-8"))
+            self.assertIn("TASK__case", failure_index.get("cases", {}))
 
     def test_list_failure_cases_and_diff_case(self):
         with tempfile.TemporaryDirectory() as tmp:

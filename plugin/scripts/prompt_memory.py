@@ -24,6 +24,7 @@ from failure_memory import (
     format_similar_failure_hint,
     format_similar_failures_hint,
 )
+from task_index import resolve_active_task_dir, update_active_task
 
 
 def is_casual(prompt):
@@ -205,6 +206,11 @@ def _get_active_task_dir():
     task_dir = TASK_DIR
     if not os.path.isdir(task_dir):
         return None
+
+    indexed = resolve_active_task_dir(tasks_dir=task_dir)
+    if indexed:
+        return indexed
+
     candidates = []
     for entry in os.listdir(task_dir):
         if not entry.startswith("TASK__"):
@@ -231,7 +237,12 @@ def _get_active_task_dir():
         return None
     # Most recently updated task
     candidates.sort(key=lambda x: x[0], reverse=True)
-    return candidates[0][1]
+    active_dir = candidates[0][1]
+    try:
+        update_active_task(active_dir, tasks_dir=task_dir)
+    except Exception:
+        pass
+    return active_dir
 
 
 def _is_fix_round(task_dir):
