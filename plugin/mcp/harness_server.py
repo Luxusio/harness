@@ -30,6 +30,7 @@ MAX_TEXT_CHARS = 12000
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import calibration_miner  # type: ignore  # noqa: E402
+import harness_api  # type: ignore  # noqa: E402
 import observability  # type: ignore  # noqa: E402
 
 
@@ -146,13 +147,34 @@ def _optional_bool(args: dict[str, Any], key: str, default: bool = False) -> boo
 
 
 def _load_context(task_dir: str) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    try:
+        parsed = harness_api.get_task_context(task_dir)
+        response = {
+            "ok": True,
+            "method": "direct",
+            "exit_code": 0,
+            "stdout": _cap_text(json.dumps(parsed, ensure_ascii=False)),
+            "stderr": "",
+        }
+        return parsed, response
+    except Exception as exc:
+        direct_error = {
+            "ok": False,
+            "method": "direct",
+            "exit_code": 1,
+            "stdout": "",
+            "stderr": _cap_text(str(exc)),
+        }
+
     response = _run_script("hctl.py", ["context", "--task-dir", task_dir, "--json"])
     if not response["ok"]:
+        response.setdefault("fallback_from", direct_error)
         return None, response
     try:
         parsed = json.loads(response["stdout"])
     except json.JSONDecodeError:
         parsed = None
+    response.setdefault("fallback_from", direct_error)
     return parsed, response
 
 
@@ -179,19 +201,43 @@ def handle_task_context(args: dict[str, Any]) -> dict[str, Any]:
     task_dir = _require_str(args, "task_dir")
     team_worker = _optional_str(args, "team_worker")
     agent_name = _optional_str(args, "agent_name")
-    argv = ["context", "--task-dir", task_dir, "--json"]
-    if team_worker:
-        argv.extend(["--team-worker", team_worker])
-    if agent_name:
-        argv.extend(["--agent-name", agent_name])
-    response = _run_script("hctl.py", argv)
-    if response["ok"]:
-        try:
-            context = json.loads(response["stdout"])
-        except json.JSONDecodeError:
+    try:
+        context = harness_api.get_task_context(
+            task_dir,
+            team_worker=team_worker,
+            agent_name=agent_name,
+        )
+        response = {
+            "ok": True,
+            "method": "direct",
+            "exit_code": 0,
+            "stdout": _cap_text(json.dumps(context, ensure_ascii=False)),
+            "stderr": "",
+        }
+    except Exception as exc:
+        argv = ["context", "--task-dir", task_dir, "--json"]
+        if team_worker:
+            argv.extend(["--team-worker", team_worker])
+        if agent_name:
+            argv.extend(["--agent-name", agent_name])
+        response = _run_script("hctl.py", argv)
+        response.setdefault(
+            "fallback_from",
+            {
+                "ok": False,
+                "method": "direct",
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": _cap_text(str(exc)),
+            },
+        )
+        if response["ok"]:
+            try:
+                context = json.loads(response["stdout"])
+            except json.JSONDecodeError:
+                context = None
+        else:
             context = None
-    else:
-        context = None
     payload = {
         "task_dir": task_dir,
         "task_context": context,

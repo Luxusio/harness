@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Tests for prompt_memory.py — complaint summary and reminder injection."""
+import json
 import os
 import sys
 import tempfile
@@ -189,3 +190,42 @@ class TestSimilarFailureHint(unittest.TestCase):
                 repair_parts[0],
             )
             self.assertLessEqual(len(parts), 4)
+
+
+class TestActiveTaskIndex(unittest.TestCase):
+
+    def test_get_active_task_dir_prefers_valid_index(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            indexed = os.path.join(tmp, "TASK__indexed")
+            newer = os.path.join(tmp, "TASK__newer")
+            os.makedirs(indexed)
+            os.makedirs(newer)
+
+            with open(os.path.join(indexed, "TASK_STATE.yaml"), "w", encoding="utf-8") as f:
+                f.write(
+                    "task_id: TASK__indexed\n"
+                    "status: planned\n"
+                    "updated: 2026-01-01T00:00:00Z\n"
+                )
+            with open(os.path.join(newer, "TASK_STATE.yaml"), "w", encoding="utf-8") as f:
+                f.write(
+                    "task_id: TASK__newer\n"
+                    "status: planned\n"
+                    "updated: 2026-02-01T00:00:00Z\n"
+                )
+
+            with open(os.path.join(tmp, "ACTIVE_TASK.json"), "w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "task_id": "TASK__indexed",
+                        "status": "planned",
+                        "updated": "2026-01-01T00:00:00Z",
+                        "task_dir": indexed,
+                    },
+                    f,
+                )
+
+            with mock.patch.object(prompt_memory_module, "TASK_DIR", tmp):
+                active = prompt_memory_module._get_active_task_dir()
+
+            self.assertEqual(active, indexed)

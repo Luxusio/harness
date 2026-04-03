@@ -96,6 +96,11 @@ class PromptBudgetTests(unittest.TestCase):
             self.assertEqual(code, 0, err)
             ctx = json.loads(out)
             self.assertLess(len(out), 2200, "compact context should stay small even with many checks")
+            self.assertEqual(
+                set(ctx["team"].keys()),
+                {"provider", "status", "size", "reason", "fallback_used"},
+                "non-team compact context should only surface the minimal team summary",
+            )
             self.assertLessEqual(len(ctx["must_read"]), 4)
             self.assertLessEqual(len(ctx["checks"]["top_open_titles"]), 2)
             forbidden = {

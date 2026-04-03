@@ -22,6 +22,7 @@ from typing import Iterable
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import TASK_DIR, yaml_array, yaml_field
 from memory_selectors import extract_keywords
+from task_index import load_failure_index, upsert_failure_case
 
 CASE_FILENAME = "FAILURE_CASE.json"
 DEFAULT_LIMIT = 3
@@ -293,10 +294,15 @@ def write_failure_case_snapshot(task_dir: str, prompt: str = "") -> str:
     path = os.path.join(task_dir, CASE_FILENAME)
     try:
         with open(path, "w", encoding="utf-8") as fh:
-            json.dump(_serialize_case(case), fh, indent=2, sort_keys=True)
+            serialized = _serialize_case(case)
+            json.dump(serialized, fh, indent=2, sort_keys=True)
             fh.write("\n")
     except OSError:
         return ""
+    try:
+        upsert_failure_case(serialized, tasks_dir=os.path.dirname(task_dir))
+    except Exception:
+        pass
     return path
 
 
@@ -305,6 +311,15 @@ def _candidate_features(task_dir: str) -> dict:
     if cached:
         return cached
     return _task_features(task_dir)
+
+
+def _indexed_candidate_features(tasks_dir: str | None) -> list[dict]:
+    cases = []
+    for raw_case in load_failure_index(tasks_dir):
+        case = _deserialize_case(raw_case)
+        if case:
+            cases.append(case)
+    return cases
 
 
 def _overlap(a: set[str], b: set[str]) -> float:
@@ -369,16 +384,26 @@ def find_similar_failures(
         return []
 
     results = []
-    for entry in sorted(os.listdir(tasks_dir)):
-        if not entry.startswith("TASK__"):
-            continue
-        candidate_dir = os.path.join(tasks_dir, entry)
-        if not os.path.isdir(candidate_dir):
-            continue
-        if os.path.normpath(candidate_dir) == os.path.normpath(current_task_dir):
-            continue
+    indexed_cases = _indexed_candidate_features(tasks_dir)
+    if indexed_cases:
+        candidate_cases = [
+            case
+            for case in indexed_cases
+            if str(case.get("task_id") or "") != str(current.get("task_id") or "")
+        ]
+    else:
+        candidate_cases = []
+        for entry in sorted(os.listdir(tasks_dir)):
+            if not entry.startswith("TASK__"):
+                continue
+            candidate_dir = os.path.join(tasks_dir, entry)
+            if not os.path.isdir(candidate_dir):
+                continue
+            if os.path.normpath(candidate_dir) == os.path.normpath(current_task_dir):
+                continue
+            candidate_cases.append(_candidate_features(candidate_dir))
 
-        candidate = _candidate_features(candidate_dir)
+    for candidate in candidate_cases:
         scored = _score_candidate(current, candidate, tasks_dir)
         if not scored or scored["score"] < min_score:
             continue
@@ -417,13 +442,20 @@ def list_failure_cases(
 
     selected_lane = (lane or "").strip().lower()
     cases = []
-    for entry in sorted(os.listdir(tasks_dir)):
-        if not entry.startswith("TASK__"):
-            continue
-        task_dir = os.path.join(tasks_dir, entry)
-        if not os.path.isdir(task_dir):
-            continue
-        case = _candidate_features(task_dir)
+    indexed_cases = _indexed_candidate_features(tasks_dir)
+    if indexed_cases:
+        candidate_cases = indexed_cases
+    else:
+        candidate_cases = []
+        for entry in sorted(os.listdir(tasks_dir)):
+            if not entry.startswith("TASK__"):
+                continue
+            task_dir = os.path.join(tasks_dir, entry)
+            if not os.path.isdir(task_dir):
+                continue
+            candidate_cases.append(_candidate_features(task_dir))
+
+    for case in candidate_cases:
         if not case or int(case.get("failure_signals", 0) or 0) < int(min_failure_signals):
             continue
         if selected_lane and str(case.get("lane") or "").lower() != selected_lane:

@@ -90,12 +90,51 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_task_context_forwards_personalization_args(self):
         captured = {}
 
+        def fake_get_task_context(task_dir, *, team_worker=None, agent_name=None):
+            captured["task_dir"] = task_dir
+            captured["team_worker"] = team_worker
+            captured["agent_name"] = agent_name
+            return {"task_id": "TASK__mcp", "must_read": [], "planning_mode": "standard"}
+
+        original = harness_server.harness_api.get_task_context
+        harness_server.harness_api.get_task_context = fake_get_task_context
+        try:
+            result = harness_server.call_tool(
+                "task_context",
+                {
+                    "task_dir": "/tmp/TASK__mcp",
+                    "team_worker": "reviewer",
+                    "agent_name": "harness:writer:reviewer",
+                },
+            )
+        finally:
+            harness_server.harness_api.get_task_context = original
+
+        self.assertNotIn("isError", result)
+        self.assertEqual(captured["task_dir"], "/tmp/TASK__mcp")
+        self.assertEqual(captured["team_worker"], "reviewer")
+        self.assertEqual(captured["agent_name"], "harness:writer:reviewer")
+        self.assertEqual(result["structuredContent"]["fetch"]["method"], "direct")
+
+    def test_task_context_falls_back_to_cli_when_direct_path_errors(self):
+        captured = {}
+
+        def fake_get_task_context(*args, **kwargs):
+            raise RuntimeError("boom")
+
         def fake_run_script(script_name, argv, env=None):
             captured["script_name"] = script_name
             captured["argv"] = list(argv)
-            return {"ok": True, "stdout": json.dumps({"task_id": "TASK__mcp", "must_read": [], "planning_mode": "standard"}), "stderr": "", "returncode": 0}
+            return {
+                "ok": True,
+                "stdout": json.dumps({"task_id": "TASK__mcp", "must_read": [], "planning_mode": "standard"}),
+                "stderr": "",
+                "returncode": 0,
+            }
 
-        original = harness_server._run_script
+        original_get = harness_server.harness_api.get_task_context
+        original_run = harness_server._run_script
+        harness_server.harness_api.get_task_context = fake_get_task_context
         harness_server._run_script = fake_run_script
         try:
             result = harness_server.call_tool(
@@ -107,7 +146,8 @@ class HarnessMcpServerTests(unittest.TestCase):
                 },
             )
         finally:
-            harness_server._run_script = original
+            harness_server.harness_api.get_task_context = original_get
+            harness_server._run_script = original_run
 
         self.assertNotIn("isError", result)
         self.assertEqual(captured["script_name"], "hctl.py")
@@ -115,6 +155,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertIn("reviewer", captured["argv"])
         self.assertIn("--agent-name", captured["argv"])
         self.assertIn("harness:writer:reviewer", captured["argv"])
+        self.assertEqual(result["structuredContent"]["fetch"]["fallback_from"]["method"], "direct")
 
     def test_unknown_tool_returns_error_payload(self):
         result = harness_server.call_tool("does_not_exist", {})
