@@ -69,7 +69,25 @@ Detection: `len(roots_touched) > roots_estimate + 1` where `roots_estimate` is s
   "roots_in_focus": ["common"],
   "paths_in_focus": ["src/api/users.py", "src/db/connection.py"],
   "do_not_regress": ["login flow remains functional", "existing API endpoints respond"],
-  "files_to_read_first": ["PLAN.md", "CRITIC__runtime.md", "HANDOFF.md"]
+  "files_to_read_first": ["PLAN.md", "TEAM_PLAN.md", "CRITIC__runtime.md", "HANDOFF.md"],
+  "team_recovery": {
+    "status": "running",
+    "phase": "worker_summaries",
+    "plan_ready": true,
+    "synthesis_ready": false,
+    "expected_workers": ["worker-a", "worker-b"],
+    "summary_workers": ["worker-a", "worker-b"],
+    "synthesis_workers": ["lead"],
+    "ready_workers": ["worker-a"],
+    "pending_workers": ["worker-b"],
+    "missing_workers": ["worker-b"],
+    "incomplete_workers": [],
+    "pending_artifacts": ["team/worker-b.md", "TEAM_SYNTHESIS.md"],
+    "worker_summary_artifacts": ["team/worker-a.md"],
+    "pending_owned_paths": ["api/**"],
+    "worker_summary_errors": [],
+    "synthesis_semantic_errors": []
+  }
 }
 ```
 
@@ -88,6 +106,7 @@ Detection: `len(roots_touched) > roots_estimate + 1` where `roots_estimate` is s
 | `paths_in_focus` | string[] | Most recently failed file paths (from critic content or touched_paths) |
 | `do_not_regress` | string[] | Items that were passing and must remain passing |
 | `files_to_read_first` | string[] | Ordered reading list for efficient session recovery |
+| `team_recovery` | object | Present only for `orchestration_mode: team`; records which team phase is blocked, which worker artifacts / owned paths are still pending, and which synthesis owner(s) should refresh `TEAM_SYNTHESIS.md` / `HANDOFF.md` |
 
 ---
 
@@ -111,6 +130,7 @@ When `SESSION_HANDOFF.json` is present, a task has an active `CRITIC__runtime.md
 4. it emits a compact `review_focus` block with `trigger`, `critic_artifact`, `supporting_artifact`, and a short `evidence_excerpt`
 5. it carries forward `focus_check_ids`, `paths_in_focus`, and `do_not_regress` when available
 6. when a similar past failure exists, it also surfaces `prior_similar_task`, `prior_similar_artifact`, and `prior_similar_excerpt` as a single top-1 recovery hint
+7. for team tasks, it also surfaces `team_recovery_phase`, `team_pending_workers`, and `team_pending_artifacts` so restart logic can resume the blocked team slice instead of re-scanning the whole repo
 
 This is meant to stop fix rounds from reopening with only summaries while the actual failing evidence stays hidden deeper in the task folder.
 
@@ -127,7 +147,8 @@ On session start or task re-entry:
 4. Read `files_to_read_first` in order.
 5. Pass `do_not_regress` to critic-runtime.
 6. Focus on `open_check_ids` and `paths_in_focus`.
-7. After runtime PASS: leave handoff in place (historical record).
+7. For team tasks, use `team_recovery.phase` plus `team_recovery.synthesis_workers` to decide whether the next move is `TEAM_PLAN.md`, contributor worker summaries, a synthesis-owner refresh of `TEAM_SYNTHESIS.md`, final runtime verification, or the documentation pass (`DOC_SYNC.md` / `CRITIC__document.md`) before `HANDOFF.md`. When `team_recovery.doc_sync_owners` or `team_recovery.document_critic_owners` are present, route those artifacts to those workers instead of treating the doc phase as anonymous role work.
+8. After runtime PASS: leave handoff in place (historical record).
 
 ### developer (generator)
 
@@ -136,6 +157,7 @@ When `SESSION_HANDOFF.json` is present:
 2. Focus on `paths_in_focus`.
 3. Avoid breaking `do_not_regress` items.
 4. After 2nd+ FAIL: populate or update `do_not_regress` with criteria that passed in earlier critic runs.
+5. On team tasks, prefer `team_recovery.pending_owned_paths` and the surfaced worker artifacts over broad repo exploration.
 
 ### post_compact_sync.py and session_end_sync.py
 
@@ -177,3 +199,6 @@ When a handoff is created or present, hook scripts print:
 - `plugin/scripts/session_end_sync.py` — calls handoff check before maintain-lite section
 - `plugin/agents/harness.md` — reading instructions for session start / task re-entry
 - `plugin/agents/developer.md` — reading instructions and do_not_regress population rule
+
+
+Team recovery now includes a `launch` phase between `dispatch` and `worker_summaries`. Use `team-launch` to auto-refresh stale bootstrap/dispatch artifacts, write `team/bootstrap/provider/launch.json`, and recover the default provider/implementer fan-out entrypoint before worker execution resumes. For native Claude teams, the same launch state now surfaces the frozen lead prompt plus an auto-execute fallback to the implementer dispatcher, so recovery can still continue from `team-launch --execute` when the provider path itself is interactive-only. After fan-out, `team-relaunch` can recover a specific worker/phase from the frozen dispatch pack — for example a missing implementer, lead synthesis, final runtime verification, documentation sync, document review, or handoff refresh — without rebuilding prompts by hand.

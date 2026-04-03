@@ -3,7 +3,8 @@ import sys, os, re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (read_hook_input, hook_json_get, json_field, yaml_field, yaml_array,
                   TASK_DIR, now_iso, increment_agent_run, append_workflow_violation,
-                  exit_if_unmanaged_repo)
+                  exit_if_unmanaged_repo, team_artifact_status, get_team_worker_name,
+                  get_agent_role, team_worker_summary_relpath)
 
 # SubagentStop hook — records subagent provenance and checks expected artifacts.
 # Non-blocking (exit 0 always). Records violations for close-time enforcement.
@@ -103,6 +104,110 @@ def check_agent_artifacts(task_dir, raw_agent_name):
     return reminders
 
 
+def check_team_artifacts(task_dir, raw_agent_name):
+    """Return targeted reminders for team artifact phases."""
+    team_state = team_artifact_status(task_dir)
+    if team_state.get("orchestration_mode") != "team":
+        return []
+
+    task_id = os.path.basename(task_dir.rstrip("/"))
+    plan_workers = list(team_state.get("plan_workers") or [])
+    current_worker = get_team_worker_name(plan_workers, raw_agent_name=raw_agent_name)
+    current_role = get_agent_role(raw_agent_name)
+    reminders = []
+
+    if not team_state.get("plan_ready"):
+        if current_worker or current_role in ("developer", "harness"):
+            reminders.append(
+                f"REMINDER: {task_id} — complete TEAM_PLAN.md before team workers stop or mutate source files"
+            )
+        return reminders
+
+    if team_state.get("worker_summary_required") and not team_state.get("worker_summary_ready"):
+        missing_workers = list(team_state.get("worker_summary_missing_workers") or [])
+        if current_worker:
+            current_summary = dict((team_state.get("worker_summary_per_worker") or {}).get(current_worker) or {})
+            if current_worker in missing_workers or current_summary.get("status") == "incomplete":
+                rel_name = team_worker_summary_relpath(current_worker) or f"team/worker-{current_worker}.md"
+                owned_paths = list((team_state.get("plan_owned_paths") or {}).get(current_worker, []) or [])
+                owned_preview = ", ".join(owned_paths[:2]) or "owned writable paths"
+                reminders.append(
+                    f"REMINDER: {task_id} — {current_worker} should refresh {rel_name} after finishing {owned_preview}"
+                )
+            elif current_worker in (team_state.get("synthesis_workers") or []):
+                pending_preview = ", ".join(missing_workers[:3]) or "the remaining workers"
+                reminders.append(
+                    f"REMINDER: {task_id} — synthesis owner {current_worker} should wait for {pending_preview} before refreshing TEAM_SYNTHESIS.md"
+                )
+        return reminders
+
+    if not team_state.get("synthesis_ready"):
+        synthesis_workers = list(team_state.get("synthesis_workers") or [])
+        if current_worker and current_worker in synthesis_workers:
+            reminders.append(
+                f"REMINDER: {task_id} — {current_worker} should refresh TEAM_SYNTHESIS.md before final team verification"
+            )
+        return reminders
+
+    if team_state.get("team_runtime_verification_needed"):
+        owners = list(team_state.get("team_runtime_verification_owners") or team_state.get("synthesis_workers") or [])
+        artifact = str(team_state.get("team_runtime_artifact") or "CRITIC__runtime.md")
+        if current_worker and current_worker in owners:
+            reminders.append(
+                f"REMINDER: {task_id} — {current_worker} should refresh {artifact} before close"
+            )
+        elif current_role == "critic-runtime" and owners:
+            preview = ", ".join(owners[:3])
+            reminders.append(
+                f"REMINDER: {task_id} — final runtime verification belongs to [{preview}]; set HARNESS_TEAM_WORKER before writing {artifact}"
+            )
+        return reminders
+
+    if team_state.get("team_documentation_needed"):
+        doc_sync_owners = list(team_state.get("team_doc_sync_owners") or [])
+        document_critic_owners = list(team_state.get("team_document_critic_owners") or [])
+        doc_sync_artifact = str(team_state.get("team_doc_sync_artifact") or "DOC_SYNC.md")
+        document_artifact = str(team_state.get("team_document_critic_artifact") or "CRITIC__document.md")
+
+        if current_worker and current_worker in doc_sync_owners and team_state.get("team_doc_sync_needed"):
+            reminders.append(
+                f"REMINDER: {task_id} — {current_worker} should refresh {doc_sync_artifact} after final team verification"
+            )
+        if current_worker and current_worker in document_critic_owners and (
+            team_state.get("team_document_critic_missing_after_docs")
+            or team_state.get("team_document_critic_stale_after_docs")
+            or team_state.get("team_document_critic_pending")
+        ):
+            reminders.append(
+                f"REMINDER: {task_id} — {current_worker} should refresh {document_artifact} after the latest team documentation update"
+            )
+        elif current_role == "writer" and doc_sync_owners:
+            preview = ", ".join(doc_sync_owners[:3])
+            reminders.append(
+                f"REMINDER: {task_id} — documentation sync belongs to [{preview}]; set HARNESS_TEAM_WORKER before writing {doc_sync_artifact}"
+            )
+        elif current_role == "critic-document" and document_critic_owners:
+            preview = ", ".join(document_critic_owners[:3])
+            reminders.append(
+                f"REMINDER: {task_id} — document review belongs to [{preview}]; set HARNESS_TEAM_WORKER before writing {document_artifact}"
+            )
+        return reminders
+
+    if team_state.get("handoff_refresh_needed"):
+        synthesis_workers = list(team_state.get("synthesis_workers") or [])
+        if current_worker and current_worker in synthesis_workers:
+            reminders.append(
+                f"REMINDER: {task_id} — {current_worker} should refresh HANDOFF.md ({team_state.get('handoff_refresh_reason') or 'team handoff is stale'})"
+            )
+        elif current_role == "developer" and synthesis_workers:
+            preview = ", ".join(synthesis_workers[:3])
+            reminders.append(
+                f"REMINDER: {task_id} — HANDOFF.md refresh belongs to synthesis owner(s) [{preview}]; set HARNESS_TEAM_WORKER before writing it"
+            )
+
+    return reminders
+
+
 def check_artifact_provenance(task_dir, canonical_agent):
     """Check that expected artifacts have proper .meta.json provenance.
 
@@ -178,6 +283,8 @@ def main():
 
     # Check artifact reminders (soft enforcement)
     for reminder in check_agent_artifacts(target, raw_agent):
+        print(reminder)
+    for reminder in check_team_artifacts(target, raw_agent):
         print(reminder)
 
     # Check artifact provenance (.meta.json) — records violations, does not block

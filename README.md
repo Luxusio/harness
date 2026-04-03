@@ -250,7 +250,7 @@ When specific failure triggers are detected, the harness generates a `SESSION_HA
 | `blocked_env_recovery` | Re-entry after blocked_env resolution |
 | `scope_growth` | Touched roots grew significantly beyond plan estimate |
 
-The handoff includes: open check IDs, last fail evidence, next recovery step, paths in focus, and a do-not-regress list. It is consumed by the harness on session re-entry and by the developer for recovery context.
+The handoff includes: open check IDs, last fail evidence, next recovery step, paths in focus, and a do-not-regress list. For `orchestration_mode: team`, it also carries a `team_recovery` block describing whether resume should start from `TEAM_PLAN.md`, missing `team/worker-<name>.md` summaries, or `TEAM_SYNTHESIS.md`, plus the pending owned paths for the blocked workers. It now also records per-worker recovery details (artifact path, owned writable paths, handled paths, verification excerpt, residual-risk excerpt), documentation owners for `DOC_SYNC.md` / `CRITIC__document.md`, and whether `HANDOFF.md` has gone stale relative to the latest team artifacts. It is consumed by the harness on session re-entry and by the developer for recovery context.
 
 Normal successful tasks produce no handoff artifact. See `plugin/docs/handoff-escalation.md`.
 
@@ -452,9 +452,16 @@ fallback_used: none | subagents | solo
 For `orchestration_mode: team`, task state is now driven by the actual team artifacts:
 
 - `task_start` scaffolds `TEAM_PLAN.md` and `TEAM_SYNTHESIS.md` when a team task is selected.
-- Source writes stay blocked until `TEAM_PLAN.md` is fully completed (required headings present, no `TODO` / `TBD` placeholders, valid disjoint writable ownership).
-- Once team mode is running, source writes are restricted to paths explicitly owned in `TEAM_PLAN.md`; shared read-only paths remain write-blocked.
-- `TEAM_SYNTHESIS.md` is required before `task_close`; once it is complete, `team_status` can resolve to `complete` without a manual YAML edit.
+- Source writes stay blocked until `TEAM_PLAN.md` is fully completed: required headings present, no `TODO` / `TBD` placeholders, every worker has owned writable paths, and owned paths are non-overlapping.
+- Once the team plan is ready, source writes are checked against declared ownership: shared read-only or unowned paths are blocked, and worker-specific runs may pin identity with `HARNESS_TEAM_WORKER` or a worker-suffixed `CLAUDE_AGENT_NAME`.
+- After `team-bootstrap`, the lead can run `team-dispatch` to generate a provider launch pack under `team/bootstrap/provider/`: a provider prompt, launcher helper, per-phase worker prompts, and headless `run-*.sh` helpers. Synthesis owners now also get explicit `synthesis` / `handoff_refresh` phase helpers (for example `run-lead-synthesis.sh` and `run-lead-handoff_refresh.sh`) so the close path uses the same frozen launch surface as initial fan-out. Then `team-launch` can auto-refresh stale bootstrap/dispatch artifacts, write `team/bootstrap/provider/launch.json`, and expose the default provider/implementer fan-out command from one entrypoint. For native Claude teams, the frozen provider prompt is surfaced directly and `team-launch --execute` can automatically fall back to the implementer dispatcher when the preferred provider path is interactive-only. For recovery after fan-out, `team-relaunch` writes `team/bootstrap/provider/relaunch.json` and picks the best worker/phase pair (missing implementer, synthesis, runtime verification, docs sync, document review, or handoff refresh) before optionally spawning it in detached mode. `hctl context` now surfaces when the bootstrap, dispatch, or launch layer is missing or stale so fan-out happens from a frozen launch surface instead of ad-hoc copy/paste.
+- `TEAM_PLAN.md` may optionally declare `## Documentation Ownership` (for example `- writer: reviewer`, `- critic-document: lead`) so the documentation pass is also worker-scoped instead of only role-scoped.
+- Each planned worker is expected to leave `team/worker-<name>.md` before synthesis. Those summaries must record completed work, owned paths handled, verification, and residual risks.
+- `hctl context` now surfaces the current worker (when `HARNESS_TEAM_WORKER` or a worker-suffixed `CLAUDE_AGENT_NAME` is present), their owned paths, summary artifact, and a worker-specific next action when their slice is still pending.
+- `TEAM_SYNTHESIS.md` is required before `task_close`; it must be refreshed after the latest worker summary update, and once it is complete, `team_status` can resolve to `complete` without a manual YAML edit.
+- For repo-mutating team tasks, the synthesis owner also owns the final runtime verification pass. If `CRITIC__runtime.md` is older than the newest `TEAM_SYNTHESIS.md`, close is blocked until final verification is rerun.
+- After that final runtime verification, the writer must refresh `DOC_SYNC.md`. When `TEAM_PLAN.md` names documentation owners, `hctl context`, `SESSION_HANDOFF.json`, and the prewrite gate all route `DOC_SYNC.md` / `CRITIC__document.md` to those workers. When documentation review is required, `critic-document` must then rerun against the refreshed doc sync / final verification state before close can continue.
+- `HANDOFF.md` now comes last for team close: if it becomes older than the latest worker summary, synthesis, final runtime verification, `DOC_SYNC.md`, or `CRITIC__document.md`, the context and session handoff will call that out so recovery resumes from a fresh global handoff instead of stale breadcrumbs.
 - If a team round degraded, `TEAM_SYNTHESIS.md` must be refreshed after that degraded round before close succeeds.
 
 ## Hook behavior
@@ -466,7 +473,7 @@ For `orchestration_mode: team`, task state is now driven by the actual team arti
 | `SubagentStop` | Warn if expected artifacts missing |
 | `Stop` | **BLOCK** (exit 2) if open tasks remain |
 | `PreToolUse (Bash)` | Route harness control commands to MCP aliases before shell execution |
-| `PreToolUse` | Enforce the write gate and workflow lock before repo mutation; team tasks keep source writes blocked until `TEAM_PLAN.md` is complete and then restrict writes to declared worker-owned paths |
+| `PreToolUse` | Enforce the write gate and workflow lock before repo mutation; team tasks keep source writes blocked until `TEAM_PLAN.md` is semantically complete, then restrict writes to declared owned writable paths |
 | `UserPromptSubmit` | Surface task/doc memory hints plus open directive/complaint summaries |
 | `PostToolUse` | Emit tool-routing hints after tool execution |
 | `PostToolUse (Write|Edit|MultiEdit)` | Precise invalidation: runtime_verdict for runtime paths, document_verdict for doc paths; marks affected notes suspect |

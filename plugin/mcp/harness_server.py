@@ -177,7 +177,21 @@ def handle_task_start(args: dict[str, Any]) -> dict[str, Any]:
 
 def handle_task_context(args: dict[str, Any]) -> dict[str, Any]:
     task_dir = _require_str(args, "task_dir")
-    context, response = _load_context(task_dir)
+    team_worker = _optional_str(args, "team_worker")
+    agent_name = _optional_str(args, "agent_name")
+    argv = ["context", "--task-dir", task_dir, "--json"]
+    if team_worker:
+        argv.extend(["--team-worker", team_worker])
+    if agent_name:
+        argv.extend(["--agent-name", agent_name])
+    response = _run_script("hctl.py", argv)
+    if response["ok"]:
+        try:
+            context = json.loads(response["stdout"])
+        except json.JSONDecodeError:
+            context = None
+    else:
+        context = None
     payload = {
         "task_dir": task_dir,
         "task_context": context,
@@ -185,6 +199,107 @@ def handle_task_context(args: dict[str, Any]) -> dict[str, Any]:
     }
     if context is None:
         return _tool_error("task_context failed", data=payload)
+    return _result(payload)
+
+
+def handle_team_bootstrap(args: dict[str, Any]) -> dict[str, Any]:
+    task_dir = _require_str(args, "task_dir")
+    write_files = _optional_bool(args, "write_files", default=False)
+    argv = ["team-bootstrap", "--task-dir", task_dir, "--json"]
+    if write_files:
+        argv.append("--write-files")
+    response = _run_script("hctl.py", argv)
+    try:
+        bootstrap = json.loads(response["stdout"])
+    except json.JSONDecodeError:
+        bootstrap = None
+    payload = {
+        "task_dir": task_dir,
+        "team_bootstrap": bootstrap,
+        "fetch": response,
+    }
+    if bootstrap is None or not response["ok"]:
+        return _tool_error("team_bootstrap failed", data=payload)
+    return _result(payload)
+
+
+def handle_team_dispatch(args: dict[str, Any]) -> dict[str, Any]:
+    task_dir = _require_str(args, "task_dir")
+    write_files = _optional_bool(args, "write_files", default=False)
+    argv = ["team-dispatch", "--task-dir", task_dir, "--json"]
+    if write_files:
+        argv.append("--write-files")
+    response = _run_script("hctl.py", argv)
+    try:
+        dispatch = json.loads(response["stdout"])
+    except json.JSONDecodeError:
+        dispatch = None
+    payload = {
+        "task_dir": task_dir,
+        "team_dispatch": dispatch,
+        "fetch": response,
+    }
+    if dispatch is None or not response["ok"]:
+        return _tool_error("team_dispatch failed", data=payload)
+    return _result(payload)
+
+
+def handle_team_launch(args: dict[str, Any]) -> dict[str, Any]:
+    task_dir = _require_str(args, "task_dir")
+    write_files = _optional_bool(args, "write_files", default=False)
+    execute = _optional_bool(args, "execute", default=False)
+    no_auto_refresh = _optional_bool(args, "no_auto_refresh", default=False)
+    target = _optional_str(args, "target") or "auto"
+    argv = ["team-launch", "--task-dir", task_dir, "--json", "--target", target]
+    if write_files or execute:
+        argv.append("--write-files")
+    if execute:
+        argv.append("--execute")
+    if no_auto_refresh:
+        argv.append("--no-auto-refresh")
+    response = _run_script("hctl.py", argv)
+    try:
+        launch = json.loads(response["stdout"])
+    except json.JSONDecodeError:
+        launch = None
+    payload = {
+        "task_dir": task_dir,
+        "team_launch": launch,
+        "fetch": response,
+    }
+    if launch is None or not response["ok"]:
+        return _tool_error("team_launch failed", data=payload)
+    return _result(payload)
+
+
+def handle_team_relaunch(args: dict[str, Any]) -> dict[str, Any]:
+    task_dir = _require_str(args, "task_dir")
+    write_files = _optional_bool(args, "write_files", default=False)
+    execute = _optional_bool(args, "execute", default=False)
+    no_auto_refresh = _optional_bool(args, "no_auto_refresh", default=False)
+    worker = _optional_str(args, "worker")
+    phase = _optional_str(args, "phase") or "auto"
+    argv = ["team-relaunch", "--task-dir", task_dir, "--json", "--phase", phase]
+    if worker:
+        argv.extend(["--worker", worker])
+    if write_files or execute:
+        argv.append("--write-files")
+    if execute:
+        argv.append("--execute")
+    if no_auto_refresh:
+        argv.append("--no-auto-refresh")
+    response = _run_script("hctl.py", argv)
+    try:
+        relaunch = json.loads(response["stdout"])
+    except json.JSONDecodeError:
+        relaunch = None
+    payload = {
+        "task_dir": task_dir,
+        "team_relaunch": relaunch,
+        "fetch": response,
+    }
+    if relaunch is None or not response["ok"]:
+        return _tool_error("team_relaunch failed", data=payload)
     return _result(payload)
 
 
@@ -229,11 +344,23 @@ def handle_verify_run(args: dict[str, Any]) -> dict[str, Any]:
     return _result(payload)
 
 
-def _artifact_response(subcommand: str, args: list[str], *, artifact: str) -> dict[str, Any]:
+def _artifact_response(
+    subcommand: str,
+    args: list[str],
+    *,
+    artifact: str,
+    team_worker: str | None = None,
+    agent_name: str | None = None,
+) -> dict[str, Any]:
+    env = {"HARNESS_SKIP_PREWRITE": "1"}
+    if team_worker:
+        env["HARNESS_TEAM_WORKER"] = team_worker
+    if agent_name:
+        env["CLAUDE_AGENT_NAME"] = agent_name
     response = _run_script(
         "write_artifact.py",
         [subcommand] + args,
-        env={"HARNESS_SKIP_PREWRITE": "1"},
+        env=env,
     )
     task_dir = args[args.index("--task-dir") + 1] if "--task-dir" in args else None
     payload = {
@@ -255,6 +382,8 @@ def handle_write_critic_runtime(args: dict[str, Any]) -> dict[str, Any]:
     transcript = _require_str(args, "transcript")
     checks = _optional_str(args, "checks")
     verdict_reason = _optional_str(args, "verdict_reason")
+    team_worker = _optional_str(args, "team_worker")
+    agent_name = _optional_str(args, "agent_name")
     argv = [
         "--task-dir", task_dir,
         "--verdict", verdict,
@@ -266,7 +395,13 @@ def handle_write_critic_runtime(args: dict[str, Any]) -> dict[str, Any]:
         argv.extend(["--checks", checks])
     if verdict_reason:
         argv.extend(["--verdict-reason", verdict_reason])
-    return _artifact_response("critic-runtime", argv, artifact="CRITIC__runtime.md")
+    return _artifact_response(
+        "critic-runtime",
+        argv,
+        artifact="CRITIC__runtime.md",
+        team_worker=team_worker,
+        agent_name=agent_name,
+    )
 
 
 def handle_write_critic_plan(args: dict[str, Any]) -> dict[str, Any]:
@@ -275,12 +410,20 @@ def handle_write_critic_plan(args: dict[str, Any]) -> dict[str, Any]:
     summary = _require_str(args, "summary")
     checks = _optional_str(args, "checks")
     issues = _optional_str(args, "issues")
+    team_worker = _optional_str(args, "team_worker")
+    agent_name = _optional_str(args, "agent_name")
     argv = ["--task-dir", task_dir, "--verdict", verdict, "--summary", summary]
     if checks:
         argv.extend(["--checks", checks])
     if issues:
         argv.extend(["--issues", issues])
-    return _artifact_response("critic-plan", argv, artifact="CRITIC__plan.md")
+    return _artifact_response(
+        "critic-plan",
+        argv,
+        artifact="CRITIC__plan.md",
+        team_worker=team_worker,
+        agent_name=agent_name,
+    )
 
 
 def handle_write_critic_document(args: dict[str, Any]) -> dict[str, Any]:
@@ -289,12 +432,20 @@ def handle_write_critic_document(args: dict[str, Any]) -> dict[str, Any]:
     summary = _require_str(args, "summary")
     checks = _optional_str(args, "checks")
     issues = _optional_str(args, "issues")
+    team_worker = _optional_str(args, "team_worker")
+    agent_name = _optional_str(args, "agent_name")
     argv = ["--task-dir", task_dir, "--verdict", verdict, "--summary", summary]
     if checks:
         argv.extend(["--checks", checks])
     if issues:
         argv.extend(["--issues", issues])
-    return _artifact_response("critic-document", argv, artifact="CRITIC__document.md")
+    return _artifact_response(
+        "critic-document",
+        argv,
+        artifact="CRITIC__document.md",
+        team_worker=team_worker,
+        agent_name=agent_name,
+    )
 
 
 def handle_write_handoff(args: dict[str, Any]) -> dict[str, Any]:
@@ -303,6 +454,8 @@ def handle_write_handoff(args: dict[str, Any]) -> dict[str, Any]:
     what_changed = _require_str(args, "what_changed")
     expected_output = _optional_str(args, "expected_output")
     do_not_regress = _optional_str(args, "do_not_regress")
+    team_worker = _optional_str(args, "team_worker")
+    agent_name = _optional_str(args, "agent_name")
     argv = [
         "--task-dir", task_dir,
         "--verify-cmd", verify_cmd,
@@ -312,7 +465,13 @@ def handle_write_handoff(args: dict[str, Any]) -> dict[str, Any]:
         argv.extend(["--expected-output", expected_output])
     if do_not_regress:
         argv.extend(["--do-not-regress", do_not_regress])
-    return _artifact_response("handoff", argv, artifact="HANDOFF.md")
+    return _artifact_response(
+        "handoff",
+        argv,
+        artifact="HANDOFF.md",
+        team_worker=team_worker,
+        agent_name=agent_name,
+    )
 
 
 def handle_write_doc_sync(args: dict[str, Any]) -> dict[str, Any]:
@@ -322,6 +481,8 @@ def handle_write_doc_sync(args: dict[str, Any]) -> dict[str, Any]:
     updated_files = _optional_str(args, "updated_files")
     deleted_files = _optional_str(args, "deleted_files")
     notes = _optional_str(args, "notes")
+    team_worker = _optional_str(args, "team_worker")
+    agent_name = _optional_str(args, "agent_name")
     argv = ["--task-dir", task_dir, "--what-changed", what_changed]
     if new_files:
         argv.extend(["--new-files", new_files])
@@ -331,7 +492,13 @@ def handle_write_doc_sync(args: dict[str, Any]) -> dict[str, Any]:
         argv.extend(["--deleted-files", deleted_files])
     if notes:
         argv.extend(["--notes", notes])
-    return _artifact_response("doc-sync", argv, artifact="DOC_SYNC.md")
+    return _artifact_response(
+        "doc-sync",
+        argv,
+        artifact="DOC_SYNC.md",
+        team_worker=team_worker,
+        agent_name=agent_name,
+    )
 
 
 def handle_calibration_mine(args: dict[str, Any]) -> dict[str, Any]:
@@ -407,11 +574,80 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "team_worker": {"type": "string", "description": "Optional team worker id for personalized context"},
+                "agent_name": {"type": "string", "description": "Optional agent name override for personalized context"},
             },
             "required": ["task_dir"],
             "additionalProperties": False,
         },
         "handler": handle_task_context,
+    },
+    {
+        "name": "team_bootstrap",
+        "title": "Generate worker bootstrap specs",
+        "description": "Return per-worker bootstrap briefs and optional env/brief files for a ready team task.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "write_files": {"type": "boolean", "description": "When true, write team/bootstrap briefs + env files into the task directory"},
+            },
+            "required": ["task_dir"],
+            "additionalProperties": False,
+        },
+        "handler": handle_team_bootstrap,
+    },
+    {
+        "name": "team_dispatch",
+        "title": "Generate provider launch artifacts",
+        "description": "Return provider-ready launch prompts, worker phase prompts, and optional run helpers for a ready team task.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "write_files": {"type": "boolean", "description": "When true, write provider prompts + run helpers into the task directory"},
+            },
+            "required": ["task_dir"],
+            "additionalProperties": False,
+        },
+        "handler": handle_team_dispatch,
+    },
+    {
+        "name": "team_launch",
+        "title": "Prepare or execute the team launch entrypoint",
+        "description": "Auto-refresh stale bootstrap/dispatch artifacts if needed, then return or execute the default provider/implementer launch plan for a ready team task.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "write_files": {"type": "boolean", "description": "When true, write the launch manifest into the task directory"},
+                "execute": {"type": "boolean", "description": "When true, spawn the launcher in detached mode when supported"},
+                "no_auto_refresh": {"type": "boolean", "description": "When true, require existing bootstrap/dispatch artifacts instead of auto-refreshing them"},
+                "target": {"type": "string", "enum": ["auto", "provider", "implementers"], "description": "Which launcher to prepare or execute"},
+            },
+            "required": ["task_dir"],
+            "additionalProperties": False,
+        },
+        "handler": handle_team_launch,
+    },
+    {
+        "name": "team_relaunch",
+        "title": "Prepare or execute a worker/phase relaunch",
+        "description": "Auto-refresh stale bootstrap/dispatch artifacts if needed, then return or execute the best worker/phase relaunch plan for the current team recovery state.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "write_files": {"type": "boolean", "description": "When true, write the relaunch manifest into the task directory"},
+                "execute": {"type": "boolean", "description": "When true, spawn the selected worker phase in detached mode when supported"},
+                "no_auto_refresh": {"type": "boolean", "description": "When true, require existing bootstrap/dispatch artifacts instead of auto-refreshing them"},
+                "worker": {"type": "string", "description": "Optional worker id to relaunch"},
+                "phase": {"type": "string", "description": "Optional phase override: auto|implement|synthesis|final_runtime_verification|documentation_sync|documentation_review|handoff_refresh"},
+            },
+            "required": ["task_dir"],
+            "additionalProperties": False,
+        },
+        "handler": handle_team_relaunch,
     },
     {
         "name": "task_update_from_git_diff",
@@ -486,6 +722,8 @@ TOOL_DEFS: list[dict[str, Any]] = [
                 "transcript": {"type": "string"},
                 "checks": {"type": "string"},
                 "verdict_reason": {"type": "string"},
+                "team_worker": {"type": "string", "description": "Optional team worker id for team-owned artifact enforcement"},
+                "agent_name": {"type": "string", "description": "Optional agent name to forward into write_artifact.py"},
             },
             "required": ["task_dir", "verdict", "execution_mode", "summary", "transcript"],
             "additionalProperties": False,
@@ -504,6 +742,8 @@ TOOL_DEFS: list[dict[str, Any]] = [
                 "summary": {"type": "string"},
                 "checks": {"type": "string"},
                 "issues": {"type": "string"},
+                "team_worker": {"type": "string", "description": "Optional team worker id for team-owned artifact enforcement"},
+                "agent_name": {"type": "string", "description": "Optional agent name to forward into write_artifact.py"},
             },
             "required": ["task_dir", "verdict", "summary"],
             "additionalProperties": False,
@@ -522,6 +762,8 @@ TOOL_DEFS: list[dict[str, Any]] = [
                 "summary": {"type": "string"},
                 "checks": {"type": "string"},
                 "issues": {"type": "string"},
+                "team_worker": {"type": "string", "description": "Optional team worker id for team-owned artifact enforcement"},
+                "agent_name": {"type": "string", "description": "Optional agent name to forward into write_artifact.py"},
             },
             "required": ["task_dir", "verdict", "summary"],
             "additionalProperties": False,
@@ -540,6 +782,8 @@ TOOL_DEFS: list[dict[str, Any]] = [
                 "what_changed": {"type": "string"},
                 "expected_output": {"type": "string"},
                 "do_not_regress": {"type": "string"},
+                "team_worker": {"type": "string", "description": "Optional team worker id for team-owned artifact enforcement"},
+                "agent_name": {"type": "string", "description": "Optional agent name to forward into write_artifact.py"},
             },
             "required": ["task_dir", "verify_cmd", "what_changed"],
             "additionalProperties": False,
@@ -559,6 +803,8 @@ TOOL_DEFS: list[dict[str, Any]] = [
                 "updated_files": {"type": "string"},
                 "deleted_files": {"type": "string"},
                 "notes": {"type": "string"},
+                "team_worker": {"type": "string", "description": "Optional team worker id for team-owned artifact enforcement"},
+                "agent_name": {"type": "string", "description": "Optional agent name to forward into write_artifact.py"},
             },
             "required": ["task_dir", "what_changed"],
             "additionalProperties": False,

@@ -418,9 +418,9 @@ def compute_completion_failures(task_dir):
                 reasons.append("missing sections: " + ", ".join(missing_sections))
             if team_state.get("plan_has_placeholders"):
                 reasons.append("remove TODO/TBD placeholders")
-            validation_errors = team_state.get("plan_validation_errors") or []
-            if validation_errors:
-                reasons.append("ownership errors: " + "; ".join(validation_errors[:3]))
+            semantic_errors = team_state.get("plan_semantic_errors") or []
+            if semantic_errors:
+                reasons.extend(list(semantic_errors[:3]))
             failures.append(
                 "TEAM_PLAN.md is incomplete — " + "; ".join(reasons or ["fill required sections"])
             )
@@ -433,6 +433,9 @@ def compute_completion_failures(task_dir):
                 reasons.append("missing sections: " + ", ".join(missing_sections))
             if team_state.get("synthesis_has_placeholders"):
                 reasons.append("remove TODO/TBD placeholders")
+            synthesis_semantic_errors = team_state.get("synthesis_semantic_errors") or []
+            if synthesis_semantic_errors:
+                reasons.extend(list(synthesis_semantic_errors[:3]))
             failures.append(
                 "TEAM_SYNTHESIS.md is incomplete — " + "; ".join(reasons or ["fill required sections"])
             )
@@ -448,6 +451,33 @@ def compute_completion_failures(task_dir):
         ):
             failures.append(
                 "TEAM_SYNTHESIS.md must be refreshed after the degraded team round before close"
+            )
+        if team_state.get("team_runtime_verification_needed"):
+            owner_label = team_state.get("team_runtime_verification_owner_label") or "the synthesis owner"
+            reason = team_state.get("team_runtime_verification_reason") or "rerun final runtime verification after TEAM_SYNTHESIS.md"
+            failures.append(
+                f"Final team runtime verification is stale — {owner_label} should {reason} before close"
+            )
+        if team_state.get("team_doc_sync_needed"):
+            owner_label = team_state.get("team_documentation_owner_label") or "writer"
+            reason = team_state.get("team_documentation_reason") or "refresh DOC_SYNC.md after final team runtime verification"
+            failures.append(
+                f"Team documentation sync is stale — {owner_label} should {reason} before close"
+            )
+        elif team_state.get("team_document_critic_stale_after_docs"):
+            owner_label = team_state.get("team_documentation_owner_label") or "writer and critic-document"
+            reason = team_state.get("team_documentation_reason") or "rerun critic-document after the latest DOC_SYNC.md / final team runtime verification"
+            failures.append(
+                f"Team document critic is stale — {owner_label} should {reason} before close"
+            )
+        if (
+            team_state.get("handoff_exists")
+            and team_state.get("handoff_refresh_needed")
+            and not team_state.get("team_documentation_needed")
+        ):
+            reason = team_state.get("handoff_refresh_reason") or "refresh HANDOFF.md after the latest team artifact update"
+            failures.append(
+                f"HANDOFF.md is stale for team close — {reason} before close"
             )
         if team_status_val == "fallback":
             fallback_val = yaml_field("fallback_used", state_file) or "none"

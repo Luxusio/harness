@@ -18,7 +18,7 @@ updated: 2026-03-31
 - Runtime critic produces evidence bundles — structured proof required for every PASS verdict.
 - Notes carry freshness metadata (current/suspect/stale); file changes automatically mark affected notes suspect.
 - Maintain-lite runs at session end to detect entropy (stale tasks, orphan notes, broken chains) without writes.
-- Protected artifacts have role ownership: PLAN.md=plan-skill, HANDOFF.md=developer, DOC_SYNC.md=writer, CRITIC__*.md=respective critic. Enforced by prewrite gate.
+- Protected artifacts have role ownership: PLAN.md=plan-skill, HANDOFF.md=developer, DOC_SYNC.md=writer, CRITIC__*.md=respective critic. Enforced by prewrite gate. For team tasks with an explicit synthesis owner, final runtime verification artifacts and final HANDOFF refresh are reserved to that synthesis owner once TEAM_SYNTHESIS.md is ready. `TEAM_PLAN.md` may also optionally declare `## Documentation Ownership` so `DOC_SYNC.md` / `CRITIC__document.md` are pinned to specific workers during the documentation pass.
 - Pre-plan source reads are blocked until plan session opens. Capability firewall prevents silent collapsed mode.
 - User directives are captured in DIRECTIVES_PENDING.yaml and must be promoted before task close.
 

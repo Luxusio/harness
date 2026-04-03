@@ -6,11 +6,13 @@ Blocking gate — exits 2 when:
   2. Protected artifact write attempted by wrong role.
   3. PLAN.md write attempted without active plan session token.
   4. Workflow control surface write attempted from a non-maintenance task.
+  5. Team task source write falls outside TEAM_PLAN.md owned writable paths.
 
 Escape hatch: set HARNESS_SKIP_PREWRITE=1 to bypass (for emergency fixes).
 """
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -19,8 +21,11 @@ from _lib import (
     yaml_field,
     team_artifact_status,
     is_team_task,
-    get_team_worker_identity,
-    check_team_write_ownership,
+    parse_team_plan,
+    resolve_team_path_ownership,
+    get_team_worker_name,
+    team_worker_summary_relpath,
+    normalize_path,
     TASK_DIR,
     MANIFEST,
 )
@@ -107,10 +112,41 @@ AGENT_TO_ROLE = {
 }
 
 
+def _get_raw_agent_name():
+    return os.environ.get("CLAUDE_AGENT_NAME", "").strip()
+
+
 def _get_agent_role():
     """Get the canonical role of the current agent from CLAUDE_AGENT_NAME."""
-    raw = os.environ.get("CLAUDE_AGENT_NAME", "")
-    return AGENT_TO_ROLE.get(raw, raw)
+    raw = _get_raw_agent_name()
+    if raw in AGENT_TO_ROLE:
+        return AGENT_TO_ROLE[raw]
+
+    role_prefixes = (
+        ("harness:critic-document", "critic-document"),
+        ("harness:critic-runtime", "critic-runtime"),
+        ("harness:critic-plan", "critic-plan"),
+        ("harness:developer", "developer"),
+        ("harness:writer", "writer"),
+        ("harness:harness", "harness"),
+        ("critic-document", "critic-document"),
+        ("critic-runtime", "critic-runtime"),
+        ("critic-plan", "critic-plan"),
+        ("developer", "developer"),
+        ("writer", "writer"),
+        ("harness", "harness"),
+    )
+    for prefix, role in role_prefixes:
+        if raw == prefix:
+            return role
+        if raw.startswith(prefix + ":") or raw.startswith(prefix + "/") or raw.startswith(prefix + "@"):
+            return role
+    return raw
+
+
+def _get_team_worker_name(known_workers=None):
+    """Best-effort worker identity from env or worker-suffixed agent names."""
+    return get_team_worker_name(known_workers=known_workers, raw_agent_name=_get_raw_agent_name())
 
 
 def _is_source_file(filepath):
@@ -240,14 +276,170 @@ def _check_team_plan_ready(task_dir):
         reasons.append("missing sections: " + ", ".join(missing_sections))
     if artifact_state.get("plan_has_placeholders"):
         reasons.append("remove TODO/TBD placeholders")
-    validation_errors = artifact_state.get("plan_validation_errors") or []
-    if validation_errors:
-        reasons.append("ownership errors: " + "; ".join(validation_errors[:3]))
+    semantic_errors = artifact_state.get("plan_semantic_errors") or []
+    if semantic_errors:
+        reasons.extend(list(semantic_errors[:3]))
 
     return False, (
         "BLOCKED: team task source writes require completed TEAM_PLAN.md first. "
         + ("; ".join(reasons) if reasons else "Finish TEAM_PLAN.md before worker execution.")
     )
+
+
+def _check_team_write_ownership(task_dir, filepath):
+    """Enforce TEAM_PLAN.md writable ownership for team tasks."""
+    if not task_dir or not is_team_task(task_dir):
+        return True, ""
+
+    artifact_state = team_artifact_status(task_dir)
+    if not artifact_state.get("plan_ready"):
+        return _check_team_plan_ready(task_dir)
+
+    plan_data = parse_team_plan(os.path.join(task_dir, "TEAM_PLAN.md"))
+    if not plan_data.get("ownership_ready"):
+        reasons = plan_data.get("errors") or artifact_state.get("plan_semantic_errors") or [
+            "TEAM_PLAN.md ownership metadata is invalid"
+        ]
+        return False, "BLOCKED: TEAM_PLAN.md ownership rules are invalid. " + "; ".join(reasons[:3])
+
+    ownership = resolve_team_path_ownership(plan_data, filepath)
+    if ownership.get("shared_read_only"):
+        return False, (
+            f"BLOCKED: '{filepath}' is listed under shared read-only paths in TEAM_PLAN.md. "
+            "Only non-mutating reads are allowed for that surface."
+        )
+
+    owners = list(ownership.get("owners") or [])
+    if not owners:
+        workers = ", ".join(plan_data.get("workers") or []) or "none"
+        return False, (
+            f"BLOCKED: '{filepath}' is outside TEAM_PLAN.md owned writable paths. "
+            f"Declare a worker owner before mutating it. Known workers: {workers}."
+        )
+    if len(owners) > 1:
+        return False, (
+            f"BLOCKED: '{filepath}' matches multiple TEAM_PLAN.md owners ({', '.join(owners)}). "
+            "Fix overlapping ownership before mutating source files."
+        )
+
+    current_worker = _get_team_worker_name(plan_data.get("workers") or [])
+    if current_worker:
+        if current_worker not in (plan_data.get("workers") or []):
+            roster = ", ".join(plan_data.get("workers") or []) or "none"
+            return False, (
+                f"BLOCKED: current worker '{current_worker}' is not in TEAM_PLAN.md worker roster ({roster})."
+            )
+        owner = owners[0]
+        if owner != current_worker:
+            return False, (
+                f"BLOCKED: '{filepath}' is owned by '{owner}' in TEAM_PLAN.md. "
+                f"Current worker is '{current_worker}'."
+            )
+        if current_worker in (ownership.get("forbidden_by") or []):
+            return False, (
+                f"BLOCKED: TEAM_PLAN.md forbids worker '{current_worker}' from mutating '{filepath}'."
+            )
+    return True, ""
+
+
+def _team_worker_summary_target(filepath):
+    """Return worker id for team/worker-<name>.md writes, else ''."""
+    fp = normalize_path(str(filepath or "").strip())
+    if not fp:
+        return ""
+    match = re.search(r"(?:^|/)team/(worker-[A-Za-z0-9_.-]+)\.md$", fp)
+    return match.group(1) if match else ""
+
+
+def _check_team_artifact_write(task_dir, filepath):
+    """Enforce team-only coordination artifact ownership.
+
+    This supplements protected-artifact ownership by ensuring:
+      - only the designated synthesis owner(s) write TEAM_SYNTHESIS.md / HANDOFF.md
+      - workers only write their own team/worker-<name>.md summary artifact
+    """
+    if not task_dir or not is_team_task(task_dir):
+        return True, ""
+
+    basename = os.path.basename(str(filepath or ""))
+    artifact_state = team_artifact_status(task_dir)
+    plan_workers = list(artifact_state.get("plan_workers") or [])
+    current_worker = _get_team_worker_name(plan_workers)
+    synthesis_workers = list(artifact_state.get("synthesis_workers") or [])
+
+    summary_target = _team_worker_summary_target(filepath)
+    if summary_target:
+        if plan_workers and summary_target not in plan_workers:
+            roster = ", ".join(plan_workers) or "none"
+            return False, (
+                f"BLOCKED: '{filepath}' is not in the TEAM_PLAN.md worker roster ({roster})."
+            )
+        if current_worker and current_worker != summary_target:
+            return False, (
+                f"BLOCKED: '{filepath}' is owned by worker '{summary_target}'. "
+                f"Current worker is '{current_worker}'."
+            )
+        return True, ""
+
+    if basename == "TEAM_SYNTHESIS.md":
+        if not artifact_state.get("plan_ready"):
+            return False, (
+                "BLOCKED: TEAM_SYNTHESIS.md requires a completed TEAM_PLAN.md first. "
+                "Finish worker ownership and synthesis rules before writing synthesis."
+            )
+        if synthesis_workers and current_worker and current_worker not in synthesis_workers:
+            owners = ", ".join(synthesis_workers[:4])
+            return False, (
+                f"BLOCKED: TEAM_SYNTHESIS.md is reserved for synthesis owner(s) [{owners}] in TEAM_PLAN.md. "
+                f"Current worker is '{current_worker}'."
+            )
+        return True, ""
+
+    if basename in ("CRITIC__runtime.md", "QA__runtime.md"):
+        final_phase_started = bool(
+            artifact_state.get("synthesis_ready")
+            or artifact_state.get("team_runtime_verification_needed")
+        )
+        if final_phase_started and synthesis_workers and current_worker and current_worker not in synthesis_workers:
+            owners = ", ".join(synthesis_workers[:4])
+            return False, (
+                f"BLOCKED: final team runtime verification artifacts are reserved for synthesis owner(s) [{owners}] once TEAM_SYNTHESIS.md is ready. "
+                f"Current worker is '{current_worker}'."
+            )
+        return True, ""
+
+    if basename == "DOC_SYNC.md":
+        documentation_owners = list(artifact_state.get("team_doc_sync_owners") or [])
+        owner_source = str(artifact_state.get("team_doc_sync_owner_source") or "")
+        if documentation_owners and owner_source in ("explicit", "inferred") and current_worker and current_worker not in documentation_owners:
+            owners = ", ".join(documentation_owners[:4])
+            return False, (
+                f"BLOCKED: DOC_SYNC.md is reserved for documentation owner(s) [{owners}] in TEAM_PLAN.md. "
+                f"Current worker is '{current_worker}'."
+            )
+        return True, ""
+
+    if basename == "CRITIC__document.md":
+        documentation_owners = list(artifact_state.get("team_document_critic_owners") or [])
+        owner_source = str(artifact_state.get("team_document_critic_owner_source") or "")
+        if documentation_owners and owner_source in ("explicit", "inferred") and current_worker and current_worker not in documentation_owners:
+            owners = ", ".join(documentation_owners[:4])
+            return False, (
+                f"BLOCKED: CRITIC__document.md is reserved for document critic owner(s) [{owners}] in TEAM_PLAN.md. "
+                f"Current worker is '{current_worker}'."
+            )
+        return True, ""
+
+    if basename == "HANDOFF.md":
+        if synthesis_workers and current_worker and current_worker not in synthesis_workers:
+            owners = ", ".join(synthesis_workers[:4])
+            return False, (
+                f"BLOCKED: HANDOFF.md refresh for team tasks is reserved for synthesis owner(s) [{owners}]. "
+                f"Current worker is '{current_worker}'."
+            )
+        return True, ""
+
+    return True, ""
 
 
 def _is_workflow_control_surface(filepath):
@@ -383,6 +575,12 @@ def main():
         # Maintenance task — allow write to control surface
         sys.exit(0)
 
+    active_task_dir = _find_active_task_dir()
+    team_artifact_ok, team_artifact_message = _check_team_artifact_write(active_task_dir, filepath)
+    if not team_artifact_ok:
+        print(team_artifact_message, file=sys.stderr)
+        sys.exit(2)
+
     # --- Protected artifact ownership check ---
     if _is_protected_artifact(filepath):
         allowed, message = _check_protected_artifact_write(filepath)
@@ -422,26 +620,22 @@ def main():
         )
         sys.exit(2)
 
-    active_task_dir = _find_active_task_dir()
     team_ready, team_message = _check_team_plan_ready(active_task_dir)
     if not team_ready:
         print(team_message)
         sys.exit(2)
 
-    team_worker = ""
-    if active_task_dir and is_team_task(active_task_dir):
-        allowed, message, meta = check_team_write_ownership(active_task_dir, filepath)
-        team_worker = (meta or {}).get("worker") or get_team_worker_identity()
-        if not allowed:
-            print(message)
-            sys.exit(2)
+    team_write_ok, team_write_message = _check_team_write_ownership(active_task_dir, filepath)
+    if not team_write_ok:
+        print(team_write_message)
+        sys.exit(2)
 
-    # Source file write — check actor is developer unless this is an owned team worker write
+    # Source file write — check actor is developer
     current_role = _get_agent_role()
-    if current_role and current_role not in ("developer", "harness", "") and not team_worker:
+    if current_role and current_role not in ("developer", "harness", ""):
         print(
             f"BLOCKED: Source file write by non-developer role '{current_role}'. "
-            f"Only developer role or a declared team worker may write source files. "
+            f"Only developer role may write source files. "
             f"(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
         )
         sys.exit(2)

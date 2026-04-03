@@ -12,9 +12,11 @@ Run with: python -m unittest discover -s tests -p 'test_*.py'
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -110,7 +112,7 @@ class TestHctlHelp(unittest.TestCase):
 
     def test_subcommands_listed(self):
         code, out, _ = _run_hctl("--help")
-        for sub in ("start", "context", "history", "top-failures", "diff-case", "update", "verify", "close", "artifact"):
+        for sub in ("start", "context", "team-bootstrap", "team-dispatch", "team-launch", "team-relaunch", "history", "top-failures", "diff-case", "update", "verify", "close", "artifact"):
             self.assertIn(sub, out, f"subcommand '{sub}' missing from --help")
 
 
@@ -297,6 +299,17 @@ class TestHctlContextJson(unittest.TestCase):
         omc_path.chmod(0o755)
         return {"PATH": f"{fake_bin}{os.pathsep}" + os.environ.get("PATH", "")}
 
+    def _native_team_env(self):
+        fake_bin = Path(self.tmp.name) / "native-bin"
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        claude_path = fake_bin / "claude"
+        claude_path.write_text("#!/bin/sh\necho '{\"ok\": true}'\n", encoding="utf-8")
+        claude_path.chmod(0o755)
+        return {
+            "PATH": f"{fake_bin}{os.pathsep}" + os.environ.get("PATH", ""),
+            "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+        }
+
     def _write_completed_team_plan(self, task_dir):
         Path(task_dir, "TEAM_PLAN.md").write_text(
             "# Team Plan\n"
@@ -313,6 +326,90 @@ class TestHctlContextJson(unittest.TestCase):
             "- worker-2: app/**\n\n"
             "## Synthesis Strategy\n"
             "- lead merges diffs and runs final verification\n",
+            encoding="utf-8",
+        )
+
+    def _write_worker_summary(self, task_dir, worker_name, handled_path):
+        team_dir = Path(task_dir) / "team"
+        team_dir.mkdir(parents=True, exist_ok=True)
+        rel_name = worker_name if worker_name.startswith("worker-") else f"worker-{worker_name}"
+        (team_dir / f"{rel_name}.md").write_text(
+            "# Worker Summary\n"
+            "## Completed Work\n- finished slice\n\n"
+            f"## Owned Paths Handled\n- {handled_path}\n\n"
+            "## Verification\n- pytest\n\n"
+            "## Residual Risks\n- none\n",
+            encoding="utf-8",
+        )
+
+    def _write_completed_worker_summaries(self, task_dir):
+        self._write_worker_summary(task_dir, "worker-1", "app/main.ts")
+        self._write_worker_summary(task_dir, "worker-2", "api/server.ts")
+
+    def _write_doc_sync(self, task_dir, *, meaningful=False):
+        if meaningful:
+            what_changed = "- docs/architecture.md aligned with the verified implementation"
+            updated = "- docs/architecture.md"
+            notes = "- verified after final runtime QA"
+        else:
+            what_changed = "none"
+            updated = "none"
+            notes = "none"
+        Path(task_dir, "DOC_SYNC.md").write_text(
+            "# DOC_SYNC: task\n"
+            "written_at: 2026-01-01T00:00:00Z\n\n"
+            "## What changed\n"
+            f"{what_changed}\n\n"
+            "## New files\nnone\n\n"
+            "## Updated files\n"
+            f"{updated}\n\n"
+            "## Deleted files\nnone\n\n"
+            "## Notes\n"
+            f"{notes}\n",
+            encoding="utf-8",
+        )
+
+    def _write_documentation_owner_plan(self, task_dir):
+        Path(task_dir, "TEAM_PLAN.md").write_text(
+            "# Team Plan\n"
+            "## Worker Roster\n"
+            "- lead: integrator\n"
+            "- worker-a: app\n"
+            "- reviewer: doc-reviewer\n\n"
+            "## Owned Writable Paths\n"
+            "- lead: tests/**\n"
+            "- worker-a: app/**\n"
+            "- reviewer: docs/**\n\n"
+            "## Shared Read-Only Paths\n"
+            "- api/**\n\n"
+            "## Forbidden Writes\n"
+            "- lead: app/**, docs/**\n"
+            "- worker-a: tests/**, docs/**\n"
+            "- reviewer: tests/**, app/**\n\n"
+            "## Synthesis Strategy\n"
+            "- lead merges worker summaries and writes TEAM_SYNTHESIS.md then refreshes HANDOFF.md\n\n"
+            "## Documentation Ownership\n"
+            "- writer: reviewer\n"
+            "- critic-document: lead\n",
+            encoding="utf-8",
+        )
+
+    def _set_state_field(self, task_dir, field, value):
+        state_path = Path(task_dir, "TASK_STATE.yaml")
+        content = state_path.read_text(encoding="utf-8")
+        if re.search(rf"^{re.escape(field)}:\s*.+$", content, re.MULTILINE):
+            content = re.sub(rf"^{re.escape(field)}:\s*.+$", f"{field}: {value}", content, flags=re.MULTILINE)
+        else:
+            content += f"{field}: {value}\n"
+        state_path.write_text(content, encoding="utf-8")
+
+    def _write_document_pass(self, task_dir):
+        self._set_state_field(task_dir, "document_verdict", "PASS")
+        self._set_state_field(task_dir, "doc_changes_detected", "true")
+        Path(task_dir, "CRITIC__document.md").write_text(
+            "verdict: PASS\n"
+            "summary: docs match the verified behavior\n\n"
+            "## Findings\n- docs/architecture.md is current\n",
             encoding="utf-8",
         )
 
@@ -492,6 +589,41 @@ class TestHctlContextJson(unittest.TestCase):
         self.assertEqual(ctx["must_read"][0], "doc/harness/tasks/TASK__ctx/SESSION_HANDOFF.json")
         self.assertIn("pytest", ctx["review_focus"].get("evidence_excerpt", ""))
 
+    def test_session_handoff_surfaces_team_recovery_phase(self):
+        task_dir = _make_task(self.tmp.name, "TASK__ctx_team_handoff", lane="build", risk_tags=["multi-root"])
+        task_path = Path(task_dir)
+        self._write_completed_team_plan(task_dir)
+        (task_path / "team").mkdir(parents=True, exist_ok=True)
+        self._write_worker_summary(task_dir, "worker-1", "app/main.ts")
+        (task_path / "SESSION_HANDOFF.json").write_text(
+            json.dumps(
+                {
+                    "trigger": "runtime_fail_repeat",
+                    "next_step": "Collect missing worker summaries before refresh.",
+                    "files_to_read_first": ["TEAM_PLAN.md", "team/worker-1.md"],
+                    "team_recovery": {
+                        "phase": "worker_summaries",
+                        "pending_workers": ["worker-2"],
+                        "pending_artifacts": ["team/worker-2.md", "TEAM_SYNTHESIS.md"],
+                    },
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        env = self._team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json", env=env)
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertEqual(ctx["review_focus"].get("team_recovery_phase"), "worker_summaries")
+        self.assertEqual(ctx["review_focus"].get("team_pending_workers"), ["worker-2"])
+        self.assertIn("TEAM_SYNTHESIS.md", " ".join(ctx["review_focus"].get("team_pending_artifacts") or []))
+        self.assertTrue(any(item.endswith("TEAM_PLAN.md") for item in ctx["must_read"]))
+
     def test_document_fail_surfaces_document_critic(self):
         task_dir = _make_task(self.tmp.name, "TASK__ctx")
         task_path = Path(task_dir)
@@ -536,14 +668,781 @@ class TestHctlContextJson(unittest.TestCase):
         env = self._team_env()
         _run_hctl("start", "--task-dir", task_dir, env=env)
         self._write_completed_team_plan(task_dir)
+        self._write_completed_worker_summaries(task_dir)
         code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json", env=env)
         self.assertEqual(code, 0, err)
         ctx = json.loads(out)
 
         self.assertEqual(ctx["team"]["status"], "running")
         self.assertTrue(ctx["team"]["plan_ready"])
+        self.assertTrue(ctx["team"]["worker_summary_ready"])
         self.assertFalse(ctx["team"]["synthesis_ready"])
         self.assertIn("TEAM_SYNTHESIS.md", ctx["next_action"])
+
+    def test_team_context_requests_worker_summaries_before_synthesis(self):
+        task_dir = _make_task(self.tmp.name, "TASK__ctx_team_workers", lane="build", risk_tags=["multi-root"])
+        _write_request(task_dir, "Implement app, API, and tests for the feature.")
+        env = self._team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_completed_team_plan(task_dir)
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json", env=env)
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertEqual(ctx["team"]["status"], "running")
+        self.assertTrue(ctx["team"]["worker_summary_required"])
+        self.assertFalse(ctx["team"]["worker_summary_ready"])
+        self.assertIn("worker summaries", ctx["next_action"].lower())
+        self.assertIn("worker-1", " ".join(ctx["team"].get("worker_summary_missing_workers") or []))
+
+    def test_team_context_personalizes_pending_worker_resume(self):
+        task_dir = _make_task(self.tmp.name, "TASK__ctx_team_worker_resume", lane="build", risk_tags=["multi-root"])
+        _write_request(task_dir, "Implement app, API, and tests for the feature.")
+        env = self._team_env()
+        env["HARNESS_TEAM_WORKER"] = "worker-2"
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_completed_team_plan(task_dir)
+        self._write_worker_summary(task_dir, "worker-1", "app/main.ts")
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json", env=env)
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertEqual(ctx["team"]["current_worker"], "worker-2")
+        self.assertTrue(ctx["team"]["current_worker_pending"])
+        self.assertIn("api/**", " ".join(ctx["team"].get("current_worker_owned_paths") or []))
+        self.assertIn("worker-2", ctx["next_action"])
+        self.assertIn("team/worker-2.md", ctx["next_action"])
+        self.assertEqual(ctx["review_focus"].get("team_current_worker"), "worker-2")
+
+
+    def test_team_context_routes_synthesis_owner_to_final_runtime_verification(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_verify",
+            lane="build",
+            risk_tags=["multi-root"],
+            extra_fields={"mutates_repo": "true", "runtime_verdict": "PASS"},
+        )
+        _write_request(task_dir, "Implement app, API, and tests for the feature.")
+        env = self._team_env()
+        env["HARNESS_TEAM_WORKER"] = "lead"
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        Path(task_dir, "TEAM_PLAN.md").write_text(
+            """# Team Plan
+## Worker Roster
+- lead: integrator
+- worker-a: app
+- worker-b: api
+
+## Owned Writable Paths
+- lead: tests/**
+- worker-a: app/**
+- worker-b: api/**
+
+## Shared Read-Only Paths
+- docs/**
+
+## Forbidden Writes
+- lead: app/**, api/**
+- worker-a: tests/**, api/**
+- worker-b: tests/**, app/**
+
+## Synthesis Strategy
+- lead merges worker summaries and writes TEAM_SYNTHESIS.md then refreshes HANDOFF.md
+""",
+            encoding="utf-8",
+        )
+        self._write_worker_summary(task_dir, "worker-a", "app/main.ts")
+        self._write_worker_summary(task_dir, "worker-b", "api/server.ts")
+        Path(task_dir, "CRITIC__runtime.md").write_text(
+            """verdict: PASS
+summary: pre-synthesis runtime pass
+
+## Transcript
+pytest tests/test_example.py
+""",
+            encoding="utf-8",
+        )
+        time.sleep(0.02)
+        Path(task_dir, "TEAM_SYNTHESIS.md").write_text(
+            """# Team Synthesis
+## Integrated Result
+- merged app and api slices
+
+## Cross-Checks
+- ownership respected
+
+## Verification Summary
+- pytest tests/test_example.py
+
+## Residual Risks
+- none
+""",
+            encoding="utf-8",
+        )
+
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json", env=env)
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertTrue(ctx["team"].get("runtime_verification_needed"))
+        self.assertEqual(ctx["team"].get("current_worker"), "lead")
+        self.assertTrue(ctx["review_focus"].get("team_final_verification_needed"))
+        self.assertIn("final runtime verification", ctx["next_action"].lower())
+        self.assertIn("lead", ctx["next_action"])
+
+    def test_team_context_routes_after_final_verification_to_documentation(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_docs",
+            lane="build",
+            risk_tags=["multi-root"],
+            extra_fields={"mutates_repo": "true", "runtime_verdict": "PASS"},
+        )
+        _write_request(task_dir, "Implement app, API, tests, and refresh docs.")
+        env = self._team_env()
+        env["HARNESS_TEAM_WORKER"] = "lead"
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        Path(task_dir, "TEAM_PLAN.md").write_text(
+            """# Team Plan
+## Worker Roster
+- lead: integrator
+- worker-a: app
+- worker-b: api
+
+## Owned Writable Paths
+- lead: tests/**
+- worker-a: app/**
+- worker-b: api/**
+
+## Shared Read-Only Paths
+- docs/**
+
+## Forbidden Writes
+- lead: app/**, api/**
+- worker-a: tests/**, api/**
+- worker-b: tests/**, app/**
+
+## Synthesis Strategy
+- lead merges worker summaries and writes TEAM_SYNTHESIS.md then refreshes HANDOFF.md
+""",
+            encoding="utf-8",
+        )
+        self._write_worker_summary(task_dir, "worker-a", "app/main.ts")
+        self._write_worker_summary(task_dir, "worker-b", "api/server.ts")
+        Path(task_dir, "TEAM_SYNTHESIS.md").write_text(
+            """# Team Synthesis
+## Integrated Result
+- merged app and api slices
+
+## Cross-Checks
+- ownership respected
+
+## Verification Summary
+- pytest tests/test_example.py
+
+## Residual Risks
+- none
+""",
+            encoding="utf-8",
+        )
+        self._write_doc_sync(task_dir, meaningful=False)
+        time.sleep(0.02)
+        Path(task_dir, "CRITIC__runtime.md").write_text(
+            """verdict: PASS
+summary: final runtime verification passed
+
+## Transcript
+pytest tests/test_example.py
+""",
+            encoding="utf-8",
+        )
+
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json", env=env)
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertTrue(ctx["team"].get("documentation_needed"))
+        self.assertTrue(ctx["team"].get("doc_sync_needed"))
+        self.assertTrue(ctx["review_focus"].get("team_documentation_needed"))
+        self.assertIn("documentation pass", ctx["next_action"].lower())
+        self.assertIn("DOC_SYNC.md", ctx["next_action"])
+
+    def test_team_context_routes_after_doc_sync_to_document_critic(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_doc_critic",
+            lane="build",
+            risk_tags=["multi-root"],
+            extra_fields={"mutates_repo": "true", "runtime_verdict": "PASS"},
+        )
+        _write_request(task_dir, "Implement app, API, tests, and refresh docs.")
+        env = self._team_env()
+        env["HARNESS_TEAM_WORKER"] = "lead"
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        Path(task_dir, "TEAM_PLAN.md").write_text(
+            """# Team Plan
+## Worker Roster
+- lead: integrator
+- worker-a: app
+- worker-b: api
+
+## Owned Writable Paths
+- lead: tests/**
+- worker-a: app/**
+- worker-b: api/**
+
+## Shared Read-Only Paths
+- docs/**
+
+## Forbidden Writes
+- lead: app/**, api/**
+- worker-a: tests/**, api/**
+- worker-b: tests/**, app/**
+
+## Synthesis Strategy
+- lead merges worker summaries and writes TEAM_SYNTHESIS.md then refreshes HANDOFF.md
+""",
+            encoding="utf-8",
+        )
+        self._write_worker_summary(task_dir, "worker-a", "app/main.ts")
+        self._write_worker_summary(task_dir, "worker-b", "api/server.ts")
+        Path(task_dir, "TEAM_SYNTHESIS.md").write_text(
+            """# Team Synthesis
+## Integrated Result
+- merged app and api slices
+
+## Cross-Checks
+- ownership respected
+
+## Verification Summary
+- pytest tests/test_example.py
+
+## Residual Risks
+- none
+""",
+            encoding="utf-8",
+        )
+        Path(task_dir, "CRITIC__runtime.md").write_text(
+            """verdict: PASS
+summary: final runtime verification passed
+
+## Transcript
+pytest tests/test_example.py
+""",
+            encoding="utf-8",
+        )
+        self._write_doc_sync(task_dir, meaningful=True)
+
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json", env=env)
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertTrue(ctx["team"].get("documentation_needed"))
+        self.assertTrue(ctx["team"].get("document_critic_needed"))
+        self.assertTrue(ctx["review_focus"].get("team_document_critic_needed"))
+        self.assertIn("critic-document", ctx["next_action"])
+
+    def test_team_context_personalizes_doc_sync_to_documentation_owner(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_doc_owner",
+            lane="build",
+            risk_tags=["multi-root"],
+            extra_fields={"mutates_repo": "true", "runtime_verdict": "PASS"},
+        )
+        _write_request(task_dir, "Implement app, tests, and refresh docs.")
+        env = self._team_env()
+        env["HARNESS_TEAM_WORKER"] = "reviewer"
+        env["CLAUDE_AGENT_NAME"] = "harness:writer:reviewer"
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_documentation_owner_plan(task_dir)
+        self._write_worker_summary(task_dir, "worker-a", "app/main.ts")
+        self._write_worker_summary(task_dir, "reviewer", "docs/architecture.md")
+        Path(task_dir, "TEAM_SYNTHESIS.md").write_text(
+            """# Team Synthesis
+## Integrated Result
+- merged app and docs slices
+
+## Cross-Checks
+- ownership respected
+
+## Verification Summary
+- pytest tests/test_example.py
+
+## Residual Risks
+- none
+""",
+            encoding="utf-8",
+        )
+        self._write_doc_sync(task_dir, meaningful=False)
+        time.sleep(0.02)
+        Path(task_dir, "CRITIC__runtime.md").write_text(
+            """verdict: PASS
+summary: final runtime verification passed
+
+## Transcript
+pytest tests/test_example.py
+""",
+            encoding="utf-8",
+        )
+
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json", env=env)
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertEqual(ctx["team"].get("current_worker"), "reviewer")
+        self.assertEqual(ctx["team"].get("current_agent_role"), "writer")
+        self.assertTrue(ctx["team"].get("current_worker_is_doc_sync_owner"))
+        self.assertEqual(ctx["team"].get("doc_sync_owners"), ["reviewer"])
+        self.assertIn("As reviewer", ctx["next_action"])
+        self.assertIn("DOC_SYNC.md", ctx["next_action"])
+
+    def test_team_context_personalizes_document_critic_to_owner(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_doc_critic_owner",
+            lane="build",
+            risk_tags=["multi-root"],
+            extra_fields={"mutates_repo": "true", "runtime_verdict": "PASS"},
+        )
+        _write_request(task_dir, "Implement app, tests, and refresh docs.")
+        env = self._team_env()
+        env["HARNESS_TEAM_WORKER"] = "lead"
+        env["CLAUDE_AGENT_NAME"] = "harness:critic-document:lead"
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_documentation_owner_plan(task_dir)
+        self._write_worker_summary(task_dir, "worker-a", "app/main.ts")
+        self._write_worker_summary(task_dir, "reviewer", "docs/architecture.md")
+        Path(task_dir, "TEAM_SYNTHESIS.md").write_text(
+            """# Team Synthesis
+## Integrated Result
+- merged app and docs slices
+
+## Cross-Checks
+- ownership respected
+
+## Verification Summary
+- pytest tests/test_example.py
+
+## Residual Risks
+- none
+""",
+            encoding="utf-8",
+        )
+        Path(task_dir, "CRITIC__runtime.md").write_text(
+            """verdict: PASS
+summary: final runtime verification passed
+
+## Transcript
+pytest tests/test_example.py
+""",
+            encoding="utf-8",
+        )
+        self._write_doc_sync(task_dir, meaningful=True)
+
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json", env=env)
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertEqual(ctx["team"].get("current_worker"), "lead")
+        self.assertEqual(ctx["team"].get("current_agent_role"), "critic-document")
+        self.assertTrue(ctx["team"].get("current_worker_is_document_critic_owner"))
+        self.assertEqual(ctx["team"].get("document_critic_owners"), ["lead"])
+        self.assertIn("As lead", ctx["next_action"])
+        self.assertIn("CRITIC__document.md", ctx["next_action"])
+
+    def test_context_accepts_explicit_worker_and_agent_without_env(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_explicit_worker",
+            lane="build",
+            risk_tags=["multi-root"],
+            extra_fields={"mutates_repo": "true", "runtime_verdict": "PASS"},
+        )
+        _write_request(task_dir, "Implement app, tests, and refresh docs.")
+        env = self._team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_documentation_owner_plan(task_dir)
+        self._write_worker_summary(task_dir, "worker-a", "app/main.ts")
+        self._write_worker_summary(task_dir, "reviewer", "docs/architecture.md")
+        Path(task_dir, "TEAM_SYNTHESIS.md").write_text(
+            """# Team Synthesis
+## Integrated Result
+- merged app and docs slices
+
+## Cross-Checks
+- ownership respected
+
+## Verification Summary
+- pytest tests/test_example.py
+
+## Residual Risks
+- none
+""",
+            encoding="utf-8",
+        )
+        self._write_doc_sync(task_dir, meaningful=False)
+        time.sleep(0.02)
+        Path(task_dir, "CRITIC__runtime.md").write_text(
+            """verdict: PASS
+summary: final runtime verification passed
+
+## Transcript
+pytest tests/test_example.py
+""",
+            encoding="utf-8",
+        )
+
+        code, out, err = _run_hctl(
+            "context",
+            "--task-dir",
+            task_dir,
+            "--json",
+            "--team-worker",
+            "reviewer",
+            "--agent-name",
+            "harness:writer:reviewer",
+        )
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertEqual(ctx["team"].get("current_worker"), "reviewer")
+        self.assertEqual(ctx["team"].get("current_agent_role"), "writer")
+        self.assertTrue(ctx["team"].get("current_worker_is_doc_sync_owner"))
+        self.assertIn("DOC_SYNC.md", ctx["next_action"])
+
+    def test_team_context_recommends_team_bootstrap_before_fanout(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_bootstrap_hint",
+            lane="build",
+            risk_tags=["multi-root"],
+        )
+        _write_request(task_dir, "Implement app, API, and tests for the feature.")
+        env = self._team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_completed_team_plan(task_dir)
+
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json")
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertTrue(ctx["team"].get("bootstrap_available"))
+        self.assertFalse(ctx["team"].get("bootstrap_generated"))
+        self.assertIn("team_bootstrap", ctx["next_action"])
+
+    def test_team_bootstrap_generates_worker_briefs_and_env_files(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_bootstrap_write",
+            lane="build",
+            risk_tags=["multi-root"],
+        )
+        _write_request(task_dir, "Implement app, API, tests, and docs.")
+        env = self._team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_documentation_owner_plan(task_dir)
+
+        code, out, err = _run_hctl("team-bootstrap", "--task-dir", task_dir, "--json", "--write-files")
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+
+        self.assertTrue(payload.get("ready"))
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "index.json").is_file())
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "worker-a.md").is_file())
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "worker-a.developer.env").is_file())
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "reviewer.writer.env").is_file())
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "lead.critic-document.env").is_file())
+
+        brief = (Path(task_dir) / "team" / "bootstrap" / "reviewer.md").read_text(encoding="utf-8")
+        self.assertIn("Team Worker Bootstrap — reviewer", brief)
+        self.assertIn("DOC_SYNC.md", brief)
+
+        env_file = (Path(task_dir) / "team" / "bootstrap" / "reviewer.writer.env").read_text(encoding="utf-8")
+        self.assertIn("export HARNESS_TEAM_WORKER='reviewer'", env_file)
+        self.assertIn("export CLAUDE_AGENT_NAME='harness:writer:reviewer'", env_file)
+
+    def test_team_dispatch_generates_provider_prompts_and_run_scripts(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_dispatch_write",
+            lane="build",
+            risk_tags=["multi-root"],
+        )
+        _write_request(task_dir, "Implement app, API, tests, and docs.")
+        env = self._team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_documentation_owner_plan(task_dir)
+
+        code, out, err = _run_hctl("team-bootstrap", "--task-dir", task_dir, "--json", "--write-files")
+        self.assertEqual(code, 0, err)
+
+        code, out, err = _run_hctl("team-dispatch", "--task-dir", task_dir, "--json", "--write-files")
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+
+        self.assertTrue(payload.get("ready"))
+        self.assertEqual(payload.get("provider"), "omc")
+        self.assertIn("bootstrap_signature", payload)
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "provider" / "dispatch.json").is_file())
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "provider" / "omc-team.prompt.md").is_file())
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "provider" / "launch-omc-team.sh").is_file())
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "run-worker-a-implement.sh").is_file())
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "reviewer.documentation_sync.writer.prompt.md").is_file())
+
+        provider_prompt = (Path(task_dir) / "team" / "bootstrap" / "provider" / "omc-team.prompt.md").read_text(encoding="utf-8")
+        self.assertIn("TEAM_PLAN.md", provider_prompt)
+        self.assertIn("Planned workers", provider_prompt)
+
+        launcher = (Path(task_dir) / "team" / "bootstrap" / "provider" / "launch-omc-team.sh").read_text(encoding="utf-8")
+        self.assertIn("omc team 3:executor", launcher)
+
+    def test_team_launch_autorefreshes_bootstrap_and_dispatch(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_launch_write",
+            lane="build",
+            risk_tags=["multi-root"],
+        )
+        _write_request(task_dir, "Implement app, API, tests, and docs.")
+        env = self._team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_documentation_owner_plan(task_dir)
+
+        code, out, err = _run_hctl("team-launch", "--task-dir", task_dir, "--json", "--write-files")
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+
+        self.assertTrue(payload.get("ready"))
+        self.assertEqual(payload.get("provider"), "omc")
+        self.assertEqual(payload.get("target"), "provider")
+        self.assertTrue(payload.get("bootstrap_refreshed"))
+        self.assertTrue(payload.get("dispatch_refreshed"))
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "index.json").is_file())
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "provider" / "dispatch.json").is_file())
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "provider" / "launch.json").is_file())
+        self.assertIn("launch-omc-team.sh", payload.get("launch_script", ""))
+
+    def test_team_launch_native_provider_surfaces_prompt_and_execute_fallback(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_launch_native",
+            lane="build",
+            risk_tags=["multi-root"],
+        )
+        _write_request(task_dir, "Implement app, API, tests, and docs.")
+        env = self._native_team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_documentation_owner_plan(task_dir)
+
+        code, out, err = _run_hctl("team-launch", "--task-dir", task_dir, "--json", "--write-files", env=env)
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+
+        self.assertTrue(payload.get("ready"))
+        self.assertEqual(payload.get("provider"), "native")
+        self.assertEqual(payload.get("target"), "provider")
+        self.assertTrue(payload.get("interactive_required"))
+        self.assertTrue(payload.get("execute_supported"))
+        self.assertTrue(payload.get("execute_fallback_available"))
+        self.assertEqual(payload.get("execute_target"), "implementers")
+        self.assertIn("falling back", payload.get("execute_resolution_reason", ""))
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "provider" / "native-team.prompt.md").is_file())
+        self.assertIn("native-team.prompt.md", payload.get("provider_prompt", ""))
+        self.assertIn("dispatch-implementers.sh", payload.get("execute_launch_script", ""))
+
+    def test_team_launch_execute_auto_uses_implementer_fallback_for_native_provider(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_launch_native_exec",
+            lane="build",
+            risk_tags=["multi-root"],
+        )
+        _write_request(task_dir, "Implement app, API, tests, and docs.")
+        env = self._native_team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_documentation_owner_plan(task_dir)
+
+        code, out, err = _run_hctl("team-launch", "--task-dir", task_dir, "--json", "--write-files", "--execute", env=env)
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+
+        self.assertTrue(payload.get("ready"))
+        self.assertEqual(payload.get("target"), "provider")
+        self.assertEqual(payload.get("execute_target"), "implementers")
+        self.assertTrue(payload.get("execution", {}).get("spawned"))
+        self.assertEqual(payload.get("execution", {}).get("resolved_target"), "implementers")
+        self.assertIn("dispatch-implementers.sh", payload.get("execution", {}).get("launch_script", ""))
+
+    def test_team_dispatch_generates_synthesis_and_handoff_run_scripts(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_dispatch_synthesis",
+            lane="build",
+            risk_tags=["multi-root"],
+        )
+        _write_request(task_dir, "Implement app, API, tests, and docs.")
+        env = self._team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_documentation_owner_plan(task_dir)
+
+        _run_hctl("team-bootstrap", "--task-dir", task_dir, "--json", "--write-files")
+        code, out, err = _run_hctl("team-dispatch", "--task-dir", task_dir, "--json", "--write-files")
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+
+        self.assertTrue(payload.get("ready"))
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "run-lead-synthesis.sh").is_file())
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "run-lead-handoff_refresh.sh").is_file())
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "lead.synthesis.developer.prompt.md").is_file())
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "lead.handoff_refresh.developer.prompt.md").is_file())
+
+    def test_team_relaunch_defaults_to_pending_worker_implement_phase(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_relaunch_worker",
+            lane="build",
+            risk_tags=["multi-root"],
+        )
+        _write_request(task_dir, "Implement app, API, tests, and docs.")
+        env = self._team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_documentation_owner_plan(task_dir)
+        _run_hctl("team-bootstrap", "--task-dir", task_dir, "--json", "--write-files")
+        _run_hctl("team-dispatch", "--task-dir", task_dir, "--json", "--write-files")
+
+        code, out, err = _run_hctl("team-relaunch", "--task-dir", task_dir, "--json", "--write-files")
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+
+        self.assertTrue(payload.get("ready"))
+        self.assertEqual(payload.get("worker"), "worker-a")
+        self.assertEqual(payload.get("phase"), "implement")
+        self.assertIn("worker summary", payload.get("selection_reason", ""))
+        self.assertTrue((Path(task_dir) / "team" / "bootstrap" / "provider" / "relaunch.json").is_file())
+
+    def test_team_relaunch_routes_synthesis_owner_after_worker_summaries(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_relaunch_synthesis",
+            lane="build",
+            risk_tags=["multi-root"],
+        )
+        _write_request(task_dir, "Implement app, API, tests, and docs.")
+        env = self._team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_documentation_owner_plan(task_dir)
+        self._write_worker_summary(task_dir, "lead", "tests/test_example.py")
+        self._write_worker_summary(task_dir, "worker-a", "app/main.ts")
+        self._write_worker_summary(task_dir, "reviewer", "docs/guide.md")
+        _run_hctl("team-bootstrap", "--task-dir", task_dir, "--json", "--write-files")
+        _run_hctl("team-dispatch", "--task-dir", task_dir, "--json", "--write-files")
+
+        code, out, err = _run_hctl("team-relaunch", "--task-dir", task_dir, "--json", "--write-files")
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+
+        self.assertTrue(payload.get("ready"))
+        self.assertEqual(payload.get("worker"), "lead")
+        self.assertEqual(payload.get("phase"), "synthesis")
+        self.assertIn("TEAM_SYNTHESIS", payload.get("selection_reason", ""))
+        self.assertIn("run-lead-synthesis.sh", payload.get("run_script", ""))
+
+    def test_team_context_requests_team_dispatch_after_bootstrap(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_dispatch_hint",
+            lane="build",
+            risk_tags=["multi-root"],
+        )
+        _write_request(task_dir, "Implement app, API, tests, and docs.")
+        env = self._team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_completed_team_plan(task_dir)
+        _run_hctl("team-bootstrap", "--task-dir", task_dir, "--json", "--write-files")
+
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json")
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertTrue(ctx["team"].get("dispatch_available"))
+        self.assertFalse(ctx["team"].get("dispatch_generated"))
+        self.assertIn("team_dispatch", ctx["next_action"])
+
+    def test_team_context_requests_team_launch_after_dispatch(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_launch_hint",
+            lane="build",
+            risk_tags=["multi-root"],
+        )
+        _write_request(task_dir, "Implement app, API, tests, and docs.")
+        env = self._team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_completed_team_plan(task_dir)
+        _run_hctl("team-bootstrap", "--task-dir", task_dir, "--json", "--write-files")
+        _run_hctl("team-dispatch", "--task-dir", task_dir, "--json", "--write-files")
+
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json")
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertTrue(ctx["team"].get("launch_available"))
+        self.assertFalse(ctx["team"].get("launch_generated"))
+        self.assertIn("team_launch", ctx["next_action"])
+
+    def test_team_context_surfaces_native_launch_prompt_and_execute_fallback(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_launch_native_hint",
+            lane="build",
+            risk_tags=["multi-root"],
+        )
+        _write_request(task_dir, "Implement app, API, tests, and docs.")
+        env = self._native_team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_completed_team_plan(task_dir)
+        _run_hctl("team-bootstrap", "--task-dir", task_dir, "--json", "--write-files", env=env)
+        _run_hctl("team-dispatch", "--task-dir", task_dir, "--json", "--write-files", env=env)
+
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json", env=env)
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertEqual(ctx["team"].get("launch_target"), "provider")
+        self.assertTrue(ctx["team"].get("launch_interactive_required"))
+        self.assertTrue(ctx["team"].get("launch_execute_supported"))
+        self.assertEqual(ctx["team"].get("launch_execute_target"), "implementers")
+        self.assertIn("native-team.prompt.md", ctx["team"].get("launch_provider_prompt", ""))
+        self.assertIn("native lead prompt", ctx.get("next_action", ""))
+
+    def test_team_context_marks_dispatch_stale_when_dispatch_files_go_missing(self):
+        task_dir = _make_task(
+            self.tmp.name,
+            "TASK__ctx_team_dispatch_stale",
+            lane="build",
+            risk_tags=["multi-root"],
+        )
+        _write_request(task_dir, "Implement app, API, tests, and docs.")
+        env = self._team_env()
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        self._write_completed_team_plan(task_dir)
+        _run_hctl("team-bootstrap", "--task-dir", task_dir, "--json", "--write-files")
+        _run_hctl("team-dispatch", "--task-dir", task_dir, "--json", "--write-files")
+
+        provider_prompt = Path(task_dir) / "team" / "bootstrap" / "provider" / "omc-team.prompt.md"
+        provider_prompt.unlink()
+
+        code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json")
+        self.assertEqual(code, 0, err)
+        ctx = json.loads(out)
+
+        self.assertTrue(ctx["team"].get("dispatch_generated"))
+        self.assertTrue(ctx["team"].get("dispatch_stale"))
+        self.assertTrue(ctx["team"].get("dispatch_refresh_needed"))
+        self.assertIn("dispatch files missing", ctx["team"].get("dispatch_reason", ""))
+        self.assertIn("team_dispatch", ctx["next_action"])
 
 
 # ---------------------------------------------------------------------------

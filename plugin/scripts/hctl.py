@@ -33,6 +33,10 @@ from _lib import (
     compile_routing,
     emit_compact_context,
     ensure_team_artifacts,
+    build_team_bootstrap,
+    build_team_dispatch,
+    build_team_launch,
+    build_team_relaunch,
     sync_team_status,
     TASK_DIR,
 )
@@ -190,7 +194,11 @@ def cmd_context(args):
     except Exception:
         pass
 
-    ctx = emit_compact_context(task_dir)
+    ctx = emit_compact_context(
+        task_dir,
+        raw_agent_name=getattr(args, "agent_name", None),
+        explicit_worker=getattr(args, "team_worker", None),
+    )
 
     if getattr(args, "json", False):
         print(json.dumps(ctx, indent=2))
@@ -227,14 +235,83 @@ def cmd_context(args):
                 print(f"Team reason: {team['reason']}")
             if team.get("plan_required") or team.get("synthesis_required") or team.get("provider") not in ("none", ""):
                 print(
-                    "Team plan: ready={ready} placeholders={placeholders} artifact={artifact}".format(
+                    "Team plan: ready={ready} ownership_ready={ownership} placeholders={placeholders} artifact={artifact}".format(
                         ready="yes" if team.get("plan_ready") else "no",
+                        ownership="yes" if team.get("plan_ownership_ready") else "no",
                         placeholders="yes" if team.get("plan_has_placeholders") else "no",
                         artifact=team.get("plan_artifact", "TEAM_PLAN.md"),
                     )
                 )
-                if team.get("plan_validation_errors"):
-                    print("Team plan ownership: " + "; ".join(team.get("plan_validation_errors", [])[:3]))
+                if team.get("plan_workers"):
+                    print(
+                        "Team ownership: workers={workers} owned_paths={owned_paths}".format(
+                            workers=", ".join(team.get("plan_workers", [])[:6]),
+                            owned_paths=team.get("plan_owned_path_count", 0),
+                        )
+                    )
+                synthesis_workers = team.get("synthesis_workers") or []
+                if synthesis_workers:
+                    print("Team synthesis owners: " + ", ".join(str(x) for x in synthesis_workers[:6]))
+                semantic_errors = team.get("plan_semantic_errors") or []
+                if semantic_errors:
+                    print("Team ownership errors: " + " | ".join(str(x) for x in semantic_errors[:3]))
+                if team.get("bootstrap_available"):
+                    print(
+                        "Team bootstrap: ready={ready} stale={stale} artifact={artifact}".format(
+                            ready="yes" if team.get("bootstrap_generated") else "no",
+                            stale="yes" if team.get("bootstrap_refresh_needed") else "no",
+                            artifact=team.get("bootstrap_index", "team/bootstrap/index.json"),
+                        )
+                    )
+                    if team.get("bootstrap_reason") and team.get("bootstrap_reason") != "current":
+                        print("Team bootstrap reason: " + str(team.get("bootstrap_reason")))
+                if team.get("dispatch_available"):
+                    print(
+                        "Team dispatch: ready={ready} stale={stale} artifact={artifact}".format(
+                            ready="yes" if team.get("dispatch_generated") else "no",
+                            stale="yes" if team.get("dispatch_refresh_needed") else "no",
+                            artifact=team.get("dispatch_index", "team/bootstrap/provider/dispatch.json"),
+                        )
+                    )
+                    if team.get("dispatch_reason") and team.get("dispatch_reason") != "current":
+                        print("Team dispatch reason: " + str(team.get("dispatch_reason")))
+                if team.get("launch_available"):
+                    print(
+                        "Team launch: ready={ready} stale={stale} target={target} artifact={artifact}".format(
+                            ready="yes" if team.get("launch_generated") else "no",
+                            stale="yes" if team.get("launch_refresh_needed") else "no",
+                            target=team.get("launch_target", "auto"),
+                            artifact=team.get("launch_manifest", "team/bootstrap/provider/launch.json"),
+                        )
+                    )
+                    if team.get("launch_command_preview"):
+                        print("Team launch command: " + str(team.get("launch_command_preview")))
+                    if team.get("launch_provider_prompt"):
+                        print("Team launch prompt: " + str(team.get("launch_provider_prompt")))
+                    if team.get("launch_execute_supported"):
+                        execute_target = team.get("launch_execute_target") or team.get("launch_target") or "auto"
+                        print("Team launch execute: supported via " + str(execute_target))
+                        if team.get("launch_execute_command_preview") and team.get("launch_execute_command_preview") != team.get("launch_command_preview"):
+                            print("Team launch execute command: " + str(team.get("launch_execute_command_preview")))
+                        if team.get("launch_execute_resolution_reason"):
+                            print("Team launch execute reason: " + str(team.get("launch_execute_resolution_reason")))
+                    if team.get("launch_reason") and team.get("launch_reason") != "current":
+                        print("Team launch reason: " + str(team.get("launch_reason")))
+                if team.get("worker_summary_required"):
+                    print(
+                        "Team workers: summaries_ready={ready} present={present}/{expected} dir={team_dir}".format(
+                            ready="yes" if team.get("worker_summary_ready") else "no",
+                            present=team.get("worker_summary_present_count", 0),
+                            expected=team.get("worker_summary_expected_count", 0),
+                            team_dir=team.get("worker_summary_dir", "team"),
+                        )
+                    )
+                    missing_workers = team.get("worker_summary_missing_workers") or []
+                    if missing_workers:
+                        print("Team worker summaries missing: " + ", ".join(str(x) for x in missing_workers[:6]))
+                    worker_errors = team.get("worker_summary_errors") or []
+                    if worker_errors:
+                        print("Team worker summary errors: " + " | ".join(str(x) for x in worker_errors[:3]))
                 print(
                     "Team synthesis: ready={ready} placeholders={placeholders} artifact={artifact}".format(
                         ready="yes" if team.get("synthesis_ready") else "no",
@@ -242,6 +319,39 @@ def cmd_context(args):
                         artifact=team.get("synthesis_artifact", "TEAM_SYNTHESIS.md"),
                     )
                 )
+                synthesis_errors = team.get("synthesis_semantic_errors") or []
+                if synthesis_errors:
+                    print("Team synthesis errors: " + " | ".join(str(x) for x in synthesis_errors[:3]))
+                if team.get("runtime_verification_needed"):
+                    print(
+                        "Team final verification: ready={ready} artifact={artifact}".format(
+                            ready="yes" if team.get("runtime_verification_ready") else "no",
+                            artifact=team.get("runtime_verification_artifact", "CRITIC__runtime.md"),
+                        )
+                    )
+                if team.get("documentation_needed"):
+                    print(
+                        "Team docs: ready={ready} doc_sync={doc_sync} document_critic={critic}".format(
+                            ready="yes" if team.get("documentation_ready") else "no",
+                            doc_sync=team.get("doc_sync_artifact", "DOC_SYNC.md"),
+                            critic=team.get("document_critic_artifact", "CRITIC__document.md"),
+                        )
+                    )
+                    doc_sync_owners = team.get("doc_sync_owners") or []
+                    document_critic_owners = team.get("document_critic_owners") or []
+                    if doc_sync_owners or document_critic_owners:
+                        parts = []
+                        if doc_sync_owners:
+                            parts.append("writer=" + ", ".join(str(x) for x in doc_sync_owners[:4]))
+                        if document_critic_owners:
+                            parts.append("critic-document=" + ", ".join(str(x) for x in document_critic_owners[:4]))
+                        print("Team docs owners: " + " | ".join(parts))
+                    if team.get("documentation_reason"):
+                        print("Team docs reason: " + str(team.get("documentation_reason")))
+                if team.get("current_worker"):
+                    role = str(team.get("current_agent_role") or "")
+                    if role:
+                        print(f"Current worker role: {role}")
         if ctx.get("must_read"):
             print(f"Must read: {', '.join(ctx['must_read'])}")
         review_focus = ctx.get("review_focus") or {}
@@ -276,6 +386,297 @@ def cmd_context(args):
             print(f"Notes: {' | '.join(ctx['notes'])}")
         if ctx.get("next_action"):
             print(f"Next: {ctx['next_action']}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: team-bootstrap
+# ---------------------------------------------------------------------------
+
+
+def cmd_team_bootstrap(args):
+    """Generate or preview per-worker bootstrap specs for team tasks."""
+    task_dir = _require_task_dir(args)
+
+    bootstrap = build_team_bootstrap(
+        task_dir,
+        write_files=getattr(args, "write_files", False),
+    )
+
+    if getattr(args, "json", False):
+        print(json.dumps(bootstrap, indent=2))
+        return 0 if bootstrap.get("ready") else 1
+
+    task_id = bootstrap.get("task_id") or os.path.basename(task_dir)
+    if not bootstrap.get("ready"):
+        print(
+            f"team bootstrap not ready for {task_id}: {bootstrap.get('reason') or 'unknown reason'}",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(
+        "team bootstrap ready for {task_id} (provider={provider}, status={status})".format(
+            task_id=task_id,
+            provider=bootstrap.get("provider", "none"),
+            status=bootstrap.get("team_status", "n/a"),
+        )
+    )
+    print(f"  bootstrap_dir: {bootstrap.get('bootstrap_dir')}")
+    print(f"  bootstrap_index: {bootstrap.get('bootstrap_index')}")
+    for spec in bootstrap.get("workers") or []:
+        owned = ", ".join((spec.get("owned_paths") or [])[:2]) or "none"
+        print(
+            "  - {worker}: scope={scope} owned={owned} default_env={env}".format(
+                worker=spec.get("worker", "worker"),
+                scope=spec.get("role_scope", "worker"),
+                owned=owned,
+                env=spec.get("default_env_file", ""),
+            )
+        )
+        for phase in spec.get("phases") or []:
+            print(
+                "      phase={phase_name} agent={agent} env={env} artifact={artifact}".format(
+                    phase_name=phase.get("phase", "phase"),
+                    agent=phase.get("agent_name", ""),
+                    env=phase.get("env_file", ""),
+                    artifact=phase.get("artifact", ""),
+                )
+            )
+    generated = bootstrap.get("generated_files") or []
+    if generated:
+        print("  generated:")
+        for item in generated:
+            print(f"    - {item}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: team-dispatch
+# ---------------------------------------------------------------------------
+
+
+def cmd_team_dispatch(args):
+    """Generate or preview provider launch artifacts for a team task."""
+    task_dir = _require_task_dir(args)
+
+    dispatch = build_team_dispatch(
+        task_dir,
+        write_files=getattr(args, "write_files", False),
+    )
+
+    if getattr(args, "json", False):
+        print(json.dumps(dispatch, indent=2))
+        return 0 if dispatch.get("ready") else 1
+
+    task_id = dispatch.get("task_id") or os.path.basename(task_dir)
+    if not dispatch.get("ready"):
+        print(
+            f"team dispatch not ready for {task_id}: {dispatch.get('reason') or 'unknown reason'}",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(
+        "team dispatch ready for {task_id} (provider={provider})".format(
+            task_id=task_id,
+            provider=dispatch.get("provider", "none"),
+        )
+    )
+    print(f"  provider_prompt: {dispatch.get('provider_prompt')}")
+    print(f"  provider_launcher: {dispatch.get('provider_launcher')}")
+    if dispatch.get("launch_command_preview"):
+        print(f"  launch: {dispatch.get('launch_command_preview')}")
+    for worker in dispatch.get("workers") or []:
+        owned = ", ".join((worker.get("owned_paths") or [])[:2]) or "none"
+        print(
+            "  - {worker}: scope={scope} owned={owned}".format(
+                worker=worker.get("worker", "worker"),
+                scope=worker.get("role_scope", "worker"),
+                owned=owned,
+            )
+        )
+        for phase in worker.get("phases") or []:
+            print(
+                "      phase={phase_name} prompt={prompt} run={run} artifact={artifact}".format(
+                    phase_name=phase.get("phase", "phase"),
+                    prompt=phase.get("prompt_file", ""),
+                    run=phase.get("run_script", ""),
+                    artifact=phase.get("artifact", ""),
+                )
+            )
+    generated = dispatch.get("generated_files") or []
+    if generated:
+        print("  generated:")
+        for item in generated:
+            print(f"    - {item}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: team-launch
+# ---------------------------------------------------------------------------
+
+
+def cmd_team_launch(args):
+    """Generate or execute the default team launch entrypoint."""
+    task_dir = _require_task_dir(args)
+
+    launch = build_team_launch(
+        task_dir,
+        write_files=getattr(args, "write_files", False) or getattr(args, "execute", False),
+        execute=getattr(args, "execute", False),
+        auto_refresh=not getattr(args, "no_auto_refresh", False),
+        target=getattr(args, "target", "auto"),
+    )
+
+    if getattr(args, "json", False):
+        print(json.dumps(launch, indent=2))
+        if getattr(args, "execute", False):
+            return 0 if launch.get("execution", {}).get("spawned") else 1
+        return 0 if launch.get("ready") else 1
+
+    task_id = launch.get("task_id") or os.path.basename(task_dir)
+    if not launch.get("ready"):
+        print(
+            f"team launch not ready for {task_id}: {launch.get('reason') or 'unknown reason'}",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(
+        "team launch ready for {task_id} (provider={provider}, target={target})".format(
+            task_id=task_id,
+            provider=launch.get("provider", "none"),
+            target=launch.get("target", "auto"),
+        )
+    )
+    print(f"  launch_manifest: {launch.get('launch_manifest')}")
+    print(f"  launch_script: {launch.get('launch_script')}")
+    if launch.get("provider_prompt"):
+        print(f"  provider_prompt: {launch.get('provider_prompt')}")
+    if launch.get("implement_dispatcher"):
+        print(f"  implement_dispatcher: {launch.get('implement_dispatcher')}")
+    if launch.get("launch_command_preview"):
+        print(f"  launch: {launch.get('launch_command_preview')}")
+    print(
+        "  auto_refresh: bootstrap={bootstrap} dispatch={dispatch}".format(
+            bootstrap="yes" if launch.get("bootstrap_refreshed") else "no",
+            dispatch="yes" if launch.get("dispatch_refreshed") else "no",
+        )
+    )
+    if launch.get("interactive_required"):
+        print("  interactive: native lead session required")
+    if launch.get("execute_supported"):
+        execute_target = launch.get("execute_target") or launch.get("target") or "auto"
+        print(f"  execute: supported via {execute_target}")
+        if launch.get("execute_launch_script") and launch.get("execute_launch_script") != launch.get("launch_script"):
+            print(f"  execute_script: {launch.get('execute_launch_script')}")
+        if launch.get("execute_command_preview") and launch.get("execute_command_preview") != launch.get("launch_command_preview"):
+            print(f"  execute_launch: {launch.get('execute_command_preview')}")
+        if launch.get("execute_resolution_reason"):
+            print(f"  execute_resolution: {launch.get('execute_resolution_reason')}")
+    elif launch.get("execute_blocker"):
+        print(f"  execute blocked: {launch.get('execute_blocker')}")
+    generated = launch.get("generated_files") or []
+    if generated:
+        print("  generated:")
+        for item in generated:
+            print(f"    - {item}")
+    execution = launch.get("execution") or {}
+    if getattr(args, "execute", False):
+        if execution.get("spawned"):
+            print(
+                "  spawned: pid={pid} stdout={stdout_log} stderr={stderr_log}".format(
+                    pid=execution.get("pid", "?"),
+                    stdout_log=execution.get("stdout_log", launch.get("stdout_log", "")),
+                    stderr_log=execution.get("stderr_log", launch.get("stderr_log", "")),
+                )
+            )
+            return 0
+        error = execution.get("error") or launch.get("execute_blocker") or "launch spawn failed"
+        print(f"team launch execute failed for {task_id}: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Subcommand: team-relaunch
+# ---------------------------------------------------------------------------
+
+
+def cmd_team_relaunch(args):
+    """Generate or execute a worker/phase-specific relaunch manifest."""
+    task_dir = _require_task_dir(args)
+
+    relaunch = build_team_relaunch(
+        task_dir,
+        worker=getattr(args, "worker", None),
+        phase=getattr(args, "phase", "auto"),
+        write_files=getattr(args, "write_files", False) or getattr(args, "execute", False),
+        execute=getattr(args, "execute", False),
+        auto_refresh=not getattr(args, "no_auto_refresh", False),
+    )
+
+    if getattr(args, "json", False):
+        print(json.dumps(relaunch, indent=2))
+        if getattr(args, "execute", False):
+            return 0 if relaunch.get("execution", {}).get("spawned") else 1
+        return 0 if relaunch.get("ready") else 1
+
+    task_id = relaunch.get("task_id") or os.path.basename(task_dir)
+    if not relaunch.get("ready"):
+        print(
+            f"team relaunch not ready for {task_id}: {relaunch.get('reason') or 'unknown reason'}",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(
+        "team relaunch ready for {task_id} (worker={worker}, phase={phase})".format(
+            task_id=task_id,
+            worker=relaunch.get("worker", "?"),
+            phase=relaunch.get("phase", "?"),
+        )
+    )
+    print(f"  relaunch_manifest: {relaunch.get('relaunch_manifest')}")
+    print(f"  run_script: {relaunch.get('run_script')}")
+    if relaunch.get("command_preview"):
+        print(f"  launch: {relaunch.get('command_preview')}")
+    if relaunch.get("artifact"):
+        print(f"  artifact: {relaunch.get('artifact')}")
+    if relaunch.get("selection_reason"):
+        print(f"  selection: {relaunch.get('selection_reason')}")
+    print(
+        "  auto_refresh: bootstrap={bootstrap} dispatch={dispatch}".format(
+            bootstrap="yes" if relaunch.get("bootstrap_refreshed") else "no",
+            dispatch="yes" if relaunch.get("dispatch_refreshed") else "no",
+        )
+    )
+    if relaunch.get("execute_supported"):
+        print("  execute: supported")
+    elif relaunch.get("execute_blocker"):
+        print(f"  execute blocked: {relaunch.get('execute_blocker')}")
+    generated = relaunch.get("generated_files") or []
+    if generated:
+        print("  generated:")
+        for item in generated:
+            print(f"    - {item}")
+    execution = relaunch.get("execution") or {}
+    if getattr(args, "execute", False):
+        if execution.get("spawned"):
+            print(
+                "  spawned: pid={pid} stdout={stdout_log} stderr={stderr_log} phase_log={phase_log}".format(
+                    pid=execution.get("pid", "?"),
+                    stdout_log=execution.get("stdout_log", relaunch.get("stdout_log", "")),
+                    stderr_log=execution.get("stderr_log", relaunch.get("stderr_log", "")),
+                    phase_log=execution.get("phase_log", relaunch.get("log_file", "")),
+                )
+            )
+            return 0
+        error = execution.get("error") or relaunch.get("execute_blocker") or "relaunch spawn failed"
+        print(f"team relaunch execute failed for {task_id}: {error}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -532,7 +933,40 @@ def build_parser():
     p_ctx = subparsers.add_parser("context", help="emit compact task pack")
     p_ctx.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
     p_ctx.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p_ctx.add_argument("--team-worker", metavar="WORKER", help="optional team worker id for personalized context")
+    p_ctx.add_argument("--agent-name", metavar="NAME", help="optional agent name override for personalized context")
     p_ctx.set_defaults(func=cmd_context)
+
+    p_team_bootstrap = subparsers.add_parser("team-bootstrap", help="generate team worker bootstrap specs")
+    p_team_bootstrap.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_team_bootstrap.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p_team_bootstrap.add_argument("--write-files", action="store_true", help="materialize team/bootstrap briefs + env files")
+    p_team_bootstrap.set_defaults(func=cmd_team_bootstrap)
+
+    p_team_dispatch = subparsers.add_parser("team-dispatch", help="generate provider launch artifacts for a team task")
+    p_team_dispatch.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_team_dispatch.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p_team_dispatch.add_argument("--write-files", action="store_true", help="materialize provider prompts + run helpers")
+    p_team_dispatch.set_defaults(func=cmd_team_dispatch)
+
+    p_team_launch = subparsers.add_parser("team-launch", help="prepare or execute the default team fan-out entrypoint")
+    p_team_launch.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_team_launch.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p_team_launch.add_argument("--write-files", action="store_true", help="materialize the launch manifest")
+    p_team_launch.add_argument("--execute", action="store_true", help="spawn the selected launcher in detached mode")
+    p_team_launch.add_argument("--no-auto-refresh", action="store_true", help="do not regenerate stale/missing bootstrap or dispatch artifacts")
+    p_team_launch.add_argument("--target", choices=("auto", "provider", "implementers"), default="auto", help="which launcher to prepare or execute")
+    p_team_launch.set_defaults(func=cmd_team_launch)
+
+    p_team_relaunch = subparsers.add_parser("team-relaunch", help="prepare or execute a worker/phase-specific relaunch")
+    p_team_relaunch.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_team_relaunch.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p_team_relaunch.add_argument("--write-files", action="store_true", help="materialize the relaunch manifest")
+    p_team_relaunch.add_argument("--execute", action="store_true", help="spawn the selected worker phase in detached mode")
+    p_team_relaunch.add_argument("--no-auto-refresh", action="store_true", help="do not regenerate stale/missing bootstrap or dispatch artifacts")
+    p_team_relaunch.add_argument("--worker", metavar="WORKER", help="target worker id (defaults to the current or pending worker)")
+    p_team_relaunch.add_argument("--phase", metavar="PHASE", default="auto", help="target phase: auto|implement|synthesis|final_runtime_verification|documentation_sync|documentation_review|handoff_refresh")
+    p_team_relaunch.set_defaults(func=cmd_team_relaunch)
 
     p_hist = subparsers.add_parser("history", help="list failure cases across task history")
     p_hist.add_argument("--tasks-dir", metavar="DIR", help="optional tasks directory (defaults to doc/harness/tasks)")

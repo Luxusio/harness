@@ -54,6 +54,9 @@ Important fields:
 - document evaluation → `harness:critic-document`
 
 Do not write source files, `PLAN.md`, `HANDOFF.md`, `DOC_SYNC.md`, or `CRITIC__*.md` yourself.
+For team-owned protected artifacts written through `mcp__plugin_harness_harness__write_*`, forward the current worker explicitly (`team_worker`) or set `HARNESS_TEAM_WORKER` in the delegated worker environment so `write_artifact.py` can enforce the right owner.
+For ready team tasks, prefer `mcp__plugin_harness_harness__team_bootstrap` before fan-out: it writes `team/bootstrap/*` worker briefs plus role-scoped env snippets, and `task_context` can now be personalized with `team_worker` / `agent_name` to fetch a worker-specific task pack for that brief.
+After bootstrap, use `mcp__plugin_harness_harness__team_dispatch` when available so the lead fan-out runs from a frozen provider pack (`team/bootstrap/provider/*`) instead of improvised prompts. Refresh that dispatch pack first when `task_context` says it is missing or stale.
 
 ## AskUserQuestion rule
 
