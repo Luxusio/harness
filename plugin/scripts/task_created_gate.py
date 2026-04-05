@@ -48,7 +48,9 @@ qa_required: pending
 qa_mode: {qa_mode}
 plan_verdict: pending
 runtime_verdict: pending
+runtime_verdict_freshness: current
 document_verdict: pending
+document_verdict_freshness: current
 runtime_verdict_fail_count: 0
 browser_required: {browser_required}
 doc_sync_required: false

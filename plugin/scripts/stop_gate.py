@@ -3,7 +3,8 @@ import sys, os, json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (read_hook_input, json_field, json_array, yaml_field, yaml_array,
                   manifest_field, is_browser_first_project, is_doc_path,
-                  extract_roots, TASK_DIR, MANIFEST, now_iso)
+                  extract_roots, TASK_DIR, MANIFEST, now_iso,
+                  needs_document_critic, verdict_freshness)
 
 # Stop hook — catches premature completion attempts.
 # Uses Claude Code structured JSON API:
@@ -33,18 +34,30 @@ def _next_step(status):
 def _verdict_hints(state_file):
     """Return list of non-PASS verdict hint strings for display.
 
-    Shows plan_verdict and runtime_verdict when they are not PASS,
-    so the agent knows exactly what gate still needs to be passed.
+    Shows non-ready verdicts, including stale PASS freshness, so the agent
+    knows exactly what gate still needs to be passed again before close.
     """
     if not state_file or not os.path.exists(state_file):
         return []
     hints = []
     pv = yaml_field("plan_verdict", state_file) or "pending"
     rv = yaml_field("runtime_verdict", state_file) or "pending"
+    runtime_freshness = verdict_freshness(state_file, "runtime_verdict")
     if pv != "PASS":
         hints.append(f"plan_verdict: {pv}")
     if rv != "PASS":
         hints.append(f"runtime_verdict: {rv}")
+    elif runtime_freshness != "current":
+        hints.append(f"runtime_verdict freshness: {runtime_freshness} (rerun critic-runtime)")
+
+    task_dir = os.path.dirname(state_file)
+    if task_dir and needs_document_critic(task_dir):
+        dv = yaml_field("document_verdict", state_file) or "pending"
+        document_freshness = verdict_freshness(state_file, "document_verdict")
+        if dv != "PASS":
+            hints.append(f"document_verdict: {dv}")
+        elif document_freshness != "current":
+            hints.append(f"document_verdict freshness: {document_freshness} (rerun critic-document)")
     return hints
 
 

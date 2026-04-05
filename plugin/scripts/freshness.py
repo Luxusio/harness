@@ -8,7 +8,7 @@ from datetime import datetime
 
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import yaml_array, is_doc_path
+from _lib import yaml_array, is_doc_path, verdict_freshness
 
 def get_git_changed_since(timestamp):
     """Get files changed since a timestamp via git."""
@@ -48,8 +48,19 @@ def check_stale_verdicts(task_dir="doc/harness/tasks"):
         if any("status: {}".format(s) in content for s in ["closed", "archived", "stale"]):
             continue
 
-        # Check runtime verdict
-        if "runtime_verdict: PASS" in content:
+        runtime_freshness = verdict_freshness(state_file, "runtime_verdict")
+        document_freshness = verdict_freshness(state_file, "document_verdict")
+
+        # First honor explicit freshness fields written by the hook layer.
+        if "runtime_verdict: PASS" in content and runtime_freshness == "stale":
+            warnings.append({
+                "type": "stale_pass",
+                "task": entry,
+                "verdict": "runtime",
+                "changed_files": [],
+                "reason": "runtime_verdict_freshness is stale"
+            })
+        elif "runtime_verdict: PASS" in content:
             critic_file = os.path.join(task_path, "CRITIC__runtime.md")
             if os.path.isfile(critic_file):
                 verified_at = extract_verified_at(critic_file)
@@ -68,7 +79,15 @@ def check_stale_verdicts(task_dir="doc/harness/tasks"):
                         })
 
         # Check document verdict
-        if "document_verdict: PASS" in content:
+        if "document_verdict: PASS" in content and document_freshness == "stale":
+            warnings.append({
+                "type": "stale_pass",
+                "task": entry,
+                "verdict": "document",
+                "changed_files": [],
+                "reason": "document_verdict_freshness is stale"
+            })
+        elif "document_verdict: PASS" in content:
             critic_file = os.path.join(task_path, "CRITIC__document.md")
             if os.path.isfile(critic_file):
                 verified_at = extract_verified_at(critic_file)

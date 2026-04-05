@@ -69,10 +69,17 @@ class TestVerdictHints(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _write_state(self, plan_v="pending", runtime_v="pending"):
+    def _write_state(self, plan_v="pending", runtime_v="pending", runtime_freshness="current", document_v="pending", document_freshness="current", doc_changes_detected="false"):
         path = os.path.join(self.tmp.name, "TASK_STATE.yaml")
         with open(path, "w") as f:
-            f.write(f"plan_verdict: {plan_v}\nruntime_verdict: {runtime_v}\n")
+            f.write(
+                f"plan_verdict: {plan_v}\n"
+                f"runtime_verdict: {runtime_v}\n"
+                f"runtime_verdict_freshness: {runtime_freshness}\n"
+                f"document_verdict: {document_v}\n"
+                f"document_verdict_freshness: {document_freshness}\n"
+                f"doc_changes_detected: {doc_changes_detected}\n"
+            )
         return path
 
     def test_both_pending(self):
@@ -90,6 +97,11 @@ class TestVerdictHints(unittest.TestCase):
         path = self._write_state("PASS", "PASS")
         hints = _verdict_hints(path)
         self.assertEqual(len(hints), 0)
+
+    def test_stale_runtime_pass_surfaces_hint(self):
+        path = self._write_state("PASS", "PASS", runtime_freshness="stale")
+        hints = _verdict_hints(path)
+        self.assertTrue(any("freshness" in hint for hint in hints), hints)
 
     def test_missing_file(self):
         hints = _verdict_hints("/nonexistent/path")

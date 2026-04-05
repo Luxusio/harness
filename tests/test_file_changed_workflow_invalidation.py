@@ -3,8 +3,8 @@
 Covers:
   - plan PASS before source mutation → no violation
   - source mutation before plan PASS → violation recorded
-  - file change → runtime_verdict reset from PASS to pending
-  - task with pending runtime_verdict after invalidation → close blocked
+  - file change → runtime_verdict freshness flips from current to stale
+  - task with stale runtime PASS after invalidation → close blocked
   - execution_mode/orchestration_mode pending on mutating task → close blocked
 
 Run with: python -m unittest discover -s tests -p 'test_*.py'
@@ -45,7 +45,9 @@ def _make_state(task_dir, **overrides):
         "mutates_repo": "true",
         "plan_verdict": "PASS",
         "runtime_verdict": "PASS",
+        "runtime_verdict_freshness": "current",
         "document_verdict": "skipped",
+        "document_verdict_freshness": "current",
         "doc_changes_detected": "false",
         "execution_mode": "standard",
         "orchestration_mode": "solo",
@@ -95,19 +97,24 @@ class TestVerdictInvalidation(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def test_invalidate_runtime_resets_from_pass_to_pending(self):
-        """invalidate_runtime sets runtime_verdict from PASS to pending."""
+    def test_invalidate_runtime_marks_pass_stale(self):
+        """invalidate_runtime keeps PASS but marks freshness stale."""
         _make_state(self.task_dir, runtime_verdict="PASS")
         state_file = os.path.join(self.task_dir, "TASK_STATE.yaml")
 
         invalidate_runtime(state_file, "TASK__test", "src/foo.py changed")
 
         new_verdict = yaml_field("runtime_verdict", state_file)
-        self.assertEqual(new_verdict, "pending",
-            "runtime_verdict must be reset to pending after invalidation")
+        self.assertEqual(new_verdict, "PASS",
+            "runtime_verdict audit trail must be preserved after invalidation")
+        self.assertEqual(
+            yaml_field("runtime_verdict_freshness", state_file),
+            "stale",
+            "runtime_verdict freshness must become stale after invalidation",
+        )
 
     def test_invalidate_runtime_noop_when_already_pending(self):
-        """invalidate_runtime is a no-op when already pending (no redundant write)."""
+        """invalidate_runtime leaves pending verdicts untouched."""
         _make_state(self.task_dir, runtime_verdict="pending")
         state_file = os.path.join(self.task_dir, "TASK_STATE.yaml")
         mtime_before = os.path.getmtime(state_file)
@@ -116,21 +123,22 @@ class TestVerdictInvalidation(unittest.TestCase):
         time.sleep(0.01)
         invalidate_runtime(state_file, "TASK__test", "src/foo.py changed")
 
-        # Should still be pending, not errored
         self.assertEqual(yaml_field("runtime_verdict", state_file), "pending")
+        self.assertEqual(yaml_field("runtime_verdict_freshness", state_file), "current")
 
     def test_invalidate_document_resets_and_sets_doc_changes(self):
-        """invalidate_document sets document_verdict to pending and doc_changes_detected to true."""
+        """invalidate_document keeps verdict history and sets doc freshness stale."""
         _make_state(self.task_dir, document_verdict="PASS", doc_changes_detected="false")
         state_file = os.path.join(self.task_dir, "TASK_STATE.yaml")
 
         invalidate_document(state_file, "TASK__test", "doc/common/api.md changed")
 
-        self.assertEqual(yaml_field("document_verdict", state_file), "pending")
+        self.assertEqual(yaml_field("document_verdict", state_file), "PASS")
+        self.assertEqual(yaml_field("document_verdict_freshness", state_file), "stale")
         self.assertEqual(yaml_field("doc_changes_detected", state_file), "true")
 
-    def test_pending_runtime_verdict_after_invalidation_blocks_close(self):
-        """After invalidation sets runtime_verdict: pending, close must be blocked."""
+    def test_stale_runtime_pass_after_invalidation_blocks_close(self):
+        """After invalidation marks runtime PASS stale, close must still be blocked."""
         _make_state(self.task_dir, runtime_verdict="PASS")
         _make_passing_artifacts(self.task_dir)
         state_file = os.path.join(self.task_dir, "TASK_STATE.yaml")
