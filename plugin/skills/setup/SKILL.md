@@ -351,8 +351,8 @@ Probe for team execution capabilities and populate the `teams:` section in manif
 Run `${CLAUDE_PLUGIN_ROOT}/scripts/capability_probe.py team` to detect:
 
 #### Native team readiness
-- `claude --version` available and version supports native teams
-- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` environment variable set
+- `claude --version` available and version is `>= 2.1.32`
+- `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` environment variable set for the current session
 - Optional: `tmux` available for terminal-based team sessions
 
 #### OMC team readiness
@@ -369,7 +369,6 @@ teams:
   native_ready: <detected>
   omc_ready: <detected>
   auto_activate: true
-  approval_mode: preapproved
   teammate_mode: auto
   default_size: 3
   max_size: 5
@@ -381,10 +380,10 @@ teams:
 ```
 
 Rules:
-- `provider: auto` by default (prefers native if ready, then omc, then fallback)
-- `native_ready` and `omc_ready` reflect actual detection results
-- `auto_activate: true` and `approval_mode: preapproved` mean the harness does not ask the user for team permission
-- If native team readiness is detected, consider adding `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` to `.claude/settings.json` env section
+- `provider: auto` by default (prefers native if the current session is ready, then omc, then fallback)
+- `native_ready` and `omc_ready` capture the setup-time probe snapshot; runtime selection should still re-probe the current environment
+- `auto_activate: true` means the harness may prefer team mode and scaffold team artifacts automatically; it does **not** bypass Claude Code's native team approval flow
+- Only add `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` to `.claude/settings.json` when the project explicitly wants native teams enabled by default
 - `fallback: subagents` means if team provider fails, fall back to subagents mode
 
 Report team readiness status in Phase 15 finish report.

@@ -132,14 +132,14 @@ When `orchestration_mode: team`, the lead selects a team provider in this priori
 
 Provider preference is read from `manifest.teams.provider`. If not set, default priority applies.
 
-### Approval-free operation
+### Auto-selection and approval boundaries
 
-When `manifest.teams.auto_activate: true` and `manifest.teams.approval_mode: preapproved`:
-- No user confirmation is required before spawning workers
-- `task_start` scaffolds `TEAM_PLAN.md` and `TEAM_SYNTHESIS.md`
+When `manifest.teams.auto_activate: true`:
+- The harness may auto-select `orchestration_mode: team` for eligible tasks and scaffold `TEAM_PLAN.md` / `TEAM_SYNTHESIS.md` without an extra harness-local confirmation prompt
 - Source writes stay blocked until `TEAM_PLAN.md` is semantically complete (required headings, no placeholders, explicit worker ownership, no overlapping writable paths)
 - After that, source writes are restricted to declared owned writable paths; shared read-only or unowned paths are blocked
 - All worker activity is recorded in TASK_STATE.yaml for auditability
+- Native Claude Code teams still follow Claude Code's own approval flow; manifest fields do not bypass lead/user approval for team creation
 
 ---
 
@@ -148,7 +148,7 @@ When `manifest.teams.auto_activate: true` and `manifest.teams.approval_mode: pre
 Before selecting `team`, the harness performs a lightweight readiness probe:
 
 1. Check `manifest.teams.*` exists and specifies a provider
-2. Confirm provider is not blocked (e.g., native team support enabled in current environment)
+2. Confirm the current environment actually supports the provider (for native: `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`, Claude Code CLI present, version `>= 2.1.32`; for OMC: runnable `omc`)
 3. Confirm file ownership can be cleanly partitioned (no shared writable paths across workers)
 
 If the probe fails at any step, downgrade to `subagents` (or `solo` if subagents also unavailable) and record `fallback_used`.

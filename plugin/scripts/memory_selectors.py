@@ -3,6 +3,8 @@
 import os
 import re
 
+from _lib import parse_note_metadata as parse_note_state_metadata
+
 # Common English stopwords for keyword extraction
 STOPWORDS = {
     "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
@@ -126,49 +128,71 @@ FRESHNESS_WEIGHTS = {
 }
 
 
-def parse_note_frontmatter(content):
-    """Extract YAML-like header fields from note content."""
-    result = {
-        "freshness": "current",
-        "status": "active",
-        "summary": "",
-        "verified_at": "",
-        "derived_from": "",
-        "invalidated_by_paths": "",
-    }
-    if not content.startswith("---"):
-        return result
-    end = content.find("---", 3)
-    if end == -1:
-        return result
-    header = content[3:end]
-    for line in header.split("\n"):
-        line = line.strip()
-        if ":" in line:
-            key, _, val = line.partition(":")
-            key = key.strip()
-            val = val.strip()
-            if key in result:
-                result[key] = val
-    return result
+def _parse_inline_list(value):
+    """Parse a simple inline YAML-style list like [a, b, c]."""
+    inner = str(value or "").strip()
+    if inner.startswith("[") and inner.endswith("]"):
+        inner = inner[1:-1]
+    return [x.strip().strip('"').strip("'") for x in inner.split(",") if x.strip()]
 
 
-def parse_note_metadata(frontmatter_text):
-    """Parse optional retrieval-metadata fields from note frontmatter text.
 
-    Handles: root, lane, path_scope (block list), topic_tags (block list).
-    Returns dict with defaults when fields are absent.
-    """
+def _extract_header_text(content):
+    """Extract metadata-bearing header text from frontmatter or inline note headers."""
+    if not content:
+        return ""
+
+    if content.startswith("---"):
+        end = content.find("\n---", 3)
+        if end != -1:
+            return content[3:end]
+
+    lines = content.splitlines()
+    start = 0
+    if lines and lines[0].lstrip().startswith("#"):
+        start = 1
+
+    header_lines = []
+    seen_field = False
+    for line in lines[start:start + 40]:
+        stripped = line.strip()
+        if not stripped:
+            if seen_field:
+                break
+            continue
+        if re.match(r"^\s+-\s+", line):
+            if seen_field:
+                header_lines.append(line)
+                continue
+            break
+        if ":" not in stripped:
+            if seen_field:
+                break
+            continue
+        seen_field = True
+        header_lines.append(line)
+    return "\n".join(header_lines)
+
+
+
+def _parse_note_header_fields(header_text):
+    """Parse note metadata from top-of-file header text."""
     result = {
         "root": "common",
         "lane": None,
         "path_scope": [],
         "topic_tags": [],
+        "summary": "",
+        "status": None,
+        "freshness": None,
+        "verified_at": None,
+        "derived_from": [],
+        "invalidated_by_paths": [],
     }
-    if not frontmatter_text:
+    if not header_text:
         return result
 
-    lines = frontmatter_text.split("\n")
+    lines = header_text.split("\n")
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -176,52 +200,82 @@ def parse_note_metadata(frontmatter_text):
         if not stripped or stripped.startswith("#"):
             i += 1
             continue
+        if ":" not in stripped:
+            i += 1
+            continue
 
-        if ":" in stripped:
-            key, _, val = stripped.partition(":")
-            key = key.strip()
-            val = val.strip()
+        key, _, val = stripped.partition(":")
+        key = key.strip()
+        val = val.strip()
 
-            if key == "root" and val:
-                result["root"] = val
-            elif key == "lane" and val:
-                result["lane"] = val
-            elif key in ("path_scope", "topic_tags"):
-                # Check for inline list: path_scope: [a, b]
-                if val.startswith("["):
-                    inner = val.strip("[]")
-                    items = [x.strip().strip('"').strip("'") for x in inner.split(",") if x.strip()]
-                    result[key] = items
-                else:
-                    # Block list: next lines starting with "  -"
-                    block_items = []
-                    j = i + 1
-                    while j < len(lines):
-                        next_line = lines[j]
-                        m = re.match(r'^\s+-\s+(.*)', next_line)
-                        if m:
-                            item = m.group(1).strip().strip('"').strip("'")
-                            if item:
-                                block_items.append(item)
-                            j += 1
-                        else:
-                            break
-                    result[key] = block_items
-                    i = j
+        if key in {"root", "lane", "summary", "status", "freshness", "verified_at"}:
+            result[key] = val or result.get(key)
+        elif key == "tags":
+            for item in _parse_inline_list(val):
+                if ":" not in item:
+                    if item:
+                        result["topic_tags"].append(item)
                     continue
+                t_key, t_val = item.split(":", 1)
+                t_key = t_key.strip()
+                t_val = t_val.strip()
+                if t_key == "root" and t_val:
+                    result["root"] = t_val
+                elif t_key == "status" and t_val and not result.get("status"):
+                    result["status"] = t_val
+                elif t_key == "lane" and t_val and not result.get("lane"):
+                    result["lane"] = t_val
+                elif t_val:
+                    result["topic_tags"].append(t_val)
+                else:
+                    result["topic_tags"].append(t_key)
+        elif key in {"path_scope", "topic_tags", "derived_from", "invalidated_by_paths"}:
+            if val.startswith("["):
+                result[key] = _parse_inline_list(val)
+            else:
+                block_items = []
+                j = i + 1
+                while j < len(lines):
+                    next_line = lines[j]
+                    m = re.match(r"^\s+-\s+(.*)", next_line)
+                    if not m:
+                        break
+                    item = m.group(1).strip().strip('"').strip("'")
+                    if item:
+                        block_items.append(item)
+                    j += 1
+                result[key] = block_items
+                i = j
+                continue
         i += 1
 
     return result
 
 
-def _extract_frontmatter_text(content):
-    """Extract just the frontmatter text (between --- delimiters) from note content."""
-    if not content.startswith("---"):
-        return ""
-    end = content.find("---", 3)
-    if end == -1:
-        return ""
-    return content[3:end]
+
+def _build_note_metadata(content, note_path, root_name):
+    """Build unified note metadata from note content + structured state parsing."""
+    header_text = _extract_header_text(content)
+    metadata = _parse_note_header_fields(header_text)
+    state_meta = parse_note_state_metadata(note_path)
+
+    if state_meta.get("status"):
+        metadata["status"] = state_meta["status"]
+    if state_meta.get("freshness"):
+        metadata["freshness"] = state_meta["freshness"]
+    if state_meta.get("verified_at"):
+        metadata["verified_at"] = state_meta["verified_at"]
+    if state_meta.get("invalidated_by_paths"):
+        metadata["invalidated_by_paths"] = list(state_meta["invalidated_by_paths"])
+
+    if not metadata.get("status"):
+        metadata["status"] = "active"
+    if not metadata.get("freshness"):
+        metadata["freshness"] = "current"
+    if not metadata.get("root"):
+        metadata["root"] = root_name or "common"
+    return metadata
+
 
 
 def keyword_match_ratio(keywords, text):
@@ -262,7 +316,8 @@ def score_note(keywords, note_text, note_metadata, query_context):
       lane_match   0.10  — whether note lane matches current_lane
     """
     lexical = keyword_match_ratio(keywords, note_text)
-    freshness = FRESHNESS_WEIGHTS.get(note_metadata.get("freshness", "current"), 1.0)
+    freshness_state = note_metadata.get("freshness", "current")
+    freshness = FRESHNESS_WEIGHTS.get(freshness_state, 1.0)
     active_roots = query_context.get("active_roots", [])
     note_root = note_metadata.get("root", "common")
     root_match = 1.0 if note_root in active_roots else 0.5
@@ -274,8 +329,13 @@ def score_note(keywords, note_text, note_metadata, query_context):
     else:
         lane_match = 0.7  # unknown lane — neutral
 
-    return (lexical * 0.4 + freshness * 0.25 + root_match * 0.15
-            + path_overlap * 0.1 + lane_match * 0.1)
+    score = (lexical * 0.4 + freshness * 0.25 + root_match * 0.15
+             + path_overlap * 0.1 + lane_match * 0.1)
+    if freshness_state == "stale":
+        score *= 0.6
+    elif freshness_state == "suspect":
+        score *= 0.9
+    return score
 
 
 def score_relevance(keywords, text):
@@ -336,15 +396,32 @@ def _get_registered_roots(doc_base="doc"):
 
 
 def _get_first_line(content):
-    """Extract the first meaningful non-frontmatter line from note content."""
+    """Extract the first meaningful non-metadata line from note content."""
     lines = content.split("\n")
-    in_header = content.startswith("---")
-    past_header = not in_header
-    for line in lines:
-        if not past_header:
-            if line.strip() == "---" and lines.index(line) > 0:
-                past_header = True
-            continue
+    if content.startswith("---"):
+        end_idx = None
+        for idx, line in enumerate(lines[1:], start=1):
+            if line.strip() == "---":
+                end_idx = idx + 1
+                break
+        start = end_idx or 0
+    else:
+        start = 0
+        if lines and lines[0].lstrip().startswith("#"):
+            start = 1
+        while start < len(lines):
+            stripped = lines[start].strip()
+            if not stripped:
+                start += 1
+                continue
+            if re.match(r"^\s*-\s+", lines[start]):
+                start += 1
+                continue
+            if ":" in stripped:
+                start += 1
+                continue
+            break
+    for line in lines[start:]:
         stripped = line.strip("# ").strip()
         if stripped:
             return stripped
@@ -405,29 +482,16 @@ def select_relevant_notes(prompt, notes_dir=None, query_context=None):
             except Exception:
                 continue
 
-            frontmatter = parse_note_frontmatter(content)
-            # Skip superseded notes entirely
-            if frontmatter["status"] == "superseded":
+            metadata = _build_note_metadata(content, fpath, root_name)
+            if metadata.get("status") == "superseded" or metadata.get("freshness") == "superseded":
                 continue
-
-            # Parse extended metadata (optional fields)
-            fm_text = _extract_frontmatter_text(content)
-            metadata = parse_note_metadata(fm_text)
-            # Merge core freshness from parse_note_frontmatter
-            metadata["freshness"] = frontmatter["freshness"]
-            metadata["status"] = frontmatter["status"]
-            # If root not set in frontmatter, use directory name
-            if metadata.get("root") == "common" and root_name != "common":
-                # Only override default if the note doesn't explicitly set root
-                if "root:" not in fm_text:
-                    metadata["root"] = root_name
 
             weighted_score = score_note(keywords, content, metadata, query_context)
 
             if weighted_score > 0.1:
-                first_line = _get_first_line(content)
-                scored.append((fpath, weighted_score, first_line,
-                               frontmatter["freshness"], root_name))
+                display_text = metadata.get("summary") or _get_first_line(content)
+                scored.append((fpath, weighted_score, display_text,
+                               metadata.get("freshness", "current"), root_name))
         # end for fname
     # end for root_name
 

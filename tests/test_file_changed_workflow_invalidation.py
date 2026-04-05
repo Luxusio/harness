@@ -14,12 +14,17 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "plugin", "scripts"))
 os.environ["HARNESS_SKIP_STDIN"] = "1"
 
 from _lib import yaml_field, get_workflow_violations, append_workflow_violation
-from file_changed_sync import invalidate_runtime, invalidate_document
+from file_changed_sync import (
+    invalidate_runtime,
+    invalidate_document,
+    invalidate_note_freshness_for_changes,
+)
 from task_completed_gate import compute_completion_failures
 
 
@@ -201,6 +206,73 @@ class TestPlanFirstViolation(unittest.TestCase):
         violations = get_workflow_violations(self.task_dir)
         count = violations.count("source_mutation_before_plan_pass")
         self.assertEqual(count, 1, "Violation must not be duplicated")
+
+
+# ---------------------------------------------------------------------------
+# Note freshness invalidation batching
+# ---------------------------------------------------------------------------
+
+class TestNoteFreshnessBatching(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.prev_cwd = os.getcwd()
+        os.chdir(self.tmp.name)
+        os.makedirs(os.path.join("doc", "common"), exist_ok=True)
+
+    def tearDown(self):
+        os.chdir(self.prev_cwd)
+        self.tmp.cleanup()
+
+    def test_batch_marks_matching_note_suspect(self):
+        _write(
+            os.path.join("doc", "common", "obs-api.md"),
+            """# API note
+freshness: current
+invalidated_by_paths: [src/api.py, src/model.py]
+""",
+        )
+
+        invalidate_note_freshness_for_changes(["src/model.py", "src/other.py"])
+
+        note_path = os.path.join("doc", "common", "obs-api.md")
+        self.assertEqual(yaml_field("freshness", note_path), "suspect")
+
+    def test_batch_scans_each_note_once_per_hook_run(self):
+        _write(
+            os.path.join("doc", "common", "obs-a.md"),
+            """# Note A
+freshness: current
+invalidated_by_paths: [src/a.py]
+""",
+        )
+        _write(
+            os.path.join("doc", "common", "obs-b.md"),
+            """# Note B
+freshness: current
+invalidated_by_paths: [src/b.py]
+""",
+        )
+
+        parse_calls = []
+
+        def _counting_parse(note_path):
+            parse_calls.append(note_path)
+            from _lib import parse_note_metadata as _real_parse_note_metadata
+            return _real_parse_note_metadata(note_path)
+
+        with mock.patch("file_changed_sync.parse_note_metadata", side_effect=_counting_parse):
+            invalidate_note_freshness_for_changes(["src/a.py", "src/b.py", "src/c.py"])
+
+        self.assertEqual(len(parse_calls), 2, parse_calls)
+        self.assertCountEqual(
+            parse_calls,
+            [
+                os.path.join("doc", "common", "obs-a.md"),
+                os.path.join("doc", "common", "obs-b.md"),
+            ],
+        )
+
 
 
 # ---------------------------------------------------------------------------

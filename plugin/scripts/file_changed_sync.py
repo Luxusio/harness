@@ -8,7 +8,7 @@ Precision rules:
   - doc path change  → invalidate document_verdict only
   - runtime path change → invalidate runtime_verdict only (via verification_targets)
   - both → invalidate both
-Conservative fallback (no file list): invalidate ALL verdicts on ALL open tasks.
+Gitless fallback (no file list): invalidate only the indexed active task.
 
 Plan-first enforcement (WS-5):
   - runtime path change on task with explicit verification_targets ownership
@@ -27,7 +27,10 @@ from _lib import (read_hook_input, json_array, yaml_field, yaml_array,
                   find_tasks_with_verification_targets, task_touches_path,
                   manifest_field, is_profile_enabled, TASK_DIR, MANIFEST, now_iso,
                   parse_note_metadata, set_note_freshness, parse_changed_files,
-                  append_workflow_violation)
+                  append_workflow_violation, merge_task_path_fields,
+                  is_task_artifact_path, find_repo_root)
+
+from task_index import resolve_active_task_dir
 
 import re
 import glob
@@ -69,6 +72,51 @@ def invalidate_document(state_file, task_id, reason):
         f.write(content)
 
 
+def _task_state_file(task_dir):
+    return os.path.join(task_dir, "TASK_STATE.yaml")
+
+
+def _is_open_task(task_dir):
+    state_file = _task_state_file(task_dir)
+    if not os.path.isfile(state_file):
+        return False
+    status = yaml_field("status", state_file)
+    return status not in ("closed", "archived", "stale")
+
+
+def _merge_active_task_paths(task_dir, changed_file):
+    if not task_dir or not changed_file or is_task_artifact_path(changed_file):
+        return
+    merge_task_path_fields(
+        task_dir,
+        touched_paths=[changed_file],
+        verification_targets=[] if is_doc_path(changed_file) else [changed_file],
+    )
+
+
+def _fallback_invalidate_active_task(changed_file=None, reason="files changed after PASS, no file list"):
+    """Invalidate only the indexed active task when precision is unavailable."""
+    active_task = resolve_active_task_dir(TASK_DIR)
+    if not active_task or not _is_open_task(active_task):
+        return False
+    state_file = _task_state_file(active_task)
+    task_id = os.path.basename(active_task.rstrip('/'))
+
+    if changed_file:
+        if is_task_artifact_path(changed_file):
+            return True
+        _merge_active_task_paths(active_task, changed_file)
+        if is_doc_path(changed_file):
+            invalidate_document(state_file, task_id, f"{changed_file} doc changed after PASS (active-task fallback)")
+        else:
+            _record_plan_first_violation(changed_file)
+            invalidate_runtime(state_file, task_id, f"{changed_file} changed after PASS (active-task fallback)")
+    else:
+        invalidate_runtime(state_file, task_id, reason)
+        invalidate_document(state_file, task_id, reason)
+    return True
+
+
 def _path_matches_inv(changed_file, inv_path):
     """Structural path match: exact equality or directory prefix.
 
@@ -88,47 +136,70 @@ def _path_matches_inv(changed_file, inv_path):
     return False
 
 
-def invalidate_note_freshness(changed_file):
-    """Scan doc/*/*.md and *.yaml; if invalidated_by_paths structurally matches
-    changed_file → set freshness: suspect.
-
-    Uses parse_note_metadata for structured invalidated_by_paths extraction
-    instead of substring matching on raw content.
-    """
-    doc_base = "doc"
-    if not os.path.isdir(doc_base):
-        return
-
-    # Collect all note files across all doc/* subdirectories
+def _collect_note_files(doc_base="doc"):
+    """Return sorted note files across doc roots."""
     note_files = []
     for pattern in (
         os.path.join(doc_base, "*", "*.md"),
         os.path.join(doc_base, "*", "*.yaml"),
     ):
         note_files.extend(glob.glob(pattern))
+    return sorted(note_files)
 
-    for note_file in sorted(note_files):
+
+
+def invalidate_note_freshness_for_changes(changed_files, doc_base="doc"):
+    """Batch note freshness invalidation for one hook run.
+
+    Scans notes exactly once per run, then checks all changed files against each
+    note's invalidated_by_paths. This avoids rescanning/parsing the entire doc/*
+    tree once per changed file during MultiEdit/PostToolUse bursts.
+    """
+    if not os.path.isdir(doc_base):
+        return
+
+    normalized_changes = []
+    seen_changes = set()
+    for changed_file in changed_files or []:
+        if not changed_file or changed_file in seen_changes:
+            continue
+        normalized_changes.append(changed_file)
+        seen_changes.add(changed_file)
+    if not normalized_changes:
+        return
+
+    for note_file in _collect_note_files(doc_base):
         if not os.path.isfile(note_file):
             continue
 
         meta = parse_note_metadata(note_file)
         inv_paths = meta["invalidated_by_paths"]
-
         if not inv_paths:
             continue
 
-        # Structural comparison — no substring matching
-        matched = any(_path_matches_inv(changed_file, inv) for inv in inv_paths)
-        if not matched:
+        matched_change = None
+        for changed_file in normalized_changes:
+            if any(_path_matches_inv(changed_file, inv) for inv in inv_paths):
+                matched_change = changed_file
+                break
+        if not matched_change:
             continue
 
         # Only transition current → suspect (already-suspect notes are left alone)
-        current_freshness = meta["freshness"]
-        if current_freshness == "suspect":
-            continue  # already suspect, no action needed
+        if meta["freshness"] == "suspect":
+            continue
 
         set_note_freshness(note_file, "suspect")
-        print(f"NOTE SUSPECT: {note_file} — freshness set to suspect ({changed_file} changed)")
+        print(
+            f"NOTE SUSPECT: {note_file} — freshness set to suspect"
+            f" ({matched_change} changed)"
+        )
+
+
+
+def invalidate_note_freshness(changed_file, doc_base="doc"):
+    """Backward-compatible single-file wrapper around batch note invalidation."""
+    invalidate_note_freshness_for_changes([changed_file], doc_base=doc_base)
 
 
 def _record_plan_first_violation(changed_file):
@@ -180,11 +251,17 @@ def _record_plan_first_violation(changed_file):
 
 def process_changed_file(changed_file):
     """Classify doc/runtime, call appropriate invalidation and violation recording."""
+    if is_task_artifact_path(changed_file):
+        print(f"IGNORE: task-local artifact change does not invalidate verdicts ({changed_file})")
+        return True
+
+    active_task = resolve_active_task_dir(TASK_DIR)
+    if active_task and _is_open_task(active_task):
+        _merge_active_task_paths(active_task, changed_file)
+
     changed_is_doc = is_doc_path(changed_file)
     changed_is_runtime = not changed_is_doc
-
-    # Note freshness check (applies to all changed files)
-    invalidate_note_freshness(changed_file)
+    matched_any = False
 
     if changed_is_runtime:
         # WS-5: record plan-first violation for tasks that own this file
@@ -199,6 +276,7 @@ def process_changed_file(changed_file):
             if not os.path.isfile(state_file):
                 continue
             invalidate_runtime(state_file, task_id, f"{changed_file} changed after PASS")
+            matched_any = True
 
     if changed_is_doc:
         # Doc change: invalidate document_verdict on tasks whose touched_paths overlap
@@ -210,6 +288,7 @@ def process_changed_file(changed_file):
             if not os.path.isfile(state_file):
                 continue
             invalidate_document(state_file, task_id, f"{changed_file} doc changed after PASS")
+            matched_any = True
 
     # Team status degradation: complete → degraded when related files change
     if os.path.isdir(TASK_DIR):
@@ -234,9 +313,20 @@ def process_changed_file(changed_file):
                         f.write(content)
                     task_id = os.path.basename(task.rstrip('/'))
                     print(f"TEAM DEGRADED: {task_id} — team_status set to degraded ({changed_file} changed)")
+                    matched_any = True
+
+    if not matched_any:
+        _fallback_invalidate_active_task(changed_file, reason=f"{changed_file} changed after PASS (no path ownership)")
+        matched_any = True
+
+    return matched_any
 
 
 def main():
+    try:
+        os.chdir(find_repo_root(os.getcwd()))
+    except Exception:
+        pass
     if not os.path.isfile(MANIFEST):
         sys.exit(0)
     if not os.path.isdir(TASK_DIR):
@@ -248,25 +338,18 @@ def main():
     changed_files = parse_changed_files(hook_input)
 
     if changed_files:
+        # Note freshness invalidation is batched once per hook run.
+        invalidate_note_freshness_for_changes(changed_files)
+
         # Process each changed file individually with precision
         for f in changed_files:
             if not f:
                 continue
             process_changed_file(f)
     else:
-        # No file list available — conservative fallback: invalidate ALL verdicts on ALL open tasks
-        for task in sorted(glob.glob(os.path.join(TASK_DIR, "TASK__*/"))):
-            if not os.path.isdir(task):
-                continue
-            state_file = os.path.join(task, "TASK_STATE.yaml")
-            task_id = os.path.basename(task.rstrip('/'))
-            if not os.path.isfile(state_file):
-                continue
-            status = yaml_field("status", state_file)
-            if status in ("closed", "archived", "stale"):
-                continue
-            invalidate_runtime(state_file, task_id, "files changed after PASS, no file list")
-            invalidate_document(state_file, task_id, "files changed after PASS, no file list")
+        # No file list available — stale only the active task instead of all open tasks.
+        if not _fallback_invalidate_active_task(reason="files changed after PASS, no file list"):
+            print("INFO: no changed file list and no active task — skipping global invalidation")
 
     sys.exit(0)
 

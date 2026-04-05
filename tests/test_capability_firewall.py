@@ -17,7 +17,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "plugin", "scripts"))
 os.environ["HARNESS_SKIP_STDIN"] = "1"
 
-from capability_probe import probe_delegation_capability, update_task_capability
+from capability_probe import check_native_ready, probe_delegation_capability, update_task_capability
 from _lib import yaml_field
 import _lib
 
@@ -96,6 +96,59 @@ class TestProbeCapability(unittest.TestCase):
             self.assertEqual(result, "unavailable")
         finally:
             os.unlink(tmp.name)
+
+
+class TestNativeTeamReadiness(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.fake_bin = os.path.join(self.tmp.name, "bin")
+        os.makedirs(self.fake_bin, exist_ok=True)
+        self._orig_path = os.environ.get("PATH", "")
+        self._orig_env_flag = os.environ.pop("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", None)
+
+    def tearDown(self):
+        os.environ["PATH"] = self._orig_path
+        if self._orig_env_flag is None:
+            os.environ.pop("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", None)
+        else:
+            os.environ["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = self._orig_env_flag
+        self.tmp.cleanup()
+
+    def _write_fake_claude(self, version_text: str):
+        path = os.path.join(self.fake_bin, "claude")
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = \"--version\" ]; then\n"
+                f"  echo '{version_text}'\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 0\n"
+            )
+        os.chmod(path, 0o755)
+        os.environ["PATH"] = self.fake_bin + os.pathsep + self._orig_path
+
+    def test_native_requires_supported_version(self):
+        self._write_fake_claude("Claude Code 2.1.31")
+        os.environ["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
+        ready, details = check_native_ready()
+        self.assertFalse(ready)
+        self.assertEqual(details["required_min_version"], "2.1.32")
+        self.assertFalse(details["claude_version_supported"])
+
+    def test_native_ready_when_env_and_supported_version_present(self):
+        self._write_fake_claude("Claude Code 2.1.32")
+        os.environ["CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS"] = "1"
+        ready, details = check_native_ready()
+        self.assertTrue(ready)
+        self.assertTrue(details["claude_version_supported"])
+
+    def test_native_not_ready_without_env_flag(self):
+        self._write_fake_claude("Claude Code 2.1.40")
+        ready, details = check_native_ready()
+        self.assertFalse(ready)
+        self.assertFalse(details["teams_env_set"])
 
 
 class TestUpdateTaskCapability(unittest.TestCase):

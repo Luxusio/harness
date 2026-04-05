@@ -117,7 +117,7 @@ def main():
         lines += [
             "",
             "Actions you can take:",
-            "  • Finish the task and close it (update TASK_STATE.yaml status: closed)",
+            "  • Finish the task and run task_close / `hctl close --task-dir ...` (it writes status: closed for you)",
             "  • Mark abandoned tasks stale: set status: stale in TASK_STATE.yaml",
             "  • Run /harness:maintain to auto-mark stale tasks",
         ]
