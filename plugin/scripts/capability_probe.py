@@ -16,7 +16,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import manifest_section_field
+from _lib import manifest_section_field, native_agent_teams_runtime_probe, omc_runtime_probe
 
 
 def probe_delegation_capability():
@@ -77,20 +77,8 @@ def update_task_capability(task_dir, capability_status=None):
 
 
 def check_native_ready():
-    """Check if native Claude Code teams are available."""
-    details = {}
-    teams_env = os.environ.get("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "")
-    details["teams_env_set"] = teams_env == "1"
-
-    claude_version = ""
-    try:
-        result = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=5)
-        if result.returncode == 0:
-            claude_version = result.stdout.strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        pass
-    details["claude_version"] = claude_version
-    details["claude_available"] = bool(claude_version)
+    """Check if native Claude Code teams are available in the current session."""
+    details = native_agent_teams_runtime_probe()
 
     tmux_available = False
     try:
@@ -100,32 +88,14 @@ def check_native_ready():
         pass
     details["tmux_available"] = tmux_available
 
-    ready = details["teams_env_set"] and details["claude_available"]
+    ready = bool(details.get("ready"))
     return ready, details
 
 
 def check_omc_ready():
-    """Check if oh-my-claudecode teams are available."""
-    details = {}
-    omc_available = False
-    try:
-        result = subprocess.run(["command", "-v", "omc"], capture_output=True, text=True, timeout=3, shell=True)
-        omc_available = result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        pass
-
-    if not omc_available:
-        try:
-            result = subprocess.run(["which", "omc"], capture_output=True, text=True, timeout=3)
-            omc_available = result.returncode == 0
-        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-            pass
-
-    details["omc_available"] = omc_available
-    omc_dir_exists = os.path.isdir(".omc") or os.path.isdir(os.path.join(os.path.expanduser("~"), ".omc"))
-    details["omc_dir_exists"] = omc_dir_exists
-
-    ready = omc_available
+    """Check if oh-my-claudecode teams are available in the current session."""
+    details = omc_runtime_probe()
+    ready = bool(details.get("ready"))
     return ready, details
 
 

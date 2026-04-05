@@ -7,7 +7,7 @@ from _lib import (read_hook_input, hook_json_get, json_field, json_array, yaml_f
                   exit_if_unmanaged_repo,
                   get_workflow_violations, get_agent_run_count,
                   needs_document_critic, is_handoff_stub, team_artifact_status,
-                  parse_checks_close_gate)
+                  parse_checks_close_gate, set_task_state_field)
 
 # TaskCompleted hook — completion firewall.
 # BLOCKING: exit 2 rejects completion when verdicts are missing.
@@ -42,7 +42,7 @@ def _parse_checks_yaml(checks_file):
         # Status field within a criterion
         m_st = re.match(r"^\s+status\s*:\s*(.+)", line)
         if m_st and current.get("id"):
-            current["status"] = m_st.group(1).strip().strip('"').strip("'")
+            current["status"] = _normalize_check_status(m_st.group(1))
             continue
         # Title field within a criterion
         m_title = re.match(r"^\s+title\s*:\s*(.+)", line)
@@ -55,6 +55,24 @@ def _parse_checks_yaml(checks_file):
         criteria.append(current)
 
     return criteria
+
+
+def _normalize_check_status(raw_status):
+    """Normalize CHECKS.yaml status values into canonical lowercase forms."""
+    value = str(raw_status or "").strip().strip('"').strip("'")
+    if not value:
+        return "unknown"
+    lowered = value.lower()
+    aliases = {
+        "pass": "passed",
+        "passed": "passed",
+        "fail": "failed",
+        "failed": "failed",
+        "planned": "planned",
+        "implemented_candidate": "implemented_candidate",
+        "blocked": "blocked",
+    }
+    return aliases.get(lowered, lowered)
 
 
 def _check_artifact_provenance(task_dir):
@@ -630,6 +648,11 @@ def main():
             print(f"NOTE FRESHNESS: {recovered} note(s) restored to current via reverify")
     except Exception as _e:
         print(f"NOTE REVERIFY: skipped ({_e})")
+
+    closed_at = now_iso()
+    set_task_state_field(target, "status", "closed")
+    set_task_state_field(target, "closed_at", closed_at)
+    print(f"CLOSED: {task_id} status=closed closed_at={closed_at}")
 
     sys.exit(0)
 

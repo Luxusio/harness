@@ -85,6 +85,64 @@ def detect_lane_from_prompt(prompt):
     return None
 
 
+def _extract_roots_from_paths(paths):
+    """Map task path lists to candidate doc roots."""
+    roots = set()
+    for path in paths or []:
+        normalized = str(path or "").strip().strip('"').strip("'")
+        if not normalized:
+            continue
+        if normalized.startswith("doc/"):
+            parts = normalized.split("/")
+            if len(parts) >= 2 and parts[1] and parts[1] != "harness":
+                roots.add(parts[1])
+                continue
+        roots.add("common")
+    return roots
+
+
+
+def _infer_active_roots(prompt, active_task_dir, registered_roots):
+    """Infer the smallest useful set of doc roots for note retrieval."""
+    roots = {"common"}
+
+    try:
+        prompt_paths = re.findall(r'[a-zA-Z0-9_.@\-]+(?:/[a-zA-Z0-9_.@\-]+)+', prompt or "")
+        roots.update(_extract_roots_from_paths(prompt_paths))
+    except Exception:
+        pass
+
+    if active_task_dir and os.path.isdir(active_task_dir):
+        state_file = os.path.join(active_task_dir, "TASK_STATE.yaml")
+        task_paths = []
+        for field in ("verification_targets", "touched_paths"):
+            try:
+                task_paths.extend(yaml_array(field, state_file))
+            except Exception:
+                pass
+        roots.update(_extract_roots_from_paths(task_paths))
+
+    allowed = set(registered_roots or ["common"])
+    filtered = [root for root in registered_roots if root in roots] if registered_roots else []
+    if not filtered:
+        filtered = ["common"] if "common" in allowed else list(sorted(allowed))[:1]
+    return filtered
+
+
+
+def _resolve_current_lane(prompt, active_task_dir):
+    """Prefer the active task lane; fall back to prompt heuristics."""
+    if active_task_dir and os.path.isdir(active_task_dir):
+        try:
+            state_file = os.path.join(active_task_dir, "TASK_STATE.yaml")
+            lane = yaml_field("lane", state_file)
+            if lane:
+                return lane
+        except Exception:
+            pass
+    return detect_lane_from_prompt(prompt)
+
+
 def classify_prompt_intent(prompt):
     """Classify prompt as answer | investigate | mutating.
 
@@ -495,9 +553,9 @@ def gather_context(prompt):
     context_parts = []
 
     try:
-        active_roots = _get_registered_roots("doc")
+        registered_roots = _get_registered_roots("doc")
     except Exception:
-        active_roots = ["common"]
+        registered_roots = ["common"]
 
     active_task_dir = None
     try:
@@ -576,7 +634,8 @@ def gather_context(prompt):
         pass
 
     try:
-        current_lane = detect_lane_from_prompt(prompt)
+        active_roots = _infer_active_roots(prompt, active_task_dir, registered_roots)
+        current_lane = _resolve_current_lane(prompt, active_task_dir)
         query_context = {
             "active_roots": active_roots,
             "current_lane": current_lane,

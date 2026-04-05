@@ -1,5 +1,7 @@
 # Claude Code Plugin Harness Blueprint (v3)
 
+> ⚠️ Historical design note: this blueprint started as a v3 draft. The current repo uses root `CLAUDE.md` plus `doc/CLAUDE.md` as the documentation registry, and plugin-shipped agents must not rely on `permissionMode`, `mcpServers`, or `hooks` frontmatter. For current executable contracts, prefer `plugin/agents/*`, `plugin/scripts/*`, and `plugin/skills/setup/*`.
+
 이 문서는 다음 목표를 만족하는 Claude Code plugin/프로젝트 구조 설계다.
 
 - main agent는 `harness`
@@ -16,7 +18,7 @@
 
 ## 1. 핵심 원칙
 
-1. root `CLAUDE.md`가 single entrypoint이자 root registry다. `doc/CLAUDE.md`는 없다.
+1. root `CLAUDE.md`가 single entrypoint이고, 현재 구현에서는 `doc/CLAUDE.md`를 문서 registry로 로드한다.
 2. `doc/`는 순수 memory root 공간이다.
 3. `REQ__ / OBS__ / INF__` note 파일이 durable knowledge의 기본 단위다.
 4. 개발 전에는 반드시 contract `PLAN.md`가 있어야 하고, `plan-critic` PASS가 있어야 한다.
@@ -83,7 +85,7 @@ repo/
 
 설명:
 
-- root `CLAUDE.md`가 registry. `doc/CLAUDE.md`는 없다.
+- root `CLAUDE.md`가 entrypoint이고 `doc/CLAUDE.md`가 문서 registry 역할을 맡는다.
 - `doc/harness/manifest.yaml`가 initialization marker.
 - `scripts/harness/`는 executable QA scaffolding.
 - task 폴더에 `TASK_STATE.yaml`, `HANDOFF.md`, `QA__runtime.md`, `DOC_SYNC.md` 추가.
@@ -250,8 +252,6 @@ name: developer
 description: Implements the approved plan and leaves clear evidence for runtime verification.
 model: sonnet
 maxTurns: 14
-permissionMode: acceptEdits
-mcpServers: [chrome-devtools]
 tools: Read, Edit, Write, MultiEdit, Bash, Glob, Grep, LS
 ---
 
@@ -259,6 +259,7 @@ Before acting:
 - Read doc/harness/manifest.yaml and task-local TASK_STATE.yaml
 - Read doc/harness/critics/runtime.md
 - Read optional doc/harness/constraints/*
+- For browser QA prerequisites in plugin form, rely on project/session MCP scope such as `.mcp.json`, not agent frontmatter
 
 On finish:
 - Update TASK_STATE.yaml to status: implemented
@@ -274,7 +275,6 @@ name: writer
 description: Updates documentation and durable notes.
 model: sonnet
 maxTurns: 10
-permissionMode: acceptEdits
 tools: Read, Edit, Write, MultiEdit, Glob, Grep, LS
 ---
 
@@ -294,7 +294,6 @@ name: critic-plan
 description: Verifies PLAN.md as a contract before implementation.
 model: sonnet
 maxTurns: 8
-permissionMode: plan
 tools: Read, Glob, Grep, LS
 ---
 
@@ -313,13 +312,12 @@ name: critic-runtime
 description: Mandatory runtime critic with browser-first QA.
 model: sonnet
 maxTurns: 12
-permissionMode: acceptEdits
-mcpServers: [chrome-devtools]
-tools: Read, Bash, Glob, Grep, LS
+disallowedTools: Edit, Write, MultiEdit, Agent, Skill
 ---
 
 Before acting: read doc/harness/critics/runtime.md
 Optionally run doc/harness/constraints/check-architecture.* if present.
+For browser QA in plugin form, rely on project/session MCP scope such as `.mcp.json`, not agent frontmatter.
 
 BLOCKED_ENV is a runtime verdict only — task stays open with status: blocked_env.
 
@@ -336,7 +334,6 @@ name: critic-document
 description: Unified critic for documentation, note hygiene, and durable structure changes.
 model: sonnet
 maxTurns: 8
-permissionMode: plan
 tools: Read, Glob, Grep, LS
 ---
 

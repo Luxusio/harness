@@ -27,9 +27,11 @@ sys.path.insert(0, SCRIPT_DIR)
 
 from _lib import (
     yaml_field,
+    yaml_array,
     is_doc_path,
     extract_roots,
     set_task_state_field,
+    merge_task_path_fields,
     compile_routing,
     emit_compact_context,
     ensure_team_artifacts,
@@ -38,6 +40,12 @@ from _lib import (
     build_team_launch,
     build_team_relaunch,
     sync_team_status,
+    canonical_task_id,
+    canonical_task_dir,
+    ensure_task_scaffold,
+    find_repo_root,
+    repo_root_for_task_dir,
+    repo_relpath,
     TASK_DIR,
 )
 from environment_snapshot import write_environment_snapshot
@@ -56,15 +64,79 @@ from task_index import clear_active_task, update_active_task
 # ---------------------------------------------------------------------------
 
 
+def _repo_root() -> str:
+    return find_repo_root(os.getcwd())
+
+
+def _resolve_task_dir_value(task_dir):
+    if not task_dir:
+        return ""
+    if os.path.isabs(task_dir):
+        return os.path.normpath(task_dir)
+    return os.path.normpath(os.path.join(_repo_root(), task_dir))
+
+
+def _expected_canonical_task_dir(raw_task_dir=None, task_id=None, slug=None):
+    repo_root = _repo_root()
+    return canonical_task_dir(
+        task_id=task_id,
+        slug=slug,
+        task_dir=raw_task_dir,
+        tasks_dir=TASK_DIR,
+        repo_root=repo_root,
+    )
+
+
+def _bootstrap_start_task(args):
+    """Resolve start references and bootstrap canonical task scaffolding."""
+    raw_task_dir = getattr(args, "task_dir", None)
+    task_id = getattr(args, "task_id", None)
+    slug = getattr(args, "slug", None)
+
+    request_text = ""
+    request_file = getattr(args, "request_file", None)
+    if request_file:
+        request_path = _resolve_task_dir_value(request_file)
+        if os.path.isfile(request_path):
+            try:
+                with open(request_path, "r", encoding="utf-8") as fh:
+                    request_text = fh.read()
+            except OSError:
+                request_text = ""
+
+    if raw_task_dir:
+        resolved = _resolve_task_dir_value(raw_task_dir)
+        state_file = os.path.join(resolved, "TASK_STATE.yaml")
+        canonical = _expected_canonical_task_dir(raw_task_dir=raw_task_dir, task_id=task_id, slug=slug)
+        canonical_norm = os.path.normpath(canonical) if canonical else ""
+        if os.path.isfile(state_file):
+            return resolved, request_text, {"created": [], "canonical": resolved, "expected": canonical_norm}
+        if canonical_norm and resolved != canonical_norm:
+            raise ValueError(
+                "Non-canonical task_dir. "
+                f"Expected {canonical_norm} but received {resolved}. "
+                f"Use --task-id {canonical_task_id(task_id=task_id, slug=slug, task_dir=raw_task_dir)!r} "
+                f"or --task-dir {canonical_norm!r}."
+            )
+        scaffold = ensure_task_scaffold(resolved, canonical_task_id(task_id=task_id, slug=slug, task_dir=raw_task_dir), request_text=request_text)
+        scaffold.update({"canonical": resolved, "expected": canonical_norm or resolved})
+        return resolved, request_text, scaffold
+
+    if not task_id and not slug:
+        raise ValueError("task_start requires task_dir, task_id, or slug")
+
+    canonical = _expected_canonical_task_dir(task_id=task_id, slug=slug)
+    scaffold = ensure_task_scaffold(canonical, canonical_task_id(task_id=task_id, slug=slug), request_text=request_text)
+    scaffold.update({"canonical": canonical, "expected": canonical})
+    return canonical, request_text, scaffold
+
+
 def _require_task_dir(args):
     """Resolve and validate --task-dir. Exits on failure."""
-    task_dir = getattr(args, "task_dir", None)
+    task_dir = _resolve_task_dir_value(getattr(args, "task_dir", None))
     if not task_dir:
         print("ERROR: --task-dir is required", file=sys.stderr)
         sys.exit(1)
-    if not os.path.isabs(task_dir):
-        task_dir = os.path.join(os.getcwd(), task_dir)
-    task_dir = os.path.normpath(task_dir)
     state_file = os.path.join(task_dir, "TASK_STATE.yaml")
     if not os.path.isfile(state_file):
         print(f"ERROR: TASK_STATE.yaml not found in {task_dir}", file=sys.stderr)
@@ -75,7 +147,7 @@ def _require_task_dir(args):
 def _resolve_tasks_dir(raw_tasks_dir):
     tasks_dir = raw_tasks_dir or TASK_DIR
     if not os.path.isabs(tasks_dir):
-        tasks_dir = os.path.join(os.getcwd(), tasks_dir)
+        tasks_dir = os.path.join(_repo_root(), tasks_dir)
     tasks_dir = os.path.normpath(tasks_dir)
     if not os.path.isdir(tasks_dir):
         print(f"ERROR: tasks dir not found: {tasks_dir}", file=sys.stderr)
@@ -107,16 +179,13 @@ def _print_case_summary(case, prefix=""):
 
 def cmd_start(args):
     """Compile routing and write canonical fields to TASK_STATE.yaml."""
-    task_dir = _require_task_dir(args)
+    try:
+        task_dir, request_text, bootstrap = _bootstrap_start_task(args)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
 
-    request_text = ""
-    request_file = getattr(args, "request_file", None)
-    if request_file and os.path.isfile(request_file):
-        try:
-            with open(request_file, "r", encoding="utf-8") as fh:
-                request_text = fh.read()
-        except OSError:
-            pass
+    repo_root = repo_root_for_task_dir(task_dir)
 
     routing = compile_routing(task_dir, request_text=request_text)
 
@@ -137,7 +206,7 @@ def cmd_start(args):
 
     snapshot_path = ""
     try:
-        snapshot_path = write_environment_snapshot(task_dir, repo_root=os.getcwd(), reason="task_start")
+        snapshot_path = write_environment_snapshot(task_dir, repo_root=repo_root, reason="task_start")
     except Exception:
         snapshot_path = ""
 
@@ -154,6 +223,11 @@ def cmd_start(args):
 
     task_id = yaml_field("task_id", os.path.join(task_dir, "TASK_STATE.yaml")) or os.path.basename(task_dir)
     print(f"routing compiled for {task_id}")
+    print(f"  task_dir: {task_dir}")
+    if bootstrap.get("created"):
+        print(
+            "  bootstrap_created: " + ", ".join(os.path.basename(item) for item in bootstrap.get("created") or [])
+        )
     print(f"  risk_level: {routing['risk_level']}")
     print(f"  maintenance_task: {routing['maintenance_task']}")
     print(f"  workflow_locked: {routing['workflow_locked']}")
@@ -783,36 +857,58 @@ def cmd_diff_case(args):
 def cmd_update(args):
     """Update touched_paths/roots_touched/verification_targets in TASK_STATE.yaml."""
     task_dir = _require_task_dir(args)
+    repo_root = repo_root_for_task_dir(task_dir)
+
+    explicit_touched = [repo_relpath(p, repo_root=repo_root) for p in (getattr(args, "touched_path", None) or []) if repo_relpath(p, repo_root=repo_root)]
+    explicit_roots = [p for p in (getattr(args, "root_touched", None) or []) if p]
+    explicit_vt = [repo_relpath(p, repo_root=repo_root) for p in (getattr(args, "verification_target", None) or []) if repo_relpath(p, repo_root=repo_root)]
+
+    if explicit_touched or explicit_roots or explicit_vt:
+        merged = merge_task_path_fields(
+            task_dir,
+            touched_paths=explicit_touched,
+            roots_touched=explicit_roots,
+            verification_targets=explicit_vt,
+        )
+        try:
+            update_active_task(task_dir, tasks_dir=os.path.dirname(task_dir))
+        except Exception:
+            pass
+        print(f"Updated touched_paths: {len(merged['touched_paths'])} files")
+        print(f"Updated roots_touched: {merged['roots_touched']}")
+        print(f"Updated verification_targets: {len(merged['verification_targets'])} files")
+        return 0
 
     if getattr(args, "from_git_diff", False):
         result = subprocess.run(
             ["git", "diff", "--name-only", "HEAD"],
             capture_output=True,
             text=True,
-            cwd=os.getcwd(),
+            cwd=repo_root,
         )
         if result.returncode != 0:
             result = subprocess.run(
                 ["git", "diff", "--name-only"],
                 capture_output=True,
                 text=True,
-                cwd=os.getcwd(),
+                cwd=repo_root,
             )
         changed_files = [
-            f.strip() for f in result.stdout.strip().splitlines() if f.strip()
+            repo_relpath(f.strip(), repo_root=repo_root)
+            for f in result.stdout.strip().splitlines()
+            if f.strip()
         ]
 
         if not changed_files:
             print("No changed files detected from git diff")
             return 0
 
-        touched_paths = changed_files
-        roots_touched = extract_roots(changed_files)
-        verification_targets = [f for f in changed_files if not is_doc_path(f)]
-
-        set_task_state_field(task_dir, "touched_paths", touched_paths)
-        set_task_state_field(task_dir, "roots_touched", roots_touched)
-        set_task_state_field(task_dir, "verification_targets", verification_targets)
+        merged = merge_task_path_fields(
+            task_dir,
+            touched_paths=changed_files,
+            roots_touched=extract_roots(changed_files),
+            verification_targets=[f for f in changed_files if not is_doc_path(f)],
+        )
 
         team_state = None
         try:
@@ -830,13 +926,13 @@ def cmd_update(args):
         except Exception:
             pass
 
-        print(f"Updated touched_paths: {len(touched_paths)} files")
-        print(f"Updated roots_touched: {roots_touched}")
-        print(f"Updated verification_targets: {len(verification_targets)} files")
+        print(f"Updated touched_paths: {len(merged['touched_paths'])} files")
+        print(f"Updated roots_touched: {merged['roots_touched']}")
+        print(f"Updated verification_targets: {len(merged['verification_targets'])} files")
         if team_state and team_state.get("orchestration_mode") == "team":
             print(f"Team status: {team_state.get('derived_status', team_state.get('current_status', 'n/a'))} (artifact-driven)")
     else:
-        print("Nothing to update. Use --from-git-diff to sync from git.")
+        print("Nothing to update. Use --from-git-diff or explicit --touched-path / --verification-target values.")
 
     return 0
 
@@ -848,12 +944,13 @@ def cmd_update(args):
 
 def cmd_verify(args):
     """Run verification suite (delegates to verify.py)."""
-    _require_task_dir(args)
+    task_dir = _require_task_dir(args)
+    repo_root = repo_root_for_task_dir(task_dir)
 
     verify_script = os.path.join(SCRIPT_DIR, "verify.py")
     result = subprocess.run(
-        ["python3", verify_script],
-        cwd=os.getcwd(),
+        ["python3", verify_script, "--task-dir", task_dir],
+        cwd=repo_root,
     )
     return result.returncode
 
@@ -866,6 +963,7 @@ def cmd_verify(args):
 def cmd_close(args):
     """Run completion gate (delegates to task_completed_gate.py)."""
     task_dir = _require_task_dir(args)
+    repo_root = repo_root_for_task_dir(task_dir)
 
     gate_script = os.path.join(SCRIPT_DIR, "task_completed_gate.py")
     state_file = os.path.join(task_dir, "TASK_STATE.yaml")
@@ -883,7 +981,7 @@ def cmd_close(args):
     result = subprocess.run(
         ["python3", gate_script],
         env=env,
-        cwd=os.getcwd(),
+        cwd=repo_root,
     )
     try:
         state_status = (yaml_field("status", state_file) or "").strip().lower()
@@ -917,7 +1015,7 @@ def cmd_artifact(args):
     result = subprocess.run(
         ["python3", write_artifact_script] + extra,
         env=env,
-        cwd=os.getcwd(),
+        cwd=_repo_root(),
     )
     return result.returncode
 
@@ -936,7 +1034,9 @@ def build_parser():
     subparsers.required = True
 
     p_start = subparsers.add_parser("start", help="compile routing into TASK_STATE.yaml")
-    p_start.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_start.add_argument("--task-dir", metavar="DIR", help="canonical task directory (doc/harness/tasks/TASK__<id>)")
+    p_start.add_argument("--task-id", metavar="TASK_ID", help="canonical task id or slug to bootstrap (TASK__ prefix optional)")
+    p_start.add_argument("--slug", metavar="SLUG", help="task slug to bootstrap under doc/harness/tasks/TASK__<slug>")
     p_start.add_argument("--request-file", metavar="FILE", help="optional REQUEST.md for request-text heuristics")
     p_start.set_defaults(func=cmd_start)
 
@@ -1003,6 +1103,9 @@ def build_parser():
     p_upd = subparsers.add_parser("update", help="sync task state from git diff")
     p_upd.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
     p_upd.add_argument("--from-git-diff", action="store_true", help="update touched_paths from `git diff --name-only HEAD`")
+    p_upd.add_argument("--touched-path", action="append", default=[], metavar="PATH", help="manually add a touched path (repeatable)")
+    p_upd.add_argument("--root-touched", action="append", default=[], metavar="ROOT", help="manually add a touched root (repeatable)")
+    p_upd.add_argument("--verification-target", action="append", default=[], metavar="PATH", help="manually add a runtime verification target (repeatable)")
     p_upd.set_defaults(func=cmd_update)
 
     p_ver = subparsers.add_parser("verify", help="run verification suite")

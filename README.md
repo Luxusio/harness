@@ -89,11 +89,11 @@ Team mode is still **prohibited** when:
 
 When team mode is selected, the harness probes for available providers:
 
-1. **Native** Claude Code teams (if `native_ready: true` in manifest)
-2. **OMC** teams (if `omc_ready: true` in manifest)
-3. **Fallback** to subagents or solo (no user prompt — automatic)
+1. **Native** Claude Code teams (when the current session is opted in and the Claude CLI version supports teams)
+2. **OMC** teams (when the current session can actually run `omc`)
+3. **Fallback** to subagents or solo (automatic)
 
-The harness never asks the user for team permission when `approval_mode: preapproved`.
+The harness can auto-select a team-capable path and fall back automatically when the preferred provider is unavailable. For native Claude Code teams, actual team creation still follows Claude Code's built-in approval flow; manifest values are not treated as an approval bypass.
 
 See `plugin/docs/orchestration-modes.md` for the full selection algorithm and provider policy.
 
@@ -404,10 +404,9 @@ constraints:
     check: <shell command, exits non-zero on violation>
 teams:
   provider: auto | native | omc | none
-  native_ready: true | false
-  omc_ready: true | false
-  auto_activate: true | false
-  approval_mode: preapproved | ask
+  native_ready: true | false   # setup snapshot; runtime selection re-probes the current session
+  omc_ready: true | false      # setup snapshot; runtime selection re-probes the current session
+  auto_activate: true | false  # auto-select team mode / scaffold artifacts only
   fallback: subagents | solo
   safe_only:
     require_disjoint_files: true | false

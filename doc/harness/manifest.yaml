@@ -52,7 +52,7 @@ registered_roots:
 
 # --- Tooling readiness ---
 tooling:
-  ast_grep_ready: true
+  ast_grep_ready: false
   lsp_ready: false
   cclsp_ready: false
   observability_ready: false
@@ -67,10 +67,11 @@ profiles:
 # --- Teams ---
 teams:
   provider: auto
-  native_ready: true
+  native_ready: false
   omc_ready: false
+  # setup snapshot only; runtime selection re-probes the current session
   auto_activate: true
-  approval_mode: preapproved
+  # auto-select team mode / scaffold artifacts only; not a bypass of native team approval
   teammate_mode: auto
   default_size: 3
   max_size: 5

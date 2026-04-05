@@ -233,6 +233,58 @@ class TestHctlStart(unittest.TestCase):
         self.assertTrue(os.path.isfile(os.path.join(task_dir, "TEAM_PLAN.md")))
         self.assertTrue(os.path.isfile(os.path.join(task_dir, "TEAM_SYNTHESIS.md")))
 
+    def test_start_team_selects_native_when_supported_version_and_env_present(self):
+        task_dir = _make_task(self.tmp.name, "TASK__team_native_ready", lane="build", risk_tags=["multi-root"])
+        _write_request(task_dir, "Implement app, API, and tests for the feature.")
+        fake_bin = Path(self.tmp.name) / "bin-native-ready"
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        claude_path = fake_bin / "claude"
+        claude_path.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"--version\" ]; then\n"
+            "  echo 'Claude Code 2.1.32'\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        claude_path.chmod(0o755)
+        env = {
+            "PATH": f"{fake_bin}{os.pathsep}" + os.environ.get("PATH", ""),
+            "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+        }
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        state = os.path.join(task_dir, "TASK_STATE.yaml")
+        self.assertEqual(_yaml_field(state, "orchestration_mode"), "team")
+        self.assertEqual(_yaml_field(state, "team_provider"), "native")
+        self.assertEqual(_yaml_field(state, "team_status"), "planned")
+
+    def test_start_team_falls_back_when_native_version_too_old(self):
+        task_dir = _make_task(self.tmp.name, "TASK__team_native_old", lane="build", risk_tags=["multi-root"])
+        _write_request(task_dir, "Implement app, API, and tests for the feature.")
+        fake_bin = Path(self.tmp.name) / "bin-native-old"
+        fake_bin.mkdir(parents=True, exist_ok=True)
+        claude_path = fake_bin / "claude"
+        claude_path.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"--version\" ]; then\n"
+            "  echo 'Claude Code 2.1.31'\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        claude_path.chmod(0o755)
+        env = {
+            "PATH": f"{fake_bin}{os.pathsep}" + os.environ.get("PATH", ""),
+            "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+        }
+        _run_hctl("start", "--task-dir", task_dir, env=env)
+        state = os.path.join(task_dir, "TASK_STATE.yaml")
+        self.assertEqual(_yaml_field(state, "orchestration_mode"), "subagents")
+        self.assertEqual(_yaml_field(state, "team_provider"), "fallback-subagents")
+        self.assertEqual(_yaml_field(state, "fallback_used"), "subagents")
+
     def test_start_writes_failure_case_sidecar(self):
         task_dir = _make_task(self.tmp.name, "TASK__test", lane="debug")
         code, out, err = _run_hctl("start", "--task-dir", task_dir)

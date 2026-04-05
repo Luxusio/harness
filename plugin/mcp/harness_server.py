@@ -32,6 +32,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 import calibration_miner  # type: ignore  # noqa: E402
 import harness_api  # type: ignore  # noqa: E402
 import observability  # type: ignore  # noqa: E402
+from _lib import canonical_task_dir, canonical_task_id, find_repo_root  # type: ignore  # noqa: E402
 
 
 def _server_version() -> str:
@@ -179,15 +180,32 @@ def _load_context(task_dir: str) -> tuple[dict[str, Any] | None, dict[str, Any]]
 
 
 def handle_task_start(args: dict[str, Any]) -> dict[str, Any]:
-    task_dir = _require_str(args, "task_dir")
+    task_dir = _optional_str(args, "task_dir")
+    task_id = _optional_str(args, "task_id")
+    slug = _optional_str(args, "slug")
     request_file = _optional_str(args, "request_file")
-    argv = ["start", "--task-dir", task_dir]
+    if not task_dir and not task_id and not slug:
+        raise ValueError("task_start requires task_dir, task_id, or slug")
+
+    repo_root = find_repo_root(os.getcwd())
+    resolved_task_dir = task_dir
+    if not resolved_task_dir:
+        resolved_task_dir = canonical_task_dir(task_id=task_id, slug=slug, repo_root=repo_root)
+
+    argv = ["start"]
+    if task_dir:
+        argv.extend(["--task-dir", task_dir])
+    if task_id:
+        argv.extend(["--task-id", task_id])
+    if slug:
+        argv.extend(["--slug", slug])
     if request_file:
         argv.extend(["--request-file", request_file])
     response = _run_script("hctl.py", argv)
-    context, context_response = _load_context(task_dir)
+    context, context_response = _load_context(resolved_task_dir)
     payload = {
-        "task_dir": task_dir,
+        "task_dir": resolved_task_dir,
+        "task_id": canonical_task_id(task_id=task_id, slug=slug, task_dir=resolved_task_dir),
         "start": response,
         "task_context": context,
         "task_context_fetch": context_response,
@@ -358,6 +376,41 @@ def handle_task_update_from_git_diff(args: dict[str, Any]) -> dict[str, Any]:
     payload = {"task_dir": task_dir, "update": response}
     if not response["ok"]:
         return _tool_error("task_update_from_git_diff failed", data=payload)
+    return _result(payload)
+
+
+def handle_task_update_paths(args: dict[str, Any]) -> dict[str, Any]:
+    task_dir = _require_str(args, "task_dir")
+    touched_paths = args.get("touched_paths") or []
+    roots_touched = args.get("roots_touched") or []
+    verification_targets = args.get("verification_targets") or []
+
+    for key, value in (
+        ("touched_paths", touched_paths),
+        ("roots_touched", roots_touched),
+        ("verification_targets", verification_targets),
+    ):
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise ValueError(f"{key} must be an array of strings")
+
+    argv = ["update", "--task-dir", task_dir]
+    for item in touched_paths:
+        argv.extend(["--touched-path", item])
+    for item in roots_touched:
+        argv.extend(["--root-touched", item])
+    for item in verification_targets:
+        argv.extend(["--verification-target", item])
+
+    response = _run_script("hctl.py", argv)
+    payload = {
+        "task_dir": task_dir,
+        "touched_paths": touched_paths,
+        "roots_touched": roots_touched,
+        "verification_targets": verification_targets,
+        "update": response,
+    }
+    if not response["ok"]:
+        return _tool_error("task_update_paths failed", data=payload)
     return _result(payload)
 
 
@@ -604,10 +657,11 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "task_dir": {"type": "string", "description": "Canonical task directory (doc/harness/tasks/TASK__<id>)"},
+                "task_id": {"type": "string", "description": "Canonical task id or slug to bootstrap (TASK__ prefix optional)"},
+                "slug": {"type": "string", "description": "Task slug to bootstrap under doc/harness/tasks/TASK__<slug>"},
                 "request_file": {"type": "string", "description": "Optional request file path"},
             },
-            "required": ["task_dir"],
             "additionalProperties": False,
         },
         "handler": handle_task_start,
@@ -708,6 +762,23 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
         "handler": handle_task_update_from_git_diff,
+    },
+    {
+        "name": "task_update_paths",
+        "title": "Manually sync changed paths into task state",
+        "description": "Merge explicit touched paths, roots, and verification targets into TASK_STATE.yaml without relying on git.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "touched_paths": {"type": "array", "items": {"type": "string"}, "description": "Changed repo-relative paths to merge into touched_paths"},
+                "roots_touched": {"type": "array", "items": {"type": "string"}, "description": "Changed roots to merge into roots_touched"},
+                "verification_targets": {"type": "array", "items": {"type": "string"}, "description": "Runtime paths to merge into verification_targets"},
+            },
+            "required": ["task_dir"],
+            "additionalProperties": False,
+        },
+        "handler": handle_task_update_paths,
     },
     {
         "name": "task_verify",

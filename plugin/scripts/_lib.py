@@ -20,6 +20,65 @@ from datetime import datetime, timezone
 
 TASK_DIR = "doc/harness/tasks"
 MANIFEST = "doc/harness/manifest.yaml"
+CLAUDE_CODE_AGENT_TEAMS_MIN_VERSION = (2, 1, 32)
+
+
+def parse_semver_triplet(text):
+    """Extract the first semantic version triplet from text."""
+    if not text:
+        return None
+    match = re.search(r"\b(\d+)\.(\d+)\.(\d+)\b", str(text))
+    if not match:
+        return None
+    return tuple(int(group) for group in match.groups())
+
+
+def claude_code_agent_teams_min_version_str():
+    """Return the minimum Claude Code version required for agent teams."""
+    return ".".join(str(part) for part in CLAUDE_CODE_AGENT_TEAMS_MIN_VERSION)
+
+
+def detect_claude_cli_version(timeout=5):
+    """Return raw `claude --version` output or '' when unavailable."""
+    try:
+        result = subprocess.run(["claude", "--version"], capture_output=True, text=True, timeout=timeout)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return (result.stdout or result.stderr or "").strip()
+
+
+def claude_code_version_supports_agent_teams(version_text):
+    """Return True when the Claude Code version supports agent teams."""
+    parsed = parse_semver_triplet(version_text)
+    return bool(parsed and parsed >= CLAUDE_CODE_AGENT_TEAMS_MIN_VERSION)
+
+
+def native_agent_teams_runtime_probe():
+    """Probe current-session readiness for native Claude Code teams."""
+    version_text = detect_claude_cli_version()
+    env_enabled = os.environ.get("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS") == "1"
+    version_supported = claude_code_version_supports_agent_teams(version_text)
+    return {
+        "required_min_version": claude_code_agent_teams_min_version_str(),
+        "teams_env_set": env_enabled,
+        "claude_version": version_text,
+        "claude_available": bool(version_text),
+        "claude_version_supported": version_supported,
+        "ready": env_enabled and bool(version_text) and version_supported,
+    }
+
+
+def omc_runtime_probe():
+    """Probe current-session readiness for oh-my-claudecode teams."""
+    omc_available = shutil.which("omc") is not None
+    omc_dir_exists = os.path.isdir(".omc") or os.path.isdir(os.path.join(os.path.expanduser("~"), ".omc"))
+    return {
+        "omc_available": omc_available,
+        "omc_dir_exists": omc_dir_exists,
+        "ready": omc_available,
+    }
 
 # ---------------------------------------------------------------------------
 # Lazy stdin reader — read once, cache forever
@@ -686,9 +745,39 @@ def is_doc_path(path):
     return False
 
 
+def find_repo_root(start_path=None):
+    """Best-effort repository root discovery.
+
+    Searches upward from ``start_path`` (or cwd) for either the harness
+    manifest or a git directory. Falls back to the normalized starting
+    directory when no marker is found.
+    """
+    start = start_path or os.getcwd()
+    current = os.path.abspath(start)
+    if os.path.isfile(current):
+        current = os.path.dirname(current)
+
+    while True:
+        manifest_candidate = os.path.join(current, *normalize_path(MANIFEST).split("/"))
+        git_candidate = os.path.join(current, ".git")
+        if os.path.isfile(manifest_candidate) or os.path.isdir(git_candidate):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            if os.path.isfile(start):
+                return os.path.dirname(os.path.abspath(start))
+            return os.path.abspath(start)
+        current = parent
+
+
 def normalize_path(path):
-    """Strip leading ./ and leading / from a path."""
-    p = path
+    """Normalize a filesystem path into slash-separated repo-ish form."""
+    if path is None:
+        return ""
+    p = str(path).strip()
+    if not p:
+        return ""
+    p = p.replace("\\", "/")
     if p.startswith("./"):
         p = p[2:]
     if p.startswith("/"):
@@ -696,6 +785,75 @@ def normalize_path(path):
     if p.endswith("/"):
         p = p.rstrip("/")
     return p
+
+
+def repo_relpath(path, repo_root=None):
+    """Return a normalized repo-relative path when possible."""
+    if path is None:
+        return ""
+    text = str(path).strip()
+    if not text:
+        return ""
+
+    repo_root = os.path.abspath(repo_root or find_repo_root())
+    abs_path = os.path.abspath(text) if os.path.isabs(text) else os.path.abspath(os.path.join(repo_root, text))
+
+    try:
+        common = os.path.commonpath([repo_root, abs_path])
+    except ValueError:
+        common = ""
+    if common == repo_root:
+        rel = os.path.relpath(abs_path, repo_root)
+        return normalize_path(rel)
+
+    marker_rel = normalize_path(TASK_DIR)
+    marker = f"/{marker_rel}/"
+    abs_norm = abs_path.replace("\\", "/")
+    if marker in abs_norm:
+        suffix = abs_norm.split(marker, 1)[1]
+        return normalize_path(f"{marker_rel}/{suffix}")
+
+    return normalize_path(text)
+
+
+def is_task_artifact_path(path):
+    """Return True when a path points inside a canonical task artifact dir."""
+    norm = repo_relpath(path)
+    task_prefix = normalize_path(TASK_DIR)
+    if not norm or not task_prefix:
+        return False
+    return bool(re.match(r"^" + re.escape(task_prefix) + r"/TASK__[^/]+(?:/|$)", norm))
+
+
+def canonical_task_id(task_id=None, slug=None, task_dir=None):
+    """Return canonical ``TASK__<id>`` from a task id, slug, or task dir."""
+    candidate = ""
+    if task_id:
+        candidate = str(task_id).strip()
+    elif slug:
+        candidate = str(slug).strip()
+    elif task_dir:
+        candidate = os.path.basename(str(task_dir).rstrip("/"))
+    candidate = candidate.strip()
+    if not candidate:
+        return ""
+    if candidate.startswith("TASK__"):
+        return candidate
+    return f"TASK__{candidate}"
+
+
+def canonical_task_dir(task_id=None, slug=None, task_dir=None, tasks_dir=None, repo_root=None):
+    """Return the canonical task directory for a task reference."""
+    repo_root = os.path.abspath(repo_root or find_repo_root())
+    tasks_dir = tasks_dir or TASK_DIR
+    if os.path.isabs(str(tasks_dir)):
+        tasks_root = os.path.normpath(str(tasks_dir))
+    else:
+        tasks_root = os.path.normpath(os.path.join(repo_root, str(tasks_dir)))
+    task_name = canonical_task_id(task_id=task_id, slug=slug, task_dir=task_dir)
+    if not task_name:
+        return ""
+    return os.path.join(tasks_root, task_name)
 
 
 def parse_changed_files(input_str=None):
@@ -707,7 +865,7 @@ def parse_changed_files(input_str=None):
       {"files": ["src/a.ts"]}
       {"file": "src/foo.ts"}
 
-    Returns sorted deduplicated list of normalized paths.
+    Returns sorted deduplicated list of normalized repo-relative paths.
     """
     if input_str is None:
         input_str = read_hook_input()
@@ -715,13 +873,14 @@ def parse_changed_files(input_str=None):
         return []
 
     result = set()
+    repo_root = find_repo_root()
 
     # Try array fields first
     for field in ("paths", "files", "changed_files"):
         arr = json_array(field, input_str)
         for f in arr:
             if f:
-                norm = normalize_path(f)
+                norm = repo_relpath(f, repo_root=repo_root)
                 if norm:
                     result.add(norm)
 
@@ -730,7 +889,7 @@ def parse_changed_files(input_str=None):
         for field in ("file_path", "file", "path"):
             val = json_field(field, input_str)
             if val:
-                norm = normalize_path(val)
+                norm = repo_relpath(val, repo_root=repo_root)
                 if norm:
                     result.add(norm)
 
@@ -747,14 +906,14 @@ def parse_changed_files(input_str=None):
                 for field in ("file_path", "file_paths", "path"):
                     val = tool_input.get(field)
                     if val and isinstance(val, str):
-                        norm = normalize_path(val)
+                        norm = repo_relpath(val, repo_root=repo_root)
                         if norm:
                             result.add(norm)
                             break
                     elif val and isinstance(val, list):
                         for item in val:
                             if item and isinstance(item, str):
-                                norm = normalize_path(item)
+                                norm = repo_relpath(item, repo_root=repo_root)
                                 if norm:
                                     result.add(norm)
         except Exception:
@@ -2927,7 +3086,111 @@ def repo_root_for_task_dir(task_dir):
     marker = f"{os.sep}{marker_rel}{os.sep}"
     if marker in abs_task_dir:
         return abs_task_dir.split(marker, 1)[0] or os.getcwd()
-    return os.getcwd()
+    return find_repo_root(abs_task_dir)
+
+
+def ensure_task_scaffold(task_dir, task_id, request_text=""):
+    """Create a minimal canonical task scaffold when it does not exist.
+
+    Returns a dict describing whether files were created.
+    """
+    task_dir = os.path.abspath(task_dir)
+    task_id = canonical_task_id(task_id=task_id, task_dir=task_dir)
+    created = []
+    os.makedirs(task_dir, exist_ok=True)
+
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    if not os.path.exists(state_file):
+        browser_required = "false"
+        qa_mode = "auto"
+        if is_browser_first_project():
+            browser_required = "true"
+            qa_mode = "browser-first"
+
+        with open(state_file, "w", encoding="utf-8") as f:
+            f.write(
+                f"""task_id: {task_id}
+status: created
+lane: unknown
+execution_mode: pending
+planning_mode: standard
+mutates_repo: unknown
+qa_required: pending
+qa_mode: {qa_mode}
+plan_verdict: pending
+runtime_verdict: pending
+document_verdict: pending
+runtime_verdict_fail_count: 0
+browser_required: {browser_required}
+doc_sync_required: false
+doc_changes_detected: false
+touched_paths: []
+roots_touched: []
+verification_targets: []
+blockers: []
+review_overlays: []
+risk_tags: []
+performance_task: false
+orchestration_mode: pending
+team_provider: none
+team_status: n/a
+team_size: 0
+team_reason: ""
+team_plan_required: false
+team_synthesis_required: false
+fallback_used: none
+workflow_violations: []
+workflow_mode: compliant
+risk_level: pending
+parallelism: 1
+workflow_locked: true
+maintenance_task: false
+routing_compiled: false
+routing_source: pending
+compliance_claim: strict
+artifact_provenance_required: true
+result_required: false
+plan_session_state: closed
+capability_delegation: unknown
+collapsed_mode_approved: false
+collapsed_reason: ""
+directive_capture_state: clean
+pending_directive_ids: []
+complaint_capture_state: clean
+pending_complaint_ids: []
+last_complaint_at: null
+agent_run_developer_count: 0
+agent_run_developer_last: null
+agent_run_writer_count: 0
+agent_run_writer_last: null
+agent_run_critic_plan_count: 0
+agent_run_critic_plan_last: null
+agent_run_critic_runtime_count: 0
+agent_run_critic_runtime_last: null
+agent_run_critic_document_count: 0
+agent_run_critic_document_last: null
+updated: {now_iso()}
+"""
+            )
+        created.append(state_file)
+
+    request_file = os.path.join(task_dir, "REQUEST.md")
+    if not os.path.exists(request_file):
+        body = request_text.strip() if str(request_text or "").strip() else "<!-- Request details pending -->"
+        with open(request_file, "w", encoding="utf-8") as f:
+            f.write(
+                f"# Request: {task_id}\n"
+                f"created: {now_iso()}\n\n"
+                f"{body}\n"
+            )
+        created.append(request_file)
+
+    return {
+        "task_dir": task_dir,
+        "task_id": task_id,
+        "created": created,
+        "created_any": bool(created),
+    }
 
 
 def build_team_dispatch(task_dir, write_files=False):
@@ -3317,7 +3580,7 @@ def _team_launch_target_metadata(task_dir, task_root, dispatch_index, provider, 
     elif interactive_required:
         execute_blocker = "native team launch requires an interactive lead Claude session"
     elif target_name == "provider" and str(provider or "none") == "omc":
-        omc_ready = str(manifest_teams_field("omc_ready") or "").strip().lower() == "true" or shutil.which("omc") is not None
+        omc_ready = bool(omc_runtime_probe().get("ready"))
         if not omc_ready:
             execute_blocker = "omc CLI not found for provider launch"
     elif target_name == "implementers":
@@ -4969,6 +5232,42 @@ def set_task_state_field(task_dir, field, value):
         return False
 
 
+def merge_task_path_fields(task_dir, touched_paths=None, roots_touched=None, verification_targets=None):
+    """Merge path-ledger fields into TASK_STATE.yaml.
+
+    Returns a dict containing the merged values. Task-local artifact paths are
+    ignored so workflow metadata writes do not pollute ownership tracking.
+    """
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    if not os.path.isfile(state_file):
+        return {
+            "touched_paths": [],
+            "roots_touched": [],
+            "verification_targets": [],
+        }
+
+    existing_touched = [p for p in yaml_array("touched_paths", state_file) if p]
+    existing_roots = [p for p in yaml_array("roots_touched", state_file) if p]
+    existing_vt = [p for p in yaml_array("verification_targets", state_file) if p]
+
+    incoming_touched = [repo_relpath(p) for p in (touched_paths or []) if repo_relpath(p) and not is_task_artifact_path(p)]
+    incoming_roots = [normalize_path(p) for p in (roots_touched or []) if normalize_path(p)]
+    incoming_vt = [repo_relpath(p) for p in (verification_targets or []) if repo_relpath(p) and not is_task_artifact_path(p)]
+
+    merged_touched = list(dict.fromkeys(existing_touched + incoming_touched))
+    merged_roots = list(dict.fromkeys(existing_roots + incoming_roots + extract_roots(incoming_touched + incoming_vt)))
+    merged_vt = list(dict.fromkeys(existing_vt + incoming_vt))
+
+    set_task_state_field(task_dir, "touched_paths", merged_touched)
+    set_task_state_field(task_dir, "roots_touched", merged_roots)
+    set_task_state_field(task_dir, "verification_targets", merged_vt)
+    return {
+        "touched_paths": merged_touched,
+        "roots_touched": merged_roots,
+        "verification_targets": merged_vt,
+    }
+
+
 def compile_routing(task_dir, request_text=""):
     """Compute routing fields from TASK_STATE.yaml + request text heuristics.
 
@@ -5019,11 +5318,8 @@ def compile_routing(task_dir, request_text=""):
 
     def _preferred_team_provider():
         provider_pref = str(manifest_teams_field("provider") or "auto").strip().lower() or "auto"
-        native_ready = _flag(manifest_teams_field("native_ready")) or (
-            os.environ.get("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS") == "1"
-            and shutil.which("claude") is not None
-        )
-        omc_ready = _flag(manifest_teams_field("omc_ready")) or shutil.which("omc") is not None
+        native_ready = bool(native_agent_teams_runtime_probe().get("ready"))
+        omc_ready = bool(omc_runtime_probe().get("ready"))
 
         if provider_pref == "none":
             return "none", False

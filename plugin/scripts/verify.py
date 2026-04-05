@@ -27,19 +27,33 @@ from datetime import datetime, timezone
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
-from _lib import MANIFEST, is_profile_enabled, manifest_field, manifest_path_field, manifest_sync_gaps
+from _lib import (
+    MANIFEST,
+    is_profile_enabled,
+    manifest_field,
+    manifest_path_field,
+    manifest_sync_gaps,
+    repo_root_for_task_dir,
+)
 
 RETRIES = 10
 CONSOLE_ERRORS = 0
 NETWORK_FAILURES = 0
+BASE_CWD = os.getcwd()
+
+
+def _set_base_cwd(path: str | None) -> None:
+    global BASE_CWD
+    if path:
+        BASE_CWD = path
 
 
 def _run_shell(command: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, shell=True, capture_output=True, text=True)
+    return subprocess.run(command, shell=True, capture_output=True, text=True, cwd=BASE_CWD)
 
 
 def _run_exec_target(argv: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(argv, capture_output=True, text=True)
+    return subprocess.run(argv, capture_output=True, text=True, cwd=BASE_CWD)
 
 
 def _print_output(output: str) -> None:
@@ -236,6 +250,7 @@ def _suite_step(mode: str, label: str, evidence_label: str) -> int:
         ["python3", os.path.join(SCRIPT_DIR, "verify.py"), mode],
         capture_output=True,
         text=True,
+        cwd=BASE_CWD,
     )
     output = result.stdout + result.stderr
     exit_code = result.returncode
@@ -309,6 +324,7 @@ def run_suite() -> int:
             ["python3", os.path.join(SCRIPT_DIR, "observability.py"), "status"],
             capture_output=True,
             text=True,
+            cwd=BASE_CWD,
         )
         output = result.stdout + result.stderr
         if result.returncode == 0:
@@ -335,6 +351,11 @@ def run_suite() -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Harness QA runner")
     parser.add_argument(
+        "--task-dir",
+        dest="task_dir",
+        help="Optional task directory used to anchor verification commands at repo root",
+    )
+    parser.add_argument(
         "mode",
         nargs="?",
         default="suite",
@@ -346,6 +367,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.task_dir:
+        _set_base_cwd(repo_root_for_task_dir(args.task_dir))
     if args.mode == "suite":
         return run_suite()
     if args.mode == "smoke":
