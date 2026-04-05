@@ -52,7 +52,7 @@ registered_roots:
 
 # --- Tooling readiness ---
 tooling:
-  ast_grep_ready: false
+  ast_grep_ready: true
   lsp_ready: false
   cclsp_ready: false
   observability_ready: false
@@ -67,7 +67,7 @@ profiles:
 # --- Teams ---
 teams:
   provider: auto
-  native_ready: false
+  native_ready: true
   omc_ready: false
   auto_activate: true
   approval_mode: preapproved
