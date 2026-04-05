@@ -9,5 +9,8 @@
       "Skill(harness:maintain *)",
       "mcp__plugin_harness_harness__*"
     ]
+  },
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
   }
 }
