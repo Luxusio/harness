@@ -74,7 +74,9 @@ def _make_non_mutating_passing_task(task_dir: Path) -> None:
                 "mutates_repo: false",
                 "plan_verdict: PASS",
                 "runtime_verdict: PASS",
+                "runtime_verdict_freshness: current",
                 "document_verdict: skipped",
+                "document_verdict_freshness: current",
                 "execution_mode: standard",
                 "orchestration_mode: solo",
                 "workflow_violations: []",
@@ -105,7 +107,9 @@ def _make_mutating_task(task_dir: Path, *, runtime_verdict: str = "PASS", docume
                 "mutates_repo: true",
                 "plan_verdict: PASS",
                 f"runtime_verdict: {runtime_verdict}",
+                "runtime_verdict_freshness: current",
                 f"document_verdict: {document_verdict}",
+                "document_verdict_freshness: current",
                 "doc_changes_detected: false",
                 "execution_mode: standard",
                 "orchestration_mode: solo",
@@ -148,7 +152,10 @@ class TaskLifecycleRegressionTests(unittest.TestCase):
             task_dir = repo / "doc" / "harness" / "tasks" / "TASK__local-setup-doc"
             self.assertTrue((task_dir / "TASK_STATE.yaml").is_file())
             self.assertTrue((task_dir / "REQUEST.md").is_file())
-            self.assertEqual(yaml_field("task_id", str(task_dir / "TASK_STATE.yaml")), "TASK__local-setup-doc")
+            state_file = task_dir / "TASK_STATE.yaml"
+            self.assertEqual(yaml_field("task_id", str(state_file)), "TASK__local-setup-doc")
+            self.assertEqual(yaml_field("runtime_verdict_freshness", str(state_file)), "current")
+            self.assertEqual(yaml_field("document_verdict_freshness", str(state_file)), "current")
             self.assertIn("task_dir:", result.stdout)
 
     def test_task_close_persists_closed_status_and_timestamp(self):
@@ -220,10 +227,16 @@ class TaskLifecycleRegressionTests(unittest.TestCase):
             finally:
                 os.chdir(cwd_before)
 
-            self.assertEqual(yaml_field("runtime_verdict", str(task_a / "TASK_STATE.yaml")), "pending")
-            self.assertEqual(yaml_field("document_verdict", str(task_a / "TASK_STATE.yaml")), "pending")
-            self.assertEqual(yaml_field("runtime_verdict", str(task_b / "TASK_STATE.yaml")), "PASS")
-            self.assertEqual(yaml_field("document_verdict", str(task_b / "TASK_STATE.yaml")), "PASS")
+            state_a = str(task_a / "TASK_STATE.yaml")
+            state_b = str(task_b / "TASK_STATE.yaml")
+            self.assertEqual(yaml_field("runtime_verdict", state_a), "PASS")
+            self.assertEqual(yaml_field("runtime_verdict_freshness", state_a), "stale")
+            self.assertEqual(yaml_field("document_verdict", state_a), "PASS")
+            self.assertEqual(yaml_field("document_verdict_freshness", state_a), "stale")
+            self.assertEqual(yaml_field("runtime_verdict", state_b), "PASS")
+            self.assertEqual(yaml_field("runtime_verdict_freshness", state_b), "current")
+            self.assertEqual(yaml_field("document_verdict", state_b), "PASS")
+            self.assertEqual(yaml_field("document_verdict_freshness", state_b), "current")
 
     def test_task_artifact_write_does_not_invalidate_runtime(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -241,7 +254,9 @@ class TaskLifecycleRegressionTests(unittest.TestCase):
 
             state_file = task_dir / "TASK_STATE.yaml"
             self.assertEqual(yaml_field("runtime_verdict", str(state_file)), "PASS")
+            self.assertEqual(yaml_field("runtime_verdict_freshness", str(state_file)), "current")
             self.assertEqual(yaml_field("document_verdict", str(state_file)), "PASS")
+            self.assertEqual(yaml_field("document_verdict_freshness", str(state_file)), "current")
 
     def test_hctl_verify_runs_from_repo_root_even_when_called_elsewhere(self):
         with tempfile.TemporaryDirectory() as tmp:

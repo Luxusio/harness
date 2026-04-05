@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Write-tool PostToolUse hook — task-scoped verdict invalidation + plan-first violation recording.
 
-Non-blocking. Resets stale PASS verdicts to pending only for tasks
-whose touched_paths/roots_touched/verification_targets overlap with the changed file(s).
+Non-blocking. Marks verdict freshness stale only for tasks whose
+touched_paths/roots_touched/verification_targets overlap with the changed file(s).
 
 Precision rules:
-  - doc path change  → invalidate document_verdict only
-  - runtime path change → invalidate runtime_verdict only (via verification_targets)
-  - both → invalidate both
+  - doc path change  → mark document_verdict freshness stale only
+  - runtime path change → mark runtime_verdict freshness stale only (via verification_targets)
+  - both → mark both freshness fields stale
 Gitless fallback (no file list): invalidate only the indexed active task.
 
 Plan-first enforcement (WS-5):
@@ -21,6 +21,7 @@ stdin: JSON | exit 0: always
 
 import sys
 import os
+import re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (read_hook_input, json_array, yaml_field, yaml_array,
                   is_doc_path, find_tasks_touching_path,
@@ -28,48 +29,37 @@ from _lib import (read_hook_input, json_array, yaml_field, yaml_array,
                   manifest_field, is_profile_enabled, TASK_DIR, MANIFEST, now_iso,
                   parse_note_metadata, set_note_freshness, parse_changed_files,
                   append_workflow_violation, merge_task_path_fields,
-                  is_task_artifact_path, find_repo_root)
+                  is_task_artifact_path, find_repo_root,
+                  verdict_freshness, set_task_state_field)
 
 from task_index import resolve_active_task_dir
 
-import re
 import glob
 
 
 def invalidate_runtime(state_file, task_id, reason):
-    """If runtime_verdict is PASS → replace with pending, update timestamp."""
+    """Mark runtime verdict freshness stale without erasing the stored verdict."""
     rv = yaml_field("runtime_verdict", state_file)
-    if rv == "PASS":
-        with open(state_file, "r", encoding="utf-8") as f:
-            content = f.read()
-        content = content.replace("runtime_verdict: PASS", "runtime_verdict: pending")
-        content = re.sub(r'^updated: .*', f'updated: {now_iso()}', content, flags=re.MULTILINE)
-        with open(state_file, "w", encoding="utf-8") as f:
-            f.write(content)
-        print(f"INVALIDATED: {task_id} — runtime_verdict reset to pending ({reason})")
+    freshness = verdict_freshness(state_file, "runtime_verdict")
+    if rv and rv != "pending" and freshness != "stale":
+        set_task_state_field(os.path.dirname(state_file), "runtime_verdict_freshness", "stale")
+        print(
+            f"INVALIDATED: {task_id} — runtime_verdict freshness set to stale"
+            f" (verdict={rv}; {reason})"
+        )
 
 
 def invalidate_document(state_file, task_id, reason):
-    """If document_verdict is PASS → replace with pending, set doc_changes_detected: true."""
+    """Mark document verdict freshness stale and set doc_changes_detected: true."""
     dv = yaml_field("document_verdict", state_file)
-    if dv == "PASS":
-        with open(state_file, "r", encoding="utf-8") as f:
-            content = f.read()
-        content = content.replace("document_verdict: PASS", "document_verdict: pending")
-        content = re.sub(r'^updated: .*', f'updated: {now_iso()}', content, flags=re.MULTILINE)
-        with open(state_file, "w", encoding="utf-8") as f:
-            f.write(content)
-        print(f"INVALIDATED: {task_id} — document_verdict reset to pending ({reason})")
-
-    # Also set doc_changes_detected: true
-    with open(state_file, "r", encoding="utf-8") as f:
-        content = f.read()
-    if re.search(r'^doc_changes_detected:', content, flags=re.MULTILINE):
-        content = re.sub(r'^doc_changes_detected: .*', 'doc_changes_detected: true', content, flags=re.MULTILINE)
-    else:
-        content = content.rstrip('\n') + '\ndoc_changes_detected: true\n'
-    with open(state_file, "w", encoding="utf-8") as f:
-        f.write(content)
+    freshness = verdict_freshness(state_file, "document_verdict")
+    if dv and dv != "pending" and freshness != "stale":
+        set_task_state_field(os.path.dirname(state_file), "document_verdict_freshness", "stale")
+        print(
+            f"INVALIDATED: {task_id} — document_verdict freshness set to stale"
+            f" (verdict={dv}; {reason})"
+        )
+    set_task_state_field(os.path.dirname(state_file), "doc_changes_detected", True)
 
 
 def _task_state_file(task_dir):

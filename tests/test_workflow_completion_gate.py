@@ -2,7 +2,7 @@
 
 Covers:
   - doc_changes_detected: true + no CRITIC__document.md → block
-  - runtime_verdict: pending in TASK_STATE + old PASS text in artifact → block (stale PASS)
+  - runtime_verdict: PASS + freshness stale in TASK_STATE → block (stale PASS)
   - plan_verdict: pending + PLAN.md exists → block
   - workflow_violations non-empty → block
   - Normal passing task (scenario F) → no failures
@@ -45,7 +45,9 @@ def _make_passing_task(task_dir):
         "mutates_repo: true\n"
         "plan_verdict: PASS\n"
         "runtime_verdict: PASS\n"
+        "runtime_verdict_freshness: current\n"
         "document_verdict: skipped\n"
+        "document_verdict_freshness: current\n"
         "doc_changes_detected: false\n"
         "execution_mode: standard\n"
         "orchestration_mode: solo\n"
@@ -162,11 +164,11 @@ class TestDocCriticRequired(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# §5.2.2 — stale PASS: runtime_verdict pending + artifact has old PASS text
+# §5.2.2 — stale PASS: verdict freshness stale after prior PASS
 # ---------------------------------------------------------------------------
 
 class TestStalePASS(unittest.TestCase):
-    """Scenario B: YAML verdict is pending but artifact still has 'verdict: PASS' text → block."""
+    """Scenario B: YAML keeps PASS but freshness is stale → block."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -178,33 +180,36 @@ class TestStalePASS(unittest.TestCase):
 
     def test_stale_runtime_pass_is_blocked(self):
         _make_passing_task(self.task_dir)
-        # Simulate file_changed_sync resetting YAML verdict to pending
+        # Simulate file_changed_sync preserving PASS but marking freshness stale
         state_file = os.path.join(self.task_dir, "TASK_STATE.yaml")
         with open(state_file) as f:
             content = f.read()
-        content = content.replace("runtime_verdict: PASS", "runtime_verdict: pending")
+        content = content.replace(
+            "runtime_verdict_freshness: current",
+            "runtime_verdict_freshness: stale",
+        )
         with open(state_file, "w") as f:
             f.write(content)
-        # CRITIC__runtime.md still has old PASS text — the "stale" case
 
         failures = compute_completion_failures(self.task_dir)
         self.assertTrue(
             any("runtime" in f.lower() for f in failures),
-            f"Stale runtime PASS must be blocked. YAML says pending, artifact says PASS. Got: {failures}"
+            f"Stale runtime PASS must be blocked. Got: {failures}"
         )
 
     def test_stale_document_pass_is_blocked(self):
         _make_passing_task(self.task_dir)
         # Add CRITIC__document.md with PASS text
         _write(os.path.join(self.task_dir, "CRITIC__document.md"), "verdict: PASS\n")
-        # Set doc_changes_detected: true and document_verdict: pending in YAML
+        # Set doc_changes_detected: true and keep PASS with stale freshness in YAML
         state_file = os.path.join(self.task_dir, "TASK_STATE.yaml")
         with open(state_file) as f:
             content = f.read()
         content = (
             content
             .replace("doc_changes_detected: false", "doc_changes_detected: true")
-            .replace("document_verdict: skipped", "document_verdict: pending")
+            .replace("document_verdict: skipped", "document_verdict: PASS")
+            .replace("document_verdict_freshness: current", "document_verdict_freshness: stale")
         )
         with open(state_file, "w") as f:
             f.write(content)

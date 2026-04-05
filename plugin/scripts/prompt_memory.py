@@ -13,6 +13,7 @@ from _lib import (
     exit_if_unmanaged_repo,
     hook_json_get,
     read_hook_input,
+    verdict_freshness,
     yaml_array,
     yaml_field,
 )
@@ -433,12 +434,20 @@ def _latest_task_verdict(task_dir):
         return ""
 
     runtime_v = yaml_field("runtime_verdict", state_file) or "pending"
+    runtime_freshness = verdict_freshness(state_file, "runtime_verdict")
     if runtime_v in ("FAIL", "BLOCKED_ENV"):
-        return f"runtime={runtime_v}"
+        suffix = "" if runtime_freshness == "current" else f"({runtime_freshness})"
+        return f"runtime={runtime_v}{suffix}"
+    if runtime_v == "PASS" and runtime_freshness != "current":
+        return f"runtime=PASS({runtime_freshness})"
 
     document_v = yaml_field("document_verdict", state_file) or "pending"
+    document_freshness = verdict_freshness(state_file, "document_verdict")
     if document_v == "FAIL":
-        return "document=FAIL"
+        suffix = "" if document_freshness == "current" else f"({document_freshness})"
+        return f"document=FAIL{suffix}"
+    if document_v == "PASS" and document_freshness != "current":
+        return f"document=PASS({document_freshness})"
 
     plan_v = yaml_field("plan_verdict", state_file) or "pending"
     if plan_v == "FAIL":

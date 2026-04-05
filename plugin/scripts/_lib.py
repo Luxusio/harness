@@ -296,6 +296,44 @@ def yaml_array(field, filepath):
     return items
 
 
+def verdict_freshness_field(verdict_field):
+    """Return the TASK_STATE.yaml freshness field for a verdict field."""
+    text = str(verdict_field or "").strip()
+    if not text:
+        return ""
+    return f"{text}_freshness"
+
+
+def verdict_freshness(filepath, verdict_field, default="current"):
+    """Return canonical verdict freshness (``current`` or ``stale``).
+
+    Older tasks may not carry explicit freshness fields yet, so missing or
+    unknown values default to ``current`` for backward compatibility.
+    """
+    field_name = verdict_freshness_field(verdict_field)
+    if not field_name:
+        return str(default or "current").strip().lower() or "current"
+    raw = yaml_field(field_name, filepath) or default
+    value = str(raw or default or "current").strip().lower()
+    if value not in ("current", "stale"):
+        return str(default or "current").strip().lower() or "current"
+    return value
+
+
+def verdict_is_current(filepath, verdict_field, default="current"):
+    """Return True when the verdict freshness is currently valid."""
+    return verdict_freshness(filepath, verdict_field, default=default) == "current"
+
+
+def format_verdict_with_freshness(verdict, freshness):
+    """Format verdict strings as ``PASS`` or ``PASS (stale)`` for UI output."""
+    verdict_text = str(verdict or "pending")
+    freshness_text = str(freshness or "current").strip().lower() or "current"
+    if freshness_text == "current":
+        return verdict_text
+    return f"{verdict_text} ({freshness_text})"
+
+
 # ---------------------------------------------------------------------------
 # Manifest helpers
 # ---------------------------------------------------------------------------
@@ -1942,6 +1980,7 @@ def team_runtime_verification_status(task_dir, team_state=None):
     state_file = os.path.join(task_dir, "TASK_STATE.yaml")
     orch_mode = yaml_field("orchestration_mode", state_file) or "solo"
     runtime_verdict = (yaml_field("runtime_verdict", state_file) or "pending").upper()
+    runtime_freshness = verdict_freshness(state_file, "runtime_verdict")
     mutates_repo = str(yaml_field("mutates_repo", state_file) or "false").strip().lower() in ("true", "1", "yes")
 
     artifact_candidates = []
@@ -1971,17 +2010,32 @@ def team_runtime_verification_status(task_dir, team_state=None):
     runtime_artifact_exists = bool(runtime_artifact)
     stale_after_synthesis = bool(active and synthesis_mtime and runtime_artifact_exists and runtime_artifact_mtime < synthesis_mtime)
     missing_after_synthesis = bool(active and not runtime_artifact_exists)
-    verification_needed = bool(active and (runtime_verdict != "PASS" or stale_after_synthesis or missing_after_synthesis))
-    verification_ready = bool(active and runtime_verdict == "PASS" and runtime_artifact_exists and not stale_after_synthesis)
+    verification_needed = bool(
+        active and (
+            runtime_verdict != "PASS"
+            or runtime_freshness != "current"
+            or stale_after_synthesis
+            or missing_after_synthesis
+        )
+    )
+    verification_ready = bool(
+        active
+        and runtime_verdict == "PASS"
+        and runtime_freshness == "current"
+        and runtime_artifact_exists
+        and not stale_after_synthesis
+    )
 
     reason = ""
     if verification_needed:
         if missing_after_synthesis:
             reason = "record final runtime verification after TEAM_SYNTHESIS.md before close"
-        elif runtime_verdict != "PASS":
-            reason = "run final runtime verification after TEAM_SYNTHESIS.md before close"
         elif stale_after_synthesis:
             reason = "rerun final runtime verification after the latest TEAM_SYNTHESIS.md update"
+        elif runtime_verdict != "PASS":
+            reason = "run final runtime verification after TEAM_SYNTHESIS.md before close"
+        elif runtime_freshness != "current":
+            reason = "rerun final runtime verification to refresh stale verdict freshness before close"
         else:
             reason = "refresh final runtime verification before close"
 
@@ -1989,6 +2043,7 @@ def team_runtime_verification_status(task_dir, team_state=None):
     return {
         "active": active,
         "runtime_verdict": runtime_verdict,
+        "runtime_verdict_freshness": runtime_freshness,
         "runtime_artifact": runtime_artifact,
         "runtime_artifact_exists": runtime_artifact_exists,
         "runtime_artifact_mtime": runtime_artifact_mtime,
@@ -2014,6 +2069,7 @@ def team_documentation_status(task_dir, team_state=None):
     orch_mode = yaml_field("orchestration_mode", state_file) or "solo"
     mutates_repo = str(yaml_field("mutates_repo", state_file) or "false").strip().lower() in ("true", "1", "yes")
     document_verdict = (yaml_field("document_verdict", state_file) or "pending").upper()
+    document_freshness = verdict_freshness(state_file, "document_verdict")
 
     synthesis_ready = bool((team_state or {}).get("synthesis_ready"))
     runtime_ready = bool((team_state or {}).get("runtime_verification_ready"))
@@ -2068,7 +2124,9 @@ def team_documentation_status(task_dir, team_state=None):
         and document_mtime < documentation_baseline_mtime
     )
     document_critic_pending = bool(
-        active and document_critic_needed and document_verdict != "PASS"
+        active and document_critic_needed and (
+            document_verdict != "PASS" or document_freshness != "current"
+        )
     )
 
     documentation_needed = bool(
@@ -2097,7 +2155,10 @@ def team_documentation_status(task_dir, team_state=None):
         elif document_critic_stale_after_docs:
             reason = "rerun critic-document after the latest DOC_SYNC.md / final team runtime verification"
         elif document_critic_pending:
-            reason = "rerun critic-document after refreshing DOC_SYNC.md and final team runtime verification"
+            if document_verdict == "PASS" and document_freshness != "current":
+                reason = "rerun critic-document to refresh stale document verdict freshness before close"
+            else:
+                reason = "rerun critic-document after refreshing DOC_SYNC.md and final team runtime verification"
         else:
             reason = "refresh team documentation sync before close"
 
@@ -2133,6 +2194,7 @@ def team_documentation_status(task_dir, team_state=None):
         "document_critic_stale_after_docs": document_critic_stale_after_docs,
         "document_critic_artifact": document_artifact,
         "document_verdict": document_verdict,
+        "document_verdict_freshness": document_freshness,
         "runtime_artifact": runtime_artifact,
     }
 
@@ -3119,7 +3181,9 @@ qa_required: pending
 qa_mode: {qa_mode}
 plan_verdict: pending
 runtime_verdict: pending
+runtime_verdict_freshness: current
 document_verdict: pending
+document_verdict_freshness: current
 runtime_verdict_fail_count: 0
 browser_required: {browser_required}
 doc_sync_required: false
@@ -5830,6 +5894,8 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
     routing_compiled = str(yaml_field("routing_compiled", state_file) or "false").lower()
     plan_verdict = yaml_field("plan_verdict", state_file) or "pending"
     runtime_verdict = (yaml_field("runtime_verdict", state_file) or "pending").upper()
+    runtime_freshness = verdict_freshness(state_file, "runtime_verdict")
+    document_freshness = verdict_freshness(state_file, "document_verdict")
 
     session_handoff_name = "SESSION_HANDOFF.json"
     runtime_critic_name = "CRITIC__runtime.md"
@@ -5849,9 +5915,16 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
     handoff_data = _load_handoff_json(session_handoff_path)
     runtime_critic_verdict = _critic_verdict(runtime_critic_path)
     document_critic_verdict = _critic_verdict(document_critic_path)
-    runtime_fix_round = runtime_verdict == "FAIL" or runtime_critic_verdict == "FAIL"
+    runtime_fix_round = (
+        runtime_verdict == "FAIL"
+        or runtime_critic_verdict == "FAIL"
+        or (runtime_verdict == "PASS" and runtime_freshness != "current")
+    )
     blocked_env_round = status == "blocked_env" or runtime_verdict == "BLOCKED_ENV" or runtime_critic_verdict == "BLOCKED_ENV"
-    document_fix_round = document_critic_verdict == "FAIL"
+    document_fix_round = document_critic_verdict == "FAIL" or (
+        (yaml_field("document_verdict", state_file) or "pending").upper() == "PASS"
+        and document_freshness != "current"
+    )
 
     verify_commands_config = yaml_array("verify_commands", MANIFEST) if os.path.isfile(MANIFEST) else []
     request_preview = (_read_text(_task_abs(request_name)) or "")[:900]

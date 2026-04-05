@@ -12,7 +12,7 @@ Harness is an execution harness that orchestrates plan-implement-verify loops fo
 receive → classify → [mode selection] → plan contract → critic-plan PASS → implement → self-check breadcrumbs → runtime QA (browser-first when supported) → writer / DOC_SYNC → critic-document (when doc surface changed) → close
 ```
 
-The only hard gate is at **task completion**: all required critic verdicts must PASS. A stale PASS (recorded before subsequent file changes) does not count.
+The only hard gate is at **task completion**: all required critic verdicts must PASS **and** their freshness must still be `current`. A stale PASS (recorded before subsequent file changes) does not count.
 
 | Requirement | When needed |
 |-------------|-------------|
@@ -204,12 +204,12 @@ The following were evaluated and intentionally **not** included in this version:
 
 ## Precise invalidation
 
-When files change after a critic PASS, verdict invalidation is path-scoped:
+When files change after a critic PASS, verdict freshness invalidation is path-scoped:
 
-- **Runtime path change** → invalidates `runtime_verdict` only (via `verification_targets`)
-- **Doc path change** → invalidates `document_verdict` only
-- **Both** → invalidates both
-- **No file list available** → conservative fallback: invalidates all verdicts on all open tasks
+- **Runtime path change** → marks `runtime_verdict_freshness: stale` only (via `verification_targets`)
+- **Doc path change** → marks `document_verdict_freshness: stale` only
+- **Both** → marks both freshness fields stale
+- **No file list available** → active-task fallback marks only the indexed task stale instead of resetting every open task
 
 Doc paths: `doc/*`, `docs/*`, `*.md`, `README*`, `CHANGELOG*`, `LICENSE*`, `doc/harness/critics/*`, `DOC_SYNC.md`
 
@@ -433,7 +433,9 @@ roots_touched: []
 verification_targets: []
 plan_verdict: pending | PASS | FAIL
 runtime_verdict: pending | PASS | FAIL | BLOCKED_ENV
+runtime_verdict_freshness: current | stale
 document_verdict: pending | PASS | FAIL | skipped
+document_verdict_freshness: current | stale
 blockers: []
 updated: <ISO 8601>
 orchestration_mode: solo | subagents | team

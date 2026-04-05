@@ -4,7 +4,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (read_hook_input, yaml_field, yaml_array, manifest_field,
                   is_browser_first_project, is_tooling_ready, is_profile_enabled,
                   get_browser_qa_status,
-                  TASK_DIR, MANIFEST, now_iso)
+                  TASK_DIR, MANIFEST, now_iso,
+                  needs_document_critic, verdict_freshness, format_verdict_with_freshness)
 from handoff_escalation import should_create_handoff, generate_handoff
 
 
@@ -148,9 +149,14 @@ def main():
             open_count += 1
             plan_v = yaml_field("plan_verdict", state_file) or "?"
             runtime_v = yaml_field("runtime_verdict", state_file) or "?"
+            runtime_freshness = verdict_freshness(state_file, "runtime_verdict")
             doc_v = yaml_field("document_verdict", state_file) or "?"
+            doc_freshness = verdict_freshness(state_file, "document_verdict")
+            runtime_display = format_verdict_with_freshness(runtime_v, runtime_freshness)
+            doc_display = format_verdict_with_freshness(doc_v, doc_freshness)
             qa_mode = yaml_field("qa_mode", state_file) or "auto"
             mutates = yaml_field("mutates_repo", state_file) or ""
+            doc_needed = needs_document_critic(task_path)
 
             doc_sync_status = "n/a"
             if mutates in ("true", "unknown"):
@@ -160,7 +166,7 @@ def main():
                     doc_sync_status = "missing"
 
             print(f"- {task_id} [{status}, lane: {lane}, qa_mode: {qa_mode}]")
-            print(f"  verdicts: plan={plan_v} runtime={runtime_v} document={doc_v}")
+            print(f"  verdicts: plan={plan_v} runtime={runtime_display} document={doc_display}")
             print(f"  doc_sync: {doc_sync_status}")
             orch_mode = yaml_field("orchestration_mode", state_file) or "solo"
             if orch_mode != "solo":
@@ -174,16 +180,16 @@ def main():
 
             if plan_v == "pending":
                 pending_verdicts += 1
-            if runtime_v == "pending":
+            if runtime_v != "PASS" or runtime_freshness != "current":
                 pending_verdicts += 1
-            if doc_v == "pending":
+            if doc_needed and (doc_v != "PASS" or doc_freshness != "current"):
                 pending_verdicts += 1
 
     if open_count == 0 and blocked_count == 0:
         print("(no active tasks)")
     else:
         print("")
-        print(f"Summary: {open_count} open, {blocked_count} blocked_env, {pending_verdicts} pending verdicts")
+        print(f"Summary: {open_count} open, {blocked_count} blocked_env, {pending_verdicts} unready verdict gates")
 
     # Handoff escalation — check open tasks for trigger conditions
     for entry in sorted(os.listdir(TASK_DIR)):

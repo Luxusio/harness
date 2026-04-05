@@ -395,6 +395,7 @@ def cmd_critic_runtime(args):
 
     # Update TASK_STATE.yaml
     update_task_state_field(task_dir, "runtime_verdict", args.verdict)
+    update_task_state_field(task_dir, "runtime_verdict_freshness", "current")
     if args.verdict == "FAIL":
         increment_task_state_int(task_dir, "runtime_verdict_fail_count")
     if args.verdict == "BLOCKED_ENV":
@@ -485,6 +486,7 @@ def cmd_critic_document(args):
 
     # Update TASK_STATE.yaml
     update_task_state_field(task_dir, "document_verdict", args.verdict)
+    update_task_state_field(task_dir, "document_verdict_freshness", "current")
 
     # Update CHECKS.yaml
     update_checks_yaml(task_dir, checks_dict)

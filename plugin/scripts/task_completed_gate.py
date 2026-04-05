@@ -7,7 +7,8 @@ from _lib import (read_hook_input, hook_json_get, json_field, json_array, yaml_f
                   exit_if_unmanaged_repo,
                   get_workflow_violations, get_agent_run_count,
                   needs_document_critic, is_handoff_stub, team_artifact_status,
-                  parse_checks_close_gate, set_task_state_field)
+                  parse_checks_close_gate, set_task_state_field,
+                  verdict_freshness, format_verdict_with_freshness)
 
 # TaskCompleted hook — completion firewall.
 # BLOCKING: exit 2 rejects completion when verdicts are missing.
@@ -197,7 +198,8 @@ def compute_completion_failures(task_dir):
     """Pure function: compute and return list of failure strings for a task.
 
     Uses TASK_STATE.yaml verdicts as source of truth — not artifact file text.
-    Stale PASS (artifact says PASS but YAML says pending) is caught here.
+    Stale PASS (verdict freshness marked stale after later file changes) is
+    caught here.
     Also checks provenance (agent run counts), workflow violations,
     CHECKS.yaml failed criteria (hard threshold per Anthropic requirement),
     strict close gate for high-risk tasks,
@@ -298,10 +300,17 @@ def compute_completion_failures(task_dir):
 
         # runtime_verdict must be PASS in YAML — stale artifact PASS does not count
         runtime_verdict_val = yaml_field("runtime_verdict", state_file)
+        runtime_freshness = verdict_freshness(state_file, "runtime_verdict")
         if runtime_verdict_val != "PASS":
+            runtime_display = format_verdict_with_freshness(runtime_verdict_val, runtime_freshness)
             failures.append(
-                f"runtime_verdict is '{runtime_verdict_val}' in TASK_STATE.yaml (not PASS)"
-                " — stale PASS artifact does not count"
+                f"runtime_verdict is '{runtime_display}' in TASK_STATE.yaml"
+                " (needs PASS + freshness=current)"
+            )
+        elif runtime_freshness != "current":
+            failures.append(
+                f"runtime_verdict is 'PASS' but freshness is '{runtime_freshness}' in TASK_STATE.yaml"
+                " — rerun runtime critic; stale PASS does not count"
             )
 
         # CRITIC__runtime.md required
@@ -341,10 +350,17 @@ def compute_completion_failures(task_dir):
     if doc_critic_needed:
         # document_verdict must be PASS in YAML
         doc_verdict_val = yaml_field("document_verdict", state_file)
+        doc_freshness = verdict_freshness(state_file, "document_verdict")
         if doc_verdict_val != "PASS":
+            doc_display = format_verdict_with_freshness(doc_verdict_val, doc_freshness)
             failures.append(
-                f"document_verdict is '{doc_verdict_val}' in TASK_STATE.yaml (not PASS)"
-                " — stale PASS artifact does not count"
+                f"document_verdict is '{doc_display}' in TASK_STATE.yaml"
+                " (needs PASS + freshness=current)"
+            )
+        elif doc_freshness != "current":
+            failures.append(
+                f"document_verdict is 'PASS' but freshness is '{doc_freshness}' in TASK_STATE.yaml"
+                " — rerun document critic; stale PASS does not count"
             )
 
         # CRITIC__document.md required
