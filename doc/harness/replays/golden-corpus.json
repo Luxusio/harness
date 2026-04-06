@@ -492,6 +492,228 @@
           "TEAM_SYNTHESIS.md must be refreshed after the degraded team round before close"
         ]
       }
+    },
+    {
+      "id": "cross_surface_team_documentation_review_phase",
+      "kind": "cross_surface",
+      "description": "Context, SESSION_HANDOFF, team-relaunch, and close gate should agree on the documentation-review recovery path.",
+      "task_dir": "doc/harness/tasks/TASK__team-documentation-review-replay",
+      "surfaces": {
+        "context": {
+          "expect": {
+            "next_action_contains": "CRITIC__document.md",
+            "team": {
+              "relaunch_available": true,
+              "relaunch_ready": true,
+              "relaunch_worker": "lead",
+              "relaunch_phase": "documentation_review",
+              "document_critic_pending": true
+            }
+          }
+        },
+        "handoff": {
+          "trigger": "runtime_fail_repeat",
+          "expect": {
+            "exists": true,
+            "trigger": "runtime_fail_repeat",
+            "next_step_contains": "documentation review phase",
+            "files_to_read_first_contains": [
+              "TEAM_PLAN.md",
+              "TEAM_SYNTHESIS.md",
+              "CRITIC__runtime.md",
+              "DOC_SYNC.md",
+              "HANDOFF.md"
+            ],
+            "team_recovery": {
+              "phase": "documentation",
+              "relaunch_available": true,
+              "relaunch_ready": true,
+              "relaunch_worker": "lead",
+              "relaunch_phase": "documentation_review",
+              "relaunch_artifact": "doc/harness/tasks/TASK__team-documentation-review-replay/CRITIC__document.md",
+              "relaunch_prompt_file": "doc/harness/tasks/TASK__team-documentation-review-replay/team/bootstrap/lead.documentation_review.critic-document.prompt.md",
+              "relaunch_run_script": "doc/harness/tasks/TASK__team-documentation-review-replay/team/bootstrap/run-lead-documentation_review.sh",
+              "relaunch_log_file": "doc/harness/tasks/TASK__team-documentation-review-replay/team/bootstrap/logs/lead-documentation_review.json",
+              "documentation_needed": true,
+              "doc_sync_needed": false,
+              "document_critic_needed": true
+            }
+          }
+        },
+        "team_relaunch": {
+          "expect": {
+            "available": true,
+            "ready": true,
+            "worker": "lead",
+            "phase": "documentation_review",
+            "artifact": "doc/harness/tasks/TASK__team-documentation-review-replay/CRITIC__document.md",
+            "prompt_file": "doc/harness/tasks/TASK__team-documentation-review-replay/team/bootstrap/lead.documentation_review.critic-document.prompt.md",
+            "run_script": "doc/harness/tasks/TASK__team-documentation-review-replay/team/bootstrap/run-lead-documentation_review.sh",
+            "log_file": "doc/harness/tasks/TASK__team-documentation-review-replay/team/bootstrap/logs/lead-documentation_review.json",
+            "selection_reason_contains": "critic-document"
+          }
+        },
+        "close_gate": {
+          "expect": {
+            "blocked": true,
+            "required_substrings": [
+              "document_verdict is 'pending' in TASK_STATE.yaml (needs PASS + freshness=current)",
+              "doc changes detected — needs document critic verdict (CRITIC__document.md)"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "cross_surface_team_handoff_refresh_phase",
+      "kind": "cross_surface",
+      "description": "Context, SESSION_HANDOFF, team-relaunch, and close gate should agree when only HANDOFF refresh remains after critic-document.",
+      "task_dir": "doc/harness/tasks/TASK__team-handoff-refresh-replay",
+      "surfaces": {
+        "context": {
+          "expect": {
+            "next_action_contains": "after critic-document",
+            "team": {
+              "handoff_refresh_needed": true,
+              "handoff_refresh_reason": "refresh HANDOFF.md after critic-document",
+              "relaunch_available": true,
+              "relaunch_ready": true,
+              "relaunch_worker": "lead",
+              "relaunch_phase": "handoff_refresh"
+            }
+          }
+        },
+        "handoff": {
+          "trigger": "runtime_fail_repeat",
+          "expect": {
+            "exists": true,
+            "trigger": "runtime_fail_repeat",
+            "next_step_contains": "handoff refresh phase",
+            "files_to_read_first_contains": [
+              "TEAM_PLAN.md",
+              "TEAM_SYNTHESIS.md",
+              "CRITIC__runtime.md",
+              "DOC_SYNC.md",
+              "CRITIC__document.md",
+              "HANDOFF.md"
+            ],
+            "team_recovery": {
+              "phase": "complete",
+              "relaunch_available": true,
+              "relaunch_ready": true,
+              "relaunch_worker": "lead",
+              "relaunch_phase": "handoff_refresh",
+              "relaunch_artifact": "doc/harness/tasks/TASK__team-handoff-refresh-replay/HANDOFF.md",
+              "relaunch_prompt_file": "doc/harness/tasks/TASK__team-handoff-refresh-replay/team/bootstrap/lead.handoff_refresh.developer.prompt.md",
+              "relaunch_run_script": "doc/harness/tasks/TASK__team-handoff-refresh-replay/team/bootstrap/run-lead-handoff_refresh.sh",
+              "relaunch_log_file": "doc/harness/tasks/TASK__team-handoff-refresh-replay/team/bootstrap/logs/lead-handoff_refresh.json",
+              "handoff_refresh_needed": true,
+              "handoff_refresh_reason": "refresh HANDOFF.md after critic-document",
+              "documentation_needed": false,
+              "doc_sync_needed": false,
+              "document_critic_needed": true
+            }
+          }
+        },
+        "team_relaunch": {
+          "expect": {
+            "available": true,
+            "ready": true,
+            "worker": "lead",
+            "phase": "handoff_refresh",
+            "artifact": "doc/harness/tasks/TASK__team-handoff-refresh-replay/HANDOFF.md",
+            "prompt_file": "doc/harness/tasks/TASK__team-handoff-refresh-replay/team/bootstrap/lead.handoff_refresh.developer.prompt.md",
+            "run_script": "doc/harness/tasks/TASK__team-handoff-refresh-replay/team/bootstrap/run-lead-handoff_refresh.sh",
+            "log_file": "doc/harness/tasks/TASK__team-handoff-refresh-replay/team/bootstrap/logs/lead-handoff_refresh.json",
+            "selection_reason_contains": "critic-document"
+          }
+        },
+        "close_gate": {
+          "expect": {
+            "blocked": true,
+            "required_substrings": [
+              "HANDOFF.md is stale for team close — refresh HANDOFF.md after critic-document before close"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "cross_surface_team_degraded_synthesis_refresh",
+      "kind": "cross_surface",
+      "description": "Context, SESSION_HANDOFF, team-relaunch, and close gate should all point back to the synthesis owner after a degraded team round.",
+      "task_dir": "doc/harness/tasks/TASK__team-degraded-refresh-replay",
+      "surfaces": {
+        "context": {
+          "expect": {
+            "next_action_contains": "degraded after synthesis",
+            "team": {
+              "relaunch_available": true,
+              "relaunch_ready": true,
+              "relaunch_worker": "lead",
+              "relaunch_phase": "synthesis",
+              "status": "degraded",
+              "synthesis_refreshed_after_degraded": false
+            }
+          }
+        },
+        "handoff": {
+          "trigger": "runtime_fail_repeat",
+          "expect": {
+            "exists": true,
+            "trigger": "runtime_fail_repeat",
+            "next_step_contains": "synthesis phase",
+            "files_to_read_first_contains": [
+              "TEAM_PLAN.md",
+              "TEAM_SYNTHESIS.md",
+              "CRITIC__runtime.md",
+              "DOC_SYNC.md",
+              "CRITIC__document.md",
+              "HANDOFF.md"
+            ],
+            "team_recovery": {
+              "phase": "synthesis",
+              "relaunch_available": true,
+              "relaunch_ready": true,
+              "relaunch_worker": "lead",
+              "relaunch_phase": "synthesis",
+              "relaunch_artifact": "doc/harness/tasks/TASK__team-degraded-refresh-replay/TEAM_SYNTHESIS.md",
+              "relaunch_prompt_file": "doc/harness/tasks/TASK__team-degraded-refresh-replay/team/bootstrap/lead.synthesis.developer.prompt.md",
+              "relaunch_run_script": "doc/harness/tasks/TASK__team-degraded-refresh-replay/team/bootstrap/run-lead-synthesis.sh",
+              "relaunch_log_file": "doc/harness/tasks/TASK__team-degraded-refresh-replay/team/bootstrap/logs/lead-synthesis.json",
+              "handoff_refresh_needed": false,
+              "documentation_needed": false,
+              "doc_sync_needed": false,
+              "document_critic_needed": true,
+              "pending_artifacts_contains": [
+                "TEAM_SYNTHESIS.md"
+              ]
+            }
+          }
+        },
+        "team_relaunch": {
+          "expect": {
+            "available": true,
+            "ready": true,
+            "worker": "lead",
+            "phase": "synthesis",
+            "artifact": "doc/harness/tasks/TASK__team-degraded-refresh-replay/TEAM_SYNTHESIS.md",
+            "prompt_file": "doc/harness/tasks/TASK__team-degraded-refresh-replay/team/bootstrap/lead.synthesis.developer.prompt.md",
+            "run_script": "doc/harness/tasks/TASK__team-degraded-refresh-replay/team/bootstrap/run-lead-synthesis.sh",
+            "log_file": "doc/harness/tasks/TASK__team-degraded-refresh-replay/team/bootstrap/logs/lead-synthesis.json",
+            "selection_reason_contains": "degraded team round"
+          }
+        },
+        "close_gate": {
+          "expect": {
+            "blocked": true,
+            "required_substrings": [
+              "team_status must resolve to 'complete' or 'fallback' before close, got 'degraded'",
+              "TEAM_SYNTHESIS.md must be refreshed after the degraded team round before close"
+            ]
+          }
+        }
+      }
     }
   ]
 }

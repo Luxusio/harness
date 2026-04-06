@@ -413,6 +413,48 @@ class TestTeamHandoffEscalation(unittest.TestCase):
         self.assertIn("reviewer", handoff["next_step"])
         self.assertIn("lead", handoff["next_step"])
 
+    def test_team_handoff_degraded_round_returns_to_synthesis_phase(self):
+        task_dir = self._make_team_task("TASK__team_handoff_degraded")
+        self._enable_runtime_gate(task_dir, verdict="PASS")
+        self._write_documentation_owner_plan(task_dir)
+        self._write_worker_summary(task_dir, "worker-a", "app/main.py")
+        self._write_worker_summary(task_dir, "reviewer", "docs/architecture.md")
+        Path(task_dir, "TEAM_SYNTHESIS.md").write_text(
+            "# Team Synthesis\n"
+            "## Integrated Result\n- merged app and docs slices\n\n"
+            "## Cross-Checks\n- ownership respected\n\n"
+            "## Verification Summary\n- pytest tests/test_example.py\n\n"
+            "## Residual Risks\n- none\n",
+            encoding="utf-8",
+        )
+        self._write_runtime_pass(task_dir)
+        self._write_doc_sync(task_dir, meaningful=True)
+        self._write_document_pass(task_dir)
+
+        build_team_bootstrap(task_dir, write_files=True)
+        build_team_dispatch(task_dir, write_files=True)
+
+        os.utime(Path(task_dir, "TEAM_PLAN.md"), (10, 10))
+        os.utime(Path(task_dir, "team", "worker-a.md"), (20, 20))
+        os.utime(Path(task_dir, "team", "worker-reviewer.md"), (30, 30))
+        os.utime(Path(task_dir, "TEAM_SYNTHESIS.md"), (40, 40))
+        os.utime(Path(task_dir, "CRITIC__runtime.md"), (50, 50))
+        os.utime(Path(task_dir, "DOC_SYNC.md"), (60, 60))
+        os.utime(Path(task_dir, "CRITIC__document.md"), (70, 70))
+        os.utime(Path(task_dir, "HANDOFF.md"), (80, 80))
+        self._set_state_field(task_dir, "team_status", "degraded")
+        os.utime(Path(task_dir, "TASK_STATE.yaml"), (90, 90))
+
+        handoff = generate_handoff(task_dir, "runtime_fail_repeat")
+
+        self.assertIsNotNone(handoff)
+        team = handoff["team_recovery"]
+        self.assertEqual(team["phase"], "synthesis")
+        self.assertIn("TEAM_SYNTHESIS.md", team["pending_artifacts"])
+        self.assertIn("TEAM_SYNTHESIS.md", handoff["files_to_read_first"])
+        self.assertIn("lead should refresh TEAM_SYNTHESIS.md", handoff["next_step"])
+        self.assertIn("TEAM_SYNTHESIS.md", handoff["next_step"])
+
     def test_preview_handoff_does_not_write_session_file(self):
         task_dir = self._make_team_task("TASK__handoff_preview")
         self._write_complete_team_plan(task_dir)

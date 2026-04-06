@@ -1136,7 +1136,7 @@ def build_parser():
 
     p_replay = subparsers.add_parser("replay", help="run golden behavior replay corpus")
     p_replay.add_argument("--corpus", metavar="FILE", help="optional JSON corpus path (defaults to doc/harness/replays/golden-corpus.json)")
-    p_replay.add_argument("--kind", action="append", choices=("routing", "close_gate", "prompt_notes", "next_step", "handoff", "context", "team_launch", "team_relaunch"), help="filter by case kind (repeatable)")
+    p_replay.add_argument("--kind", action="append", choices=("routing", "close_gate", "prompt_notes", "next_step", "handoff", "context", "team_launch", "team_relaunch", "cross_surface"), help="filter by case kind (repeatable)")
     p_replay.add_argument("--case", action="append", dest="case_ids", metavar="ID", help="filter by case id (repeatable or comma-separated)")
     p_replay.add_argument("--json", action="store_true", help="output machine-readable JSON")
     p_replay.set_defaults(func=cmd_replay)
