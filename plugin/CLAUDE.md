@@ -21,6 +21,8 @@ For every tasked request, use:
 - `mcp__plugin_harness_harness__task_start`
 - `mcp__plugin_harness_harness__task_context`
 
+If a worker or critic ran out-of-band and the stop hook missed provenance, repair the durable count with `mcp__plugin_harness_harness__record_agent_run` before the next close attempt. `task_context` and `task_close` also reconcile missing zero-count provenance from durable protected artifacts when possible.
+
 Treat `task_context` as the **canonical task pack** for:
 
 - `risk_level`

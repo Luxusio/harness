@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import os
 
-from _lib import emit_compact_context, sync_team_status
+from _lib import emit_compact_context, reconcile_agent_run_counts, sync_team_status
 from failure_memory import write_failure_case_snapshot
 
 
@@ -41,8 +41,17 @@ def get_task_context(
     except Exception:
         pass
 
-    return emit_compact_context(
+    reconciliation = {"reconciled": [], "skipped": []}
+    try:
+        reconciliation = reconcile_agent_run_counts(task_dir, apply=True)
+    except Exception:
+        reconciliation = {"reconciled": [], "skipped": []}
+
+    context = emit_compact_context(
         task_dir,
         raw_agent_name=agent_name,
         explicit_worker=team_worker,
     )
+    if reconciliation.get("reconciled"):
+        context["agent_run_reconciliation"] = reconciliation
+    return context

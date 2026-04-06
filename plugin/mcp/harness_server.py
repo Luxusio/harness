@@ -414,6 +414,27 @@ def handle_task_update_paths(args: dict[str, Any]) -> dict[str, Any]:
     return _result(payload)
 
 
+def handle_record_agent_run(args: dict[str, Any]) -> dict[str, Any]:
+    task_dir = _require_str(args, "task_dir")
+    agent_name = _require_str(args, "agent_name")
+    count = args.get("count", 1)
+    if not isinstance(count, int) or count < 1:
+        raise ValueError("count must be a positive integer")
+    observed_at = _optional_str(args, "observed_at")
+    argv = ["record-agent-run", "--task-dir", task_dir, "--agent-name", agent_name, "--count", str(count), "--json"]
+    if observed_at:
+        argv.extend(["--observed-at", observed_at])
+    response = _run_script("hctl.py", argv)
+    try:
+        recorded = json.loads(response["stdout"])
+    except json.JSONDecodeError:
+        recorded = None
+    payload = {"task_dir": task_dir, "agent_name": agent_name, "record_agent_run": recorded, "record": response}
+    if recorded is None or not response["ok"]:
+        return _tool_error("record_agent_run failed", data=payload)
+    return _result(payload)
+
+
 def handle_task_verify(args: dict[str, Any]) -> dict[str, Any]:
     task_dir = _require_str(args, "task_dir")
     response = _run_script("hctl.py", ["verify", "--task-dir", task_dir])
@@ -462,10 +483,17 @@ def _artifact_response(
         env=env,
     )
     task_dir = args[args.index("--task-dir") + 1] if "--task-dir" in args else None
+    artifact_write = None
+    if response["ok"]:
+        try:
+            artifact_write = json.loads(response["stdout"])
+        except json.JSONDecodeError:
+            artifact_write = None
     payload = {
         "artifact": artifact,
         "subcommand": subcommand,
         "task_dir": task_dir,
+        "artifact_write": artifact_write,
         "write": response,
     }
     if not response["ok"]:
@@ -779,6 +807,23 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
         "handler": handle_task_update_paths,
+    },
+    {
+        "name": "record_agent_run",
+        "title": "Explicitly record an agent run",
+        "description": "Persist a worker/critic run into TASK_STATE.yaml when hook-based provenance delivery is unavailable or needs manual recovery.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "agent_name": {"type": "string", "description": "Canonical agent name: developer|writer|critic-plan|critic-runtime|critic-document"},
+                "count": {"type": "integer", "minimum": 1, "description": "Optional increment amount (default: 1)"},
+                "observed_at": {"type": "string", "description": "Optional ISO timestamp to store as the latest observed run time"}
+            },
+            "required": ["task_dir", "agent_name"],
+            "additionalProperties": False,
+        },
+        "handler": handle_record_agent_run,
     },
     {
         "name": "task_verify",

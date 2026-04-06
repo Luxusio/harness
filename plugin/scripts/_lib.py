@@ -4809,6 +4809,110 @@ def increment_agent_run(task_dir, agent_name):
         return False
 
 
+def record_agent_run(task_dir, agent_name, *, observed_at=None, count_increment=1):
+    """Record a durable agent run event in TASK_STATE.yaml.
+
+    This is the explicit control-plane fallback when hook-based provenance
+    tracking is unavailable. ``count_increment`` defaults to ``1`` and may be
+    larger when importing an external execution log. ``observed_at`` overrides
+    the ``*_last`` timestamp when the caller already knows when the run
+    completed (for example, when reconciling from an artifact's meta sidecar).
+    """
+    try:
+        steps = int(count_increment)
+    except (TypeError, ValueError):
+        steps = 1
+    if steps < 1:
+        steps = 1
+
+    ok = True
+    for _ in range(steps):
+        ok = increment_agent_run(task_dir, agent_name) and ok
+    if ok and observed_at:
+        ok = set_task_state_field(task_dir, _agent_field_prefix(agent_name) + "_last", observed_at) and ok
+    return ok
+
+
+_AGENT_RUN_RECONCILIATION_ARTIFACTS = {
+    "developer": {"artifact": "HANDOFF.md", "meta": "HANDOFF.meta.json", "roles": {"developer"}},
+    "writer": {"artifact": "DOC_SYNC.md", "meta": "DOC_SYNC.meta.json", "roles": {"writer"}},
+    "critic-plan": {"artifact": "CRITIC__plan.md", "meta": "CRITIC__plan.meta.json", "roles": {"critic-plan"}},
+    "critic-runtime": {"artifact": "CRITIC__runtime.md", "meta": "CRITIC__runtime.meta.json", "roles": {"critic-runtime"}},
+    "critic-document": {"artifact": "CRITIC__document.md", "meta": "CRITIC__document.meta.json", "roles": {"critic-document"}},
+}
+
+
+def _artifact_observed_at_iso(task_dir, artifact_name, meta_name, allowed_roles):
+    artifact_path = os.path.join(task_dir, artifact_name)
+    if not os.path.isfile(artifact_path):
+        return None, "artifact_missing", ""
+
+    meta_path = os.path.join(task_dir, meta_name)
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as fh:
+                meta = json.load(fh)
+            author_role = str(meta.get("author_role") or "").strip()
+            written_at = str(meta.get("written_at") or "").strip()
+            if author_role and allowed_roles and author_role not in allowed_roles:
+                return None, "meta_role_mismatch", author_role
+            if written_at:
+                return written_at, "meta_written_at", author_role
+            if author_role:
+                return None, "meta_missing_written_at", author_role
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+
+    try:
+        observed_at = datetime.fromtimestamp(os.path.getmtime(artifact_path), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except OSError:
+        return None, "artifact_stat_error", ""
+    return observed_at, "artifact_mtime", ""
+
+
+def reconcile_agent_run_counts(task_dir, *, apply=True):
+    """Backfill missing agent run counters from durable task artifacts.
+
+    This keeps provenance event-driven while still providing a safe repair path
+    when hook delivery is missed. Reconciliation is intentionally conservative:
+    it only repairs agents whose count is currently ``0`` and only when a
+    durable role-owned artifact exists. Existing non-zero counts are preserved.
+    """
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    summary = {"task_dir": task_dir, "reconciled": [], "skipped": []}
+    if not os.path.isfile(state_file):
+        summary["skipped"].append({"reason": "missing_task_state"})
+        return summary
+
+    for agent_name, spec in _AGENT_RUN_RECONCILIATION_ARTIFACTS.items():
+        current_count = get_agent_run_count(task_dir, agent_name)
+        artifact_name = spec["artifact"]
+        if current_count > 0:
+            summary["skipped"].append({"agent": agent_name, "artifact": artifact_name, "reason": "already_recorded", "count": current_count})
+            continue
+
+        observed_at, source, role_hint = _artifact_observed_at_iso(task_dir, artifact_name, spec["meta"], set(spec.get("roles") or []))
+        if not observed_at:
+            summary["skipped"].append({"agent": agent_name, "artifact": artifact_name, "reason": source, "role_hint": role_hint})
+            continue
+
+        applied = False
+        if apply:
+            applied = record_agent_run(task_dir, agent_name, observed_at=observed_at, count_increment=1)
+
+        summary["reconciled"].append({
+            "agent": agent_name,
+            "artifact": artifact_name,
+            "observed_at": observed_at,
+            "source": source,
+            "count_before": current_count,
+            "count_after": get_agent_run_count(task_dir, agent_name) if applied else max(current_count, 1),
+            "applied": bool(applied),
+        })
+
+    return summary
+
+
 # ---------------------------------------------------------------------------
 # WS-4: Verdict / doc critic / HANDOFF helpers
 # ---------------------------------------------------------------------------

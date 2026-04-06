@@ -9,7 +9,7 @@ from _lib import (read_hook_input, hook_json_get, json_field, json_array, yaml_f
                   needs_document_critic, is_handoff_stub, team_artifact_status,
                   parse_checks_close_gate, set_task_state_field,
                   verdict_freshness, format_verdict_with_freshness,
-                  should_set_strict_close_gate)
+                  should_set_strict_close_gate, reconcile_agent_run_counts)
 
 # TaskCompleted hook — completion firewall.
 # BLOCKING: exit 2 rejects completion when verdicts are missing.
@@ -636,6 +636,22 @@ def main():
                     "WARN: touched_paths is empty and git diff returned no files"
                     " — invalidation precision will be reduced"
                 )
+
+    # --- Reconcile missed provenance events from durable artifacts ---
+    try:
+        reconciliation = reconcile_agent_run_counts(target, apply=True)
+    except Exception as exc:
+        reconciliation = {"reconciled": [], "skipped": [{"reason": f"reconciliation_error: {exc}"}]}
+
+    for item in reconciliation.get("reconciled", []):
+        if item.get("applied"):
+            print(
+                "RECONCILED: agent provenance backfilled from {artifact} -> {agent} @ {observed_at}".format(
+                    artifact=item.get("artifact", "artifact"),
+                    agent=item.get("agent", "unknown"),
+                    observed_at=item.get("observed_at", "unknown"),
+                )
+            )
 
     # --- Run completion checks (pure function) ---
     failures = compute_completion_failures(target)
