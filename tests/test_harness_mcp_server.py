@@ -61,6 +61,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             "team_launch",
             "team_relaunch",
             "task_update_from_git_diff",
+            "record_agent_run",
             "task_verify",
             "task_close",
             "verify_run",
@@ -198,6 +199,46 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(captured["env"].get("HARNESS_SKIP_PREWRITE"), "1")
             self.assertEqual(captured["env"].get("HARNESS_TEAM_WORKER"), "reviewer")
             self.assertEqual(captured["env"].get("CLAUDE_AGENT_NAME"), "harness:writer@reviewer")
+
+    def test_record_agent_run_forwards_json_cli_call(self):
+        captured = {}
+
+        def fake_run_script(script_name, argv, env=None):
+            captured["script_name"] = script_name
+            captured["argv"] = list(argv)
+            return {
+                "ok": True,
+                "stdout": json.dumps({
+                    "ok": True,
+                    "task_dir": "/tmp/TASK__mcp",
+                    "agent_name": "developer",
+                    "count_before": 0,
+                    "count_after": 1,
+                }),
+                "stderr": "",
+                "exit_code": 0,
+            }
+
+        original = harness_server._run_script
+        harness_server._run_script = fake_run_script
+        try:
+            result = harness_server.call_tool(
+                "record_agent_run",
+                {"task_dir": "/tmp/TASK__mcp", "agent_name": "developer", "count": 1},
+            )
+        finally:
+            harness_server._run_script = original
+
+        self.assertNotIn("isError", result)
+        self.assertEqual(captured["script_name"], "hctl.py")
+        self.assertEqual(captured["argv"][:8], [
+            "record-agent-run",
+            "--task-dir", "/tmp/TASK__mcp",
+            "--agent-name", "developer",
+            "--count", "1",
+            "--json",
+        ])
+        self.assertEqual(result["structuredContent"]["record_agent_run"]["count_after"], 1)
 
     def test_team_bootstrap_forwards_write_files_flag(self):
         captured = {}

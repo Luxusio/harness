@@ -33,6 +33,8 @@ from _lib import (
     extract_roots,
     set_task_state_field,
     merge_task_path_fields,
+    get_agent_run_count,
+    record_agent_run,
     compile_routing,
     emit_compact_context,
     ensure_team_artifacts,
@@ -940,6 +942,45 @@ def cmd_update(args):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: record-agent-run
+# ---------------------------------------------------------------------------
+
+
+def cmd_record_agent_run(args):
+    """Explicitly record an agent run in TASK_STATE.yaml."""
+    task_dir = _require_task_dir(args)
+    agent_name = (getattr(args, "agent_name", "") or "").strip()
+    if not agent_name:
+        print("ERROR: --agent-name is required", file=sys.stderr)
+        return 1
+
+    observed_at = (getattr(args, "observed_at", None) or "").strip() or None
+    count_increment = max(1, int(getattr(args, "count", 1) or 1))
+    before = get_agent_run_count(task_dir, agent_name)
+    ok = record_agent_run(task_dir, agent_name, observed_at=observed_at, count_increment=count_increment)
+    after = get_agent_run_count(task_dir, agent_name)
+    payload = {
+        "task_dir": task_dir,
+        "agent_name": agent_name,
+        "count_before": before,
+        "count_after": after,
+        "count_increment": count_increment,
+        "observed_at": observed_at,
+        "ok": bool(ok),
+    }
+    if getattr(args, "json", False):
+        print(json.dumps(payload, indent=2))
+    else:
+        if ok:
+            print(f"Recorded agent run: {agent_name} count {before} -> {after}")
+            if observed_at:
+                print(f"  observed_at: {observed_at}")
+        else:
+            print(f"ERROR: could not record agent run for {agent_name}", file=sys.stderr)
+    return 0 if ok else 1
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: verify
 # ---------------------------------------------------------------------------
 
@@ -1125,6 +1166,14 @@ def build_parser():
     p_upd.add_argument("--root-touched", action="append", default=[], metavar="ROOT", help="manually add a touched root (repeatable)")
     p_upd.add_argument("--verification-target", action="append", default=[], metavar="PATH", help="manually add a runtime verification target (repeatable)")
     p_upd.set_defaults(func=cmd_update)
+
+    p_record = subparsers.add_parser("record-agent-run", help="explicitly record a worker/critic run")
+    p_record.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_record.add_argument("--agent-name", required=True, metavar="NAME", help="canonical agent name (developer|writer|critic-plan|critic-runtime|critic-document)")
+    p_record.add_argument("--count", type=int, default=1, metavar="N", help="increment amount (default: 1)")
+    p_record.add_argument("--observed-at", metavar="ISO", help="optional observed-at timestamp to store as *_last")
+    p_record.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p_record.set_defaults(func=cmd_record_agent_run)
 
     p_ver = subparsers.add_parser("verify", help="run verification suite")
     p_ver.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")

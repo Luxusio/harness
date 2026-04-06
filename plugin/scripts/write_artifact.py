@@ -13,10 +13,12 @@ Subcommands:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import sys
+import tempfile
 from datetime import datetime, timezone
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -45,13 +47,37 @@ def task_id_from_dir(task_dir):
     return os.path.basename(os.path.abspath(task_dir))
 
 
-def write_file(path, content):
+def _atomic_write_text(path, content):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(content)
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp.", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
-def write_meta(path, artifact_name, task_id, author_role, verdict=None, team_context=None):
+def _read_text(path):
+    with open(path, "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _sha256_text(content):
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def write_file(path, content):
+    _atomic_write_text(path, content)
+
+
+def build_meta(artifact_name, task_id, author_role, verdict=None, team_context=None):
     meta = {
         "artifact": artifact_name,
         "task_id": task_id,
@@ -84,9 +110,29 @@ def write_meta(path, artifact_name, task_id, author_role, verdict=None, team_con
             meta["team_owner_enforced"] = True
         if team_context.get("current_worker_inferred"):
             meta["team_worker_inferred"] = True
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(meta, fh, indent=2)
-        fh.write("\n")
+    return meta
+
+
+def write_meta(path, artifact_name, task_id, author_role, verdict=None, team_context=None):
+    meta = build_meta(artifact_name, task_id, author_role, verdict=verdict, team_context=team_context)
+    _atomic_write_text(path, json.dumps(meta, indent=2) + "\n")
+    return meta
+
+
+def finalize_write_result(artifact_path, meta_path, *, state_fields_updated=None, checks_updated=None):
+    artifact_content = _read_text(artifact_path)
+    meta_content = _read_text(meta_path)
+    return {
+        "artifact_path": artifact_path,
+        "meta_path": meta_path,
+        "artifact_sha256": _sha256_text(artifact_content),
+        "meta_sha256": _sha256_text(meta_content),
+        "artifact_bytes": len(artifact_content.encode("utf-8")),
+        "meta_bytes": len(meta_content.encode("utf-8")),
+        "state_fields_updated": list(state_fields_updated or []),
+        "checks_updated": list(checks_updated or []),
+        "readback_ok": True,
+    }
 
 
 def update_task_state_field(task_dir, field, value):
@@ -111,8 +157,7 @@ def update_task_state_field(task_dir, field, value):
     else:
         content = content.rstrip("\n") + f"\nupdated: \"{ts}\"\n"
 
-    with open(state_file, "w", encoding="utf-8") as fh:
-        fh.write(content)
+    _atomic_write_text(state_file, content)
 
 
 def increment_task_state_int(task_dir, field):
@@ -143,8 +188,7 @@ def increment_task_state_int(task_dir, field):
     else:
         content = content.rstrip("\n") + f"\nupdated: \"{ts}\"\n"
 
-    with open(state_file, "w", encoding="utf-8") as fh:
-        fh.write(content)
+    _atomic_write_text(state_file, content)
 
 
 def parse_checks_arg(checks_str):
@@ -346,8 +390,7 @@ def update_checks_yaml(task_dir, checks_dict):
         pattern = r"(  - id: " + re.escape(cid) + r".*?)(?=\n  - id:|\Z)"
         content = re.sub(pattern, replace_block, content, flags=re.DOTALL)
 
-    with open(checks_file, "w", encoding="utf-8") as fh:
-        fh.write(content)
+    _atomic_write_text(checks_file, content)
 
 
 # ---------------------------------------------------------------------------
@@ -391,20 +434,23 @@ def cmd_critic_runtime(args):
     meta_path = os.path.join(task_dir, "CRITIC__runtime.meta.json")
 
     write_file(artifact_path, md_content)
-    write_meta(meta_path, artifact_name, task_id, "critic-runtime", verdict=args.verdict, team_context=team_context)
+    meta = write_meta(meta_path, artifact_name, task_id, "critic-runtime", verdict=args.verdict, team_context=team_context)
 
-    # Update TASK_STATE.yaml
+    state_fields_updated = ["runtime_verdict", "runtime_verdict_freshness"]
     update_task_state_field(task_dir, "runtime_verdict", args.verdict)
     update_task_state_field(task_dir, "runtime_verdict_freshness", "current")
     if args.verdict == "FAIL":
         increment_task_state_int(task_dir, "runtime_verdict_fail_count")
+        state_fields_updated.append("runtime_verdict_fail_count")
     if args.verdict == "BLOCKED_ENV":
         update_task_state_field(task_dir, "status", "blocked_env")
+        state_fields_updated.append("status")
 
-    # Update CHECKS.yaml
     update_checks_yaml(task_dir, checks_dict)
 
-    print(f"wrote {artifact_name} + CRITIC__runtime.meta.json")
+    result = finalize_write_result(artifact_path, meta_path, state_fields_updated=state_fields_updated, checks_updated=sorted(checks_dict))
+    result.update({"artifact": artifact_name, "task_id": task_id, "verdict": args.verdict, "meta_written_at": meta.get("written_at")})
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 
@@ -439,15 +485,14 @@ def cmd_critic_plan(args):
     meta_path = os.path.join(task_dir, "CRITIC__plan.meta.json")
 
     write_file(artifact_path, md_content)
-    write_meta(meta_path, artifact_name, task_id, "critic-plan", verdict=args.verdict, team_context=team_context)
+    meta = write_meta(meta_path, artifact_name, task_id, "critic-plan", verdict=args.verdict, team_context=team_context)
 
-    # Update TASK_STATE.yaml
     update_task_state_field(task_dir, "plan_verdict", args.verdict)
-
-    # Update CHECKS.yaml
     update_checks_yaml(task_dir, checks_dict)
 
-    print(f"wrote {artifact_name} + CRITIC__plan.meta.json")
+    result = finalize_write_result(artifact_path, meta_path, state_fields_updated=["plan_verdict"], checks_updated=sorted(checks_dict))
+    result.update({"artifact": artifact_name, "task_id": task_id, "verdict": args.verdict, "meta_written_at": meta.get("written_at")})
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 
@@ -482,16 +527,15 @@ def cmd_critic_document(args):
     meta_path = os.path.join(task_dir, "CRITIC__document.meta.json")
 
     write_file(artifact_path, md_content)
-    write_meta(meta_path, artifact_name, task_id, "critic-document", verdict=args.verdict, team_context=team_context)
+    meta = write_meta(meta_path, artifact_name, task_id, "critic-document", verdict=args.verdict, team_context=team_context)
 
-    # Update TASK_STATE.yaml
     update_task_state_field(task_dir, "document_verdict", args.verdict)
     update_task_state_field(task_dir, "document_verdict_freshness", "current")
-
-    # Update CHECKS.yaml
     update_checks_yaml(task_dir, checks_dict)
 
-    print(f"wrote {artifact_name} + CRITIC__document.meta.json")
+    result = finalize_write_result(artifact_path, meta_path, state_fields_updated=["document_verdict", "document_verdict_freshness"], checks_updated=sorted(checks_dict))
+    result.update({"artifact": artifact_name, "task_id": task_id, "verdict": args.verdict, "meta_written_at": meta.get("written_at")})
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 
@@ -535,9 +579,11 @@ def cmd_handoff(args):
     meta_path = os.path.join(task_dir, "HANDOFF.meta.json")
 
     write_file(artifact_path, md_content)
-    write_meta(meta_path, artifact_name, task_id, "developer", team_context=team_context)
+    meta = write_meta(meta_path, artifact_name, task_id, "developer", team_context=team_context)
 
-    print(f"wrote {artifact_name} + HANDOFF.meta.json")
+    result = finalize_write_result(artifact_path, meta_path, state_fields_updated=[], checks_updated=[])
+    result.update({"artifact": artifact_name, "task_id": task_id, "meta_written_at": meta.get("written_at")})
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 
@@ -586,9 +632,11 @@ def cmd_doc_sync(args):
     meta_path = os.path.join(task_dir, "DOC_SYNC.meta.json")
 
     write_file(artifact_path, md_content)
-    write_meta(meta_path, artifact_name, task_id, "writer", team_context=team_context)
+    meta = write_meta(meta_path, artifact_name, task_id, "writer", team_context=team_context)
 
-    print(f"wrote {artifact_name} + DOC_SYNC.meta.json")
+    result = finalize_write_result(artifact_path, meta_path, state_fields_updated=[], checks_updated=[])
+    result.update({"artifact": artifact_name, "task_id": task_id, "meta_written_at": meta.get("written_at")})
+    print(json.dumps(result, ensure_ascii=False))
     return 0
 
 

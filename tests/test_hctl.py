@@ -112,8 +112,39 @@ class TestHctlHelp(unittest.TestCase):
 
     def test_subcommands_listed(self):
         code, out, _ = _run_hctl("--help")
-        for sub in ("start", "context", "team-bootstrap", "team-dispatch", "team-launch", "team-relaunch", "history", "top-failures", "diff-case", "update", "verify", "close", "artifact"):
+        for sub in ("start", "context", "team-bootstrap", "team-dispatch", "team-launch", "team-relaunch", "history", "top-failures", "diff-case", "update", "record-agent-run", "verify", "close", "artifact"):
             self.assertIn(sub, out, f"subcommand '{sub}' missing from --help")
+
+
+class TestHctlRecordAgentRun(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_record_agent_run_updates_state_and_returns_json(self):
+        task_dir = _make_task(self.tmp.name, "TASK__record_agent_run", extra_fields={
+            "agent_run_developer_count": "0",
+            "agent_run_developer_last": "null",
+        })
+        code, out, err = _run_hctl(
+            "record-agent-run",
+            "--task-dir", task_dir,
+            "--agent-name", "developer",
+            "--observed-at", "2026-02-03T04:05:06Z",
+            "--json",
+        )
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["count_before"], 0)
+        self.assertEqual(payload["count_after"], 1)
+        state = os.path.join(task_dir, "TASK_STATE.yaml")
+        self.assertEqual(_yaml_field(state, "agent_run_developer_count"), "1")
+        self.assertEqual(_yaml_field(state, "agent_run_developer_last").strip('"'), "2026-02-03T04:05:06Z")
+
 
 
 # ---------------------------------------------------------------------------

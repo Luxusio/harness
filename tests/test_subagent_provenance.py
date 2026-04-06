@@ -11,7 +11,9 @@ Covers:
 Run with: python -m unittest discover -s tests -p 'test_*.py'
 """
 
+import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -19,13 +21,28 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "plugin", "scripts"))
 os.environ["HARNESS_SKIP_STDIN"] = "1"
 
-from _lib import increment_agent_run, get_agent_run_count, yaml_field
+from _lib import increment_agent_run, get_agent_run_count, reconcile_agent_run_counts, yaml_field
 from task_completed_gate import compute_completion_failures
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+HCTL = os.path.join(os.path.dirname(__file__), "..", "plugin", "scripts", "hctl.py")
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+
+def _run_hctl(*args):
+    result = subprocess.run(
+        [sys.executable, HCTL] + list(args),
+        capture_output=True,
+        text=True,
+        cwd=REPO_ROOT,
+        env=os.environ.copy(),
+    )
+    return result.returncode, result.stdout, result.stderr
+
 
 def _write(path, content):
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -146,6 +163,44 @@ class TestAgentRunCounting(unittest.TestCase):
             increment_agent_run(self.task_dir, agent)
             count = get_agent_run_count(self.task_dir, agent)
             self.assertEqual(count, 1, f"count for {agent} must be 1 after increment")
+
+
+class TestAgentRunReconciliation(unittest.TestCase):
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.task_dir = os.path.join(self.tmp.name, "TASK__reconcile")
+        os.makedirs(self.task_dir)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_reconcile_backfills_zero_counts_from_artifacts(self):
+        _make_state(self.task_dir)
+        _make_passing_artifacts(self.task_dir)
+
+        summary = reconcile_agent_run_counts(self.task_dir, apply=True)
+        agents = {item["agent"] for item in summary["reconciled"] if item.get("applied")}
+        self.assertTrue({"developer", "writer", "critic-plan", "critic-runtime"}.issubset(agents))
+        self.assertEqual(get_agent_run_count(self.task_dir, "developer"), 1)
+        self.assertEqual(get_agent_run_count(self.task_dir, "writer"), 1)
+        self.assertEqual(get_agent_run_count(self.task_dir, "critic-plan"), 1)
+        self.assertEqual(get_agent_run_count(self.task_dir, "critic-runtime"), 1)
+
+    def test_task_context_reconciles_before_read(self):
+        _make_state(self.task_dir)
+        _make_passing_artifacts(self.task_dir)
+
+        code, out, err = _run_hctl("context", "--task-dir", self.task_dir, "--json")
+        self.assertEqual(code, 0, err)
+        payload = json.loads(out)
+        self.assertIn("agent_run_reconciliation", payload)
+        self.assertTrue(payload["agent_run_reconciliation"]["reconciled"])
+        self.assertEqual(get_agent_run_count(self.task_dir, "developer"), 1)
+        self.assertEqual(get_agent_run_count(self.task_dir, "writer"), 1)
+        self.assertEqual(get_agent_run_count(self.task_dir, "critic-plan"), 1)
+        self.assertEqual(get_agent_run_count(self.task_dir, "critic-runtime"), 1)
+
 
 
 # ---------------------------------------------------------------------------

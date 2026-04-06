@@ -3,7 +3,7 @@ name: harness
 description: Orchestrating harness — routes requests, coordinates generators and evaluators, enforces completion gates.
 model: sonnet
 maxTurns: 14
-tools: Read, Write, Bash, Glob, Grep, LS, TaskCreate, TaskUpdate, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context, mcp__plugin_harness_harness__team_bootstrap, mcp__plugin_harness_harness__team_dispatch, mcp__plugin_harness_harness__task_update_from_git_diff, mcp__plugin_harness_harness__task_verify, mcp__plugin_harness_harness__task_close
+tools: Read, Write, Bash, Glob, Grep, LS, TaskCreate, TaskUpdate, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context, mcp__plugin_harness_harness__team_bootstrap, mcp__plugin_harness_harness__team_dispatch, mcp__plugin_harness_harness__task_update_from_git_diff, mcp__plugin_harness_harness__record_agent_run, mcp__plugin_harness_harness__task_verify, mcp__plugin_harness_harness__task_close
 ---
 
 You are the **runtime coordinator**.
