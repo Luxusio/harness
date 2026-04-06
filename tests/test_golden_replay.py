@@ -13,6 +13,8 @@ import textwrap
 import unittest
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_DIR = REPO_ROOT / "plugin" / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -69,6 +71,35 @@ def _write_team_state(task_dir: Path, *, provider: str = "omc", extra: str = "")
         ).strip()
         + "\n",
     )
+
+
+
+def _write_team_state_fields(task_dir: Path, *, provider: str = "omc", **overrides: object) -> None:
+    payload: dict[str, object] = {
+        "task_id": task_dir.name,
+        "status": "plan_passed",
+        "lane": "build",
+        "plan_verdict": "PASS",
+        "runtime_verdict": "pending",
+        "runtime_verdict_freshness": "current",
+        "document_verdict": "pending",
+        "document_verdict_freshness": "current",
+        "doc_changes_detected": True,
+        "execution_mode": "sprinted",
+        "orchestration_mode": "team",
+        "routing_compiled": True,
+        "routing_source": "hctl",
+        "team_provider": provider,
+        "team_status": "planned",
+        "team_plan_required": True,
+        "team_synthesis_required": True,
+        "fallback_used": "none",
+        "mutates_repo": True,
+        "roots_touched": ["app", "docs", "tests"],
+        "touched_paths": ["app/main.ts", "docs/architecture.md", "tests/test_example.py"],
+    }
+    payload.update(overrides)
+    _write(task_dir / "TASK_STATE.yaml", yaml.safe_dump(payload, sort_keys=False))
 
 
 def _write_team_plan(task_dir: Path) -> None:
@@ -129,6 +160,33 @@ def _write_worker_summary(task_dir: Path, worker_name: str, handled_path: str) -
         ).strip()
         + "\n",
     )
+
+
+def _write_non_stub_handoff(task_dir: Path) -> None:
+    _write(
+        task_dir / "HANDOFF.md",
+        textwrap.dedent(
+            """
+            # Handoff
+
+            ## Current state
+            - integrated team result is ready for the next recovery phase
+
+            ## Verification
+            - pytest tests/test_example.py
+
+            ## Next steps
+            - follow the surfaced recovery command
+            """
+        ).strip()
+        + "\n",
+    )
+
+
+def _touch_many(task_dir: Path, mapping: dict[str, int], *, base_ts: int = 1704067200) -> None:
+    for relpath, offset in mapping.items():
+        target = task_dir / relpath
+        os.utime(target, (base_ts + int(offset), base_ts + int(offset)))
 
 
 class TestGoldenReplayPackagedCorpus(unittest.TestCase):
@@ -664,6 +722,454 @@ class TestGoldenReplayCaseKinds(unittest.TestCase):
                         "worker": "lead",
                         "phase": "synthesis",
                         "selection_reason_contains": "TEAM_SYNTHESIS",
+                    },
+                }
+            ],
+        }
+        corpus_path = repo / "corpus.json"
+        corpus_path.write_text(json.dumps(corpus, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        report = execute_replay(corpus_path=str(corpus_path), repo_root=str(repo))
+        self.assertEqual(report["summary"]["failed"], 0, report)
+
+
+    def test_context_case_routes_documentation_review_and_handoff_refresh(self):
+        repo = self._make_repo()
+
+        def _write_ready_team_task(task_dir: Path, *, team_status: str, document_verdict: str, include_document_critic: bool) -> None:
+            _write_team_state_fields(
+                task_dir,
+                provider="omc",
+                team_status=team_status,
+                document_verdict=document_verdict,
+                runtime_verdict="PASS",
+                runtime_verdict_freshness="current",
+                document_verdict_freshness="current",
+            )
+            _write(task_dir / "REQUEST.md", "Implement app, docs, and tests.\n")
+            _write(task_dir / "PLAN.md", "# Plan\n")
+            _write(task_dir / "CRITIC__plan.md", "verdict: PASS\nsummary: plan approved\n")
+            _write_team_plan(task_dir)
+            _write_worker_summary(task_dir, "lead", "tests/test_example.py")
+            _write_worker_summary(task_dir, "worker-a", "app/main.ts")
+            _write_worker_summary(task_dir, "reviewer", "docs/architecture.md")
+            _write(
+                task_dir / "TEAM_SYNTHESIS.md",
+                textwrap.dedent(
+                    """
+                    # Team Synthesis
+                    ## Integrated Result
+                    - merged slices
+
+                    ## Cross-Checks
+                    - ownership respected
+
+                    ## Verification Summary
+                    - pytest tests/test_example.py
+
+                    ## Residual Risks
+                    - none
+                    """
+                ).strip()
+                + "\n",
+            )
+            _write(task_dir / "CRITIC__runtime.md", "verdict: PASS\nsummary: final runtime verification passed\n")
+            _write(
+                task_dir / "DOC_SYNC.md",
+                textwrap.dedent(
+                    """
+                    # DOC_SYNC: task
+                    written_at: 2026-01-01T00:00:00Z
+
+                    ## What changed
+                    - docs aligned with the verified implementation
+
+                    ## New files
+                    none
+
+                    ## Updated files
+                    - docs/architecture.md
+
+                    ## Deleted files
+                    none
+
+                    ## Notes
+                    - verified after final runtime QA
+                    """
+                ).strip()
+                + "\n",
+            )
+            if include_document_critic:
+                _write(task_dir / "CRITIC__document.md", "verdict: PASS\nsummary: docs match the verified behavior\n")
+            _write_non_stub_handoff(task_dir)
+
+        doc_review_task = repo / "doc" / "harness" / "tasks" / "TASK__team-doc-review"
+        _write_ready_team_task(
+            doc_review_task,
+            team_status="running",
+            document_verdict="pending",
+            include_document_critic=False,
+        )
+
+        handoff_task = repo / "doc" / "harness" / "tasks" / "TASK__team-handoff-refresh"
+        _write_ready_team_task(
+            handoff_task,
+            team_status="complete",
+            document_verdict="PASS",
+            include_document_critic=True,
+        )
+
+        with _pushd(repo):
+            _lib.build_team_bootstrap(str(doc_review_task), write_files=True)
+            _lib.build_team_dispatch(str(doc_review_task), write_files=True)
+            _lib.build_team_bootstrap(str(handoff_task), write_files=True)
+            _lib.build_team_dispatch(str(handoff_task), write_files=True)
+
+        _touch_many(
+            doc_review_task,
+            {
+                "CRITIC__plan.md": 5,
+                "TEAM_PLAN.md": 10,
+                "team/worker-lead.md": 20,
+                "team/worker-a.md": 30,
+                "team/worker-reviewer.md": 40,
+                "TEAM_SYNTHESIS.md": 50,
+                "CRITIC__runtime.md": 60,
+                "DOC_SYNC.md": 70,
+                "HANDOFF.md": 71,
+            },
+        )
+        _touch_many(
+            handoff_task,
+            {
+                "CRITIC__plan.md": 5,
+                "TEAM_PLAN.md": 10,
+                "team/worker-lead.md": 20,
+                "team/worker-a.md": 30,
+                "team/worker-reviewer.md": 40,
+                "TEAM_SYNTHESIS.md": 50,
+                "CRITIC__runtime.md": 60,
+                "DOC_SYNC.md": 70,
+                "HANDOFF.md": 75,
+                "CRITIC__document.md": 80,
+            },
+        )
+
+        corpus = {
+            "version": 1,
+            "cases": [
+                {
+                    "id": "context-doc-review",
+                    "kind": "context",
+                    "task_dir": "doc/harness/tasks/TASK__team-doc-review",
+                    "expect": {
+                        "next_action_contains": "CRITIC__document.md",
+                        "team": {
+                            "relaunch_available": True,
+                            "relaunch_ready": True,
+                            "relaunch_worker": "lead",
+                            "relaunch_phase": "documentation_review",
+                            "document_critic_pending": True,
+                        },
+                    },
+                },
+                {
+                    "id": "context-handoff-refresh",
+                    "kind": "context",
+                    "task_dir": "doc/harness/tasks/TASK__team-handoff-refresh",
+                    "expect": {
+                        "next_action_contains": "after critic-document",
+                        "team": {
+                            "handoff_refresh_needed": True,
+                            "handoff_refresh_reason": "refresh HANDOFF.md after critic-document",
+                            "relaunch_available": True,
+                            "relaunch_ready": True,
+                            "relaunch_worker": "lead",
+                            "relaunch_phase": "handoff_refresh",
+                        },
+                    },
+                },
+            ],
+        }
+        corpus_path = repo / "corpus.json"
+        corpus_path.write_text(json.dumps(corpus, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        report = execute_replay(corpus_path=str(corpus_path), repo_root=str(repo))
+        self.assertEqual(report["summary"]["failed"], 0, report)
+
+    def test_team_relaunch_case_selects_handoff_refresh_and_degraded_synthesis(self):
+        repo = self._make_repo()
+
+        def _write_ready_team_task(task_dir: Path, *, team_status: str, document_verdict: str, include_document_critic: bool) -> None:
+            _write_team_state_fields(
+                task_dir,
+                provider="omc",
+                team_status=team_status,
+                document_verdict=document_verdict,
+                runtime_verdict="PASS",
+                runtime_verdict_freshness="current",
+                document_verdict_freshness="current",
+            )
+            _write(task_dir / "REQUEST.md", "Implement app, docs, and tests.\n")
+            _write(task_dir / "PLAN.md", "# Plan\n")
+            _write(task_dir / "CRITIC__plan.md", "verdict: PASS\nsummary: plan approved\n")
+            _write_team_plan(task_dir)
+            _write_worker_summary(task_dir, "lead", "tests/test_example.py")
+            _write_worker_summary(task_dir, "worker-a", "app/main.ts")
+            _write_worker_summary(task_dir, "reviewer", "docs/architecture.md")
+            _write(
+                task_dir / "TEAM_SYNTHESIS.md",
+                textwrap.dedent(
+                    """
+                    # Team Synthesis
+                    ## Integrated Result
+                    - merged slices
+
+                    ## Cross-Checks
+                    - ownership respected
+
+                    ## Verification Summary
+                    - pytest tests/test_example.py
+
+                    ## Residual Risks
+                    - none
+                    """
+                ).strip()
+                + "\n",
+            )
+            _write(task_dir / "CRITIC__runtime.md", "verdict: PASS\nsummary: final runtime verification passed\n")
+            _write(
+                task_dir / "DOC_SYNC.md",
+                textwrap.dedent(
+                    """
+                    # DOC_SYNC: task
+                    written_at: 2026-01-01T00:00:00Z
+
+                    ## What changed
+                    - docs aligned with the verified implementation
+
+                    ## New files
+                    none
+
+                    ## Updated files
+                    - docs/architecture.md
+
+                    ## Deleted files
+                    none
+
+                    ## Notes
+                    - verified after final runtime QA
+                    """
+                ).strip()
+                + "\n",
+            )
+            if include_document_critic:
+                _write(task_dir / "CRITIC__document.md", "verdict: PASS\nsummary: docs match the verified behavior\n")
+            _write_non_stub_handoff(task_dir)
+
+        handoff_task = repo / "doc" / "harness" / "tasks" / "TASK__team-handoff-refresh"
+        _write_ready_team_task(
+            handoff_task,
+            team_status="complete",
+            document_verdict="PASS",
+            include_document_critic=True,
+        )
+
+        degraded_task = repo / "doc" / "harness" / "tasks" / "TASK__team-degraded-refresh"
+        _write_ready_team_task(
+            degraded_task,
+            team_status="degraded",
+            document_verdict="PASS",
+            include_document_critic=True,
+        )
+        _write_team_state_fields(
+            degraded_task,
+            provider="omc",
+            team_status="degraded",
+            runtime_verdict="PASS",
+            runtime_verdict_freshness="current",
+            document_verdict="PASS",
+            document_verdict_freshness="current",
+            doc_changes_detected=False,
+        )
+
+        _touch_many(
+            degraded_task,
+            {
+                "CRITIC__plan.md": 5,
+                "TEAM_PLAN.md": 10,
+                "team/worker-lead.md": 20,
+                "team/worker-a.md": 30,
+                "team/worker-reviewer.md": 40,
+                "TEAM_SYNTHESIS.md": 50,
+                "CRITIC__runtime.md": 60,
+                "DOC_SYNC.md": 70,
+                "CRITIC__document.md": 80,
+                "HANDOFF.md": 90,
+                "TASK_STATE.yaml": 100,
+            },
+        )
+
+        with _pushd(repo):
+            _lib.build_team_bootstrap(str(handoff_task), write_files=True)
+            _lib.build_team_dispatch(str(handoff_task), write_files=True)
+            _lib.build_team_bootstrap(str(degraded_task), write_files=True)
+            _lib.build_team_dispatch(str(degraded_task), write_files=True)
+
+        _touch_many(
+            handoff_task,
+            {
+                "CRITIC__plan.md": 5,
+                "TEAM_PLAN.md": 10,
+                "team/worker-lead.md": 20,
+                "team/worker-a.md": 30,
+                "team/worker-reviewer.md": 40,
+                "TEAM_SYNTHESIS.md": 50,
+                "CRITIC__runtime.md": 60,
+                "DOC_SYNC.md": 70,
+                "HANDOFF.md": 75,
+                "CRITIC__document.md": 80,
+            },
+        )
+
+        corpus = {
+            "version": 1,
+            "cases": [
+                {
+                    "id": "relaunch-handoff-refresh",
+                    "kind": "team_relaunch",
+                    "task_dir": "doc/harness/tasks/TASK__team-handoff-refresh",
+                    "expect": {
+                        "available": True,
+                        "ready": True,
+                        "worker": "lead",
+                        "phase": "handoff_refresh",
+                        "selection_reason_contains": "critic-document",
+                    },
+                },
+                {
+                    "id": "relaunch-degraded-synthesis",
+                    "kind": "team_relaunch",
+                    "task_dir": "doc/harness/tasks/TASK__team-degraded-refresh",
+                    "expect": {
+                        "available": True,
+                        "ready": True,
+                        "worker": "lead",
+                        "phase": "synthesis",
+                        "selection_reason_contains": "degraded team round",
+                    },
+                },
+            ],
+        }
+        corpus_path = repo / "corpus.json"
+        corpus_path.write_text(json.dumps(corpus, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        report = execute_replay(corpus_path=str(corpus_path), repo_root=str(repo))
+        self.assertEqual(report["summary"]["failed"], 0, report)
+
+    def test_close_gate_case_blocks_degraded_team_synthesis_refresh(self):
+        repo = self._make_repo()
+        task_dir = repo / "doc" / "harness" / "tasks" / "TASK__team-degraded-refresh"
+        _write_team_state_fields(
+            task_dir,
+            provider="omc",
+            team_status="degraded",
+            runtime_verdict="PASS",
+            runtime_verdict_freshness="current",
+            document_verdict="PASS",
+            document_verdict_freshness="current",
+            doc_changes_detected=False,
+        )
+        _write(task_dir / "REQUEST.md", "Implement app, docs, and tests.\n")
+        _write(task_dir / "PLAN.md", "# Plan\n")
+        _write(task_dir / "CRITIC__plan.md", "verdict: PASS\nsummary: plan approved\n")
+        _write_team_plan(task_dir)
+        _write_worker_summary(task_dir, "lead", "tests/test_example.py")
+        _write_worker_summary(task_dir, "worker-a", "app/main.ts")
+        _write_worker_summary(task_dir, "reviewer", "docs/architecture.md")
+        _write(
+            task_dir / "TEAM_SYNTHESIS.md",
+            textwrap.dedent(
+                """
+                # Team Synthesis
+                ## Integrated Result
+                - merged slices
+
+                ## Cross-Checks
+                - ownership respected
+
+                ## Verification Summary
+                - pytest tests/test_example.py
+
+                ## Residual Risks
+                - none
+                """
+            ).strip()
+            + "\n",
+        )
+        _write(task_dir / "CRITIC__runtime.md", "verdict: PASS\nsummary: final runtime verification passed\n")
+        _write(
+            task_dir / "DOC_SYNC.md",
+            textwrap.dedent(
+                """
+                # DOC_SYNC: task
+                written_at: 2026-01-01T00:00:00Z
+
+                ## What changed
+                - docs aligned with the verified implementation
+
+                ## New files
+                none
+
+                ## Updated files
+                - docs/architecture.md
+
+                ## Deleted files
+                none
+
+                ## Notes
+                - verified after final runtime QA
+                """
+            ).strip()
+            + "\n",
+        )
+        _write(task_dir / "CRITIC__document.md", "verdict: PASS\nsummary: docs match the verified behavior\n")
+        _write_non_stub_handoff(task_dir)
+
+        _touch_many(
+            task_dir,
+            {
+                "CRITIC__plan.md": 5,
+                "TEAM_PLAN.md": 10,
+                "team/worker-lead.md": 20,
+                "team/worker-a.md": 30,
+                "team/worker-reviewer.md": 40,
+                "TEAM_SYNTHESIS.md": 50,
+                "CRITIC__runtime.md": 60,
+                "DOC_SYNC.md": 70,
+                "CRITIC__document.md": 80,
+                "HANDOFF.md": 90,
+                "TASK_STATE.yaml": 100,
+            },
+        )
+
+        with _pushd(repo):
+            _lib.build_team_bootstrap(str(task_dir), write_files=True)
+            _lib.build_team_dispatch(str(task_dir), write_files=True)
+
+        corpus = {
+            "version": 1,
+            "cases": [
+                {
+                    "id": "close-gate-degraded-team-refresh",
+                    "kind": "close_gate",
+                    "task_dir": "doc/harness/tasks/TASK__team-degraded-refresh",
+                    "expect": {
+                        "blocked": True,
+                        "required_substrings": [
+                            "team_status must resolve to 'complete' or 'fallback' before close, got 'degraded'",
+                            "TEAM_SYNTHESIS.md must be refreshed after the degraded team round before close",
+                        ],
                     },
                 }
             ],

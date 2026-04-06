@@ -289,7 +289,7 @@ The corpus replays eight decision surfaces against the current code:
 - team launch status (`team_launch_status`)
 - team relaunch selection (`select_team_relaunch_target`)
 
-Routing/context/team replay cases patch team-provider probes to fixed values so replay stays deterministic across machines. That stabilization now also covers synthetic Claude CLI availability so native team-launch fallback paths stay pinned across machines. Prompt-note replay also uses a stable tie-breaker: higher freshness, then `REQ__` before `OBS__` before `INF__`, then root/path. Handoff replay now covers blocked-env recovery (including `ENVIRONMENT_SNAPSHOT.md`), repeated acceptance reopen loops, and team documentation-phase recovery. Context / team replay now also pins native launch fallback, stale launch refresh, and synthesis-owner relaunch selection.
+Routing/context/team replay cases patch team-provider probes to fixed values so replay stays deterministic across machines. That stabilization now also covers synthetic Claude CLI availability so native team-launch fallback paths stay pinned across machines. Prompt-note replay also uses a stable tie-breaker: higher freshness, then `REQ__` before `OBS__` before `INF__`, then root/path. Handoff replay now covers blocked-env recovery (including `ENVIRONMENT_SNAPSHOT.md`), repeated acceptance reopen loops, and team documentation-phase recovery. Context / team replay now also pins native launch fallback, stale launch refresh, synthesis-owner relaunch selection, documentation-review relaunch, stale HANDOFF refresh, and degraded-after-synthesis recovery / close blocking.
 
 Treat replay as the conservative post-change smoke test for harness logic after targeted unit tests. See `plugin/docs/golden-replay.md`.
 

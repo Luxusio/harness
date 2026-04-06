@@ -4198,6 +4198,14 @@ def select_team_relaunch_target(task_dir, team_state=None, worker=None, phase="a
     elif not team_state.get("synthesis_ready") and synthesis_workers:
         selected_worker = next((item for item in synthesis_workers if item in phase_by_worker), "")
         selection_source = "synthesis_owner"
+    elif (
+        str(team_state.get("current_status") or "") == "degraded"
+        and team_state.get("synthesis_ready")
+        and not team_state.get("synthesis_refreshed_after_degraded")
+        and synthesis_workers
+    ):
+        selected_worker = next((item for item in synthesis_workers if item in phase_by_worker), "")
+        selection_source = "degraded_synthesis_owner"
     elif team_state.get("team_runtime_verification_needed") and runtime_workers:
         selected_worker = next((item for item in runtime_workers if item in phase_by_worker), "")
         selection_source = "runtime_owner"
@@ -4237,6 +4245,15 @@ def select_team_relaunch_target(task_dir, team_state=None, worker=None, phase="a
         elif not team_state.get("synthesis_ready") and selected_worker in synthesis_workers and "synthesis" in phase_map:
             selected_phase = "synthesis"
             selection_reason = "TEAM_SYNTHESIS.md is still pending"
+        elif (
+            str(team_state.get("current_status") or "") == "degraded"
+            and team_state.get("synthesis_ready")
+            and not team_state.get("synthesis_refreshed_after_degraded")
+            and selected_worker in synthesis_workers
+            and "synthesis" in phase_map
+        ):
+            selected_phase = "synthesis"
+            selection_reason = "TEAM_SYNTHESIS.md must be refreshed after the degraded team round"
         elif team_state.get("team_runtime_verification_needed") and selected_worker in runtime_workers and "final_runtime_verification" in phase_map:
             selected_phase = "final_runtime_verification"
             selection_reason = str(team_state.get("team_runtime_verification_reason") or "final runtime verification is still pending")
@@ -6227,6 +6244,20 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
             request_name,
             "CHECKS.yaml",
         ])
+    elif (
+        orchestration_mode == "team"
+        and team_synthesis_required
+        and team_artifacts.get("synthesis_ready")
+        and team_status == "degraded"
+        and not team_artifacts.get("synthesis_refreshed_after_degraded")
+    ):
+        priority_must_read.extend([
+            team_plan_name,
+            team_synthesis_name,
+            "TASK_STATE.yaml",
+            request_name,
+            "CHECKS.yaml",
+        ])
     elif orchestration_mode == "team" and team_artifacts.get("team_runtime_verification_needed"):
         priority_must_read.extend([
             team_plan_name,
@@ -6443,6 +6474,25 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
             )
         else:
             next_action = "Write TEAM_SYNTHESIS.md with integrated result, cross-checks, and verification summary before running task_close."
+    elif (
+        orchestration_mode == "team"
+        and team_synthesis_required
+        and team_artifacts.get("synthesis_ready")
+        and team_status == "degraded"
+        and not team_artifacts.get("synthesis_refreshed_after_degraded")
+    ):
+        if current_team_worker and current_worker_is_synthesis_owner:
+            next_action = (
+                f"As synthesis owner {current_team_worker}, refresh TEAM_SYNTHESIS.md after the degraded team round before resuming verification or close."
+            )
+        elif team_synthesis_workers:
+            next_action = (
+                "The team round degraded after synthesis — hand off to "
+                + ", ".join(team_synthesis_workers[:3])
+                + " to refresh TEAM_SYNTHESIS.md before resuming verification or close."
+            )
+        else:
+            next_action = "Refresh TEAM_SYNTHESIS.md after the degraded team round before resuming verification or close."
     elif orchestration_mode == "team" and team_artifacts.get("team_runtime_verification_needed"):
         verification_reason = team_artifacts.get("team_runtime_verification_reason") or "run final runtime verification after TEAM_SYNTHESIS.md"
         runtime_artifact_name = team_artifacts.get("team_runtime_artifact") or runtime_critic_name
@@ -6508,26 +6558,33 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
                     f"As synthesis owner {current_team_worker}, wait for {doc_critic_preview} to finish {document_artifact}, then refresh HANDOFF.md before close."
                 )
         elif document_critic_needed:
-            next_action = (
-                f"Complete the documentation pass after final team verification — {doc_sync_preview} should {documentation_reason}, refresh {doc_sync_artifact}, "
-                f"then {doc_critic_preview} should rerun {document_artifact} before the synthesis owner refreshes HANDOFF.md and closes."
-            )
+            if doc_sync_needed:
+                next_action = (
+                    f"Complete the documentation pass after final team verification — {doc_sync_preview} should {documentation_reason}, refresh {doc_sync_artifact}, "
+                    f"then {doc_critic_preview} should rerun {document_artifact} before the synthesis owner refreshes HANDOFF.md and closes."
+                )
+            else:
+                next_action = (
+                    f"Complete the documentation review after final team verification — {doc_critic_preview} should {documentation_reason}, refresh {document_artifact}, "
+                    "then the synthesis owner should refresh HANDOFF.md before close."
+                )
         else:
             next_action = (
                 f"Complete the documentation pass after final team verification — {doc_sync_preview} should {documentation_reason}, refresh {doc_sync_artifact}, "
                 "then the synthesis owner should refresh HANDOFF.md before close."
             )
     elif orchestration_mode == "team" and team_artifacts.get("handoff_refresh_needed"):
+        handoff_reason = team_artifacts.get("handoff_refresh_reason") or "refresh HANDOFF.md from the latest team worker summaries and TEAM_SYNTHESIS.md"
         if current_team_worker and current_worker_is_synthesis_owner:
-            next_action = "Refresh HANDOFF.md from the latest team worker summaries and TEAM_SYNTHESIS.md before closing or handing off."
+            next_action = f"As synthesis owner {current_team_worker}, {handoff_reason} before closing or handing off."
         elif team_synthesis_workers:
             next_action = (
-                "TEAM_SYNTHESIS.md is newer than HANDOFF.md — hand off to "
+                f"{handoff_reason} — hand off to "
                 + ", ".join(team_synthesis_workers[:3])
-                + " to refresh HANDOFF.md before close or resume."
+                + " before close or resume."
             )
         else:
-            next_action = "Refresh HANDOFF.md from the latest team worker summaries and TEAM_SYNTHESIS.md before closing or handing off."
+            next_action = f"{handoff_reason} before closing or handing off."
     elif blocked_env_round:
         next_action = "Read ENVIRONMENT_SNAPSHOT.md first, repair the missing tool or setup assumption, then rerun task_verify before continuing."
     elif runtime_fix_round:

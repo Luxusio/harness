@@ -392,6 +392,106 @@
         "phase": "synthesis",
         "selection_reason_contains": "TEAM_SYNTHESIS"
       }
+    },
+    {
+      "id": "context_team_documentation_review_phase",
+      "kind": "context",
+      "description": "After final runtime verification, a missing/stale document critic should relaunch the document-review owner before close.",
+      "task_dir": "doc/harness/tasks/TASK__team-documentation-review-replay",
+      "expect": {
+        "next_action_contains": "CRITIC__document.md",
+        "team": {
+          "relaunch_available": true,
+          "relaunch_ready": true,
+          "relaunch_worker": "lead",
+          "relaunch_phase": "documentation_review",
+          "document_critic_pending": true
+        }
+      }
+    },
+    {
+      "id": "team_relaunch_documentation_review_phase",
+      "kind": "team_relaunch",
+      "description": "Team relaunch should select the document-critic owner once runtime/docs are ready and only documentation review remains.",
+      "task_dir": "doc/harness/tasks/TASK__team-documentation-review-replay",
+      "expect": {
+        "available": true,
+        "ready": true,
+        "worker": "lead",
+        "phase": "documentation_review",
+        "selection_reason_contains": "critic-document"
+      }
+    },
+    {
+      "id": "context_team_handoff_refresh_phase",
+      "kind": "context",
+      "description": "A stale HANDOFF after critic-document should route the synthesis owner through the handoff-refresh phase.",
+      "task_dir": "doc/harness/tasks/TASK__team-handoff-refresh-replay",
+      "expect": {
+        "next_action_contains": "after critic-document",
+        "team": {
+          "handoff_refresh_needed": true,
+          "handoff_refresh_reason": "refresh HANDOFF.md after critic-document",
+          "relaunch_available": true,
+          "relaunch_ready": true,
+          "relaunch_worker": "lead",
+          "relaunch_phase": "handoff_refresh"
+        }
+      }
+    },
+    {
+      "id": "team_relaunch_handoff_refresh_phase",
+      "kind": "team_relaunch",
+      "description": "Team relaunch should select handoff_refresh when critic-document is newer than HANDOFF.md.",
+      "task_dir": "doc/harness/tasks/TASK__team-handoff-refresh-replay",
+      "expect": {
+        "available": true,
+        "ready": true,
+        "worker": "lead",
+        "phase": "handoff_refresh",
+        "selection_reason_contains": "critic-document"
+      }
+    },
+    {
+      "id": "context_team_degraded_synthesis_refresh",
+      "kind": "context",
+      "description": "A degraded team round after synthesis should send recovery back to the synthesis owner before verification/close resumes.",
+      "task_dir": "doc/harness/tasks/TASK__team-degraded-refresh-replay",
+      "expect": {
+        "next_action_contains": "degraded after synthesis",
+        "team": {
+          "relaunch_available": true,
+          "relaunch_ready": true,
+          "relaunch_worker": "lead",
+          "relaunch_phase": "synthesis"
+        }
+      }
+    },
+    {
+      "id": "team_relaunch_degraded_synthesis_refresh",
+      "kind": "team_relaunch",
+      "description": "Team relaunch should select the synthesis owner when TEAM_SYNTHESIS.md predates a degraded team round.",
+      "task_dir": "doc/harness/tasks/TASK__team-degraded-refresh-replay",
+      "expect": {
+        "available": true,
+        "ready": true,
+        "worker": "lead",
+        "phase": "synthesis",
+        "selection_reason_contains": "degraded team round"
+      }
+    },
+    {
+      "id": "close_gate_team_degraded_synthesis_refresh",
+      "kind": "close_gate",
+      "description": "Close gate should block degraded team rounds until TEAM_SYNTHESIS.md is refreshed from the latest state.",
+      "task_dir": "doc/harness/tasks/TASK__team-degraded-refresh-replay",
+      "expect": {
+        "blocked": true,
+        "required_substrings": [
+          "team_status must resolve to 'complete' or 'fallback' before close, got 'degraded'",
+          "TEAM_SYNTHESIS.md must be refreshed after the degraded team round before close"
+        ]
+      }
     }
   ]
 }

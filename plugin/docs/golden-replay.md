@@ -16,7 +16,7 @@ Normal unit tests prove local logic, but harness regressions often appear as **b
 - workflow status maps to a different next action
 - recovery resumes from the wrong artifact or team phase after a failure / blocked-env round
 
-The golden replay corpus makes those decisions explicit and replayable, including the more fragile team launch / relaunch recovery surfaces.
+The golden replay corpus makes those decisions explicit and replayable, including the more fragile team launch / relaunch recovery surfaces and the team close-path recovery phases (documentation review, handoff refresh, degraded-after-synthesis refresh).
 
 ---
 
@@ -209,6 +209,7 @@ Use this to pin:
 - which worker should resume next
 - which phase (`implement`, `synthesis`, `final_runtime_verification`, `documentation_sync`, `documentation_review`, `handoff_refresh`)
 - why that phase was chosen
+- degraded-round recovery that returns to the synthesis owner before close
 
 ---
 
