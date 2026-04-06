@@ -5,6 +5,13 @@
 
 set -euo pipefail
 
+# ── macOS ownership + quarantine fix ─────────────────────────────────────────
+if [[ "$(uname)" == "Darwin" ]]; then
+    CURRENT_USER="$(whoami)"
+    sudo chown -R "${CURRENT_USER}:" . 2>/dev/null && echo "fix-diff: ownership fixed → ${CURRENT_USER}" || true
+    xattr -rc . 2>/dev/null && echo "fix-diff: quarantine xattrs cleared" || true
+fi
+
 crlf_fixed=0
 real_changes=0
 
