@@ -13,6 +13,7 @@ Case kinds:
   - context       → emit_compact_context(task_dir)
   - team_launch   → team_launch_status(task_dir)
   - team_relaunch → select_team_relaunch_target(task_dir)
+  - cross_surface → replay a bundled set of surfaces against one task snapshot
 
 The corpus is stored as JSON so the runner stays stdlib-only.
 """
@@ -39,7 +40,7 @@ from task_completed_gate import compute_completion_failures  # type: ignore
 from handoff_escalation import preview_handoff  # type: ignore
 
 DEFAULT_CORPUS_REL = os.path.join("doc", "harness", "replays", "golden-corpus.json")
-VALID_KINDS = {"routing", "close_gate", "prompt_notes", "next_step", "handoff", "context", "team_launch", "team_relaunch"}
+VALID_KINDS = {"routing", "close_gate", "prompt_notes", "next_step", "handoff", "context", "team_launch", "team_relaunch", "cross_surface"}
 
 
 def default_corpus_path(repo_root: Optional[str] = None) -> str:
@@ -110,8 +111,15 @@ def _normalize_team_recovery(team: Dict[str, Any]) -> Dict[str, Any]:
         "relaunch_selection_source",
         "relaunch_worker",
         "relaunch_phase",
+        "relaunch_artifact",
+        "relaunch_prompt_file",
+        "relaunch_run_script",
+        "relaunch_log_file",
         "handoff_refresh_needed",
         "handoff_refresh_reason",
+        "documentation_needed",
+        "doc_sync_needed",
+        "document_critic_needed",
     ):
         if key in team:
             normalized[key] = team.get(key)
@@ -520,6 +528,71 @@ def _run_team_relaunch_case(case: Dict[str, Any], repo_root: str) -> Dict[str, A
     return _base_result(case, passed=passed, actual=actual, details=details)
 
 
+def _inherit_surface_field(surface_case: Dict[str, Any], parent_case: Dict[str, Any], field: str) -> None:
+    if field not in surface_case and field in parent_case:
+        surface_case[field] = parent_case[field]
+
+
+def _run_cross_surface_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
+    surfaces = case.get("surfaces") or {}
+    if not isinstance(surfaces, dict) or not surfaces:
+        return _base_result(case, passed=False, actual=None, details={"error": "cross_surface case requires a non-empty 'surfaces' map"})
+
+    actual: Dict[str, Any] = {}
+    subresults: Dict[str, Any] = {}
+    failed_surfaces: List[str] = []
+    details: Dict[str, Any] = {
+        "task_dir": str(case.get("task_dir") or ""),
+        "surfaces": subresults,
+    }
+
+    inherited_fields = (
+        "task_dir",
+        "provider_probe",
+        "agent_name",
+        "team_worker",
+        "trigger",
+        "compaction_just_occurred",
+        "prompt",
+        "query_context",
+        "max_notes",
+        "status",
+        "task_mtime_overrides",
+    )
+
+    for surface_kind, surface_spec in surfaces.items():
+        if surface_kind == "cross_surface":
+            subresults[surface_kind] = {"passed": False, "details": {"error": "cross_surface cannot nest another cross_surface surface"}}
+            failed_surfaces.append(surface_kind)
+            continue
+        if surface_kind not in VALID_KINDS:
+            subresults[surface_kind] = {"passed": False, "details": {"error": f"unsupported surface kind: {surface_kind}"}}
+            failed_surfaces.append(surface_kind)
+            continue
+        if not isinstance(surface_spec, dict):
+            subresults[surface_kind] = {"passed": False, "details": {"error": "surface spec must be an object"}}
+            failed_surfaces.append(surface_kind)
+            continue
+
+        surface_case = dict(surface_spec)
+        surface_case["kind"] = surface_kind
+        surface_case.setdefault("id", f"{case.get('id') or 'cross-surface'}::{surface_kind}")
+        for field in inherited_fields:
+            _inherit_surface_field(surface_case, case, field)
+
+        result = run_case(surface_case, repo_root)
+        actual[surface_kind] = result.get("actual")
+        subresults[surface_kind] = {
+            "passed": bool(result.get("passed")),
+            "details": dict(result.get("details") or {}),
+        }
+        if not result.get("passed"):
+            failed_surfaces.append(surface_kind)
+
+    details["failed_surfaces"] = failed_surfaces
+    return _base_result(case, passed=not failed_surfaces, actual=actual, details=details)
+
+
 def _run_prompt_notes_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
     prompt = str(case.get("prompt") or "").strip()
     expected = dict(case.get("expect") or {})
@@ -614,6 +687,8 @@ def run_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
         return _run_team_launch_case(case, repo_root)
     if kind == "team_relaunch":
         return _run_team_relaunch_case(case, repo_root)
+    if kind == "cross_surface":
+        return _run_cross_surface_case(case, repo_root)
     return _base_result(case, passed=False, actual=None, details={"error": f"unsupported case kind: {kind}"})
 
 
@@ -725,6 +800,12 @@ def emit_report(report: Dict[str, Any], *, json_output: bool = False) -> None:
         elif item.get("kind") == "team_relaunch":
             actual = item.get("actual") or {}
             print(f"  worker={actual.get('worker')} phase={actual.get('phase')} ready={actual.get('ready')}")
+        elif item.get("kind") == "cross_surface":
+            failed_surfaces = list((details.get("failed_surfaces") or []))
+            if failed_surfaces:
+                print(f"  failed surfaces: {', '.join(failed_surfaces)}")
+            else:
+                print(f"  surfaces: {', '.join((details.get('surfaces') or {}).keys())}")
         error = details.get("error")
         if error:
             print(f"  error: {error}")

@@ -320,6 +320,8 @@ def _build_team_recovery(task_dir):
         phase = "launch"
     elif team_state.get("worker_summary_required") and not team_state.get("worker_summary_ready"):
         phase = "worker_summaries"
+    elif str(team_state.get("current_status") or "") == "degraded" and not team_state.get("synthesis_refreshed_after_degraded"):
+        phase = "synthesis"
     elif team_state.get("synthesis_ready") and team_state.get("team_runtime_verification_needed"):
         phase = "verification"
     elif team_state.get("team_documentation_needed"):
@@ -355,7 +357,11 @@ def _build_team_recovery(task_dir):
             relpath = team_worker_summary_relpath(worker)
             if relpath and relpath not in pending_artifacts:
                 pending_artifacts.append(relpath)
-    if not team_state.get("synthesis_ready"):
+    degraded_synthesis_refresh_needed = (
+        str(team_state.get("current_status") or "") == "degraded"
+        and not team_state.get("synthesis_refreshed_after_degraded")
+    )
+    if not team_state.get("synthesis_ready") or degraded_synthesis_refresh_needed:
         pending_artifacts.append("TEAM_SYNTHESIS.md")
     elif team_state.get("team_runtime_verification_needed"):
         runtime_artifact = str(team_state.get("team_runtime_artifact") or "CRITIC__runtime.md")

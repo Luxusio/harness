@@ -16,7 +16,7 @@ Normal unit tests prove local logic, but harness regressions often appear as **b
 - workflow status maps to a different next action
 - recovery resumes from the wrong artifact or team phase after a failure / blocked-env round
 
-The golden replay corpus makes those decisions explicit and replayable, including the more fragile team launch / relaunch recovery surfaces and the team close-path recovery phases (documentation review, handoff refresh, degraded-after-synthesis refresh).
+The golden replay corpus makes those decisions explicit and replayable, including the more fragile team launch / relaunch recovery surfaces, the team close-path recovery phases (documentation review, handoff refresh, degraded-after-synthesis refresh), and the cross-surface bundles where context, `SESSION_HANDOFF`, relaunch selection, and close gate must all stay aligned.
 
 ---
 
@@ -37,6 +37,7 @@ python3 plugin/scripts/hctl.py replay --kind handoff
 python3 plugin/scripts/hctl.py replay --kind context
 python3 plugin/scripts/hctl.py replay --kind team_launch
 python3 plugin/scripts/hctl.py replay --kind team_relaunch
+python3 plugin/scripts/hctl.py replay --kind cross_surface
 python3 plugin/scripts/hctl.py replay --case close_pass_cli_first_workflow
 python3 plugin/scripts/hctl.py replay --json
 ```
@@ -47,6 +48,7 @@ Direct script entrypoint also works:
 python3 plugin/scripts/golden_replay.py --kind prompt_notes
 python3 plugin/scripts/golden_replay.py --kind handoff
 python3 plugin/scripts/golden_replay.py --kind context
+python3 plugin/scripts/golden_replay.py --kind cross_surface
 ```
 
 Exit codes:
@@ -210,6 +212,25 @@ Use this to pin:
 - which phase (`implement`, `synthesis`, `final_runtime_verification`, `documentation_sync`, `documentation_review`, `handoff_refresh`)
 - why that phase was chosen
 - degraded-round recovery that returns to the synthesis owner before close
+
+### 9. `cross_surface`
+
+Replays a bundled set of surfaces against one task snapshot.
+
+Use this to pin the cases where several helpers must agree at once, especially the fragile team close path:
+
+- `emit_compact_context()` must point to the same recovery phase as `SESSION_HANDOFF`
+- `SESSION_HANDOFF` must carry the same relaunch worker / phase / artifact as `team_relaunch`
+- `compute_completion_failures()` must still block close for that same reason
+
+Typical bundled surfaces are:
+
+- `context`
+- `handoff`
+- `team_relaunch`
+- `close_gate`
+
+This is the conservative way to catch drift where each helper still looks locally plausible, but the overall recovery branch stops being internally consistent.
 
 ---
 

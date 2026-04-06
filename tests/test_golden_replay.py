@@ -1180,6 +1180,169 @@ class TestGoldenReplayCaseKinds(unittest.TestCase):
         report = execute_replay(corpus_path=str(corpus_path), repo_root=str(repo))
         self.assertEqual(report["summary"]["failed"], 0, report)
 
+    def test_cross_surface_case_keeps_degraded_team_recovery_aligned(self):
+        repo = self._make_repo()
+        task_dir = repo / "doc" / "harness" / "tasks" / "TASK__team-degraded-refresh"
+        _write_team_state_fields(
+            task_dir,
+            provider="omc",
+            team_status="degraded",
+            runtime_verdict="PASS",
+            runtime_verdict_freshness="current",
+            document_verdict="PASS",
+            document_verdict_freshness="current",
+            doc_changes_detected=False,
+        )
+        _write(task_dir / "REQUEST.md", "Implement app, docs, and tests.\n")
+        _write(task_dir / "PLAN.md", "# Plan\n")
+        _write(task_dir / "CRITIC__plan.md", "verdict: PASS\nsummary: plan approved\n")
+        _write_team_plan(task_dir)
+        _write_worker_summary(task_dir, "lead", "tests/test_example.py")
+        _write_worker_summary(task_dir, "worker-a", "app/main.ts")
+        _write_worker_summary(task_dir, "reviewer", "docs/architecture.md")
+        _write(
+            task_dir / "TEAM_SYNTHESIS.md",
+            textwrap.dedent(
+                """
+                # Team Synthesis
+                ## Integrated Result
+                - merged slices
+
+                ## Cross-Checks
+                - ownership respected
+
+                ## Verification Summary
+                - pytest tests/test_example.py
+
+                ## Residual Risks
+                - none
+                """
+            ).strip()
+            + "\n",
+        )
+        _write(task_dir / "CRITIC__runtime.md", "verdict: PASS\nsummary: final runtime verification passed\n")
+        _write(
+            task_dir / "DOC_SYNC.md",
+            textwrap.dedent(
+                """
+                # DOC_SYNC: task
+                written_at: 2026-01-01T00:00:00Z
+
+                ## What changed
+                - docs aligned with the verified implementation
+
+                ## New files
+                none
+
+                ## Updated files
+                - docs/architecture.md
+
+                ## Deleted files
+                none
+
+                ## Notes
+                - verified after final runtime QA
+                """
+            ).strip()
+            + "\n",
+        )
+        _write(task_dir / "CRITIC__document.md", "verdict: PASS\nsummary: docs match the verified behavior\n")
+        _write_non_stub_handoff(task_dir)
+
+        _touch_many(
+            task_dir,
+            {
+                "CRITIC__plan.md": 5,
+                "TEAM_PLAN.md": 10,
+                "team/worker-lead.md": 20,
+                "team/worker-a.md": 30,
+                "team/worker-reviewer.md": 40,
+                "TEAM_SYNTHESIS.md": 50,
+                "CRITIC__runtime.md": 60,
+                "DOC_SYNC.md": 70,
+                "CRITIC__document.md": 80,
+                "HANDOFF.md": 90,
+                "TASK_STATE.yaml": 100,
+            },
+        )
+
+        with _pushd(repo):
+            _lib.build_team_bootstrap(str(task_dir), write_files=True)
+            _lib.build_team_dispatch(str(task_dir), write_files=True)
+
+        corpus = {
+            "version": 1,
+            "cases": [
+                {
+                    "id": "cross-surface-degraded-team-refresh",
+                    "kind": "cross_surface",
+                    "task_dir": "doc/harness/tasks/TASK__team-degraded-refresh",
+                    "surfaces": {
+                        "context": {
+                            "expect": {
+                                "next_action_contains": "degraded after synthesis",
+                                "team": {
+                                    "relaunch_available": True,
+                                    "relaunch_ready": True,
+                                    "relaunch_worker": "lead",
+                                    "relaunch_phase": "synthesis",
+                                    "status": "degraded",
+                                    "synthesis_refreshed_after_degraded": False,
+                                },
+                            }
+                        },
+                        "handoff": {
+                            "trigger": "runtime_fail_repeat",
+                            "expect": {
+                                "exists": True,
+                                "trigger": "runtime_fail_repeat",
+                                "next_step_contains": "synthesis phase",
+                                "team_recovery": {
+                                    "phase": "synthesis",
+                                    "relaunch_available": True,
+                                    "relaunch_ready": True,
+                                    "relaunch_worker": "lead",
+                                    "relaunch_phase": "synthesis",
+                                    "relaunch_artifact": "doc/harness/tasks/TASK__team-degraded-refresh/TEAM_SYNTHESIS.md",
+                                    "relaunch_prompt_file": "doc/harness/tasks/TASK__team-degraded-refresh/team/bootstrap/lead.synthesis.developer.prompt.md",
+                                    "relaunch_run_script": "doc/harness/tasks/TASK__team-degraded-refresh/team/bootstrap/run-lead-synthesis.sh",
+                                    "relaunch_log_file": "doc/harness/tasks/TASK__team-degraded-refresh/team/bootstrap/logs/lead-synthesis.json",
+                                    "pending_artifacts_contains": ["TEAM_SYNTHESIS.md"],
+                                },
+                            },
+                        },
+                        "team_relaunch": {
+                            "expect": {
+                                "available": True,
+                                "ready": True,
+                                "worker": "lead",
+                                "phase": "synthesis",
+                                "artifact": "doc/harness/tasks/TASK__team-degraded-refresh/TEAM_SYNTHESIS.md",
+                                "prompt_file": "doc/harness/tasks/TASK__team-degraded-refresh/team/bootstrap/lead.synthesis.developer.prompt.md",
+                                "run_script": "doc/harness/tasks/TASK__team-degraded-refresh/team/bootstrap/run-lead-synthesis.sh",
+                                "log_file": "doc/harness/tasks/TASK__team-degraded-refresh/team/bootstrap/logs/lead-synthesis.json",
+                                "selection_reason_contains": "degraded team round",
+                            },
+                        },
+                        "close_gate": {
+                            "expect": {
+                                "blocked": True,
+                                "required_substrings": [
+                                    "team_status must resolve to 'complete' or 'fallback' before close, got 'degraded'",
+                                    "TEAM_SYNTHESIS.md must be refreshed after the degraded team round before close",
+                                ],
+                            }
+                        },
+                    },
+                }
+            ],
+        }
+        corpus_path = repo / "corpus.json"
+        corpus_path.write_text(json.dumps(corpus, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        report = execute_replay(corpus_path=str(corpus_path), repo_root=str(repo))
+        self.assertEqual(report["summary"]["failed"], 0, report)
+
 
 if __name__ == "__main__":
     unittest.main()
