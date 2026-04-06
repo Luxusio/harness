@@ -168,6 +168,20 @@ class TestWriteArtifactTeamOwnership(unittest.TestCase):
         self.assertTrue(meta.get("team_worker_inferred"))
         self.assertEqual(meta.get("team_expected_workers"), ["lead"])
 
+    def test_critic_plan_rejects_mismatched_agent_role(self):
+        task_dir = self._make_team_task("TASK__artifact_role_guard")
+        os.environ["CLAUDE_AGENT_NAME"] = "harness:harness"
+
+        args = SimpleNamespace(
+            task_dir=str(task_dir),
+            verdict="PASS",
+            summary="plan looks good",
+            checks=None,
+            issues=None,
+        )
+        with self.assertRaisesRegex(ValueError, r"must be written by \[critic-plan\]"):
+            write_artifact.cmd_critic_plan(args)
+
 
 if __name__ == "__main__":
     unittest.main()

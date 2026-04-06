@@ -600,10 +600,14 @@ def main():
     if not active_tasks:
         # No active task — untracked mutation → BLOCK
         print(
-            "BLOCKED: Source file write with no active harness task. "
-            "This mutation is untracked. Create a task folder and "
-            "run /harness:plan before implementing. "
-            "(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
+            "BLOCKED: source write denied because there is no active harness task.\n"
+            "reason_code: no_active_task\n"
+            f"target: {filepath}\n"
+            "why_blocked: source mutations must be attached to a task so plan / critic / provenance state stays traceable.\n"
+            "next_action: run mcp__plugin_harness_harness__task_start (or /harness:plan), create PLAN.md, then get critic-plan PASS before mutating source files.\n"
+            "escape_hatch: HARNESS_SKIP_PREWRITE=1"
+            ,
+            file=sys.stderr,
         )
         sys.exit(2)
 
@@ -611,32 +615,48 @@ def main():
     any_plan_passed = any(pv == "PASS" for _, pv in active_tasks)
 
     if not any_plan_passed:
-        task_list = ", ".join(f"{tid} (plan: {pv})" for tid, pv in active_tasks)
+        task_list = ", ".join(f"{tid} (plan_verdict={pv})" for tid, pv in active_tasks)
+        current_status = ""
+        if active_task_dir:
+            current_status = yaml_field("status", os.path.join(active_task_dir, "TASK_STATE.yaml")) or "unknown"
         print(
-            f"BLOCKED: Source file write but plan_verdict is not PASS. "
-            f"Active tasks: {task_list}. "
-            f"Complete plan approval before implementing. "
-            f"(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
+            "BLOCKED: source write denied because no active task has plan_verdict=PASS.\n"
+            "reason_code: plan_verdict_not_passed\n"
+            f"target: {filepath}\n"
+            f"current_state: {current_status or 'unknown'}\n"
+            f"active_tasks: {task_list}\n"
+            "required_state: plan_verdict=PASS\n"
+            "next_action: run critic-plan for the current task, refresh task_context, then resume implementation after PASS.\n"
+            "hint: task_start/task_context now surface entry + close requirements up front.\n"
+            "escape_hatch: HARNESS_SKIP_PREWRITE=1"
+            ,
+            file=sys.stderr,
         )
         sys.exit(2)
 
     team_ready, team_message = _check_team_plan_ready(active_task_dir)
     if not team_ready:
-        print(team_message)
+        print(team_message, file=sys.stderr)
         sys.exit(2)
 
     team_write_ok, team_write_message = _check_team_write_ownership(active_task_dir, filepath)
     if not team_write_ok:
-        print(team_write_message)
+        print(team_write_message, file=sys.stderr)
         sys.exit(2)
 
     # Source file write — check actor is developer
     current_role = _get_agent_role()
     if current_role and current_role not in ("developer", "harness", ""):
         print(
-            f"BLOCKED: Source file write by non-developer role '{current_role}'. "
-            f"Only developer role may write source files. "
-            f"(Set HARNESS_SKIP_PREWRITE=1 to bypass in emergencies.)"
+            "BLOCKED: source write denied for the current role.\n"
+            "reason_code: role_not_authorized_for_source_write\n"
+            f"target: {filepath}\n"
+            f"current_role: {current_role}\n"
+            "required_role: developer\n"
+            "next_action: hand the change to harness:developer (or switch to that role) before mutating source files.\n"
+            "escape_hatch: HARNESS_SKIP_PREWRITE=1"
+            ,
+            file=sys.stderr,
         )
         sys.exit(2)
 

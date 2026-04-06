@@ -21,6 +21,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from _lib import normalize_check_status_value
+
 # Statuses that put a criterion in the focus set
 FOCUS_STATUSES = frozenset({"failed", "implemented_candidate", "blocked"})
 PASS_STATUS = "passed"
@@ -96,7 +98,7 @@ def _finalize_check(raw):
     """Normalize a raw criterion dict with defaults."""
     return {
         "id": raw.get("id", "?"),
-        "status": (raw.get("status") or "unknown").lower(),
+        "status": normalize_check_status_value(raw.get("status") or "unknown"),
         "title": raw.get("title", ""),
         "reopen_count": raw.get("reopen_count", 0),
     }

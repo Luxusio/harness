@@ -222,6 +222,48 @@ def parse_checks_arg(checks_str):
     return result
 
 
+EXPECTED_AGENT_ROLES = {
+    "CRITIC__runtime.md": {"critic-runtime"},
+    "QA__runtime.md": {"critic-runtime"},
+    "CRITIC__plan.md": {"critic-plan"},
+    "CRITIC__document.md": {"critic-document"},
+    "HANDOFF.md": {"developer"},
+    "DOC_SYNC.md": {"writer"},
+}
+
+
+def enforce_agent_role_for_artifact(artifact_name):
+    """Fail closed when the current agent role does not own the artifact.
+
+    MCP tool wrappers set CLAUDE_AGENT_NAME, so coordinator / harness roles are
+    visible here. For manual CLI use outside that environment we stay permissive
+    when the role is unknown to avoid breaking standalone recovery workflows.
+    """
+    allowed_roles = EXPECTED_AGENT_ROLES.get(artifact_name)
+    if not allowed_roles:
+        return ""
+
+    current_role = ""
+    if get_agent_role is not None:
+        try:
+            current_role = str(get_agent_role() or "").strip()
+        except Exception:
+            current_role = ""
+    if not current_role:
+        current_role = str(os.environ.get("CLAUDE_AGENT_NAME", "") or "").strip()
+
+    if not current_role:
+        return ""
+    if current_role in allowed_roles:
+        return current_role
+
+    expected = ", ".join(sorted(allowed_roles))
+    raise ValueError(
+        f"{artifact_name} must be written by [{expected}], not '{current_role}'. "
+        "Use the matching harness role / MCP write_* tool so independent critic ownership is preserved."
+    )
+
+
 def _clean_workers(values):
     result = []
     for value in values or []:
@@ -419,6 +461,7 @@ def cmd_critic_runtime(args):
     task_id = task_id_from_dir(task_dir)
     ts = now_iso()
     artifact_name = "CRITIC__runtime.md"
+    enforce_agent_role_for_artifact(artifact_name)
     team_context = enforce_team_artifact_owner(task_dir, artifact_name)
     team_header = artifact_team_header_lines(team_context)
 
@@ -479,6 +522,7 @@ def cmd_critic_plan(args):
     task_dir = os.path.abspath(args.task_dir)
     task_id = task_id_from_dir(task_dir)
     artifact_name = "CRITIC__plan.md"
+    enforce_agent_role_for_artifact(artifact_name)
     team_context = enforce_team_artifact_owner(task_dir, artifact_name)
     team_header = artifact_team_header_lines(team_context)
 
@@ -521,6 +565,7 @@ def cmd_critic_document(args):
     task_dir = os.path.abspath(args.task_dir)
     task_id = task_id_from_dir(task_dir)
     artifact_name = "CRITIC__document.md"
+    enforce_agent_role_for_artifact(artifact_name)
     team_context = enforce_team_artifact_owner(task_dir, artifact_name)
     team_header = artifact_team_header_lines(team_context)
 
@@ -565,6 +610,7 @@ def cmd_handoff(args):
     task_id = task_id_from_dir(task_dir)
     ts = now_iso()
     artifact_name = "HANDOFF.md"
+    enforce_agent_role_for_artifact(artifact_name)
     team_context = enforce_team_artifact_owner(task_dir, artifact_name)
     team_header = artifact_team_header_lines(team_context)
 
@@ -613,6 +659,7 @@ def cmd_doc_sync(args):
     task_id = task_id_from_dir(task_dir)
     ts = now_iso()
     artifact_name = "DOC_SYNC.md"
+    enforce_agent_role_for_artifact(artifact_name)
     team_context = enforce_team_artifact_owner(task_dir, artifact_name)
     team_header = artifact_team_header_lines(team_context)
 

@@ -47,6 +47,9 @@ from _lib import (
     canonical_task_id,
     canonical_task_dir,
     ensure_task_scaffold,
+    ensure_checks_template,
+    parse_checks_close_gate,
+    should_set_strict_close_gate,
     find_repo_root,
     repo_root_for_task_dir,
     repo_relpath,
@@ -198,6 +201,9 @@ def cmd_start(args):
     for field, value in routing.items():
         set_task_state_field(task_dir, field, value)
 
+    effective_close_gate = "strict_high_risk" if should_set_strict_close_gate(os.path.join(task_dir, "TASK_STATE.yaml")) else "standard"
+    checks_template = ensure_checks_template(task_dir, close_gate=effective_close_gate)
+
     team_artifact_result = []
     if routing.get("orchestration_mode") == "team":
         try:
@@ -259,6 +265,29 @@ def cmd_start(args):
         print(f"  env_snapshot: {os.path.basename(snapshot_path)}")
     if case_path:
         print(f"  failure_case: {os.path.basename(case_path)}")
+
+    ctx = emit_compact_context(task_dir)
+    print(f"  source_write_allowed: {ctx.get('source_write_allowed')}")
+    if not ctx.get('source_write_allowed') and ctx.get('why_source_write_blocked'):
+        print(f"  source_write_blocked: {ctx.get('why_source_write_blocked')}")
+    print(f"  effective_close_gate: {ctx.get('effective_close_gate')}")
+    checks_template_path = ctx.get('checks_template_path') or ''
+    if checks_template_path:
+        template_status = 'created' if checks_template.get('created') else ('normalized' if checks_template.get('normalized') else 'ready')
+        print(f"  checks_template: {checks_template_path} ({template_status})")
+    entry_requirements = ctx.get('entry_requirements') or []
+    if entry_requirements:
+        print("  entry_requirements:")
+        for item in entry_requirements[:5]:
+            print(f"    - {item}")
+    close_requirements = ctx.get('close_requirements') or []
+    if close_requirements:
+        print("  close_requirements:")
+        for item in close_requirements[:6]:
+            print(f"    - {item}")
+    missing_for_close = ctx.get('missing_for_close') or []
+    if missing_for_close:
+        print("  missing_for_close: " + " | ".join(str(x) for x in missing_for_close[:6]))
     return 0
 
 
@@ -298,6 +327,23 @@ def cmd_context(args):
             )
         )
         print(f"Planning: {ctx.get('planning_mode', 'standard')}")
+        print(
+            "Source writes: {status}".format(
+                status="allowed" if ctx.get("source_write_allowed") else "blocked"
+            )
+        )
+        if not ctx.get("source_write_allowed") and ctx.get("why_source_write_blocked"):
+            print(f"Source block reason: {ctx['why_source_write_blocked']}")
+        print(f"Close gate: {ctx.get('effective_close_gate', 'standard')}")
+        entry_requirements = ctx.get("entry_requirements") or []
+        if entry_requirements:
+            print("Entry requirements: " + " | ".join(str(x) for x in entry_requirements[:4]))
+        close_requirements = ctx.get("close_requirements") or []
+        if close_requirements:
+            print("Close requirements: " + " | ".join(str(x) for x in close_requirements[:4]))
+        missing_for_close = ctx.get("missing_for_close") or []
+        if missing_for_close:
+            print("Missing for close: " + " | ".join(str(x) for x in missing_for_close[:4]))
         team = ctx.get("team") or {}
         if team:
             print(
