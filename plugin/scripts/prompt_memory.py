@@ -103,9 +103,9 @@ def _extract_roots_from_paths(paths):
 
 
 
-def _infer_active_roots(prompt, active_task_dir, registered_roots):
-    """Infer the smallest useful set of doc roots for note retrieval."""
-    roots = {"common"}
+def _collect_root_hints(prompt, active_task_dir):
+    """Collect root hints from prompt file references and active task paths."""
+    roots = set()
 
     try:
         prompt_paths = re.findall(r'[a-zA-Z0-9_.@\-]+(?:/[a-zA-Z0-9_.@\-]+)+', prompt or "")
@@ -123,11 +123,43 @@ def _infer_active_roots(prompt, active_task_dir, registered_roots):
                 pass
         roots.update(_extract_roots_from_paths(task_paths))
 
+    return roots
+
+
+
+def _infer_active_roots(prompt, active_task_dir, registered_roots):
+    """Infer the smallest useful set of doc roots for note retrieval."""
+    roots = {"common"}
+    roots.update(_collect_root_hints(prompt, active_task_dir))
+
     allowed = set(registered_roots or ["common"])
-    filtered = [root for root in registered_roots if root in roots] if registered_roots else []
+    filtered = [root for root in (registered_roots or []) if root in roots]
     if not filtered:
         filtered = ["common"] if "common" in allowed else list(sorted(allowed))[:1]
     return filtered
+
+
+
+def _infer_scan_roots(prompt, active_task_dir, registered_roots):
+    """Return a high-confidence root subset for note scanning, or None.
+
+    We only shrink the scan space when prompt/task paths point to a specific
+    non-common root. If there is no explicit root evidence, keep the broader
+    scan to avoid recall regressions on generic prompts.
+    """
+    hinted_roots = _collect_root_hints(prompt, active_task_dir)
+    specific_roots = {root for root in hinted_roots if root and root != "common"}
+    if not specific_roots:
+        return None
+
+    ordered_roots = registered_roots or ["common"]
+    scan_roots = []
+    for root in ordered_roots:
+        if root == "common" or root in specific_roots:
+            if root not in scan_roots:
+                scan_roots.append(root)
+
+    return scan_roots or None
 
 
 
@@ -645,10 +677,13 @@ def gather_context(prompt):
     try:
         active_roots = _infer_active_roots(prompt, active_task_dir, registered_roots)
         current_lane = _resolve_current_lane(prompt, active_task_dir)
+        scan_roots = _infer_scan_roots(prompt, active_task_dir, registered_roots)
         query_context = {
             "active_roots": active_roots,
             "current_lane": current_lane,
         }
+        if scan_roots:
+            query_context["scan_roots"] = scan_roots
         notes = select_relevant_notes(prompt, query_context=query_context)
         if notes:
             _, _, first_line, freshness, root_name = notes[0]

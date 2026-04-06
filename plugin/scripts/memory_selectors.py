@@ -450,6 +450,19 @@ def select_relevant_notes(prompt, notes_dir=None, query_context=None):
         roots_dirs = [(os.path.basename(notes_dir), notes_dir)]
     else:
         root_names = _get_registered_roots(doc_base)
+        requested_scan_roots = []
+        if query_context:
+            requested_scan_roots = list(query_context.get("scan_roots", []) or [])
+        if requested_scan_roots:
+            allowed = set(root_names)
+            seen = set()
+            filtered_roots = []
+            for root_name in requested_scan_roots:
+                if root_name in allowed and root_name not in seen:
+                    filtered_roots.append(root_name)
+                    seen.add(root_name)
+            if filtered_roots:
+                root_names = filtered_roots
         roots_dirs = []
         for rname in root_names:
             rpath = os.path.join(doc_base, rname)
