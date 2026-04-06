@@ -26,11 +26,23 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 try:
-    from _lib import team_artifact_status, get_team_worker_name, get_agent_role
+    from _lib import (
+        team_artifact_status,
+        get_team_worker_name,
+        get_agent_role,
+        set_task_state_field as lib_set_task_state_field,
+        write_task_state_content,
+        ensure_checks_schema_content,
+        atomic_write_text as lib_atomic_write_text,
+    )
 except Exception:  # pragma: no cover - defensive fallback for standalone CLI use
     team_artifact_status = None
     get_team_worker_name = None
     get_agent_role = None
+    lib_set_task_state_field = None
+    write_task_state_content = None
+    ensure_checks_schema_content = None
+    lib_atomic_write_text = None
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +86,10 @@ def _sha256_text(content):
 
 
 def write_file(path, content):
-    _atomic_write_text(path, content)
+    if lib_atomic_write_text is not None:
+        lib_atomic_write_text(path, content)
+    else:
+        _atomic_write_text(path, content)
 
 
 def build_meta(artifact_name, task_id, author_role, verdict=None, team_context=None):
@@ -137,9 +152,13 @@ def finalize_write_result(artifact_path, meta_path, *, state_fields_updated=None
 
 def update_task_state_field(task_dir, field, value):
     """Update a single scalar field in TASK_STATE.yaml. Adds it if absent."""
+    if lib_set_task_state_field is not None:
+        lib_set_task_state_field(task_dir, field, value)
+        return
+
     state_file = os.path.join(task_dir, "TASK_STATE.yaml")
     if not os.path.isfile(state_file):
-        return  # nothing to update
+        return
     with open(state_file, "r", encoding="utf-8") as fh:
         content = fh.read()
 
@@ -151,7 +170,6 @@ def update_task_state_field(task_dir, field, value):
     else:
         content = content.rstrip("\n") + f"\n{replacement}\n"
 
-    # Always update the `updated` timestamp
     if re.search(r"^updated:", content, flags=re.MULTILINE):
         content = re.sub(r"^updated:.*", f"updated: \"{ts}\"", content, flags=re.MULTILINE)
     else:
@@ -173,22 +191,22 @@ def increment_task_state_int(task_dir, field):
     if m:
         current = int(m.group(1))
     new_val = current + 1
+    content = re.sub(
+        r"^" + re.escape(field) + r":.*",
+        f"{field}: {new_val}",
+        content,
+        flags=re.MULTILINE,
+    ) if m else content.rstrip("\n") + f"\n{field}: {new_val}\n"
 
     ts = now_iso()
-    replacement = f"{field}: {new_val}"
-    if m:
-        content = re.sub(
-            r"^" + re.escape(field) + r":.*", replacement, content, flags=re.MULTILINE
-        )
+    if write_task_state_content is not None:
+        write_task_state_content(state_file, content, bump_revision=True, timestamp=ts)
     else:
-        content = content.rstrip("\n") + f"\n{replacement}\n"
-
-    if re.search(r"^updated:", content, flags=re.MULTILINE):
-        content = re.sub(r"^updated:.*", f"updated: \"{ts}\"", content, flags=re.MULTILINE)
-    else:
-        content = content.rstrip("\n") + f"\nupdated: \"{ts}\"\n"
-
-    _atomic_write_text(state_file, content)
+        if re.search(r"^updated:", content, flags=re.MULTILINE):
+            content = re.sub(r"^updated:.*", f"updated: \"{ts}\"", content, flags=re.MULTILINE)
+        else:
+            content = content.rstrip("\n") + f"\nupdated: \"{ts}\"\n"
+        _atomic_write_text(state_file, content)
 
 
 def parse_checks_arg(checks_str):
@@ -368,16 +386,15 @@ def update_checks_yaml(task_dir, checks_dict):
     with open(checks_file, "r", encoding="utf-8") as fh:
         content = fh.read()
 
+    if ensure_checks_schema_content is not None:
+        content = ensure_checks_schema_content(content)
+
     ts = now_iso()
     for cid, verdict in checks_dict.items():
         new_status = "passed" if verdict == "PASS" else "failed"
-        # Match the id line, then update the status on the following status: line
-        # We do a block replacement: find '  - id: AC-001' block and update status within it
         def replace_block(m):
             block = m.group(0)
-            # Replace status: <anything> within this block
             block = re.sub(r"(status:\s*)(\S+)", r"\g<1>" + new_status, block, count=1)
-            # Replace last_updated within this block
             block = re.sub(
                 r"(last_updated:\s*)(\S+)",
                 r'\g<1>"' + ts + '"',
@@ -386,11 +403,10 @@ def update_checks_yaml(task_dir, checks_dict):
             )
             return block
 
-        # Match from '  - id: <cid>' to the next '  - id:' or end
         pattern = r"(  - id: " + re.escape(cid) + r".*?)(?=\n  - id:|\Z)"
         content = re.sub(pattern, replace_block, content, flags=re.DOTALL)
 
-    _atomic_write_text(checks_file, content)
+    write_file(checks_file, content)
 
 
 # ---------------------------------------------------------------------------

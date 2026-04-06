@@ -112,7 +112,7 @@ class TestHctlHelp(unittest.TestCase):
 
     def test_subcommands_listed(self):
         code, out, _ = _run_hctl("--help")
-        for sub in ("start", "context", "team-bootstrap", "team-dispatch", "team-launch", "team-relaunch", "history", "top-failures", "diff-case", "update", "record-agent-run", "verify", "close", "artifact"):
+        for sub in ("start", "context", "team-bootstrap", "team-dispatch", "team-launch", "team-relaunch", "history", "top-failures", "diff-case", "update", "migrate", "record-agent-run", "verify", "close", "artifact"):
             self.assertIn(sub, out, f"subcommand '{sub}' missing from --help")
 
 

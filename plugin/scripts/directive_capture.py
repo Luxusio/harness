@@ -18,7 +18,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (
     read_hook_input, hook_json_get, yaml_field, yaml_array,
-    TASK_DIR, MANIFEST, now_iso,
+    TASK_DIR, MANIFEST, now_iso, write_task_state_content,
 )
 
 
@@ -153,8 +153,7 @@ def stage_directive(task_dir, directive_text, directive_kind="process"):
                 f"pending_directive_ids: [{inline}]",
                 state_content, flags=re.MULTILINE,
             )
-            with open(state_file, "w", encoding="utf-8") as f:
-                f.write(state_content)
+            write_task_state_content(state_file, state_content, bump_revision=True)
         except OSError:
             pass
 

@@ -22,6 +22,7 @@ from _lib import (
     team_launch_status,
     select_team_relaunch_target,
     team_worker_summary_relpath,
+    ensure_session_handoff_payload,
 )
 
 
@@ -230,7 +231,7 @@ def preview_handoff(task_dir, trigger=None, compaction_just_occurred=False):
     }
     if team_recovery:
         handoff["team_recovery"] = team_recovery
-    return handoff
+    return ensure_session_handoff_payload(handoff)
 
 
 def generate_handoff(task_dir, trigger):

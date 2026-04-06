@@ -31,3 +31,9 @@ jobs:
         env:
           HARNESS_SKIP_STDIN: "1"
         run: python -m pytest tests/ -x --tb=short
+
+      - name: Run packaged golden replay smoke
+        env:
+          HARNESS_SKIP_STDIN: "1"
+          HARNESS_SKIP_PREREAD: "1"
+        run: python plugin/scripts/golden_replay.py --json > /tmp/golden-replay.json

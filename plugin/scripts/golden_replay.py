@@ -34,6 +34,7 @@ sys.path.insert(0, SCRIPT_DIR)
 
 import _lib  # type: ignore
 from _lib import find_repo_root  # type: ignore
+from replay_fixtures import ReplayFixtureManager  # type: ignore
 from memory_selectors import select_prompt_notes  # type: ignore
 from stop_gate import _next_step  # type: ignore
 from task_completed_gate import compute_completion_failures  # type: ignore
@@ -41,6 +42,10 @@ from handoff_escalation import preview_handoff  # type: ignore
 
 DEFAULT_CORPUS_REL = os.path.join("doc", "harness", "replays", "golden-corpus.json")
 VALID_KINDS = {"routing", "close_gate", "prompt_notes", "next_step", "handoff", "context", "team_launch", "team_relaunch", "cross_surface"}
+
+
+_ACTIVE_FIXTURE_MANAGER: Optional[ReplayFixtureManager] = None
+_ACTIVE_FIXTURE_POLICY = "missing-only"
 
 
 def default_corpus_path(repo_root: Optional[str] = None) -> str:
@@ -147,6 +152,51 @@ def load_corpus(corpus_path: str) -> Dict[str, Any]:
     return data
 
 
+def _normalize_runtime_paths(value: Any, aliases: Dict[str, str]) -> Any:
+    if not aliases:
+        return value
+    if isinstance(value, str):
+        text = value
+        for actual, logical in aliases.items():
+            if actual:
+                text = text.replace(str(actual), str(logical))
+        return text
+    if isinstance(value, list):
+        return [_normalize_runtime_paths(item, aliases) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_normalize_runtime_paths(item, aliases) for item in value)
+    if isinstance(value, dict):
+        return {
+            key: _normalize_runtime_paths(item, aliases)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _prepare_task_dir_for_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
+    logical_task_dir = str(case.get("task_dir") or "").strip()
+    actual_task_dir = _resolve_repo_path(repo_root, logical_task_dir) if logical_task_dir else ""
+    fixture_source = None
+    path_aliases: Dict[str, str] = {}
+
+    use_fixture = _ACTIVE_FIXTURE_POLICY == "packaged-first" or not os.path.isdir(actual_task_dir)
+    if logical_task_dir and _ACTIVE_FIXTURE_MANAGER is not None and use_fixture:
+        fixture = _ACTIVE_FIXTURE_MANAGER.materialize(logical_task_dir)
+        if fixture:
+            actual_task_dir = str(fixture.get("actual_task_dir") or actual_task_dir)
+            path_aliases = dict(fixture.get("path_aliases") or {})
+            fixture_source = str(fixture.get("source") or "") or None
+
+    task_mtime_overrides = dict(case.get("task_mtime_overrides") or {})
+    return {
+        "logical_task_dir": logical_task_dir,
+        "actual_task_dir": actual_task_dir,
+        "path_aliases": path_aliases,
+        "fixture_source": fixture_source,
+        "task_mtime_overrides": task_mtime_overrides,
+    }
+
+
 @contextlib.contextmanager
 def _patched_provider_probe(spec: Optional[Dict[str, Any]] = None):
     spec = spec or {}
@@ -206,12 +256,15 @@ def _base_result(case: Dict[str, Any], *, passed: bool, actual: Any = None, deta
 
 
 def _run_routing_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
-    task_dir = _resolve_repo_path(repo_root, str(case.get("task_dir") or ""))
+    prepared = _prepare_task_dir_for_case(case, repo_root)
+    task_dir = prepared["actual_task_dir"]
+    logical_task_dir = prepared["logical_task_dir"]
+    path_aliases = dict(prepared.get("path_aliases") or {})
     expected = dict(case.get("expect") or {})
     if not os.path.isdir(task_dir):
-        return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {task_dir}"})
+        return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {logical_task_dir or task_dir}"})
 
-    task_mtime_overrides = dict(case.get("task_mtime_overrides") or {})
+    task_mtime_overrides = dict(prepared.get("task_mtime_overrides") or {})
     if task_mtime_overrides:
         try:
             _apply_task_mtime_overrides(task_dir, task_mtime_overrides)
@@ -220,6 +273,7 @@ def _run_routing_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
 
     with _pushd(repo_root), _patched_provider_probe(case.get("provider_probe")):
         actual = _lib.compile_routing(task_dir)
+    actual = _normalize_runtime_paths(actual, path_aliases)
 
     mismatches = []
     compared = {}
@@ -230,20 +284,26 @@ def _run_routing_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
             mismatches.append(field)
 
     details = {
-        "task_dir": os.path.relpath(task_dir, repo_root),
+        "task_dir": logical_task_dir or os.path.relpath(task_dir, repo_root),
         "compared": compared,
         "mismatches": mismatches,
     }
+    fixture_source = prepared.get("fixture_source")
+    if fixture_source:
+        details["fixture_source"] = fixture_source
     return _base_result(case, passed=not mismatches, actual=actual, details=details)
 
 
 def _run_close_gate_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
-    task_dir = _resolve_repo_path(repo_root, str(case.get("task_dir") or ""))
+    prepared = _prepare_task_dir_for_case(case, repo_root)
+    task_dir = prepared["actual_task_dir"]
+    logical_task_dir = prepared["logical_task_dir"]
+    path_aliases = dict(prepared.get("path_aliases") or {})
     expected = dict(case.get("expect") or {})
     if not os.path.isdir(task_dir):
-        return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {task_dir}"})
+        return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {logical_task_dir or task_dir}"})
 
-    task_mtime_overrides = dict(case.get("task_mtime_overrides") or {})
+    task_mtime_overrides = dict(prepared.get("task_mtime_overrides") or {})
     if task_mtime_overrides:
         try:
             _apply_task_mtime_overrides(task_dir, task_mtime_overrides)
@@ -264,26 +324,33 @@ def _run_close_gate_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]
         passed = False
 
     details = {
-        "task_dir": os.path.relpath(task_dir, repo_root),
+        "task_dir": logical_task_dir or os.path.relpath(task_dir, repo_root),
         "expected_blocked": expected_blocked,
         "actual_blocked": blocked,
         "missing_required_substrings": missing_required,
         "present_forbidden_substrings": present_forbidden,
     }
+    fixture_source = prepared.get("fixture_source")
+    if fixture_source:
+        details["fixture_source"] = fixture_source
     actual = {
         "blocked": blocked,
         "failures": failures,
     }
+    actual = _normalize_runtime_paths(actual, path_aliases)
     return _base_result(case, passed=passed, actual=actual, details=details)
 
 
 def _run_handoff_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
-    task_dir = _resolve_repo_path(repo_root, str(case.get("task_dir") or ""))
+    prepared = _prepare_task_dir_for_case(case, repo_root)
+    task_dir = prepared["actual_task_dir"]
+    logical_task_dir = prepared["logical_task_dir"]
+    path_aliases = dict(prepared.get("path_aliases") or {})
     expected = dict(case.get("expect") or {})
     if not os.path.isdir(task_dir):
-        return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {task_dir}"})
+        return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {logical_task_dir or task_dir}"})
 
-    task_mtime_overrides = dict(case.get("task_mtime_overrides") or {})
+    task_mtime_overrides = dict(prepared.get("task_mtime_overrides") or {})
     if task_mtime_overrides:
         try:
             _apply_task_mtime_overrides(task_dir, task_mtime_overrides)
@@ -308,9 +375,10 @@ def _run_handoff_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
     team = handoff.get("team_recovery") if isinstance(handoff, dict) else None
     if isinstance(team, dict):
         actual["team_recovery"] = _normalize_team_recovery(team)
+    actual = _normalize_runtime_paths(actual, path_aliases)
 
     passed = True
-    details: Dict[str, Any] = {"task_dir": os.path.relpath(task_dir, repo_root)}
+    details: Dict[str, Any] = {"task_dir": logical_task_dir or os.path.relpath(task_dir, repo_root)}
 
     expected_exists = expected.get("exists")
     if expected_exists is not None and bool(expected_exists) != bool(handoff):
@@ -369,6 +437,9 @@ def _run_handoff_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
                 passed = False
             details[f"team_{key}"] = {"expected": expected_value, "actual": actual_value}
 
+    fixture_source = prepared.get("fixture_source")
+    if fixture_source:
+        details["fixture_source"] = fixture_source
     return _base_result(case, passed=passed, actual=actual, details=details)
 
 
@@ -384,12 +455,15 @@ def _match_expected_members(actual_map: Dict[str, Any], expected_map: Dict[str, 
 
 
 def _run_context_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
-    task_dir = _resolve_repo_path(repo_root, str(case.get("task_dir") or ""))
+    prepared = _prepare_task_dir_for_case(case, repo_root)
+    task_dir = prepared["actual_task_dir"]
+    logical_task_dir = prepared["logical_task_dir"]
+    path_aliases = dict(prepared.get("path_aliases") or {})
     expected = dict(case.get("expect") or {})
     if not os.path.isdir(task_dir):
-        return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {task_dir}"})
+        return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {logical_task_dir or task_dir}"})
 
-    task_mtime_overrides = dict(case.get("task_mtime_overrides") or {})
+    task_mtime_overrides = dict(prepared.get("task_mtime_overrides") or {})
     if task_mtime_overrides:
         try:
             _apply_task_mtime_overrides(task_dir, task_mtime_overrides)
@@ -402,9 +476,10 @@ def _run_context_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
             raw_agent_name=str(case.get("agent_name") or "") or None,
             explicit_worker=str(case.get("team_worker") or "") or None,
         )
+    actual = _normalize_runtime_paths(actual, path_aliases)
 
     passed = True
-    details: Dict[str, Any] = {"task_dir": os.path.relpath(task_dir, repo_root)}
+    details: Dict[str, Any] = {"task_dir": logical_task_dir or os.path.relpath(task_dir, repo_root)}
 
     exact = expected.get("exact")
     if isinstance(exact, dict):
@@ -451,20 +526,27 @@ def _run_context_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
             passed = False
         details["review_focus"] = result
 
+    fixture_source = prepared.get("fixture_source")
+    if fixture_source:
+        details["fixture_source"] = fixture_source
     return _base_result(case, passed=passed, actual=actual, details=details)
 
 
 def _run_team_launch_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
-    task_dir = _resolve_repo_path(repo_root, str(case.get("task_dir") or ""))
+    prepared = _prepare_task_dir_for_case(case, repo_root)
+    task_dir = prepared["actual_task_dir"]
+    logical_task_dir = prepared["logical_task_dir"]
+    path_aliases = dict(prepared.get("path_aliases") or {})
     expected = dict(case.get("expect") or {})
     if not os.path.isdir(task_dir):
-        return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {task_dir}"})
+        return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {logical_task_dir or task_dir}"})
 
     with _pushd(repo_root), _patched_provider_probe(case.get("provider_probe")):
         actual = _lib.team_launch_status(task_dir)
+    actual = _normalize_runtime_paths(actual, path_aliases)
 
     passed = True
-    details: Dict[str, Any] = {"task_dir": os.path.relpath(task_dir, repo_root)}
+    details: Dict[str, Any] = {"task_dir": logical_task_dir or os.path.relpath(task_dir, repo_root)}
     exact_fields = {k: v for k, v in expected.items() if k not in {"reason_contains", "execute_resolution_reason_contains"}}
     if exact_fields:
         result = _match_expected_members(actual, exact_fields)
@@ -486,14 +568,20 @@ def _run_team_launch_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any
             passed = False
         details["execute_resolution_reason_contains"] = {"expected": str(execute_contains), "actual": actual_reason}
 
+    fixture_source = prepared.get("fixture_source")
+    if fixture_source:
+        details["fixture_source"] = fixture_source
     return _base_result(case, passed=passed, actual=actual, details=details)
 
 
 def _run_team_relaunch_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
-    task_dir = _resolve_repo_path(repo_root, str(case.get("task_dir") or ""))
+    prepared = _prepare_task_dir_for_case(case, repo_root)
+    task_dir = prepared["actual_task_dir"]
+    logical_task_dir = prepared["logical_task_dir"]
+    path_aliases = dict(prepared.get("path_aliases") or {})
     expected = dict(case.get("expect") or {})
     if not os.path.isdir(task_dir):
-        return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {task_dir}"})
+        return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {logical_task_dir or task_dir}"})
 
     with _pushd(repo_root), _patched_provider_probe(case.get("provider_probe")):
         actual = _lib.select_team_relaunch_target(
@@ -501,9 +589,10 @@ def _run_team_relaunch_case(case: Dict[str, Any], repo_root: str) -> Dict[str, A
             raw_agent_name=str(case.get("agent_name") or "") or None,
             explicit_worker=str(case.get("team_worker") or "") or None,
         )
+    actual = _normalize_runtime_paths(actual, path_aliases)
 
     passed = True
-    details: Dict[str, Any] = {"task_dir": os.path.relpath(task_dir, repo_root)}
+    details: Dict[str, Any] = {"task_dir": logical_task_dir or os.path.relpath(task_dir, repo_root)}
     exact_fields = {k: v for k, v in expected.items() if k not in {"selection_reason_contains", "reason_contains"}}
     if exact_fields:
         result = _match_expected_members(actual, exact_fields)
@@ -525,6 +614,9 @@ def _run_team_relaunch_case(case: Dict[str, Any], repo_root: str) -> Dict[str, A
             passed = False
         details["reason_contains"] = {"expected": str(reason_contains), "actual": actual_reason}
 
+    fixture_source = prepared.get("fixture_source")
+    if fixture_source:
+        details["fixture_source"] = fixture_source
     return _base_result(case, passed=passed, actual=actual, details=details)
 
 
@@ -711,6 +803,7 @@ def execute_replay(
     kind_filters: Optional[Iterable[str]] = None,
     case_ids: Optional[Iterable[str]] = None,
 ) -> Dict[str, Any]:
+    global _ACTIVE_FIXTURE_MANAGER, _ACTIVE_FIXTURE_POLICY
     resolved_repo_root = repo_root or find_repo_root(os.getcwd())
     resolved_corpus_path = corpus_path or default_corpus_path(resolved_repo_root)
     corpus = load_corpus(resolved_corpus_path)
@@ -735,7 +828,16 @@ def execute_replay(
             continue
         selected.append(case)
 
-    results = [run_case(case, resolved_repo_root) for case in selected]
+    fixture_manager = ReplayFixtureManager(resolved_repo_root)
+    _ACTIVE_FIXTURE_POLICY = str(corpus.get("task_fixture_policy") or "missing-only").strip().lower() or "missing-only"
+    _ACTIVE_FIXTURE_MANAGER = fixture_manager
+    try:
+        results = [run_case(case, resolved_repo_root) for case in selected]
+    finally:
+        _ACTIVE_FIXTURE_MANAGER = None
+        _ACTIVE_FIXTURE_POLICY = "missing-only"
+        fixture_manager.cleanup()
+
     passed = sum(1 for item in results if item.get("passed"))
     failed = len(results) - passed
 

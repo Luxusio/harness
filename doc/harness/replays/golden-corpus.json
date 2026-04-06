@@ -715,5 +715,6 @@
         }
       }
     }
-  ]
+  ],
+  "task_fixture_policy": "packaged-first"
 }

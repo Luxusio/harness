@@ -8,6 +8,7 @@ Single entry point for task lifecycle management:
   top-failures — surface top similar historical failures for a task
   diff-case    — compare two failure cases
   update       — sync touched_paths/roots_touched/verification_targets
+  migrate      — upgrade task-local artifact schemas
   verify       — delegate to verify.py (suite / smoke / healthcheck modes)
   close        — wrap task_completed_gate.py
   replay       — run curated golden behavior replays
@@ -50,6 +51,7 @@ from _lib import (
     repo_root_for_task_dir,
     repo_relpath,
     TASK_DIR,
+    migrate_task_artifacts,
 )
 from environment_snapshot import write_environment_snapshot
 from golden_replay import run_cli as run_golden_replay
@@ -942,6 +944,43 @@ def cmd_update(args):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: migrate
+# ---------------------------------------------------------------------------
+
+
+def cmd_migrate(args):
+    task_dir = _require_task_dir(args)
+    summary = migrate_task_artifacts(task_dir, write=bool(getattr(args, "write", False)))
+    if getattr(args, "json", False):
+        print(json.dumps(summary, indent=2, ensure_ascii=False))
+        return 0
+
+    mode = "applied" if summary.get("write") else "preview"
+    print(f"artifact schema migration ({mode}) for {task_dir}")
+    for item in summary.get("artifacts") or []:
+        if not item.get("exists"):
+            print(f"  {item.get('artifact')}: missing")
+            continue
+        if item.get("artifact") == "TASK_STATE.yaml":
+            print(
+                "  {artifact}: schema {before}->{after} state_revision {s_before}->{s_after} parent={parent} changed={changed}".format(
+                    artifact=item.get("artifact"),
+                    before=item.get("schema_version_before", 0),
+                    after=item.get("schema_version_after", 0),
+                    s_before=item.get("state_revision_before", 0),
+                    s_after=item.get("state_revision_after", 0),
+                    parent=item.get("parent_revision_after"),
+                    changed=item.get("changed"),
+                )
+            )
+        else:
+            print(
+                f"  {item.get('artifact')}: schema {item.get('schema_version_before', 0)}->{item.get('schema_version_after', 0)} changed={item.get('changed')}"
+            )
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: record-agent-run
 # ---------------------------------------------------------------------------
 
@@ -1166,6 +1205,12 @@ def build_parser():
     p_upd.add_argument("--root-touched", action="append", default=[], metavar="ROOT", help="manually add a touched root (repeatable)")
     p_upd.add_argument("--verification-target", action="append", default=[], metavar="PATH", help="manually add a runtime verification target (repeatable)")
     p_upd.set_defaults(func=cmd_update)
+
+    p_migrate = subparsers.add_parser("migrate", help="upgrade task-local artifact schemas")
+    p_migrate.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_migrate.add_argument("--write", action="store_true", help="apply the migration in-place (default: preview only)")
+    p_migrate.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p_migrate.set_defaults(func=cmd_migrate)
 
     p_record = subparsers.add_parser("record-agent-run", help="explicitly record a worker/critic run")
     p_record.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
