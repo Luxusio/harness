@@ -169,7 +169,7 @@ class TestPromptMemoryRootAndLaneInference(unittest.TestCase):
 
                 with mock.patch.object(prompt_memory, "_get_active_task_dir", return_value=None), mock.patch.object(
                     prompt_memory,
-                    "select_relevant_notes",
+                    "select_prompt_notes",
                     side_effect=fake_select,
                 ):
                     prompt_memory.gather_context("why does the handler regression happen?")
@@ -228,6 +228,130 @@ class TestPromptMemoryRootAndLaneInference(unittest.TestCase):
                 self.assertNotIn("verify-lane guidance", note_parts[0])
             finally:
                 os.chdir(prev)
+
+
+class TestPromptNoteOrdering(unittest.TestCase):
+    def test_select_prompt_notes_prefers_req_note_when_scores_tie(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prev = os.getcwd()
+            os.chdir(tmp)
+            try:
+                os.makedirs("doc/common", exist_ok=True)
+                os.makedirs("doc/harness", exist_ok=True)
+                with open("doc/harness/manifest.yaml", "w", encoding="utf-8") as f:
+                    f.write(
+                        "registered_roots:\n"
+                        "  - common\n"
+                    )
+
+                shared_body = "protected artifact writes should use CLI tool\n"
+                with open("doc/common/REQ__policy.md", "w", encoding="utf-8") as f:
+                    f.write(
+                        "# REQ policy\n"
+                        "summary: requirement note\n"
+                        "freshness: current\n\n"
+                        + shared_body
+                    )
+                with open("doc/common/OBS__policy.md", "w", encoding="utf-8") as f:
+                    f.write(
+                        "# OBS policy\n"
+                        "summary: observation note\n"
+                        "freshness: current\n\n"
+                        + shared_body
+                    )
+
+                notes = memory_selectors.select_prompt_notes(
+                    "protected artifact writes should use CLI tool",
+                    query_context={"active_roots": ["common"]},
+                )
+
+                self.assertEqual(notes[0][0], "doc/common/REQ__policy.md")
+                self.assertEqual(notes[1][0], "doc/common/OBS__policy.md")
+            finally:
+                os.chdir(prev)
+
+
+class TestPromptNoteBundle(unittest.TestCase):
+    def test_select_prompt_notes_prefers_complementary_second_note(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prev = os.getcwd()
+            os.chdir(tmp)
+            try:
+                os.makedirs("doc/common", exist_ok=True)
+                os.makedirs("doc/api", exist_ok=True)
+                os.makedirs("doc/ui", exist_ok=True)
+                os.makedirs("doc/harness", exist_ok=True)
+                with open("doc/harness/manifest.yaml", "w", encoding="utf-8") as f:
+                    f.write(
+                        "registered_roots:\n"
+                        "  - common\n"
+                        "  - api\n"
+                        "  - ui\n"
+                    )
+
+                with open("doc/api/login.md", "w", encoding="utf-8") as f:
+                    f.write(
+                        "# API login\n"
+                        "summary: API login contract\n"
+                        "freshness: current\n"
+                        "path_scope: [src/api/login.py]\n\n"
+                        "login validation error fix\n"
+                    )
+                with open("doc/common/login.md", "w", encoding="utf-8") as f:
+                    f.write(
+                        "# Common login\n"
+                        "summary: shared login rollback guard\n"
+                        "freshness: current\n\n"
+                        "login validation rollback guard\n"
+                    )
+                with open("doc/ui/login.md", "w", encoding="utf-8") as f:
+                    f.write(
+                        "# UI login\n"
+                        "summary: ui login styling\n"
+                        "freshness: current\n\n"
+                        "login button styling only\n"
+                    )
+
+                notes = memory_selectors.select_prompt_notes(
+                    "fix login validation in src/api/login.py",
+                    query_context={
+                        "active_roots": ["common", "api"],
+                        "current_lane": "build",
+                    },
+                )
+
+                self.assertEqual(len(notes), 2)
+                self.assertEqual(notes[0][0], "doc/api/login.md")
+                self.assertEqual(notes[1][0], "doc/common/login.md")
+            finally:
+                os.chdir(prev)
+
+
+class TestPromptMemoryNoteInjection(unittest.TestCase):
+    def test_gather_context_injects_primary_and_check_note(self):
+        with mock.patch.object(
+            prompt_memory,
+            "_get_active_task_dir",
+            return_value=None,
+        ), mock.patch.object(
+            prompt_memory,
+            "_get_task_required_hint",
+            return_value="",
+        ), mock.patch.object(
+            prompt_memory,
+            "select_prompt_notes",
+            return_value=[
+                ("doc/api/login.md", 0.91, "API login contract", "current", "api"),
+                ("doc/common/login.md", 0.74, "shared login rollback guard", "current", "common"),
+            ],
+        ):
+            parts = prompt_memory.gather_context("fix login validation")
+
+        note_parts = [part for part in parts if part.startswith("note")]
+        self.assertEqual(note_parts[:2], [
+            "note:[api] API login contract",
+            "note[check]:shared login rollback guard",
+        ])
 
 
 if __name__ == "__main__":

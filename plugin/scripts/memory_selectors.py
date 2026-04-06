@@ -395,6 +395,22 @@ def _get_registered_roots(doc_base="doc"):
     return roots
 
 
+def _freshness_sort_rank(value):
+    order = {"current": 0, "suspect": 1, "stale": 2, "superseded": 3}
+    return order.get(str(value or "").strip().lower(), 9)
+
+
+def _note_type_sort_rank(path_value):
+    basename = os.path.basename(str(path_value or "")).upper()
+    if basename.startswith("REQ__"):
+        return 0
+    if basename.startswith("OBS__"):
+        return 1
+    if basename.startswith("INF__"):
+        return 2
+    return 3
+
+
 def _get_first_line(content):
     """Extract the first meaningful non-metadata line from note content."""
     lines = content.split("\n")
@@ -428,15 +444,11 @@ def _get_first_line(content):
     return lines[0].strip("# ").strip() if lines else ""
 
 
-def select_relevant_notes(prompt, notes_dir=None, query_context=None):
-    """Find notes across all doc/* directories matching prompt keywords.
+def _collect_scored_notes(prompt, notes_dir=None, query_context=None):
+    """Collect and score note candidates across all registered roots.
 
-    Returns list of (path, weighted_score, first_line, freshness, root_name).
-
-    Falls back to doc/common only when manifest has no registered_roots and
-    doc/* scan yields nothing.
-
-    Backward compatible: notes without new metadata fields use defaults.
+    Returns a score-sorted list of tuples:
+      (path, weighted_score, display_text, freshness, root_name)
     """
     keywords = extract_keywords(prompt)
 
@@ -508,8 +520,91 @@ def select_relevant_notes(prompt, notes_dir=None, query_context=None):
         # end for fname
     # end for root_name
 
-    scored.sort(key=lambda x: x[1], reverse=True)
-    return scored[:2]  # Top 2
+    scored.sort(
+        key=lambda x: (
+            -float(x[1]),
+            _freshness_sort_rank(x[3]),
+            _note_type_sort_rank(x[0]),
+            str(x[4] or "").lower(),
+            str(x[0] or "").lower(),
+        )
+    )
+    return scored
+
+
+
+def select_relevant_notes(prompt, notes_dir=None, query_context=None):
+    """Find the top relevant notes across all doc/* roots.
+
+    Returns up to two notes as tuples of:
+      (path, weighted_score, first_line, freshness, root_name)
+
+    This stays backward compatible with earlier single-note consumers.
+    """
+    return _collect_scored_notes(
+        prompt,
+        notes_dir=notes_dir,
+        query_context=query_context,
+    )[:2]
+
+
+
+def select_prompt_notes(prompt, notes_dir=None, query_context=None, max_notes=2):
+    """Select a small prompt-safe note bundle with complementary coverage.
+
+    The first note is always the strongest-scoring candidate. The optional
+    second note must still be relevant, but is chosen with a small diversity
+    bonus so we prefer a distinct root/freshness/example rather than two near
+    duplicates from the same slice of memory.
+    """
+    if max_notes <= 0:
+        return []
+
+    scored = _collect_scored_notes(
+        prompt,
+        notes_dir=notes_dir,
+        query_context=query_context,
+    )
+    if not scored:
+        return []
+
+    primary = scored[0]
+    bundle = [primary]
+    if max_notes == 1 or len(scored) == 1:
+        return bundle
+
+    primary_text = str(primary[2] or "").strip().lower()
+    min_score = max(0.22, float(primary[1]) * 0.55)
+    best = None
+    best_bundle_score = float("-inf")
+
+    for candidate in scored[1:6]:
+        candidate_text = str(candidate[2] or "").strip().lower()
+        if candidate[1] < min_score:
+            continue
+        if candidate[0] == primary[0]:
+            continue
+        if candidate_text and candidate_text == primary_text and candidate[4] == primary[4]:
+            continue
+
+        bundle_score = float(candidate[1])
+        if candidate[4] != primary[4]:
+            bundle_score += 0.08
+        if candidate[3] == "current" and primary[3] != "current":
+            bundle_score += 0.06
+        if candidate[3] != primary[3]:
+            bundle_score += 0.03
+        if candidate_text and candidate_text != primary_text:
+            bundle_score += 0.04
+
+        if bundle_score > best_bundle_score:
+            best = candidate
+            best_bundle_score = bundle_score
+
+    if best is not None:
+        bundle.append(best)
+
+    return bundle[:max_notes]
 
 
 def select_active_tasks(prompt, task_dir="doc/harness/tasks"):

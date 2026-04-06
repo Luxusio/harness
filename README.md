@@ -129,7 +129,7 @@ checks:
     last_updated: "2026-03-29T00:00:00Z"
 ```
 
-The developer updates criteria to `implemented_candidate` after implementation. Critics update per-criterion verdicts (`passed`/`failed`) with evidence refs. The `reopen_count` tracks regression (re-failure after a previous pass). The ledger is informational — it does not block task completion in this version.
+The developer updates criteria to `implemented_candidate` after implementation. Critics update per-criterion verdicts (`passed`/`failed`) with evidence refs. The `reopen_count` tracks regression (re-failure after a previous pass). The ledger remains advisory for normal tasks, but high-risk tasks enforce an effective `strict_high_risk` close gate from TASK_STATE signals even if CHECKS.yaml was not resynced yet.
 
 See `plugin/docs/acceptance-ledger.md` for the full schema and lifecycle.
 
@@ -186,7 +186,7 @@ The prompt memory system uses multi-signal relevance scoring across all register
 | Path overlap | 0.10 | Overlap between query paths and note's `path_scope` |
 | Lane relevance | 0.10 | Bonus when note's `lane` matches current task lane |
 
-Query tokenization handles: Unicode word splitting, file path segments, `snake_case`/`camelCase`/`kebab-case` decomposition, and 2-3gram fallback. The selection budget remains top 2 notes, 1 task, 1 verdict within 600 characters.
+Query tokenization handles: Unicode word splitting, file path segments, `snake_case`/`camelCase`/`kebab-case` decomposition, and 2-3gram fallback. Prompt memory now injects a primary note first and may add one complementary `note[check]` when a second note provides distinct root/freshness coverage within the same tight prompt budget.
 
 Notes may carry optional retrieval metadata (`root`, `lane`, `path_scope`, `topic_tags`) for better scoring. Notes without these fields use defaults and score normally.
 
@@ -268,6 +268,31 @@ This stays intentionally conservative — no external DB, no embeddings, and no 
 
 The runtime control plane still keeps prompt context small: fix rounds surface at most the top 3 similar cases, while the prompt hook continues to inject only the single best hint. See `plugin/docs/failure-history.md`.
 
+## Golden task replay
+
+Harness-surface edits can pass unit tests while still drifting on real historical decisions.
+
+To catch that, the repo now keeps a curated replay corpus at `doc/harness/replays/golden-corpus.json` and exposes it through:
+
+- `python3 plugin/scripts/hctl.py replay`
+- `python3 plugin/scripts/hctl.py replay --kind routing`
+- `python3 plugin/scripts/hctl.py replay --case <case-id>`
+
+The corpus replays eight decision surfaces against the current code:
+
+- routing (`compile_routing`)
+- close gate (`compute_completion_failures`)
+- prompt note selection (`select_prompt_notes`)
+- next-step guidance (`stop_gate._next_step`)
+- recovery handoff generation (`preview_handoff`)
+- compact runtime context (`emit_compact_context`)
+- team launch status (`team_launch_status`)
+- team relaunch selection (`select_team_relaunch_target`)
+
+Routing/context/team replay cases patch team-provider probes to fixed values so replay stays deterministic across machines. That stabilization now also covers synthetic Claude CLI availability so native team-launch fallback paths stay pinned across machines. Prompt-note replay also uses a stable tie-breaker: higher freshness, then `REQ__` before `OBS__` before `INF__`, then root/path. Handoff replay now covers blocked-env recovery (including `ENVIRONMENT_SNAPSHOT.md`), repeated acceptance reopen loops, and team documentation-phase recovery. Context / team replay now also pins native launch fallback, stale launch refresh, and synthesis-owner relaunch selection.
+
+Treat replay as the conservative post-change smoke test for harness logic after targeted unit tests. See `plugin/docs/golden-replay.md`.
+
 ## Architecture check promotion
 
 Architecture constraint checks default to **hints only**. They are promoted to **required evidence** when all conditions are met:
@@ -337,7 +362,7 @@ plugin/
     prompt_memory.py             # context injection (multi-root retrieval + single similar-failure hint)
     memory_selectors.py          # note scoring (5-signal, Unicode-aware)
     failure_memory.py            # FAILURE_CASE sidecar + top-k similar-failure retrieval
-    hctl.py                      # task control plane + failure history/top-failures/diff-case CLI
+    hctl.py                      # task control plane + failure history/top-failures/diff-case/replay CLI
     task_completed_gate.py       # completion gate + CHECKS.yaml warnings
     file_changed_sync.py         # precise invalidation (all doc/* roots)
     session_end_sync.py          # session end summary + maintain-lite (all roots) + handoff
@@ -358,6 +383,7 @@ plugin/
     retrieval-selection.md       # multi-signal retrieval algorithm reference
     handoff-escalation.md        # SESSION_HANDOFF.json triggers and schema
     failure-history.md           # FAILURE_CASE index and similar-failure CLI
+    golden-replay.md            # curated behavior replay corpus + CLI
     architecture-promotion.md    # conditional architecture check promotion
     orchestration-modes.md         # orchestration mode reference
 ```

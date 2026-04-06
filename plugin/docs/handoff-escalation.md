@@ -134,6 +134,8 @@ When `SESSION_HANDOFF.json` is present, a task has an active `CRITIC__runtime.md
 
 This is meant to stop fix rounds from reopening with only summaries while the actual failing evidence stays hidden deeper in the task folder.
 
+For replay / dry-run checks, `handoff_escalation.preview_handoff(task_dir)` now builds the same payload without writing `SESSION_HANDOFF.json`, so golden replay can pin recovery behavior without mutating task fixtures.
+
 ---
 
 ## How It Is Consumed

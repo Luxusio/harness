@@ -8,7 +8,8 @@ from _lib import (read_hook_input, hook_json_get, json_field, json_array, yaml_f
                   get_workflow_violations, get_agent_run_count,
                   needs_document_critic, is_handoff_stub, team_artifact_status,
                   parse_checks_close_gate, set_task_state_field,
-                  verdict_freshness, format_verdict_with_freshness)
+                  verdict_freshness, format_verdict_with_freshness,
+                  should_set_strict_close_gate)
 
 # TaskCompleted hook — completion firewall.
 # BLOCKING: exit 2 rejects completion when verdicts are missing.
@@ -144,6 +145,20 @@ def _strict_close_gate_failures(checks_file, criteria):
     )
 
     return failures
+
+
+def _effective_checks_close_gate(state_file, checks_file):
+    """Resolve the effective CHECKS close gate for the task.
+
+    High-risk task state can promote the effective gate to strict_high_risk even
+    when CHECKS.yaml is missing the field. This protects close behavior from
+    plan/ledger drift without forcing normal tasks into stricter semantics.
+    """
+    configured = parse_checks_close_gate(checks_file)
+    requires_strict = should_set_strict_close_gate(state_file)
+    if configured == "strict_high_risk" or requires_strict:
+        return "strict_high_risk", configured, requires_strict
+    return "standard", configured, requires_strict
 
 
 def _get_blocking_open_complaints(complaints_file):
@@ -523,7 +538,10 @@ def compute_completion_failures(task_dir):
     if os.path.exists(checks_file):
         try:
             criteria = _parse_checks_yaml(checks_file)
-            close_gate = parse_checks_close_gate(checks_file)
+            close_gate, configured_close_gate, strict_required = _effective_checks_close_gate(
+                state_file,
+                checks_file,
+            )
 
             if close_gate == "strict_high_risk":
                 # Strict gate: ALL criteria must be 'passed'
@@ -540,6 +558,12 @@ def compute_completion_failures(task_dir):
                         f"CHECKS.yaml has {len(failed_criteria)} failed criterion/criteria: {ids}"
                         " — all acceptance criteria must pass before completion"
                     )
+
+            # If the state requires strict gating but CHECKS.yaml has not been
+            # updated yet, we still enforce strict semantics above. No extra
+            # blocking failure is added here because the close verdict itself is
+            # the important invariant; the CLI prints drift info separately.
+            _ = configured_close_gate, strict_required
         except Exception:
             pass  # parse errors are non-blocking
 
@@ -621,7 +645,15 @@ def main():
     if os.path.exists(checks_file):
         try:
             criteria = _parse_checks_yaml(checks_file)
-            close_gate = parse_checks_close_gate(checks_file)
+            close_gate, configured_close_gate, strict_required = _effective_checks_close_gate(
+                state_file,
+                checks_file,
+            )
+            if strict_required and configured_close_gate != "strict_high_risk":
+                print(
+                    "INFO: effective CHECKS close_gate promoted to strict_high_risk "
+                    "from TASK_STATE high-risk signals"
+                )
             # Show non-passed, non-failed criteria as info (failed ones are already in failures)
             # For strict gate, all non-passed are already blocking — show as info anyway
             if close_gate == "strict_high_risk":
