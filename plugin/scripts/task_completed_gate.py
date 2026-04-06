@@ -8,7 +8,7 @@ from _lib import (read_hook_input, hook_json_get, json_field, json_array, yaml_f
                   get_workflow_violations, get_agent_run_count,
                   needs_document_critic, is_handoff_stub, team_artifact_status,
                   parse_checks_close_gate, set_task_state_field, merge_task_path_fields,
-                  verdict_freshness, format_verdict_with_freshness,
+                  verdict_freshness, format_verdict_with_freshness, normalize_check_status_value,
                   should_set_strict_close_gate, reconcile_agent_run_counts)
 
 # TaskCompleted hook — completion firewall.
@@ -61,20 +61,7 @@ def _parse_checks_yaml(checks_file):
 
 def _normalize_check_status(raw_status):
     """Normalize CHECKS.yaml status values into canonical lowercase forms."""
-    value = str(raw_status or "").strip().strip('"').strip("'")
-    if not value:
-        return "unknown"
-    lowered = value.lower()
-    aliases = {
-        "pass": "passed",
-        "passed": "passed",
-        "fail": "failed",
-        "failed": "failed",
-        "planned": "planned",
-        "implemented_candidate": "implemented_candidate",
-        "blocked": "blocked",
-    }
-    return aliases.get(lowered, lowered)
+    return normalize_check_status_value(raw_status)
 
 
 def _check_artifact_provenance(task_dir):

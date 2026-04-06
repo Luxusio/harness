@@ -152,6 +152,7 @@ class TaskLifecycleRegressionTests(unittest.TestCase):
             task_dir = repo / "doc" / "harness" / "tasks" / "TASK__local-setup-doc"
             self.assertTrue((task_dir / "TASK_STATE.yaml").is_file())
             self.assertTrue((task_dir / "REQUEST.md").is_file())
+            self.assertTrue((task_dir / "CHECKS.yaml").is_file())
             state_file = task_dir / "TASK_STATE.yaml"
             self.assertEqual(yaml_field("task_id", str(state_file)), "TASK__local-setup-doc")
             self.assertEqual(yaml_field("runtime_verdict_freshness", str(state_file)), "current")
@@ -196,6 +197,27 @@ class TaskLifecycleRegressionTests(unittest.TestCase):
             self.assertEqual([c["status"] for c in criteria], ["passed", "passed"])
             failures = compute_completion_failures(str(task_dir))
             self.assertFalse(any("STRICT CLOSE GATE" in f for f in failures), failures)
+
+    def test_checks_pending_alias_is_normalized_to_planned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _make_repo_root(Path(tmp))
+            task_dir = repo / "doc" / "harness" / "tasks" / "TASK__checks_pending"
+            _make_non_mutating_passing_task(task_dir)
+            _write(
+                task_dir / "CHECKS.yaml",
+                textwrap.dedent(
+                    """
+                    checks:
+                      - id: AC-001
+                        title: first
+                        status: pending
+                    """
+                ).strip()
+                + "\n",
+            )
+
+            criteria = _parse_checks_yaml(str(task_dir / "CHECKS.yaml"))
+            self.assertEqual([c["status"] for c in criteria], ["planned"])
 
     def test_parse_changed_files_normalizes_absolute_repo_paths(self):
         with tempfile.TemporaryDirectory() as tmp:

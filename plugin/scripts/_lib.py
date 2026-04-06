@@ -287,6 +287,112 @@ def ensure_checks_schema_content(content):
     )
 
 
+def normalize_check_status_value(raw_status):
+    """Normalize CHECKS.yaml status values into canonical lowercase forms.
+
+    Canonical statuses are: planned, implemented_candidate, passed, failed,
+    blocked, and skipped. Common aliases remain accepted so users do not need
+    perfect schema recall during manual recovery work.
+    """
+    value = str(raw_status or '').strip().strip('\"').strip("'")
+    if not value:
+        return 'unknown'
+    lowered = value.lower()
+    aliases = {
+        'pending': 'planned',
+        'plan': 'planned',
+        'planned': 'planned',
+        'candidate': 'implemented_candidate',
+        'implemented': 'implemented_candidate',
+        'implemented_candidate': 'implemented_candidate',
+        'pass': 'passed',
+        'passed': 'passed',
+        'ok': 'passed',
+        'fail': 'failed',
+        'failed': 'failed',
+        'blocked': 'blocked',
+        'skip': 'skipped',
+        'skipped': 'skipped',
+    }
+    return aliases.get(lowered, lowered)
+
+
+def render_default_checks_yaml(close_gate='standard'):
+    """Return a canonical starter CHECKS.yaml scaffold."""
+    gate = close_gate if close_gate in ('standard', 'strict_high_risk') else 'standard'
+    ts = now_iso()
+    return (
+        f"schema_version: {CHECKS_SCHEMA_VERSION}\n"
+        f"close_gate: {gate}\n"
+        "checks:\n"
+        "  - id: AC-001\n"
+        "    title: \"Fill from PLAN.md acceptance criteria\"\n"
+        "    status: planned\n"
+        "    kind: functional\n"
+        "    evidence_refs: []\n"
+        "    reopen_count: 0\n"
+        f"    last_updated: \"{ts}\"\n"
+        "    notes: \"Replace this placeholder after the plan is approved.\"\n"
+    )
+
+
+def ensure_checks_template(task_dir, close_gate='standard'):
+    """Ensure a canonical CHECKS.yaml starter exists for the task.
+
+    Returns a small report describing the file path and whether the template was
+    created or normalized. Existing non-empty ledgers are preserved except for
+    lightweight schema / close_gate backfills.
+    """
+    task_dir = os.path.abspath(task_dir)
+    checks_file = os.path.join(task_dir, 'CHECKS.yaml')
+    gate = close_gate if close_gate in ('standard', 'strict_high_risk') else 'standard'
+    created = False
+    normalized = False
+
+    if not os.path.exists(checks_file):
+        atomic_write_text(checks_file, render_default_checks_yaml(gate))
+        created = True
+        return {
+            'path': checks_file,
+            'created': created,
+            'normalized': normalized,
+            'close_gate': gate,
+        }
+
+    try:
+        with open(checks_file, 'r', encoding='utf-8') as fh:
+            original = fh.read()
+    except OSError:
+        return {
+            'path': checks_file,
+            'created': created,
+            'normalized': normalized,
+            'close_gate': parse_checks_close_gate(checks_file),
+        }
+
+    migrated = ensure_checks_schema_content(original)
+    if re.search(r'^close_gate\s*:', migrated, flags=re.MULTILINE):
+        migrated = re.sub(r'^close_gate\s*:\s*.+$', f'close_gate: {gate}', migrated, flags=re.MULTILINE, count=1)
+    else:
+        lines = migrated.splitlines()
+        insertion = [f'close_gate: {gate}']
+        if lines and lines[0].startswith('schema_version:'):
+            lines = [lines[0], *insertion, *lines[1:]]
+        else:
+            lines = [*insertion, *lines]
+        migrated = '\n'.join(lines).rstrip('\n') + '\n'
+    normalized = migrated != original
+    if normalized:
+        atomic_write_text(checks_file, migrated)
+
+    return {
+        'path': checks_file,
+        'created': created,
+        'normalized': normalized,
+        'close_gate': gate,
+    }
+
+
 def migrate_checks_file(checks_file, *, write=False):
     """Ensure CHECKS.yaml carries a top-level schema_version."""
     report = {
@@ -6150,13 +6256,13 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
                         check_items.append(current)
                     current = {
                         "id": m_id.group(1).strip().strip('"').strip("'"),
-                        "status": "pending",
+                        "status": "planned",
                         "title": "",
                     }
                     continue
                 m_st = re.match(r"^\s+status\s*:\s*(.+)", line)
                 if m_st and current.get("id"):
-                    current["status"] = m_st.group(1).strip().strip('"').strip("'")
+                    current["status"] = normalize_check_status_value(m_st.group(1))
                     continue
                 m_title = re.match(r"^\s+title\s*:\s*(.+)", line)
                 if m_title and current.get("id"):
@@ -6915,6 +7021,103 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
         else:
             next_action = "Implement the smallest diff for open checks, then run mcp__plugin_harness_harness__task_update_from_git_diff, task_verify, and task_close."
 
+    checks_configured_close_gate = parse_checks_close_gate(checks_file)
+    effective_close_gate = (
+        "strict_high_risk"
+        if checks_configured_close_gate == "strict_high_risk" or should_set_strict_close_gate(state_file)
+        else "standard"
+    )
+    checks_non_passed_count = len([c for c in check_items if c.get("status") != "passed"])
+    checks_failed_count = len(failed_ids)
+
+    plan_exists = os.path.isfile(_task_abs("PLAN.md"))
+    plan_critic_exists = os.path.isfile(_task_abs("CRITIC__plan.md"))
+    handoff_exists = os.path.isfile(handoff_path)
+    handoff_ready = handoff_exists and not is_handoff_stub(handoff_path)
+    doc_sync_exists = os.path.isfile(doc_sync_path)
+    document_verdict = (yaml_field("document_verdict", state_file) or "pending").upper()
+    document_critic_exists = os.path.isfile(document_critic_path)
+    document_critic_needed = needs_document_critic(task_dir)
+    result_required = lane == "investigate" or _bool(yaml_field("result_required", state_file) or "false")
+    result_exists = os.path.isfile(_task_abs("RESULT.md"))
+    is_mutating = str(yaml_field("mutates_repo", state_file) or "true").lower() != "false"
+
+    source_write_allowed = True
+    why_source_write_blocked = ""
+    if routing_compiled != "true":
+        source_write_allowed = False
+        why_source_write_blocked = "routing not compiled yet — run task_start first"
+    elif plan_verdict != "PASS":
+        source_write_allowed = False
+        why_source_write_blocked = "plan_verdict is not PASS — source writes require critic-plan approval"
+    elif is_team_mode and team_plan_required and not team_artifacts.get("plan_ready"):
+        source_write_allowed = False
+        why_source_write_blocked = "TEAM_PLAN.md is not complete yet — worker ownership must be finalized before source writes"
+    elif current_agent_role and current_agent_role not in ("developer", "harness", ""):
+        source_write_allowed = False
+        why_source_write_blocked = f"current role '{current_agent_role}' should not mutate source files"
+    elif is_team_mode and current_team_worker and team_artifacts.get("plan_ready") and current_agent_role in ("developer", "harness", ""):
+        if not current_worker_owned_paths:
+            source_write_allowed = False
+            why_source_write_blocked = f"worker '{current_team_worker}' has no owned writable paths in TEAM_PLAN.md"
+
+    entry_requirements = []
+    if routing_compiled != "true":
+        entry_requirements.append("task_start routing compiled")
+    if planning_mode == "broad-build":
+        entry_requirements.append("01_product_spec.md / 02_design_language.md / 03_architecture.md")
+    entry_requirements.append("PLAN.md contract")
+    entry_requirements.append("plan_verdict=PASS before source writes")
+    if is_team_mode and team_plan_required:
+        entry_requirements.append("TEAM_PLAN.md ready before source writes")
+
+    close_requirements = [
+        "PLAN.md + CRITIC__plan.md PASS",
+        "HANDOFF.md ready",
+    ]
+    if is_team_mode:
+        close_requirements.extend(["TEAM_PLAN.md ready", "TEAM_SYNTHESIS.md ready"])
+    if result_required:
+        close_requirements.append("RESULT.md")
+    if is_mutating:
+        close_requirements.extend([
+            "runtime_verdict PASS (fresh) + CRITIC__runtime.md",
+            "DOC_SYNC.md",
+        ])
+    if document_critic_needed:
+        close_requirements.append("document_verdict PASS (fresh) + CRITIC__document.md")
+    if effective_close_gate == "strict_high_risk":
+        close_requirements.append("CHECKS all passed")
+    elif check_items:
+        close_requirements.append("CHECKS no failed criteria")
+
+    missing_for_close = []
+    if not plan_exists:
+        missing_for_close.append("PLAN.md")
+    if plan_verdict != "PASS" or not plan_critic_exists:
+        missing_for_close.append("plan_verdict PASS / CRITIC__plan.md")
+    if not handoff_ready:
+        missing_for_close.append("HANDOFF.md")
+    if is_team_mode and not team_artifacts.get("plan_ready"):
+        missing_for_close.append("TEAM_PLAN.md ready")
+    if is_team_mode and team_synthesis_required and not team_artifacts.get("synthesis_ready"):
+        missing_for_close.append("TEAM_SYNTHESIS.md ready")
+    if result_required and not result_exists:
+        missing_for_close.append("RESULT.md")
+    if is_mutating and (runtime_verdict != "PASS" or runtime_freshness != "current" or not os.path.isfile(runtime_critic_path)):
+        missing_for_close.append("runtime_verdict PASS (fresh)")
+    if is_mutating and not doc_sync_exists:
+        missing_for_close.append("DOC_SYNC.md")
+    if document_critic_needed and (document_verdict != "PASS" or document_freshness != "current" or not document_critic_exists):
+        missing_for_close.append("document_verdict PASS (fresh)")
+    if effective_close_gate == "strict_high_risk" and checks_non_passed_count:
+        missing_for_close.append(f"CHECKS all passed ({checks_non_passed_count} remaining)")
+    elif effective_close_gate == "standard" and checks_failed_count:
+        missing_for_close.append(f"CHECKS failed={checks_failed_count}")
+
+    checks_template_path = _task_rel("CHECKS.yaml")
+    checks_statuses = ["planned", "implemented_candidate", "passed", "failed", "blocked"]
+
     if is_team_mode:
         team_payload = {
             "provider": team_provider,
@@ -7089,6 +7292,14 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
         "team_synthesis_name": team_synthesis_name,
         "team_plan_path": _task_rel(team_plan_name),
         "team_synthesis_path": _task_rel(team_synthesis_name),
+        "source_write_allowed": source_write_allowed,
+        "why_source_write_blocked": why_source_write_blocked,
+        "entry_requirements": entry_requirements,
+        "close_requirements": close_requirements,
+        "effective_close_gate": effective_close_gate,
+        "missing_for_close": missing_for_close[:6],
+        "checks_template_path": checks_template_path,
+        "checks_statuses": checks_statuses,
         "must_read": must_read,
         "commands": commands,
         "checks": checks,

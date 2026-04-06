@@ -65,6 +65,24 @@ class McpBashGuardTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("mcp__plugin_harness_harness__observability_status", result.stderr)
 
+    def test_blocks_sed_in_place_source_mutation(self):
+        result = self._run_guard("sed -i '' 's/old/new/' plugin/scripts/hctl.py")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("bypasses harness provenance", result.stderr)
+        self.assertIn("plugin/scripts/hctl.py", result.stderr)
+
+    def test_blocks_python_inline_protected_artifact_write(self):
+        result = self._run_guard(
+            "python3 -c \"open(\'doc/harness/tasks/TASK__x/CRITIC__plan.md\',\'w\').write(\'verdict: PASS\\n\')\""
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("CRITIC__plan.md", result.stderr)
+        self.assertIn("write_critic_plan", result.stderr)
+    def test_allows_non_mutating_sed_read(self):
+        result = self._run_guard("sed -n '1,20p' plugin/scripts/hctl.py")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stderr, "")
+
     def test_allows_regular_bash(self):
         result = self._run_guard("npm test -- --grep runtime")
         self.assertEqual(result.returncode, 0)

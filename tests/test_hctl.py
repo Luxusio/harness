@@ -366,9 +366,9 @@ class TestHctlContextJson(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _context_json(self, lane="refactor", risk_tags=None):
+    def _context_json(self, lane="refactor", risk_tags=None, extra_fields=None):
         task_dir = _make_task(self.tmp.name, "TASK__ctx", lane=lane,
-                              risk_tags=risk_tags)
+                              risk_tags=risk_tags, extra_fields=extra_fields)
         _run_hctl("start", "--task-dir", task_dir)
         code, out, err = _run_hctl("context", "--task-dir", task_dir, "--json")
         self.assertEqual(code, 0, err)
@@ -502,6 +502,9 @@ class TestHctlContextJson(unittest.TestCase):
             "task_id", "status", "lane", "risk_level", "qa_required",
             "doc_sync_required", "browser_required", "parallelism",
             "workflow_locked", "maintenance_task", "planning_mode", "compat", "team",
+            "source_write_allowed", "why_source_write_blocked", "entry_requirements",
+            "close_requirements", "effective_close_gate", "missing_for_close",
+            "checks_template_path", "checks_statuses",
             "must_read", "commands", "checks", "open_failures", "notes",
             "review_focus", "next_action",
         }
@@ -544,6 +547,26 @@ class TestHctlContextJson(unittest.TestCase):
     def test_next_action_present(self):
         ctx = self._context_json()
         self.assertTrue(ctx["next_action"])
+
+    def test_context_surfaces_contract_fields(self):
+        ctx = self._context_json()
+        self.assertIsInstance(ctx["entry_requirements"], list)
+        self.assertTrue(ctx["entry_requirements"])
+        self.assertIsInstance(ctx["close_requirements"], list)
+        self.assertTrue(ctx["close_requirements"])
+        self.assertIn(ctx["effective_close_gate"], ("standard", "strict_high_risk"))
+        self.assertTrue(ctx["checks_template_path"].endswith("CHECKS.yaml"))
+        self.assertIn("planned", ctx["checks_statuses"])
+
+    def test_context_blocks_source_writes_before_plan_pass(self):
+        ctx = self._context_json(lane="build", risk_tags=["multi-root"], extra_fields={"plan_verdict": "pending"})
+        self.assertFalse(ctx["source_write_allowed"])
+        self.assertIn("plan_verdict", ctx["why_source_write_blocked"])
+
+    def test_context_promotes_strict_close_gate_for_structural_risk(self):
+        ctx = self._context_json(lane="build", risk_tags=["structural"])
+        self.assertEqual(ctx["effective_close_gate"], "strict_high_risk")
+        self.assertTrue(any("CHECKS all passed" in item for item in ctx["close_requirements"]))
 
     def test_no_verbose_artifact_dump(self):
         """Context JSON must not contain raw artifact file content."""
