@@ -53,6 +53,55 @@ class TestMemorySelectors(unittest.TestCase):
             finally:
                 os.chdir(prev)
 
+    def test_select_relevant_notes_respects_scan_roots(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prev = os.getcwd()
+            os.chdir(tmp)
+            try:
+                os.makedirs("doc/common", exist_ok=True)
+                os.makedirs("doc/api", exist_ok=True)
+                os.makedirs("doc/ui", exist_ok=True)
+                os.makedirs("doc/harness", exist_ok=True)
+                with open("doc/harness/manifest.yaml", "w", encoding="utf-8") as f:
+                    f.write("registered_roots:\n  - common\n  - api\n  - ui\n")
+
+                with open("doc/api/handler.md", "w", encoding="utf-8") as f:
+                    f.write(
+                        "# API note\n"
+                        "summary: api guidance\n"
+                        "freshness: current\n\n"
+                        "handler regression fix\n"
+                    )
+                with open("doc/ui/handler.md", "w", encoding="utf-8") as f:
+                    f.write(
+                        "# UI note\n"
+                        "summary: ui guidance\n"
+                        "freshness: current\n\n"
+                        "handler regression fix\n"
+                    )
+
+                original_listdir = memory_selectors.os.listdir
+
+                def guarded_listdir(path):
+                    normalized = os.path.normpath(path)
+                    if normalized.endswith(os.path.normpath("doc/ui")):
+                        raise AssertionError("unrelated root should not be scanned")
+                    return original_listdir(path)
+
+                with mock.patch.object(memory_selectors.os, "listdir", side_effect=guarded_listdir):
+                    notes = memory_selectors.select_relevant_notes(
+                        "fix the handler regression",
+                        query_context={
+                            "active_roots": ["common", "api"],
+                            "scan_roots": ["common", "api"],
+                        },
+                    )
+
+                self.assertTrue(notes)
+                self.assertEqual(notes[0][0], "doc/api/handler.md")
+            finally:
+                os.chdir(prev)
+
 
 class TestPromptMemoryRootAndLaneInference(unittest.TestCase):
     def test_gather_context_prefers_task_root_over_unrelated_registered_roots(self):
@@ -67,19 +116,66 @@ class TestPromptMemoryRootAndLaneInference(unittest.TestCase):
                 with open("doc/harness/manifest.yaml", "w", encoding="utf-8") as f:
                     f.write("registered_roots:\n  - common\n  - api\n  - ui\n")
                 with open("doc/harness/tasks/TASK__active/TASK_STATE.yaml", "w", encoding="utf-8") as f:
-                    f.write("task_id: TASK__active\nstatus: planned\nlane: build\nverification_targets: [\"doc/api/service.md\"]\ntouched_paths: []\n")
+                    f.write(
+                        "task_id: TASK__active\n"
+                        "status: planned\n"
+                        "lane: build\n"
+                        "verification_targets: [\"doc/api/service.md\"]\n"
+                        "touched_paths: []\n"
+                    )
                 with open("doc/api/handler.md", "w", encoding="utf-8") as f:
-                    f.write("# API handler\nsummary: API handler regression guidance\nfreshness: current\n\nhandler regression fix\n")
+                    f.write(
+                        "# API handler\n"
+                        "summary: API handler regression guidance\n"
+                        "freshness: current\n\n"
+                        "handler regression fix\n"
+                    )
                 with open("doc/ui/handler.md", "w", encoding="utf-8") as f:
-                    f.write("# UI handler\nsummary: UI handler regression guidance\nfreshness: current\n\nhandler regression fix\n")
+                    f.write(
+                        "# UI handler\n"
+                        "summary: UI handler regression guidance\n"
+                        "freshness: current\n\n"
+                        "handler regression fix\n"
+                    )
 
                 active_task = os.path.join(tmp, "doc", "harness", "tasks", "TASK__active")
-                with mock.patch.object(prompt_memory, "TASK_DIR", os.path.join(tmp, "doc", "harness", "tasks")),                      mock.patch.object(prompt_memory, "_get_active_task_dir", return_value=active_task):
+                with mock.patch.object(
+                    prompt_memory,
+                    "TASK_DIR",
+                    os.path.join(tmp, "doc", "harness", "tasks"),
+                ), mock.patch.object(prompt_memory, "_get_active_task_dir", return_value=active_task):
                     parts = prompt_memory.gather_context("fix the handler regression")
 
                 note_parts = [part for part in parts if part.startswith("note:")]
                 self.assertTrue(note_parts, parts)
                 self.assertIn("[api] API handler regression guidance", note_parts[0])
+            finally:
+                os.chdir(prev)
+
+    def test_gather_context_only_constrains_scan_roots_when_root_hint_exists(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            prev = os.getcwd()
+            os.chdir(tmp)
+            try:
+                os.makedirs("doc/harness", exist_ok=True)
+                with open("doc/harness/manifest.yaml", "w", encoding="utf-8") as f:
+                    f.write("registered_roots:\n  - common\n  - api\n  - ui\n")
+
+                captured = {}
+
+                def fake_select(prompt, query_context=None, notes_dir=None):
+                    captured["query_context"] = dict(query_context or {})
+                    return []
+
+                with mock.patch.object(prompt_memory, "_get_active_task_dir", return_value=None), mock.patch.object(
+                    prompt_memory,
+                    "select_relevant_notes",
+                    side_effect=fake_select,
+                ):
+                    prompt_memory.gather_context("why does the handler regression happen?")
+
+                self.assertIn("active_roots", captured["query_context"])
+                self.assertNotIn("scan_roots", captured["query_context"])
             finally:
                 os.chdir(prev)
 
@@ -94,14 +190,36 @@ class TestPromptMemoryRootAndLaneInference(unittest.TestCase):
                 with open("doc/harness/manifest.yaml", "w", encoding="utf-8") as f:
                     f.write("registered_roots:\n  - common\n")
                 with open("doc/harness/tasks/TASK__active/TASK_STATE.yaml", "w", encoding="utf-8") as f:
-                    f.write("task_id: TASK__active\nstatus: planned\nlane: build\nverification_targets: []\ntouched_paths: []\n")
+                    f.write(
+                        "task_id: TASK__active\n"
+                        "status: planned\n"
+                        "lane: build\n"
+                        "verification_targets: []\n"
+                        "touched_paths: []\n"
+                    )
                 with open("doc/common/build-note.md", "w", encoding="utf-8") as f:
-                    f.write("# Build note\nsummary: build-lane guidance\nlane: build\nfreshness: current\n\nhandler regression fix\n")
+                    f.write(
+                        "# Build note\n"
+                        "summary: build-lane guidance\n"
+                        "lane: build\n"
+                        "freshness: current\n\n"
+                        "handler regression fix\n"
+                    )
                 with open("doc/common/verify-note.md", "w", encoding="utf-8") as f:
-                    f.write("# Verify note\nsummary: verify-lane guidance\nlane: verify\nfreshness: current\n\nhandler regression fix\n")
+                    f.write(
+                        "# Verify note\n"
+                        "summary: verify-lane guidance\n"
+                        "lane: verify\n"
+                        "freshness: current\n\n"
+                        "handler regression fix\n"
+                    )
 
                 active_task = os.path.join(tmp, "doc", "harness", "tasks", "TASK__active")
-                with mock.patch.object(prompt_memory, "TASK_DIR", os.path.join(tmp, "doc", "harness", "tasks")),                      mock.patch.object(prompt_memory, "_get_active_task_dir", return_value=active_task):
+                with mock.patch.object(
+                    prompt_memory,
+                    "TASK_DIR",
+                    os.path.join(tmp, "doc", "harness", "tasks"),
+                ), mock.patch.object(prompt_memory, "_get_active_task_dir", return_value=active_task):
                     parts = prompt_memory.gather_context("fix the handler regression")
 
                 note_parts = [part for part in parts if part.startswith("note:")]
