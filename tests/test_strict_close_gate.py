@@ -259,6 +259,48 @@ class TestStrictCloseGateBlocking(unittest.TestCase):
         self.assertTrue(_has_checks_failure(failures),
             f"Standard gate + failed must block. Got: {failures}")
 
+    def test_high_risk_state_without_close_gate_promotes_to_strict(self):
+        """sprinted / high-risk task should enforce strict semantics even if CHECKS.yaml omits close_gate."""
+        _make_non_mutating_passing_task(self.task_dir)
+        _write(os.path.join(self.task_dir, "TASK_STATE.yaml"),
+            "task_id: TASK__test\n"
+            "status: implemented\n"
+            "mutates_repo: false\n"
+            "plan_verdict: PASS\n"
+            "runtime_verdict: PASS\n"
+            "document_verdict: skipped\n"
+            "execution_mode: sprinted\n"
+            "orchestration_mode: solo\n"
+            "review_overlays: []\n"
+            "risk_tags: []\n"
+            "workflow_violations: []\n"
+        )
+        _write(os.path.join(self.task_dir, "CHECKS.yaml"),
+            'checks:\n  - id: AC-001\n    title: "candidate"\n    status: implemented_candidate\n')
+        failures = compute_completion_failures(self.task_dir)
+        self.assertTrue(_has_strict_gate_failure(failures), failures)
+
+    def test_high_risk_state_overrides_standard_close_gate(self):
+        """Explicit standard gate does not weaken high-risk close behavior."""
+        _make_non_mutating_passing_task(self.task_dir)
+        _write(os.path.join(self.task_dir, "TASK_STATE.yaml"),
+            "task_id: TASK__test\n"
+            "status: implemented\n"
+            "mutates_repo: false\n"
+            "plan_verdict: PASS\n"
+            "runtime_verdict: PASS\n"
+            "document_verdict: skipped\n"
+            "execution_mode: standard\n"
+            "orchestration_mode: solo\n"
+            "review_overlays: [performance]\n"
+            "risk_tags: []\n"
+            "workflow_violations: []\n"
+        )
+        _write(os.path.join(self.task_dir, "CHECKS.yaml"),
+            'close_gate: standard\nchecks:\n  - id: AC-001\n    title: "candidate"\n    status: planned\n')
+        failures = compute_completion_failures(self.task_dir)
+        self.assertTrue(_has_strict_gate_failure(failures), failures)
+
     # --- Strict gate blocking ---
 
     def test_strict_gate_implemented_candidate_blocks(self):

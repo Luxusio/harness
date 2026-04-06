@@ -236,7 +236,7 @@ Set `close_gate: strict_high_risk` when ANY of:
 
 ### Backward compatibility
 
-`close_gate` field absence = `standard`. Older CHECKS.yaml files and tasks without CHECKS.yaml are unaffected.
+`close_gate` field absence = `standard` for normal tasks. TaskCompleted may still promote the **effective** gate to `strict_high_risk` when TASK_STATE indicates a high-risk task, so older CHECKS.yaml files cannot silently weaken high-risk close behavior. Tasks without CHECKS.yaml remain unaffected.
 
 ### Scope removal in strict mode
 

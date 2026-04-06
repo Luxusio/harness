@@ -17,7 +17,7 @@ from _lib import (
     yaml_array,
     yaml_field,
 )
-from memory_selectors import _get_registered_roots, select_relevant_notes
+from memory_selectors import _get_registered_roots, select_prompt_notes
 from failure_memory import (
     build_failure_case,
     find_similar_failure,
@@ -558,6 +558,20 @@ def _get_repair_focus_hint(task_dir, prompt):
     return _compact_hint("repair: " + " | ".join(pieces), max_chars=320)
 
 
+def _format_note_context(note, role="primary"):
+    """Render a scored note tuple into a compact prompt hint."""
+    if not note:
+        return ""
+
+    _, _, first_line, freshness, root_name = note
+    prefix = f"[{root_name}] " if root_name and root_name != "common" else ""
+    tag = "note" if role == "primary" else "note[check]"
+
+    if freshness == "current":
+        return f"{tag}:{prefix}{first_line}"
+    return f"{tag}[{freshness}]:{prefix}{first_line}"
+
+
 def _prioritize_context_parts(parts):
     """Keep the prompt injection compact while favoring actionable evidence."""
     if not parts:
@@ -684,14 +698,14 @@ def gather_context(prompt):
         }
         if scan_roots:
             query_context["scan_roots"] = scan_roots
-        notes = select_relevant_notes(prompt, query_context=query_context)
-        if notes:
-            _, _, first_line, freshness, root_name = notes[0]
-            prefix = f"[{root_name}] " if root_name and root_name != "common" else ""
-            if freshness == "current":
-                context_parts.append(f"note:{prefix}{first_line}")
-            elif freshness == "suspect":
-                context_parts.append(f"note[suspect]:{prefix}{first_line}")
+        notes = select_prompt_notes(prompt, query_context=query_context)
+        for idx, note in enumerate(notes):
+            rendered = _format_note_context(
+                note,
+                role="primary" if idx == 0 else "check",
+            )
+            if rendered:
+                context_parts.append(rendered)
     except Exception:
         pass
 

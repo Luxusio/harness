@@ -153,8 +153,9 @@ Notes with `status: superseded` are excluded from the candidate pool entirely be
 After scoring, candidates are filtered and selected:
 
 1. **Minimum threshold**: notes with `score ≤ 0.1` are dropped
-2. **Top-N selection**: at most 2 notes are selected (highest scores first)
-3. **Character budget**: total injected context (all slots combined) is capped at 600 characters
+2. **Top-N selection**: at most 2 notes are selected. The strongest note is always primary; the optional second note is chosen with a small diversity bonus so it adds distinct root/freshness/example coverage instead of duplicating the first note.
+3. **Stable tie-breaks**: when multiple notes have the same score, ordering is deterministic — fresher notes first, then `REQ__` before `OBS__` before `INF__`, then root/path. This keeps prompt-note replay stable and slightly favors requirement notes over observations when the scores are otherwise tied.
+4. **Character budget**: total injected context (all slots combined) is capped at 600 characters
 
 The 600-character budget is shared across all context slots:
 
@@ -189,7 +190,7 @@ The second note (common root) has no prefix.
 
 3. **Manifest without `registered_roots`**: system falls back to scanning all `doc/*` subdirectories. Existing repos do not need to add this field.
 
-4. **Context budget unchanged**: still 600 characters, top 2 notes.
+4. **Context budget unchanged**: still a tight prompt budget, with at most 2 notes. `prompt_memory.py` emits the primary note first and may add a complementary `note[check]` when it fits.
 
 5. **Threshold unchanged**: 0.1 minimum score for inclusion.
 

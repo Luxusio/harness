@@ -1,0 +1,397 @@
+{
+  "version": 1,
+  "description": "Curated golden replay corpus for routing, close-gate, note retrieval, next-step, context, and team recovery decisions.",
+  "cases": [
+    {
+      "id": "routing_docs_sync_light_solo",
+      "kind": "routing",
+      "description": "Docs-sync work should stay light and solo.",
+      "task_dir": "doc/harness/tasks/TASK__harness-schema-sync",
+      "provider_probe": {
+        "native_ready": false,
+        "omc_ready": false
+      },
+      "expect": {
+        "risk_level": "low",
+        "maintenance_task": false,
+        "planning_mode": "standard",
+        "execution_mode": "light",
+        "orchestration_mode": "solo",
+        "team_status": "skipped",
+        "fallback_used": "none"
+      }
+    },
+    {
+      "id": "routing_small_script_fix_standard_subagents",
+      "kind": "routing",
+      "description": "A non-trivial single-root script fix should stay standard but prefer subagents over solo.",
+      "task_dir": "doc/harness/tasks/TASK__fix-crlf-script",
+      "provider_probe": {
+        "native_ready": false,
+        "omc_ready": false
+      },
+      "expect": {
+        "risk_level": "medium",
+        "maintenance_task": false,
+        "planning_mode": "standard",
+        "execution_mode": "standard",
+        "orchestration_mode": "subagents",
+        "team_status": "skipped",
+        "fallback_used": "none"
+      }
+    },
+    {
+      "id": "routing_harness_maintenance_sprinted_subagents",
+      "kind": "routing",
+      "description": "Harness-surface maintenance should escalate to sprinted and fall back to subagents when no team provider is ready.",
+      "task_dir": "doc/harness/tasks/TASK__cli-first-workflow-v1",
+      "provider_probe": {
+        "native_ready": false,
+        "omc_ready": false
+      },
+      "expect": {
+        "risk_level": "high",
+        "maintenance_task": true,
+        "planning_mode": "standard",
+        "execution_mode": "sprinted",
+        "orchestration_mode": "subagents",
+        "team_status": "fallback",
+        "fallback_used": "subagents"
+      }
+    },
+    {
+      "id": "routing_multisurface_build_sprinted_subagents",
+      "kind": "routing",
+      "description": "Multi-surface build work should become sprinted and team-preferred, then fall back to subagents when providers are unavailable.",
+      "task_dir": "doc/harness/tasks/TASK__launch-json-relocate",
+      "provider_probe": {
+        "native_ready": false,
+        "omc_ready": false
+      },
+      "expect": {
+        "risk_level": "high",
+        "maintenance_task": false,
+        "planning_mode": "standard",
+        "execution_mode": "sprinted",
+        "orchestration_mode": "subagents",
+        "team_status": "fallback",
+        "fallback_used": "subagents"
+      }
+    },
+    {
+      "id": "close_pass_cli_first_workflow",
+      "kind": "close_gate",
+      "description": "A modern sprinted harness task with synced critics should still close cleanly.",
+      "task_dir": "doc/harness/tasks/TASK__cli-first-workflow-v1",
+      "expect": {
+        "blocked": false
+      }
+    },
+    {
+      "id": "close_pass_small_script_fix",
+      "kind": "close_gate",
+      "description": "Small regression fixes that already satisfy the gate should remain closable.",
+      "task_dir": "doc/harness/tasks/TASK__fix-crlf-script",
+      "expect": {
+        "blocked": false
+      }
+    },
+    {
+      "id": "close_blocks_missing_runtime_and_doc_critic",
+      "kind": "close_gate",
+      "description": "Tasks missing runtime/document verification must stay blocked.",
+      "task_dir": "doc/harness/tasks/TASK__task-created-gate-prefix-filter",
+      "expect": {
+        "blocked": true,
+        "required_substrings": [
+          "repo-mutating task needs runtime critic verdict",
+          "document_verdict is 'skipped'",
+          "doc critic needed"
+        ]
+      }
+    },
+    {
+      "id": "close_blocks_missing_plan_handoff_and_docsync",
+      "kind": "close_gate",
+      "description": "Old incomplete tasks should surface missing plan/handoff/doc-sync requirements.",
+      "task_dir": "doc/harness/tasks/TASK__harness-schema-sync",
+      "expect": {
+        "blocked": true,
+        "required_substrings": [
+          "missing PLAN.md",
+          "missing HANDOFF.md",
+          "repo-mutating task requires DOC_SYNC.md"
+        ]
+      }
+    },
+    {
+      "id": "prompt_template_sync_requirement",
+      "kind": "prompt_notes",
+      "description": "Template-sync prompts should surface the project-level requirement note first.",
+      "prompt": "template sync setup templates CLAUDE hooks",
+      "expect": {
+        "primary": "REQ__project__template-sync.md",
+        "primary_root": "common"
+      }
+    },
+    {
+      "id": "prompt_cli_artifact_writes_requirement",
+      "kind": "prompt_notes",
+      "description": "Artifact-write prompts should surface the CLI-write requirement first.",
+      "prompt": "protected artifact writes should use CLI tool rather than inline docs writes",
+      "expect": {
+        "primary": "REQ__process__cli-artifact-writes.md",
+        "primary_root": "common"
+      }
+    },
+    {
+      "id": "prompt_anthropic_planner_generator_evaluator",
+      "kind": "prompt_notes",
+      "description": "Harness architecture prompts should surface the Anthropic planner/generator/evaluator note first.",
+      "prompt": "anthropic planner generator evaluator file-based contract QA loop",
+      "expect": {
+        "primary": "REQ__source__anthropic-harness-design.md",
+        "primary_root": "common"
+      }
+    },
+    {
+      "id": "next_created_runs_plan",
+      "kind": "next_step",
+      "description": "Created tasks should direct the user to planning.",
+      "status": "created",
+      "expect": {
+        "contains": "plan"
+      }
+    },
+    {
+      "id": "next_implemented_runs_runtime_critic",
+      "kind": "next_step",
+      "description": "Implemented tasks should direct the user to runtime verification.",
+      "status": "implemented",
+      "expect": {
+        "contains": "critic-runtime"
+      }
+    },
+    {
+      "id": "next_docs_synced_runs_doc_critic_or_close",
+      "kind": "next_step",
+      "description": "Docs-synced tasks should mention critic-document or closing.",
+      "status": "docs_synced",
+      "expect": {
+        "contains": "critic-document"
+      }
+    },
+    {
+      "id": "routing_broad_build_team_native",
+      "kind": "routing",
+      "description": "Broad build requests should promote broad-build planning and native team mode when a provider is ready.",
+      "task_dir": "doc/harness/tasks/TASK__broad-build-support-portal",
+      "provider_probe": {
+        "native_ready": true,
+        "omc_ready": false
+      },
+      "expect": {
+        "risk_level": "medium",
+        "maintenance_task": false,
+        "planning_mode": "broad-build",
+        "execution_mode": "standard",
+        "orchestration_mode": "team",
+        "team_provider": "native",
+        "team_status": "planned",
+        "team_plan_required": true,
+        "team_synthesis_required": true,
+        "fallback_used": "none"
+      }
+    },
+    {
+      "id": "routing_broad_build_fallback_subagents",
+      "kind": "routing",
+      "description": "The same broad-build request should fall back to subagents when no team provider is ready.",
+      "task_dir": "doc/harness/tasks/TASK__broad-build-support-portal",
+      "provider_probe": {
+        "native_ready": false,
+        "omc_ready": false
+      },
+      "expect": {
+        "risk_level": "medium",
+        "maintenance_task": false,
+        "planning_mode": "broad-build",
+        "execution_mode": "standard",
+        "orchestration_mode": "subagents",
+        "team_provider": "fallback-subagents",
+        "team_status": "fallback",
+        "fallback_used": "subagents"
+      }
+    },
+    {
+      "id": "handoff_repeated_acceptance_reopen",
+      "kind": "handoff",
+      "description": "Repeatedly reopened acceptance criteria should produce a recovery handoff focused on CHECKS.yaml.",
+      "task_dir": "doc/harness/tasks/TASK__criterion-reopen-recovery",
+      "expect": {
+        "exists": true,
+        "trigger": "criterion_reopen_repeat",
+        "next_step_contains": "repeatedly reopened criteria",
+        "files_to_read_first_contains": [
+          "CHECKS.yaml",
+          "PLAN.md",
+          "TASK_STATE.yaml"
+        ],
+        "open_check_ids_contains": [
+          "AC-001"
+        ]
+      }
+    },
+    {
+      "id": "handoff_blocked_env_reads_snapshot",
+      "kind": "handoff",
+      "description": "blocked_env recovery should point operators at the environment snapshot before resuming work.",
+      "task_dir": "doc/harness/tasks/TASK__blocked-env-recovery",
+      "expect": {
+        "exists": true,
+        "trigger": "blocked_env_reentry",
+        "next_step_contains": "ENVIRONMENT_SNAPSHOT.md",
+        "files_to_read_first_contains": [
+          "ENVIRONMENT_SNAPSHOT.md",
+          "PLAN.md",
+          "TASK_STATE.yaml"
+        ]
+      }
+    },
+    {
+      "id": "handoff_team_documentation_phase",
+      "kind": "handoff",
+      "description": "Team recovery should preserve the documentation phase, owners, and critic rerun when docs are the remaining blocker.",
+      "task_dir": "doc/harness/tasks/TASK__team-doc-recovery",
+      "trigger": "runtime_fail_repeat",
+      "expect": {
+        "exists": true,
+        "trigger": "runtime_fail_repeat",
+        "next_step_contains": "CRITIC__document.md",
+        "files_to_read_first_contains": [
+          "TEAM_PLAN.md",
+          "team/worker-a.md",
+          "team/worker-reviewer.md",
+          "TEAM_SYNTHESIS.md",
+          "CRITIC__runtime.md",
+          "DOC_SYNC.md"
+        ],
+        "team_recovery": {
+          "phase": "documentation",
+          "pending_artifacts_contains": [
+            "CRITIC__document.md"
+          ],
+          "doc_sync_owners": [
+            "reviewer"
+          ],
+          "document_critic_owners": [
+            "lead"
+          ]
+        }
+      }
+    },
+    {
+      "id": "context_team_launch_native_prompt_fallback",
+      "kind": "context",
+      "description": "Native team launch context should surface the frozen lead prompt plus implementer fallback before fan-out.",
+      "task_dir": "doc/harness/tasks/TASK__team-launch-native-replay",
+      "provider_probe": {
+        "native_ready": true,
+        "claude_available": true
+      },
+      "expect": {
+        "next_action_contains": "native lead prompt",
+        "team": {
+          "launch_available": true,
+          "launch_generated": false,
+          "launch_interactive_required": true,
+          "launch_execute_target": "implementers",
+          "launch_execute_fallback_available": true
+        }
+      }
+    },
+    {
+      "id": "team_launch_native_prompt_fallback",
+      "kind": "team_launch",
+      "description": "Native provider launch should stay provider-first while exposing an implementer auto-execute fallback.",
+      "task_dir": "doc/harness/tasks/TASK__team-launch-native-replay",
+      "provider_probe": {
+        "native_ready": true,
+        "claude_available": true
+      },
+      "expect": {
+        "provider": "native",
+        "target": "provider",
+        "generated": false,
+        "interactive_required": true,
+        "execute_target": "implementers",
+        "execute_fallback_available": true,
+        "reason_contains": "not been generated yet",
+        "execute_resolution_reason_contains": "falling back"
+      }
+    },
+    {
+      "id": "context_team_launch_stale_refresh",
+      "kind": "context",
+      "description": "Stale launch manifests should ask the lead to rerun team-launch before fan-out resumes.",
+      "task_dir": "doc/harness/tasks/TASK__team-launch-stale-replay",
+      "provider_probe": {
+        "omc_ready": true
+      },
+      "expect": {
+        "next_action_contains": "team_launch",
+        "team": {
+          "launch_available": true,
+          "launch_generated": true,
+          "launch_stale": true,
+          "launch_refresh_needed": true,
+          "launch_target": "provider"
+        }
+      }
+    },
+    {
+      "id": "team_launch_stale_refresh",
+      "kind": "team_launch",
+      "description": "Launch replay should detect a stale launch signature even when bootstrap and dispatch stay current.",
+      "task_dir": "doc/harness/tasks/TASK__team-launch-stale-replay",
+      "provider_probe": {
+        "omc_ready": true
+      },
+      "expect": {
+        "provider": "omc",
+        "target": "provider",
+        "generated": true,
+        "stale": true,
+        "refresh_needed": true,
+        "reason_contains": "out of date"
+      }
+    },
+    {
+      "id": "context_team_relaunch_synthesis_stale",
+      "kind": "context",
+      "description": "When all worker summaries exist but TEAM_SYNTHESIS is missing, context should route back to the synthesis owner.",
+      "task_dir": "doc/harness/tasks/TASK__team-synthesis-recovery",
+      "expect": {
+        "next_action_contains": "TEAM_SYNTHESIS.md",
+        "team": {
+          "relaunch_available": true,
+          "relaunch_worker": "lead",
+          "relaunch_phase": "synthesis"
+        }
+      }
+    },
+    {
+      "id": "team_relaunch_synthesis_stale",
+      "kind": "team_relaunch",
+      "description": "Relaunch replay should select the synthesis owner once every worker summary is present.",
+      "task_dir": "doc/harness/tasks/TASK__team-synthesis-recovery",
+      "expect": {
+        "available": true,
+        "ready": true,
+        "worker": "lead",
+        "phase": "synthesis",
+        "selection_reason_contains": "TEAM_SYNTHESIS"
+      }
+    }
+  ]
+}

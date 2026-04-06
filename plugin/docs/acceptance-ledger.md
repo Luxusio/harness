@@ -238,15 +238,16 @@ CHECKS.yaml is optional. All agents check for its existence before reading or wr
 - Tasks created before CHECKS.yaml was introduced work exactly as before
 
 The `close_gate` field is backward-compatible:
-- Absent field → treated as `standard` (existing behavior preserved)
+- Absent field → treated as `standard` for normal tasks
 - `close_gate: standard` → only `failed` criteria block completion
 - `close_gate: strict_high_risk` → ALL non-`passed` criteria block completion
+- High-risk TASK_STATE (`sprinted`, `security`/`performance` overlay, or structural/migration/schema/cross-root risk tag) promotes the **effective** close gate to `strict_high_risk` even if CHECKS.yaml has not been resynced yet
 
 ---
 
 ## Close gate policy
 
-The `close_gate` top-level field in CHECKS.yaml controls how strictly non-passed criteria are enforced at task close.
+The `close_gate` top-level field in CHECKS.yaml controls how strictly non-passed criteria are enforced at task close. TaskCompleted resolves an **effective** close gate by combining CHECKS.yaml with TASK_STATE high-risk signals, so stale ledger configuration cannot silently weaken close behavior.
 
 ### standard (default)
 

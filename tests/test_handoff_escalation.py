@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "plugin", "scripts"))
 
-from handoff_escalation import generate_handoff
+from handoff_escalation import generate_handoff, preview_handoff
 from _lib import build_team_bootstrap, build_team_dispatch, build_team_launch
 
 
@@ -412,6 +412,40 @@ class TestTeamHandoffEscalation(unittest.TestCase):
         self.assertEqual(team["document_critic_owners"], ["lead"])
         self.assertIn("reviewer", handoff["next_step"])
         self.assertIn("lead", handoff["next_step"])
+
+    def test_preview_handoff_does_not_write_session_file(self):
+        task_dir = self._make_team_task("TASK__handoff_preview")
+        self._write_complete_team_plan(task_dir)
+
+        handoff = preview_handoff(task_dir, trigger="runtime_fail_repeat")
+
+        self.assertIsNotNone(handoff)
+        self.assertFalse(Path(task_dir, "SESSION_HANDOFF.json").exists())
+
+    def test_blocked_env_handoff_reads_environment_snapshot(self):
+        task_dir = os.path.join(self.tmp.name, "TASK__blocked_env_handoff")
+        os.makedirs(task_dir, exist_ok=True)
+        Path(task_dir, "TASK_STATE.yaml").write_text(
+            "task_id: TASK__blocked_env_handoff\n"
+            "status: blocked_env\n"
+            "lane: build\n"
+            "execution_mode: sprinted\n"
+            "blockers: missing playwright browsers\n"
+            "roots_touched: [app, tests]\n"
+            "touched_paths: [app/main.tsx, tests/e2e/refund.spec.ts]\n",
+            encoding="utf-8",
+        )
+        Path(task_dir, "PLAN.md").write_text("# Plan\n", encoding="utf-8")
+        Path(task_dir, "ENVIRONMENT_SNAPSHOT.md").write_text(
+            "# Environment Snapshot\n- browsers missing\n", encoding="utf-8"
+        )
+
+        handoff = preview_handoff(task_dir)
+
+        self.assertIsNotNone(handoff)
+        self.assertEqual(handoff["trigger"], "blocked_env_reentry")
+        self.assertIn("ENVIRONMENT_SNAPSHOT.md", handoff["next_step"])
+        self.assertIn("ENVIRONMENT_SNAPSHOT.md", handoff["files_to_read_first"])
 
 
 if __name__ == "__main__":

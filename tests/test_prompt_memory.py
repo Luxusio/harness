@@ -179,7 +179,7 @@ class TestSimilarFailureHint(unittest.TestCase):
                 )
 
             with mock.patch.object(prompt_memory_module, "TASK_DIR", tmp), \
-                 mock.patch.object(prompt_memory_module, "select_relevant_notes", return_value=[]):
+                 mock.patch.object(prompt_memory_module, "select_prompt_notes", return_value=[]):
                 parts = prompt_memory_module.gather_context("fix src/api/users.py still broken")
 
             repair_parts = [part for part in parts if part.startswith("repair:")]
