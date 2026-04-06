@@ -4,6 +4,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (read_hook_input, hook_json_get, json_field, json_array, yaml_field, yaml_array,
                   manifest_field, is_browser_first_project, is_doc_path,
                   extract_roots, TASK_DIR, MANIFEST, now_iso,
+                  TASK_STATE_SCHEMA_VERSION,
                   exit_if_unmanaged_repo)
 
 # Legacy task bootstrap helper — initializes minimal task artifacts when invoked manually.
@@ -39,6 +40,9 @@ def main():
     if not os.path.exists(state_file):
         with open(state_file, "w") as f:
             f.write(f"""task_id: {task_id}
+schema_version: {TASK_STATE_SCHEMA_VERSION}
+state_revision: 0
+parent_revision: null
 status: created
 lane: unknown
 execution_mode: pending

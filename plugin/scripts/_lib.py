@@ -11,6 +11,7 @@ import shlex
 import sys
 import shutil
 import subprocess
+import tempfile
 import glob as _glob
 from datetime import datetime, timezone
 
@@ -21,6 +22,9 @@ from datetime import datetime, timezone
 TASK_DIR = "doc/harness/tasks"
 MANIFEST = "doc/harness/manifest.yaml"
 CLAUDE_CODE_AGENT_TEAMS_MIN_VERSION = (2, 1, 32)
+TASK_STATE_SCHEMA_VERSION = 1
+CHECKS_SCHEMA_VERSION = 1
+SESSION_HANDOFF_SCHEMA_VERSION = 1
 
 
 def parse_semver_triplet(text):
@@ -87,6 +91,283 @@ def omc_runtime_probe():
 _HOOK_INPUT = None
 _HOOK_INPUT_READ = False
 _YAML_LINES_CACHE = {}
+
+
+def _invalidate_yaml_cache(filepath):
+    """Drop a cached YAML entry after a write."""
+    if filepath:
+        _YAML_LINES_CACHE.pop(filepath, None)
+
+
+def atomic_write_text(path, content):
+    """Atomically write UTF-8 text content."""
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix='.tmp.', dir=directory)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+    _invalidate_yaml_cache(path)
+
+
+def _yaml_line_value_from_content(content, field):
+    match = re.search(r'^' + re.escape(field) + r':\s*(.*)$', str(content or ''), flags=re.MULTILINE)
+    if not match:
+        return None
+    return match.group(1).strip()
+
+
+def _yaml_int_from_content(content, field, default=0):
+    raw = _yaml_line_value_from_content(content, field)
+    if raw is None:
+        return default
+    raw = raw.strip().strip('"').strip("'")
+    if raw.lower() in ('null', 'none', '~', ''):
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _yaml_replace_or_insert_line(content, field, rendered_value, *, after_fields=None, before_field='updated'):
+    """Replace or insert a top-level YAML scalar line."""
+    text = str(content or '')
+    line_text = f'{field}: {rendered_value}'
+    pattern = r'^' + re.escape(field) + r':.*$'
+    if re.search(pattern, text, flags=re.MULTILINE):
+        return re.sub(pattern, line_text, text, flags=re.MULTILINE)
+
+    lines = text.splitlines()
+    inserted = False
+    if lines:
+        for after_field in (after_fields or []):
+            for idx, line in enumerate(lines):
+                if re.match(r'^' + re.escape(after_field) + r':', line):
+                    lines.insert(idx + 1, line_text)
+                    inserted = True
+                    break
+            if inserted:
+                break
+    if not inserted and before_field:
+        for idx, line in enumerate(lines):
+            if re.match(r'^' + re.escape(before_field) + r':', line):
+                lines.insert(idx, line_text)
+                inserted = True
+                break
+    if not inserted:
+        lines.append(line_text)
+    return '\n'.join(lines).rstrip('\n') + '\n'
+
+
+def ensure_task_state_schema_content(content, *, bump_revision=False, timestamp=None):
+    """Ensure TASK_STATE.yaml carries schema metadata and optional revisions."""
+    text = str(content or '').rstrip('\n') + '\n'
+    text = _yaml_replace_or_insert_line(
+        text,
+        'schema_version',
+        TASK_STATE_SCHEMA_VERSION,
+        after_fields=['task_id'],
+        before_field='status',
+    )
+
+    has_state_revision = re.search(r'^state_revision:', text, flags=re.MULTILINE) is not None
+    current_revision = _yaml_int_from_content(text, 'state_revision', default=0)
+    if not has_state_revision:
+        text = _yaml_replace_or_insert_line(
+            text,
+            'state_revision',
+            current_revision,
+            after_fields=['schema_version'],
+            before_field='status',
+        )
+    text = _yaml_replace_or_insert_line(
+        text,
+        'parent_revision',
+        'null',
+        after_fields=['state_revision'],
+        before_field='status',
+    ) if re.search(r'^parent_revision:', text, flags=re.MULTILINE) is None else text
+
+    if bump_revision:
+        ts = timestamp or now_iso()
+        parent_revision = current_revision
+        next_revision = current_revision + 1
+        text = _yaml_replace_or_insert_line(
+            text,
+            'state_revision',
+            next_revision,
+            after_fields=['schema_version'],
+            before_field='status',
+        )
+        parent_value = parent_revision if next_revision > 0 else 'null'
+        text = _yaml_replace_or_insert_line(
+            text,
+            'parent_revision',
+            parent_value,
+            after_fields=['state_revision'],
+            before_field='status',
+        )
+        text = _yaml_replace_or_insert_line(text, 'updated', ts, before_field=None)
+    return text.rstrip('\n') + '\n'
+
+
+def write_task_state_content(state_file, content, *, bump_revision=False, timestamp=None):
+    """Write TASK_STATE.yaml content with schema/revision metadata preserved."""
+    final = ensure_task_state_schema_content(content, bump_revision=bump_revision, timestamp=timestamp)
+    atomic_write_text(state_file, final)
+    return final
+
+
+def migrate_task_state_file(state_file, *, write=False):
+    """Ensure TASK_STATE.yaml carries schema/revision fields.
+
+    Legacy files without explicit schema_version/state_revision are treated as
+    version 0 and migrated in-place when ``write`` is true.
+    """
+    report = {
+        'artifact': 'TASK_STATE.yaml',
+        'path': state_file,
+        'exists': bool(state_file and os.path.isfile(state_file)),
+        'changed': False,
+        'schema_version_before': 0,
+        'schema_version_after': TASK_STATE_SCHEMA_VERSION,
+        'state_revision_before': 0,
+        'state_revision_after': 0,
+        'parent_revision_after': None,
+    }
+    if not report['exists']:
+        return report
+    try:
+        with open(state_file, 'r', encoding='utf-8') as fh:
+            original = fh.read()
+    except OSError:
+        report['exists'] = False
+        report['error'] = 'read_failed'
+        return report
+
+    report['schema_version_before'] = _yaml_int_from_content(original, 'schema_version', default=0)
+    report['state_revision_before'] = _yaml_int_from_content(original, 'state_revision', default=0)
+    migrated = ensure_task_state_schema_content(original, bump_revision=False)
+    report['state_revision_after'] = _yaml_int_from_content(migrated, 'state_revision', default=0)
+    parent_value = _yaml_line_value_from_content(migrated, 'parent_revision')
+    if parent_value is not None:
+        parent_value = parent_value.strip().strip('"').strip("'")
+        if parent_value.lower() in ('null', 'none', '~', ''):
+            report['parent_revision_after'] = None
+        else:
+            try:
+                report['parent_revision_after'] = int(parent_value)
+            except (TypeError, ValueError):
+                report['parent_revision_after'] = parent_value
+    report['changed'] = migrated != original
+    if write and report['changed']:
+        atomic_write_text(state_file, migrated)
+    return report
+
+
+def ensure_checks_schema_content(content):
+    """Ensure CHECKS.yaml has a top-level schema_version."""
+    text = str(content or '').rstrip('\n') + '\n'
+    return _yaml_replace_or_insert_line(
+        text,
+        'schema_version',
+        CHECKS_SCHEMA_VERSION,
+        after_fields=[],
+        before_field='close_gate',
+    )
+
+
+def migrate_checks_file(checks_file, *, write=False):
+    """Ensure CHECKS.yaml carries a top-level schema_version."""
+    report = {
+        'artifact': 'CHECKS.yaml',
+        'path': checks_file,
+        'exists': bool(checks_file and os.path.isfile(checks_file)),
+        'changed': False,
+        'schema_version_before': 0,
+        'schema_version_after': CHECKS_SCHEMA_VERSION,
+    }
+    if not report['exists']:
+        return report
+    try:
+        with open(checks_file, 'r', encoding='utf-8') as fh:
+            original = fh.read()
+    except OSError:
+        report['exists'] = False
+        report['error'] = 'read_failed'
+        return report
+    report['schema_version_before'] = _yaml_int_from_content(original, 'schema_version', default=0)
+    migrated = ensure_checks_schema_content(original)
+    report['changed'] = migrated != original
+    if write and report['changed']:
+        atomic_write_text(checks_file, migrated)
+    return report
+
+
+def ensure_session_handoff_payload(payload):
+    """Return SESSION_HANDOFF payload with explicit schema_version."""
+    data = dict(payload or {})
+    data['schema_version'] = SESSION_HANDOFF_SCHEMA_VERSION
+    return data
+
+
+def migrate_session_handoff_file(handoff_path, *, write=False):
+    """Ensure SESSION_HANDOFF.json carries a top-level schema_version."""
+    report = {
+        'artifact': 'SESSION_HANDOFF.json',
+        'path': handoff_path,
+        'exists': bool(handoff_path and os.path.isfile(handoff_path)),
+        'changed': False,
+        'schema_version_before': 0,
+        'schema_version_after': SESSION_HANDOFF_SCHEMA_VERSION,
+    }
+    if not report['exists']:
+        return report
+    try:
+        with open(handoff_path, 'r', encoding='utf-8') as fh:
+            payload = json.load(fh)
+    except (OSError, ValueError, json.JSONDecodeError):
+        report['exists'] = False
+        report['error'] = 'read_failed'
+        return report
+    if not isinstance(payload, dict):
+        report['error'] = 'non_object_payload'
+        return report
+    try:
+        report['schema_version_before'] = int(payload.get('schema_version') or 0)
+    except (TypeError, ValueError):
+        report['schema_version_before'] = 0
+    migrated = ensure_session_handoff_payload(payload)
+    report['changed'] = migrated != payload
+    if write and report['changed']:
+        atomic_write_text(handoff_path, json.dumps(migrated, indent=2, ensure_ascii=False) + '\n')
+    return report
+
+
+def migrate_task_artifacts(task_dir, *, write=False):
+    """Migrate versioned task-local artifacts for a single task directory."""
+    task_dir = os.path.abspath(task_dir)
+    results = [
+        migrate_task_state_file(os.path.join(task_dir, 'TASK_STATE.yaml'), write=write),
+        migrate_checks_file(os.path.join(task_dir, 'CHECKS.yaml'), write=write),
+        migrate_session_handoff_file(os.path.join(task_dir, 'SESSION_HANDOFF.json'), write=write),
+    ]
+    return {
+        'task_dir': task_dir,
+        'write': bool(write),
+        'artifacts': results,
+        'changed': any(item.get('changed') for item in results if item.get('exists')),
+    }
 
 
 def read_hook_input():
@@ -3172,6 +3453,9 @@ def ensure_task_scaffold(task_dir, task_id, request_text=""):
         with open(state_file, "w", encoding="utf-8") as f:
             f.write(
                 f"""task_id: {task_id}
+schema_version: {TASK_STATE_SCHEMA_VERSION}
+state_revision: 0
+parent_revision: null
 status: created
 lane: unknown
 execution_mode: pending
@@ -4698,7 +4982,7 @@ def append_workflow_violation(task_dir, violation):
 
     current = get_workflow_violations(task_dir)
     if violation in current:
-        return True  # already recorded
+        return True
 
     current.append(violation)
     inline = ", ".join(f'"{v}"' for v in current)
@@ -4709,22 +4993,9 @@ def append_workflow_violation(task_dir, violation):
     except OSError:
         return False
 
-    ts = now_iso()
-    if re.search(r"^workflow_violations:", content, re.MULTILINE):
-        content = re.sub(
-            r"^workflow_violations:.*",
-            f"workflow_violations: [{inline}]",
-            content,
-            flags=re.MULTILINE,
-        )
-    else:
-        content = content.rstrip("\n") + f"\nworkflow_violations: [{inline}]\n"
-
-    content = re.sub(r"^updated: .*", f"updated: {ts}", content, flags=re.MULTILINE)
-
+    content = _yaml_replace_or_insert_line(content, "workflow_violations", f"[{inline}]")
     try:
-        with open(state_file, "w", encoding="utf-8") as fh:
-            fh.write(content)
+        write_task_state_content(state_file, content, bump_revision=True)
         return True
     except OSError:
         return False
@@ -4776,34 +5047,10 @@ def increment_agent_run(task_dir, agent_name):
     except OSError:
         return False
 
-    # Update count field
-    if re.search(r"^" + re.escape(count_field) + r":", content, re.MULTILINE):
-        content = re.sub(
-            r"^" + re.escape(count_field) + r":.*",
-            f"{count_field}: {new_count}",
-            content,
-            flags=re.MULTILINE,
-        )
-    else:
-        content = content.rstrip("\n") + f"\n{count_field}: {new_count}\n"
-
-    # Update last field
-    if re.search(r"^" + re.escape(last_field) + r":", content, re.MULTILINE):
-        content = re.sub(
-            r"^" + re.escape(last_field) + r":.*",
-            f"{last_field}: {ts}",
-            content,
-            flags=re.MULTILINE,
-        )
-    else:
-        content = content.rstrip("\n") + f"\n{last_field}: {ts}\n"
-
-    # Update global updated timestamp
-    content = re.sub(r"^updated: .*", f"updated: {ts}", content, flags=re.MULTILINE)
-
+    content = _yaml_replace_or_insert_line(content, count_field, new_count)
+    content = _yaml_replace_or_insert_line(content, last_field, ts)
     try:
-        with open(state_file, "w", encoding="utf-8") as fh:
-            fh.write(content)
+        write_task_state_content(state_file, content, bump_revision=True, timestamp=ts)
         return True
     except OSError:
         return False
@@ -5349,13 +5596,7 @@ def infer_planning_mode(task_dir, request_text=""):
 
 
 def set_task_state_field(task_dir, field, value):
-    """Update a single field in TASK_STATE.yaml using regex line replacement.
-
-    If the field exists, updates it in-place.
-    If the field is missing, appends it before the final 'updated:' line.
-    Also refreshes the 'updated:' timestamp.
-    Returns True on success, False on error.
-    """
+    """Update a single field in TASK_STATE.yaml with schema/revision support."""
     state_file = os.path.join(task_dir, "TASK_STATE.yaml")
     if not os.path.isfile(state_file):
         return False
@@ -5365,7 +5606,6 @@ def set_task_state_field(task_dir, field, value):
     except OSError:
         return False
 
-    # Represent value correctly
     if isinstance(value, bool):
         yaml_val = "true" if value else "false"
     elif isinstance(value, list):
@@ -5376,42 +5616,9 @@ def set_task_state_field(task_dir, field, value):
     else:
         yaml_val = str(value)
 
-    ts = now_iso()
-
-    if re.search(r"^" + re.escape(field) + r":", content, re.MULTILINE):
-        content = re.sub(
-            r"^" + re.escape(field) + r":.*",
-            f"{field}: {yaml_val}",
-            content,
-            flags=re.MULTILINE,
-        )
-    else:
-        # Append before 'updated:' line if present, else at end
-        if re.search(r"^updated:", content, re.MULTILINE):
-            content = re.sub(
-                r"^(updated:.*)$",
-                f"{field}: {yaml_val}\nupdated: {ts}",
-                content,
-                flags=re.MULTILINE,
-                count=1,
-            )
-            # Don't update updated again below
-            try:
-                with open(state_file, "w", encoding="utf-8") as fh:
-                    fh.write(content)
-                return True
-            except OSError:
-                return False
-        else:
-            content = content.rstrip("\n") + f"\n{field}: {yaml_val}\n"
-
-    # Update timestamp
-    if re.search(r"^updated:", content, re.MULTILINE):
-        content = re.sub(r"^updated:.*", f"updated: {ts}", content, flags=re.MULTILINE)
-
+    content = _yaml_replace_or_insert_line(content, field, yaml_val)
     try:
-        with open(state_file, "w", encoding="utf-8") as fh:
-            fh.write(content)
+        write_task_state_content(state_file, content, bump_revision=True)
         return True
     except OSError:
         return False

@@ -7,7 +7,7 @@ from _lib import (read_hook_input, hook_json_get, json_field, json_array, yaml_f
                   exit_if_unmanaged_repo,
                   get_workflow_violations, get_agent_run_count,
                   needs_document_critic, is_handoff_stub, team_artifact_status,
-                  parse_checks_close_gate, set_task_state_field,
+                  parse_checks_close_gate, set_task_state_field, merge_task_path_fields,
                   verdict_freshness, format_verdict_with_freshness,
                   should_set_strict_close_gate, reconcile_agent_run_counts)
 
@@ -613,21 +613,12 @@ def main():
             if auto_touched:
                 paths = [p for p in auto_touched.splitlines() if p.strip()]
                 try:
-                    with open(state_file, "r", encoding="utf-8") as fh:
-                        content = fh.read()
-                    inline = ", ".join(f'"{p}"' for p in paths)
-                    content = content.replace("touched_paths: []", f"touched_paths: [{inline}]")
-                    roots = list(extract_roots(paths))
-                    inline_roots = ", ".join(f'"{r}"' for r in roots)
-                    content = content.replace("roots_touched: []", f"roots_touched: [{inline_roots}]")
-                    vt_paths = [p for p in paths if not is_doc_path(p)]
-                    if vt_paths:
-                        inline_vt = ", ".join(f'"{p}"' for p in vt_paths)
-                        content = content.replace(
-                            "verification_targets: []", f"verification_targets: [{inline_vt}]"
-                        )
-                    with open(state_file, "w", encoding="utf-8") as fh:
-                        fh.write(content)
+                    merge_task_path_fields(
+                        task_dir,
+                        touched_paths=paths,
+                        roots_touched=list(extract_roots(paths)),
+                        verification_targets=[p for p in paths if not is_doc_path(p)],
+                    )
                     print("AUTO-POPULATED: touched_paths, roots_touched, verification_targets from git diff")
                 except OSError:
                     pass

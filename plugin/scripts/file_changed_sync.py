@@ -295,12 +295,7 @@ def process_changed_file(changed_file):
             ts = yaml_field("team_status", state_file_t)
             if orch == "team" and ts == "complete":
                 if task_touches_path(task, changed_file):
-                    with open(state_file_t, "r", encoding="utf-8") as f:
-                        content = f.read()
-                    content = content.replace("team_status: complete", "team_status: degraded")
-                    content = re.sub(r'^updated: .*', f'updated: {now_iso()}', content, flags=re.MULTILINE)
-                    with open(state_file_t, "w", encoding="utf-8") as f:
-                        f.write(content)
+                    set_task_state_field(task, "team_status", "degraded")
                     task_id = os.path.basename(task.rstrip('/'))
                     print(f"TEAM DEGRADED: {task_id} — team_status set to degraded ({changed_file} changed)")
                     matched_any = True

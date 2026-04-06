@@ -18,7 +18,7 @@ import sys
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import now_iso, yaml_field, yaml_array
+from _lib import now_iso, yaml_field, yaml_array, write_task_state_content
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +302,7 @@ def _update_task_state(task_dir, open_ids):
             content, flags=re.MULTILINE, count=1
         )
 
-    _write_file(state_file, content)
+    write_task_state_content(state_file, content, bump_revision=True)
 
 
 # ---------------------------------------------------------------------------

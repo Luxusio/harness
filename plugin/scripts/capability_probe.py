@@ -16,7 +16,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import manifest_section_field, native_agent_teams_runtime_probe, omc_runtime_probe
+from _lib import manifest_section_field, native_agent_teams_runtime_probe, omc_runtime_probe, set_task_state_field
 
 
 def probe_delegation_capability():
@@ -45,8 +45,6 @@ def probe_delegation_capability():
 
 def update_task_capability(task_dir, capability_status=None):
     """Update capability_delegation field in TASK_STATE.yaml."""
-    import re
-
     if capability_status is None:
         capability_status = probe_delegation_capability()
 
@@ -55,21 +53,7 @@ def update_task_capability(task_dir, capability_status=None):
         return capability_status
 
     try:
-        with open(state_file, "r", encoding="utf-8") as handle:
-            content = handle.read()
-
-        if re.search(r"^capability_delegation:", content, re.MULTILINE):
-            content = re.sub(
-                r"^capability_delegation:.*",
-                f"capability_delegation: {capability_status}",
-                content,
-                flags=re.MULTILINE,
-            )
-        else:
-            content = content.rstrip("\n") + f"\ncapability_delegation: {capability_status}\n"
-
-        with open(state_file, "w", encoding="utf-8") as handle:
-            handle.write(content)
+        set_task_state_field(task_dir, "capability_delegation", capability_status)
     except OSError:
         pass
 

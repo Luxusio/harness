@@ -6,6 +6,7 @@ __pycache__
 *.pyc
 __MACOSX/
 .pytest_cache/
+.harness-replay-fixtures/
 
 # harness — operational artifacts (ephemeral, not durable knowledge)
 doc/harness/tasks/
