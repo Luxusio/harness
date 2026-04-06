@@ -27,38 +27,39 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 
 from _lib import (
-    TASK_DIR,
+    yaml_field,
+    yaml_array,
+    is_doc_path,
+    extract_roots,
+    set_task_state_field,
+    merge_task_path_fields,
+    compile_routing,
+    emit_compact_context,
+    ensure_team_artifacts,
     build_team_bootstrap,
     build_team_dispatch,
     build_team_launch,
     build_team_relaunch,
-    canonical_task_dir,
-    canonical_task_id,
-    compile_routing,
-    emit_compact_context,
-    ensure_task_scaffold,
-    ensure_team_artifacts,
-    extract_roots,
-    find_repo_root,
-    is_doc_path,
-    merge_task_path_fields,
-    repo_relpath,
-    repo_root_for_task_dir,
-    set_task_state_field,
     sync_team_status,
-    yaml_array,
-    yaml_field,
+    canonical_task_id,
+    canonical_task_dir,
+    ensure_task_scaffold,
+    find_repo_root,
+    repo_root_for_task_dir,
+    repo_relpath,
+    TASK_DIR,
 )
 from environment_snapshot import write_environment_snapshot
-from failure_memory import (
-    diff_failure_cases,
-    find_similar_failures,
-    list_failure_cases,
-    write_failure_case_snapshot,
-)
 from golden_replay import run_cli as run_golden_replay
+from failure_memory import (
+    write_failure_case_snapshot,
+    list_failure_cases,
+    find_similar_failures,
+    diff_failure_cases,
+)
 from harness_api import get_task_context
 from task_index import clear_active_task, update_active_task
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -108,16 +109,10 @@ def _bootstrap_start_task(args):
     if raw_task_dir:
         resolved = _resolve_task_dir_value(raw_task_dir)
         state_file = os.path.join(resolved, "TASK_STATE.yaml")
-        canonical = _expected_canonical_task_dir(
-            raw_task_dir=raw_task_dir, task_id=task_id, slug=slug
-        )
+        canonical = _expected_canonical_task_dir(raw_task_dir=raw_task_dir, task_id=task_id, slug=slug)
         canonical_norm = os.path.normpath(canonical) if canonical else ""
         if os.path.isfile(state_file):
-            return (
-                resolved,
-                request_text,
-                {"created": [], "canonical": resolved, "expected": canonical_norm},
-            )
+            return resolved, request_text, {"created": [], "canonical": resolved, "expected": canonical_norm}
         if canonical_norm and resolved != canonical_norm:
             raise ValueError(
                 "Non-canonical task_dir. "
@@ -125,11 +120,7 @@ def _bootstrap_start_task(args):
                 f"Use --task-id {canonical_task_id(task_id=task_id, slug=slug, task_dir=raw_task_dir)!r} "
                 f"or --task-dir {canonical_norm!r}."
             )
-        scaffold = ensure_task_scaffold(
-            resolved,
-            canonical_task_id(task_id=task_id, slug=slug, task_dir=raw_task_dir),
-            request_text=request_text,
-        )
+        scaffold = ensure_task_scaffold(resolved, canonical_task_id(task_id=task_id, slug=slug, task_dir=raw_task_dir), request_text=request_text)
         scaffold.update({"canonical": resolved, "expected": canonical_norm or resolved})
         return resolved, request_text, scaffold
 
@@ -137,11 +128,7 @@ def _bootstrap_start_task(args):
         raise ValueError("task_start requires task_dir, task_id, or slug")
 
     canonical = _expected_canonical_task_dir(task_id=task_id, slug=slug)
-    scaffold = ensure_task_scaffold(
-        canonical,
-        canonical_task_id(task_id=task_id, slug=slug),
-        request_text=request_text,
-    )
+    scaffold = ensure_task_scaffold(canonical, canonical_task_id(task_id=task_id, slug=slug), request_text=request_text)
     scaffold.update({"canonical": canonical, "expected": canonical})
     return canonical, request_text, scaffold
 
@@ -221,9 +208,7 @@ def cmd_start(args):
 
     snapshot_path = ""
     try:
-        snapshot_path = write_environment_snapshot(
-            task_dir, repo_root=repo_root, reason="task_start"
-        )
+        snapshot_path = write_environment_snapshot(task_dir, repo_root=repo_root, reason="task_start")
     except Exception:
         snapshot_path = ""
 
@@ -238,17 +223,12 @@ def cmd_start(args):
     except Exception:
         pass
 
-    task_id = yaml_field(
-        "task_id", os.path.join(task_dir, "TASK_STATE.yaml")
-    ) or os.path.basename(task_dir)
+    task_id = yaml_field("task_id", os.path.join(task_dir, "TASK_STATE.yaml")) or os.path.basename(task_dir)
     print(f"routing compiled for {task_id}")
     print(f"  task_dir: {task_dir}")
     if bootstrap.get("created"):
         print(
-            "  bootstrap_created: "
-            + ", ".join(
-                os.path.basename(item) for item in bootstrap.get("created") or []
-            )
+            "  bootstrap_created: " + ", ".join(os.path.basename(item) for item in bootstrap.get("created") or [])
         )
     print(f"  risk_level: {routing['risk_level']}")
     print(f"  maintenance_task: {routing['maintenance_task']}")
@@ -256,9 +236,7 @@ def cmd_start(args):
     print(f"  planning_mode: {routing['planning_mode']}")
     print(f"  execution_mode: {routing['execution_mode']} (compat)")
     print(f"  orchestration_mode: {routing['orchestration_mode']} (compat)")
-    if routing.get("orchestration_mode") != "solo" or routing.get(
-        "team_status"
-    ) not in (None, "n/a", "skipped"):
+    if routing.get("orchestration_mode") != "solo" or routing.get("team_status") not in (None, "n/a", "skipped"):
         print(
             "  team: provider={provider} status={status} size={size} fallback={fallback}".format(
                 provider=routing.get("team_provider", "none"),
@@ -271,8 +249,7 @@ def cmd_start(args):
             print(f"  team_reason: {routing['team_reason']}")
     if team_artifact_result:
         print(
-            "  team_artifacts: "
-            + ", ".join(os.path.basename(item) for item in team_artifact_result)
+            "  team_artifacts: " + ", ".join(os.path.basename(item) for item in team_artifact_result)
         )
     if snapshot_path:
         print(f"  env_snapshot: {os.path.basename(snapshot_path)}")
@@ -329,18 +306,12 @@ def cmd_context(args):
             )
             if team.get("reason"):
                 print(f"Team reason: {team['reason']}")
-            if (
-                team.get("plan_required")
-                or team.get("synthesis_required")
-                or team.get("provider") not in ("none", "")
-            ):
+            if team.get("plan_required") or team.get("synthesis_required") or team.get("provider") not in ("none", ""):
                 print(
                     "Team plan: ready={ready} ownership_ready={ownership} placeholders={placeholders} artifact={artifact}".format(
                         ready="yes" if team.get("plan_ready") else "no",
                         ownership="yes" if team.get("plan_ownership_ready") else "no",
-                        placeholders="yes"
-                        if team.get("plan_has_placeholders")
-                        else "no",
+                        placeholders="yes" if team.get("plan_has_placeholders") else "no",
                         artifact=team.get("plan_artifact", "TEAM_PLAN.md"),
                     )
                 )
@@ -353,102 +324,51 @@ def cmd_context(args):
                     )
                 synthesis_workers = team.get("synthesis_workers") or []
                 if synthesis_workers:
-                    print(
-                        "Team synthesis owners: "
-                        + ", ".join(str(x) for x in synthesis_workers[:6])
-                    )
+                    print("Team synthesis owners: " + ", ".join(str(x) for x in synthesis_workers[:6]))
                 semantic_errors = team.get("plan_semantic_errors") or []
                 if semantic_errors:
-                    print(
-                        "Team ownership errors: "
-                        + " | ".join(str(x) for x in semantic_errors[:3])
-                    )
+                    print("Team ownership errors: " + " | ".join(str(x) for x in semantic_errors[:3]))
                 if team.get("bootstrap_available"):
                     print(
                         "Team bootstrap: ready={ready} stale={stale} artifact={artifact}".format(
                             ready="yes" if team.get("bootstrap_generated") else "no",
-                            stale="yes"
-                            if team.get("bootstrap_refresh_needed")
-                            else "no",
-                            artifact=team.get(
-                                "bootstrap_index", "team/bootstrap/index.json"
-                            ),
+                            stale="yes" if team.get("bootstrap_refresh_needed") else "no",
+                            artifact=team.get("bootstrap_index", "team/bootstrap/index.json"),
                         )
                     )
-                    if (
-                        team.get("bootstrap_reason")
-                        and team.get("bootstrap_reason") != "current"
-                    ):
-                        print(
-                            "Team bootstrap reason: "
-                            + str(team.get("bootstrap_reason"))
-                        )
+                    if team.get("bootstrap_reason") and team.get("bootstrap_reason") != "current":
+                        print("Team bootstrap reason: " + str(team.get("bootstrap_reason")))
                 if team.get("dispatch_available"):
                     print(
                         "Team dispatch: ready={ready} stale={stale} artifact={artifact}".format(
                             ready="yes" if team.get("dispatch_generated") else "no",
-                            stale="yes"
-                            if team.get("dispatch_refresh_needed")
-                            else "no",
-                            artifact=team.get(
-                                "dispatch_index",
-                                "team/bootstrap/provider/dispatch.json",
-                            ),
+                            stale="yes" if team.get("dispatch_refresh_needed") else "no",
+                            artifact=team.get("dispatch_index", "team/bootstrap/provider/dispatch.json"),
                         )
                     )
-                    if (
-                        team.get("dispatch_reason")
-                        and team.get("dispatch_reason") != "current"
-                    ):
-                        print(
-                            "Team dispatch reason: " + str(team.get("dispatch_reason"))
-                        )
+                    if team.get("dispatch_reason") and team.get("dispatch_reason") != "current":
+                        print("Team dispatch reason: " + str(team.get("dispatch_reason")))
                 if team.get("launch_available"):
                     print(
                         "Team launch: ready={ready} stale={stale} target={target} artifact={artifact}".format(
                             ready="yes" if team.get("launch_generated") else "no",
                             stale="yes" if team.get("launch_refresh_needed") else "no",
                             target=team.get("launch_target", "auto"),
-                            artifact=team.get(
-                                "launch_manifest", "team/bootstrap/provider/launch.json"
-                            ),
+                            artifact=team.get("launch_manifest", "team/bootstrap/provider/launch.json"),
                         )
                     )
                     if team.get("launch_command_preview"):
-                        print(
-                            "Team launch command: "
-                            + str(team.get("launch_command_preview"))
-                        )
+                        print("Team launch command: " + str(team.get("launch_command_preview")))
                     if team.get("launch_provider_prompt"):
-                        print(
-                            "Team launch prompt: "
-                            + str(team.get("launch_provider_prompt"))
-                        )
+                        print("Team launch prompt: " + str(team.get("launch_provider_prompt")))
                     if team.get("launch_execute_supported"):
-                        execute_target = (
-                            team.get("launch_execute_target")
-                            or team.get("launch_target")
-                            or "auto"
-                        )
-                        print(
-                            "Team launch execute: supported via " + str(execute_target)
-                        )
-                        if team.get("launch_execute_command_preview") and team.get(
-                            "launch_execute_command_preview"
-                        ) != team.get("launch_command_preview"):
-                            print(
-                                "Team launch execute command: "
-                                + str(team.get("launch_execute_command_preview"))
-                            )
+                        execute_target = team.get("launch_execute_target") or team.get("launch_target") or "auto"
+                        print("Team launch execute: supported via " + str(execute_target))
+                        if team.get("launch_execute_command_preview") and team.get("launch_execute_command_preview") != team.get("launch_command_preview"):
+                            print("Team launch execute command: " + str(team.get("launch_execute_command_preview")))
                         if team.get("launch_execute_resolution_reason"):
-                            print(
-                                "Team launch execute reason: "
-                                + str(team.get("launch_execute_resolution_reason"))
-                            )
-                    if (
-                        team.get("launch_reason")
-                        and team.get("launch_reason") != "current"
-                    ):
+                            print("Team launch execute reason: " + str(team.get("launch_execute_resolution_reason")))
+                    if team.get("launch_reason") and team.get("launch_reason") != "current":
                         print("Team launch reason: " + str(team.get("launch_reason")))
                 if team.get("worker_summary_required"):
                     print(
@@ -461,40 +381,25 @@ def cmd_context(args):
                     )
                     missing_workers = team.get("worker_summary_missing_workers") or []
                     if missing_workers:
-                        print(
-                            "Team worker summaries missing: "
-                            + ", ".join(str(x) for x in missing_workers[:6])
-                        )
+                        print("Team worker summaries missing: " + ", ".join(str(x) for x in missing_workers[:6]))
                     worker_errors = team.get("worker_summary_errors") or []
                     if worker_errors:
-                        print(
-                            "Team worker summary errors: "
-                            + " | ".join(str(x) for x in worker_errors[:3])
-                        )
+                        print("Team worker summary errors: " + " | ".join(str(x) for x in worker_errors[:3]))
                 print(
                     "Team synthesis: ready={ready} placeholders={placeholders} artifact={artifact}".format(
                         ready="yes" if team.get("synthesis_ready") else "no",
-                        placeholders="yes"
-                        if team.get("synthesis_has_placeholders")
-                        else "no",
+                        placeholders="yes" if team.get("synthesis_has_placeholders") else "no",
                         artifact=team.get("synthesis_artifact", "TEAM_SYNTHESIS.md"),
                     )
                 )
                 synthesis_errors = team.get("synthesis_semantic_errors") or []
                 if synthesis_errors:
-                    print(
-                        "Team synthesis errors: "
-                        + " | ".join(str(x) for x in synthesis_errors[:3])
-                    )
+                    print("Team synthesis errors: " + " | ".join(str(x) for x in synthesis_errors[:3]))
                 if team.get("runtime_verification_needed"):
                     print(
                         "Team final verification: ready={ready} artifact={artifact}".format(
-                            ready="yes"
-                            if team.get("runtime_verification_ready")
-                            else "no",
-                            artifact=team.get(
-                                "runtime_verification_artifact", "CRITIC__runtime.md"
-                            ),
+                            ready="yes" if team.get("runtime_verification_ready") else "no",
+                            artifact=team.get("runtime_verification_artifact", "CRITIC__runtime.md"),
                         )
                     )
                 if team.get("documentation_needed"):
@@ -502,9 +407,7 @@ def cmd_context(args):
                         "Team docs: ready={ready} doc_sync={doc_sync} document_critic={critic}".format(
                             ready="yes" if team.get("documentation_ready") else "no",
                             doc_sync=team.get("doc_sync_artifact", "DOC_SYNC.md"),
-                            critic=team.get(
-                                "document_critic_artifact", "CRITIC__document.md"
-                            ),
+                            critic=team.get("document_critic_artifact", "CRITIC__document.md"),
                         )
                     )
                     doc_sync_owners = team.get("doc_sync_owners") or []
@@ -512,20 +415,12 @@ def cmd_context(args):
                     if doc_sync_owners or document_critic_owners:
                         parts = []
                         if doc_sync_owners:
-                            parts.append(
-                                "writer="
-                                + ", ".join(str(x) for x in doc_sync_owners[:4])
-                            )
+                            parts.append("writer=" + ", ".join(str(x) for x in doc_sync_owners[:4]))
                         if document_critic_owners:
-                            parts.append(
-                                "critic-document="
-                                + ", ".join(str(x) for x in document_critic_owners[:4])
-                            )
+                            parts.append("critic-document=" + ", ".join(str(x) for x in document_critic_owners[:4]))
                         print("Team docs owners: " + " | ".join(parts))
                     if team.get("documentation_reason"):
-                        print(
-                            "Team docs reason: " + str(team.get("documentation_reason"))
-                        )
+                        print("Team docs reason: " + str(team.get("documentation_reason")))
                 if team.get("current_worker"):
                     role = str(team.get("current_agent_role") or "")
                     if role:
@@ -548,9 +443,7 @@ def cmd_context(args):
             print("Similar failures:")
             for item in similar_cases[:3]:
                 score = item.get("score", 0.0)
-                print(
-                    f"  - {item.get('task_id')} score={score:.2f} {item.get('artifact')}"
-                )
+                print(f"  - {item.get('task_id')} score={score:.2f} {item.get('artifact')}")
         if checks:
             print(
                 "Checks: total={total} open={open_count} failed={failed_count} blocked={blocked_count}".format(
@@ -704,8 +597,7 @@ def cmd_team_launch(args):
 
     launch = build_team_launch(
         task_dir,
-        write_files=getattr(args, "write_files", False)
-        or getattr(args, "execute", False),
+        write_files=getattr(args, "write_files", False) or getattr(args, "execute", False),
         execute=getattr(args, "execute", False),
         auto_refresh=not getattr(args, "no_auto_refresh", False),
         target=getattr(args, "target", "auto"),
@@ -751,13 +643,9 @@ def cmd_team_launch(args):
     if launch.get("execute_supported"):
         execute_target = launch.get("execute_target") or launch.get("target") or "auto"
         print(f"  execute: supported via {execute_target}")
-        if launch.get("execute_launch_script") and launch.get(
-            "execute_launch_script"
-        ) != launch.get("launch_script"):
+        if launch.get("execute_launch_script") and launch.get("execute_launch_script") != launch.get("launch_script"):
             print(f"  execute_script: {launch.get('execute_launch_script')}")
-        if launch.get("execute_command_preview") and launch.get(
-            "execute_command_preview"
-        ) != launch.get("launch_command_preview"):
+        if launch.get("execute_command_preview") and launch.get("execute_command_preview") != launch.get("launch_command_preview"):
             print(f"  execute_launch: {launch.get('execute_command_preview')}")
         if launch.get("execute_resolution_reason"):
             print(f"  execute_resolution: {launch.get('execute_resolution_reason')}")
@@ -774,20 +662,12 @@ def cmd_team_launch(args):
             print(
                 "  spawned: pid={pid} stdout={stdout_log} stderr={stderr_log}".format(
                     pid=execution.get("pid", "?"),
-                    stdout_log=execution.get(
-                        "stdout_log", launch.get("stdout_log", "")
-                    ),
-                    stderr_log=execution.get(
-                        "stderr_log", launch.get("stderr_log", "")
-                    ),
+                    stdout_log=execution.get("stdout_log", launch.get("stdout_log", "")),
+                    stderr_log=execution.get("stderr_log", launch.get("stderr_log", "")),
                 )
             )
             return 0
-        error = (
-            execution.get("error")
-            or launch.get("execute_blocker")
-            or "launch spawn failed"
-        )
+        error = execution.get("error") or launch.get("execute_blocker") or "launch spawn failed"
         print(f"team launch execute failed for {task_id}: {error}", file=sys.stderr)
         return 1
     return 0
@@ -806,8 +686,7 @@ def cmd_team_relaunch(args):
         task_dir,
         worker=getattr(args, "worker", None),
         phase=getattr(args, "phase", "auto"),
-        write_files=getattr(args, "write_files", False)
-        or getattr(args, "execute", False),
+        write_files=getattr(args, "write_files", False) or getattr(args, "execute", False),
         execute=getattr(args, "execute", False),
         auto_refresh=not getattr(args, "no_auto_refresh", False),
     )
@@ -862,21 +741,13 @@ def cmd_team_relaunch(args):
             print(
                 "  spawned: pid={pid} stdout={stdout_log} stderr={stderr_log} phase_log={phase_log}".format(
                     pid=execution.get("pid", "?"),
-                    stdout_log=execution.get(
-                        "stdout_log", relaunch.get("stdout_log", "")
-                    ),
-                    stderr_log=execution.get(
-                        "stderr_log", relaunch.get("stderr_log", "")
-                    ),
+                    stdout_log=execution.get("stdout_log", relaunch.get("stdout_log", "")),
+                    stderr_log=execution.get("stderr_log", relaunch.get("stderr_log", "")),
                     phase_log=execution.get("phase_log", relaunch.get("log_file", "")),
                 )
             )
             return 0
-        error = (
-            execution.get("error")
-            or relaunch.get("execute_blocker")
-            or "relaunch spawn failed"
-        )
+        error = execution.get("error") or relaunch.get("execute_blocker") or "relaunch spawn failed"
         print(f"team relaunch execute failed for {task_id}: {error}", file=sys.stderr)
         return 1
     return 0
@@ -963,12 +834,8 @@ def cmd_diff_case(args):
 
     case_a = diff.get("case_a") or {}
     case_b = diff.get("case_b") or {}
-    print(
-        f"Case A: {case_a.get('task_id')} signals={case_a.get('failure_signals', 0)} lane={case_a.get('lane', 'unknown')}"
-    )
-    print(
-        f"Case B: {case_b.get('task_id')} signals={case_b.get('failure_signals', 0)} lane={case_b.get('lane', 'unknown')}"
-    )
+    print(f"Case A: {case_a.get('task_id')} signals={case_a.get('failure_signals', 0)} lane={case_a.get('lane', 'unknown')}")
+    print(f"Case B: {case_b.get('task_id')} signals={case_b.get('failure_signals', 0)} lane={case_b.get('lane', 'unknown')}")
     if diff.get("same_lane"):
         print("Lane: same")
     else:
@@ -994,17 +861,9 @@ def cmd_update(args):
     task_dir = _require_task_dir(args)
     repo_root = repo_root_for_task_dir(task_dir)
 
-    explicit_touched = [
-        repo_relpath(p, repo_root=repo_root)
-        for p in (getattr(args, "touched_path", None) or [])
-        if repo_relpath(p, repo_root=repo_root)
-    ]
+    explicit_touched = [repo_relpath(p, repo_root=repo_root) for p in (getattr(args, "touched_path", None) or []) if repo_relpath(p, repo_root=repo_root)]
     explicit_roots = [p for p in (getattr(args, "root_touched", None) or []) if p]
-    explicit_vt = [
-        repo_relpath(p, repo_root=repo_root)
-        for p in (getattr(args, "verification_target", None) or [])
-        if repo_relpath(p, repo_root=repo_root)
-    ]
+    explicit_vt = [repo_relpath(p, repo_root=repo_root) for p in (getattr(args, "verification_target", None) or []) if repo_relpath(p, repo_root=repo_root)]
 
     if explicit_touched or explicit_roots or explicit_vt:
         merged = merge_task_path_fields(
@@ -1019,9 +878,7 @@ def cmd_update(args):
             pass
         print(f"Updated touched_paths: {len(merged['touched_paths'])} files")
         print(f"Updated roots_touched: {merged['roots_touched']}")
-        print(
-            f"Updated verification_targets: {len(merged['verification_targets'])} files"
-        )
+        print(f"Updated verification_targets: {len(merged['verification_targets'])} files")
         return 0
 
     if getattr(args, "from_git_diff", False):
@@ -1073,17 +930,11 @@ def cmd_update(args):
 
         print(f"Updated touched_paths: {len(merged['touched_paths'])} files")
         print(f"Updated roots_touched: {merged['roots_touched']}")
-        print(
-            f"Updated verification_targets: {len(merged['verification_targets'])} files"
-        )
+        print(f"Updated verification_targets: {len(merged['verification_targets'])} files")
         if team_state and team_state.get("orchestration_mode") == "team":
-            print(
-                f"Team status: {team_state.get('derived_status', team_state.get('current_status', 'n/a'))} (artifact-driven)"
-            )
+            print(f"Team status: {team_state.get('derived_status', team_state.get('current_status', 'n/a'))} (artifact-driven)")
     else:
-        print(
-            "Nothing to update. Use --from-git-diff or explicit --touched-path / --verification-target values."
-        )
+        print("Nothing to update. Use --from-git-diff or explicit --touched-path / --verification-target values.")
 
     return 0
 
@@ -1145,10 +996,7 @@ def cmd_close(args):
     if result.returncode == 0:
         print(f"close gate PASSED for {task_id}")
     else:
-        print(
-            f"close gate BLOCKED for {task_id} (exit {result.returncode})",
-            file=sys.stderr,
-        )
+        print(f"close gate BLOCKED for {task_id} (exit {result.returncode})", file=sys.stderr)
     return result.returncode
 
 
@@ -1203,321 +1051,102 @@ def build_parser():
     subparsers = parser.add_subparsers(dest="subcommand", metavar="SUBCOMMAND")
     subparsers.required = True
 
-    p_start = subparsers.add_parser(
-        "start", help="compile routing into TASK_STATE.yaml"
-    )
-    p_start.add_argument(
-        "--task-dir",
-        metavar="DIR",
-        help="canonical task directory (doc/harness/tasks/TASK__<id>)",
-    )
-    p_start.add_argument(
-        "--task-id",
-        metavar="TASK_ID",
-        help="canonical task id or slug to bootstrap (TASK__ prefix optional)",
-    )
-    p_start.add_argument(
-        "--slug",
-        metavar="SLUG",
-        help="task slug to bootstrap under doc/harness/tasks/TASK__<slug>",
-    )
-    p_start.add_argument(
-        "--request-file",
-        metavar="FILE",
-        help="optional REQUEST.md for request-text heuristics",
-    )
+    p_start = subparsers.add_parser("start", help="compile routing into TASK_STATE.yaml")
+    p_start.add_argument("--task-dir", metavar="DIR", help="canonical task directory (doc/harness/tasks/TASK__<id>)")
+    p_start.add_argument("--task-id", metavar="TASK_ID", help="canonical task id or slug to bootstrap (TASK__ prefix optional)")
+    p_start.add_argument("--slug", metavar="SLUG", help="task slug to bootstrap under doc/harness/tasks/TASK__<slug>")
+    p_start.add_argument("--request-file", metavar="FILE", help="optional REQUEST.md for request-text heuristics")
     p_start.set_defaults(func=cmd_start)
 
     p_ctx = subparsers.add_parser("context", help="emit compact task pack")
-    p_ctx.add_argument(
-        "--task-dir",
-        required=True,
-        metavar="DIR",
-        help="task directory containing TASK_STATE.yaml",
-    )
-    p_ctx.add_argument(
-        "--json", action="store_true", help="output machine-readable JSON"
-    )
-    p_ctx.add_argument(
-        "--team-worker",
-        metavar="WORKER",
-        help="optional team worker id for personalized context",
-    )
-    p_ctx.add_argument(
-        "--agent-name",
-        metavar="NAME",
-        help="optional agent name override for personalized context",
-    )
+    p_ctx.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_ctx.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p_ctx.add_argument("--team-worker", metavar="WORKER", help="optional team worker id for personalized context")
+    p_ctx.add_argument("--agent-name", metavar="NAME", help="optional agent name override for personalized context")
     p_ctx.set_defaults(func=cmd_context)
 
-    p_team_bootstrap = subparsers.add_parser(
-        "team-bootstrap", help="generate team worker bootstrap specs"
-    )
-    p_team_bootstrap.add_argument(
-        "--task-dir",
-        required=True,
-        metavar="DIR",
-        help="task directory containing TASK_STATE.yaml",
-    )
-    p_team_bootstrap.add_argument(
-        "--json", action="store_true", help="output machine-readable JSON"
-    )
-    p_team_bootstrap.add_argument(
-        "--write-files",
-        action="store_true",
-        help="materialize team/bootstrap briefs + env files",
-    )
+    p_team_bootstrap = subparsers.add_parser("team-bootstrap", help="generate team worker bootstrap specs")
+    p_team_bootstrap.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_team_bootstrap.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p_team_bootstrap.add_argument("--write-files", action="store_true", help="materialize team/bootstrap briefs + env files")
     p_team_bootstrap.set_defaults(func=cmd_team_bootstrap)
 
-    p_team_dispatch = subparsers.add_parser(
-        "team-dispatch", help="generate provider launch artifacts for a team task"
-    )
-    p_team_dispatch.add_argument(
-        "--task-dir",
-        required=True,
-        metavar="DIR",
-        help="task directory containing TASK_STATE.yaml",
-    )
-    p_team_dispatch.add_argument(
-        "--json", action="store_true", help="output machine-readable JSON"
-    )
-    p_team_dispatch.add_argument(
-        "--write-files",
-        action="store_true",
-        help="materialize provider prompts + run helpers",
-    )
+    p_team_dispatch = subparsers.add_parser("team-dispatch", help="generate provider launch artifacts for a team task")
+    p_team_dispatch.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_team_dispatch.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p_team_dispatch.add_argument("--write-files", action="store_true", help="materialize provider prompts + run helpers")
     p_team_dispatch.set_defaults(func=cmd_team_dispatch)
 
-    p_team_launch = subparsers.add_parser(
-        "team-launch", help="prepare or execute the default team fan-out entrypoint"
-    )
-    p_team_launch.add_argument(
-        "--task-dir",
-        required=True,
-        metavar="DIR",
-        help="task directory containing TASK_STATE.yaml",
-    )
-    p_team_launch.add_argument(
-        "--json", action="store_true", help="output machine-readable JSON"
-    )
-    p_team_launch.add_argument(
-        "--write-files", action="store_true", help="materialize the launch manifest"
-    )
-    p_team_launch.add_argument(
-        "--execute",
-        action="store_true",
-        help="spawn the selected launcher in detached mode",
-    )
-    p_team_launch.add_argument(
-        "--no-auto-refresh",
-        action="store_true",
-        help="do not regenerate stale/missing bootstrap or dispatch artifacts",
-    )
-    p_team_launch.add_argument(
-        "--target",
-        choices=("auto", "provider", "implementers"),
-        default="auto",
-        help="which launcher to prepare or execute",
-    )
+    p_team_launch = subparsers.add_parser("team-launch", help="prepare or execute the default team fan-out entrypoint")
+    p_team_launch.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_team_launch.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p_team_launch.add_argument("--write-files", action="store_true", help="materialize the launch manifest")
+    p_team_launch.add_argument("--execute", action="store_true", help="spawn the selected launcher in detached mode")
+    p_team_launch.add_argument("--no-auto-refresh", action="store_true", help="do not regenerate stale/missing bootstrap or dispatch artifacts")
+    p_team_launch.add_argument("--target", choices=("auto", "provider", "implementers"), default="auto", help="which launcher to prepare or execute")
     p_team_launch.set_defaults(func=cmd_team_launch)
 
-    p_team_relaunch = subparsers.add_parser(
-        "team-relaunch", help="prepare or execute a worker/phase-specific relaunch"
-    )
-    p_team_relaunch.add_argument(
-        "--task-dir",
-        required=True,
-        metavar="DIR",
-        help="task directory containing TASK_STATE.yaml",
-    )
-    p_team_relaunch.add_argument(
-        "--json", action="store_true", help="output machine-readable JSON"
-    )
-    p_team_relaunch.add_argument(
-        "--write-files", action="store_true", help="materialize the relaunch manifest"
-    )
-    p_team_relaunch.add_argument(
-        "--execute",
-        action="store_true",
-        help="spawn the selected worker phase in detached mode",
-    )
-    p_team_relaunch.add_argument(
-        "--no-auto-refresh",
-        action="store_true",
-        help="do not regenerate stale/missing bootstrap or dispatch artifacts",
-    )
-    p_team_relaunch.add_argument(
-        "--worker",
-        metavar="WORKER",
-        help="target worker id (defaults to the current or pending worker)",
-    )
-    p_team_relaunch.add_argument(
-        "--phase",
-        metavar="PHASE",
-        default="auto",
-        help="target phase: auto|implement|synthesis|final_runtime_verification|documentation_sync|documentation_review|handoff_refresh",
-    )
+    p_team_relaunch = subparsers.add_parser("team-relaunch", help="prepare or execute a worker/phase-specific relaunch")
+    p_team_relaunch.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_team_relaunch.add_argument("--json", action="store_true", help="output machine-readable JSON")
+    p_team_relaunch.add_argument("--write-files", action="store_true", help="materialize the relaunch manifest")
+    p_team_relaunch.add_argument("--execute", action="store_true", help="spawn the selected worker phase in detached mode")
+    p_team_relaunch.add_argument("--no-auto-refresh", action="store_true", help="do not regenerate stale/missing bootstrap or dispatch artifacts")
+    p_team_relaunch.add_argument("--worker", metavar="WORKER", help="target worker id (defaults to the current or pending worker)")
+    p_team_relaunch.add_argument("--phase", metavar="PHASE", default="auto", help="target phase: auto|implement|synthesis|final_runtime_verification|documentation_sync|documentation_review|handoff_refresh")
     p_team_relaunch.set_defaults(func=cmd_team_relaunch)
 
-    p_hist = subparsers.add_parser(
-        "history", help="list failure cases across task history"
-    )
-    p_hist.add_argument(
-        "--tasks-dir",
-        metavar="DIR",
-        help="optional tasks directory (defaults to doc/harness/tasks)",
-    )
-    p_hist.add_argument(
-        "--lane", metavar="LANE", default="", help="optional lane filter"
-    )
+    p_hist = subparsers.add_parser("history", help="list failure cases across task history")
+    p_hist.add_argument("--tasks-dir", metavar="DIR", help="optional tasks directory (defaults to doc/harness/tasks)")
+    p_hist.add_argument("--lane", metavar="LANE", default="", help="optional lane filter")
     p_hist.add_argument("--limit", type=int, default=20, help="maximum cases to show")
-    p_hist.add_argument(
-        "--min-failure-signals",
-        type=int,
-        default=1,
-        help="minimum failure_signals required",
-    )
-    p_hist.add_argument(
-        "--json", action="store_true", help="output machine-readable JSON"
-    )
+    p_hist.add_argument("--min-failure-signals", type=int, default=1, help="minimum failure_signals required")
+    p_hist.add_argument("--json", action="store_true", help="output machine-readable JSON")
     p_hist.set_defaults(func=cmd_history)
 
-    p_top = subparsers.add_parser(
-        "top-failures", help="show top similar failures for a task"
-    )
-    p_top.add_argument(
-        "--task-dir",
-        required=True,
-        metavar="DIR",
-        help="task directory containing TASK_STATE.yaml",
-    )
-    p_top.add_argument(
-        "--tasks-dir",
-        metavar="DIR",
-        help="optional tasks directory (defaults to doc/harness/tasks)",
-    )
-    p_top.add_argument(
-        "--limit", type=int, default=3, help="maximum similar failures to show"
-    )
-    p_top.add_argument(
-        "--json", action="store_true", help="output machine-readable JSON"
-    )
+    p_top = subparsers.add_parser("top-failures", help="show top similar failures for a task")
+    p_top.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_top.add_argument("--tasks-dir", metavar="DIR", help="optional tasks directory (defaults to doc/harness/tasks)")
+    p_top.add_argument("--limit", type=int, default=3, help="maximum similar failures to show")
+    p_top.add_argument("--json", action="store_true", help="output machine-readable JSON")
     p_top.set_defaults(func=cmd_top_failures)
 
     p_diff = subparsers.add_parser("diff-case", help="diff two failure cases")
-    p_diff.add_argument(
-        "--case-a", required=True, metavar="TASK_ID", help="first task id or task dir"
-    )
-    p_diff.add_argument(
-        "--case-b", required=True, metavar="TASK_ID", help="second task id or task dir"
-    )
-    p_diff.add_argument(
-        "--tasks-dir",
-        metavar="DIR",
-        help="optional tasks directory (defaults to doc/harness/tasks)",
-    )
-    p_diff.add_argument(
-        "--json", action="store_true", help="output machine-readable JSON"
-    )
+    p_diff.add_argument("--case-a", required=True, metavar="TASK_ID", help="first task id or task dir")
+    p_diff.add_argument("--case-b", required=True, metavar="TASK_ID", help="second task id or task dir")
+    p_diff.add_argument("--tasks-dir", metavar="DIR", help="optional tasks directory (defaults to doc/harness/tasks)")
+    p_diff.add_argument("--json", action="store_true", help="output machine-readable JSON")
     p_diff.set_defaults(func=cmd_diff_case)
 
     p_upd = subparsers.add_parser("update", help="sync task state from git diff")
-    p_upd.add_argument(
-        "--task-dir",
-        required=True,
-        metavar="DIR",
-        help="task directory containing TASK_STATE.yaml",
-    )
-    p_upd.add_argument(
-        "--from-git-diff",
-        action="store_true",
-        help="update touched_paths from `git diff --name-only HEAD`",
-    )
-    p_upd.add_argument(
-        "--touched-path",
-        action="append",
-        default=[],
-        metavar="PATH",
-        help="manually add a touched path (repeatable)",
-    )
-    p_upd.add_argument(
-        "--root-touched",
-        action="append",
-        default=[],
-        metavar="ROOT",
-        help="manually add a touched root (repeatable)",
-    )
-    p_upd.add_argument(
-        "--verification-target",
-        action="append",
-        default=[],
-        metavar="PATH",
-        help="manually add a runtime verification target (repeatable)",
-    )
+    p_upd.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
+    p_upd.add_argument("--from-git-diff", action="store_true", help="update touched_paths from `git diff --name-only HEAD`")
+    p_upd.add_argument("--touched-path", action="append", default=[], metavar="PATH", help="manually add a touched path (repeatable)")
+    p_upd.add_argument("--root-touched", action="append", default=[], metavar="ROOT", help="manually add a touched root (repeatable)")
+    p_upd.add_argument("--verification-target", action="append", default=[], metavar="PATH", help="manually add a runtime verification target (repeatable)")
     p_upd.set_defaults(func=cmd_update)
 
     p_ver = subparsers.add_parser("verify", help="run verification suite")
-    p_ver.add_argument(
-        "--task-dir",
-        required=True,
-        metavar="DIR",
-        help="task directory containing TASK_STATE.yaml",
-    )
+    p_ver.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
     p_ver.set_defaults(func=cmd_verify)
 
     p_cls = subparsers.add_parser("close", help="run task completion gate")
-    p_cls.add_argument(
-        "--task-dir",
-        required=True,
-        metavar="DIR",
-        help="task directory containing TASK_STATE.yaml",
-    )
+    p_cls.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")
     p_cls.set_defaults(func=cmd_close)
 
     p_replay = subparsers.add_parser("replay", help="run golden behavior replay corpus")
-    p_replay.add_argument(
-        "--corpus",
-        metavar="FILE",
-        help="optional JSON corpus path (defaults to doc/harness/replays/golden-corpus.json)",
-    )
-    p_replay.add_argument(
-        "--kind",
-        action="append",
-        choices=(
-            "routing",
-            "close_gate",
-            "prompt_notes",
-            "next_step",
-            "handoff",
-            "context",
-            "team_launch",
-            "team_relaunch",
-        ),
-        help="filter by case kind (repeatable)",
-    )
-    p_replay.add_argument(
-        "--case",
-        action="append",
-        dest="case_ids",
-        metavar="ID",
-        help="filter by case id (repeatable or comma-separated)",
-    )
-    p_replay.add_argument(
-        "--json", action="store_true", help="output machine-readable JSON"
-    )
+    p_replay.add_argument("--corpus", metavar="FILE", help="optional JSON corpus path (defaults to doc/harness/replays/golden-corpus.json)")
+    p_replay.add_argument("--kind", action="append", choices=("routing", "close_gate", "prompt_notes", "next_step", "handoff", "context", "team_launch", "team_relaunch"), help="filter by case kind (repeatable)")
+    p_replay.add_argument("--case", action="append", dest="case_ids", metavar="ID", help="filter by case id (repeatable or comma-separated)")
+    p_replay.add_argument("--json", action="store_true", help="output machine-readable JSON")
     p_replay.set_defaults(func=cmd_replay)
 
-    p_art = subparsers.add_parser(
-        "artifact", help="write harness artifact (wraps write_artifact.py)"
-    )
-    p_art.add_argument(
-        "artifact_args",
-        nargs=argparse.REMAINDER,
-        help="arguments passed through to write_artifact.py",
-    )
+    p_art = subparsers.add_parser("artifact", help="write harness artifact (wraps write_artifact.py)")
+    p_art.add_argument("artifact_args", nargs=argparse.REMAINDER, help="arguments passed through to write_artifact.py")
     p_art.set_defaults(func=cmd_artifact)
 
     return parser
+
 
 
 def main():

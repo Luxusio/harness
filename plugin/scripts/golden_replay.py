@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime as _dt
 import json
 import os
 import shutil
@@ -50,6 +51,81 @@ def _resolve_repo_path(repo_root: str, value: str) -> str:
     if os.path.isabs(value):
         return os.path.normpath(value)
     return os.path.normpath(os.path.join(repo_root, value))
+
+
+def _parse_replay_timestamp(value: Any) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("empty timestamp")
+    try:
+        return float(text)
+    except ValueError:
+        pass
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    dt = _dt.datetime.fromisoformat(text)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_dt.timezone.utc)
+    return dt.timestamp()
+
+
+def _apply_task_mtime_overrides(task_dir: str, overrides: Dict[str, Any]) -> None:
+    for relpath, timestamp in overrides.items():
+        path = os.path.join(task_dir, str(relpath))
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"mtime override target not found: {path}")
+        ts = _parse_replay_timestamp(timestamp)
+        os.utime(path, (ts, ts))
+
+
+def _normalize_team_recovery(team: Dict[str, Any]) -> Dict[str, Any]:
+    normalized = {
+        "phase": str(team.get("phase") or ""),
+        "pending_artifacts": list(team.get("pending_artifacts") or []),
+        "pending_workers": list(team.get("pending_workers") or []),
+        "missing_workers": list(team.get("missing_workers") or []),
+        "incomplete_workers": list(team.get("incomplete_workers") or []),
+        "pending_owned_paths": list(team.get("pending_owned_paths") or []),
+        "doc_sync_owners": list(team.get("doc_sync_owners") or []),
+        "document_critic_owners": list(team.get("document_critic_owners") or []),
+    }
+    for key in (
+        "bootstrap_available",
+        "bootstrap_generated",
+        "bootstrap_refresh_needed",
+        "dispatch_available",
+        "dispatch_generated",
+        "dispatch_refresh_needed",
+        "launch_available",
+        "launch_generated",
+        "launch_refresh_needed",
+        "launch_reason",
+        "launch_manifest",
+        "relaunch_available",
+        "relaunch_ready",
+        "relaunch_reason",
+        "relaunch_selection_reason",
+        "relaunch_selection_source",
+        "relaunch_worker",
+        "relaunch_phase",
+        "handoff_refresh_needed",
+        "handoff_refresh_reason",
+    ):
+        if key in team:
+            normalized[key] = team.get(key)
+    return normalized
+
+
+def _check_contains(expected_value: Any, actual_value: Any) -> Dict[str, Any]:
+    if isinstance(expected_value, list):
+        actual_items = [str(item) for item in (actual_value or [])]
+        missing = [needle for needle in expected_value if needle not in actual_items]
+        return {"ok": not missing, "missing": missing, "actual": actual_items}
+    actual_text = " ".join(str(item) for item in actual_value) if isinstance(actual_value, list) else str(actual_value or "")
+    ok = str(expected_value).lower() in actual_text.lower()
+    return {"ok": ok, "actual": actual_text}
 
 
 def load_corpus(corpus_path: str) -> Dict[str, Any]:
@@ -127,6 +203,13 @@ def _run_routing_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
     if not os.path.isdir(task_dir):
         return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {task_dir}"})
 
+    task_mtime_overrides = dict(case.get("task_mtime_overrides") or {})
+    if task_mtime_overrides:
+        try:
+            _apply_task_mtime_overrides(task_dir, task_mtime_overrides)
+        except Exception as exc:
+            return _base_result(case, passed=False, actual=None, details={"error": str(exc)})
+
     with _pushd(repo_root), _patched_provider_probe(case.get("provider_probe")):
         actual = _lib.compile_routing(task_dir)
 
@@ -151,6 +234,13 @@ def _run_close_gate_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]
     expected = dict(case.get("expect") or {})
     if not os.path.isdir(task_dir):
         return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {task_dir}"})
+
+    task_mtime_overrides = dict(case.get("task_mtime_overrides") or {})
+    if task_mtime_overrides:
+        try:
+            _apply_task_mtime_overrides(task_dir, task_mtime_overrides)
+        except Exception as exc:
+            return _base_result(case, passed=False, actual=None, details={"error": str(exc)})
 
     failures = compute_completion_failures(task_dir)
     blocked = bool(failures)
@@ -185,6 +275,13 @@ def _run_handoff_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
     if not os.path.isdir(task_dir):
         return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {task_dir}"})
 
+    task_mtime_overrides = dict(case.get("task_mtime_overrides") or {})
+    if task_mtime_overrides:
+        try:
+            _apply_task_mtime_overrides(task_dir, task_mtime_overrides)
+        except Exception as exc:
+            return _base_result(case, passed=False, actual=None, details={"error": str(exc)})
+
     trigger_override = case.get("trigger")
     compaction_just_occurred = bool(case.get("compaction_just_occurred", False))
     handoff = preview_handoff(
@@ -202,13 +299,7 @@ def _run_handoff_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
     }
     team = handoff.get("team_recovery") if isinstance(handoff, dict) else None
     if isinstance(team, dict):
-        actual["team_recovery"] = {
-            "phase": str(team.get("phase") or ""),
-            "pending_artifacts": list(team.get("pending_artifacts") or []),
-            "pending_workers": list(team.get("pending_workers") or []),
-            "doc_sync_owners": list(team.get("doc_sync_owners") or []),
-            "document_critic_owners": list(team.get("document_critic_owners") or []),
-        }
+        actual["team_recovery"] = _normalize_team_recovery(team)
 
     passed = True
     details: Dict[str, Any] = {"task_dir": os.path.relpath(task_dir, repo_root)}
@@ -251,23 +342,24 @@ def _run_handoff_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
     team_expect = dict(expected.get("team_recovery") or {})
     if team_expect:
         actual_team = dict(actual.get("team_recovery") or {})
-        phase = team_expect.get("phase")
-        if phase is not None:
-            actual_phase = actual_team.get("phase")
-            if actual_phase != phase:
-                passed = False
-            details["team_phase"] = {"expected": phase, "actual": actual_phase}
-
-        for key in ("pending_artifacts_contains", "pending_workers_contains", "doc_sync_owners", "document_critic_owners"):
-            expected_items = list(team_expect.get(key) or [])
-            if not expected_items:
+        for key, expected_value in team_expect.items():
+            if key.endswith("_contains"):
+                actual_key = key[: -len("_contains")]
+                contains_result = _check_contains(expected_value, actual_team.get(actual_key))
+                if not contains_result.get("ok"):
+                    passed = False
+                details[key] = {
+                    "expected": expected_value,
+                    "actual": contains_result.get("actual"),
+                }
+                if "missing" in contains_result:
+                    details[key]["missing"] = contains_result["missing"]
                 continue
-            actual_key = key.replace("_contains", "") if key.endswith("_contains") else key
-            actual_items = [str(item) for item in (actual_team.get(actual_key) or [])]
-            missing = [needle for needle in expected_items if needle not in actual_items]
-            if missing:
+
+            actual_value = actual_team.get(key)
+            if actual_value != expected_value:
                 passed = False
-            details[key] = {"expected": expected_items, "missing": missing}
+            details[f"team_{key}"] = {"expected": expected_value, "actual": actual_value}
 
     return _base_result(case, passed=passed, actual=actual, details=details)
 
@@ -288,6 +380,13 @@ def _run_context_case(case: Dict[str, Any], repo_root: str) -> Dict[str, Any]:
     expected = dict(case.get("expect") or {})
     if not os.path.isdir(task_dir):
         return _base_result(case, passed=False, actual=None, details={"error": f"task dir not found: {task_dir}"})
+
+    task_mtime_overrides = dict(case.get("task_mtime_overrides") or {})
+    if task_mtime_overrides:
+        try:
+            _apply_task_mtime_overrides(task_dir, task_mtime_overrides)
+        except Exception as exc:
+            return _base_result(case, passed=False, actual=None, details={"error": str(exc)})
 
     with _pushd(repo_root), _patched_provider_probe(case.get("provider_probe")):
         actual = _lib.emit_compact_context(
