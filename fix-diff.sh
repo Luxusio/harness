@@ -5,11 +5,14 @@
 
 set -euo pipefail
 
-# ── macOS ownership + quarantine fix ─────────────────────────────────────────
+# ── macOS ownership + quarantine fix + cache warmup ──────────────────────────
 if [[ "$(uname)" == "Darwin" ]]; then
     CURRENT_USER="$(whoami)"
     sudo chown -R "${CURRENT_USER}:" . 2>/dev/null && echo "fix-diff: ownership fixed → ${CURRENT_USER}" || true
     xattr -rc . 2>/dev/null && echo "fix-diff: quarantine xattrs cleared" || true
+    find . -type f \( -name "*.py" -o -name "*.sh" -o -name "*.yaml" -o -name "*.json" -o -name "*.md" \) \
+        | xargs -P8 -I{} sh -c 'cat "{}" > /dev/null 2>&1' \
+        && echo "fix-diff: file cache warmed" || true
 fi
 
 crlf_fixed=0
