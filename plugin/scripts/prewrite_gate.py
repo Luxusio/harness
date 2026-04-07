@@ -531,6 +531,17 @@ def _check_protected_artifact_write(filepath):
             f"Use /harness:plan to create PLAN.md."
         )
 
+    # Allow harness coordinator (role="" or "harness") to write any protected artifact.
+    # Mirrors the source-file write check (~line 652) which already allows "" and "harness".
+    # The coordinator acts as fallback for all roles in collapsed/recovery paths.
+    if current_role in ("", "harness"):
+        return True, ""
+
+    # Also honour HARNESS_TEAM_WORKER as an explicit role override
+    team_worker_env = os.environ.get("HARNESS_TEAM_WORKER", "").strip()
+    if team_worker_env and team_worker_env in allowed_roles:
+        return True, ""
+
     # For other protected artifacts, check role
     if current_role in allowed_roles:
         return True, ""

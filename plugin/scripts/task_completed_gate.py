@@ -315,11 +315,12 @@ def compute_completion_failures(task_dir):
                 " — rerun runtime critic; stale PASS does not count"
             )
 
-        # --- intent_verdict FAIL blocks close ---
+        # --- intent_verdict must be PASS for repo-mutating tasks ---
         intent_verdict_val = (yaml_field("intent_verdict", state_file) or "pending").upper()
-        if intent_verdict_val == "FAIL":
+        if intent_verdict_val != "PASS":
             failures.append(
-                "intent_verdict is FAIL — request coverage gap; replan and re-verify before close"
+                f"intent_verdict is '{intent_verdict_val}' — run critic-intent before close"
+                " (repo-mutating tasks require PASS, not just non-FAIL)"
             )
 
         # CRITIC__runtime.md required

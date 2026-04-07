@@ -3,7 +3,7 @@ tags: [req, root:common, source:user, status:active]
 summary: All runtime changes must propagate to setup templates — this repo is self-referential (plugin source = setup output origin)
 source: user directive on 2026-03-30
 updated: 2026-03-30
-freshness: current
+freshness: suspect
 verified_at: 2026-03-30T00:00:00Z
 confidence: high
 invalidated_by_paths:
