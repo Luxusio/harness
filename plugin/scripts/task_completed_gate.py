@@ -601,7 +601,7 @@ def main():
                 paths = [p for p in auto_touched.splitlines() if p.strip()]
                 try:
                     merge_task_path_fields(
-                        task_dir,
+                        target,
                         touched_paths=paths,
                         roots_touched=list(extract_roots(paths)),
                         verification_targets=[p for p in paths if not is_doc_path(p)],
