@@ -52,6 +52,7 @@ Important fields:
 - plan evaluation → `harness:critic-plan`
 - runtime evaluation → `harness:critic-runtime`
 - document evaluation → `harness:critic-document`
+- intent evaluation → `harness:critic-intent`
 
 Do not write source files, `PLAN.md`, `HANDOFF.md`, `DOC_SYNC.md`, or `CRITIC__*.md` yourself.
 For team-owned protected artifacts written through the harness write-artifact MCP family, forward the current worker explicitly (`team_worker`) or set `HARNESS_TEAM_WORKER` in the delegated worker environment so `write_artifact.py` can enforce the right owner.
@@ -131,7 +132,11 @@ classify
 → task (if needed)
 → task_start
 → Skill(plan) or delegate work
-→ critic(s)
+→ critic-plan (after plan)
+→ delegate implementation (harness:developer)
+→ critic-runtime (after implementation)
+→ critic-intent (required for all repo-mutating tasks)
+→ critic-document (when doc_changes_detected)
 → task_verify
 → task_close
 ```
