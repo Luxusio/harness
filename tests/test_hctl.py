@@ -501,12 +501,11 @@ class TestHctlContextJson(unittest.TestCase):
         required = {
             "task_id", "status", "lane", "risk_level", "qa_required",
             "doc_sync_required", "browser_required", "parallelism",
-            "workflow_locked", "maintenance_task", "planning_mode", "compat", "team",
-            "source_write_allowed", "why_source_write_blocked", "entry_requirements",
-            "close_requirements", "effective_close_gate", "missing_for_close",
-            "checks_template_path", "checks_statuses",
-            "must_read", "commands", "checks", "open_failures", "notes",
-            "review_focus", "next_action",
+            "workflow_locked", "maintenance_task", "planning_mode", "context_revision",
+            "compat", "team", "source_write_allowed", "why_source_write_blocked",
+            "entry_requirements", "close_requirements", "effective_close_gate",
+            "missing_for_close", "checks_template_path", "must_read", "checks",
+            "notes", "review_focus", "next_action",
         }
         for key in required:
             self.assertIn(key, ctx, f"required key '{key}' missing from context JSON")
@@ -556,7 +555,7 @@ class TestHctlContextJson(unittest.TestCase):
         self.assertTrue(ctx["close_requirements"])
         self.assertIn(ctx["effective_close_gate"], ("standard", "strict_high_risk"))
         self.assertTrue(ctx["checks_template_path"].endswith("CHECKS.yaml"))
-        self.assertIn("planned", ctx["checks_statuses"])
+        self.assertRegex(ctx["context_revision"], r"^[0-9a-f]{12}$")
 
     def test_context_blocks_source_writes_before_plan_pass(self):
         ctx = self._context_json(lane="build", risk_tags=["multi-root"], extra_fields={"plan_verdict": "pending"})

@@ -96,6 +96,7 @@ class PromptBudgetTests(unittest.TestCase):
             self.assertEqual(code, 0, err)
             ctx = json.loads(out)
             self.assertLess(len(out), 2200, "compact context should stay small even with many checks")
+            self.assertRegex(ctx["context_revision"], r"^[0-9a-f]{12}$")
             self.assertEqual(
                 set(ctx["team"].keys()),
                 {"provider", "status", "size", "reason", "fallback_used"},

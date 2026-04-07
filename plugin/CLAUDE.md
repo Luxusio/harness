@@ -1,8 +1,6 @@
 # harness runtime rules
 
-This repository uses an **MCP-first harness** for model-facing control.
-
-The goal is simple: the model should spend tokens on the task, not on brittle shell assembly. Runtime control comes from MCP tools, task-local artifacts, and hook gates. The CLI remains as backend/manual fallback.
+This repository uses an **MCP-first harness**. Spend tokens on the task, not brittle shell assembly. Runtime control comes from MCP tools, task-local artifacts, and hook gates; the CLI is fallback only.
 
 ## 1. Classify first
 
@@ -16,14 +14,15 @@ If the request will change files or produce structured findings, do not stay in 
 
 ## 2. Runtime control comes from harness MCP tools
 
-For every tasked request, use:
+For every new or resumed tasked request, start with:
 
 - `mcp__plugin_harness_harness__task_start`
-- `mcp__plugin_harness_harness__task_context`
+
+Use `mcp__plugin_harness_harness__task_context` only when you need a refresh, a personalized worker view, or the hook-provided summary looks stale.
 
 If a worker or critic ran out-of-band and the stop hook missed provenance, repair the durable count with `mcp__plugin_harness_harness__record_agent_run` before the next close attempt. `task_context` and `task_close` also reconcile missing zero-count provenance from durable protected artifacts when possible.
 
-Treat `task_context` as the **canonical task pack** for:
+Treat the task pack returned by `task_start` or `task_context` as the **canonical task pack** for:
 
 - `risk_level`
 - `qa_required`
@@ -38,13 +37,12 @@ Treat `task_context` as the **canonical task pack** for:
 - `next_action`
 
 Do **not** re-derive these from long prose docs.
-Do **not** read global harness docs again unless the task is explicitly changing the harness.
 
 ## 3. Read narrowly
 
 At runtime, prefer this order:
 
-1. `mcp__plugin_harness_harness__task_context`
+1. `task_start` on new/resume, or `task_context` only for refresh/personalization
 2. task-local files listed in `must_read`
 3. only the source files directly needed for the current step
 
@@ -63,11 +61,10 @@ Protected artifacts have one owner each.
 
 Do not write another role’s artifact directly.
 
-For `orchestration_mode: team`, source writes are additionally constrained by `TEAM_PLAN.md`: only declared owned writable paths may be mutated, and shared read-only paths stay read-only. Set `HARNESS_TEAM_WORKER` (or use a worker-suffixed `CLAUDE_AGENT_NAME`) when you want the harness to personalize context and recovery for a specific worker.
-Once `TEAM_PLAN.md` is ownership-complete, use `mcp__plugin_harness_harness__team_bootstrap` (or `python3 plugin/scripts/hctl.py team-bootstrap --task-dir ... --write-files`) to generate `team/bootstrap/*` worker briefs plus role-scoped env snippets before fan-out. `task_context` also accepts `team_worker` / `agent_name` overrides when you need a contributor- or reviewer-specific task pack without mutating the parent shell env.
-After bootstrap, prefer `mcp__plugin_harness_harness__team_dispatch` (or `python3 plugin/scripts/hctl.py team-dispatch --task-dir ... --write-files`) so the lead works from a frozen launch pack: provider prompt, provider launcher, per-phase worker prompts, and `run-*.sh` helpers. That pack now includes explicit lead synthesis / handoff-refresh helpers in addition to implementers and docs/runtime roles. Then use `mcp__plugin_harness_harness__team_launch` (or `python3 plugin/scripts/hctl.py team-launch --task-dir ... --write-files`) as the default fan-out entrypoint — it auto-refreshes stale bootstrap/dispatch artifacts, writes `team/bootstrap/provider/launch.json`, surfaces the native lead prompt when the provider is interactive, and can auto-fall back to the implementer dispatcher for `--execute`. When a single worker or close-phase needs to be resumed, use `mcp__plugin_harness_harness__team_relaunch` (or `python3 plugin/scripts/hctl.py team-relaunch --task-dir ... --write-files`) to pick the current best worker/phase pair from the frozen dispatch pack before optionally spawning it.
-Before lead synthesis and close, each contributor worker should leave `team/worker-<name>.md` summarizing completed work, owned paths handled, verification, and residual risks. When `TEAM_PLAN.md` names an explicit `lead` / `integrator`, that synthesis owner should write `TEAM_SYNTHESIS.md`, own the final runtime verification pass, then hand off to writer / critic-document for the documentation pass before refreshing `HANDOFF.md`; non-lead workers should not touch those artifacts.
-When team-owned protected artifacts are written through `mcp__plugin_harness_harness__write_*`, pass the current worker explicitly (for example `team_worker: lead`) or export `HARNESS_TEAM_WORKER`; the harness now enforces team ownership inside `write_artifact.py` as well, so ambiguous doc/runtime/handoff writes will be rejected instead of silently bypassing the team gate.
+For `orchestration_mode: team`, only paths owned in `TEAM_PLAN.md` may be mutated; shared paths stay read-only. Set `HARNESS_TEAM_WORKER` (or a worker-suffixed `CLAUDE_AGENT_NAME`) when you need worker-specific context or recovery.
+Use `team_bootstrap` to generate worker briefs and role env snippets, `team_dispatch` to freeze the lead launch pack, `team_launch` as the default fan-out entrypoint, and `team_relaunch` to resume a single worker or close-phase from that frozen pack. `task_context` also accepts `team_worker` / `agent_name` overrides for a personalized task pack.
+Before lead synthesis and close, each contributor leaves `team/worker-<name>.md` with work completed, paths handled, verification, and residual risks. If `TEAM_PLAN.md` names a `lead` / `integrator`, that owner writes `TEAM_SYNTHESIS.md`, owns the final runtime verification pass, and refreshes `HANDOFF.md`; non-lead workers should not touch those artifacts.
+When team-owned protected artifacts are written through `mcp__plugin_harness_harness__write_*`, pass `team_worker` explicitly or export `HARNESS_TEAM_WORKER`; ambiguous doc/runtime/handoff writes will be rejected.
 
 ## 5. Workflow surface is locked by default
 
@@ -89,22 +86,12 @@ Normal loop:
 
 ```text
 task_start
-task_context
-# plan / implement / evaluate
-task_update_from_git_diff
+# read must_read / do the next coherent work unit
 task_verify
 task_close
 ```
 
-Practical meaning:
-
-1. compile routing once
-2. resolve focus / queued follow-ups / pending transition
-3. read the compact task pack
-4. do the smallest coherent work unit
-5. sync changed files from git
-6. run verification
-7. close only after required critics and gates pass
+Meaning: compile routing once, resolve focus, do the smallest coherent work unit, then let `task_verify` and `task_close` auto-sync and enforce the gates. Call `task_context` only when the task pack needs refresh or personalization.
 
 ## 7. Plan-first rule
 
@@ -118,7 +105,7 @@ For repo-mutating tasks:
 
 ## 8. Verification rule
 
-`mcp__plugin_harness_harness__task_verify` is the normal task verification entry point. Use `mcp__plugin_harness_harness__verify_run` for repo-level verify.py modes.
+`mcp__plugin_harness_harness__task_verify` is the normal task verification entry point; it auto-syncs changed paths from git diff before running verification. Use `mcp__plugin_harness_harness__verify_run` for repo-level verify.py modes.
 Use browser-first verification only when the task pack or manifest requires it.
 Do not claim success from static inspection alone when runtime verification is required.
 
@@ -144,9 +131,9 @@ If the normal delegated workflow is unavailable and the task still needs repo mu
 
 Before closing a task:
 
-- sync changed paths with `mcp__plugin_harness_harness__task_update_from_git_diff`
 - ensure required critics have written PASS in task state
 - ensure blocking complaints or pending directives are resolved
-- use `mcp__plugin_harness_harness__task_close`
+- use `mcp__plugin_harness_harness__task_close` (it auto-syncs changed paths first)
+- use `mcp__plugin_harness_harness__task_update_from_git_diff` only as a manual or fallback sync step
 
 If `task_close` blocks, fix the stated gate instead of narrating around it.

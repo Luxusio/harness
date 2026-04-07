@@ -14,7 +14,9 @@ from _lib import (
     manifest_field,
     TASK_DIR,
     MANIFEST,
+    emit_compact_context,
 )
+from task_index import resolve_active_task_dir
 
 
 def _tooling_flags():
@@ -66,6 +68,20 @@ def _active_tasks(limit=2):
     return preview, hidden, blocked
 
 
+def _active_task_hint():
+    task_dir = resolve_active_task_dir(TASK_DIR)
+    if not task_dir:
+        return ""
+    try:
+        ctx = emit_compact_context(task_dir)
+    except Exception:
+        return ""
+    next_action = " ".join(str(ctx.get("next_action") or "").split())
+    if len(next_action) > 120:
+        next_action = next_action[:117].rstrip() + "..."
+    return f"focused task: {ctx.get('task_id')}[{ctx.get('status')}/{ctx.get('lane')}] rev={ctx.get('context_revision')} next={next_action}"
+
+
 def main():
     read_hook_input()
     exit_if_unmanaged_repo()
@@ -83,7 +99,10 @@ def main():
         print("active tasks: none")
     if blocked:
         print(f"blocked_env: {blocked}")
-    print("hint: use mcp__plugin_harness_harness__task_context for the canonical task pack")
+    active_hint = _active_task_hint()
+    if active_hint:
+        print(active_hint)
+    print("hint: new/resume -> task_start | refresh/personalize -> task_context")
 
 
 if __name__ == "__main__":

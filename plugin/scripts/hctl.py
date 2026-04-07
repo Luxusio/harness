@@ -181,6 +181,77 @@ def _print_case_summary(case, prefix=""):
         print(f"  paths: {', '.join(str(x) for x in paths[:4])}")
 
 
+def _sync_paths_from_git_diff(task_dir):
+    """Best-effort path sync shared by update / verify / close."""
+    repo_root = repo_root_for_task_dir(task_dir)
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD"],
+        capture_output=True,
+        text=True,
+        cwd=repo_root,
+    )
+    if result.returncode != 0:
+        result = subprocess.run(
+            ["git", "diff", "--name-only"],
+            capture_output=True,
+            text=True,
+            cwd=repo_root,
+        )
+    changed_files = [
+        repo_relpath(f.strip(), repo_root=repo_root)
+        for f in result.stdout.strip().splitlines()
+        if f.strip() and repo_relpath(f.strip(), repo_root=repo_root)
+    ]
+    if not changed_files:
+        return {
+            "changed": False,
+            "touched_paths": [],
+            "roots_touched": [],
+            "verification_targets": [],
+            "path_count": 0,
+            "team_state": None,
+        }
+    merged = merge_task_path_fields(
+        task_dir,
+        touched_paths=changed_files,
+        roots_touched=extract_roots(changed_files),
+        verification_targets=[f for f in changed_files if not is_doc_path(f)],
+    )
+    team_state = None
+    try:
+        team_state = sync_team_status(task_dir)
+    except Exception:
+        team_state = None
+    try:
+        write_failure_case_snapshot(task_dir)
+    except Exception:
+        pass
+    try:
+        update_active_task(task_dir, tasks_dir=os.path.dirname(task_dir))
+    except Exception:
+        pass
+    return {
+        "changed": True,
+        "touched_paths": list(merged.get("touched_paths") or []),
+        "roots_touched": list(merged.get("roots_touched") or []),
+        "verification_targets": list(merged.get("verification_targets") or []),
+        "path_count": len(merged.get("touched_paths") or []),
+        "team_state": team_state,
+    }
+
+
+def _print_sync_summary(summary, *, prefix=""):
+    if not summary or not summary.get("changed"):
+        print(f"{prefix}No changed files detected from git diff")
+        return
+    print(f"{prefix}Updated touched_paths: {len(summary.get('touched_paths') or [])} files")
+    print(f"{prefix}Updated roots_touched: {summary.get('roots_touched') or []}")
+    print(f"{prefix}Updated verification_targets: {len(summary.get('verification_targets') or [])} files")
+    team_state = summary.get("team_state") or None
+    if team_state and team_state.get("orchestration_mode") == "team":
+        print(f"{prefix}Team status: {team_state.get('derived_status', team_state.get('current_status', 'n/a'))} (artifact-driven)")
+
+
 # ---------------------------------------------------------------------------
 # Subcommand: start
 # ---------------------------------------------------------------------------
@@ -503,8 +574,6 @@ def cmd_context(args):
                     blocked_count=len(checks.get("blocked_ids", [])),
                 )
             )
-        if ctx.get("open_failures"):
-            print(f"Open failures: {', '.join(ctx['open_failures'])}")
         if ctx.get("notes"):
             print(f"Notes: {' | '.join(ctx['notes'])}")
         if ctx.get("next_action"):
@@ -932,57 +1001,8 @@ def cmd_update(args):
         return 0
 
     if getattr(args, "from_git_diff", False):
-        result = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD"],
-            capture_output=True,
-            text=True,
-            cwd=repo_root,
-        )
-        if result.returncode != 0:
-            result = subprocess.run(
-                ["git", "diff", "--name-only"],
-                capture_output=True,
-                text=True,
-                cwd=repo_root,
-            )
-        changed_files = [
-            repo_relpath(f.strip(), repo_root=repo_root)
-            for f in result.stdout.strip().splitlines()
-            if f.strip()
-        ]
-
-        if not changed_files:
-            print("No changed files detected from git diff")
-            return 0
-
-        merged = merge_task_path_fields(
-            task_dir,
-            touched_paths=changed_files,
-            roots_touched=extract_roots(changed_files),
-            verification_targets=[f for f in changed_files if not is_doc_path(f)],
-        )
-
-        team_state = None
-        try:
-            team_state = sync_team_status(task_dir)
-        except Exception:
-            team_state = None
-
-        try:
-            write_failure_case_snapshot(task_dir)
-        except Exception:
-            pass
-
-        try:
-            update_active_task(task_dir, tasks_dir=os.path.dirname(task_dir))
-        except Exception:
-            pass
-
-        print(f"Updated touched_paths: {len(merged['touched_paths'])} files")
-        print(f"Updated roots_touched: {merged['roots_touched']}")
-        print(f"Updated verification_targets: {len(merged['verification_targets'])} files")
-        if team_state and team_state.get("orchestration_mode") == "team":
-            print(f"Team status: {team_state.get('derived_status', team_state.get('current_status', 'n/a'))} (artifact-driven)")
+        summary = _sync_paths_from_git_diff(task_dir)
+        _print_sync_summary(summary)
     else:
         print("Nothing to update. Use --from-git-diff or explicit --touched-path / --verification-target values.")
 
@@ -1075,6 +1095,13 @@ def cmd_verify(args):
     task_dir = _require_task_dir(args)
     repo_root = repo_root_for_task_dir(task_dir)
 
+    try:
+        sync_summary = _sync_paths_from_git_diff(task_dir)
+        if sync_summary.get("changed"):
+            _print_sync_summary(sync_summary, prefix="auto-sync: ")
+    except Exception:
+        pass
+
     verify_script = os.path.join(SCRIPT_DIR, "verify.py")
     result = subprocess.run(
         ["python3", verify_script, "--task-dir", task_dir],
@@ -1100,6 +1127,13 @@ def cmd_close(args):
     env = os.environ.copy()
     env["HARNESS_TASK_ID"] = task_id
     env["HARNESS_SKIP_STDIN"] = "1"
+
+    try:
+        sync_summary = _sync_paths_from_git_diff(task_dir)
+        if sync_summary.get("changed"):
+            _print_sync_summary(sync_summary, prefix="auto-sync: ")
+    except Exception:
+        pass
 
     try:
         sync_team_status(task_dir)
