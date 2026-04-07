@@ -59,6 +59,19 @@ def task_id_from_dir(task_dir):
     return os.path.basename(os.path.abspath(task_dir))
 
 
+def _validate_task_dir(task_dir):
+    """Raise SystemExit if task_dir is not a valid harness task directory."""
+    state_file = os.path.join(task_dir, "TASK_STATE.yaml")
+    if not os.path.isfile(state_file):
+        print(
+            f"ERROR: '{task_dir}' is not a harness task directory "
+            f"(TASK_STATE.yaml not found). "
+            f"Use --task-dir doc/harness/tasks/TASK__<id>.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
 def _atomic_write_text(path, content):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(prefix=".tmp.", dir=os.path.dirname(path))
@@ -227,6 +240,7 @@ EXPECTED_AGENT_ROLES = {
     "QA__runtime.md": {"critic-runtime"},
     "CRITIC__plan.md": {"critic-plan"},
     "CRITIC__document.md": {"critic-document"},
+    "CRITIC__intent.md": {"critic-intent"},
     "HANDOFF.md": {"developer"},
     "DOC_SYNC.md": {"writer"},
 }
@@ -458,6 +472,7 @@ def update_checks_yaml(task_dir, checks_dict):
 
 def cmd_critic_runtime(args):
     task_dir = os.path.abspath(args.task_dir)
+    _validate_task_dir(task_dir)
     task_id = task_id_from_dir(task_dir)
     ts = now_iso()
     artifact_name = "CRITIC__runtime.md"
@@ -520,6 +535,7 @@ def cmd_critic_runtime(args):
 
 def cmd_critic_plan(args):
     task_dir = os.path.abspath(args.task_dir)
+    _validate_task_dir(task_dir)
     task_id = task_id_from_dir(task_dir)
     artifact_name = "CRITIC__plan.md"
     enforce_agent_role_for_artifact(artifact_name)
@@ -563,6 +579,7 @@ def cmd_critic_plan(args):
 
 def cmd_critic_document(args):
     task_dir = os.path.abspath(args.task_dir)
+    _validate_task_dir(task_dir)
     task_id = task_id_from_dir(task_dir)
     artifact_name = "CRITIC__document.md"
     enforce_agent_role_for_artifact(artifact_name)
@@ -601,12 +618,62 @@ def cmd_critic_document(args):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: critic-intent
+# ---------------------------------------------------------------------------
+
+
+def cmd_critic_intent(args):
+    task_dir = os.path.abspath(args.task_dir)
+    _validate_task_dir(task_dir)
+    task_id = task_id_from_dir(task_dir)
+    artifact_name = "CRITIC__intent.md"
+    enforce_agent_role_for_artifact(artifact_name)
+    team_context = enforce_team_artifact_owner(task_dir, artifact_name)
+    team_header = artifact_team_header_lines(team_context)
+
+    checks_str = getattr(args, "checks", None) or "none"
+    checks_dict = parse_checks_arg(checks_str)
+    issues = getattr(args, "issues", None) or "none"
+    blocker_ids = getattr(args, "blocker_ids", None) or "none"
+    opportunity_ids = getattr(args, "opportunity_ids", None) or "none"
+
+    md_lines = [
+        f"verdict: {args.verdict}",
+        f"task_id: {task_id}",
+        f"summary: {args.summary}",
+        f"issues: {issues}",
+        f"blocker_ids: {blocker_ids}",
+        f"opportunity_ids: {opportunity_ids}",
+        f"checks_updated: {checks_str if checks_str else 'none'}",
+    ]
+    if team_header:
+        md_lines[2:2] = team_header
+    md_content = "\n".join(md_lines) + "\n"
+
+    artifact_path = os.path.join(task_dir, artifact_name)
+    meta_path = os.path.join(task_dir, "CRITIC__intent.meta.json")
+
+    write_file(artifact_path, md_content)
+    meta = write_meta(meta_path, artifact_name, task_id, "critic-intent", verdict=args.verdict, team_context=team_context)
+
+    update_task_state_field(task_dir, "intent_verdict", args.verdict)
+    update_task_state_field(task_dir, "intent_verdict_freshness", "current")
+    update_checks_yaml(task_dir, checks_dict)
+
+    result = finalize_write_result(artifact_path, meta_path, state_fields_updated=["intent_verdict", "intent_verdict_freshness"], checks_updated=sorted(checks_dict))
+    result.update({"artifact": artifact_name, "task_id": task_id, "verdict": args.verdict, "meta_written_at": meta.get("written_at")})
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: handoff
 # ---------------------------------------------------------------------------
 
 
 def cmd_handoff(args):
     task_dir = os.path.abspath(args.task_dir)
+    _validate_task_dir(task_dir)
     task_id = task_id_from_dir(task_dir)
     ts = now_iso()
     artifact_name = "HANDOFF.md"
@@ -656,6 +723,7 @@ def cmd_handoff(args):
 
 def cmd_doc_sync(args):
     task_dir = os.path.abspath(args.task_dir)
+    _validate_task_dir(task_dir)
     task_id = task_id_from_dir(task_dir)
     ts = now_iso()
     artifact_name = "DOC_SYNC.md"
@@ -746,6 +814,16 @@ def build_parser():
     p_cd.add_argument("--checks", default=None)
     p_cd.add_argument("--issues", default=None)
 
+    # --- critic-intent ---
+    p_ci = subparsers.add_parser("critic-intent", help="Write CRITIC__intent.md")
+    p_ci.add_argument("--task-dir", required=True)
+    p_ci.add_argument("--verdict", required=True, choices=["PASS", "FAIL"])
+    p_ci.add_argument("--summary", required=True)
+    p_ci.add_argument("--checks", default=None)
+    p_ci.add_argument("--issues", default=None)
+    p_ci.add_argument("--blocker-ids", default=None)
+    p_ci.add_argument("--opportunity-ids", default=None)
+
     # --- handoff ---
     p_ho = subparsers.add_parser("handoff", help="Write HANDOFF.md")
     p_ho.add_argument("--task-dir", required=True)
@@ -775,6 +853,7 @@ DISPATCH = {
     "critic-runtime": cmd_critic_runtime,
     "critic-plan": cmd_critic_plan,
     "critic-document": cmd_critic_document,
+    "critic-intent": cmd_critic_intent,
     "handoff": cmd_handoff,
     "doc-sync": cmd_doc_sync,
 }

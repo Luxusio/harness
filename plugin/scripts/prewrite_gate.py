@@ -348,7 +348,11 @@ def _team_worker_summary_target(filepath):
     if not fp:
         return ""
     match = re.search(r"(?:^|/)team/(worker-[A-Za-z0-9_.-]+)\.md$", fp)
-    return match.group(1) if match else ""
+    if not match:
+        return ""
+    name = match.group(1)  # e.g. "worker-developer"
+    # Strip "worker-" prefix to return the canonical worker name used in plan_workers
+    return name[len("worker-"):] if name.startswith("worker-") else name
 
 
 def _check_team_artifact_write(task_dir, filepath):

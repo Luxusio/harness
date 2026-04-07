@@ -3575,6 +3575,8 @@ runtime_verdict_freshness: current
 document_verdict: pending
 document_verdict_freshness: current
 runtime_verdict_fail_count: 0
+intent_verdict: pending
+intent_verdict_freshness: current
 browser_required: {browser_required}
 doc_sync_required: false
 doc_changes_detected: false
@@ -6323,6 +6325,8 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
     runtime_verdict = (yaml_field("runtime_verdict", state_file) or "pending").upper()
     runtime_freshness = verdict_freshness(state_file, "runtime_verdict")
     document_freshness = verdict_freshness(state_file, "document_verdict")
+    intent_verdict = (yaml_field("intent_verdict", state_file) or "pending").upper()
+    intent_fix_round = intent_verdict == "FAIL"
 
     session_handoff_name = "SESSION_HANDOFF.json"
     runtime_critic_name = "CRITIC__runtime.md"
@@ -6744,6 +6748,8 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
         notes.append("blocked env: read environment snapshot")
     elif runtime_fix_round:
         notes.append("runtime fix round: evidence-first")
+    elif intent_fix_round:
+        notes.append("intent fix round: replan required")
     elif document_fix_round:
         notes.append("document fix round: evidence-first")
     elif handoff_data:
@@ -7002,6 +7008,11 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
             next_action = "Read the surfaced runtime evidence, consult ENVIRONMENT_SNAPSHOT.md, run task_verify, then re-check critics."
         else:
             next_action = "Read the surfaced runtime evidence first, fix the failing path, run task_verify, then re-check critics."
+    elif intent_fix_round:
+        next_action = (
+            "intent critic FAIL: request coverage gap — open PLAN.md, add missing AC "
+            "for the REQUEST must-goals, get critic-plan PASS, then implement and re-verify."
+        )
     elif document_fix_round:
         next_action = "Read the surfaced document evidence first, repair DOC_SYNC / notes, then re-run critic-document before closing."
     elif handoff_data:

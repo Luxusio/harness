@@ -811,6 +811,34 @@ def handle_write_critic_document(args: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def handle_write_critic_intent(args: dict[str, Any]) -> dict[str, Any]:
+    task_dir = _require_str(args, "task_dir")
+    verdict = _require_str(args, "verdict")
+    summary = _require_str(args, "summary")
+    checks = _optional_str(args, "checks")
+    issues = _optional_str(args, "issues")
+    blocker_ids = _optional_str(args, "blocker_ids")
+    opportunity_ids = _optional_str(args, "opportunity_ids")
+    team_worker = _optional_str(args, "team_worker")
+    agent_name = _optional_str(args, "agent_name")
+    argv = ["--task-dir", task_dir, "--verdict", verdict, "--summary", summary]
+    if checks:
+        argv.extend(["--checks", checks])
+    if issues:
+        argv.extend(["--issues", issues])
+    if blocker_ids:
+        argv.extend(["--blocker-ids", blocker_ids])
+    if opportunity_ids:
+        argv.extend(["--opportunity-ids", opportunity_ids])
+    return _artifact_response(
+        "critic-intent",
+        argv,
+        artifact="CRITIC__intent.md",
+        team_worker=team_worker,
+        agent_name=agent_name,
+    )
+
+
 def handle_write_handoff(args: dict[str, Any]) -> dict[str, Any]:
     task_dir = _require_str(args, "task_dir")
     verify_cmd = _require_str(args, "verify_cmd")
@@ -1193,6 +1221,28 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
         "handler": handle_write_critic_document,
+    },
+    {
+        "name": "write_critic_intent",
+        "title": "Write intent critic artifact",
+        "description": "Write CRITIC__intent.md and update intent_verdict in TASK_STATE.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_dir": {"type": "string"},
+                "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
+                "summary": {"type": "string"},
+                "checks": {"type": "string"},
+                "issues": {"type": "string"},
+                "blocker_ids": {"type": "string"},
+                "opportunity_ids": {"type": "string"},
+                "team_worker": {"type": "string", "description": "Optional team worker id"},
+                "agent_name": {"type": "string", "description": "Optional agent name"},
+            },
+            "required": ["task_dir", "verdict", "summary"],
+            "additionalProperties": False,
+        },
+        "handler": handle_write_critic_intent,
     },
     {
         "name": "write_handoff",

@@ -5,7 +5,7 @@ evidence: filesystem scan at setup time
 updated: 2026-03-30
 
 ## Layout
-- `plugin/agents/` — 6 agent definitions (harness, developer, writer, critic-plan, critic-runtime, critic-document)
+- `plugin/agents/` — 7 agent definitions (harness, developer, writer, critic-plan, critic-runtime, critic-document, critic-intent)
 - `plugin/scripts/` — 31 Python hook scripts + _lib.py shared utilities
 - `plugin/hooks/hooks.json` — 8+ lifecycle hook definitions
 - `plugin/calibration/` — 13 critic calibration packs by mode
