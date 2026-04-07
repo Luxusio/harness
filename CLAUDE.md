@@ -2,7 +2,7 @@
 tags: [root, harness, bootstrap]
 summary: 프로젝트 진입점. 운영 규칙과 doc registry 참조.
 always_load: [doc/CLAUDE.md]
-updated: 2026-03-31
+updated: 2026-04-07
 
 @doc/CLAUDE.md
 
@@ -21,6 +21,9 @@ updated: 2026-03-31
 - Protected artifacts have role ownership: PLAN.md=plan-skill, HANDOFF.md=developer, DOC_SYNC.md=writer, CRITIC__*.md=respective critic. Enforced by prewrite gate. For team tasks with an explicit synthesis owner, final runtime verification artifacts and final HANDOFF refresh are reserved to that synthesis owner once TEAM_SYNTHESIS.md is ready. `TEAM_PLAN.md` may also optionally declare `## Documentation Ownership` so `DOC_SYNC.md` / `CRITIC__document.md` are pinned to specific workers during the documentation pass.
 - Pre-plan source reads are blocked until plan session opens. Capability firewall prevents silent collapsed mode.
 - User directives are captured in DIRECTIVES_PENDING.yaml and must be promoted before task close.
+- Only one repo-mutating task may hold write focus at a time. If a second mutating request arrives, create or resume a separate task and keep it queued until the user explicitly switches focus or the current task closes.
+- Short approvals such as `ㅇㅇ ㄱ` approve only the last explicit transition the harness proposed; they never authorize skipping task creation, planning, or critic gates.
+- When an answer-lane exchange turns into repo mutation, the harness must first make the lane switch explicit and open planning before implementation.
 
 # Template sync rule (CRITICAL)
 - This repo IS the harness plugin source. Every change to runtime behavior (paths, hook output schemas, gitignore patterns, agent definitions, critic rubrics, skill logic) MUST also update the corresponding setup templates under `plugin/skills/setup/templates/`.

@@ -1,6 +1,6 @@
 # Orchestration Modes Reference
 
-updated: 2026-04-01
+updated: 2026-04-07
 
 > **Compatibility / maintenance reference only.**
 > This document is NOT the agent-facing canonical routing source.
@@ -14,6 +14,8 @@ updated: 2026-04-01
 ## Overview
 
 Orchestration mode controls **how many agents work on a task and how their work is coordinated**. It is selected after execution mode and before plan creation, then stored in `TASK_STATE.yaml`.
+
+Conversation handling stays stricter than task existence: many task folders may exist, but the harness should keep only **one focused repo-mutating task** as the active write target at a time. When a second mutating request arrives mid-flight, the default behavior is to create or resume a separate task and keep it queued until the user explicitly switches focus. Short approvals such as `go ahead` or `ㅇㅇ ㄱ` bind to the last explicit transition the harness proposed; they are not blanket permission to skip task creation, planning, or critic gates.
 
 The three modes:
 

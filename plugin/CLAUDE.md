@@ -10,7 +10,7 @@ Use the smallest lane that fits the request.
 
 - **answer**: explain, summarize, or advise. No task folder.
 - **investigate**: inspect, reproduce, diagnose, or prepare findings. Task required.
-- **repo-mutating lanes** (`build`, `debug`, `verify`, `refactor`, `docs-sync`): task required.
+- **repo-mutating lanes** (`build`, `debug`, `verify`, `refactor`, `docs-sync`): task required. Keep only one repo-mutating task as the current write focus at a time; new overlapping mutating requests default to a separate task plus queued follow-up until the user switches focus.
 
 If the request will change files or produce structured findings, do not stay in answer mode.
 
@@ -99,17 +99,19 @@ task_close
 Practical meaning:
 
 1. compile routing once
-2. read the compact task pack
-3. do the smallest coherent work unit
-4. sync changed files from git
-5. run verification
-6. close only after required critics and gates pass
+2. resolve focus / queued follow-ups / pending transition
+3. read the compact task pack
+4. do the smallest coherent work unit
+5. sync changed files from git
+6. run verification
+7. close only after required critics and gates pass
 
 ## 7. Plan-first rule
 
 For repo-mutating tasks:
 
 - do not mutate source before `PLAN.md` exists and critic-plan PASS is recorded
+- short approvals such as `ㅇㅇ ㄱ` or `go ahead` only approve the last explicit transition you proposed; they never skip task creation, planning, or critic gates
 - if the task is unplanned, stop source work and repair the plan first
 - if `planning_mode: broad-build`, let the plan skill write `01_product_spec.md`, `02_design_language.md`, and `03_architecture.md` before `PLAN.md`
 - otherwise, if the request is broad and under-specified, use the plan skill to narrow it before implementation
