@@ -32,7 +32,7 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 import calibration_miner  # type: ignore  # noqa: E402
 import harness_api  # type: ignore  # noqa: E402
 import observability  # type: ignore  # noqa: E402
-from _lib import canonical_task_dir, canonical_task_id, find_repo_root  # type: ignore  # noqa: E402
+from _lib import canonical_task_dir, canonical_task_id, find_repo_root, yaml_array, yaml_field  # type: ignore  # noqa: E402
 
 
 def _server_version() -> str:
@@ -179,11 +179,97 @@ def _load_context(task_dir: str) -> tuple[dict[str, Any] | None, dict[str, Any]]
     return parsed, response
 
 
+def _minimal_fetch(response: dict[str, Any]) -> dict[str, Any]:
+    payload = {
+        "ok": bool(response.get("ok")),
+        "method": str(response.get("method") or "cli"),
+        "exit_code": int(response.get("exit_code") or 0),
+    }
+    fallback = response.get("fallback_from")
+    if isinstance(fallback, dict):
+        payload["fallback_from"] = {
+            "ok": bool(fallback.get("ok")),
+            "method": str(fallback.get("method") or "direct"),
+            "exit_code": int(fallback.get("exit_code") or 0),
+        }
+    return payload
+
+
+def _debug_response(response: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: response.get(key)
+        for key in ("ok", "method", "exit_code", "argv", "stdout", "stderr", "fallback_from")
+        if key in response
+    }
+
+
+def _state_file(task_dir: str) -> str:
+    return os.path.join(task_dir, "TASK_STATE.yaml")
+
+
+def _task_paths_summary(task_dir: str) -> dict[str, Any]:
+    state_file = _state_file(task_dir)
+    touched = list(yaml_array("touched_paths", state_file) or [])
+    roots = list(yaml_array("roots_touched", state_file) or [])
+    targets = list(yaml_array("verification_targets", state_file) or [])
+    return {
+        "path_count": len(touched),
+        "top_paths": touched[-3:],
+        "roots_touched": roots[:4],
+        "verification_targets": targets[:3],
+    }
+
+
+def _result_summary_line(response: dict[str, Any]) -> str:
+    lines = []
+    for source in (response.get("stdout") or "", response.get("stderr") or ""):
+        for raw in str(source).splitlines():
+            line = raw.strip()
+            if line.startswith("RESULT:"):
+                lines.append(line)
+    if lines:
+        return lines[-1]
+    evidence = []
+    for source in (response.get("stdout") or "", response.get("stderr") or ""):
+        for raw in str(source).splitlines():
+            line = raw.strip()
+            if line.startswith("[EVIDENCE]"):
+                evidence.append(line)
+    if evidence:
+        return evidence[-1]
+    tail = []
+    for source in (response.get("stdout") or "", response.get("stderr") or ""):
+        tail.extend([raw.strip() for raw in str(source).splitlines() if raw.strip()])
+    return tail[-1] if tail else ""
+
+
+def _task_relpath(task_dir: str, filename: str) -> str:
+    task_name = Path(task_dir).name
+    return f"doc/harness/tasks/{task_name}/{filename}" if filename else ""
+
+
+def _artifact_if_exists(task_dir: str, filename: str) -> str:
+    return _task_relpath(task_dir, filename) if os.path.isfile(os.path.join(task_dir, filename)) else ""
+
+
+def _brief_context_payload(task_dir: str, context: dict[str, Any] | None, fetch: dict[str, Any], *, debug: bool = False) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "task_dir": task_dir,
+        "task_context": context,
+        "context_revision": (context or {}).get("context_revision"),
+        "fetch": _minimal_fetch(fetch),
+    }
+    if debug:
+        payload["debug"] = {"fetch": _debug_response(fetch)}
+    return payload
+
+
 def handle_task_start(args: dict[str, Any]) -> dict[str, Any]:
     task_dir = _optional_str(args, "task_dir")
     task_id = _optional_str(args, "task_id")
     slug = _optional_str(args, "slug")
     request_file = _optional_str(args, "request_file")
+    debug = _optional_bool(args, "debug", default=False)
     if not task_dir and not task_id and not slug:
         raise ValueError("task_start requires task_dir, task_id, or slug")
 
@@ -203,15 +289,32 @@ def handle_task_start(args: dict[str, Any]) -> dict[str, Any]:
         argv.extend(["--request-file", request_file])
     response = _run_script("hctl.py", argv)
     context, context_response = _load_context(resolved_task_dir)
-    payload = {
+    failure_payload = {
         "task_dir": resolved_task_dir,
         "task_id": canonical_task_id(task_id=task_id, slug=slug, task_dir=resolved_task_dir),
         "start": response,
         "task_context": context,
         "task_context_fetch": context_response,
     }
-    if not response["ok"]:
-        return _tool_error("task_start failed", data=payload)
+    if not response["ok"] or context is None:
+        return _tool_error("task_start failed", data=failure_payload)
+
+    payload = {
+        "task_dir": resolved_task_dir,
+        "task_id": canonical_task_id(task_id=task_id, slug=slug, task_dir=resolved_task_dir),
+        "status": context.get("status"),
+        "planning_mode": context.get("planning_mode"),
+        "team_status": (context.get("team") or {}).get("status"),
+        "source_write_allowed": context.get("source_write_allowed"),
+        "context_revision": context.get("context_revision"),
+        "task_context": context,
+        "start": {"ok": True, "exit_code": int(response.get("exit_code") or 0)},
+    }
+    if debug:
+        payload["debug"] = {
+            "start": _debug_response(response),
+            "task_context_fetch": _debug_response(context_response),
+        }
     return _result(payload)
 
 
@@ -219,6 +322,7 @@ def handle_task_context(args: dict[str, Any]) -> dict[str, Any]:
     task_dir = _require_str(args, "task_dir")
     team_worker = _optional_str(args, "team_worker")
     agent_name = _optional_str(args, "agent_name")
+    debug = _optional_bool(args, "debug", default=False)
     try:
         context = harness_api.get_task_context(
             task_dir,
@@ -256,14 +360,10 @@ def handle_task_context(args: dict[str, Any]) -> dict[str, Any]:
                 context = None
         else:
             context = None
-    payload = {
-        "task_dir": task_dir,
-        "task_context": context,
-        "fetch": response,
-    }
+    failure_payload = {"task_dir": task_dir, "task_context": context, "fetch": response}
     if context is None:
-        return _tool_error("task_context failed", data=payload)
-    return _result(payload)
+        return _tool_error("task_context failed", data=failure_payload)
+    return _result(_brief_context_payload(task_dir, context, response, debug=debug))
 
 
 def handle_team_bootstrap(args: dict[str, Any]) -> dict[str, Any]:
@@ -369,18 +469,25 @@ def handle_team_relaunch(args: dict[str, Any]) -> dict[str, Any]:
 
 def handle_task_update_from_git_diff(args: dict[str, Any]) -> dict[str, Any]:
     task_dir = _require_str(args, "task_dir")
+    debug = _optional_bool(args, "debug", default=False)
     response = _run_script(
         "hctl.py",
         ["update", "--task-dir", task_dir, "--from-git-diff"],
     )
-    payload = {"task_dir": task_dir, "update": response}
+    failure_payload = {"task_dir": task_dir, "update": response}
     if not response["ok"]:
-        return _tool_error("task_update_from_git_diff failed", data=payload)
+        return _tool_error("task_update_from_git_diff failed", data=failure_payload)
+    summary = _task_paths_summary(task_dir)
+    changed = "No changed files detected from git diff" not in str(response.get("stdout") or "")
+    payload = {"task_dir": task_dir, "changed": changed, **summary}
+    if debug:
+        payload["debug"] = {"update": _debug_response(response)}
     return _result(payload)
 
 
 def handle_task_update_paths(args: dict[str, Any]) -> dict[str, Any]:
     task_dir = _require_str(args, "task_dir")
+    debug = _optional_bool(args, "debug", default=False)
     touched_paths = args.get("touched_paths") or []
     roots_touched = args.get("roots_touched") or []
     verification_targets = args.get("verification_targets") or []
@@ -402,7 +509,7 @@ def handle_task_update_paths(args: dict[str, Any]) -> dict[str, Any]:
         argv.extend(["--verification-target", item])
 
     response = _run_script("hctl.py", argv)
-    payload = {
+    failure_payload = {
         "task_dir": task_dir,
         "touched_paths": touched_paths,
         "roots_touched": roots_touched,
@@ -410,7 +517,10 @@ def handle_task_update_paths(args: dict[str, Any]) -> dict[str, Any]:
         "update": response,
     }
     if not response["ok"]:
-        return _tool_error("task_update_paths failed", data=payload)
+        return _tool_error("task_update_paths failed", data=failure_payload)
+    payload = {"task_dir": task_dir, "changed": True, **_task_paths_summary(task_dir)}
+    if debug:
+        payload["debug"] = {"update": _debug_response(response)}
     return _result(payload)
 
 
@@ -437,19 +547,49 @@ def handle_record_agent_run(args: dict[str, Any]) -> dict[str, Any]:
 
 def handle_task_verify(args: dict[str, Any]) -> dict[str, Any]:
     task_dir = _require_str(args, "task_dir")
+    debug = _optional_bool(args, "debug", default=False)
     response = _run_script("hctl.py", ["verify", "--task-dir", task_dir])
-    payload = {"task_dir": task_dir, "verify": response}
+    context, context_fetch = _load_context(task_dir)
+    failure_payload = {"task_dir": task_dir, "verify": response, "task_context": context, "task_context_fetch": context_fetch}
     if not response["ok"]:
-        return _tool_error("task_verify failed", data=payload)
+        return _tool_error("task_verify failed", data=failure_payload)
+    state_file = _state_file(task_dir)
+    payload = {
+        "task_dir": task_dir,
+        "ok": True,
+        "summary": _result_summary_line(response),
+        "next_action": (context or {}).get("next_action", ""),
+        "missing_for_close": list((context or {}).get("missing_for_close") or [])[:4],
+        "runtime_verdict": yaml_field("runtime_verdict", state_file) or "pending",
+        "runtime_freshness": yaml_field("runtime_verdict_freshness", state_file) or "",
+        "report_path": _artifact_if_exists(task_dir, "CRITIC__runtime.md"),
+    }
+    if debug:
+        payload["debug"] = {"verify": _debug_response(response), "task_context_fetch": _debug_response(context_fetch)}
     return _result(payload)
 
 
 def handle_task_close(args: dict[str, Any]) -> dict[str, Any]:
     task_dir = _require_str(args, "task_dir")
+    debug = _optional_bool(args, "debug", default=False)
     response = _run_script("hctl.py", ["close", "--task-dir", task_dir])
-    payload = {"task_dir": task_dir, "close": response}
+    context, context_fetch = _load_context(task_dir)
+    state_file = _state_file(task_dir)
+    closed = bool(response.get("ok")) or (yaml_field("status", state_file) or "").strip().lower() in {"closed", "archived", "stale"}
+    failure_payload = {"task_dir": task_dir, "close": response, "task_context": context, "task_context_fetch": context_fetch}
     if not response["ok"]:
-        return _tool_error("task_close failed", data=payload)
+        return _tool_error("task_close failed", data=failure_payload)
+    payload = {
+        "task_dir": task_dir,
+        "closed": closed,
+        "status": yaml_field("status", state_file) or "unknown",
+        "summary": _result_summary_line(response) or ("close gate PASSED" if closed else "close gate finished"),
+        "missing_for_close": list((context or {}).get("missing_for_close") or [])[:4],
+        "next_action": (context or {}).get("next_action", ""),
+        "gate_artifact": _artifact_if_exists(task_dir, "HANDOFF.md"),
+    }
+    if debug:
+        payload["debug"] = {"close": _debug_response(response), "task_context_fetch": _debug_response(context_fetch)}
     return _result(payload)
 
 
@@ -681,7 +821,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
     {
         "name": "task_start",
         "title": "Compile routing for a task",
-        "description": "Run the harness task start step and return the fresh task pack.",
+        "description": "Run the harness task start step and return the fresh task pack. New or resumed tasks should usually stop here instead of calling task_context again immediately.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -689,6 +829,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
                 "task_id": {"type": "string", "description": "Canonical task id or slug to bootstrap (TASK__ prefix optional)"},
                 "slug": {"type": "string", "description": "Task slug to bootstrap under doc/harness/tasks/TASK__<slug>"},
                 "request_file": {"type": "string", "description": "Optional request file path"},
+                "debug": {"type": "boolean", "description": "When true, include raw CLI/debug payloads"},
             },
             "additionalProperties": False,
         },
@@ -697,13 +838,14 @@ TOOL_DEFS: list[dict[str, Any]] = [
     {
         "name": "task_context",
         "title": "Read the canonical task pack",
-        "description": "Return the compact machine-readable task context for routing and workflow state.",
+        "description": "Return the compact machine-readable task context for routing and workflow state. Use it for refresh, personalization, or when hook-provided state is stale.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "task_dir": {"type": "string", "description": "Path to the task directory"},
                 "team_worker": {"type": "string", "description": "Optional team worker id for personalized context"},
                 "agent_name": {"type": "string", "description": "Optional agent name override for personalized context"},
+                "debug": {"type": "boolean", "description": "When true, include raw CLI/debug payloads"},
             },
             "required": ["task_dir"],
             "additionalProperties": False,
@@ -780,11 +922,12 @@ TOOL_DEFS: list[dict[str, Any]] = [
     {
         "name": "task_update_from_git_diff",
         "title": "Sync changed paths into task state",
-        "description": "Populate touched_paths, roots_touched, and verification_targets from git diff.",
+        "description": "Manual or fallback path sync: populate touched_paths, roots_touched, and verification_targets from git diff.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "debug": {"type": "boolean", "description": "When true, include raw CLI/debug payloads"},
             },
             "required": ["task_dir"],
             "additionalProperties": False,
@@ -802,6 +945,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
                 "touched_paths": {"type": "array", "items": {"type": "string"}, "description": "Changed repo-relative paths to merge into touched_paths"},
                 "roots_touched": {"type": "array", "items": {"type": "string"}, "description": "Changed roots to merge into roots_touched"},
                 "verification_targets": {"type": "array", "items": {"type": "string"}, "description": "Runtime paths to merge into verification_targets"},
+                "debug": {"type": "boolean", "description": "When true, include raw CLI/debug payloads"},
             },
             "required": ["task_dir"],
             "additionalProperties": False,
@@ -828,11 +972,12 @@ TOOL_DEFS: list[dict[str, Any]] = [
     {
         "name": "task_verify",
         "title": "Run the task verification entry point",
-        "description": "Run the harness verification suite for a task-scoped workflow.",
+        "description": "Auto-sync changed paths from git diff, then run the harness verification suite for a task-scoped workflow.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "debug": {"type": "boolean", "description": "When true, include raw CLI/debug payloads"},
             },
             "required": ["task_dir"],
             "additionalProperties": False,
@@ -842,11 +987,12 @@ TOOL_DEFS: list[dict[str, Any]] = [
     {
         "name": "task_close",
         "title": "Run the completion gate",
-        "description": "Attempt to close the task through the harness completion gate.",
+        "description": "Auto-sync changed paths from git diff, then attempt to close the task through the harness completion gate.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "debug": {"type": "boolean", "description": "When true, include raw CLI/debug payloads"},
             },
             "required": ["task_dir"],
             "additionalProperties": False,

@@ -12,12 +12,12 @@ Your job is to create or resume tasks, compile routing once, hand work to the ri
 
 ## Canonical control source
 
-For any active task, run:
+For any new or resumed task, run:
 
 - `mcp__plugin_harness_harness__task_start`
-- `mcp__plugin_harness_harness__task_context`
 
 Use the returned task pack as the source of truth for routing and workflow state.
+Call `mcp__plugin_harness_harness__task_context` only when you need a refresh, a personalized worker view, or the hook-provided summary looks stale.
 Do not re-derive mode from long prose docs.
 
 Important fields:
@@ -39,7 +39,7 @@ Important fields:
 
 - read manifest and task-local state
 - create task folders and `TASK_STATE.yaml`
-- run `task_start`, `task_context`, `task_update_from_git_diff`, `task_verify`, `task_close` via MCP
+- run `task_start`, optional refresh `task_context`, fallback `task_update_from_git_diff`, `task_verify`, and `task_close`
 - update task status fields when needed
 - disclose degraded capability states to the user
 
@@ -56,7 +56,7 @@ Important fields:
 Do not write source files, `PLAN.md`, `HANDOFF.md`, `DOC_SYNC.md`, or `CRITIC__*.md` yourself.
 For team-owned protected artifacts written through the harness write-artifact MCP family, forward the current worker explicitly (`team_worker`) or set `HARNESS_TEAM_WORKER` in the delegated worker environment so `write_artifact.py` can enforce the right owner.
 For ready team tasks, prefer `mcp__plugin_harness_harness__team_bootstrap` before fan-out: it writes `team/bootstrap/*` worker briefs plus role-scoped env snippets, and `task_context` can now be personalized with `team_worker` / `agent_name` to fetch a worker-specific task pack for that brief.
-After bootstrap, use `mcp__plugin_harness_harness__team_dispatch` when available so the lead fan-out runs from a frozen provider pack (`team/bootstrap/provider/*`) instead of improvised prompts. Refresh that dispatch pack first when `task_context` says it is missing or stale.
+After bootstrap, use `mcp__plugin_harness_harness__team_dispatch` so the lead fan-out runs from a frozen provider pack (`team/bootstrap/provider/*`) instead of improvised prompts. Refresh it first when `task_context` says it is missing or stale.
 
 ## AskUserQuestion rule
 
@@ -100,9 +100,9 @@ If an answer-lane exchange turns into repo mutation, state the lane switch expli
 
 1. create or reuse a task folder
 2. run `mcp__plugin_harness_harness__task_start`
-3. run `mcp__plugin_harness_harness__task_context`
-4. read `must_read` in order and inspect `review_focus` when present
-5. if `review_focus.evidence_first: true`, start from the surfaced critic / handoff evidence before broad repo exploration
+3. read the returned `must_read` in order and inspect `review_focus` when present
+4. if `review_focus.evidence_first: true`, start from the surfaced critic / handoff evidence before broad repo exploration
+5. if the task pack needs a refresh or a personalized worker view, run `mcp__plugin_harness_harness__task_context`
 6. if `planning_mode: broad-build`, route through `Skill(harness:plan)` before implementation so the spec trio is written first
 7. delegate planning or implementation
 
@@ -130,15 +130,13 @@ Use this default loop:
 classify
 → task (if needed)
 → task_start
-→ task_context
 → Skill(plan) or delegate work
 → critic(s)
-→ task_update_from_git_diff
 → task_verify
 → task_close
 ```
 
-Keep work incremental. Prefer the smallest coherent diff that can pass the next gate.
+Keep work incremental. Prefer the smallest coherent diff that can pass the next gate. `task_verify` and `task_close` already auto-sync changed paths, so do not force an extra git-diff sync unless you need it manually.
 
 ## Degraded capability disclosure
 

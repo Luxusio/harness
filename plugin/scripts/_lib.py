@@ -6236,12 +6236,6 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
         )
 
     task_root = os.path.join(TASK_DIR, task_id)
-    commands = {
-        "update": "mcp__plugin_harness_harness__task_update_from_git_diff",
-        "verify": "mcp__plugin_harness_harness__task_verify",
-        "close": "mcp__plugin_harness_harness__task_close",
-    }
-
     checks_file = os.path.join(task_dir, "CHECKS.yaml")
     check_items = []
     if os.path.isfile(checks_file):
@@ -6282,18 +6276,17 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
         if c.get("status") not in ("passed", "skipped")
     ]
     top_open_titles = [
-        c.get("title", "")[:90]
+        c.get("title", "")[:56]
         for c in check_items
         if c.get("status") not in ("passed", "skipped") and c.get("title")
     ][:2]
-    open_failures = failed_ids + [cid for cid in blocked_ids if cid not in failed_ids]
 
     checks = {
         "total": len(check_items),
-        "open_ids": open_ids[:8],
-        "failed_ids": failed_ids[:8],
-        "blocked_ids": blocked_ids[:8],
-        "candidate_ids": candidate_ids[:8],
+        "open_ids": open_ids[:5],
+        "failed_ids": failed_ids[:5],
+        "blocked_ids": blocked_ids[:4],
+        "candidate_ids": candidate_ids[:4],
         "top_open_titles": top_open_titles,
     }
 
@@ -7003,12 +6996,12 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
         else:
             next_action = f"{handoff_reason} before closing or handing off."
     elif blocked_env_round:
-        next_action = "Read ENVIRONMENT_SNAPSHOT.md first, repair the missing tool or setup assumption, then rerun task_verify before continuing."
+        next_action = "Read ENVIRONMENT_SNAPSHOT.md, fix the missing tool/setup assumption, then run task_verify."
     elif runtime_fix_round:
         if env_snapshot_surface:
-            next_action = "Read the surfaced runtime evidence first, then consult ENVIRONMENT_SNAPSHOT.md before changing setup or toolchain assumptions, run mcp__plugin_harness_harness__task_verify, and re-check critics."
+            next_action = "Read the surfaced runtime evidence, consult ENVIRONMENT_SNAPSHOT.md, run task_verify, then re-check critics."
         else:
-            next_action = "Read the surfaced runtime evidence first, fix the failing path, run mcp__plugin_harness_harness__task_verify, then re-check critics."
+            next_action = "Read the surfaced runtime evidence, fix the failing path, run task_verify, then re-check critics."
     elif document_fix_round:
         next_action = "Read the surfaced document evidence first, repair DOC_SYNC / notes, then re-run critic-document before closing."
     elif handoff_data:
@@ -7017,9 +7010,9 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
         next_action = "Write RESULT.md with findings and close after verification gates pass."
     else:
         if env_snapshot_surface:
-            next_action = "Read ENVIRONMENT_SNAPSHOT.md before making setup or verification assumptions, implement the smallest diff for open checks, then run mcp__plugin_harness_harness__task_update_from_git_diff, task_verify, and task_close."
+            next_action = "Read ENVIRONMENT_SNAPSHOT.md, implement the smallest diff for open checks, then run task_verify and task_close."
         else:
-            next_action = "Implement the smallest diff for open checks, then run mcp__plugin_harness_harness__task_update_from_git_diff, task_verify, and task_close."
+            next_action = "Implement the smallest diff for open checks, then run task_verify and task_close."
 
     checks_configured_close_gate = parse_checks_close_gate(checks_file)
     effective_close_gate = (
@@ -7063,29 +7056,29 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
 
     entry_requirements = []
     if routing_compiled != "true":
-        entry_requirements.append("task_start routing compiled")
+        entry_requirements.append("routing compiled")
     if planning_mode == "broad-build":
-        entry_requirements.append("01_product_spec.md / 02_design_language.md / 03_architecture.md")
-    entry_requirements.append("PLAN.md contract")
-    entry_requirements.append("plan_verdict=PASS before source writes")
+        entry_requirements.append("spec trio ready")
+    entry_requirements.append("PLAN.md ready")
+    entry_requirements.append("plan PASS before writes")
     if is_team_mode and team_plan_required:
-        entry_requirements.append("TEAM_PLAN.md ready before source writes")
+        entry_requirements.append("TEAM_PLAN ready before writes")
 
     close_requirements = [
-        "PLAN.md + CRITIC__plan.md PASS",
+        "PLAN PASS + CRITIC__plan.md",
         "HANDOFF.md ready",
     ]
     if is_team_mode:
-        close_requirements.extend(["TEAM_PLAN.md ready", "TEAM_SYNTHESIS.md ready"])
+        close_requirements.extend(["TEAM_PLAN ready", "TEAM_SYNTHESIS ready"])
     if result_required:
         close_requirements.append("RESULT.md")
     if is_mutating:
         close_requirements.extend([
-            "runtime_verdict PASS (fresh) + CRITIC__runtime.md",
+            "runtime PASS + CRITIC__runtime.md",
             "DOC_SYNC.md",
         ])
     if document_critic_needed:
-        close_requirements.append("document_verdict PASS (fresh) + CRITIC__document.md")
+        close_requirements.append("document PASS + CRITIC__document.md")
     if effective_close_gate == "strict_high_risk":
         close_requirements.append("CHECKS all passed")
     elif check_items:
@@ -7095,7 +7088,7 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
     if not plan_exists:
         missing_for_close.append("PLAN.md")
     if plan_verdict != "PASS" or not plan_critic_exists:
-        missing_for_close.append("plan_verdict PASS / CRITIC__plan.md")
+        missing_for_close.append("plan PASS / CRITIC__plan.md")
     if not handoff_ready:
         missing_for_close.append("HANDOFF.md")
     if is_team_mode and not team_artifacts.get("plan_ready"):
@@ -7105,18 +7098,39 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
     if result_required and not result_exists:
         missing_for_close.append("RESULT.md")
     if is_mutating and (runtime_verdict != "PASS" or runtime_freshness != "current" or not os.path.isfile(runtime_critic_path)):
-        missing_for_close.append("runtime_verdict PASS (fresh)")
+        missing_for_close.append("runtime PASS")
     if is_mutating and not doc_sync_exists:
         missing_for_close.append("DOC_SYNC.md")
     if document_critic_needed and (document_verdict != "PASS" or document_freshness != "current" or not document_critic_exists):
-        missing_for_close.append("document_verdict PASS (fresh)")
+        missing_for_close.append("document PASS")
     if effective_close_gate == "strict_high_risk" and checks_non_passed_count:
         missing_for_close.append(f"CHECKS all passed ({checks_non_passed_count} remaining)")
     elif effective_close_gate == "standard" and checks_failed_count:
         missing_for_close.append(f"CHECKS failed={checks_failed_count}")
 
     checks_template_path = _task_rel("CHECKS.yaml")
-    checks_statuses = ["planned", "implemented_candidate", "passed", "failed", "blocked"]
+    context_revision = hashlib.sha1(
+        json.dumps(
+            {
+                "task_id": task_id,
+                "status": status,
+                "updated": yaml_field("updated", state_file) or "",
+                "state_revision": yaml_field("state_revision", state_file) or "",
+                "plan_verdict": plan_verdict,
+                "runtime_verdict": runtime_verdict,
+                "document_verdict": document_verdict,
+                "team_status": team_status,
+                "must_read": must_read,
+                "review_focus": {
+                    "trigger": review_focus.get("trigger"),
+                    "evidence_first": review_focus.get("evidence_first"),
+                },
+                "next_action": next_action,
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode("utf-8")
+    ).hexdigest()[:12]
 
     if is_team_mode:
         team_payload = {
@@ -7283,15 +7297,12 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
         "parallelism": parallelism,
         "workflow_locked": workflow_locked,
         "maintenance_task": maintenance_task,
+        "context_revision": context_revision,
         "compat": {
             "execution_mode": execution_mode,
             "orchestration_mode": orchestration_mode,
         },
         "team": team_payload,
-        "team_plan_name": team_plan_name,
-        "team_synthesis_name": team_synthesis_name,
-        "team_plan_path": _task_rel(team_plan_name),
-        "team_synthesis_path": _task_rel(team_synthesis_name),
         "source_write_allowed": source_write_allowed,
         "why_source_write_blocked": why_source_write_blocked,
         "entry_requirements": entry_requirements,
@@ -7299,11 +7310,8 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
         "effective_close_gate": effective_close_gate,
         "missing_for_close": missing_for_close[:6],
         "checks_template_path": checks_template_path,
-        "checks_statuses": checks_statuses,
         "must_read": must_read,
-        "commands": commands,
         "checks": checks,
-        "open_failures": open_failures,
         "notes": notes,
         "review_focus": review_focus,
         "next_action": next_action,
