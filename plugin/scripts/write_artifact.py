@@ -34,6 +34,7 @@ try:
         write_task_state_content,
         ensure_checks_schema_content,
         atomic_write_text as lib_atomic_write_text,
+        yaml_field,
     )
 except Exception:  # pragma: no cover - defensive fallback for standalone CLI use
     team_artifact_status = None
@@ -43,6 +44,7 @@ except Exception:  # pragma: no cover - defensive fallback for standalone CLI us
     write_task_state_content = None
     ensure_checks_schema_content = None
     lib_atomic_write_text = None
+    yaml_field = None
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +72,62 @@ def _validate_task_dir(task_dir):
             file=sys.stderr,
         )
         sys.exit(1)
+
+
+def _project_root():
+    """Return git repo root, falling back to cwd."""
+    try:
+        import subprocess as _sp
+        r = _sp.run(["git", "rev-parse", "--show-toplevel"],
+                    capture_output=True, text=True)
+        if r.returncode == 0:
+            return r.stdout.strip()
+    except Exception:
+        pass
+    return os.getcwd()
+
+
+def _resolve_task_dir(task_id):
+    """Accept full path, TASK__slug, or bare slug -> validated absolute task dir."""
+    # Already a path
+    if os.sep in task_id or task_id.startswith("."):
+        p = os.path.abspath(task_id)
+        if os.path.isdir(p) and os.path.isfile(os.path.join(p, "TASK_STATE.yaml")):
+            return p
+    # Slug resolution
+    root = _project_root()
+    slug = task_id if task_id.startswith("TASK__") else f"TASK__{task_id}"
+    p = os.path.join(root, "doc", "harness", "tasks", slug)
+    if os.path.isdir(p) and os.path.isfile(os.path.join(p, "TASK_STATE.yaml")):
+        return p
+    print(f"ERROR: task '{task_id}' not found (tried {p}). "
+          f"Use --task-id with a slug like 'critic-intent'.", file=sys.stderr)
+    sys.exit(1)
+
+
+def _yaml_field_local(field, filepath):
+    """Minimal yaml_field fallback when _lib is not available."""
+    if not os.path.isfile(filepath):
+        return None
+    with open(filepath, "r", encoding="utf-8") as fh:
+        for line in fh:
+            m = re.match(r"^" + re.escape(field) + r":\s*(.*)", line)
+            if m:
+                return m.group(1).strip().strip('"').strip("'") or None
+    return None
+
+
+def _get_yaml_field(field, filepath):
+    """Use _lib yaml_field if available, else fallback."""
+    if yaml_field is not None:
+        return yaml_field(field, filepath)
+    return _yaml_field_local(field, filepath)
+
+
+def _team_header(team_context):
+    """Return a newline-joined string of team header lines, or empty string."""
+    lines = artifact_team_header_lines(team_context)
+    return "\n".join(lines) if lines else ""
 
 
 def _atomic_write_text(path, content):
@@ -471,26 +529,23 @@ def update_checks_yaml(task_dir, checks_dict):
 
 
 def cmd_critic_runtime(args):
-    task_dir = os.path.abspath(args.task_dir)
-    _validate_task_dir(task_dir)
+    task_dir = _resolve_task_dir(args.task_id)
     task_id = task_id_from_dir(task_dir)
     ts = now_iso()
+    execution_mode = _get_yaml_field("execution_mode", os.path.join(task_dir, "TASK_STATE.yaml")) or "standard"
     artifact_name = "CRITIC__runtime.md"
     enforce_agent_role_for_artifact(artifact_name)
     team_context = enforce_team_artifact_owner(task_dir, artifact_name)
     team_header = artifact_team_header_lines(team_context)
 
-    checks_str = getattr(args, "checks", None) or "none"
-    checks_dict = parse_checks_arg(checks_str)
     verdict_reason = getattr(args, "verdict_reason", None) or ""
 
     # Build CRITIC__runtime.md content
     md_lines = [
         f"verdict: {args.verdict}",
         f"task_id: {task_id}",
-        f"execution_mode: {args.execution_mode}",
+        f"execution_mode: {execution_mode}",
         f"summary: {args.summary}",
-        f"checks_updated: {checks_str if checks_str else 'none'}",
         "",
         "## Transcript",
         args.transcript,
@@ -520,9 +575,7 @@ def cmd_critic_runtime(args):
         update_task_state_field(task_dir, "status", "blocked_env")
         state_fields_updated.append("status")
 
-    update_checks_yaml(task_dir, checks_dict)
-
-    result = finalize_write_result(artifact_path, meta_path, state_fields_updated=state_fields_updated, checks_updated=sorted(checks_dict))
+    result = finalize_write_result(artifact_path, meta_path, state_fields_updated=state_fields_updated, checks_updated=[])
     result.update({"artifact": artifact_name, "task_id": task_id, "verdict": args.verdict, "meta_written_at": meta.get("written_at")})
     print(json.dumps(result, ensure_ascii=False))
     return 0
@@ -534,24 +587,17 @@ def cmd_critic_runtime(args):
 
 
 def cmd_critic_plan(args):
-    task_dir = os.path.abspath(args.task_dir)
-    _validate_task_dir(task_dir)
+    task_dir = _resolve_task_dir(args.task_id)
     task_id = task_id_from_dir(task_dir)
     artifact_name = "CRITIC__plan.md"
     enforce_agent_role_for_artifact(artifact_name)
     team_context = enforce_team_artifact_owner(task_dir, artifact_name)
     team_header = artifact_team_header_lines(team_context)
 
-    checks_str = getattr(args, "checks", None) or "none"
-    checks_dict = parse_checks_arg(checks_str)
-    issues = getattr(args, "issues", None) or "none"
-
     md_lines = [
         f"verdict: {args.verdict}",
         f"task_id: {task_id}",
         f"summary: {args.summary}",
-        f"issues: {issues}",
-        f"checks_updated: {checks_str if checks_str else 'none'}",
     ]
     if team_header:
         md_lines[2:2] = team_header
@@ -564,9 +610,8 @@ def cmd_critic_plan(args):
     meta = write_meta(meta_path, artifact_name, task_id, "critic-plan", verdict=args.verdict, team_context=team_context)
 
     update_task_state_field(task_dir, "plan_verdict", args.verdict)
-    update_checks_yaml(task_dir, checks_dict)
 
-    result = finalize_write_result(artifact_path, meta_path, state_fields_updated=["plan_verdict"], checks_updated=sorted(checks_dict))
+    result = finalize_write_result(artifact_path, meta_path, state_fields_updated=["plan_verdict"], checks_updated=[])
     result.update({"artifact": artifact_name, "task_id": task_id, "verdict": args.verdict, "meta_written_at": meta.get("written_at")})
     print(json.dumps(result, ensure_ascii=False))
     return 0
@@ -578,24 +623,17 @@ def cmd_critic_plan(args):
 
 
 def cmd_critic_document(args):
-    task_dir = os.path.abspath(args.task_dir)
-    _validate_task_dir(task_dir)
+    task_dir = _resolve_task_dir(args.task_id)
     task_id = task_id_from_dir(task_dir)
     artifact_name = "CRITIC__document.md"
     enforce_agent_role_for_artifact(artifact_name)
     team_context = enforce_team_artifact_owner(task_dir, artifact_name)
     team_header = artifact_team_header_lines(team_context)
 
-    checks_str = getattr(args, "checks", None) or "none"
-    checks_dict = parse_checks_arg(checks_str)
-    issues = getattr(args, "issues", None) or "none"
-
     md_lines = [
         f"verdict: {args.verdict}",
         f"task_id: {task_id}",
         f"summary: {args.summary}",
-        f"issues: {issues}",
-        f"checks_updated: {checks_str if checks_str else 'none'}",
     ]
     if team_header:
         md_lines[2:2] = team_header
@@ -609,9 +647,8 @@ def cmd_critic_document(args):
 
     update_task_state_field(task_dir, "document_verdict", args.verdict)
     update_task_state_field(task_dir, "document_verdict_freshness", "current")
-    update_checks_yaml(task_dir, checks_dict)
 
-    result = finalize_write_result(artifact_path, meta_path, state_fields_updated=["document_verdict", "document_verdict_freshness"], checks_updated=sorted(checks_dict))
+    result = finalize_write_result(artifact_path, meta_path, state_fields_updated=["document_verdict", "document_verdict_freshness"], checks_updated=[])
     result.update({"artifact": artifact_name, "task_id": task_id, "verdict": args.verdict, "meta_written_at": meta.get("written_at")})
     print(json.dumps(result, ensure_ascii=False))
     return 0
@@ -623,28 +660,17 @@ def cmd_critic_document(args):
 
 
 def cmd_critic_intent(args):
-    task_dir = os.path.abspath(args.task_dir)
-    _validate_task_dir(task_dir)
+    task_dir = _resolve_task_dir(args.task_id)
     task_id = task_id_from_dir(task_dir)
     artifact_name = "CRITIC__intent.md"
     enforce_agent_role_for_artifact(artifact_name)
     team_context = enforce_team_artifact_owner(task_dir, artifact_name)
     team_header = artifact_team_header_lines(team_context)
 
-    checks_str = getattr(args, "checks", None) or "none"
-    checks_dict = parse_checks_arg(checks_str)
-    issues = getattr(args, "issues", None) or "none"
-    blocker_ids = getattr(args, "blocker_ids", None) or "none"
-    opportunity_ids = getattr(args, "opportunity_ids", None) or "none"
-
     md_lines = [
         f"verdict: {args.verdict}",
         f"task_id: {task_id}",
         f"summary: {args.summary}",
-        f"issues: {issues}",
-        f"blocker_ids: {blocker_ids}",
-        f"opportunity_ids: {opportunity_ids}",
-        f"checks_updated: {checks_str if checks_str else 'none'}",
     ]
     if team_header:
         md_lines[2:2] = team_header
@@ -658,9 +684,8 @@ def cmd_critic_intent(args):
 
     update_task_state_field(task_dir, "intent_verdict", args.verdict)
     update_task_state_field(task_dir, "intent_verdict_freshness", "current")
-    update_checks_yaml(task_dir, checks_dict)
 
-    result = finalize_write_result(artifact_path, meta_path, state_fields_updated=["intent_verdict", "intent_verdict_freshness"], checks_updated=sorted(checks_dict))
+    result = finalize_write_result(artifact_path, meta_path, state_fields_updated=["intent_verdict", "intent_verdict_freshness"], checks_updated=[])
     result.update({"artifact": artifact_name, "task_id": task_id, "verdict": args.verdict, "meta_written_at": meta.get("written_at")})
     print(json.dumps(result, ensure_ascii=False))
     return 0
@@ -672,8 +697,7 @@ def cmd_critic_intent(args):
 
 
 def cmd_handoff(args):
-    task_dir = os.path.abspath(args.task_dir)
-    _validate_task_dir(task_dir)
+    task_dir = _resolve_task_dir(args.task_id)
     task_id = task_id_from_dir(task_dir)
     ts = now_iso()
     artifact_name = "HANDOFF.md"
@@ -681,24 +705,15 @@ def cmd_handoff(args):
     team_context = enforce_team_artifact_owner(task_dir, artifact_name)
     team_header = artifact_team_header_lines(team_context)
 
-    expected_output = getattr(args, "expected_output", None) or "see transcript"
-    do_not_regress = getattr(args, "do_not_regress", None) or "n/a"
-
     md_lines = [
         f"# Handoff: {task_id}",
         f"written_at: {ts}",
         "",
+        "## Summary",
+        args.summary,
+        "",
         "## Verification",
-        "```bash",
-        args.verify_cmd,
-        "```",
-        f"Expected output: {expected_output}",
-        "",
-        "## What changed",
-        args.what_changed,
-        "",
-        "## Do not regress",
-        do_not_regress,
+        args.verification,
     ]
     if team_header:
         md_lines[2:2] = team_header
@@ -722,8 +737,7 @@ def cmd_handoff(args):
 
 
 def cmd_doc_sync(args):
-    task_dir = os.path.abspath(args.task_dir)
-    _validate_task_dir(task_dir)
+    task_dir = _resolve_task_dir(args.task_id)
     task_id = task_id_from_dir(task_dir)
     ts = now_iso()
     artifact_name = "DOC_SYNC.md"
@@ -731,29 +745,12 @@ def cmd_doc_sync(args):
     team_context = enforce_team_artifact_owner(task_dir, artifact_name)
     team_header = artifact_team_header_lines(team_context)
 
-    new_files = getattr(args, "new_files", None) or "none"
-    updated_files = getattr(args, "updated_files", None) or "none"
-    deleted_files = getattr(args, "deleted_files", None) or "none"
-    notes = getattr(args, "notes", None) or "none"
-
     md_lines = [
         f"# DOC_SYNC: {task_id}",
         f"written_at: {ts}",
         "",
-        "## What changed",
-        args.what_changed,
-        "",
-        "## New files",
-        new_files,
-        "",
-        "## Updated files",
-        updated_files,
-        "",
-        "## Deleted files",
-        deleted_files,
-        "",
-        "## Notes",
-        notes,
+        "## Summary",
+        args.summary,
     ]
     if team_header:
         md_lines[2:2] = team_header
@@ -784,62 +781,43 @@ def build_parser():
 
     # --- critic-runtime ---
     p_rt = subparsers.add_parser("critic-runtime", help="Write CRITIC__runtime.md")
-    p_rt.add_argument("--task-dir", required=True, help="Path to task directory")
+    p_rt.add_argument("--task-id", required=True, help="Task slug, TASK__slug, or path")
     p_rt.add_argument(
         "--verdict", required=True, choices=["PASS", "FAIL", "BLOCKED_ENV"],
         help="Verdict value"
     )
-    p_rt.add_argument("--execution-mode", required=True, help="Execution mode (light/standard/sprinted)")
     p_rt.add_argument("--summary", required=True, help="One-sentence summary")
     p_rt.add_argument("--transcript", required=True, help="Command transcript text")
-    p_rt.add_argument(
-        "--checks", default=None,
-        help="Comma-separated AC-001:PASS,AC-002:FAIL entries"
-    )
     p_rt.add_argument("--verdict-reason", default=None, help="Optional extended reason")
 
     # --- critic-plan ---
     p_cp = subparsers.add_parser("critic-plan", help="Write CRITIC__plan.md")
-    p_cp.add_argument("--task-dir", required=True)
+    p_cp.add_argument("--task-id", required=True, help="Task slug, TASK__slug, or path")
     p_cp.add_argument("--verdict", required=True, choices=["PASS", "FAIL"])
     p_cp.add_argument("--summary", required=True)
-    p_cp.add_argument("--checks", default=None)
-    p_cp.add_argument("--issues", default=None)
 
     # --- critic-document ---
     p_cd = subparsers.add_parser("critic-document", help="Write CRITIC__document.md")
-    p_cd.add_argument("--task-dir", required=True)
+    p_cd.add_argument("--task-id", required=True, help="Task slug, TASK__slug, or path")
     p_cd.add_argument("--verdict", required=True, choices=["PASS", "FAIL"])
     p_cd.add_argument("--summary", required=True)
-    p_cd.add_argument("--checks", default=None)
-    p_cd.add_argument("--issues", default=None)
 
     # --- critic-intent ---
     p_ci = subparsers.add_parser("critic-intent", help="Write CRITIC__intent.md")
-    p_ci.add_argument("--task-dir", required=True)
+    p_ci.add_argument("--task-id", required=True, help="Task slug, TASK__slug, or path")
     p_ci.add_argument("--verdict", required=True, choices=["PASS", "FAIL"])
     p_ci.add_argument("--summary", required=True)
-    p_ci.add_argument("--checks", default=None)
-    p_ci.add_argument("--issues", default=None)
-    p_ci.add_argument("--blocker-ids", default=None)
-    p_ci.add_argument("--opportunity-ids", default=None)
 
     # --- handoff ---
     p_ho = subparsers.add_parser("handoff", help="Write HANDOFF.md")
-    p_ho.add_argument("--task-dir", required=True)
-    p_ho.add_argument("--verify-cmd", required=True)
-    p_ho.add_argument("--what-changed", required=True)
-    p_ho.add_argument("--expected-output", default=None)
-    p_ho.add_argument("--do-not-regress", default=None)
+    p_ho.add_argument("--task-id", required=True, help="Task slug, TASK__slug, or path")
+    p_ho.add_argument("--summary", required=True, help="Summary of what was done")
+    p_ho.add_argument("--verification", required=True, help="Verification steps / commands")
 
     # --- doc-sync ---
     p_ds = subparsers.add_parser("doc-sync", help="Write DOC_SYNC.md")
-    p_ds.add_argument("--task-dir", required=True)
-    p_ds.add_argument("--what-changed", required=True)
-    p_ds.add_argument("--new-files", default=None)
-    p_ds.add_argument("--updated-files", default=None)
-    p_ds.add_argument("--deleted-files", default=None)
-    p_ds.add_argument("--notes", default=None)
+    p_ds.add_argument("--task-id", required=True, help="Task slug, TASK__slug, or path")
+    p_ds.add_argument("--summary", required=True, help="Summary of documentation changes")
 
     return parser
 

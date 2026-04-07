@@ -718,7 +718,7 @@ def _artifact_response(
         [subcommand] + args,
         env=env,
     )
-    task_dir = args[args.index("--task-dir") + 1] if "--task-dir" in args else None
+    task_dir = args[args.index("--task-id") + 1] if "--task-id" in args else None
     artifact_write = None
     if response["ok"]:
         try:
@@ -738,26 +738,18 @@ def _artifact_response(
 
 
 def handle_write_critic_runtime(args: dict[str, Any]) -> dict[str, Any]:
-    task_dir = _require_str(args, "task_dir")
+    task_id = _require_str(args, "task_id")
     verdict = _require_str(args, "verdict")
-    execution_mode = _require_str(args, "execution_mode")
     summary = _require_str(args, "summary")
     transcript = _require_str(args, "transcript")
-    checks = _optional_str(args, "checks")
-    verdict_reason = _optional_str(args, "verdict_reason")
     team_worker = _optional_str(args, "team_worker")
     agent_name = _optional_str(args, "agent_name")
     argv = [
-        "--task-dir", task_dir,
+        "--task-id", task_id,
         "--verdict", verdict,
-        "--execution-mode", execution_mode,
         "--summary", summary,
         "--transcript", transcript,
     ]
-    if checks:
-        argv.extend(["--checks", checks])
-    if verdict_reason:
-        argv.extend(["--verdict-reason", verdict_reason])
     return _artifact_response(
         "critic-runtime",
         argv,
@@ -768,18 +760,12 @@ def handle_write_critic_runtime(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_write_critic_plan(args: dict[str, Any]) -> dict[str, Any]:
-    task_dir = _require_str(args, "task_dir")
+    task_id = _require_str(args, "task_id")
     verdict = _require_str(args, "verdict")
     summary = _require_str(args, "summary")
-    checks = _optional_str(args, "checks")
-    issues = _optional_str(args, "issues")
     team_worker = _optional_str(args, "team_worker")
     agent_name = _optional_str(args, "agent_name")
-    argv = ["--task-dir", task_dir, "--verdict", verdict, "--summary", summary]
-    if checks:
-        argv.extend(["--checks", checks])
-    if issues:
-        argv.extend(["--issues", issues])
+    argv = ["--task-id", task_id, "--verdict", verdict, "--summary", summary]
     return _artifact_response(
         "critic-plan",
         argv,
@@ -790,18 +776,12 @@ def handle_write_critic_plan(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_write_critic_document(args: dict[str, Any]) -> dict[str, Any]:
-    task_dir = _require_str(args, "task_dir")
+    task_id = _require_str(args, "task_id")
     verdict = _require_str(args, "verdict")
     summary = _require_str(args, "summary")
-    checks = _optional_str(args, "checks")
-    issues = _optional_str(args, "issues")
     team_worker = _optional_str(args, "team_worker")
     agent_name = _optional_str(args, "agent_name")
-    argv = ["--task-dir", task_dir, "--verdict", verdict, "--summary", summary]
-    if checks:
-        argv.extend(["--checks", checks])
-    if issues:
-        argv.extend(["--issues", issues])
+    argv = ["--task-id", task_id, "--verdict", verdict, "--summary", summary]
     return _artifact_response(
         "critic-document",
         argv,
@@ -812,24 +792,12 @@ def handle_write_critic_document(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_write_critic_intent(args: dict[str, Any]) -> dict[str, Any]:
-    task_dir = _require_str(args, "task_dir")
+    task_id = _require_str(args, "task_id")
     verdict = _require_str(args, "verdict")
     summary = _require_str(args, "summary")
-    checks = _optional_str(args, "checks")
-    issues = _optional_str(args, "issues")
-    blocker_ids = _optional_str(args, "blocker_ids")
-    opportunity_ids = _optional_str(args, "opportunity_ids")
     team_worker = _optional_str(args, "team_worker")
     agent_name = _optional_str(args, "agent_name")
-    argv = ["--task-dir", task_dir, "--verdict", verdict, "--summary", summary]
-    if checks:
-        argv.extend(["--checks", checks])
-    if issues:
-        argv.extend(["--issues", issues])
-    if blocker_ids:
-        argv.extend(["--blocker-ids", blocker_ids])
-    if opportunity_ids:
-        argv.extend(["--opportunity-ids", opportunity_ids])
+    argv = ["--task-id", task_id, "--verdict", verdict, "--summary", summary]
     return _artifact_response(
         "critic-intent",
         argv,
@@ -840,22 +808,12 @@ def handle_write_critic_intent(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_write_handoff(args: dict[str, Any]) -> dict[str, Any]:
-    task_dir = _require_str(args, "task_dir")
-    verify_cmd = _require_str(args, "verify_cmd")
-    what_changed = _require_str(args, "what_changed")
-    expected_output = _optional_str(args, "expected_output")
-    do_not_regress = _optional_str(args, "do_not_regress")
+    task_id = _require_str(args, "task_id")
+    summary = _require_str(args, "summary")
+    verification = _require_str(args, "verification")
     team_worker = _optional_str(args, "team_worker")
     agent_name = _optional_str(args, "agent_name")
-    argv = [
-        "--task-dir", task_dir,
-        "--verify-cmd", verify_cmd,
-        "--what-changed", what_changed,
-    ]
-    if expected_output:
-        argv.extend(["--expected-output", expected_output])
-    if do_not_regress:
-        argv.extend(["--do-not-regress", do_not_regress])
+    argv = ["--task-id", task_id, "--summary", summary, "--verification", verification]
     return _artifact_response(
         "handoff",
         argv,
@@ -866,23 +824,11 @@ def handle_write_handoff(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_write_doc_sync(args: dict[str, Any]) -> dict[str, Any]:
-    task_dir = _require_str(args, "task_dir")
-    what_changed = _require_str(args, "what_changed")
-    new_files = _optional_str(args, "new_files")
-    updated_files = _optional_str(args, "updated_files")
-    deleted_files = _optional_str(args, "deleted_files")
-    notes = _optional_str(args, "notes")
+    task_id = _require_str(args, "task_id")
+    summary = _require_str(args, "summary")
     team_worker = _optional_str(args, "team_worker")
     agent_name = _optional_str(args, "agent_name")
-    argv = ["--task-dir", task_dir, "--what-changed", what_changed]
-    if new_files:
-        argv.extend(["--new-files", new_files])
-    if updated_files:
-        argv.extend(["--updated-files", updated_files])
-    if deleted_files:
-        argv.extend(["--deleted-files", deleted_files])
-    if notes:
-        argv.extend(["--notes", notes])
+    argv = ["--task-id", task_id, "--summary", summary]
     return _artifact_response(
         "doc-sync",
         argv,
@@ -1167,17 +1113,14 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_dir": {"type": "string"},
+                "task_id": {"type": "string"},
                 "verdict": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED_ENV"]},
-                "execution_mode": {"type": "string"},
                 "summary": {"type": "string"},
                 "transcript": {"type": "string"},
-                "checks": {"type": "string"},
-                "verdict_reason": {"type": "string"},
                 "team_worker": {"type": "string", "description": "Optional team worker id for team-owned artifact enforcement"},
                 "agent_name": {"type": "string", "description": "Optional agent name to forward into write_artifact.py"},
             },
-            "required": ["task_dir", "verdict", "execution_mode", "summary", "transcript"],
+            "required": ["task_id", "verdict", "summary", "transcript"],
             "additionalProperties": False,
         },
         "handler": handle_write_critic_runtime,
@@ -1189,15 +1132,13 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_dir": {"type": "string"},
+                "task_id": {"type": "string"},
                 "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
                 "summary": {"type": "string"},
-                "checks": {"type": "string"},
-                "issues": {"type": "string"},
                 "team_worker": {"type": "string", "description": "Optional team worker id for team-owned artifact enforcement"},
                 "agent_name": {"type": "string", "description": "Optional agent name to forward into write_artifact.py"},
             },
-            "required": ["task_dir", "verdict", "summary"],
+            "required": ["task_id", "verdict", "summary"],
             "additionalProperties": False,
         },
         "handler": handle_write_critic_plan,
@@ -1209,15 +1150,13 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_dir": {"type": "string"},
+                "task_id": {"type": "string"},
                 "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
                 "summary": {"type": "string"},
-                "checks": {"type": "string"},
-                "issues": {"type": "string"},
                 "team_worker": {"type": "string", "description": "Optional team worker id for team-owned artifact enforcement"},
                 "agent_name": {"type": "string", "description": "Optional agent name to forward into write_artifact.py"},
             },
-            "required": ["task_dir", "verdict", "summary"],
+            "required": ["task_id", "verdict", "summary"],
             "additionalProperties": False,
         },
         "handler": handle_write_critic_document,
@@ -1229,17 +1168,13 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_dir": {"type": "string"},
+                "task_id": {"type": "string"},
                 "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
                 "summary": {"type": "string"},
-                "checks": {"type": "string"},
-                "issues": {"type": "string"},
-                "blocker_ids": {"type": "string"},
-                "opportunity_ids": {"type": "string"},
                 "team_worker": {"type": "string", "description": "Optional team worker id"},
                 "agent_name": {"type": "string", "description": "Optional agent name"},
             },
-            "required": ["task_dir", "verdict", "summary"],
+            "required": ["task_id", "verdict", "summary"],
             "additionalProperties": False,
         },
         "handler": handle_write_critic_intent,
@@ -1251,15 +1186,13 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_dir": {"type": "string"},
-                "verify_cmd": {"type": "string"},
-                "what_changed": {"type": "string"},
-                "expected_output": {"type": "string"},
-                "do_not_regress": {"type": "string"},
+                "task_id": {"type": "string"},
+                "summary": {"type": "string"},
+                "verification": {"type": "string"},
                 "team_worker": {"type": "string", "description": "Optional team worker id for team-owned artifact enforcement"},
                 "agent_name": {"type": "string", "description": "Optional agent name to forward into write_artifact.py"},
             },
-            "required": ["task_dir", "verify_cmd", "what_changed"],
+            "required": ["task_id", "summary", "verification"],
             "additionalProperties": False,
         },
         "handler": handle_write_handoff,
@@ -1271,16 +1204,12 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_dir": {"type": "string"},
-                "what_changed": {"type": "string"},
-                "new_files": {"type": "string"},
-                "updated_files": {"type": "string"},
-                "deleted_files": {"type": "string"},
-                "notes": {"type": "string"},
+                "task_id": {"type": "string"},
+                "summary": {"type": "string"},
                 "team_worker": {"type": "string", "description": "Optional team worker id for team-owned artifact enforcement"},
                 "agent_name": {"type": "string", "description": "Optional agent name to forward into write_artifact.py"},
             },
-            "required": ["task_dir", "what_changed"],
+            "required": ["task_id", "summary"],
             "additionalProperties": False,
         },
         "handler": handle_write_doc_sync,
