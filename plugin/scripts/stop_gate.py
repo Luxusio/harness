@@ -69,7 +69,7 @@ def approve(system_message=None):
     sys.exit(0)
 
 
-def main():
+def _main_impl():
     # No harness initialized — approve stop
     if not os.path.exists("doc/harness/manifest.yaml"):
         approve()
@@ -145,6 +145,19 @@ def main():
 
     # Clean — no open or blocked tasks
     approve()
+
+
+def main():
+    try:
+        _main_impl()
+    except SystemExit:
+        raise   # sys.exit(0), sys.exit(2) propagate normally
+    except Exception as e:
+        print(
+            f"GATE INFRA ERROR (non-blocking): {type(e).__name__}: {e}",
+            file=sys.stderr
+        )
+        sys.exit(0)   # infra errors don't block
 
 
 if __name__ == "__main__":

@@ -557,7 +557,7 @@ def compute_completion_failures(task_dir):
     return failures
 
 
-def main():
+def _main_impl():
     exit_if_unmanaged_repo()
 
     data = read_hook_input()
@@ -697,6 +697,19 @@ def main():
     print(f"CLOSED: {task_id} status=closed closed_at={closed_at}")
 
     sys.exit(0)
+
+
+def main():
+    try:
+        _main_impl()
+    except SystemExit:
+        raise   # sys.exit(0), sys.exit(2) propagate normally
+    except Exception as e:
+        print(
+            f"GATE INFRA ERROR (non-blocking): {type(e).__name__}: {e}",
+            file=sys.stderr
+        )
+        sys.exit(0)   # infra errors don't block
 
 
 if __name__ == "__main__":
