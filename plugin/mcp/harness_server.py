@@ -92,6 +92,11 @@ def _tool_error(message: str, *, data: dict[str, Any] | None = None) -> dict[str
     }
 
 
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _resolve_script(script_name: str) -> str:
     return str(SCRIPTS_DIR / script_name)
 
@@ -545,6 +550,97 @@ def handle_record_agent_run(args: dict[str, Any]) -> dict[str, Any]:
     return _result(payload)
 
 
+# Coordinator-settable fields allowlist
+COORDINATOR_SETTABLE_FIELDS = frozenset({
+    "maintenance_task",
+    "lane",
+    "mutates_repo",
+    "doc_sync_required",
+    "qa_required",
+    "browser_required",
+    "risk_level",
+    "parallelism",
+    "doc_sync_expected",
+})
+
+# Fields that must go through dedicated tools
+BLOCKED_FIELDS_REASONS = {
+    "plan_verdict": "use write_critic_plan",
+    "runtime_verdict": "use write_critic_runtime",
+    "document_verdict": "use write_critic_document",
+    "runtime_verdict_freshness": "use write_critic_runtime",
+    "document_verdict_freshness": "use write_critic_document",
+    "status": "use task_close",
+    "state_revision": "internal — managed by harness",
+    "parent_revision": "internal — managed by harness",
+    "schema_version": "internal — managed by harness",
+    "touched_paths": "use task_update_paths",
+    "roots_touched": "use task_update_paths",
+    "verification_targets": "use task_update_paths",
+}
+
+
+def handle_task_set_fields(args: dict[str, Any]) -> dict[str, Any]:
+    task_dir = _require_str(args, "task_dir")
+    fields = args.get("fields")
+    if not isinstance(fields, dict) or not fields:
+        raise ValueError("fields must be a non-empty object")
+    debug = _optional_bool(args, "debug", default=False)
+
+    updated = {}
+    rejected = {}
+
+    for key, value in fields.items():
+        # Block agent_run_* prefix
+        if key.startswith("agent_run_"):
+            rejected[key] = "use record_agent_run"
+            continue
+        # Block known protected fields
+        if key in BLOCKED_FIELDS_REASONS:
+            rejected[key] = BLOCKED_FIELDS_REASONS[key]
+            continue
+        # Only allow allowlisted fields
+        if key not in COORDINATOR_SETTABLE_FIELDS:
+            rejected[key] = f"not in coordinator-settable allowlist; allowed: {sorted(COORDINATOR_SETTABLE_FIELDS)}"
+            continue
+
+        # Coerce value
+        coerced: Any
+        if isinstance(value, bool):
+            coerced = value
+        elif isinstance(value, str) and value.lower() in ("true", "false"):
+            coerced = value.lower() == "true"
+        elif isinstance(value, (int, float)):
+            coerced = value
+        else:
+            coerced = str(value)
+
+        from _lib import set_task_state_field as _set_field
+        ok = _set_field(task_dir, key, coerced)
+        if ok:
+            updated[key] = coerced
+        else:
+            rejected[key] = "set_task_state_field returned False (task_dir missing or IO error)"
+
+    if not updated and rejected:
+        payload = {"task_dir": task_dir, "updated": updated, "rejected": rejected}
+        return _tool_error("task_set_fields: no fields were updated", data=payload)
+
+    state_file = _state_file(task_dir)
+    revision = yaml_field("state_revision", state_file) or "unknown"
+
+    payload = {
+        "task_dir": task_dir,
+        "updated": updated,
+        "rejected": rejected,
+        "state_revision": revision,
+        "updated_at": _now_iso(),
+    }
+    if debug:
+        payload["debug"] = {"fields_input": fields}
+    return _result(payload)
+
+
 def handle_task_verify(args: dict[str, Any]) -> dict[str, Any]:
     task_dir = _require_str(args, "task_dir")
     debug = _optional_bool(args, "debug", default=False)
@@ -968,6 +1064,26 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "additionalProperties": False,
         },
         "handler": handle_record_agent_run,
+    },
+    {
+        "name": "task_set_fields",
+        "title": "Set coordinator-settable fields in TASK_STATE",
+        "description": "Update coordinator-settable fields in TASK_STATE.yaml (e.g. maintenance_task, lane, mutates_repo). Protected fields like verdicts and status are rejected. Use this instead of directly editing TASK_STATE.yaml.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "fields": {
+                    "type": "object",
+                    "description": "Key/value pairs to set. Allowed: maintenance_task, lane, mutates_repo, doc_sync_required, qa_required, browser_required, risk_level, parallelism, doc_sync_expected.",
+                    "additionalProperties": True,
+                },
+                "debug": {"type": "boolean", "description": "When true, include raw debug payloads"},
+            },
+            "required": ["task_dir", "fields"],
+            "additionalProperties": False,
+        },
+        "handler": handle_task_set_fields,
     },
     {
         "name": "task_verify",

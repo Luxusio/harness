@@ -11,3 +11,4 @@ updated: 2026-03-30
 - [OBS repo workspace-layout](OBS__repo__workspace-layout.md)
 - [INF arch initial-stack-assumptions](INF__arch__initial-stack-assumptions.md)
 - [REQ process cli-artifact-writes](REQ__process__cli-artifact-writes.md) — agents must use CLI tool for protected artifact writes; direct inline writes waste 500-2000 tokens
+- [REQ process task-set-fields-via-mcp](REQ__process__task-set-fields-via-mcp.md) — coordinator must use task_set_fields MCP tool to update coordinator-settable TASK_STATE fields; direct YAML writes prohibited

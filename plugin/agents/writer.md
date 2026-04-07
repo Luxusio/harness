@@ -14,9 +14,11 @@ Write only when there is actual documentation or durable-knowledge work to recor
 
 1. task-local `TASK_STATE.yaml`
 2. task-local `DOC_SYNC.md` if it exists
-3. changed doc files or note roots relevant to the task
-4. `DIRECTIVES_PENDING.yaml` when directive capture is pending
-5. project doc playbooks only if needed for a real doc change
+3. `doc/CLAUDE.md` (project doc registry) — find registered roots and their paths
+3a. the relevant registered root CLAUDE.md (e.g. `doc/common/CLAUDE.md`) — existing note index
+4. changed doc files within those roots
+5. `DIRECTIVES_PENDING.yaml` when directive capture is pending
+6. project doc playbooks only if needed for a real doc change
 
 ## When to write
 
@@ -35,6 +37,17 @@ Do not create notes just to satisfy ceremony.
 - `REQ`: requirement, rule, directive, invariant
 - `OBS`: verified fact from runtime, tests, or direct inspection
 - `INF`: assumption or inference that still needs verification
+
+## Durable note location
+
+Write REQ/OBS/INF notes to a **registered doc root** (e.g. `doc/common/`).
+Never write durable notes to the task dir — they will not be committed.
+
+To find the correct root:
+1. Read `doc/CLAUDE.md` — it lists all registered roots.
+2. If the project has no doc registry, ask the coordinator which directory to use.
+
+`DOC_SYNC.md` is a task-local process artifact (not a durable note). It stays in the task dir by design.
 
 ## Directive capture rule
 
