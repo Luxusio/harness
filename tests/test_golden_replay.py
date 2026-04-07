@@ -13,7 +13,35 @@ import textwrap
 import unittest
 from pathlib import Path
 
-import yaml
+try:
+    import yaml as _yaml_mod
+    def _dict_to_yaml(d: dict) -> str:
+        return _yaml_mod.safe_dump(d, sort_keys=False)
+except ModuleNotFoundError:
+    import json as _json_mod
+    def _dict_to_yaml(d: dict) -> str:  # type: ignore[misc]
+        lines = []
+        for k, v in d.items():
+            if isinstance(v, bool):
+                lines.append(f"{k}: {'true' if v else 'false'}")
+            elif v is None:
+                lines.append(f"{k}: null")
+            elif isinstance(v, list):
+                if not v:
+                    lines.append(f"{k}: []")
+                else:
+                    lines.append(f"{k}:")
+                    for item in v:
+                        lines.append(f"  - {item}")
+            elif isinstance(v, (int, float)):
+                lines.append(f"{k}: {v}")
+            else:
+                sv = str(v)
+                if any(c in sv for c in ':{}&*[]|>!\'%@') or sv != sv.strip():
+                    lines.append(f"{k}: {_json_mod.dumps(sv)}")
+                else:
+                    lines.append(f"{k}: {sv}")
+        return '\n'.join(lines) + '\n'
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT_DIR = REPO_ROOT / "plugin" / "scripts"
@@ -99,7 +127,7 @@ def _write_team_state_fields(task_dir: Path, *, provider: str = "omc", **overrid
         "touched_paths": ["app/main.ts", "docs/architecture.md", "tests/test_example.py"],
     }
     payload.update(overrides)
-    _write(task_dir / "TASK_STATE.yaml", yaml.safe_dump(payload, sort_keys=False))
+    _write(task_dir / "TASK_STATE.yaml", _dict_to_yaml(payload))
 
 
 def _write_team_plan(task_dir: Path) -> None:

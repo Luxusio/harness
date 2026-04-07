@@ -1086,6 +1086,74 @@ def cmd_record_agent_run(args):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: set-fields
+# ---------------------------------------------------------------------------
+
+
+def cmd_set_fields(args):
+    """Set coordinator-settable fields in TASK_STATE.yaml."""
+    task_dir = _require_task_dir(args)
+    raw_fields = getattr(args, "field", None) or []
+    if not raw_fields:
+        print("Error: at least one --field key=value is required", file=sys.stderr)
+        return 1
+
+    fields = {}
+    for item in raw_fields:
+        if "=" not in item:
+            print(f"Error: --field must be key=value, got: {item!r}", file=sys.stderr)
+            return 1
+        k, v = item.split("=", 1)
+        fields[k.strip()] = v.strip()
+
+    COORDINATOR_SETTABLE_FIELDS = frozenset({
+        "maintenance_task", "lane", "mutates_repo", "doc_sync_required",
+        "qa_required", "browser_required", "risk_level", "parallelism",
+        "doc_sync_expected",
+    })
+    BLOCKED_PREFIXES = ("agent_run_",)
+    BLOCKED_FIELDS = {
+        "plan_verdict", "runtime_verdict", "document_verdict",
+        "runtime_verdict_freshness", "document_verdict_freshness",
+        "status", "state_revision", "parent_revision", "schema_version",
+        "touched_paths", "roots_touched", "verification_targets",
+    }
+
+    updated = {}
+    rejected = {}
+
+    for key, value in fields.items():
+        if any(key.startswith(p) for p in BLOCKED_PREFIXES):
+            rejected[key] = "use record-agent-run"
+            continue
+        if key in BLOCKED_FIELDS:
+            rejected[key] = "protected field — use dedicated command"
+            continue
+        if key not in COORDINATOR_SETTABLE_FIELDS:
+            rejected[key] = "not in allowlist"
+            continue
+        # Coerce bool strings
+        coerced = value
+        if value.lower() in ("true", "false"):
+            coerced = value.lower() == "true"
+        ok = set_task_state_field(task_dir, key, coerced)
+        if ok:
+            updated[key] = coerced
+        else:
+            rejected[key] = "write failed"
+
+    if rejected:
+        for k, reason in rejected.items():
+            print(f"  rejected {k}: {reason}")
+    for k, v in updated.items():
+        print(f"  set {k} = {v!r}")
+    if not updated:
+        print("Error: no fields were updated", file=sys.stderr)
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Subcommand: verify
 # ---------------------------------------------------------------------------
 
@@ -1299,6 +1367,12 @@ def build_parser():
     p_record.add_argument("--observed-at", metavar="ISO", help="optional observed-at timestamp to store as *_last")
     p_record.add_argument("--json", action="store_true", help="output machine-readable JSON")
     p_record.set_defaults(func=cmd_record_agent_run)
+
+    p_sf = subparsers.add_parser("set-fields", help="set coordinator-settable fields in TASK_STATE.yaml")
+    p_sf.add_argument("--task-dir", dest="task_dir", default=None)
+    p_sf.add_argument("--field", action="append", dest="field", metavar="KEY=VALUE",
+                      help="field to set (may be repeated)")
+    p_sf.set_defaults(func=cmd_set_fields)
 
     p_ver = subparsers.add_parser("verify", help="run verification suite")
     p_ver.add_argument("--task-dir", required=True, metavar="DIR", help="task directory containing TASK_STATE.yaml")

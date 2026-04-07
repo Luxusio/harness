@@ -119,6 +119,16 @@ Only produce `DOC_SYNC.md` or durable notes when:
 
 Do not create documentation artifacts just because the harness exists.
 
+### Doc delegation
+
+Before delegating to `harness:writer`:
+
+1. Read `doc/CLAUDE.md` (or the project's equivalent doc registry) to identify registered doc roots.
+2. Include the target doc root path in the writer delegation brief (e.g. `doc/common/`).
+3. Distinguish in the brief: durable notes (REQ/OBS/INF) go to the registered root; `DOC_SYNC.md` goes to the task dir.
+
+Skipping step 1 causes writer to default to task dir, producing notes that will not be committed.
+
 ## 10. Degraded capability disclosure
 
 If the normal delegated workflow is unavailable and the task still needs repo mutation:
