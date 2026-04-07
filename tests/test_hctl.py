@@ -253,6 +253,18 @@ class TestHctlStart(unittest.TestCase):
         omc_path = fake_bin / "omc"
         omc_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         omc_path.chmod(0o755)
+        # Block native detection by providing a claude binary with an old version
+        claude_path = fake_bin / "claude"
+        claude_path.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"--version\" ]; then\n"
+            "  echo 'Claude Code 1.0.0'\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        claude_path.chmod(0o755)
         env = {"PATH": f"{fake_bin}{os.pathsep}" + os.environ.get("PATH", "")}
         _run_hctl("start", "--task-dir", task_dir, env=env)
         state = os.path.join(task_dir, "TASK_STATE.yaml")
@@ -380,13 +392,33 @@ class TestHctlContextJson(unittest.TestCase):
         omc_path = fake_bin / "omc"
         omc_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         omc_path.chmod(0o755)
+        # Block native detection by providing a claude binary with an old version
+        claude_path = fake_bin / "claude"
+        claude_path.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"--version\" ]; then\n"
+            "  echo 'Claude Code 1.0.0'\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        claude_path.chmod(0o755)
         return {"PATH": f"{fake_bin}{os.pathsep}" + os.environ.get("PATH", "")}
 
     def _native_team_env(self):
         fake_bin = Path(self.tmp.name) / "native-bin"
         fake_bin.mkdir(parents=True, exist_ok=True)
         claude_path = fake_bin / "claude"
-        claude_path.write_text("#!/bin/sh\necho '{\"ok\": true}'\n", encoding="utf-8")
+        claude_path.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"--version\" ]; then\n"
+            "  echo 'Claude Code 2.1.32'\n"
+            "  exit 0\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
         claude_path.chmod(0o755)
         return {
             "PATH": f"{fake_bin}{os.pathsep}" + os.environ.get("PATH", ""),

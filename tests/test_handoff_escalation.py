@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -282,6 +283,7 @@ class TestTeamHandoffEscalation(unittest.TestCase):
         self._write_complete_team_plan(task_dir)
         self._write_worker_summary(task_dir, "worker-a", "app/main.py")
         self._write_worker_summary(task_dir, "worker-b", "api/server.py")
+        time.sleep(0.02)
         Path(task_dir, "TEAM_SYNTHESIS.md").write_text(
             "# Team Synthesis\n"
             "## Integrated Result\n- merged app and api slices\n\n"
@@ -312,6 +314,7 @@ class TestTeamHandoffEscalation(unittest.TestCase):
         self._write_complete_team_plan(task_dir)
         self._write_worker_summary(task_dir, "worker-a", "app/main.py")
         self._write_worker_summary(task_dir, "worker-b", "api/server.py")
+        time.sleep(0.02)
         Path(task_dir, "TEAM_SYNTHESIS.md").write_text(
             "# Team Synthesis\n"
             "## Integrated Result\n- merged app and api slices\n\n"

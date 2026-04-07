@@ -7001,7 +7001,7 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
         if env_snapshot_surface:
             next_action = "Read the surfaced runtime evidence, consult ENVIRONMENT_SNAPSHOT.md, run task_verify, then re-check critics."
         else:
-            next_action = "Read the surfaced runtime evidence, fix the failing path, run task_verify, then re-check critics."
+            next_action = "Read the surfaced runtime evidence first, fix the failing path, run task_verify, then re-check critics."
     elif document_fix_round:
         next_action = "Read the surfaced document evidence first, repair DOC_SYNC / notes, then re-run critic-document before closing."
     elif handoff_data:

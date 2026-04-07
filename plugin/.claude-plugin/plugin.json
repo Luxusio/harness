@@ -1,31 +1,5 @@
 {
   "name": "harness",
-  "version": "2.0.0",
-  "description": "Execution harness for AI-assisted repository work \u2014 MCP-first control plane, adaptive plan-implement-verify loops, evidence bundles, freshness-aware memory, and DOC_SYNC enforcement.",
-  "author": {
-    "name": "harness"
-  },
-  "license": "MIT",
-  "skills": "./skills/",
-  "keywords": [
-    "execution-harness",
-    "completion-gate",
-    "critic-evaluation",
-    "task-verification",
-    "verdict-invalidation",
-    "runtime-qa",
-    "browser-qa",
-    "doc-sync",
-    "durable-memory",
-    "runtime-playbooks",
-    "execution-modes",
-    "evidence-bundles",
-    "note-freshness",
-    "maintain-lite",
-    "orchestration-modes",
-    "team-readiness",
-    "auto-orchestration",
-    "mcp-control-plane",
-    "mcp-tools"
-  ]
+  "version": "2.1.0",
+  "description": "MCP-first execution harness with plan-implement-verify loops, evidence bundles, and DOC_SYNC enforcement."
 }
