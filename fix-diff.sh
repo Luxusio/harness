@@ -9,7 +9,8 @@ set -euo pipefail
 if [[ "$(uname)" == "Darwin" ]]; then
     CURRENT_USER="$(whoami)"
     sudo chown -R "${CURRENT_USER}:" . 2>/dev/null && echo "fix-diff: ownership fixed → ${CURRENT_USER}" || true
-    xattr -rc . 2>/dev/null && echo "fix-diff: quarantine xattrs cleared" || true
+    find . -type f | xargs -P8 xattr -d com.apple.quarantine 2>/dev/null || true
+    echo "fix-diff: quarantine xattrs cleared"
     find . -type f \( -name "*.py" -o -name "*.sh" -o -name "*.yaml" -o -name "*.json" -o -name "*.md" \) \
         | xargs -P8 -I{} sh -c 'cat "{}" > /dev/null 2>&1' \
         && echo "fix-diff: file cache warmed" || true

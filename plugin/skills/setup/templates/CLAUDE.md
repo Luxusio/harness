@@ -21,5 +21,8 @@ updated: {{SETUP_DATE}}
 - Protected artifacts have role ownership: PLAN.md=plan-skill, HANDOFF.md=developer, DOC_SYNC.md=writer, CRITIC__*.md=respective critic. Enforced by prewrite gate.
 - Pre-plan source reads are blocked until plan session opens. Capability firewall prevents silent collapsed mode.
 - User directives are captured in DIRECTIVES_PENDING.yaml and must be promoted before task close.
+- Only one repo-mutating task may hold write focus at a time. If a second mutating request arrives, create or resume a separate task and keep it queued until the user explicitly switches focus or the current task closes.
+- Short approvals such as `ㅇㅇ ㄱ` approve only the last explicit transition the harness proposed; they never authorize skipping task creation, planning, or critic gates.
+- When an answer-lane exchange turns into repo mutation, the harness must first make the lane switch explicit and open planning before implementation.
 - Use `mcp__plugin_harness_harness__task_context` as the canonical routing source before starting any task.
 - Workflow control surface files (plugin/CLAUDE.md, hctl.py, hooks.json, setup templates, agent prompts) are write-locked for normal tasks; only maintenance tasks (maintenance_task=true) may modify them.
