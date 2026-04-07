@@ -58,6 +58,7 @@ Protected artifacts have one owner each.
 - `CRITIC__plan.md` → critic-plan
 - `CRITIC__runtime.md` → critic-runtime
 - `CRITIC__document.md` → critic-document
+- `CRITIC__intent.md` → critic-intent
 
 Do not write another role’s artifact directly.
 

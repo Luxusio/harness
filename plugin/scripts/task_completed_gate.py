@@ -315,6 +315,13 @@ def compute_completion_failures(task_dir):
                 " — rerun runtime critic; stale PASS does not count"
             )
 
+        # --- intent_verdict FAIL blocks close ---
+        intent_verdict_val = (yaml_field("intent_verdict", state_file) or "pending").upper()
+        if intent_verdict_val == "FAIL":
+            failures.append(
+                "intent_verdict is FAIL — request coverage gap; replan and re-verify before close"
+            )
+
         # CRITIC__runtime.md required
         if not os.path.exists(os.path.join(task_dir, "CRITIC__runtime.md")):
             failures.append(
