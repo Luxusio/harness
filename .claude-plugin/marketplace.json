@@ -8,15 +8,25 @@
   "plugins": [
     {
       "name": "harness",
-      "description": "Execution harness: adaptive modes (light/standard/sprinted), orchestration modes (solo/subagents/team), team readiness, evidence bundles, freshness-aware notes, maintain-lite entropy detection. 6 agents, 3 skills.",
-      "version": "2.0.0",
-      "author": {
-        "name": "harness"
-      },
       "source": "./plugin",
       "category": "productivity",
-      "tags": ["execution-harness", "completion-gate", "critic-evaluation", "task-verification", "browser-qa", "doc-sync", "execution-modes", "evidence-bundles", "note-freshness", "maintain-lite", "orchestration-modes", "team-readiness", "auto-orchestration", "mcp-control-plane", "mcp-tools"]
+      "tags": [
+        "execution-harness",
+        "completion-gate",
+        "critic-evaluation",
+        "task-verification",
+        "browser-qa",
+        "doc-sync",
+        "execution-modes",
+        "evidence-bundles",
+        "note-freshness",
+        "maintain-lite",
+        "orchestration-modes",
+        "team-readiness",
+        "auto-orchestration",
+        "mcp-control-plane",
+        "mcp-tools"
+      ]
     }
-  ],
-  "version": "2.0.0"
+  ]
 }

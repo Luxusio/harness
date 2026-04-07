@@ -40,7 +40,7 @@ class TestTeamArtifacts(unittest.TestCase):
         Path(task_dir, "PLAN.md").write_text("# Plan\n\nShip the feature.\n", encoding="utf-8")
         Path(task_dir, "CRITIC__plan.md").write_text("verdict: PASS\n", encoding="utf-8")
         Path(task_dir, "HANDOFF.md").write_text(
-            "# Handoff\n\n## Result\n- verified: manual smoke test\n",
+            "# Handoff\n\n## Result\n- feature delivered\n\n## Verification\n- manual smoke test passed\n\n## Next Steps\n- monitor logs\n",
             encoding="utf-8",
         )
         return task_dir
@@ -258,6 +258,7 @@ class TestTeamArtifacts(unittest.TestCase):
         task_dir = self._make_team_task()
         self._write_complete_team_plan(task_dir)
         self._write_complete_worker_summaries(task_dir)
+        time.sleep(0.02)
         self._write_complete_team_synthesis(task_dir)
 
         failures = compute_completion_failures(task_dir)
