@@ -315,11 +315,6 @@ def handle_task_start(args: dict[str, Any]) -> dict[str, Any]:
     payload = {
         "task_dir": resolved_task_dir,
         "task_id": canonical_task_id(task_id=task_id, slug=slug, task_dir=resolved_task_dir),
-        "status": context.get("status"),
-        "planning_mode": context.get("planning_mode"),
-        "team_status": (context.get("team") or {}).get("status"),
-        "source_write_allowed": context.get("source_write_allowed"),
-        "context_revision": context.get("context_revision"),
         "task_context": context,
         "start": {"ok": True, "exit_code": int(response.get("exit_code") or 0)},
     }

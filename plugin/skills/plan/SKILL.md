@@ -26,8 +26,8 @@ Also set `plan_session_state: context_open` in `TASK_STATE.yaml`.
 
 Run:
 
-- `mcp__plugin_harness_harness__task_start { task_dir: "doc/harness/tasks/TASK__$ARGUMENTS" }`
-- `mcp__plugin_harness_harness__task_context { task_dir: "doc/harness/tasks/TASK__$ARGUMENTS" }` only when the task pack needs to be refreshed
+- `mcp__plugin_harness_harness__task_start { task_id: "$ARGUMENTS" }`
+- `mcp__plugin_harness_harness__task_context { task_id: "$ARGUMENTS" }` only when the task pack needs to be refreshed
 
 Use the returned task pack as the source of truth for:
 
