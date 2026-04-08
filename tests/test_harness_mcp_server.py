@@ -81,7 +81,12 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_task_context_returns_structured_content(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__mcp")
-            result = harness_server.call_tool("task_context", {"task_dir": task_dir})
+            original_ctd = harness_server.canonical_task_dir
+            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
+            try:
+                result = harness_server.call_tool("task_context", {"task_id": "TASK__mcp"})
+            finally:
+                harness_server.canonical_task_dir = original_ctd
             self.assertNotIn("isError", result)
             structured = result["structuredContent"]
             self.assertEqual(structured["task_context"]["task_id"], "TASK__mcp")
@@ -98,18 +103,21 @@ class HarnessMcpServerTests(unittest.TestCase):
             return {"task_id": "TASK__mcp", "must_read": [], "planning_mode": "standard"}
 
         original = harness_server.harness_api.get_task_context
+        original_ctd = harness_server.canonical_task_dir
         harness_server.harness_api.get_task_context = fake_get_task_context
+        harness_server.canonical_task_dir = lambda task_id=None, **kw: "/tmp/TASK__mcp"
         try:
             result = harness_server.call_tool(
                 "task_context",
                 {
-                    "task_dir": "/tmp/TASK__mcp",
+                    "task_id": "TASK__mcp",
                     "team_worker": "reviewer",
                     "agent_name": "harness:writer:reviewer",
                 },
             )
         finally:
             harness_server.harness_api.get_task_context = original
+            harness_server.canonical_task_dir = original_ctd
 
         self.assertNotIn("isError", result)
         self.assertEqual(captured["task_dir"], "/tmp/TASK__mcp")
@@ -135,13 +143,15 @@ class HarnessMcpServerTests(unittest.TestCase):
 
         original_get = harness_server.harness_api.get_task_context
         original_run = harness_server._run_script
+        original_ctd = harness_server.canonical_task_dir
         harness_server.harness_api.get_task_context = fake_get_task_context
         harness_server._run_script = fake_run_script
+        harness_server.canonical_task_dir = lambda task_id=None, **kw: "/tmp/TASK__mcp"
         try:
             result = harness_server.call_tool(
                 "task_context",
                 {
-                    "task_dir": "/tmp/TASK__mcp",
+                    "task_id": "TASK__mcp",
                     "team_worker": "reviewer",
                     "agent_name": "harness:writer:reviewer",
                 },
@@ -149,6 +159,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         finally:
             harness_server.harness_api.get_task_context = original_get
             harness_server._run_script = original_run
+            harness_server.canonical_task_dir = original_ctd
 
         self.assertNotIn("isError", result)
         self.assertEqual(captured["script_name"], "hctl.py")
@@ -249,14 +260,17 @@ class HarnessMcpServerTests(unittest.TestCase):
             return {"ok": True, "stdout": json.dumps({"task_id": "TASK__team", "ready": True, "workers": []}), "stderr": "", "returncode": 0}
 
         original = harness_server._run_script
+        original_ctd = harness_server.canonical_task_dir
         harness_server._run_script = fake_run_script
+        harness_server.canonical_task_dir = lambda task_id=None, **kw: "/tmp/TASK__team"
         try:
             result = harness_server.call_tool(
                 "team_bootstrap",
-                {"task_dir": "/tmp/TASK__team", "write_files": True},
+                {"task_id": "TASK__team", "write_files": True},
             )
         finally:
             harness_server._run_script = original
+            harness_server.canonical_task_dir = original_ctd
 
         self.assertNotIn("isError", result)
         self.assertEqual(captured["script_name"], "hctl.py")
@@ -272,14 +286,17 @@ class HarnessMcpServerTests(unittest.TestCase):
             return {"ok": True, "stdout": json.dumps({"task_id": "TASK__team", "ready": True, "workers": []}), "stderr": "", "returncode": 0}
 
         original = harness_server._run_script
+        original_ctd = harness_server.canonical_task_dir
         harness_server._run_script = fake_run_script
+        harness_server.canonical_task_dir = lambda task_id=None, **kw: "/tmp/TASK__team"
         try:
             result = harness_server.call_tool(
                 "team_dispatch",
-                {"task_dir": "/tmp/TASK__team", "write_files": True},
+                {"task_id": "TASK__team", "write_files": True},
             )
         finally:
             harness_server._run_script = original
+            harness_server.canonical_task_dir = original_ctd
 
         self.assertNotIn("isError", result)
         self.assertEqual(captured["script_name"], "hctl.py")

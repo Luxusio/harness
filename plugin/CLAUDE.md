@@ -67,6 +67,17 @@ Use `team_bootstrap` to generate worker briefs and role env snippets, `team_disp
 Before lead synthesis and close, each contributor leaves `team/worker-<name>.md` with work completed, paths handled, verification, and residual risks. If `TEAM_PLAN.md` names a `lead` / `integrator`, that owner writes `TEAM_SYNTHESIS.md`, owns the final runtime verification pass, and refreshes `HANDOFF.md`; non-lead workers should not touch those artifacts.
 When team-owned protected artifacts are written through `mcp__plugin_harness_harness__write_*`, pass `team_worker` explicitly or export `HARNESS_TEAM_WORKER`; ambiguous doc/runtime/handoff writes will be rejected.
 
+## Agent delegation convention
+
+When delegating to harness agents, tag the agent name with `TASK__<id>:<role>` so the stop hook auto-records provenance:
+
+```
+Agent(name="TASK__harness-zero-friction:developer", ...)
+Agent(name="TASK__harness-zero-friction:critic-runtime", ...)
+```
+
+The stop hook (`subagent_stop_gate.py`) parses this pattern and calls `record_agent_run` automatically. You do NOT need to call `mcp__plugin_harness_harness__record_agent_run` manually when using this convention.
+
 ## 5. Workflow surface is locked by default
 
 Normal tasks must not modify the harness control plane:

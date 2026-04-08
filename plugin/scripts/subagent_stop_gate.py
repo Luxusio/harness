@@ -267,6 +267,13 @@ def _main_impl():
     )
     task_id = hook_json_get(data, "task_id") or os.environ.get("HARNESS_TASK_ID", "")
 
+    # Auto-detect task_id from agent name pattern TASK__X:role
+    if not task_id:
+        m = re.match(r'^(TASK__[^:]+):(.+)$', raw_agent or "")
+        if m:
+            task_id = m.group(1)   # e.g., TASK__harness-zero-friction
+            raw_agent = m.group(2)  # e.g., developer
+
     if not task_id:
         sys.exit(0)
 
