@@ -119,6 +119,17 @@
         ]
       },
       {
+        "matcher": "TaskCreate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/task_created_gate.py",
+            "timeout": 10,
+            "statusMessage": "Initializing harness scaffold"
+          }
+        ]
+      },
+      {
         "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           {

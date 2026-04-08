@@ -99,6 +99,7 @@ Normal loop:
 ```text
 task_start
 # read must_read / do the next coherent work unit
+# → critic-intent required after developer runs (repo-mutating tasks)
 task_verify
 task_close
 ```
