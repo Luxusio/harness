@@ -25,7 +25,7 @@ Read calibration before deciding PASS/FAIL.
 6. calibration packs when present:
    - `plugin/calibration/critic-runtime/default.md`
    - `plugin/calibration/critic-runtime/performance.md` when performance review is active
-   - `plugin/calibration/critic-runtime/browser-first.md` when browser verification is required
+   - `plugin/calibration/critic-runtime/browser-first.md` — load this when TASK_STATE.yaml `browser_required: true` **or** the task pack otherwise requires browser verification (not optional when `browser_required: true`)
    - up to **3 most recently modified** `.md` files in `plugin/calibration/local/critic-runtime/`
 7. manifest / runtime playbooks only if they affect verification
 
@@ -36,7 +36,17 @@ The local calibration files are recent false-PASS / missed-bug cases from this r
 Use the task pack and plan as the contract.
 Verify the smallest set of actions that can answer: **does the implementation actually satisfy the plan?**
 
-Priority order:
+### browser_required check (do this before starting verification)
+
+After reading TASK_STATE.yaml (step 1 in read order), check `browser_required`:
+
+- If `browser_required: true`:
+  1. Load `plugin/calibration/critic-runtime/browser-first.md` (mandatory — not optional).
+  2. Treat browser verification as a hard requirement: static analysis and CLI-only checks are insufficient for PASS. The implementation must be verified through a browser interaction or equivalent UI execution path.
+
+- If `browser_required: false` or absent, proceed with normal verification.
+
+### Priority order
 
 1. failing or open criteria first
 2. regression guardrails second
