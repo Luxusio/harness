@@ -73,6 +73,19 @@ def _validate_task_dir(task_dir):
         )
         sys.exit(1)
 
+    # Verify path is under canonical tasks root
+    canonical_root = os.path.normpath(
+        os.path.join(_project_root(), "doc", "harness", "tasks")
+    )
+    abs_task_dir = os.path.normpath(os.path.abspath(task_dir))
+    if not abs_task_dir.startswith(canonical_root + os.sep):
+        print(
+            f"ERROR: '{task_dir}' is outside the canonical tasks root "
+            f"'{canonical_root}'. Refusing to write.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
 
 def _project_root():
     """Return git repo root, falling back to cwd."""

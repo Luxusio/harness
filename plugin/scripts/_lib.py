@@ -1559,7 +1559,8 @@ def _split_path_specs(raw_value):
     pieces = re.split(r"[;,]", str(raw_value))
     result = []
     for piece in pieces:
-        norm = normalize_path(piece.strip())
+        clean = re.sub(r'[\s\U0001F000-\U0010FFFF\u2000-\u2BFF\u2600-\u26FF\u2700-\u27BF\u2500-\u25FF]+$', '', piece.strip())
+        norm = normalize_path(clean)
         if not norm:
             continue
         if norm.lower() in ("none", "n/a"):
@@ -2996,7 +2997,9 @@ def ensure_team_artifacts(task_dir, routing=None):
                 "## Synthesis Strategy\n"
                 "- TODO: describe merge + verification flow\n\n"
                 "## Documentation Ownership (optional)\n"
-                "Use bullet assignments like `- writer: lead` and `- critic-document: reviewer` only when docs / document review should be limited to specific workers.\n"
+                "Use bullet assignments like `- writer: worker-b` and `- critic-document: worker-c` only when "
+                "docs / document review should be limited to specific workers. "
+                "Values must be worker names listed in ## Worker Roster.\n"
             )
         created.append(plan_path)
 
@@ -5955,6 +5958,18 @@ def compile_routing(task_dir, request_text=""):
         team_reason = "subagents: non-trivial task but disjoint ownership unclear"
         team_status = "skipped"
 
+    # --- orchestration_mode lock ---
+    # If routing was already compiled and orchestration_mode was set,
+    # preserve the existing value unless force_orchestration_mode is set.
+    orchestration_mode_locked = False
+    existing_compiled = yaml_field("routing_compiled", state_file)
+    if str(existing_compiled).lower() == "true":
+        existing_orch = yaml_field("orchestration_mode", state_file) or ""
+        force_orch = yaml_field("force_orchestration_mode", state_file)
+        if existing_orch and str(force_orch).lower() != "true":
+            orchestration_mode = existing_orch
+            orchestration_mode_locked = True
+
     return {
         "risk_level": risk_level,
         "parallelism": parallelism,
@@ -5965,6 +5980,7 @@ def compile_routing(task_dir, request_text=""):
         "planning_mode": planning_mode,
         "execution_mode": execution_mode,
         "orchestration_mode": orchestration_mode,
+        "orchestration_mode_locked": orchestration_mode_locked,
         "team_provider": team_provider,
         "team_status": team_status,
         "team_size": team_size,
