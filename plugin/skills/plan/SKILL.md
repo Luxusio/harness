@@ -34,7 +34,6 @@ Use the returned task pack as the source of truth for:
 - `risk_level`
 - `qa_required`
 - `doc_sync_required`
-- `browser_required`
 - `workflow_locked`
 - `maintenance_task`
 - `planning_mode`

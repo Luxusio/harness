@@ -8,7 +8,7 @@ Verify through execution, not through code reading. Do not give PASS from static
 
 # Verification approach
 
-## For browser-first projects (manifest.browser.enabled: true or qa.default_mode: browser-first)
+## For browser-first projects (manifest.browser.enabled: true or qa.default_mode: browser-first or TASK_STATE.yaml browser_required: true)
 
 Execute in this priority order:
 
