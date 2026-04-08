@@ -332,7 +332,8 @@ def handle_task_start(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_task_context(args: dict[str, Any]) -> dict[str, Any]:
-    task_dir = _require_str(args, "task_dir")
+    task_id_arg = _require_str(args, "task_id")
+    task_dir = str(canonical_task_dir(task_id=task_id_arg))
     team_worker = _optional_str(args, "team_worker")
     agent_name = _optional_str(args, "agent_name")
     debug = _optional_bool(args, "debug", default=False)
@@ -380,7 +381,8 @@ def handle_task_context(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_team_bootstrap(args: dict[str, Any]) -> dict[str, Any]:
-    task_dir = _require_str(args, "task_dir")
+    task_id_arg = _require_str(args, "task_id")
+    task_dir = str(canonical_task_dir(task_id=task_id_arg))
     write_files = _optional_bool(args, "write_files", default=False)
     argv = ["team-bootstrap", "--task-dir", task_dir, "--json"]
     if write_files:
@@ -401,7 +403,8 @@ def handle_team_bootstrap(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_team_dispatch(args: dict[str, Any]) -> dict[str, Any]:
-    task_dir = _require_str(args, "task_dir")
+    task_id_arg = _require_str(args, "task_id")
+    task_dir = str(canonical_task_dir(task_id=task_id_arg))
     write_files = _optional_bool(args, "write_files", default=False)
     argv = ["team-dispatch", "--task-dir", task_dir, "--json"]
     if write_files:
@@ -650,7 +653,8 @@ def handle_task_set_fields(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_task_verify(args: dict[str, Any]) -> dict[str, Any]:
-    task_dir = _require_str(args, "task_dir")
+    task_id_arg = _require_str(args, "task_id")
+    task_dir = str(canonical_task_dir(task_id=task_id_arg))
     debug = _optional_bool(args, "debug", default=False)
     response = _run_script("hctl.py", ["verify", "--task-dir", task_dir])
     context, context_fetch = _load_context(task_dir)
@@ -678,7 +682,8 @@ def handle_task_verify(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_task_close(args: dict[str, Any]) -> dict[str, Any]:
-    task_dir = _require_str(args, "task_dir")
+    task_id_arg = _require_str(args, "task_id")
+    task_dir = str(canonical_task_dir(task_id=task_id_arg))
     debug = _optional_bool(args, "debug", default=False)
     response = _run_script("hctl.py", ["close", "--task-dir", task_dir])
     context, context_fetch = _load_context(task_dir)
@@ -944,12 +949,12 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "task_id": {"type": "string", "description": "Task id (e.g. TASK__my-feature)"},
                 "team_worker": {"type": "string", "description": "Optional team worker id for personalized context"},
                 "agent_name": {"type": "string", "description": "Optional agent name override for personalized context"},
                 "debug": {"type": "boolean", "description": "When true, include raw CLI/debug payloads"},
             },
-            "required": ["task_dir"],
+            "required": ["task_id"],
             "additionalProperties": False,
         },
         "handler": handle_task_context,
@@ -961,10 +966,10 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "task_id": {"type": "string", "description": "Task id (e.g. TASK__my-feature)"},
                 "write_files": {"type": "boolean", "description": "When true, write team/bootstrap briefs + env files into the task directory"},
             },
-            "required": ["task_dir"],
+            "required": ["task_id"],
             "additionalProperties": False,
         },
         "handler": handle_team_bootstrap,
@@ -976,10 +981,10 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "task_id": {"type": "string", "description": "Task id (e.g. TASK__my-feature)"},
                 "write_files": {"type": "boolean", "description": "When true, write provider prompts + run helpers into the task directory"},
             },
-            "required": ["task_dir"],
+            "required": ["task_id"],
             "additionalProperties": False,
         },
         "handler": handle_team_dispatch,
@@ -1098,10 +1103,10 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "task_id": {"type": "string", "description": "Task id (e.g. TASK__my-feature)"},
                 "debug": {"type": "boolean", "description": "When true, include raw CLI/debug payloads"},
             },
-            "required": ["task_dir"],
+            "required": ["task_id"],
             "additionalProperties": False,
         },
         "handler": handle_task_verify,
@@ -1113,10 +1118,10 @@ TOOL_DEFS: list[dict[str, Any]] = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "task_dir": {"type": "string", "description": "Path to the task directory"},
+                "task_id": {"type": "string", "description": "Task id (e.g. TASK__my-feature)"},
                 "debug": {"type": "boolean", "description": "When true, include raw CLI/debug payloads"},
             },
-            "required": ["task_dir"],
+            "required": ["task_id"],
             "additionalProperties": False,
         },
         "handler": handle_task_close,
