@@ -190,31 +190,14 @@ def ensure_task_state_schema_content(content, *, bump_revision=False, timestamp=
             after_fields=['schema_version'],
             before_field='status',
         )
-    text = _yaml_replace_or_insert_line(
-        text,
-        'parent_revision',
-        'null',
-        after_fields=['state_revision'],
-        before_field='status',
-    ) if re.search(r'^parent_revision:', text, flags=re.MULTILINE) is None else text
-
     if bump_revision:
         ts = timestamp or now_iso()
-        parent_revision = current_revision
         next_revision = current_revision + 1
         text = _yaml_replace_or_insert_line(
             text,
             'state_revision',
             next_revision,
             after_fields=['schema_version'],
-            before_field='status',
-        )
-        parent_value = parent_revision if next_revision > 0 else 'null'
-        text = _yaml_replace_or_insert_line(
-            text,
-            'parent_revision',
-            parent_value,
-            after_fields=['state_revision'],
             before_field='status',
         )
         text = _yaml_replace_or_insert_line(text, 'updated', ts, before_field=None)
@@ -3554,24 +3537,17 @@ def ensure_task_scaffold(task_dir, task_id, request_text=""):
     state_file = os.path.join(task_dir, "TASK_STATE.yaml")
     if not os.path.exists(state_file):
         browser_required = "false"
-        qa_mode = "auto"
         if is_browser_first_project():
             browser_required = "true"
-            qa_mode = "browser-first"
 
         with open(state_file, "w", encoding="utf-8") as f:
             f.write(
                 f"""task_id: {task_id}
 schema_version: {TASK_STATE_SCHEMA_VERSION}
 state_revision: 0
-parent_revision: null
 status: created
-lane: unknown
 execution_mode: pending
 planning_mode: standard
-mutates_repo: unknown
-qa_required: pending
-qa_mode: {qa_mode}
 plan_verdict: pending
 runtime_verdict: pending
 runtime_verdict_freshness: current
@@ -3584,50 +3560,19 @@ browser_required: {browser_required}
 doc_sync_required: false
 doc_changes_detected: false
 touched_paths: []
-roots_touched: []
 verification_targets: []
-blockers: []
-review_overlays: []
-risk_tags: []
-performance_task: false
 orchestration_mode: pending
-team_provider: none
-team_status: n/a
-team_size: 0
-team_reason: ""
-team_plan_required: false
-team_synthesis_required: false
-fallback_used: none
-workflow_violations: []
-workflow_mode: compliant
 risk_level: pending
 parallelism: 1
 workflow_locked: true
 maintenance_task: false
 routing_compiled: false
-routing_source: pending
-compliance_claim: strict
-artifact_provenance_required: true
-result_required: false
 plan_session_state: closed
-capability_delegation: unknown
-collapsed_mode_approved: false
-collapsed_reason: ""
-directive_capture_state: clean
-pending_directive_ids: []
-complaint_capture_state: clean
-pending_complaint_ids: []
-last_complaint_at: null
 agent_run_developer_count: 0
-agent_run_developer_last: null
 agent_run_writer_count: 0
-agent_run_writer_last: null
 agent_run_critic_plan_count: 0
-agent_run_critic_plan_last: null
 agent_run_critic_runtime_count: 0
-agent_run_critic_runtime_last: null
 agent_run_critic_document_count: 0
-agent_run_critic_document_last: null
 updated: {now_iso()}
 """
             )
@@ -6132,7 +6077,7 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
     status = yaml_field("status", state_file) or "unknown"
     lane = yaml_field("lane", state_file) or "unknown"
     risk_level = yaml_field("risk_level", state_file) or "medium"
-    qa_required = _bool(yaml_field("qa_required", state_file) or "true")
+    qa_required = _bool(yaml_field("qa_required", state_file) or "false")
     doc_sync_required = _bool(yaml_field("doc_sync_required", state_file) or "false")
     browser_required = _bool(yaml_field("browser_required", state_file) or "false")
     parallelism = _int(yaml_field("parallelism", state_file) or "1")
@@ -7305,17 +7250,13 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
         }
     else:
         team_payload = {
-            "provider": team_provider,
             "status": team_status,
             "size": team_size,
-            "reason": team_reason,
-            "fallback_used": fallback_used,
         }
 
     return {
         "task_id": task_id,
         "status": status,
-        "lane": lane,
         "risk_level": risk_level,
         "qa_required": qa_required,
         "doc_sync_required": doc_sync_required,
@@ -7332,11 +7273,7 @@ def emit_compact_context(task_dir, raw_agent_name=None, explicit_worker=None):
         "team": team_payload,
         "source_write_allowed": source_write_allowed,
         "why_source_write_blocked": why_source_write_blocked,
-        "entry_requirements": entry_requirements,
-        "close_requirements": close_requirements,
-        "effective_close_gate": effective_close_gate,
         "missing_for_close": missing_for_close[:6],
-        "checks_template_path": checks_template_path,
         "must_read": must_read,
         "checks": checks,
         "notes": notes,
