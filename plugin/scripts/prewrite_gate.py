@@ -386,7 +386,13 @@ def _check_team_artifact_write(task_dir, filepath):
         return True, ""
 
     if basename == "TEAM_SYNTHESIS.md":
-        if not artifact_state.get("plan_ready"):
+        plan_path = os.path.join(task_dir, "TEAM_PLAN.md")
+        plan_ready = artifact_state.get("plan_ready")
+        if not plan_ready and os.path.isfile(plan_path):
+            # Recheck fresh — artifact_state may be stale relative to disk state
+            fresh_plan = parse_team_plan(plan_path)
+            plan_ready = bool(fresh_plan.get("ownership_ready"))
+        if not plan_ready:
             return False, (
                 "BLOCKED: TEAM_SYNTHESIS.md requires a completed TEAM_PLAN.md first. "
                 "Finish worker ownership and synthesis rules before writing synthesis."

@@ -145,6 +145,15 @@ def _optional_str(args: dict[str, Any], key: str) -> str | None:
     return value or None
 
 
+def _slim_response(response: dict[str, Any]) -> dict[str, Any]:
+    """Trimmed script response — argv and stdout excluded; use for non-debug failure payloads."""
+    return {
+        "ok": response.get("ok"),
+        "exit_code": response.get("exit_code"),
+        "stderr": response.get("stderr", ""),
+    }
+
+
 def _optional_bool(args: dict[str, Any], key: str, default: bool = False) -> bool:
     value = args.get(key, default)
     if isinstance(value, bool):
@@ -297,9 +306,8 @@ def handle_task_start(args: dict[str, Any]) -> dict[str, Any]:
     failure_payload = {
         "task_dir": resolved_task_dir,
         "task_id": canonical_task_id(task_id=task_id, slug=slug, task_dir=resolved_task_dir),
-        "start": response,
+        "start": _slim_response(response),
         "task_context": context,
-        "task_context_fetch": context_response,
     }
     if not response["ok"] or context is None:
         return _tool_error("task_start failed", data=failure_payload)
@@ -387,7 +395,7 @@ def handle_team_bootstrap(args: dict[str, Any]) -> dict[str, Any]:
         "team_bootstrap": bootstrap,
         "fetch": response,
     }
-    if bootstrap is None or not response["ok"]:
+    if not response["ok"]:
         return _tool_error("team_bootstrap failed", data=payload)
     return _result(payload)
 
@@ -408,7 +416,7 @@ def handle_team_dispatch(args: dict[str, Any]) -> dict[str, Any]:
         "team_dispatch": dispatch,
         "fetch": response,
     }
-    if dispatch is None or not response["ok"]:
+    if not response["ok"]:
         return _tool_error("team_dispatch failed", data=payload)
     return _result(payload)
 
@@ -544,7 +552,7 @@ def handle_record_agent_run(args: dict[str, Any]) -> dict[str, Any]:
         recorded = json.loads(response["stdout"])
     except json.JSONDecodeError:
         recorded = None
-    payload = {"task_dir": task_dir, "agent_name": agent_name, "record_agent_run": recorded, "record": response}
+    payload = {"task_dir": task_dir, "agent_name": agent_name, "record_agent_run": recorded, "record": _slim_response(response)}
     if recorded is None or not response["ok"]:
         return _tool_error("record_agent_run failed", data=payload)
     return _result(payload)
@@ -646,7 +654,11 @@ def handle_task_verify(args: dict[str, Any]) -> dict[str, Any]:
     debug = _optional_bool(args, "debug", default=False)
     response = _run_script("hctl.py", ["verify", "--task-dir", task_dir])
     context, context_fetch = _load_context(task_dir)
-    failure_payload = {"task_dir": task_dir, "verify": response, "task_context": context, "task_context_fetch": context_fetch}
+    failure_payload = {
+        "task_dir": task_dir,
+        "verify": _slim_response(response),
+        "task_context": context,
+    }
     if not response["ok"]:
         return _tool_error("task_verify failed", data=failure_payload)
     state_file = _state_file(task_dir)
@@ -672,7 +684,12 @@ def handle_task_close(args: dict[str, Any]) -> dict[str, Any]:
     context, context_fetch = _load_context(task_dir)
     state_file = _state_file(task_dir)
     closed = bool(response.get("ok")) or (yaml_field("status", state_file) or "").strip().lower() in {"closed", "archived", "stale"}
-    failure_payload = {"task_dir": task_dir, "close": response, "task_context": context, "task_context_fetch": context_fetch}
+    failure_payload = {
+        "task_dir": task_dir,
+        "close": _slim_response(response),
+        "stdout": response.get("stdout"),   # preserves BLOCKED message
+        "task_context": context,
+    }
     if not response["ok"]:
         return _tool_error("task_close failed", data=failure_payload)
     payload = {
@@ -760,7 +777,10 @@ def handle_write_critic_runtime(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_write_critic_plan(args: dict[str, Any]) -> dict[str, Any]:
-    task_id = _require_str(args, "task_id")
+    task_dir = _optional_str(args, "task_dir")
+    task_id = _optional_str(args, "task_id") or (os.path.basename(task_dir.rstrip("/")) if task_dir else None)
+    if not task_id:
+        return _tool_error("task_id or task_dir is required")
     verdict = _require_str(args, "verdict")
     summary = _require_str(args, "summary")
     team_worker = _optional_str(args, "team_worker")
@@ -776,7 +796,10 @@ def handle_write_critic_plan(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_write_critic_document(args: dict[str, Any]) -> dict[str, Any]:
-    task_id = _require_str(args, "task_id")
+    task_dir = _optional_str(args, "task_dir")
+    task_id = _optional_str(args, "task_id") or (os.path.basename(task_dir.rstrip("/")) if task_dir else None)
+    if not task_id:
+        return _tool_error("task_id or task_dir is required")
     verdict = _require_str(args, "verdict")
     summary = _require_str(args, "summary")
     team_worker = _optional_str(args, "team_worker")
@@ -792,7 +815,10 @@ def handle_write_critic_document(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_write_critic_intent(args: dict[str, Any]) -> dict[str, Any]:
-    task_id = _require_str(args, "task_id")
+    task_dir = _optional_str(args, "task_dir")
+    task_id = _optional_str(args, "task_id") or (os.path.basename(task_dir.rstrip("/")) if task_dir else None)
+    if not task_id:
+        return _tool_error("task_id or task_dir is required")
     verdict = _require_str(args, "verdict")
     summary = _require_str(args, "summary")
     team_worker = _optional_str(args, "team_worker")
@@ -808,7 +834,10 @@ def handle_write_critic_intent(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_write_handoff(args: dict[str, Any]) -> dict[str, Any]:
-    task_id = _require_str(args, "task_id")
+    task_dir = _optional_str(args, "task_dir")
+    task_id = _optional_str(args, "task_id") or (os.path.basename(task_dir.rstrip("/")) if task_dir else None)
+    if not task_id:
+        return _tool_error("task_id or task_dir is required")
     summary = _require_str(args, "summary")
     verification = _require_str(args, "verification")
     team_worker = _optional_str(args, "team_worker")
@@ -824,7 +853,10 @@ def handle_write_handoff(args: dict[str, Any]) -> dict[str, Any]:
 
 
 def handle_write_doc_sync(args: dict[str, Any]) -> dict[str, Any]:
-    task_id = _require_str(args, "task_id")
+    task_dir = _optional_str(args, "task_dir")
+    task_id = _optional_str(args, "task_id") or (os.path.basename(task_dir.rstrip("/")) if task_dir else None)
+    if not task_id:
+        return _tool_error("task_id or task_dir is required")
     summary = _require_str(args, "summary")
     team_worker = _optional_str(args, "team_worker")
     agent_name = _optional_str(args, "agent_name")
@@ -1133,12 +1165,13 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
+                "task_dir": {"type": "string", "description": "Task directory path; basename used as task_id when task_id is omitted"},
                 "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
                 "summary": {"type": "string"},
                 "team_worker": {"type": "string", "description": "Optional team worker id for team-owned artifact enforcement"},
                 "agent_name": {"type": "string", "description": "Optional agent name to forward into write_artifact.py"},
             },
-            "required": ["task_id", "verdict", "summary"],
+            "required": ["verdict", "summary"],
             "additionalProperties": False,
         },
         "handler": handle_write_critic_plan,
@@ -1151,12 +1184,13 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
+                "task_dir": {"type": "string", "description": "Task directory path; basename used as task_id when task_id is omitted"},
                 "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
                 "summary": {"type": "string"},
                 "team_worker": {"type": "string", "description": "Optional team worker id for team-owned artifact enforcement"},
                 "agent_name": {"type": "string", "description": "Optional agent name to forward into write_artifact.py"},
             },
-            "required": ["task_id", "verdict", "summary"],
+            "required": ["verdict", "summary"],
             "additionalProperties": False,
         },
         "handler": handle_write_critic_document,
@@ -1169,12 +1203,13 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
+                "task_dir": {"type": "string", "description": "Task directory path; basename used as task_id when task_id is omitted"},
                 "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
                 "summary": {"type": "string"},
                 "team_worker": {"type": "string", "description": "Optional team worker id"},
                 "agent_name": {"type": "string", "description": "Optional agent name"},
             },
-            "required": ["task_id", "verdict", "summary"],
+            "required": ["verdict", "summary"],
             "additionalProperties": False,
         },
         "handler": handle_write_critic_intent,
@@ -1187,12 +1222,13 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
+                "task_dir": {"type": "string", "description": "Task directory path; basename used as task_id when task_id is omitted"},
                 "summary": {"type": "string"},
                 "verification": {"type": "string"},
                 "team_worker": {"type": "string", "description": "Optional team worker id for team-owned artifact enforcement"},
                 "agent_name": {"type": "string", "description": "Optional agent name to forward into write_artifact.py"},
             },
-            "required": ["task_id", "summary", "verification"],
+            "required": ["summary", "verification"],
             "additionalProperties": False,
         },
         "handler": handle_write_handoff,
@@ -1205,11 +1241,12 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {
                 "task_id": {"type": "string"},
+                "task_dir": {"type": "string", "description": "Task directory path; basename used as task_id when task_id is omitted"},
                 "summary": {"type": "string"},
                 "team_worker": {"type": "string", "description": "Optional team worker id for team-owned artifact enforcement"},
                 "agent_name": {"type": "string", "description": "Optional agent name to forward into write_artifact.py"},
             },
-            "required": ["task_id", "summary"],
+            "required": ["summary"],
             "additionalProperties": False,
         },
         "handler": handle_write_doc_sync,
