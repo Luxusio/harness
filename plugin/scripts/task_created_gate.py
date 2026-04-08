@@ -14,16 +14,38 @@ from _lib import (read_hook_input, hook_json_get, json_field, json_array, yaml_f
 def main():
     exit_if_unmanaged_repo()
 
-    data = read_hook_input()
+    raw = read_hook_input()
 
-    task_id = hook_json_get(data, "task_id") or os.environ.get("HARNESS_TASK_ID", "")
+    # Parse JSON once; fall back to empty dict if not valid JSON
+    try:
+        import json as _json
+        data = _json.loads(raw) if raw else {}
+    except Exception:
+        data = {}
 
-    if not task_id:
-        sys.exit(0)
+    # PostToolUse hook input shape: {"tool_name": "TaskCreate", "tool_input": {"subject": "...", ...}, ...}
+    tool_name = data.get("tool_name", "") if isinstance(data, dict) else ""
+    if tool_name == "TaskCreate":
+        tool_input = data.get("tool_input", {}) if isinstance(data, dict) else {}
+        subject = tool_input.get("subject", "") if isinstance(tool_input, dict) else ""
+        if not subject.startswith("TASK__"):
+            # Non-TASK__ subject: exit silently, no scaffold
+            sys.exit(0)
+        task_id = subject
+        description = tool_input.get("description", "") if isinstance(tool_input, dict) else ""
+        # Inject description into data so REQUEST.md picks it up
+        if description:
+            data["description"] = description
+    else:
+        # Legacy manual invocation: {"task_id": "..."}
+        task_id = hook_json_get(raw, "task_id") or os.environ.get("HARNESS_TASK_ID", "")
 
-    # Ignore non-harness task IDs (e.g. Claude Code internal numeric IDs)
-    if not task_id.startswith("TASK__"):
-        sys.exit(0)
+        if not task_id:
+            sys.exit(0)
+
+        # Ignore non-harness task IDs (e.g. Claude Code internal numeric IDs)
+        if not task_id.startswith("TASK__"):
+            sys.exit(0)
 
     target = os.path.join(TASK_DIR, task_id)
     os.makedirs(target, exist_ok=True)
@@ -114,7 +136,7 @@ updated: {now_iso()}
     # Create REQUEST.md stub if missing
     request_file = os.path.join(target, "REQUEST.md")
     if not os.path.exists(request_file):
-        request_text = hook_json_get(data, "description") or hook_json_get(data, "request") or ""
+        request_text = data.get("description", "") or data.get("request", "") if isinstance(data, dict) else ""
         body = request_text if request_text else "<!-- Request details pending -->"
         with open(request_file, "w") as f:
             f.write(f"""# Request: {task_id}

@@ -143,6 +143,34 @@ classify
 
 Keep work incremental. Prefer the smallest coherent diff that can pass the next gate. `task_verify` and `task_close` already auto-sync changed paths, so do not force an extra git-diff sync unless you need it manually.
 
+## critic-intent gate
+
+**Purpose**: verify the implementation matches PLAN.md *intent* — not just that it works (runtime), but that the right thing was built. Catches scope drift, unplanned side effects, and requirement misses that runtime tests won't surface.
+
+**When**: after developer completes + critic-runtime PASS, before critic-document, before task_verify.
+
+**Trigger**: all tasks where developer ran (touched_paths non-empty / mutates_repo != false).
+
+**Hard gate**: `intent_verdict` must be `PASS` in TASK_STATE.yaml for `task_close` to succeed. Skipping critic-intent will cause task_close to fail — it is not optional.
+
+**Inputs to pass to the critic**:
+- PLAN.md (the contract)
+- HANDOFF.md (what developer actually did)
+- touched_paths / list of changed files
+- open CHECKS.yaml criteria
+
+**Delegation pattern**:
+
+```python
+Agent(
+    name="TASK__<id>:critic-intent",
+    subagent_type="harness:critic-intent",
+    prompt="Run critic-intent for TASK__<id>. Task dir: ... Read PLAN.md and HANDOFF.md, inspect changed files, write CRITIC__intent.md with PASS or FAIL verdict."
+)
+```
+
+The stop hook auto-records provenance from the `TASK__<id>:critic-intent` naming pattern — no manual `record_agent_run` needed.
+
 ## Degraded capability disclosure
 
 If a repo-mutating task cannot follow the normal delegated path:

@@ -66,6 +66,14 @@ def get_hint(hook_input, manifest, state):
     command = data.get("command", data.get("input", ""))
     error = data.get("error", data.get("stderr", ""))
 
+    # TaskCreate: inject coordinator hint for TASK__-prefixed subjects
+    if tool_name == "TaskCreate":
+        tool_input = data.get("tool_input", {})
+        subject = tool_input.get("subject", "") if isinstance(tool_input, dict) else ""
+        if subject.startswith("TASK__"):
+            return "harness scaffold initialized — run task_start to compile routing"
+        return None
+
     # Only process failures
     if not exit_code and not error:
         return None
