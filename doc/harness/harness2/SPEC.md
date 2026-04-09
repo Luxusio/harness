@@ -9,7 +9,7 @@ task_ref: TASK__harness2-architecture
 
 ## Overview
 
-harness2 is the next-generation harness that absorbs gstack's best capabilities natively while removing all gstack runtime dependency. It preserves harness's canonical loop and documentation discipline, and adds automatic intent routing so users never need to memorize skill commands.
+harness2 is the next-generation harness that bundles gstack-quality skills natively — users install harness2 only and get investigate, health, review, checkpoint, learn, and retro without installing gstack. It preserves harness's canonical loop and documentation discipline, and adds automatic intent routing so users never need to memorize skill commands.
 
 ---
 
@@ -98,7 +98,7 @@ Stale PASS does not count: if files change after a PASS verdict, that verdict is
 - YC-flavored preambles or "Boil the Lake" intros
 - Require users to memorize slash commands
 - Ship, deploy, canary, design-* workflows
-- Depend on gstack runtime at any point
+- Require gstack to be installed
 
 ---
 
@@ -119,14 +119,25 @@ When a user states an intent in natural language, harness2 reads the pattern and
 
 See `AUTO_ROUTING.md` for the full intent pattern → specialist mapping table.
 
-### Native Skill Ownership
+## Bundled Skills
 
-gstack skills are imported with gstack-specific infrastructure stripped:
-- No gstack preamble bash block
-- No gstack-slug, gstack-config, gstack-telemetry calls
-- No YC Boil the Lake intro
-- No PROACTIVE/SKILL_PREFIX flag checks
-- No vendoring deprecation warnings
+harness2 bundles 6 gstack-quality skills natively in `plugin2/skills/`. Users get all of these without installing gstack:
+
+| Skill | Purpose |
+|-------|---------|
+| investigate | Root-cause analysis for bugs, errors, and regressions |
+| health | Code quality and project health scanning |
+| review | PR and diff review |
+| checkpoint | Session save and resume |
+| learn | Learnings capture and retrieval |
+| retro | Periodic retrospective |
+
+### Bundling Principles
+
+- **gstack infra stripped**: preamble bash block, `gstack-update-check`, `gstack-config`, `gstack-slug`, `gstack-telemetry-log`, PROACTIVE/SKILL_PREFIX flags, YC references — all removed
+- **Core logic preserved**: the skill's actual workflow, analysis steps, and output format are kept intact
+- **Path remapped**: `~/.gstack/projects/*/` → `.harness/` (project-local, no home dir dependency)
+- **Context block added**: minimal `_BRANCH` / `_PROJECT` detection without gstack binaries
 
 See `IMPORT_LIST.md` for per-skill import decisions and stripping scope.
 

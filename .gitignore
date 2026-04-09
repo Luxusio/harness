@@ -13,3 +13,6 @@ doc/harness/tasks/
 doc/harness/maintenance/
 doc/harness/archive/
 doc/harness/.routing-state.json
+doc/harness/local.yaml
+doc/harness/.markers/
+doc/harness/timeline.jsonl
