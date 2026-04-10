@@ -43,6 +43,11 @@ When user describes intent in natural language, route accordingly:
 |---------------|----------|
 | Set up harness / bootstrap / initialize | `Skill(setup)` |
 | New feature / task / build something | plan-skill (loop start) |
+| Review plan / autoplan / run all reviews | `Skill(autoplan)` |
+| CEO review / think bigger / scope review | `Skill(plan-ceo-review)` |
+| Architecture review / engineering review | `Skill(plan-eng-review)` |
+| Design review / design critique | `Skill(plan-design-review)` |
+| DX review / devex review / API design review | `Skill(plan-devex-review)` |
 | Explanation / lookup | Direct answer (no routing) |
 
 **Announce routing:** `Routing to setup — bootstrapping harness2 for this project.`
@@ -73,8 +78,13 @@ gitignored — the distilled doc is the permanent record.
 
 ## 7. Skills
 
-Skills live in `plugin2/skills/`. Currently available:
+Skills live in `plugin/skills/`. Currently available:
 - `setup` — bootstrap harness2 in a project (interactive, AskUserQuestion-based)
+- `autoplan` — full review pipeline (CEO → Design → Eng → DX, auto-decides with 6 principles, final approval gate)
+- `plan-ceo-review` — CEO/founder mode plan review (scope modes: expansion/selective/hold/reduction)
+- `plan-eng-review` — engineering plan review (architecture, data flow, error maps, test coverage)
+- `plan-design-review` — design plan review (0-10 scoring per dimension, fix-to-10 loop)
+- `plan-devex-review` — developer experience plan review (personas, friction points, DX benchmarks)
 
 State files stored under `doc/harness/` in project root.
 
