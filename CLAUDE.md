@@ -26,10 +26,10 @@ updated: 2026-04-07
 - When an answer-lane exchange turns into repo mutation, the harness must first make the lane switch explicit and open planning before implementation.
 
 # Template sync rule (CRITICAL)
-- This repo IS the harness plugin source. Every change to runtime behavior (paths, hook output schemas, gitignore patterns, agent definitions, critic rubrics, skill logic) MUST also update the corresponding setup templates under `plugin/skills/setup/templates/`.
+- This repo IS the harness plugin source. Every change to runtime behavior (paths, hook output schemas, gitignore patterns, agent definitions, critic rubrics, skill logic) MUST also update the corresponding setup templates under `plugin-legacy/skills/setup/templates/`.
 - Affected template surfaces: `gitignore-harness`, `CLAUDE.md`, manifest.yaml template, critic playbook templates, launch.json, .mcp.json.
-- If a script constant changes (e.g. TASK_DIR, MANIFEST path), grep `plugin/skills/` for matching references and update them.
-- Setup skill (`plugin/skills/setup/SKILL.md`) procedure text must stay consistent with actual generated output.
+- If a script constant changes (e.g. TASK_DIR, MANIFEST path), grep `plugin-legacy/skills/` for matching references and update them.
+- Setup skill (`plugin-legacy/skills/setup/SKILL.md`) procedure text must stay consistent with actual generated output.
 
 ## Skill routing
 
