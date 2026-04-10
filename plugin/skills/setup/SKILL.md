@@ -575,7 +575,7 @@ The harness2 section should include:
 - "Just describe what you want" — auto-routing is on
 
 Keep it under 20 lines. Don't dump the full harness2 runtime rules here — those
-live in plugin2/CLAUDE.md.
+live in plugin/CLAUDE.md.
 
 ### 3.5 Critic Playbooks
 
