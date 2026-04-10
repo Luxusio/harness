@@ -16,9 +16,9 @@ healthcheck_command: ""
 
 # --- Verify commands (used by verify.py) ---
 verify_commands:
-  - python3 plugin/scripts/verify.py
-  - python3 plugin/scripts/verify.py healthcheck
-  - python3 plugin/scripts/verify.py smoke
+  - python3 plugin-legacy/scripts/verify.py
+  - python3 plugin-legacy/scripts/verify.py healthcheck
+  - python3 plugin-legacy/scripts/verify.py smoke
 
 # --- QA ---
 qa:
