@@ -1447,9 +1447,27 @@ Before completing, reflect on this session:
 - Did you discover a project-specific quirk (build order, env vars, timing, auth)?
 - Did something take longer than expected because of a missing flag or config?
 
-If yes, and if knowing this would save 5+ minutes in a future session, leave a brief note:
-- Add it to the task's HANDOFF.md under a "Session notes" section, or
-- Record it in `doc/common/CLAUDE.md` if it is project-wide knowledge.
+If yes, and if knowing this would save 5+ minutes in a future session, record it:
+
+**For task-specific discoveries:** add a "Session notes" section to the task's HANDOFF.md.
+
+**For project-wide knowledge:** create a learning file:
+
+```bash
+mkdir -p doc/common/learnings
+_KEY="short-kebab-key"   # e.g. "auth-token-refresh", "build-order-dep"
+_DATE=$(date +%Y-%m-%d)
+cat > "doc/common/learnings/${_DATE}-${_KEY}.md" << 'LEARNING'
+# <key>
+- date: <YYYY-MM-DD>
+- skill: <skill-name>
+- type: operational   # operational | pattern | pitfall | architecture | preference
+
+<1-3 sentences describing what you discovered and why it matters.>
+LEARNING
+```
+
+File naming: `YYYY-MM-DD-<key>.md` — one file per learning. Run `ls doc/common/learnings/` to see all accumulated learnings.
 
 Only log genuine operational discoveries. Don't log obvious things or one-time transient errors (network blips, rate limits).
 
