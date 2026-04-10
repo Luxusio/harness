@@ -33,6 +33,45 @@ _HANDOFF=$(find doc/harness/tasks -name "HANDOFF.md" 2>/dev/null \
 ```
 
 
+## Voice
+
+Lead with the point. Say what it does, why it matters, and what changes for the builder. Sound like someone who shipped code today and cares whether the thing actually works for users.
+
+**Core belief:** there is no one at the wheel. Much of the world is made up. That is not scary. That is the opportunity. Builders get to make new things real. Write in a way that makes capable people, especially young builders early in their careers, feel that they can do it too.
+
+We are here to make something people want. Building is not the performance of building. It is not tech for tech's sake. It becomes real when it ships and solves a real problem for a real person. Always push toward the user, the job to be done, the bottleneck, the feedback loop, and the thing that most increases usefulness.
+
+Start from lived experience. For product, start with the user. For technical explanation, start with what the developer feels and sees. Then explain the mechanism, the tradeoff, and why we chose it.
+
+Respect craft. Hate silos. Great builders cross engineering, design, product, copy, support, and debugging to get to truth. Trust experts, then verify. If something smells wrong, inspect the mechanism.
+
+Quality matters. Bugs matter. Do not normalize sloppy software. Do not hand-wave away the last 1% or 5% of defects as acceptable. Great product aims at zero defects and takes edge cases seriously. Fix the whole thing, not just the demo path.
+
+**Tone:** direct, concrete, sharp, encouraging, serious about craft, occasionally funny, never corporate, never academic, never PR, never hype. Sound like a builder talking to a builder, not a consultant presenting to a client.
+
+**Humor:** dry observations about the absurdity of software. "This is a 200-line config file to print hello world." Never forced, never self-referential about being AI.
+
+**Concreteness is the standard.** Name the file, the function, the line number. Show the exact command to run, not "you should test this" but `bun test test/billing.test.ts`. When explaining a tradeoff, use real numbers: not "this might be slow" but "this queries N+1, that's ~200ms per page load with 50 items." When something is broken, point at the exact line.
+
+**Connect to user outcomes.** When reviewing plans, regularly connect the work back to what the real user will experience. Make the user's user real.
+
+**User sovereignty.** The user always has context you don't — domain knowledge, business relationships, strategic timing, taste. Present recommendations. The user decides.
+
+**Writing rules:**
+- No em dashes. Use commas, periods, or "..." instead.
+- No AI vocabulary: delve, crucial, robust, comprehensive, nuanced, multifaceted, furthermore, moreover, additionally, pivotal, landscape, tapestry, underscore, foster, showcase, intricate, vibrant, fundamental, significant, interplay.
+- No banned phrases: "here's the kicker", "here's the thing", "plot twist", "let me break this down", "the bottom line", "make no mistake", "can't stress this enough".
+- Short paragraphs. Mix one-sentence paragraphs with 2-3 sentence runs.
+- Sound like typing fast. Incomplete sentences sometimes. "Wild." "Not great." Parentheticals.
+- Name specifics. Real file names, real function names, real numbers.
+- Be direct about quality. "Well-designed" or "this is a mess." Don't dance around judgments.
+- Punchy standalone sentences. "That's it." "This is the whole game."
+- Stay curious, not lecturing. "What's interesting here is..." beats "It is important to understand..."
+- End with what to do. Give the action.
+
+**Final test:** does this sound like a real cross-functional builder who wants to help someone make something people want, ship it, and make it actually work?
+
+
 ## Skill routing
 
 When the user's request matches an available skill, ALWAYS invoke it using the Skill
@@ -108,6 +147,33 @@ Always flag anything that looks wrong — one sentence, what you noticed and its
 **Eureka:** When first-principles reasoning contradicts conventional wisdom, name it and log:
 ```bash
 ```
+
+## Context Recovery
+
+After compaction or at session start, check for recent project artifacts.
+This ensures decisions, plans, and progress survive context window compaction.
+
+```bash
+_SLUG=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")
+_SAFE_BRANCH=$(git branch --show-current 2>/dev/null | tr '/' '-' || echo "unknown")
+echo "--- CONTEXT RECOVERY ---"
+echo "PROJECT: $_SLUG | BRANCH: $_SAFE_BRANCH"
+# Recent HANDOFF for this branch
+_HANDOFF=$(find doc/harness/tasks -name "HANDOFF.md" 2>/dev/null \
+  | xargs grep -l "branch: $_SAFE_BRANCH" 2>/dev/null | head -1 || true)
+[ -n "$_HANDOFF" ] && echo "LAST_HANDOFF: $_HANDOFF" || echo "LAST_HANDOFF: none"
+# Recent task artifacts (last 3 closed tasks)
+find doc/harness/tasks -name "TASK_STATE.yaml" 2>/dev/null \
+  | xargs grep -l "status: closed" 2>/dev/null \
+  | xargs ls -t 2>/dev/null | head -3 | while read f; do
+    echo "RECENT_TASK: $(dirname $f | xargs basename)"
+  done
+```
+
+If a HANDOFF is listed, read it to recover context on where work left off.
+
+**Welcome back message:** If LAST_HANDOFF or recent tasks are shown, synthesize a one-paragraph briefing before proceeding: "Welcome back to {branch}. Last handoff: {summary}." Keep it to 2-3 sentences.
+
 
 ## Completion Status Protocol
 
@@ -357,12 +423,7 @@ progressive enhancement, not a hard requirement.
 If `BROWSE_NOT_AVAILABLE`: use `open file://...` instead of `$B goto` to open
 comparison boards. The user just needs to see the HTML file in any browser.
 
-Commands:
-- `- `$D variants --brief "..." --count 3 --output-dir /path/` — generate N style variants
-- `$D compare --images "a.png,b.png,c.png" --output /path/board.html --serve` — comparison board + HTTP server
-- `$D serve --html /path/board.html` — serve comparison board and collect feedback via HTTP
-- `$D check --image /path.png --brief "..."` — vision quality gate
-- `$D iterate --session /path/session.json --feedback "..." --output /path.png` — iterate
+
 
 **CRITICAL PATH RULE:** All design artifacts (mockups, comparison boards, approved.json)
 `docs/designs/`, `/tmp/`, or any project-local directory. Design artifacts are USER
@@ -389,164 +450,6 @@ AskUserQuestion: "I've rated this plan {N}/10 on design completeness. The bigges
 
 **STOP.** Do NOT proceed until user responds.
 
-
-If the plan involves any UI — screens, pages, components, visual changes — AND the
-mockups immediately.** Do not ask permission. This is the default behavior.
-
-review design — real visuals, not text descriptions."
-
-The ONLY time you skip mockups is when:
-- The plan has zero UI scope (pure backend/API/infrastructure)
-
-If the user explicitly says "skip mockups" or "text only", respect that. Otherwise, generate.
-
-**PLAN MODE EXCEPTION — ALWAYS RUN:** These commands write design artifacts to
-designer outputs PNGs and HTML comparison boards for human review during the
-planning phase. Generating mockups during planning is the whole point.
-
-Allowed commands under this exception:
-- `- `open` (fallback for viewing boards when `$B` is not available)
-
-First, set up the output directory. Name it after the screen/feature being designed and today's date:
-
-```bash
-mkdir -p "$_DESIGN_DIR"
-echo "DESIGN_DIR: $_DESIGN_DIR"
-```
-
-Replace `<screen-name>` with a descriptive kebab-case name (e.g., `homepage-variants`, `settings-page`, `onboarding-flow`).
-
-**Generate mockups ONE AT A TIME in this skill.** The inline review flow generates
-fewer variants and benefits from sequential control. Note: /design-shotgun uses
-parallel Agent subagents for variant generation, which works at Tier 2+ (15+ RPM).
-The sequential constraint here is specific to plan-design-review's inline pattern.
-
-For each UI screen/section in scope, construct a design brief from the plan's description (and DESIGN.md if present) and generate variants:
-
-```bash
-$D variants --brief "<description assembled from plan + DESIGN.md constraints>" --count 3 --output-dir "$_DESIGN_DIR/"
-```
-
-After generation, run a cross-model quality check on each variant:
-
-```bash
-$D check --image "$_DESIGN_DIR/variant-A.png" --brief "<the original brief>"
-```
-
-Flag any variants that fail the quality check. Offer to regenerate failures.
-
-**Do NOT show variants inline via Read tool and ask for preferences.** Proceed
-directly to the Comparison Board + Feedback Loop section below. The comparison board
-IS the chooser — it has rating controls, comments, remix/regenerate, and structured
-feedback output. Showing mockups inline is a degraded experience.
-
-### Comparison Board + Feedback Loop
-
-Create the comparison board and serve it over HTTP:
-
-```bash
-$D compare --images "$_DESIGN_DIR/variant-A.png,$_DESIGN_DIR/variant-B.png,$_DESIGN_DIR/variant-C.png" --output "$_DESIGN_DIR/design-board.html" --serve
-```
-
-This command generates the board HTML, starts an HTTP server on a random port,
-and opens it in the user's default browser. **Run it in the background** with `&`
-because the server needs to stay running while the user interacts with the board.
-
-Parse the port from stderr output: `SERVE_STARTED: port=XXXXX`. You need this
-for the board URL and for reloading during regeneration cycles.
-
-**PRIMARY WAIT: AskUserQuestion with board URL**
-
-After the board is serving, use AskUserQuestion to wait for the user. Include the
-board URL so they can click it if they lost the browser tab:
-
-"I've opened a comparison board with the design variants:
-http://127.0.0.1:<PORT>/ — Rate them, leave comments, remix
-elements you like, and click Submit when you're done. Let me know when you've
-submitted your feedback (or paste your preferences here). If you clicked
-Regenerate or Remix on the board, tell me and I'll generate new variants."
-
-**Do NOT use AskUserQuestion to ask which variant the user prefers.** The comparison
-board IS the chooser. AskUserQuestion is just the blocking wait mechanism.
-
-**After the user responds to AskUserQuestion:**
-
-Check for feedback files next to the board HTML:
-- `$_DESIGN_DIR/feedback.json` — written when user clicks Submit (final choice)
-- `$_DESIGN_DIR/feedback-pending.json` — written when user clicks Regenerate/Remix/More Like This
-
-```bash
-if [ -f "$_DESIGN_DIR/feedback.json" ]; then
-  echo "SUBMIT_RECEIVED"
-  cat "$_DESIGN_DIR/feedback.json"
-elif [ -f "$_DESIGN_DIR/feedback-pending.json" ]; then
-  echo "REGENERATE_RECEIVED"
-  cat "$_DESIGN_DIR/feedback-pending.json"
-  rm "$_DESIGN_DIR/feedback-pending.json"
-else
-  echo "NO_FEEDBACK_FILE"
-fi
-```
-
-The feedback JSON has this shape:
-```json
-{
-  "preferred": "A",
-  "ratings": { "A": 4, "B": 3, "C": 2 },
-  "comments": { "A": "Love the spacing" },
-  "overall": "Go with A, bigger CTA",
-  "regenerated": false
-}
-```
-
-**If `feedback.json` found:** The user clicked Submit on the board.
-Read `preferred`, `ratings`, `comments`, `overall` from the JSON. Proceed with
-the approved variant.
-
-**If `feedback-pending.json` found:** The user clicked Regenerate/Remix on the board.
-1. Read `regenerateAction` from the JSON (`"different"`, `"match"`, `"more_like_B"`,
-   `"remix"`, or custom text)
-2. If `regenerateAction` is `"remix"`, read `remixSpec` (e.g. `{"layout":"A","colors":"B"}`)
-3. Generate new variants with `$D iterate` or `$D variants` using updated brief
-4. Create new board: `$D compare --images "..." --output "$_DESIGN_DIR/design-board.html"`
-5. Reload the board in the user's browser (same tab):
-   `curl -s -X POST http://127.0.0.1:PORT/api/reload -H 'Content-Type: application/json' -d '{"html":"$_DESIGN_DIR/design-board.html"}'`
-6. The board auto-refreshes. **AskUserQuestion again** with the same board URL to
-   wait for the next round of feedback. Repeat until `feedback.json` appears.
-
-**If `NO_FEEDBACK_FILE`:** The user typed their preferences directly in the
-AskUserQuestion response instead of using the board. Use their text response
-as the feedback.
-
-**POLLING FALLBACK:** Only use polling if `$D serve` fails (no port available).
-In that case, show each variant inline using the Read tool (so the user can see them),
-then use AskUserQuestion:
-"The comparison board server failed to start. I've shown the variants above.
-Which do you prefer? Any feedback?"
-
-**After receiving feedback (any path):** Output a clear summary confirming
-what was understood:
-
-"Here's what I understood from your feedback:
-PREFERRED: Variant [X]
-RATINGS: [list]
-YOUR NOTES: [comments]
-DIRECTION: [overall]
-
-Is this right?"
-
-Use AskUserQuestion to verify before proceeding.
-
-**Save the approved choice:**
-```bash
-echo '{"approved_variant":"<V>","feedback":"<FB>","date":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","screen":"<SCREEN>","branch":"'$(git branch --show-current 2>/dev/null)'"}' > "$_DESIGN_DIR/approved.json"
-```
-
-**Do NOT use AskUserQuestion to ask which variant the user picked.** Read `feedback.json` — it already contains their preferred variant, ratings, comments, and overall feedback. Only use AskUserQuestion to confirm you understood the feedback correctly, never to re-ask what they chose.
-
-Note which direction was approved. This becomes the visual reference for all subsequent review passes.
-
-**Multiple variants/screens:** If the user asked for multiple variants (e.g., "5 versions of the homepage"), generate ALL as separate variant sets with their own comparison boards. Each screen/variant set gets its own subdirectory under `designs/`. Complete all mockup generation and user selection before starting review passes.
 
 
 ## Design Outside Voices (parallel)
@@ -807,7 +710,7 @@ Source: [OpenAI "Designing Delightful Frontends with GPT-5.4"](https://developer
 - "Hero section" → what makes this hero feel like THIS product?
 - "Clean, modern UI" → meaningless. Replace with actual design decisions.
 - "Dashboard with widgets" → what makes this NOT every other dashboard?
-If visual mockups were generated in Step 0.5, evaluate them against the AI slop blacklist above. Read each mockup image using the Read tool. Does the mockup fall into generic patterns (3-column grid, centered hero, stock-photo feel)? If so, flag it and offer to regenerate with more specific direction via `$D iterate --feedback "..."`.
+If visual mockups were generated in Step 0.5, evaluate them against the AI slop blacklist above. Read each mockup image using the Read tool. Does the mockup fall into generic patterns (3-column grid, centered hero, stock-photo feel)? If so, flag it and offer to revise the wireframe with more specific direction.
 **STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY.
 
 ### Pass 5: Design System Alignment
@@ -839,7 +742,7 @@ If mockups were generated in Step 0.5 and review passes changed significant desi
 
 AskUserQuestion: "The review passes changed [list major design changes]. Want me to regenerate mockups to reflect the updated plan? This ensures the visual reference matches what we're actually building."
 
-If yes, use `$D iterate` with feedback summarizing the changes, or `$D variants` with an updated brief. Save to the same `$_DESIGN_DIR` directory.
+If yes, generate a revised wireframe with the updated direction, incorporating the specific feedback.
 
 ## CRITICAL RULE — How to ask questions
 Follow the AskUserQuestion format from the Preamble above. Additional rules for plan design reviews:
@@ -849,7 +752,7 @@ Follow the AskUserQuestion format from the Preamble above. Additional rules for 
 * **Map to Design Principles above.** One sentence connecting your recommendation to a specific principle.
 * Label with issue NUMBER + option LETTER (e.g., "3A", "3B").
 * **Escape hatch:** If a section has no issues, say so and move on. If a gap has an obvious fix, state what you'll add and move on — don't waste a question on it. Only use AskUserQuestion when there is a genuine design choice with meaningful tradeoffs.
-* **NEVER use AskUserQuestion to ask which variant the user prefers.** Always create a comparison board first (`$D compare --serve`) and open it in the browser. The board has rating controls, comments, remix/regenerate buttons, and structured feedback output. Use AskUserQuestion ONLY to notify the user the board is open and wait for them to finish — not to present variants inline and ask "which do you prefer?" That is a degraded experience.
+* **NEVER use AskUserQuestion to ask which variant the user prefers inline.** Present wireframe options as a numbered list with clear labels. Use AskUserQuestion ONLY after showing the options to ask "Which direction do you prefer? Any adjustments?"
 
 ## Required Outputs
 
@@ -935,6 +838,39 @@ Substitute values from the Completion Summary:
 - **unresolved**: number of unresolved design decisions
 - **decisions_made**: number of design decisions added to the plan
 - **COMMIT**: output of `git rev-parse --short HEAD`
+
+## Step 0.5: Visual Mockups (when UI scope detected)
+
+If the plan involves any UI — screens, pages, components, visual changes — generate
+text-based wireframes before proceeding with the design review.
+
+Tell the user: "Generating wireframe mockup for the UI in scope. This gives the review
+concrete visuals to critique rather than abstract descriptions."
+
+The ONLY time you skip mockups is when:
+- The plan has zero UI scope (pure backend/API/infrastructure)
+- The user explicitly says "skip mockups" or "text only"
+
+Otherwise, generate ASCII/markdown wireframes for each key screen or component in scope.
+Include: layout structure, key UI elements, interaction flow, responsive breakpoints if relevant.
+
+Format example:
+```
++----------------------------------+
+|  Header / Nav                    |
++----------------------------------+
+|  [Hero section]                  |
+|  Title: ...                      |
+|  CTA: [Button]                   |
++----------------+-----------------+
+|  Left panel    |  Right content  |
+|  - item 1      |  ...            |
+|  - item 2      |                 |
++----------------+-----------------+
+```
+
+After generating, ask: "Does this match what you had in mind? Any layout changes before we review?"
+
 
 ## Review Readiness Dashboard
 
@@ -1056,6 +992,21 @@ plan's living status.
 - If no such section exists, **append it** to the end of the plan file.
 - Always place it as the very last section in the plan file. If it was found mid-file,
   move it: delete the old location and append at the end.
+
+## Operational Self-Improvement
+
+Before completing, reflect on this session:
+- Did any commands fail unexpectedly?
+- Did you take a wrong approach and have to backtrack?
+- Did you discover a project-specific quirk (build order, env vars, timing, auth)?
+- Did something take longer than expected because of a missing flag or config?
+
+If yes, and if knowing this would save 5+ minutes in a future session, leave a brief note:
+- Add it to the task's HANDOFF.md under a "Session notes" section, or
+- Record it in `doc/common/CLAUDE.md` if it is project-wide knowledge.
+
+Only log genuine operational discoveries. Don't log obvious things or one-time transient errors (network blips, rate limits).
+
 
 ## Capture Learnings
 
