@@ -1,6 +1,7 @@
 ---
 name: plan-design-review
-version: 1.0.0
+preamble-tier: 3
+version: 2.0.0
 description: |
   Designer's eye plan review — interactive, like CEO and Eng review.
   Rates each design dimension 0-10, explains what would make it a 10,
@@ -17,14 +18,53 @@ allowed-tools:
   - Bash
   - AskUserQuestion
 ---
+<!-- Regenerate: bun run gen:skill-docs -->
 
 ## Preamble (run first)
 
 ```bash
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 _PROJECT=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")
-echo "harness2 | PROJECT: $_PROJECT | BRANCH: $_BRANCH"
+echo "harness | PROJECT: $_PROJECT | BRANCH: $_BRANCH"
+_SAFE_BRANCH=$(echo "$_BRANCH" | tr '/' '-')
+_HANDOFF=$(find doc/harness/tasks -name "HANDOFF.md" 2>/dev/null \
+  | xargs grep -l "branch: $_SAFE_BRANCH" 2>/dev/null | head -1 || true)
+[ -n "$_HANDOFF" ] && echo "LAST_HANDOFF: $_HANDOFF" || echo "LAST_HANDOFF: none"
 ```
+
+
+## Skill routing
+
+When the user's request matches an available skill, ALWAYS invoke it using the Skill
+tool as your FIRST action. Do NOT answer directly, do NOT use other tools first.
+The skill has specialized workflows that produce better results than ad-hoc answers.
+
+Key routing rules:
+- Product ideas, "is this worth building", brainstorming → invoke office-hours
+- Bugs, errors, "why is this broken", 500 errors → invoke investigate
+- Ship, deploy, push, create PR → invoke ship
+- QA, test the site, find bugs → invoke qa
+- Code review, check my diff → invoke review
+- Update docs after shipping → invoke document-release
+- Weekly retro → invoke retro
+- Design system, brand → invoke design-consultation
+- Visual audit, design polish → invoke design-review
+- Architecture review → invoke plan-eng-review
+- Save progress, checkpoint, resume → invoke checkpoint
+- Code quality, health check → invoke health
+```
+
+Then commit the change: `git add CLAUDE.md && git commit -m "chore: add skill routing rules to CLAUDE.md"`
+
+
+This only happens once per project. If `HAS_ROUTING` is `yes` or `ROUTING_DECLINED` is `true`, skip this entirely.
+
+AI orchestrator (e.g., OpenClaw). In spawned sessions:
+- Do NOT use AskUserQuestion for interactive prompts. Auto-choose the recommended option.
+- Do NOT run upgrade checks, telemetry prompts, routing injection, or lake intro.
+- Focus on completing the task and reporting results via prose output.
+- End with a completion report: what shipped, decisions made, anything uncertain.
+
 
 ## AskUserQuestion Format
 
@@ -55,12 +95,19 @@ Include `Completeness: X/10` for each option (10=all edge cases, 7=happy path, 3
 
 ## Repo Ownership — See Something, Say Something
 
+`REPO_MODE` controls how to handle issues outside your branch:
+- **`solo`** — You own everything. Investigate and offer to fix proactively.
+- **`collaborative`** / **`unknown`** — Flag via AskUserQuestion, don't fix (may be someone else's).
+
 Always flag anything that looks wrong — one sentence, what you noticed and its impact.
 
 ## Search Before Building
 
-Before building anything unfamiliar, **search first.**
 - **Layer 1** (tried and true) — don't reinvent. **Layer 2** (new and popular) — scrutinize. **Layer 3** (first principles) — prize above all.
+
+**Eureka:** When first-principles reasoning contradicts conventional wisdom, name it and log:
+```bash
+```
 
 ## Completion Status Protocol
 
@@ -87,16 +134,20 @@ ATTEMPTED: [what you tried]
 RECOMMENDATION: [what the user should do next]
 ```
 
+
 ## Plan Mode Safe Operations
 
 When in plan mode, these operations are always allowed because they produce
 artifacts that inform the plan, not code changes:
 
+- `$B` commands (browse: screenshots, page inspection, navigation, snapshots)
+- `$D` commands (design: generate mockups, variants, comparison boards, iterate)
+- `codex exec` / `codex review` (outside voice, plan review, adversarial challenge)
 - Writing to the plan file (already allowed by plan mode)
-- `open` commands for viewing generated artifacts
+- `open` commands for viewing generated artifacts (comparison boards, HTML previews)
 
-These are read-only in spirit — they inspect context or generate visual artifacts.
-They do NOT modify project source files.
+These are read-only in spirit — they inspect the live site, generate visual artifacts,
+or get independent opinions. They do NOT modify project source files.
 
 ## Skill Invocation During Plan Mode
 
@@ -112,7 +163,52 @@ satisfy plan mode's requirement to end turns with AskUserQuestion.
 
 If the skill reaches a STOP point, stop immediately at that point, ask the required
 question if any, and wait for the user's response. Do not continue the workflow
-past a STOP point.
+past a STOP point, and do not call ExitPlanMode at that point.
+
+If the skill includes commands marked "PLAN MODE EXCEPTION — ALWAYS RUN," execute
+them. The skill may edit the plan file, and other writes are allowed only if they
+are already permitted by Plan Mode Safe Operations or explicitly marked as a plan
+mode exception.
+
+Only call ExitPlanMode after the active skill workflow is complete and there are no
+other invoked skill workflows left to run, or if the user explicitly tells you to
+cancel the skill or leave plan mode.
+
+## Plan Status Footer
+
+When you are in plan mode and about to call ExitPlanMode:
+
+1. Check if the plan file already has a `## REVIEW REPORT` section.
+2. If it DOES — skip (a review skill already wrote a richer report).
+3. If it does NOT — run this command:
+
+\`\`\`bash
+\`\`\`
+
+Then write a `## REVIEW REPORT` section to the end of the plan file:
+
+- If the output contains review entries (JSONL lines before `---CONFIG---`): format the
+  standard report table with runs/status/findings per skill, same format as the review
+  skills use.
+- If the output is `NO_REVIEWS` or empty: write this placeholder table:
+
+\`\`\`markdown
+## REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | \`/plan-ceo-review\` | Scope & strategy | 0 | — | — |
+| Codex Review | \`/codex review\` | Independent 2nd opinion | 0 | — | — |
+| Eng Review | \`/plan-eng-review\` | Architecture & tests (required) | 0 | — | — |
+| Design Review | \`/plan-design-review\` | UI/UX gaps | 0 | — | — |
+| DX Review | \`/plan-devex-review\` | Developer experience gaps | 0 | — | — |
+
+**VERDICT:** NO REVIEWS YET — run \`/autoplan\` for full review pipeline, or individual reviews above.
+\`\`\`
+
+**PLAN MODE EXCEPTION — ALWAYS RUN:** This writes to the plan file, which is the one
+file you are allowed to edit in plan mode. The plan file review report is part of the
+plan's living status.
 
 ## Step 0: Detect platform and base branch
 
@@ -171,6 +267,7 @@ choices.
 Do NOT make any code changes. Do NOT start implementation. Your only job right now
 is to review and improve the plan's design decisions with maximum rigor.
 
+
 ## Design Principles
 
 1. Empty states are features. "No items found." is not a design. Every empty state needs warmth, a primary action, and context.
@@ -206,8 +303,8 @@ When reviewing a plan, empathy as simulation runs automatically. When rating, pr
 
 ## Priority Hierarchy Under Context Pressure
 
-Step 0 > Interaction State Coverage > AI Slop Risk > Information Architecture > User Journey > everything else.
-Never skip Step 0.
+Step 0 > Step 0.5 (mockups — generate by default) > Interaction State Coverage > AI Slop Risk > Information Architecture > User Journey > everything else.
+Never skip Step 0 or mockup generation (when the designer is available). Mockups before review passes is non-negotiable. Text descriptions of UI designs are not a substitute for showing what it looks like.
 
 ## PRE-REVIEW SYSTEM AUDIT (before Step 0)
 
@@ -228,7 +325,7 @@ Map:
 * What is the UI scope of this plan? (pages, components, interactions)
 * Does a DESIGN.md exist? If not, flag as a gap.
 * Are there existing design patterns in the codebase to align with?
-* What prior design reviews exist?
+* What prior design reviews exist? (check reviews.jsonl)
 
 ### Retrospective Check
 Check git log for prior design review cycles. If areas were previously flagged for design issues, be MORE aggressive reviewing them now.
@@ -237,6 +334,39 @@ Check git log for prior design review cycles. If areas were previously flagged f
 Analyze the plan. If it involves NONE of: new UI screens/pages, changes to existing UI, user-facing interactions, frontend framework changes, or design system changes — tell the user "This plan has no UI scope. A design review isn't applicable." and exit early. Don't force design review on a backend change.
 
 Report findings before proceeding to Step 0.
+
+## DESIGN SETUP (run this check BEFORE any design mockup command)
+
+```bash
+_ROOT=$(git rev-parse --show-toplevel 2>/dev/null)
+D=""
+if [ -x "$D" ]; then
+else
+fi
+B=""
+if [ -x "$B" ]; then
+  echo "BROWSE_READY: $B"
+else
+  echo "BROWSE_NOT_AVAILABLE (will use 'open' to view comparison boards)"
+fi
+```
+
+existing HTML wireframe approach (`DESIGN_SKETCH`). Design mockups are a
+progressive enhancement, not a hard requirement.
+
+If `BROWSE_NOT_AVAILABLE`: use `open file://...` instead of `$B goto` to open
+comparison boards. The user just needs to see the HTML file in any browser.
+
+Commands:
+- `- `$D variants --brief "..." --count 3 --output-dir /path/` — generate N style variants
+- `$D compare --images "a.png,b.png,c.png" --output /path/board.html --serve` — comparison board + HTTP server
+- `$D serve --html /path/board.html` — serve comparison board and collect feedback via HTTP
+- `$D check --image /path.png --brief "..."` — vision quality gate
+- `$D iterate --session /path/session.json --feedback "..." --output /path.png` — iterate
+
+**CRITICAL PATH RULE:** All design artifacts (mockups, comparison boards, approved.json)
+`docs/designs/`, `/tmp/`, or any project-local directory. Design artifacts are USER
+data, not project files. They persist across branches, conversations, and workspaces.
 
 ## Step 0: Design Scope Assessment
 
@@ -255,9 +385,276 @@ Explain what a 10 looks like for THIS plan.
 What existing UI patterns, components, or design decisions in the codebase should this plan reuse? Don't reinvent what already works.
 
 ### 0D. Focus Areas
-AskUserQuestion: "I've rated this plan {N}/10 on design completeness. The biggest gaps are {X, Y, Z}. I'll review all 7 dimensions. Want me to focus on specific areas instead of all 7?"
+AskUserQuestion: "I've rated this plan {N}/10 on design completeness. The biggest gaps are {X, Y, Z}. I'll generate visual mockups next, then review all 7 dimensions. Want me to focus on specific areas instead of all 7?"
 
 **STOP.** Do NOT proceed until user responds.
+
+
+If the plan involves any UI — screens, pages, components, visual changes — AND the
+mockups immediately.** Do not ask permission. This is the default behavior.
+
+review design — real visuals, not text descriptions."
+
+The ONLY time you skip mockups is when:
+- The plan has zero UI scope (pure backend/API/infrastructure)
+
+If the user explicitly says "skip mockups" or "text only", respect that. Otherwise, generate.
+
+**PLAN MODE EXCEPTION — ALWAYS RUN:** These commands write design artifacts to
+designer outputs PNGs and HTML comparison boards for human review during the
+planning phase. Generating mockups during planning is the whole point.
+
+Allowed commands under this exception:
+- `- `open` (fallback for viewing boards when `$B` is not available)
+
+First, set up the output directory. Name it after the screen/feature being designed and today's date:
+
+```bash
+mkdir -p "$_DESIGN_DIR"
+echo "DESIGN_DIR: $_DESIGN_DIR"
+```
+
+Replace `<screen-name>` with a descriptive kebab-case name (e.g., `homepage-variants`, `settings-page`, `onboarding-flow`).
+
+**Generate mockups ONE AT A TIME in this skill.** The inline review flow generates
+fewer variants and benefits from sequential control. Note: /design-shotgun uses
+parallel Agent subagents for variant generation, which works at Tier 2+ (15+ RPM).
+The sequential constraint here is specific to plan-design-review's inline pattern.
+
+For each UI screen/section in scope, construct a design brief from the plan's description (and DESIGN.md if present) and generate variants:
+
+```bash
+$D variants --brief "<description assembled from plan + DESIGN.md constraints>" --count 3 --output-dir "$_DESIGN_DIR/"
+```
+
+After generation, run a cross-model quality check on each variant:
+
+```bash
+$D check --image "$_DESIGN_DIR/variant-A.png" --brief "<the original brief>"
+```
+
+Flag any variants that fail the quality check. Offer to regenerate failures.
+
+**Do NOT show variants inline via Read tool and ask for preferences.** Proceed
+directly to the Comparison Board + Feedback Loop section below. The comparison board
+IS the chooser — it has rating controls, comments, remix/regenerate, and structured
+feedback output. Showing mockups inline is a degraded experience.
+
+### Comparison Board + Feedback Loop
+
+Create the comparison board and serve it over HTTP:
+
+```bash
+$D compare --images "$_DESIGN_DIR/variant-A.png,$_DESIGN_DIR/variant-B.png,$_DESIGN_DIR/variant-C.png" --output "$_DESIGN_DIR/design-board.html" --serve
+```
+
+This command generates the board HTML, starts an HTTP server on a random port,
+and opens it in the user's default browser. **Run it in the background** with `&`
+because the server needs to stay running while the user interacts with the board.
+
+Parse the port from stderr output: `SERVE_STARTED: port=XXXXX`. You need this
+for the board URL and for reloading during regeneration cycles.
+
+**PRIMARY WAIT: AskUserQuestion with board URL**
+
+After the board is serving, use AskUserQuestion to wait for the user. Include the
+board URL so they can click it if they lost the browser tab:
+
+"I've opened a comparison board with the design variants:
+http://127.0.0.1:<PORT>/ — Rate them, leave comments, remix
+elements you like, and click Submit when you're done. Let me know when you've
+submitted your feedback (or paste your preferences here). If you clicked
+Regenerate or Remix on the board, tell me and I'll generate new variants."
+
+**Do NOT use AskUserQuestion to ask which variant the user prefers.** The comparison
+board IS the chooser. AskUserQuestion is just the blocking wait mechanism.
+
+**After the user responds to AskUserQuestion:**
+
+Check for feedback files next to the board HTML:
+- `$_DESIGN_DIR/feedback.json` — written when user clicks Submit (final choice)
+- `$_DESIGN_DIR/feedback-pending.json` — written when user clicks Regenerate/Remix/More Like This
+
+```bash
+if [ -f "$_DESIGN_DIR/feedback.json" ]; then
+  echo "SUBMIT_RECEIVED"
+  cat "$_DESIGN_DIR/feedback.json"
+elif [ -f "$_DESIGN_DIR/feedback-pending.json" ]; then
+  echo "REGENERATE_RECEIVED"
+  cat "$_DESIGN_DIR/feedback-pending.json"
+  rm "$_DESIGN_DIR/feedback-pending.json"
+else
+  echo "NO_FEEDBACK_FILE"
+fi
+```
+
+The feedback JSON has this shape:
+```json
+{
+  "preferred": "A",
+  "ratings": { "A": 4, "B": 3, "C": 2 },
+  "comments": { "A": "Love the spacing" },
+  "overall": "Go with A, bigger CTA",
+  "regenerated": false
+}
+```
+
+**If `feedback.json` found:** The user clicked Submit on the board.
+Read `preferred`, `ratings`, `comments`, `overall` from the JSON. Proceed with
+the approved variant.
+
+**If `feedback-pending.json` found:** The user clicked Regenerate/Remix on the board.
+1. Read `regenerateAction` from the JSON (`"different"`, `"match"`, `"more_like_B"`,
+   `"remix"`, or custom text)
+2. If `regenerateAction` is `"remix"`, read `remixSpec` (e.g. `{"layout":"A","colors":"B"}`)
+3. Generate new variants with `$D iterate` or `$D variants` using updated brief
+4. Create new board: `$D compare --images "..." --output "$_DESIGN_DIR/design-board.html"`
+5. Reload the board in the user's browser (same tab):
+   `curl -s -X POST http://127.0.0.1:PORT/api/reload -H 'Content-Type: application/json' -d '{"html":"$_DESIGN_DIR/design-board.html"}'`
+6. The board auto-refreshes. **AskUserQuestion again** with the same board URL to
+   wait for the next round of feedback. Repeat until `feedback.json` appears.
+
+**If `NO_FEEDBACK_FILE`:** The user typed their preferences directly in the
+AskUserQuestion response instead of using the board. Use their text response
+as the feedback.
+
+**POLLING FALLBACK:** Only use polling if `$D serve` fails (no port available).
+In that case, show each variant inline using the Read tool (so the user can see them),
+then use AskUserQuestion:
+"The comparison board server failed to start. I've shown the variants above.
+Which do you prefer? Any feedback?"
+
+**After receiving feedback (any path):** Output a clear summary confirming
+what was understood:
+
+"Here's what I understood from your feedback:
+PREFERRED: Variant [X]
+RATINGS: [list]
+YOUR NOTES: [comments]
+DIRECTION: [overall]
+
+Is this right?"
+
+Use AskUserQuestion to verify before proceeding.
+
+**Save the approved choice:**
+```bash
+echo '{"approved_variant":"<V>","feedback":"<FB>","date":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","screen":"<SCREEN>","branch":"'$(git branch --show-current 2>/dev/null)'"}' > "$_DESIGN_DIR/approved.json"
+```
+
+**Do NOT use AskUserQuestion to ask which variant the user picked.** Read `feedback.json` — it already contains their preferred variant, ratings, comments, and overall feedback. Only use AskUserQuestion to confirm you understood the feedback correctly, never to re-ask what they chose.
+
+Note which direction was approved. This becomes the visual reference for all subsequent review passes.
+
+**Multiple variants/screens:** If the user asked for multiple variants (e.g., "5 versions of the homepage"), generate ALL as separate variant sets with their own comparison boards. Each screen/variant set gets its own subdirectory under `designs/`. Complete all mockup generation and user selection before starting review passes.
+
+
+## Design Outside Voices (parallel)
+
+Use AskUserQuestion:
+> "Want outside design voices before the detailed review? Codex evaluates against OpenAI's design hard rules + litmus checks; Claude subagent does an independent completeness review."
+>
+> A) Yes — run outside design voices
+> B) No — proceed without
+
+If user chooses B, skip this step and continue.
+
+**Check Codex availability:**
+```bash
+which codex 2>/dev/null && echo "CODEX_AVAILABLE" || echo "CODEX_NOT_AVAILABLE"
+```
+
+**If Codex is available**, launch both voices simultaneously:
+
+1. **Codex design voice** (via Bash):
+```bash
+TMPERR_DESIGN=$(mktemp /tmp/codex-design-XXXXXXXX)
+_REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
+codex exec "Read the plan file at [plan-file-path]. Evaluate this plan's UI/UX design against these criteria.
+
+HARD REJECTION — flag if ANY apply:
+1. Generic SaaS card grid as first impression
+2. Beautiful image with weak brand
+3. Strong headline with no clear action
+4. Busy imagery behind text
+5. Sections repeating same mood statement
+6. Carousel with no narrative purpose
+7. App UI made of stacked cards instead of layout
+
+LITMUS CHECKS — answer YES or NO for each:
+1. Brand/product unmistakable in first screen?
+2. One strong visual anchor present?
+3. Page understandable by scanning headlines only?
+4. Each section has one job?
+5. Are cards actually necessary?
+6. Does motion improve hierarchy or atmosphere?
+7. Would design feel premium with all decorative shadows removed?
+
+HARD RULES — first classify as MARKETING/LANDING PAGE vs APP UI vs HYBRID, then flag violations of the matching rule set:
+- MARKETING: First viewport as one composition, brand-first hierarchy, full-bleed hero, 2-3 intentional motions, composition-first layout
+- APP UI: Calm surface hierarchy, dense but readable, utility language, minimal chrome
+- UNIVERSAL: CSS variables for colors, no default font stacks, one job per section, cards earn existence
+
+For each finding: what's wrong, what will happen if it ships unresolved, and the specific fix. Be opinionated. No hedging." -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="high"' --enable web_search_cached 2>"$TMPERR_DESIGN"
+```
+Use a 5-minute timeout (`timeout: 300000`). After the command completes, read stderr:
+```bash
+cat "$TMPERR_DESIGN" && rm -f "$TMPERR_DESIGN"
+```
+
+2. **Claude design subagent** (via Agent tool):
+Dispatch a subagent with this prompt:
+"Read the plan file at [plan-file-path]. You are an independent senior product designer reviewing this plan. You have NOT seen any prior review. Evaluate:
+
+1. Information hierarchy: what does the user see first, second, third? Is it right?
+2. Missing states: loading, empty, error, success, partial — which are unspecified?
+3. User journey: what's the emotional arc? Where does it break?
+4. Specificity: does the plan describe SPECIFIC UI ("48px Söhne Bold header, #1a1a1a on white") or generic patterns ("clean modern card-based layout")?
+5. What design decisions will haunt the implementer if left ambiguous?
+
+For each finding: what's wrong, severity (critical/high/medium), and the fix."
+
+**Error handling (all non-blocking):**
+- **Auth failure:** If stderr contains "auth", "login", "unauthorized", or "API key": "Codex authentication failed. Run `codex login` to authenticate."
+- **Timeout:** "Codex timed out after 5 minutes."
+- **Empty response:** "Codex returned no response."
+- On any Codex error: proceed with Claude subagent output only, tagged `[single-model]`.
+- If Claude subagent also fails: "Outside voices unavailable — continuing with primary review."
+
+Present Codex output under a `CODEX SAYS (design critique):` header.
+Present subagent output under a `CLAUDE SUBAGENT (design completeness):` header.
+
+**Synthesis — Litmus scorecard:**
+
+```
+DESIGN OUTSIDE VOICES — LITMUS SCORECARD:
+═══════════════════════════════════════════════════════════════
+  Check                                    Claude  Codex  Consensus
+  ─────────────────────────────────────── ─────── ─────── ─────────
+  1. Brand unmistakable in first screen?   —       —      —
+  2. One strong visual anchor?             —       —      —
+  3. Scannable by headlines only?          —       —      —
+  4. Each section has one job?             —       —      —
+  5. Cards actually necessary?             —       —      —
+  6. Motion improves hierarchy?            —       —      —
+  7. Premium without decorative shadows?   —       —      —
+  ─────────────────────────────────────── ─────── ─────── ─────────
+  Hard rejections triggered:               —       —      —
+═══════════════════════════════════════════════════════════════
+```
+
+Fill in each cell from the Codex and subagent outputs. CONFIRMED = both agree. DISAGREE = models differ. NOT SPEC'D = not enough info to evaluate.
+
+**Pass integration (respects existing 7-pass contract):**
+- Hard rejections → raised as the FIRST items in Pass 1, tagged `[HARD REJECTION]`
+- Litmus DISAGREE items → raised in the relevant pass with both perspectives
+- Litmus CONFIRMED failures → pre-loaded as known issues in the relevant pass
+- Passes can skip discovery and go straight to fixing for pre-identified issues
+
+**Log the result:**
+```bash
+```
+Replace STATUS with "clean" or "issues_found", SOURCE with "codex+subagent", "codex-only", "subagent-only", or "unavailable".
 
 ## The 0-10 Rating Method
 
@@ -273,9 +670,37 @@ Pattern:
 
 Re-run loop: invoke /plan-design-review again → re-rate → sections at 8+ get a quick pass, sections below 8 get full treatment.
 
+### "Show me what 10/10 looks like" (requires design binary)
+
+offer to generate a visual mockup showing what the improved version would look like:
+
+```bash
+```
+
+Show the mockup to the user via the Read tool. This makes the gap between
+"what the plan describes" and "what it should look like" visceral, not abstract.
+
+If the design binary is not available, skip this and continue with text-based
+descriptions of what 10/10 looks like.
+
 ## Review Sections (7 passes, after scope is agreed)
 
 **Anti-skip rule:** Never condense, abbreviate, or skip any review pass (1-7) regardless of plan type (strategy, spec, code, infra). Every pass in this skill exists for a reason. "This is a strategy doc so design passes don't apply" is always wrong — design gaps are where implementation breaks down. If a pass genuinely has zero findings, say "No issues found" and move on — but you must evaluate it.
+
+## Prior Learnings
+
+Search for relevant learnings from previous sessions:
+
+```bash
+echo "CROSS_PROJECT: $_CROSS_PROJ"
+if [ "$_CROSS_PROJ" = "true" ]; then
+else
+fi
+```
+
+If `CROSS_PROJECT` is `unset` (first time): Use AskUserQuestion:
+
+smarter on their codebase over time.
 
 ### Pass 1: Information Architecture
 Rate 0-10: Does the plan define what the user sees first, second, third?
@@ -326,7 +751,7 @@ FIX TO 10: Rewrite vague UI descriptions with specific alternatives.
 6. Carousel with no narrative purpose
 7. App UI made of stacked cards instead of layout
 
-**Litmus checks** (answer YES/NO for each — used for consensus scoring):
+**Litmus checks** (answer YES/NO for each — used for cross-model consensus scoring):
 1. Brand/product unmistakable in first screen?
 2. One strong visual anchor present?
 3. Page understandable by scanning headlines only?
@@ -377,11 +802,12 @@ FIX TO 10: Rewrite vague UI descriptions with specific alternatives.
 9. Generic hero copy ("Welcome to [X]", "Unlock the power of...", "Your all-in-one solution for...")
 10. Cookie-cutter section rhythm (hero → 3 features → testimonials → pricing → CTA, every section same height)
 
+Source: [OpenAI "Designing Delightful Frontends with GPT-5.4"](https://developers.openai.com/blog/designing-delightful-frontends-with-gpt-5-4) (Mar 2026) + AI design methodology.
 - "Cards with icons" → what differentiates these from every SaaS template?
 - "Hero section" → what makes this hero feel like THIS product?
 - "Clean, modern UI" → meaningless. Replace with actual design decisions.
 - "Dashboard with widgets" → what makes this NOT every other dashboard?
-
+If visual mockups were generated in Step 0.5, evaluate them against the AI slop blacklist above. Read each mockup image using the Read tool. Does the mockup fall into generic patterns (3-column grid, centered hero, stock-photo feel)? If so, flag it and offer to regenerate with more specific direction via `$D iterate --feedback "..."`.
 **STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY.
 
 ### Pass 5: Design System Alignment
@@ -404,7 +830,16 @@ Surface ambiguities that will haunt implementation:
   Mobile nav pattern?          | Desktop nav hides behind hamburger
   ...
 ```
+If visual mockups were generated in Step 0.5, reference them as evidence when surfacing unresolved decisions. A mockup makes decisions concrete — e.g., "Your approved mockup shows a sidebar nav, but the plan doesn't specify mobile behavior. What happens to this sidebar on 375px?"
 Each decision = one AskUserQuestion with recommendation + WHY + alternatives. Edit the plan with each decision as it's made.
+
+### Post-Pass: Update Mockups (if generated)
+
+If mockups were generated in Step 0.5 and review passes changed significant design decisions (information architecture restructure, new states, layout changes), offer to regenerate (one-shot, not a loop):
+
+AskUserQuestion: "The review passes changed [list major design changes]. Want me to regenerate mockups to reflect the updated plan? This ensures the visual reference matches what we're actually building."
+
+If yes, use `$D iterate` with feedback summarizing the changes, or `$D variants` with an updated brief. Save to the same `$_DESIGN_DIR` directory.
 
 ## CRITICAL RULE — How to ask questions
 Follow the AskUserQuestion format from the Preamble above. Additional rules for plan design reviews:
@@ -414,6 +849,7 @@ Follow the AskUserQuestion format from the Preamble above. Additional rules for 
 * **Map to Design Principles above.** One sentence connecting your recommendation to a specific principle.
 * Label with issue NUMBER + option LETTER (e.g., "3A", "3B").
 * **Escape hatch:** If a section has no issues, say so and move on. If a gap has an obvious fix, state what you'll add and move on — don't waste a question on it. Only use AskUserQuestion when there is a genuine design choice with meaningful tradeoffs.
+* **NEVER use AskUserQuestion to ask which variant the user prefers.** Always create a comparison board first (`$D compare --serve`) and open it in the browser. The board has rating controls, comments, remix/regenerate buttons, and structured feedback output. Use AskUserQuestion ONLY to notify the user the board is open and wait for them to finish — not to present variants inline and ask "which do you prefer?" That is a degraded experience.
 
 ## Required Outputs
 
@@ -454,6 +890,7 @@ Then present options: **A)** Add to TODOS.md **B)** Skip — not valuable enough
   | NOT in scope         | written (___ items)                         |
   | What already exists  | written                                     |
   | TODOS.md updates     | ___ items proposed                          |
+  | Approved Mockups     | ___ generated, ___ approved                  |
   | Decisions made       | ___ added to plan                           |
   | Decisions deferred   | ___ (listed below)                          |
   | Overall design score | ___/10 → ___/10                             |
@@ -466,20 +903,206 @@ If any below 8: note what's unresolved and why (user chose to defer).
 ### Unresolved Decisions
 If any AskUserQuestion goes unanswered, note it here. Never silently default to an option.
 
+### Approved Mockups
+
+If visual mockups were generated during this review, add to the plan file:
+
+```
+## Approved Mockups
+
+| Screen/Section | Mockup Path | Direction | Notes |
+|----------------|-------------|-----------|-------|
+```
+
+Include the full path to each approved mockup (the variant the user chose), a one-line description of the direction, and any constraints. The implementer reads this to know exactly which visual to build from. These persist across conversations and workspaces. If no mockups were generated, omit this section.
+
+## Review Log
+
+After producing the Completion Summary above, persist the review result.
+
+**PLAN MODE EXCEPTION — ALWAYS RUN:** This command writes review metadata to
+the same pattern. The review dashboard depends on this data. Skipping this
+command breaks the review readiness dashboard in /ship.
+
+```bash
+```
+
+Substitute values from the Completion Summary:
+- **TIMESTAMP**: current ISO 8601 datetime
+- **STATUS**: "clean" if overall score 8+ AND 0 unresolved; otherwise "issues_open"
+- **initial_score**: initial overall design score before fixes (0-10)
+- **overall_score**: final overall design score after fixes (0-10)
+- **unresolved**: number of unresolved design decisions
+- **decisions_made**: number of design decisions added to the plan
+- **COMMIT**: output of `git rev-parse --short HEAD`
+
+## Review Readiness Dashboard
+
+After completing the review, read the review log and config to display the dashboard.
+
+```bash
+```
+
+Parse the output. Find the most recent entry for each skill (plan-ceo-review, plan-eng-review, review, plan-design-review, design-review-lite, adversarial-review, codex-review, codex-plan-review). Ignore entries with timestamps older than 7 days. For the Eng Review row, show whichever is more recent between `review` (diff-scoped pre-landing review) and `plan-eng-review` (plan-stage architecture review). Append "(DIFF)" or "(PLAN)" to the status to distinguish. For the Adversarial row, show whichever is more recent between `adversarial-review` (new auto-scaled) and `codex-review` (legacy). For Design Review, show whichever is more recent between `plan-design-review` (full visual audit) and `design-review-lite` (code-level check). Append "(FULL)" or "(LITE)" to the status to distinguish. For the Outside Voice row, show the most recent `codex-plan-review` entry — this captures outside voices from both /plan-ceo-review and /plan-eng-review.
+
+**Source attribution:** If the most recent entry for a skill has a \`"via"\` field, append it to the status label in parentheses. Examples: `plan-eng-review` with `via:"autoplan"` shows as "CLEAR (PLAN via /autoplan)". `review` with `via:"ship"` shows as "CLEAR (DIFF via /ship)". Entries without a `via` field show as "CLEAR (PLAN)" or "CLEAR (DIFF)" as before.
+
+Note: `autoplan-voices` and `design-outside-voices` entries are audit-trail-only (forensic data for cross-model consensus analysis). They do not appear in the dashboard and are not checked by any consumer.
+
+Display:
+
+```
++====================================================================+
+|                    REVIEW READINESS DASHBOARD                       |
++====================================================================+
+| Review          | Runs | Last Run            | Status    | Required |
+|-----------------|------|---------------------|-----------|----------|
+| Eng Review      |  1   | 2026-03-16 15:00    | CLEAR     | YES      |
+| CEO Review      |  0   | —                   | —         | no       |
+| Design Review   |  0   | —                   | —         | no       |
+| Adversarial     |  0   | —                   | —         | no       |
+| Outside Voice   |  0   | —                   | —         | no       |
++--------------------------------------------------------------------+
+| VERDICT: CLEARED — Eng Review passed                                |
++====================================================================+
+```
+
+**Review tiers:**
+- **CEO Review (optional):** Use your judgment. Recommend it for big product/business changes, new user-facing features, or scope decisions. Skip for bug fixes, refactors, infra, and cleanup.
+- **Design Review (optional):** Use your judgment. Recommend it for UI/UX changes. Skip for backend-only, infra, or prompt-only changes.
+- **Adversarial Review (automatic):** Always-on for every review. Every diff gets both Claude adversarial subagent and Codex adversarial challenge. Large diffs (200+ lines) additionally get Codex structured review with P1 gate. No configuration needed.
+- **Outside Voice (optional):** Independent plan review from a different AI model. Offered after all review sections complete in /plan-ceo-review and /plan-eng-review. Falls back to Claude subagent if Codex is unavailable. Never gates shipping.
+
+**Verdict logic:**
+- **CLEARED**: Eng Review has >= 1 entry within 7 days from either \`review\` or \`plan-eng-review\` with status "clean" (or \`skip_eng_review\` is \`true\`)
+- **NOT CLEARED**: Eng Review missing, stale (>7 days), or has open issues
+- CEO, Design, and Codex reviews are shown for context but never block shipping
+- If \`skip_eng_review\` config is \`true\`, Eng Review shows "SKIPPED (global)" and verdict is CLEARED
+
+**Staleness detection:** After displaying the dashboard, check if any existing reviews may be stale:
+- Parse the \`---HEAD---\` section from the bash output to get the current HEAD commit hash
+- For each review entry that has a \`commit\` field: compare it against the current HEAD. If different, count elapsed commits: \`git rev-list --count STORED_COMMIT..HEAD\`. Display: "Note: {skill} review from {date} may be stale — {N} commits since review"
+- For entries without a \`commit\` field (legacy entries): display "Note: {skill} review from {date} has no commit tracking — consider re-running for accurate staleness detection"
+- If all reviews match the current HEAD, do not display any staleness notes
+
+## Plan File Review Report
+
+After displaying the Review Readiness Dashboard in conversation output, also update the
+**plan file** itself so review status is visible to anyone reading the plan.
+
+### Detect the plan file
+
+1. Check if there is an active plan file in this conversation (the host provides plan file
+   paths in system messages — look for plan file references in the conversation context).
+2. If not found, skip this section silently — not every review runs in plan mode.
+
+### Generate the report
+
+Read the review log output you already have from the Review Readiness Dashboard step above.
+Parse each JSONL entry. Each skill logs different fields:
+
+- **plan-ceo-review**: \`status\`, \`unresolved\`, \`critical_gaps\`, \`mode\`, \`scope_proposed\`, \`scope_accepted\`, \`scope_deferred\`, \`commit\`
+  → Findings: "{scope_proposed} proposals, {scope_accepted} accepted, {scope_deferred} deferred"
+  → If scope fields are 0 or missing (HOLD/REDUCTION mode): "mode: {mode}, {critical_gaps} critical gaps"
+- **plan-eng-review**: \`status\`, \`unresolved\`, \`critical_gaps\`, \`issues_found\`, \`mode\`, \`commit\`
+  → Findings: "{issues_found} issues, {critical_gaps} critical gaps"
+- **plan-design-review**: \`status\`, \`initial_score\`, \`overall_score\`, \`unresolved\`, \`decisions_made\`, \`commit\`
+  → Findings: "score: {initial_score}/10 → {overall_score}/10, {decisions_made} decisions"
+- **plan-devex-review**: \`status\`, \`initial_score\`, \`overall_score\`, \`product_type\`, \`tthw_current\`, \`tthw_target\`, \`mode\`, \`persona\`, \`competitive_tier\`, \`unresolved\`, \`commit\`
+  → Findings: "score: {initial_score}/10 → {overall_score}/10, TTHW: {tthw_current} → {tthw_target}"
+- **devex-review**: \`status\`, \`overall_score\`, \`product_type\`, \`tthw_measured\`, \`dimensions_tested\`, \`dimensions_inferred\`, \`boomerang\`, \`commit\`
+  → Findings: "score: {overall_score}/10, TTHW: {tthw_measured}, {dimensions_tested} tested/{dimensions_inferred} inferred"
+- **codex-review**: \`status\`, \`gate\`, \`findings\`, \`findings_fixed\`
+  → Findings: "{findings} findings, {findings_fixed}/{findings} fixed"
+
+All fields needed for the Findings column are now present in the JSONL entries.
+For the review you just completed, you may use richer details from your own Completion
+Summary. For prior reviews, use the JSONL fields directly — they contain all required data.
+
+Produce this markdown table:
+
+\`\`\`markdown
+## REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | \`/plan-ceo-review\` | Scope & strategy | {runs} | {status} | {findings} |
+| Codex Review | \`/codex review\` | Independent 2nd opinion | {runs} | {status} | {findings} |
+| Eng Review | \`/plan-eng-review\` | Architecture & tests (required) | {runs} | {status} | {findings} |
+| Design Review | \`/plan-design-review\` | UI/UX gaps | {runs} | {status} | {findings} |
+| DX Review | \`/plan-devex-review\` | Developer experience gaps | {runs} | {status} | {findings} |
+\`\`\`
+
+Below the table, add these lines (omit any that are empty/not applicable):
+
+- **CODEX:** (only if codex-review ran) — one-line summary of codex fixes
+- **CROSS-MODEL:** (only if both Claude and Codex reviews exist) — overlap analysis
+- **UNRESOLVED:** total unresolved decisions across all reviews
+- **VERDICT:** list reviews that are CLEAR (e.g., "CEO + ENG CLEARED — ready to implement").
+  If Eng Review is not CLEAR and not skipped globally, append "eng review required".
+
+### Write to the plan file
+
+**PLAN MODE EXCEPTION — ALWAYS RUN:** This writes to the plan file, which is the one
+file you are allowed to edit in plan mode. The plan file review report is part of the
+plan's living status.
+
+- Search the plan file for a \`## REVIEW REPORT\` section **anywhere** in the file
+  (not just at the end — content may have been added after it).
+- If found, **replace it** entirely using the Edit tool. Match from \`## REVIEW REPORT\`
+  through either the next \`## \` heading or end of file, whichever comes first. This ensures
+  content added after the report section is preserved, not eaten. If the Edit fails
+  (e.g., concurrent edit changed the content), re-read the plan file and retry once.
+- If no such section exists, **append it** to the end of the plan file.
+- Always place it as the very last section in the plan file. If it was found mid-file,
+  move it: delete the old location and append at the end.
+
+## Capture Learnings
+
+If you discovered a non-obvious pattern, pitfall, or architectural insight during
+this session, log it for future sessions:
+
+```bash
+```
+
+**Types:** `pattern` (reusable approach), `pitfall` (what NOT to do), `preference`
+(user stated), `architecture` (structural decision), `tool` (library/framework insight),
+`operational` (project environment/CLI/workflow knowledge).
+
+**Sources:** `observed` (you found this in the code), `user-stated` (user told you),
+`inferred` (AI deduction), `cross-model` (both Claude and Codex agree).
+
+**Confidence:** 1-10. Be honest. An observed pattern you verified in the code is 8-9.
+An inference you're not sure about is 4-5. A user preference they explicitly stated is 10.
+
+**files:** Include the specific file paths this learning references. This enables
+staleness detection: if those files are later deleted, the learning can be flagged.
+
+**Only log genuine discoveries.** Don't log obvious things. Don't log things the user
+already knows. A good test: would this insight save time in a future session? If yes, log it.
+
 ## Next Steps — Review Chaining
 
-After displaying the Completion Summary, recommend the next review(s) based on what this design review discovered.
+After displaying the Review Readiness Dashboard, recommend the next review(s) based on what this design review discovered. Read the dashboard output to see which reviews have already been run and whether they are stale.
 
-**Recommend /plan-eng-review** — the required shipping gate. If this design review added significant interaction specifications, new user flows, or changed the information architecture, emphasize that eng review needs to validate the architectural implications.
+**Recommend /plan-eng-review if eng review is not skipped globally** — check the dashboard output for `skip_eng_review`. If it is `true`, eng review is opted out — do not recommend it. Otherwise, eng review is the required shipping gate. If this design review added significant interaction specifications, new user flows, or changed the information architecture, emphasize that eng review needs to validate the architectural implications. If an eng review already exists but the commit hash shows it predates this design review, note that it may be stale and should be re-run.
 
-**Consider recommending /plan-ceo-review** — only if this design review revealed fundamental product direction gaps. Specifically: if the overall design score started below 4/10, if the information architecture had major structural problems, or if the review surfaced questions about whether the right problem is being solved. This is a selective recommendation — most design reviews should NOT trigger a CEO review.
+**Consider recommending /plan-ceo-review** — but only if this design review revealed fundamental product direction gaps. Specifically: if the overall design score started below 4/10, if the information architecture had major structural problems, or if the review surfaced questions about whether the right problem is being solved. AND no CEO review exists in the dashboard. This is a selective recommendation — most design reviews should NOT trigger a CEO review.
 
 **If both are needed, recommend eng review first** (required gate).
+
+**Recommend design exploration skills when appropriate** — /design-shotgun and /design-html
+produce design artifacts (mockups, HTML previews), not application code. They belong in
+plan mode alongside reviews. If this design review found visual issues that would benefit
+from exploring new directions, recommend /design-shotgun. If approved mockups exist and
+need to be turned into working HTML, recommend /design-html.
 
 Use AskUserQuestion to present the next step. Include only applicable options:
 - **A)** Run /plan-eng-review next (required gate)
 - **B)** Run /plan-ceo-review (only if fundamental product gaps found)
-- **C)** Skip — I'll handle next steps manually
+- **C)** Run /design-shotgun — explore visual design variants for issues found
+- **D)** Run /design-html — generate Pretext-native HTML from approved mockups
+- **E)** Skip — I'll handle next steps manually
 
 ## Formatting Rules
 * NUMBER issues (1, 2, 3...) and LETTERS for options (A, B, C...).
