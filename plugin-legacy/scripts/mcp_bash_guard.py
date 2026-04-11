@@ -48,6 +48,7 @@ MANAGED_SCRIPT_PATTERNS = {
             "handoff": "mcp__plugin_harness_harness__write_handoff",
             "doc-sync": "mcp__plugin_harness_harness__write_doc_sync",
         },
+        "allowed_subcommands": {"plan"},
         "default_tool": "mcp__plugin_harness_harness__write_critic_plan",
     },
     "calibration_miner.py": {
@@ -312,6 +313,26 @@ def _extract_mutation_targets(command: str) -> list[dict[str, str]]:
     return targets
 
 
+def _subcommand_in_allowlist(script_name: str, command: str) -> bool:
+    """Return True if the command's first positional after script_name is
+    in the script's allowed_subcommands set."""
+    meta = MANAGED_SCRIPT_PATTERNS.get(script_name, {})
+    allowed = meta.get("allowed_subcommands") or set()
+    if not allowed:
+        return False
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    for index, token in enumerate(tokens):
+        if os.path.basename(token) == script_name:
+            for candidate in tokens[index + 1 :]:
+                if candidate.startswith("-"):
+                    continue
+                return candidate in allowed
+    return False
+
+
 def _managed_cli_message(script_name: str, tool_name: str, command: str) -> str:
     return (
         "BLOCKED: harness-managed control-plane CLI calls must use MCP tools, not Bash.\n"
@@ -357,6 +378,8 @@ def main() -> int:
 
     script_name = _find_managed_script(command)
     if script_name:
+        if _subcommand_in_allowlist(script_name, command):
+            return 0
         tool_name = _infer_tool(script_name, command)
         print(_managed_cli_message(script_name, tool_name, command), file=sys.stderr)
         return 2
