@@ -249,6 +249,87 @@ Show the mockup to the user via the Read tool. This makes the gap between
 If the design binary is not available, skip this and continue with text-based
 descriptions of what 10/10 looks like.
 
+## Litmus Scorecard
+
+After the 0-10 Rating Method runs across all 7 dimensions, consolidate results
+into a single scorecard table before any fixing begins. This makes the overall
+state of the design visible at a glance and anchors the Fix-to-10 Loop.
+
+Produce this table with all 7 rows filled in:
+
+```
+| # | Dimension                | Score | Finding                          | Fix-to-10 Path                          |
+|---|--------------------------|-------|----------------------------------|-----------------------------------------|
+| 1 | Information Hierarchy    |  /10  | [what is missing or broken]      | [smallest change to reach 10]           |
+| 2 | Interaction States       |  /10  | [which states are unspecified]   | [smallest change to reach 10]           |
+| 3 | User Journey             |  /10  | [where the emotional arc breaks] | [smallest change to reach 10]           |
+| 4 | Responsive Strategy      |  /10  | [viewport gaps]                  | [smallest change to reach 10]           |
+| 5 | Accessibility            |  /10  | [a11y omissions]                 | [smallest change to reach 10]           |
+| 6 | Visual Specificity       |  /10  | [vague vs specific UI language]  | [smallest change to reach 10]           |
+| 7 | Design System Alignment  |  /10  | [token / component drift]        | [smallest change to reach 10]           |
+```
+
+Rules for filling in the table:
+- Score must be an integer 0-10. No ranges, no "7-8".
+- Finding must be one concrete sentence — not "needs improvement."
+- Fix-to-10 Path must name the specific addition or change, not "add more detail."
+- If a dimension genuinely has no issues, score it 10 and write "None" for both
+  Finding and Fix-to-10 Path.
+
+## Fix-to-10 Loop
+
+For every dimension in the Litmus Scorecard that scored below 10, run a
+Fix-to-10 Loop before moving to the next dimension. The loop resolves each gap
+sequentially, not in batch.
+
+### Structural vs Taste classification
+
+Every proposed fix must be classified before acting on it:
+
+- **Structural** — the plan is missing a required state, has a broken hierarchy,
+  omits a user journey step, or leaves an interaction undefined. The fix is
+  objectively necessary; skipping it will cause implementation defects or UX
+  failures. Auto-decide and apply to the plan immediately — do not ask the user.
+- **Taste** — the fix is an aesthetic or style preference (color palette choice,
+  typeface selection, spacing scale, tone of copy). The fix would improve quality
+  but reasonable designers disagree. Mark the item with `[TASTE: deferred]` and
+  surface it at the Phase 5 user gate — do not apply without explicit approval.
+
+When the classification is ambiguous, apply the implementation-defect test:
+"If this is absent, will the implementer produce a broken or confusing
+experience?" Yes → Structural. No → Taste.
+
+### Loop procedure
+
+For each below-10 dimension:
+
+1. **Identify the gap** — restate the finding from the Litmus Scorecard in one
+   sentence. Reference the specific design principle it violates (from the Design
+   Principles section above).
+
+2. **Propose the smallest change** — the fix must be the minimum edit that moves
+   the score up. Never redesign a section wholesale when a single addition
+   resolves the gap.
+
+3. **Classify** — label the fix Structural or Taste (see above).
+
+4. **Act**:
+   - Structural → edit the plan immediately. Re-rate the dimension.
+   - Taste → mark `[TASTE: deferred to Phase 5 gate]`. Do not edit the plan.
+
+5. **Re-rate** — after applying Structural fixes, re-score the dimension.
+
+6. **Iterate** — repeat until the dimension reaches 8 or above, or until all
+   remaining gaps are classified as Taste decisions deferred to the user gate.
+
+7. **Stuck condition** — if a dimension cannot reach 8 without a Taste decision,
+   note exactly which Taste item is the blocker. Surface it via AskUserQuestion
+   at the Phase 5 user gate with options A (apply the suggestion) and B (defer).
+
+**Exit condition:** the Fix-to-10 Loop is complete when every dimension is
+either at score >= 8, or all remaining sub-10 gaps are tagged
+`[TASTE: deferred to Phase 5 gate]` and queued for the user gate.
+
 ## Review Sections (7 passes, after scope is agreed)
 
 **Anti-skip rule:** Never condense, abbreviate, or skip any review pass (1-7) regardless of plan type (strategy, spec, code, infra). Every pass in this skill exists for a reason. "This is a strategy doc so design passes don't apply" is always wrong — design gaps are where implementation breaks down. If a pass genuinely has zero findings, say "No issues found" and move on — but you must evaluate it.
