@@ -42,8 +42,7 @@ When user describes intent in natural language, route accordingly:
 | Intent pattern | Route to |
 |---------------|----------|
 | Set up harness / bootstrap / initialize | `Skill(setup)` |
-| New feature / task / build something | plan-skill (loop start) |
-| Review plan / autoplan / run all reviews | `Skill(autoplan)` |
+| New feature / task / build something | `Skill(harness:plan)` (loop start, 7-phase dual-voice review pipeline) |
 | CEO review / think bigger / scope review | `Skill(plan-ceo-review)` |
 | Architecture review / engineering review | `Skill(plan-eng-review)` |
 | Design review / design critique | `Skill(plan-design-review)` |
@@ -80,7 +79,6 @@ gitignored — the distilled doc is the permanent record.
 
 Skills live in `plugin/skills/`. Currently available:
 - `setup` — bootstrap harness2 in a project (interactive, AskUserQuestion-based)
-- `autoplan` — full review pipeline (CEO → Design → Eng → DX, auto-decides with 6 principles, final approval gate)
 - `plan-ceo-review` — CEO/founder mode plan review (scope modes: expansion/selective/hold/reduction)
 - `plan-eng-review` — engineering plan review (architecture, data flow, error maps, test coverage)
 - `plan-design-review` — design plan review (0-10 scoring per dimension, fix-to-10 loop)

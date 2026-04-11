@@ -3,6 +3,7 @@ tags: [req, process, plan-skill, review-pipeline]
 summary: plan skill must run the 7-phase dual-voice review pipeline; old linear procedure is retired.
 freshness: current
 updated: 2026-04-10
+verified_at: 2026-04-11T00:00:00Z
 
 ## Requirement
 
