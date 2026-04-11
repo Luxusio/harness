@@ -1,0 +1,61 @@
+#!/usr/bin/env python3
+"""Append a review log entry (JSON line) to doc/harness/reviews/{branch}-reviews.jsonl."""
+
+import json
+import os
+import subprocess
+import sys
+
+
+def get_branch():
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        branch = result.stdout.strip()
+        return branch.replace("/", "-") if branch else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: python3 review-log '<json-line>'", file=sys.stderr)
+        sys.exit(1)
+
+    raw = sys.argv[1]
+    try:
+        entry = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"ERROR: invalid JSON — {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    branch = get_branch()
+
+    # Resolve repo root so the path is stable regardless of cwd
+    try:
+        repo_root = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    except Exception:
+        repo_root = os.getcwd()
+
+    reviews_dir = os.path.join(repo_root, "doc", "harness", "reviews")
+    os.makedirs(reviews_dir, exist_ok=True)
+
+    path = os.path.join(reviews_dir, f"{branch}-reviews.jsonl")
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(entry) + "\n")
+
+    skill = entry.get("skill", "unknown")
+    print(f"LOGGED: {skill} \u2192 {path}")
+
+
+if __name__ == "__main__":
+    main()
