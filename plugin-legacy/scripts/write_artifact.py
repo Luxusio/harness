@@ -952,14 +952,16 @@ def cmd_plan(args):
             existing = _read_text(artifact_path)
         else:
             existing = ""
+        first_line = existing.lstrip("\n").split("\n")[0] if existing.strip() else ""
+        has_header = first_line.startswith("| # |")
         if not existing.strip():
             new_content = _AUDIT_TRAIL_HEADER + content.rstrip("\n") + "\n"
+        elif has_header:
+            # Header already present — coalesce: append row only, no duplicate header
+            new_content = existing.rstrip("\n") + "\n" + content.rstrip("\n") + "\n"
         else:
-            # Check if a table exists already
-            if "|" in existing:
-                new_content = existing.rstrip("\n") + "\n" + content.rstrip("\n") + "\n"
-            else:
-                new_content = existing.rstrip("\n") + "\n\n" + _AUDIT_TRAIL_HEADER + content.rstrip("\n") + "\n"
+            # Existing content has no header row — prepend header then append
+            new_content = existing.rstrip("\n") + "\n\n" + _AUDIT_TRAIL_HEADER + content.rstrip("\n") + "\n"
         write_file(artifact_path, new_content)
         meta = build_meta(artifact_name, task_id, "plan-skill")
         _atomic_write_text(meta_path, json.dumps(meta, indent=2) + "\n")
