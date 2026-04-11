@@ -24,6 +24,9 @@ from _lib import now_iso
 
 PROTECTED_ARTIFACT_OWNERS = {
     "PLAN.md": {"plan-skill"},
+    "PLAN.meta.json": {"plan-skill"},
+    "CHECKS.yaml": {"plan-skill"},
+    "AUDIT_TRAIL.md": {"plan-skill"},
     "HANDOFF.md": {"developer"},
     "DOC_SYNC.md": {"writer"},
     "CRITIC__plan.md": {"critic-plan"},

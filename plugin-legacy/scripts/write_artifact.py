@@ -307,6 +307,10 @@ def parse_checks_arg(checks_str):
 
 
 EXPECTED_AGENT_ROLES = {
+    "PLAN.md": {"plan-skill"},
+    "PLAN.meta.json": {"plan-skill"},
+    "CHECKS.yaml": {"plan-skill"},
+    "AUDIT_TRAIL.md": {"plan-skill"},
     "CRITIC__runtime.md": {"critic-runtime"},
     "QA__runtime.md": {"critic-runtime"},
     "CRITIC__plan.md": {"critic-plan"},
@@ -782,6 +786,196 @@ def cmd_doc_sync(args):
 
 
 # ---------------------------------------------------------------------------
+# Subcommand: plan
+# ---------------------------------------------------------------------------
+
+# NOTE: Intentional divergence from prewrite_gate.py::_check_plan_session_token.
+# The hook-level gate accepts phase "context" as well as "write" and does not
+# inspect the "source" field — this is correct for the hook because it must
+# allow early PLAN_SESSION.json setup writes and other context-phase reads.
+# This CLI helper is stricter: it requires state=="open", phase=="write", AND
+# source=="plan-skill", because cmd_plan writes the final protected plan artefacts.
+# Do not merge or reuse these two helpers.
+def _plan_session_write_ok(task_dir):
+    """Return True only when PLAN_SESSION.json has state=open, phase=write, source=plan-skill."""
+    token_path = os.path.join(task_dir, "PLAN_SESSION.json")
+    if not os.path.isfile(token_path):
+        return False, "PLAN_SESSION.json not found"
+    try:
+        with open(token_path, "r", encoding="utf-8") as fh:
+            token = json.load(fh)
+    except (json.JSONDecodeError, OSError) as exc:
+        return False, f"PLAN_SESSION.json unreadable: {exc}"
+    state = token.get("state", "")
+    phase = token.get("phase", "")
+    source = token.get("source", "")
+    if state != "open":
+        return False, f"state={state!r} (expected 'open')"
+    if phase != "write":
+        return False, f"phase={phase!r} (expected 'write')"
+    if source != "plan-skill":
+        return False, f"source={source!r} (expected 'plan-skill')"
+    return True, ""
+
+
+_AUDIT_TRAIL_HEADER = (
+    "| # | phase | decision | classification | principle | rationale | rejected_option |\n"
+    "|---|---|---|---|---|---|---|\n"
+)
+_AUDIT_TRAIL_COLUMNS = ["#", "phase", "decision", "classification", "principle", "rationale", "rejected_option"]
+
+
+def _validate_audit_row(row_text):
+    """Return (ok, error_msg) for a pipe-delimited audit row."""
+    stripped = row_text.strip()
+    if not stripped.startswith("|"):
+        return False, "Audit row must start with '|'"
+    cells = [c.strip() for c in stripped.strip("|").split("|")]
+    if len(cells) < len(_AUDIT_TRAIL_COLUMNS):
+        return False, (
+            f"Audit row has {len(cells)} column(s); expected {len(_AUDIT_TRAIL_COLUMNS)}: "
+            + ", ".join(_AUDIT_TRAIL_COLUMNS)
+        )
+    return True, ""
+
+
+def cmd_plan(args):
+    task_dir = os.path.abspath(args.task_dir)
+    _validate_task_dir(task_dir)
+    task_id = task_id_from_dir(task_dir)
+    artifact_choice = args.artifact
+
+    # Read input content
+    if args.input == "-":
+        content = sys.stdin.read()
+    else:
+        if not os.path.isfile(args.input):
+            print(f"ERROR: input file not found: {args.input}", file=sys.stderr)
+            sys.exit(1)
+        with open(args.input, "r", encoding="utf-8") as fh:
+            content = fh.read()
+
+    # Session-token check for plan artefacts (PLAN.md, PLAN.meta.json, CHECKS.yaml, AUDIT_TRAIL.md)
+    ok, reason = _plan_session_write_ok(task_dir)
+    if not ok:
+        print(
+            f"PLAN.md write requires active plan session token "
+            f"(state=open, phase=write, source=plan-skill). Reason: {reason}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Role enforcement
+    artifact_map = {
+        "plan": "PLAN.md",
+        "plan-meta": "PLAN.meta.json",
+        "checks": "CHECKS.yaml",
+        "audit": "AUDIT_TRAIL.md",
+    }
+    artifact_name = artifact_map[artifact_choice]
+    try:
+        enforce_agent_role_for_artifact(artifact_name)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    ts = now_iso()
+    checks_updated = []
+
+    if artifact_choice == "plan":
+        artifact_path = os.path.join(task_dir, "PLAN.md")
+        meta_path = os.path.join(task_dir, "PLAN.meta.json")
+        write_file(artifact_path, content)
+        meta_extra = {}
+        for kv in (args.meta or []):
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                meta_extra[k.strip()] = v.strip()
+        meta = build_meta(artifact_name, task_id, "plan-skill")
+        if meta_extra:
+            meta["plan_meta"] = meta_extra
+        _atomic_write_text(meta_path, json.dumps(meta, indent=2) + "\n")
+        if args.checks:
+            checks_dict = parse_checks_arg(args.checks)
+            update_checks_yaml(task_dir, checks_dict)
+            checks_updated = list(checks_dict.keys())
+        result = finalize_write_result(artifact_path, meta_path, state_fields_updated=[], checks_updated=checks_updated)
+        result.update({"artifact": artifact_name, "task_id": task_id, "meta_written_at": meta.get("written_at")})
+
+    elif artifact_choice == "plan-meta":
+        artifact_path = os.path.join(task_dir, "PLAN.meta.json")
+        meta_path = artifact_path  # the artifact IS the meta file
+        meta = build_meta(artifact_name, task_id, "plan-skill")
+        # Merge passthrough fields
+        try:
+            input_data = json.loads(content) if content.strip() else {}
+        except json.JSONDecodeError:
+            input_data = {}
+        meta_extra = {}
+        for kv in (args.meta or []):
+            if "=" in kv:
+                k, v = kv.split("=", 1)
+                meta_extra[k.strip()] = v.strip()
+        if input_data:
+            meta["plan_meta"] = input_data
+        elif meta_extra:
+            meta["plan_meta"] = meta_extra
+        _atomic_write_text(artifact_path, json.dumps(meta, indent=2) + "\n")
+        if args.checks:
+            checks_dict = parse_checks_arg(args.checks)
+            update_checks_yaml(task_dir, checks_dict)
+            checks_updated = list(checks_dict.keys())
+        result = finalize_write_result(artifact_path, meta_path, state_fields_updated=[], checks_updated=checks_updated)
+        result.update({"artifact": artifact_name, "task_id": task_id, "meta_written_at": meta.get("written_at")})
+
+    elif artifact_choice == "checks":
+        artifact_path = os.path.join(task_dir, "CHECKS.yaml")
+        meta_path = os.path.join(task_dir, "CHECKS.meta.json")
+        write_file(artifact_path, content)
+        meta = build_meta(artifact_name, task_id, "plan-skill")
+        _atomic_write_text(meta_path, json.dumps(meta, indent=2) + "\n")
+        result = finalize_write_result(artifact_path, meta_path, state_fields_updated=[], checks_updated=[])
+        result.update({"artifact": artifact_name, "task_id": task_id, "meta_written_at": meta.get("written_at")})
+
+    elif artifact_choice == "audit":
+        if not args.append:
+            print("ERROR: --artifact audit requires --append flag", file=sys.stderr)
+            sys.exit(1)
+        # Validate the row
+        row_ok, row_err = _validate_audit_row(content)
+        if not row_ok:
+            print(f"ERROR: {row_err}", file=sys.stderr)
+            sys.exit(1)
+        artifact_path = os.path.join(task_dir, "AUDIT_TRAIL.md")
+        meta_path = os.path.join(task_dir, "AUDIT_TRAIL.meta.json")
+        if os.path.isfile(artifact_path):
+            existing = _read_text(artifact_path)
+        else:
+            existing = ""
+        if not existing.strip():
+            new_content = _AUDIT_TRAIL_HEADER + content.rstrip("\n") + "\n"
+        else:
+            # Check if a table exists already
+            if "|" in existing:
+                new_content = existing.rstrip("\n") + "\n" + content.rstrip("\n") + "\n"
+            else:
+                new_content = existing.rstrip("\n") + "\n\n" + _AUDIT_TRAIL_HEADER + content.rstrip("\n") + "\n"
+        write_file(artifact_path, new_content)
+        meta = build_meta(artifact_name, task_id, "plan-skill")
+        _atomic_write_text(meta_path, json.dumps(meta, indent=2) + "\n")
+        result = finalize_write_result(artifact_path, meta_path, state_fields_updated=[], checks_updated=[])
+        result.update({"artifact": artifact_name, "task_id": task_id, "meta_written_at": meta.get("written_at")})
+
+    else:
+        valid = ", ".join(sorted(artifact_map.keys()))
+        print(f"ERROR: unknown --artifact value {artifact_choice!r}. Valid: {valid}", file=sys.stderr)
+        sys.exit(1)
+
+    print(json.dumps(result, ensure_ascii=False))
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Argument parser
 # ---------------------------------------------------------------------------
 
@@ -832,6 +1026,31 @@ def build_parser():
     p_ds.add_argument("--task-id", required=True, help="Task slug, TASK__slug, or path")
     p_ds.add_argument("--summary", required=True, help="Summary of documentation changes")
 
+    # --- plan ---
+    p_pl = subparsers.add_parser("plan", help="Write PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md")
+    p_pl.add_argument("--task-dir", required=True, help="Absolute or relative path to task directory")
+    p_pl.add_argument(
+        "--artifact", required=True,
+        choices=["plan", "plan-meta", "checks", "audit"],
+        help="Which plan artifact to write: plan|plan-meta|checks|audit",
+    )
+    p_pl.add_argument(
+        "--input", required=True,
+        help="Path to input file, or '-' to read from stdin",
+    )
+    p_pl.add_argument(
+        "--append", action="store_true", default=False,
+        help="Append mode (only valid for --artifact audit)",
+    )
+    p_pl.add_argument(
+        "--checks", default=None,
+        help="Optional CHECKS.yaml updates, format: AC-001:PASS,AC-002:FAIL",
+    )
+    p_pl.add_argument(
+        "--meta", action="append", default=None,
+        help="Optional metadata passthrough as key=value (repeatable)",
+    )
+
     return parser
 
 
@@ -847,6 +1066,7 @@ DISPATCH = {
     "critic-intent": cmd_critic_intent,
     "handoff": cmd_handoff,
     "doc-sync": cmd_doc_sync,
+    "plan": cmd_plan,
 }
 
 
