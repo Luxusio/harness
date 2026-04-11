@@ -749,23 +749,88 @@ Follow the AskUserQuestion format from the Preamble above. Additional rules for 
 ## Required Outputs
 
 ### "NOT in scope" section
-List work considered and explicitly deferred, with one-line rationale each.
+
+Explicitly enumerate work that was considered and consciously deferred, so the user
+sees deferral decisions rather than assuming invisible omissions. Each entry must
+carry a one-line rationale tying the deferral to a principle or constraint.
+
+| Deferred item | Why deferred | Rationale (principle / constraint) | Follow-up home |
+|---------------|--------------|-------------------------------------|----------------|
+| [item] | [reason] | scope stability / risk / tooling gap / cost | TODOS.md / future task / accepted loss |
+
+Rules:
+- Every deferral must have a rationale. "Out of scope" alone is not a rationale.
+- If a deferral is unsafe to leave on the floor, escalate it to a blocker
+  instead of quietly listing it here.
+- Duplicates of items under "What already exists" are a smell — merge them.
 
 ### "What already exists" section
-List existing code/flows that partially solve sub-problems and whether the plan reuses them.
+
+Map every sub-problem the plan tackles to prior art inside the repo. The goal is to
+prevent rebuild-from-scratch decisions that bypass working code.
+
+| Sub-problem | Existing asset (file / module / CLI) | Reuse verdict | Notes |
+|-------------|--------------------------------------|---------------|-------|
+| [sub-problem] | [path / symbol] | reuse / refactor / rebuild (reason) | [risk or caveat] |
+
+Rules:
+- Every sub-problem must appear here even if the verdict is "none found".
+- A "rebuild" verdict must carry a concrete reason (API mismatch, licensing,
+  performance ceiling, etc.) — never "prefer fresh code".
+- Cross-reference each row to the corresponding Leverage Map row in 0B.
 
 ### "Dream state delta" section
-Where this plan leaves us relative to the 12-month ideal.
+
+State where this plan leaves the system relative to the 12-month ideal captured in
+0C. Three fields, no prose:
+
+- **Toward the ideal:** concrete ways this plan moves closer to the dream state.
+- **Orthogonal:** changes that neither help nor hurt the ideal trajectory.
+- **Away from the ideal:** decisions that add path dependency or create debt the
+  ideal must later unwind. Every entry here must have a justification (cost of
+  doing the ideal version now) and a rollback hook.
+
+If the "Away from the ideal" list is non-empty, raise each item as an explicit
+AskUserQuestion in the Phase 5 gate before the plan is approved.
 
 ### Error & Rescue Registry (from Section 2)
-Complete table of every method that can fail, every exception class, rescued status, rescue action, user impact.
+
+Reproduce the full registry that Section 2 builds. This is a deliverable, not a
+pointer. Every method that can fail must appear as a row.
+
+| Method / path | Exception class | Rescued? | Rescue action | User-visible impact | Owner |
+|---------------|-----------------|----------|---------------|---------------------|-------|
+| [method] | [class] | yes / no / partial | [action] | [impact] | [role] |
+
+Rules:
+- `Rescued? = no` with `User-visible impact = silent` is a **CRITICAL GAP**.
+  Flag, do not auto-approve.
+- `Rescued? = partial` must name which failure modes are covered and which are
+  not.
+- Every rescue action must map to a test in the Failure Modes Registry below.
 
 ### Failure Modes Registry
+
+Enumerate every codepath that can fail in a user-visible way. The registry is a
+full table, not a stub — "not applicable" is only valid after showing why the
+codepath cannot fail.
+
 ```
-  CODEPATH | FAILURE MODE   | RESCUED? | TEST? | USER SEES?     | LOGGED?
-  ---------|----------------|----------|-------|----------------|--------
+  CODEPATH | FAILURE MODE | LIKELIHOOD | BLAST RADIUS | RESCUED? | TEST? | USER SEES? | LOGGED? | CRITICAL GAP?
 ```
-Any row with RESCUED=N, TEST=N, USER SEES=Silent → **CRITICAL GAP**.
+
+Column rules:
+- **Likelihood**: high / med / low, backed by a concrete trigger description.
+- **Blast radius**: local / module / system / user-data-loss.
+- **Rescued?**: yes / no / partial — must match the Error & Rescue Registry.
+- **Test?**: yes / no / planned — `planned` is only valid with a referenced
+  test ID.
+- **User sees?**: concrete error / degraded experience / silent.
+- **Logged?**: yes / no — `no` + `Silent` is automatically a critical gap.
+- **Critical gap?**: yes if (Rescued=no OR partial) AND (Test=no OR User sees=silent).
+
+Any row with `CRITICAL GAP = yes` must be surfaced in the Phase 5 user gate as a
+User Challenge with a named mitigation option. Do not auto-approve critical gaps.
 
 ### TODOS.md updates
 Present each potential TODO as its own individual AskUserQuestion. Never batch TODOs — one per question. Never silently skip this step. Follow the format in `.claude/skills/review/TODOS-format.md`.
