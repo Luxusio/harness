@@ -178,6 +178,39 @@ If `workflow_locked: true` AND `maintenance_task: false`:
 
 Read in this order: `TASK_STATE.yaml`, `REQUEST.md` (if exists), existing `PLAN.md` (if exists), files listed in `must_read`.
 
+### 0.4.5 Prerequisite offer
+
+After reading the task pack, check whether the request is sufficiently scoped.
+
+**Trigger condition:** REQUEST.md is absent OR REQUEST.md exists but contains fewer than 15 non-empty lines.
+
+**If triggered:**
+
+1. Check whether an `office-hours` skill is available (look for `plugin/skills/office-hours/SKILL.md` or equivalent).
+
+2. **If `office-hours` is available**, emit one `AskUserQuestion`:
+   ```
+   The request appears brief (under 15 lines). A scope-sharpening prerequisite is available.
+
+   A) Run the office-hours prerequisite to sharpen scope before planning
+   B) Skip — proceed directly to planning with the current request
+   C) Clarify inline — I'll answer 3 goal-sharpening questions now
+   ```
+   - If A: invoke the office-hours skill, then resume from Phase 0.5 with the output.
+   - If B: proceed to Phase 0.5 immediately.
+   - If C: ask 3 inline goal-sharpening questions in a single AskUserQuestion, then proceed.
+
+3. **If `office-hours` is not available**, emit one `AskUserQuestion` with 3 goal-sharpening questions:
+   ```
+   The request appears brief. Please answer these 3 questions to sharpen scope:
+   1. What is the single most important outcome this plan should deliver?
+   2. What is explicitly NOT in scope (name at least one thing)?
+   3. What does success look like at the end of the first implementation step?
+   ```
+   Proceed after user responds.
+
+**Skip cleanly** if the trigger condition is not met — never hard-gate. Do not loop or re-ask after one response.
+
 ### 0.5 Restore point
 
 If a prior `PLAN.md` exists in the task directory, capture a restore point:
@@ -188,16 +221,41 @@ cp doc/harness/tasks/TASK__<id>/PLAN.md \
    doc/harness/tasks/TASK__<id>/restore-points/pre-plan-${_TS}.md
 ```
 
-### 0.6 Scope detection
-
+After copying, append a `## Re-run Instructions` section to the restore file:
 ```bash
-grep -rn "ui_scope\|frontend\|component\|css\|html\|react\|vue" \
-  doc/harness/tasks/TASK__<id>/ 2>/dev/null | head -5
-grep -rn "dx_scope\|api\|cli\|sdk\|devex\|developer experience" \
-  doc/harness/tasks/TASK__<id>/ 2>/dev/null | head -5
+cat >> doc/harness/tasks/TASK__<id>/restore-points/pre-plan-${_TS}.md << 'EOF'
+
+## Re-run Instructions
+
+To restore this plan: copy this file back over PLAN.md in the task directory.
+Then re-run the plan skill with the same task slug to resume from this state.
+The restore point was captured at: ${_TS}
+EOF
 ```
 
-Set `ui_scope=true` if matches found (or if task pack already sets it). Set `dx_scope=true` similarly.
+Record the relative restore point path (e.g. `restore-points/pre-plan-${_TS}.md`) in memory for use in Phase 6.2.
+
+### 0.6 Scope detection
+
+Read the task pack text (TASK_STATE.yaml + REQUEST.md) and scan for keywords. Use the rules below — do NOT run grep bash commands for scope detection.
+
+**UI scope keywords:** `ui_scope`, `frontend`, `component`, `css`, `html`, `react`, `vue`, `design system`, `stylesheet`, `layout`, `visual`
+
+**DX scope keywords:** `dx_scope`, `api`, `cli`, `sdk`, `devex`, `developer experience`, `ergonomics`, `tooling`, `integration`, `plugin`
+
+**2+ match threshold:** Set `ui_scope=true` only if 2 or more distinct UI keywords appear in the task pack text. A single keyword match is insufficient. Apply the same 2+ match threshold for `dx_scope`.
+
+**False-positive exclusions (do not count as matches):**
+- `\bpage\b` alone (e.g. "page 3", "next page") — does not count as a UI keyword
+- `\bUI\b` as a standalone acronym in a non-design context (e.g. "UI thread", "UI process") — does not count unless paired with design intent
+- `\bapi\b` in "API keys" or "API credentials" context without developer-tool intent — does not count as DX
+- `\bcli\b` in "CLI arguments" for a non-developer-facing tool — does not count unless the product exposes the CLI to developers
+
+**Structural DX triggers (override threshold — set dx_scope=true immediately):**
+- "product IS a developer tool" — any statement that the primary artifact is a CLI, SDK, plugin, or developer framework
+- "AI agent is primary user" — any statement that the consumer of the output is an AI model or agent harness
+
+If the task pack already sets `ui_scope: true` or `dx_scope: true`, honour that value without re-evaluation.
 
 ### 0.7 broad-build planning_mode branch
 
@@ -286,6 +344,24 @@ python3 plugin-legacy/scripts/write_artifact.py plan --artifact audit \
   --append
 ```
 
+### Phase-transition summary (end of Phase 1)
+
+Emit a summary block before moving to Phase 2:
+```
+Phase 1 consensus: confirmed=<N> / disagree=<N> / adversarial=<N>
+User Challenge items queued: <N>
+```
+
+### Pre-Phase 2 checklist
+
+Before starting Phase 2, verify these Phase 1 outputs exist:
+- [ ] Premise-confirmation AskUserQuestion answered by user
+- [ ] CEO consensus table written to AUDIT_TRAIL.md
+- [ ] Phase-transition summary emitted above
+- [ ] All User Challenge items recorded (even if N=0)
+
+If any item is missing, produce it before proceeding to Phase 2.
+
 ---
 
 ## Phase 2: Design Review
@@ -323,6 +399,23 @@ python3 plugin-legacy/scripts/write_artifact.py plan --artifact audit \
   --input /tmp/design_audit_rows.txt \
   --append
 ```
+
+### Phase-transition summary (end of Phase 2)
+
+Emit a summary block before moving to Phase 3:
+```
+Phase 2 consensus: confirmed=<N> / disagree=<N> / adversarial=<N>
+User Challenge items queued: <N>
+```
+
+### Pre-Phase 3 checklist
+
+Before starting Phase 3, verify these Phase 2 outputs exist (skip if Phase 2 was not run):
+- [ ] Design consensus table written to AUDIT_TRAIL.md (or Phase 2 skipped — note reason)
+- [ ] Phase-transition summary emitted above
+- [ ] All User Challenge items recorded (even if N=0)
+
+If any item is missing, produce it before proceeding to Phase 3.
 
 ---
 
@@ -364,6 +457,23 @@ python3 plugin-legacy/scripts/write_artifact.py plan --artifact audit \
   --append
 ```
 
+### Phase-transition summary (end of Phase 3)
+
+Emit a summary block before moving to Phase 4:
+```
+Phase 3 consensus: confirmed=<N> / disagree=<N> / adversarial=<N>
+User Challenge items queued: <N>
+```
+
+### Pre-Phase 4 checklist
+
+Before starting Phase 4, verify these Phase 3 outputs exist:
+- [ ] Engineering consensus table written to AUDIT_TRAIL.md
+- [ ] Phase-transition summary emitted above
+- [ ] All User Challenge items recorded (even if N=0)
+
+If any item is missing, produce it before proceeding to Phase 4.
+
 ---
 
 ## Phase 4: DX Review
@@ -402,6 +512,23 @@ python3 plugin-legacy/scripts/write_artifact.py plan --artifact audit \
   --input /tmp/dx_audit_rows.txt \
   --append
 ```
+
+### Phase-transition summary (end of Phase 4)
+
+Emit a summary block before moving to Phase 4.5 / Phase 5:
+```
+Phase 4 consensus: confirmed=<N> / disagree=<N> / adversarial=<N>
+User Challenge items queued: <N>
+```
+
+### Pre-Phase 5 checklist
+
+Before starting Phase 5, verify these Phase 4 outputs exist (skip if Phase 4 was not run):
+- [ ] DX consensus table written to AUDIT_TRAIL.md (or Phase 4 skipped — note reason)
+- [ ] Phase-transition summary emitted above
+- [ ] All User Challenge items recorded (even if N=0)
+
+If any item is missing, produce it before proceeding to Phase 5.
 
 ---
 
@@ -474,6 +601,25 @@ Continue to Phase 5. Outside Voice is informational-only — it is not a gate.
 
 **Always runs.**
 
+### 5.0 Pre-Gate Verification
+
+Before collecting decisions, verify all required phase outputs are present. This is a max-2-retries gate.
+
+Required outputs checklist:
+- [ ] **Phase 1:** Premise challenge named and user-confirmed; CEO consensus table in AUDIT_TRAIL.md; phase-transition summary emitted
+- [ ] **Phase 2 (if ran):** Design consensus table in AUDIT_TRAIL.md; phase-transition summary emitted
+- [ ] **Phase 3:** Engineering consensus table in AUDIT_TRAIL.md; phase-transition summary emitted
+- [ ] **Phase 4 (if ran):** DX consensus table in AUDIT_TRAIL.md; phase-transition summary emitted
+- [ ] **Audit trail:** AUDIT_TRAIL.md has at least one row per completed phase
+
+**Retry rule:** If any required output is missing, go back and produce it (up to 2 retries). After 2 retries, proceed to Phase 5.1 with a warning block listing all incomplete items:
+
+```
+⚠ Pre-Gate Warning: proceeding with incomplete phase outputs.
+Missing: <list each incomplete item>
+These gaps may reduce plan quality. Reviewer should flag accordingly.
+```
+
 ### 5.1 Collect all decisions
 
 Gather from the consensus tables across Phases 1-4:
@@ -491,7 +637,36 @@ Auto-decided (Taste):
 - ...
 ```
 
+### 5.2.5 Cross-Phase Themes
+
+Scan each phase consensus table (Phases 1-4) for recurring concerns. Group findings by topic. Flag any topic that appears in 2 or more phase consensus tables as a high-confidence signal.
+
+Instructions:
+1. For each phase that ran, extract the topic/dimension column from its consensus table.
+2. Normalise topics (lowercase, trim) and group identical or closely related topics across phases.
+3. Any topic appearing in ≥2 phases is a Cross-Phase Theme.
+4. Present Cross-Phase Themes as a separate section before the User Challenge gate:
+
+```
+Cross-Phase Themes (recurring in 2+ phases):
+- <theme>: appeared in Phase <N>, Phase <N> — <brief description of the concern>
+- ...
+(none — no topics recurred across phases)
+```
+
+These themes are high-confidence signals for the user. Surface them even if none are User Challenge items. They inform prioritisation and should be noted in the PLAN.md `Cross-phase themes` section.
+
 ### 5.3 User Challenge gate
+
+**Cognitive load rules (apply before emitting any AskUserQuestion):**
+
+- **0 challenges:** Skip the User Challenges section entirely. Do not emit any AskUserQuestion for this section. Proceed directly to 5.4.
+- **1-7 challenges:** Present as a flat list. Emit one `AskUserQuestion` per challenge, in order. Do not batch.
+- **8+ challenges:** Group challenges by phase (Phase 1 challenges, Phase 2 challenges, etc.). Emit a warning at the top before the first question:
+  ```
+  ⚠ High ambiguity (<N> challenges identified). Questions are grouped by phase to reduce cognitive load. One question per challenge.
+  ```
+  Then emit one `AskUserQuestion` per challenge, batched by phase (all Phase 1 challenges first, then Phase 2, etc.).
 
 For each User Challenge item (in order), emit a separate `AskUserQuestion`. Do not batch them.
 
@@ -626,7 +801,13 @@ Otherwise, materialise the plan content from in-memory review state into `/tmp/p
 
 Write the complete PLAN.md content to `/tmp/plan_content.md` incorporating all review decisions.
 
-Required sections: objective, scope in, scope out, target files/surfaces, acceptance criteria (stable IDs AC-001+), verification contract, doc-sync expectation, risk/rollback (if `risk_level: high`), next implementation step.
+**Restore point comment:** If a restore point was captured in Phase 0.5, prepend a single-line HTML comment as the very first line of `/tmp/plan_content.md` before writing any other content:
+```
+<!-- plan restore point: restore-points/pre-plan-<timestamp>.md -->
+```
+Use the relative path recorded in Phase 0.5. If no restore point exists, omit this line.
+
+Required sections: objective, scope in, scope out, `NOT in scope`, `What already exists`, target files/surfaces, acceptance criteria (stable IDs AC-001+), verification contract, `Error & Rescue Registry`, `Failure Modes Registry`, `Dream state delta`, `Cross-phase themes`, doc-sync expectation, risk/rollback (if `risk_level: high`), next implementation step.
 
 Do not include harness policy boilerplate. Keep it concise and executable.
 
