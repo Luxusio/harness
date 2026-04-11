@@ -115,42 +115,64 @@ smarter on their codebase over time.
 
 ## Step 0: Nuclear Scope Challenge + Mode Selection
 
-### 0A. Premise Challenge
+### 0A. **Premise Challenge**
+
+Extract the top 3-5 premises the plan depends on. Classify each as one of:
+- **stated** — explicitly written in the plan
+- **assumed** — implied but not written
+- **proven** — backed by data, prior art, or existing code
+- **unknown** — no evidence either way
+
+Then rank by blast radius: if this premise turns out to be wrong, how much of the plan breaks?
+
+| # | Premise | Classification | Blast radius if wrong |
+|---|---------|---------------|----------------------|
+| 1 | [premise] | stated / assumed / proven / unknown | high / med / low |
+| 2 | | | |
+| 3 | | | |
+
+Surface the top-blast-radius unknown or assumed premises to the user before proceeding.
+
+Also run:
 1. Is this the right problem to solve? Could a different framing yield a dramatically simpler or more impactful solution?
 2. What is the actual user/business outcome? Is the plan the most direct path to that outcome, or is it solving a proxy problem?
 3. What would happen if we did nothing? Real pain point or hypothetical one?
 
-### 0B. Existing Code Leverage
-1. What existing code already partially or fully solves each sub-problem? Map every sub-problem to existing code. Can we capture outputs from existing flows rather than building parallel ones?
-2. Is this plan rebuilding anything that already exists? If yes, explain why rebuilding is better than refactoring.
+### 0B. **Existing Code Leverage Map**
 
-### 0C. Dream State Mapping
+Decompose the plan into sub-problems. For each sub-problem, list existing code that could be reused. Populate this table:
+
+| Sub-problem | Existing candidate | Reuse verdict |
+|-------------|-------------------|---------------|
+| [sub-problem] | [file / class / function] | reuse / refactor / rebuild (reason) |
+
+Rules:
+- Every sub-problem must have an entry. "None found" is a valid verdict but must be explicit.
+- Is this plan rebuilding anything that already exists? If yes, explain why rebuilding is better than refactoring.
+- Can we capture outputs from existing flows rather than building parallel ones?
+
+### 0C. **Dream State**
+
 Describe the ideal end state of this system 12 months from now. Does this plan move toward that state or away from it?
+
 ```
   CURRENT STATE                  THIS PLAN                  12-MONTH IDEAL
-  [describe]          --->       [describe delta]    --->    [describe target]
+  [describe current              [describe what this         [describe the target
+   situation, pain,               plan adds/changes]          state 12 months out]
+   limitations]
 ```
 
-### 0C-bis. Implementation Alternatives (MANDATORY)
+Flag any decision in the plan that moves away from the 12-month ideal. Flag any decision that creates path dependency making the ideal harder to reach.
+
+### 0C-bis. **Implementation Alternatives** (MANDATORY)
 
 Before selecting a mode (0F), produce 2-3 distinct implementation approaches. This is NOT optional — every plan must consider alternatives.
 
-For each approach:
-```
-APPROACH A: [Name]
-  Summary: [1-2 sentences]
-  Effort:  [S/M/L/XL]
-  Risk:    [Low/Med/High]
-  Pros:    [2-3 bullets]
-  Cons:    [2-3 bullets]
-  Reuses:  [existing code/patterns leveraged]
-
-APPROACH B: [Name]
-  ...
-
-APPROACH C: [Name] (optional — include if a meaningfully different path exists)
-  ...
-```
+| Approach | Effort | Risk | Pros | Cons |
+|----------|--------|------|------|------|
+| A: [Name] | S/M/L/XL | Low/Med/High | [key pros] | [key cons] |
+| B: [Name] | | | | |
+| C: [Name — optional] | | | | |
 
 **RECOMMENDATION:** Choose [X] because [one-line reason mapped to engineering preferences].
 
