@@ -3,7 +3,7 @@ summary: Agents must use CLI tool for all protected artifact writes
 status: active
 updated: 2026-03-31
 freshness: current
-verified_at: 2026-03-31T00:00:00Z
+verified_at: 2026-04-11T00:00:00Z
 derived_from:
   - plugin/scripts/write_artifact.py
   - plugin/CLAUDE.md
@@ -29,3 +29,4 @@ Agents must NOT output artifact file content inline in their responses. Inline w
 | `critic-document` | CRITIC__document.md + meta.json | critic-document |
 | `handoff` | HANDOFF.md + meta.json | developer |
 | `doc-sync` | DOC_SYNC.md + meta.json | writer |
+| `plan` | PLAN.md + PLAN.meta.json + CHECKS.yaml + AUDIT_TRAIL.md | plan-skill |
