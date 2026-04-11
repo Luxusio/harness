@@ -32,7 +32,7 @@ allowed-tools:
 | Design Review | \`/plan-design-review\` | UI/UX gaps | 0 | — | — |
 | DX Review | \`/plan-devex-review\` | Developer experience gaps | 0 | — | — |
 
-**VERDICT:** NO REVIEWS YET — run \`/autoplan\` for full review pipeline, or individual reviews above.
+**VERDICT:** NO REVIEWS YET — run \`harness:plan\` for the full 7-phase review pipeline, or individual reviews above.
 \`\`\`
 
 ## DX First Principles
