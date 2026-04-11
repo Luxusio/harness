@@ -2,7 +2,7 @@
 tags: [req, process, plan-skill, review-pipeline]
 summary: plan skill must run the 7-phase dual-voice review pipeline; old linear procedure is retired.
 freshness: current
-updated: 2026-04-10
+updated: 2026-04-11
 verified_at: 2026-04-11T00:00:00Z
 
 ## Requirement
@@ -18,7 +18,9 @@ verified_at: 2026-04-11T00:00:00Z
 | 2 | Design Review | ui_scope: true only |
 | 3 | Engineering Review | always |
 | 4 | DX Review | dx_scope: true only |
+| 4.5 | Outside Voice — Final Plan Challenge | always (skipped in light) |
 | 5 | Final Approval Gate | always |
+| 5.5 | Spec Review Loop | always (skipped in light) |
 | 6 | Write PLAN.md + CHECKS.yaml + PLAN.meta.json | always |
 
 ## Invariants
@@ -28,6 +30,7 @@ verified_at: 2026-04-11T00:00:00Z
 - **User Challenge gate**: both voices must independently agree that the user's direction should change for an item to become a User Challenge. Each User Challenge gets its own AskUserQuestion — never batched.
 - **Premise gate**: Phase 1.1 is the one mandatory user interaction before Phase 5. Premises are never auto-decided.
 - **6 Decision Principles**: applied to every contested item; first applicable principle wins. Conflict resolution priority varies by phase (CEO: P1+P2, Eng: P5+P3, Design: P5+P1).
+- **Adversarial review layers**: Phase 4.5 dispatches a whole-plan fresh-context reviewer between Phase 4 and Phase 5. Phase 5.5 runs a closed adversarial review loop (max 3 rounds, 5 dimensions) after Phase 5 user approval clears, before Phase 6 writes PLAN.md. Both layers fail non-blockingly; findings are informational unless the user accepts them.
 
 ## Harness integration constraints
 
