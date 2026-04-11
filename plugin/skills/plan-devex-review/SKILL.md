@@ -805,6 +805,7 @@ The persona card from Step 0A. This goes at the top of the plan's DX section.
 
 ### Developer Empathy Narrative
 The first-person narrative from Step 0B, updated with user corrections.
+Use the template from the **Empathy Narrative** section below. Mandatory output — not optional.
 
 ### Competitive DX Benchmark
 The benchmark table from Step 0C, updated with the product's post-review scores.
@@ -814,6 +815,7 @@ The chosen delivery vehicle from Step 0D with implementation requirements.
 
 ### Developer Journey Map
 The journey map from Step 0F, updated with all friction point resolutions.
+Produce the full 9-stage table from the **Developer Journey Map** section below.
 
 ### First-Time Developer Confusion Report
 The roleplay report from Step 0G, annotated with which items were addressed.
@@ -839,37 +841,10 @@ Options: **A)** Add to TODOS.md **B)** Skip **C)** Build it now
 
 ### DX Scorecard
 
-```
-+====================================================================+
-|              DX PLAN REVIEW — SCORECARD                             |
-+====================================================================+
-| Dimension            | Score  | Prior  | Trend  |
-|----------------------|--------|--------|--------|
-| Getting Started      | __/10  | __/10  | __ ↑↓  |
-| API/CLI/SDK          | __/10  | __/10  | __ ↑↓  |
-| Error Messages       | __/10  | __/10  | __ ↑↓  |
-| Documentation        | __/10  | __/10  | __ ↑↓  |
-| Upgrade Path         | __/10  | __/10  | __ ↑↓  |
-| Dev Environment      | __/10  | __/10  | __ ↑↓  |
-| Community            | __/10  | __/10  | __ ↑↓  |
-| DX Measurement       | __/10  | __/10  | __ ↑↓  |
-+--------------------------------------------------------------------+
-| TTHW                 | __ min | __ min | __ ↑↓  |
-| Competitive Rank     | [Champion/Competitive/Needs Work/Red Flag]   |
-| Magical Moment       | [designed/missing] via [delivery vehicle]    |
-| Product Type         | [type]                                      |
-| Mode                 | [EXPANSION/POLISH/TRIAGE]                    |
-| Overall DX           | __/10  | __/10  | __ ↑↓  |
-+====================================================================+
-| DX PRINCIPLE COVERAGE                                               |
-| Zero Friction      | [covered/gap]                                  |
-| Learn by Doing     | [covered/gap]                                  |
-| Fight Uncertainty  | [covered/gap]                                  |
-| Opinionated + Escape Hatches | [covered/gap]                       |
-| Code in Context    | [covered/gap]                                  |
-| Magical Moments    | [covered/gap]                                  |
-+====================================================================+
-```
+Produce the 8-dimension scorecard from the **DX Scorecard** section below.
+Each dimension: score 0-10, finding, recommendation.
+
+Also include the TTHW row from the **TTHW Assessment** section below.
 
 If all passes 8+: "DX plan is solid. Developers will have a good experience."
 If any below 6: Flag as critical DX debt with specific impact on adoption.
