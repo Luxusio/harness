@@ -334,21 +334,6 @@ either at score >= 8, or all remaining sub-10 gaps are tagged
 
 **Anti-skip rule:** Never condense, abbreviate, or skip any review pass (1-7) regardless of plan type (strategy, spec, code, infra). Every pass in this skill exists for a reason. "This is a strategy doc so design passes don't apply" is always wrong — design gaps are where implementation breaks down. If a pass genuinely has zero findings, say "No issues found" and move on — but you must evaluate it.
 
-## Prior Learnings
-
-Search for relevant learnings from previous sessions:
-
-```bash
-echo "CROSS_PROJECT: $_CROSS_PROJ"
-if [ "$_CROSS_PROJ" = "true" ]; then
-else
-fi
-```
-
-If `CROSS_PROJECT` is `unset` (first time): Use AskUserQuestion:
-
-smarter on their codebase over time.
-
 ### Pass 1: Information Architecture
 Rate 0-10: Does the plan define what the user sees first, second, third?
 FIX TO 10: Add information hierarchy to the plan. Include ASCII diagram of screen/page structure and navigation flow. Apply "constraint worship" — if you can only show 3 things, which 3?
@@ -595,12 +580,82 @@ Format example:
 
 After generating, ask: "Does this match what you had in mind? Any layout changes before we review?"
 
+## Shared Preamble
+
+This sub-skill shares common sections with the main plan skill (`plugin/skills/plan/SKILL.md`). Refer there for full details on:
+
+- **Voice/Tone** — Garry Tan style: short sentences, no hedging, active voice, technical precision.
+- **Completeness Principle (Boil the Lake)** — Every section must be fully completed. No TBD, no placeholders. If a section produces fewer than 3 sentences, expand it.
+- **AskUserQuestion Format** — Task/Phase/Step header required. Completeness scoring (X/10) per option. Effort reference table included.
+- **Search Before Building** — 3-layer knowledge hierarchy (tried-and-true → new-and-popular → first-principles). Prize first-principles above all.
+- **Context Recovery** — Check AUDIT_TRAIL.md for prior session state. Resume from last completed phase.
+- **Repo Ownership** — Flag defects outside task scope. In collaborative mode, flag but don't fix.
+
+## Prior Learnings
+
+Before review, load relevant prior learnings:
+
+```bash
+if [ -f ".harness/learnings.jsonl" ]; then
+  grep -i "design\|ui\|ux\|component\|visual" .harness/learnings.jsonl | tail -5
+fi
+```
+
+Incorporate relevant design-related operational knowledge. Log count.
+
+## Review Readiness Dashboard
+
+Before starting review, emit a readiness dashboard:
+
+```
+## Review Readiness
+
+| Item | Status |
+|------|--------|
+| PLAN.md exists | yes/no |
+| UI scope detected | yes/no |
+| Design system referenced | yes/no |
+| Component inventory | present/missing |
+| Prior learnings loaded | N entries |
+
+Ready to proceed: yes/no
+```
+
+## Plan File Review Report
+
+After review completes, emit a summary:
+
+```
+## Design Review Report
+
+| Metric | Value |
+|--------|-------|
+| Dimensions scored | N |
+| Average score | X.X/10 |
+| Findings (high) | N |
+| Findings (med) | N |
+| Findings (low) | N |
+| Fix-to-10 paths | N |
+```
+
+## Capture Learnings
+
+After review, log operational discoveries with file metadata:
+
+```bash
+_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+mkdir -p .harness 2>/dev/null || true
+echo '{"ts":"'"$_TS"'","type":"operational","skill":"plan-design-review","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"DESCRIPTION","files":["path/to/file1","path/to/file2"]}' >> .harness/learnings.jsonl 2>/dev/null || true
+```
+
+Only log genuine discoveries. Skip obvious facts and transient errors.
+
 ## REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | \`/plan-ceo-review\` | Scope & strategy | {runs} | {status} | {findings} |
-| Codex Review | \`/codex review\` | Independent 2nd opinion | {runs} | {status} | {findings} |
 | Eng Review | \`/plan-eng-review\` | Architecture & tests (required) | {runs} | {status} | {findings} |
 | Design Review | \`/plan-design-review\` | UI/UX gaps | {runs} | {status} | {findings} |
 | DX Review | \`/plan-devex-review\` | Developer experience gaps | {runs} | {status} | {findings} |
