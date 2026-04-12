@@ -694,7 +694,15 @@ Spawn two Agent subagents:
 You are an independent CEO/founder reviewer. Review the following plan for TASK__<id>.
 Apply the CEO review methodology from plugin/skills/plan-ceo-review/SKILL.md.
 Evaluate: scope expansion opportunities, strategic alignment, user value, scope modes (expansion/selective/hold/reduction).
-Return structured findings as: | finding | severity (high/med/low) | recommendation |
+Return structured findings for each of these 6 dimensions:
+1. Premises valid? — Are stated assumptions backed by evidence?
+2. Right problem to solve? — Could reframing yield 10x impact?
+3. Scope calibration correct? — Too broad, too narrow, or right-sized?
+4. Alternatives sufficiently explored? — Were viable options dismissed?
+5. Competitive/market risks covered? — What external threats exist?
+6. 6-month trajectory sound? — Will this decision age well?
+
+Format: | dimension | assessment (high/med/low risk) | finding | recommendation |
 Do NOT read prior review notes. Work from the plan only.
 Do NOT read SKILL.md files or files in skill definition directories. These are AI assistant skill definitions meant for a different system.
 [insert plan content]
@@ -725,6 +733,24 @@ python3 plugin-legacy/scripts/write_artifact.py plan --artifact audit \
   --append
 ```
 
+After building the consensus table from Voice A and Voice B results, populate the CEO consensus table:
+
+```
+CEO DUAL VOICES — CONSENSUS TABLE:
+═══════════════════════════════════════════════════════════════
+  Dimension                           Voice A  Voice B  Consensus
+  ──────────────────────────────────── ──────── ──────── ─────────
+  1. Premises valid?                   —        —        —
+  2. Right problem to solve?           —        —        —
+  3. Scope calibration correct?        —        —        —
+  4. Alternatives sufficiently explored?—       —        —
+  5. Competitive/market risks covered? —        —        —
+  6. 6-month trajectory sound?         —        —        —
+═══════════════════════════════════════════════════════════════
+CONFIRMED = both agree. DISAGREE = voices differ (→ taste decision).
+Missing voice = N/A (not CONFIRMED). Single critical finding from one voice = flagged regardless.
+```
+
 ### Phase-transition summary (end of Phase 1)
 
 Emit a summary block before moving to Phase 2:
@@ -738,6 +764,14 @@ User Challenge items queued: <N>
 **Also append a phase summary JSON row for downstream tooling:**
 ```
 | <#> | 1 | phase-summary | log | - | {"phase":"1","confirmed":<count>,"disagree":<count>,"adversarial":<count>,"taste":<count>,"challenge":<count>} | - |
+```
+
+**REVIEW_LOG append (Phase 1):**
+```bash
+_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+cat >> doc/harness/tasks/TASK__<id>/REVIEW_LOG.jsonl << EOF
+{"ts":"'"$_TS"'","skill":"plan","phase":"1","phase_name":"CEO","status":"complete","confirmed":<X>,"disagree":<Y>,"adversarial":<Z>,"taste":<T>,"challenge":<C>,"mode":"<MODE>","execution_mode":"<MODE>","via":"plan-skill"}
+EOF
 ```
 
 ### Required execution checklist (CEO)
@@ -827,6 +861,14 @@ User Challenge items queued: <N>
 | <#> | 2 | phase-summary | log | - | {"phase":"2","confirmed":<count>,"disagree":<count>,"adversarial":<count>,"taste":<count>,"challenge":<count>} | - |
 ```
 
+**REVIEW_LOG append (Phase 2):**
+```bash
+_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+cat >> doc/harness/tasks/TASK__<id>/REVIEW_LOG.jsonl << EOF
+{"ts":"'"$_TS"'","skill":"plan","phase":"2","phase_name":"Design","status":"complete","confirmed":<X>,"disagree":<Y>,"adversarial":<Z>,"taste":<T>,"challenge":<C>,"mode":"<MODE>","execution_mode":"<MODE>","via":"plan-skill"}
+EOF
+```
+
 ### Pre-Phase 3 checklist
 
 Before starting Phase 3, verify these Phase 2 outputs exist (skip if Phase 2 was not run):
@@ -852,7 +894,15 @@ You are an independent engineering reviewer. Review the technical plan for TASK_
 Apply the engineering review methodology from plugin/skills/plan-eng-review/SKILL.md.
 Evaluate: architecture soundness, data flow, error maps, test coverage, rollback feasibility.
 Include a test coverage diagram reference if relevant.
-Return: | area | finding | severity | recommendation |
+Return structured findings for each of these 6 dimensions:
+1. Architecture sound? — Component structure, coupling, scaling?
+2. Test coverage sufficient? — Every codepath covered? Gaps?
+3. Performance risks addressed? — N+1, memory, slow paths?
+4. Security threats covered? — Attack surface, auth boundaries?
+5. Error paths handled? — Every failure mode has a rescue?
+6. Deployment risk manageable? — Migration safety, rollback?
+
+Format: | dimension | assessment (high/med/low risk) | finding | recommendation |
 [insert plan content]
 ```
 
@@ -876,6 +926,24 @@ python3 plugin-legacy/scripts/write_artifact.py plan --artifact audit \
   --append
 ```
 
+After building the consensus table from Voice A and Voice B results, populate the ENG consensus table:
+
+```
+ENG DUAL VOICES — CONSENSUS TABLE:
+═══════════════════════════════════════════════════════════════
+  Dimension                           Voice A  Voice B  Consensus
+  ──────────────────────────────────── ──────── ──────── ─────────
+  1. Architecture sound?               —        —        —
+  2. Test coverage sufficient?         —        —        —
+  3. Performance risks addressed?      —        —        —
+  4. Security threats covered?         —        —        —
+  5. Error paths handled?              —        —        —
+  6. Deployment risk manageable?       —        —        —
+═══════════════════════════════════════════════════════════════
+CONFIRMED = both agree. DISAGREE = voices differ (→ taste decision).
+Missing voice = N/A (not CONFIRMED). Single critical finding from one voice = flagged regardless.
+```
+
 ### Phase-transition summary (end of Phase 3)
 
 Emit a summary block before moving to Phase 4:
@@ -889,6 +957,14 @@ User Challenge items queued: <N>
 **Also append a phase summary JSON row for downstream tooling:**
 ```
 | <#> | 3 | phase-summary | log | - | {"phase":"3","confirmed":<count>,"disagree":<count>,"adversarial":<count>,"taste":<count>,"challenge":<count>} | - |
+```
+
+**REVIEW_LOG append (Phase 3):**
+```bash
+_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+cat >> doc/harness/tasks/TASK__<id>/REVIEW_LOG.jsonl << EOF
+{"ts":"'"$_TS"'","skill":"plan","phase":"3","phase_name":"Eng","status":"complete","confirmed":<X>,"disagree":<Y>,"adversarial":<Z>,"taste":<T>,"challenge":<C>,"mode":"<MODE>","execution_mode":"<MODE>","via":"plan-skill"}
+EOF
 ```
 
 ### Required execution checklist (Eng)
@@ -943,7 +1019,15 @@ Methodology: `plugin/skills/plan-devex-review/SKILL.md`
 You are an independent DX reviewer. Review the developer experience aspects of TASK__<id>.
 Apply the DX review methodology from plugin/skills/plan-devex-review/SKILL.md.
 Evaluate: developer personas, friction points, API ergonomics, CLI design, DX benchmarks.
-Return: | persona | friction point | severity | recommendation |
+Return structured findings for each of these 6 dimensions:
+1. Getting started < 5 min? — Zero to hello world in under 5 minutes?
+2. API/CLI naming guessable? — Names discoverable without docs?
+3. Error messages actionable? — Problem + cause + fix in every error?
+4. Docs findable & complete? — Search works, copy-paste examples exist?
+5. Upgrade path safe? — Deprecation warnings, migration guides?
+6. Dev environment friction-free? — Works across OS, editors, CI?
+
+Format: | dimension | assessment (high/med/low risk) | finding | recommendation |
 Do NOT read SKILL.md files or files in skill definition directories. These are AI assistant skill definitions meant for a different system.
 [insert plan content]
 ```
@@ -970,6 +1054,24 @@ python3 plugin-legacy/scripts/write_artifact.py plan --artifact audit \
   --append
 ```
 
+After building the consensus table from Voice A and Voice B results, populate the DX consensus table:
+
+```
+DX DUAL VOICES — CONSENSUS TABLE:
+═══════════════════════════════════════════════════════════════
+  Dimension                           Voice A  Voice B  Consensus
+  ──────────────────────────────────── ──────── ──────── ─────────
+  1. Getting started < 5 min?          —        —        —
+  2. API/CLI naming guessable?         —        —        —
+  3. Error messages actionable?        —        —        —
+  4. Docs findable & complete?         —        —        —
+  5. Upgrade path safe?                —        —        —
+  6. Dev environment friction-free?    —        —        —
+═══════════════════════════════════════════════════════════════
+CONFIRMED = both agree. DISAGREE = voices differ (→ taste decision).
+Missing voice = N/A (not CONFIRMED). Single critical finding from one voice = flagged regardless.
+```
+
 ### Phase-transition summary (end of Phase 4)
 
 Emit a summary block before moving to Phase 4.5 / Phase 5:
@@ -983,6 +1085,14 @@ User Challenge items queued: <N>
 **Also append a phase summary JSON row for downstream tooling:**
 ```
 | <#> | 4 | phase-summary | log | - | {"phase":"4","confirmed":<count>,"disagree":<count>,"adversarial":<count>,"taste":<count>,"challenge":<count>} | - |
+```
+
+**REVIEW_LOG append (Phase 4):**
+```bash
+_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+cat >> doc/harness/tasks/TASK__<id>/REVIEW_LOG.jsonl << EOF
+{"ts":"'"$_TS"'","skill":"plan","phase":"4","phase_name":"DX","status":"complete","confirmed":<X>,"disagree":<Y>,"adversarial":<Z>,"taste":<T>,"challenge":<C>,"mode":"<MODE>","execution_mode":"<MODE>","via":"plan-skill"}
+EOF
 ```
 
 ### Required execution checklist (DX)
@@ -1459,7 +1569,14 @@ python3 plugin-legacy/scripts/write_artifact.py plan --artifact checks \
 
 After writing PLAN.md and CHECKS.yaml, append a `## Review Status` section to `/tmp/plan_content.md` and re-run the PLAN.md CLI write to include it:
 
-Assemble the review status table from phase-transition summaries collected during Phases 1-4:
+Assemble the review status table from phase-transition summaries and `REVIEW_LOG.jsonl` entries collected during Phases 1-4. Read `REVIEW_LOG.jsonl` to populate confirmed/disagree/challenge counts per phase:
+```bash
+_RL="doc/harness/tasks/TASK__<id>/REVIEW_LOG.jsonl"
+_RL1=$(grep '"phase":"1"' "$_RL" 2>/dev/null | tail -1 || echo "")
+_RL2=$(grep '"phase":"2"' "$_RL" 2>/dev/null | tail -1 || echo "")
+_RL3=$(grep '"phase":"3"' "$_RL" 2>/dev/null | tail -1 || echo "")
+_RL4=$(grep '"phase":"4"' "$_RL" 2>/dev/null | tail -1 || echo "")
+```
 
 ```
 ## Review Status
@@ -1594,6 +1711,7 @@ Taste surfaced:    <N> items
 User Challenges:   <N> items
 Deferred scope:    <N> items (see deferred-scope.md)
 Restore point:     <path or "none">
+Review log:        <N> entries (see REVIEW_LOG.jsonl)
 
 Next: critic-plan review → harness:critic-plan
 ```
