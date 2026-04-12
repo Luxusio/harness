@@ -16,6 +16,58 @@ This skill implements the harness-native 7-phase dual-voice review pipeline for 
 - **Write via CLI only.** PLAN.md, PLAN.meta.json, CHECKS.yaml, and AUDIT_TRAIL.md are written exclusively through `python3 plugin-legacy/scripts/write_artifact.py plan --artifact ...`. Never call Write/Edit on these artefacts directly.
 - **Zero browser-flag participation.** This skill does not read, write, enforce, or inspect the browser verification flag in TASK_STATE.yaml. Treat it as opaque metadata owned by critic-runtime. See `REQ__process__browser-required-enforcement.md`.
 - **Workflow-lock refusal.** If the task pack shows `workflow_locked: true` AND `maintenance_task: false` AND the proposed plan touches paths under `plugin/**`, `plugin-legacy/**`, `doc/harness/manifest.yaml`, or setup templates, refuse to write PLAN.md with a concrete message citing the flag.
+- **Read actual code.** Each review phase MUST read actual source files, diffs, and code referenced by the plan. Reasoning from memory or plan text alone is insufficient. If a section asks for a dependency graph, ASCII diagram, or code map — read the files first.
+- **Never abort.** The pipeline does not abort. If both voices fail (blocked), surface the gap as a finding and continue. Blocked is never a terminal state except for premise gate refusal. Surface all taste decisions; never silently redirect to a shorter path. When auto_decide is active, never redirect to interactive review. Surface all taste decisions at the Phase 5 gate.
+- **Auto-decide mode.** When `auto_decide` is active, intermediate AskUserQuestion calls (except premise gate and User Challenge items) are resolved by the 6 Decision Principles. Two gates are never auto-decided: (a) premise confirmation (Phase 1.1) and (b) User Challenge items (Phase 5.3). Auto-decide replaces the USER's judgment on taste items, but does NOT reduce analysis depth.
+
+---
+
+## AskUserQuestion Format
+
+Every `AskUserQuestion` emitted by this skill MUST begin with a one-line context header as the very first line of the question text:
+
+```
+Task: TASK__<id> | Phase: <current phase number> | Step: <step name>
+```
+
+This ensures the user can orient themselves after a long analysis block.
+
+**Format:**
+```
+Task: TASK__<id> | Phase: <1/1.1/2/3/4/5/5.3> | Step: <descriptive name>
+
+<question body>
+
+A) ...
+B) ...
+```
+
+**Applies to:** all AskUserQuestion calls including premise gate (Phase 1.1), prerequisite offer (Phase 0.4.5), User Challenge items (Phase 5.3), and gate options (Phase 5.4.1).
+
+Do NOT add lengthy recap of prior phases. The one-line header is sufficient orientation.
+
+---
+
+## Sub-skill execution protocol
+
+Each review phase MUST load the corresponding sub-skill file from disk before running:
+- Phase 1 → `plugin/skills/plan-ceo-review/SKILL.md`
+- Phase 2 → `plugin/skills/plan-design-review/SKILL.md` (only if ui_scope=true)
+- Phase 3 → `plugin/skills/plan-eng-review/SKILL.md`
+- Phase 4 → `plugin/skills/plan-devex-review/SKILL.md` (only if dx_scope=true)
+
+Iterate every non-skipped section at full depth. Follow the section's required outputs exactly.
+
+**Skip list** (these sections are already handled by this pipeline — do not re-run them):
+- Preamble / boilerplate sections
+- AskUserQuestion Format
+- Completeness Principle — Boil the Lake
+- Telemetry / analytics
+- Platform detection (handled by Phase 0)
+- Prerequisite Skill Offer / BENEFITS_FROM sections (handled by Phase 0.4.5)
+- Outside Voice / Design Outside Voices (handled by Phase 4.5)
+
+**Compression brake:** If any review section produces fewer than 3 sentences of analysis, it is compression and must be expanded before moving on. "No issues found" is a valid result only after stating what was examined and why nothing was flagged (minimum 1-2 sentences). "Skipped" is never valid for a non-skip-listed section.
 
 ---
 
@@ -66,6 +118,30 @@ Both voices must return structured responses before consensus is built. The skil
 | Both voices fail | `blocked` | Stop phase; emit `AskUserQuestion` with blocked status and failure details before proceeding |
 
 **Phase-scoped vs whole-plan fresh reviews:** Voice A/B operate within a single review phase (phase-scoped independence). Phase 4.5 Outside Voice and Phase 5.5 Spec Review Loop operate on the full assembled plan (whole-plan-scoped fresh-context review). Use them in addition to, not instead of, phase Voice A/B.
+
+---
+
+## What Auto-Decide Means
+
+When `auto_decide` is active (set in the task pack or passed as a flag), the pipeline runs the full 7-phase review without intermediate user interaction — except for the two non-auto-decided gates listed below.
+
+**MUST:**
+- Resolve every Mechanical and Taste decision using the 6 Decision Principles (first applicable principle wins).
+- Log every auto-decided item to AUDIT_TRAIL.md immediately, one row per decision.
+- Surface all auto-decided Taste items at Phase 5.2 for informational review.
+- Default CEO mode to SELECTIVE EXPANSION (Phase 1).
+- Default DX mode to DX POLISH (Phase 4).
+- Complete all mandatory phase outputs at full depth — auto-decide replaces judgment, not analysis.
+
+**MUST NOT:**
+- Auto-decide premise confirmation (Phase 1.1). This gate always requires user input.
+- Auto-decide User Challenge items (Phase 5.3). Each gets its own AskUserQuestion.
+- Reduce Voice A/B depth or skip any mandatory output checklist item.
+- Redirect to interactive review mid-pipeline. All decisions accumulate and surface at Phase 5.
+
+The two gates that are **never auto-decided**:
+1. **Phase 1.1 — Premise confirmation.** Premises are always presented to the user before review begins.
+2. **Phase 5.3 — User Challenge gate.** Items where both voices recommend changing a user-stated direction are always surfaced individually.
 
 ---
 
@@ -146,6 +222,38 @@ Audit row format (7 pipe-delimited columns):
 
 ---
 
+## Phase 0.0: Session Recovery
+
+**Runs only when resuming an interrupted plan session.**
+
+Check for prior phase progress in the task directory:
+
+```bash
+if [ -f "doc/harness/tasks/TASK__<id>/AUDIT_TRAIL.md" ]; then
+  grep "phase-summary" doc/harness/tasks/TASK__<id>/AUDIT_TRAIL.md | tail -10
+fi
+```
+
+If AUDIT_TRAIL.md contains `phase-summary` rows:
+1. Extract the highest completed phase number from the JSON rows (e.g. `"phase":"3"` → last completed = Phase 3).
+2. Emit a one-line recovery notice:
+   ```
+   Resuming TASK__<id>: last completed phase = <N>. Continuing from Phase <N+1>.
+   ```
+3. Load prior consensus summaries from the audit rows for use as `## Prior phase findings` in remaining phases.
+4. Skip all phases ≤ <N>. Do not re-run completed phases.
+
+If AUDIT_TRAIL.md is absent, empty, or contains no `phase-summary` rows, proceed from Phase 0 normally (fresh start).
+
+If AUDIT_TRAIL.md is unreadable, log the error inline and proceed from Phase 0:
+```
+Note: AUDIT_TRAIL.md unreadable (<reason>) — starting fresh.
+```
+
+**This phase is informational only. It never blocks.**
+
+---
+
 ## Phase 0: Intake + Context
 
 **Always runs.**
@@ -209,6 +317,28 @@ After reading the task pack, check whether the request is sufficiently scoped.
    ```
    Proceed after user responds.
 
+**Office-hours inline invocation (when user selects A):**
+1. Read `plugin/skills/office-hours/SKILL.md` using the Read tool.
+2. If the file is unreadable (missing, permission error), skip with message: "office-hours skill unavailable — proceeding to inline questions" and fall back to option C (3 inline goal-sharpening questions).
+3. If readable, execute the office-hours skill at full depth, skipping preamble and boilerplate sections (same skip list as sub-skill execution protocol above).
+4. On completion, search for a design document written during the office-hours session:
+
+```bash
+find doc/ -name "*design*.md" -newer doc/harness/tasks/TASK__<id>/TASK_STATE.yaml \
+  2>/dev/null | head -3
+ls doc/harness/tasks/TASK__<id>/*design*.md 2>/dev/null | head -3
+```
+
+If a file is found:
+- Read it in full.
+- Append its content as `## Design Context` to the task pack used in Phases 1-4.
+- Log discovery in `AUDIT_TRAIL.md` via the audit CLI:
+  ```
+  | <#> | 0.4.5 | design-doc-found | log | - | <path> | - |
+  ```
+
+If no file is found, proceed without design context (same as before). Do not re-offer the prerequisite gate.
+
 **Skip cleanly** if the trigger condition is not met — never hard-gate. Do not loop or re-ask after one response.
 
 ### 0.5 Restore point
@@ -239,9 +369,9 @@ Record the relative restore point path (e.g. `restore-points/pre-plan-${_TS}.md`
 
 Read the task pack text (TASK_STATE.yaml + REQUEST.md) and scan for keywords. Use the rules below — do NOT run grep bash commands for scope detection.
 
-**UI scope keywords:** `ui_scope`, `frontend`, `component`, `css`, `html`, `react`, `vue`, `design system`, `stylesheet`, `layout`, `visual`
+**UI scope keywords:** `ui_scope`, `frontend`, `component`, `css`, `html`, `react`, `vue`, `design system`, `stylesheet`, `layout`, `visual`, `button`, `modal`, `dashboard`, `sidebar`, `nav`, `dialog`
 
-**DX scope keywords:** `dx_scope`, `api`, `cli`, `sdk`, `devex`, `developer experience`, `ergonomics`, `tooling`, `integration`, `plugin`
+**DX scope keywords:** `dx_scope`, `api`, `cli`, `sdk`, `devex`, `developer experience`, `ergonomics`, `tooling`, `integration`, `plugin`, `endpoint`, `REST`, `GraphQL`, `gRPC`, `webhook`, `command`, `flag`, `argument`, `terminal`, `shell`, `library`, `package`, `npm`, `pip`, `import`, `require`, `developer docs`, `getting started`, `onboarding`, `debug`, `implement`, `error message`
 
 **2+ match threshold:** Set `ui_scope=true` only if 2 or more distinct UI keywords appear in the task pack text. A single keyword match is insufficient. Apply the same 2+ match threshold for `dx_scope`.
 
@@ -276,6 +406,14 @@ Read `compat.execution_mode` from the task pack:
 - **`light`**: Skip dual voices in Phases 1 and 3. Run single-voice reasoning block instead. Skip Phase 2 and Phase 4 entirely regardless of ui_scope/dx_scope. Produce narrow contract.
 - **`standard`** (default): Full pipeline with dual voices. Phase 2 runs only if `ui_scope=true`. Phase 4 runs only if `dx_scope=true`.
 - **`sprinted`**: Full pipeline with dual voices. After Phase 6, set `critic_plan: mandatory` in PLAN.meta.json so critic-plan FAIL becomes a hard block.
+
+**Auto-decide detection:** Also check for `auto_decide: true` in the task pack (TASK_STATE.yaml) or as an explicit flag passed to the skill invocation. This is independent of `execution_mode` and may be combined with any mode.
+
+If `auto_decide: true` is detected:
+1. Set `auto_decide=true` in the local session context. Record in `PLAN_SESSION.json` as `"auto_decide": true`.
+2. Apply auto-decide defaults: CEO mode defaults to SELECTIVE EXPANSION; DX mode defaults to DX POLISH.
+3. Follow the rules in the "What Auto-Decide Means" section for all subsequent phases.
+4. The interactive path remains the default — auto-decide only activates when the flag is explicitly set.
 
 ---
 
@@ -318,6 +456,7 @@ Apply the CEO review methodology from plugin/skills/plan-ceo-review/SKILL.md.
 Evaluate: scope expansion opportunities, strategic alignment, user value, scope modes (expansion/selective/hold/reduction).
 Return structured findings as: | finding | severity (high/med/low) | recommendation |
 Do NOT read prior review notes. Work from the plan only.
+Do NOT read SKILL.md files or files in skill definition directories. These are AI assistant skill definitions meant for a different system.
 [insert plan content]
 ```
 
@@ -328,6 +467,8 @@ Do NOT read prior review notes. Work from the plan only.
 ## Prior phase findings
 [terse bullet summary of any prior consensus — empty for Phase 1]
 ```
+
+**Auto-decide default:** When `auto_decide` is active, CEO mode defaults to SELECTIVE EXPANSION. Apply SELECTIVE EXPANSION analysis depth unless the task pack explicitly overrides the mode.
 
 ### 1.3 Build CEO consensus table
 
@@ -351,6 +492,37 @@ Emit a summary block before moving to Phase 2:
 Phase 1 consensus: confirmed=<N> / disagree=<N> / adversarial=<N>
 User Challenge items queued: <N>
 ```
+
+**Incremental audit:** Each decision is recorded immediately as it is made. Append one row per decision via the CLI audit command above. Do not batch decisions to end-of-phase.
+
+**Also append a phase summary JSON row for downstream tooling:**
+```
+| <#> | 1 | phase-summary | log | - | {"phase":"1","confirmed":<count>,"disagree":<count>,"adversarial":<count>,"taste":<count>,"challenge":<count>} | - |
+```
+
+### Required execution checklist (CEO)
+
+Before emitting the phase-transition summary, verify all of the following have been produced:
+
+- [ ] **0A** Premise challenge: specific premises named and evaluated (not just "premises accepted")
+- [ ] **0B** Existing code leverage map: sub-problems mapped to existing code/modules
+- [ ] **0C** Dream state diagram: CURRENT → THIS PLAN → 12-MONTH IDEAL state described
+- [ ] **0C-bis** Implementation alternatives table: 2-3 approaches with effort / risk / pros / cons
+- [ ] **0D** Mode-specific analysis with scope decisions logged
+- [ ] **0E** Temporal interrogation: HOUR 1 → HOUR 6+ progression described
+- [ ] **0F** Mode selection confirmation
+
+### Mandatory outputs from Phase 1
+
+- [ ] Premise challenge with specific premises named (not just "premises accepted")
+- [ ] Existing code leverage map
+- [ ] Dream state diagram
+- [ ] Implementation alternatives table
+- [ ] Error & Rescue Registry table
+- [ ] Failure Modes Registry table
+- [ ] Completion Summary
+- [ ] CEO consensus table in AUDIT_TRAIL.md
+- [ ] Phase-transition summary emitted
 
 ### Pre-Phase 2 checklist
 
@@ -406,6 +578,13 @@ Emit a summary block before moving to Phase 3:
 ```
 Phase 2 consensus: confirmed=<N> / disagree=<N> / adversarial=<N>
 User Challenge items queued: <N>
+```
+
+**Incremental audit:** Each decision is recorded immediately as it is made. Append one row per decision via the CLI audit command above. Do not batch decisions to end-of-phase.
+
+**Also append a phase summary JSON row for downstream tooling:**
+```
+| <#> | 2 | phase-summary | log | - | {"phase":"2","confirmed":<count>,"disagree":<count>,"adversarial":<count>,"taste":<count>,"challenge":<count>} | - |
 ```
 
 ### Pre-Phase 3 checklist
@@ -465,6 +644,41 @@ Phase 3 consensus: confirmed=<N> / disagree=<N> / adversarial=<N>
 User Challenge items queued: <N>
 ```
 
+**Incremental audit:** Each decision is recorded immediately as it is made. Append one row per decision via the CLI audit command above. Do not batch decisions to end-of-phase.
+
+**Also append a phase summary JSON row for downstream tooling:**
+```
+| <#> | 3 | phase-summary | log | - | {"phase":"3","confirmed":<count>,"disagree":<count>,"adversarial":<count>,"taste":<count>,"challenge":<count>} | - |
+```
+
+### Required execution checklist (Eng)
+
+Before emitting the phase-transition summary, verify all of the following have been produced:
+
+- [ ] ASCII dependency graph showing new components and relationships to existing code
+- [ ] Test diagram mapping every new codepath and branch to test coverage
+- [ ] Test plan artifact written to task-local `test-plan.md`
+- [ ] "NOT in scope" section written
+- [ ] "What already exists" section written
+- [ ] Completion Summary
+- [ ] Deferred scope items appended to `deferred-scope.md`
+- [ ] Deferred scope items appended to TODOS.md (if TODOS.md exists at project root)
+- [ ] Engineering consensus table in AUDIT_TRAIL.md
+
+### Mandatory outputs from Phase 3
+
+- [ ] ASCII dependency graph showing new components and relationships to existing
+- [ ] Test diagram mapping every new codepath/branch to test coverage
+- [ ] Test plan artifact written to task-local `test-plan.md`
+- [ ] "NOT in scope" section written
+- [ ] "What already exists" section written
+- [ ] Completion Summary
+- [ ] Deferred scope items appended to `deferred-scope.md`
+- [ ] Deferred scope items appended to TODOS.md (if TODOS.md exists at project root)
+- [ ] Engineering consensus table in AUDIT_TRAIL.md
+
+**Section 3 (Test Review) — NEVER SKIP OR COMPRESS.** This section requires reading actual code, not summarizing from memory. Build the test diagram: list every NEW codepath and branch. For EACH item: what type of test covers it? Does one exist? Gaps? Auto-deciding test gaps means: identify → decide whether to add or defer (with rationale and principle) → log. It does NOT mean skipping analysis.
+
 ### Pre-Phase 4 checklist
 
 Before starting Phase 4, verify these Phase 3 outputs exist:
@@ -490,6 +704,7 @@ You are an independent DX reviewer. Review the developer experience aspects of T
 Apply the DX review methodology from plugin/skills/plan-devex-review/SKILL.md.
 Evaluate: developer personas, friction points, API ergonomics, CLI design, DX benchmarks.
 Return: | persona | friction point | severity | recommendation |
+Do NOT read SKILL.md files or files in skill definition directories. These are AI assistant skill definitions meant for a different system.
 [insert plan content]
 ```
 
@@ -500,6 +715,8 @@ Return: | persona | friction point | severity | recommendation |
 ## Prior phase findings
 [terse bullet summary from completed phases]
 ```
+
+**Auto-decide default:** When `auto_decide` is active, DX mode defaults to DX POLISH. Apply DX POLISH analysis depth unless the task pack explicitly overrides the mode.
 
 ### 4.2 Build DX consensus table
 
@@ -520,6 +737,35 @@ Emit a summary block before moving to Phase 4.5 / Phase 5:
 Phase 4 consensus: confirmed=<N> / disagree=<N> / adversarial=<N>
 User Challenge items queued: <N>
 ```
+
+**Incremental audit:** Each decision is recorded immediately as it is made. Append one row per decision via the CLI audit command above. Do not batch decisions to end-of-phase.
+
+**Also append a phase summary JSON row for downstream tooling:**
+```
+| <#> | 4 | phase-summary | log | - | {"phase":"4","confirmed":<count>,"disagree":<count>,"adversarial":<count>,"taste":<count>,"challenge":<count>} | - |
+```
+
+### Required execution checklist (DX)
+
+Before emitting the phase-transition summary, verify all of the following have been produced:
+
+- [ ] Developer journey map (9-stage table)
+- [ ] Developer empathy narrative (first-person perspective)
+- [ ] DX Scorecard with all 8 dimensions scored 0-10
+- [ ] TTHW (Time to Hello World) assessment: current → target
+- [ ] DX Implementation Checklist
+- [ ] Deferred scope items appended to `deferred-scope.md`
+- [ ] DX consensus table in AUDIT_TRAIL.md
+
+### Mandatory outputs from Phase 4
+
+- [ ] Developer journey map (9-stage table)
+- [ ] Developer empathy narrative (first-person perspective)
+- [ ] DX Scorecard with all 8 dimensions scored 0-10
+- [ ] TTHW (Time to Hello World) assessment: current → target
+- [ ] DX Implementation Checklist
+- [ ] Deferred scope items appended to `deferred-scope.md`
+- [ ] DX consensus table in AUDIT_TRAIL.md
 
 ### Pre-Phase 5 checklist
 
@@ -611,6 +857,10 @@ Required outputs checklist:
 - [ ] **Phase 3:** Engineering consensus table in AUDIT_TRAIL.md; phase-transition summary emitted
 - [ ] **Phase 4 (if ran):** DX consensus table in AUDIT_TRAIL.md; phase-transition summary emitted
 - [ ] **Audit trail:** AUDIT_TRAIL.md has at least one row per completed phase
+- [ ] **Dual voices ran (Phase 1):** Voice A and Voice B both returned findings, or single-voice degradation was logged with reason
+- [ ] **Dual voices ran (Phase 2, if ran):** Voice A and Voice B both returned findings, or Phase 2 skipped with noted reason
+- [ ] **Dual voices ran (Phase 3):** Voice A and Voice B both returned findings, or single-voice degradation was logged with reason
+- [ ] **Dual voices ran (Phase 4, if ran):** Voice A and Voice B both returned findings, or Phase 4 skipped with noted reason
 
 **Retry rule:** If any required output is missing, go back and produce it (up to 2 retries). After 2 retries, proceed to Phase 5.1 with a warning block listing all incomplete items:
 
@@ -620,7 +870,27 @@ Missing: <list each incomplete item>
 These gaps may reduce plan quality. Reviewer should flag accordingly.
 ```
 
-### 5.1 Collect all decisions
+### 5.1 Rich plan review summary
+
+Before collecting decisions, emit a structured summary of the completed review:
+
+```
+## Plan Review Complete
+
+### Plan Summary: [1-3 sentences describing what this plan does and its primary goal]
+### Decisions Made: [N] total ([M] auto-decided, [K] taste, [J] user challenges)
+
+### Per-Phase Review Scores
+- Phase 1 CEO: [brief summary of findings], Voice consensus [X/6 confirmed, Y disagree]
+- Phase 2 Design: [brief summary or "skipped, no UI scope"], consensus [X/Y]
+- Phase 3 Eng: [brief summary of findings], Voice consensus [X/6 confirmed, Y disagree]
+- Phase 4 DX: [brief summary or "skipped, no DX scope"], consensus [X/6]
+
+### Cross-Phase Themes: [recurring concerns identified in 5.2.5, or "none"]
+### Deferred Items: [count and summary of items in deferred-scope.md, or "none"]
+```
+
+### 5.1.1 Collect all decisions
 
 Gather from the consensus tables across Phases 1-4:
 - All Mechanical decisions (already silently applied)
@@ -628,6 +898,15 @@ Gather from the consensus tables across Phases 1-4:
 - All User Challenge items
 
 ### 5.2 Surface Taste decisions
+
+**Cognitive load rules (apply before presenting Taste decisions):**
+
+- **0 taste decisions:** Skip the "Taste decisions" section entirely. Do not emit it.
+- **1-7 taste decisions:** Present as a flat list.
+- **8+ taste decisions:** Group by phase with a warning at the top:
+  ```
+  ⚠ High ambiguity (<N> taste decisions). Grouped by phase.
+  ```
 
 Present a single summary of all Taste decisions made automatically. No user input required here — this is informational only. Format:
 
@@ -695,6 +974,32 @@ Wait for and record each response before proceeding to the next.
 ### 5.4 Final scope confirmation
 
 If any User Challenge responses in 5.3 changed the scope, confirm the updated scope before Phase 6.
+
+### 5.4.1 Gate response options
+
+After presenting the Phase 5 summary (5.1), Taste decisions (5.2), Cross-Phase Themes (5.2.5), and handling all User Challenge items (5.3), present the user with the following gate options:
+
+```
+How would you like to proceed?
+
+A) Approve as-is — accept all recommendations, proceed to Phase 6
+B) Approve with overrides — specify which taste decisions to change
+B2) Approve with user challenge responses — specify how to resolve outstanding challenges
+C) Interrogate — ask about any specific decision before approving
+D) Revise — re-run affected phases (max 3 revision cycles):
+   - Scope concerns → re-run Phase 1
+   - Design concerns → re-run Phase 2
+   - Test/architecture concerns → re-run Phase 3
+   - DX concerns → re-run Phase 4
+E) Reject — start over from Phase 0 (clears all phase state)
+```
+
+**Option handling:**
+- **A:** Proceed directly to Phase 6.
+- **B / B2:** Apply the specified overrides or challenge responses, re-present the gate summary (5.1) with changes noted, then re-offer options A-E.
+- **C:** Answer the question fully, re-present the gate summary, then re-offer options A-E.
+- **D:** Re-run the affected phase(s) with updated scope as additional context. Increment revision cycle counter. After max 3 revision cycles, proceed to Phase 6 regardless with a warning noting the cycle limit was reached.
+- **E:** Clear all phase-level state. Reset to Phase 0. Restart the full pipeline.
 
 ---
 
@@ -778,6 +1083,42 @@ python3 plugin-legacy/scripts/write_artifact.py plan --artifact plan-meta \
 
 ---
 
+## Deferred Scope Surface
+
+**Runs throughout Phases 1-4. Not a standalone phase.**
+
+`deferred-scope.md` is a task-local (non-protected) file that collects scope items deferred during review. It is NOT a protected artifact — write directly via Bash heredoc.
+
+Each review phase appends deferred items as they arise:
+```bash
+cat >> doc/harness/tasks/TASK__<id>/deferred-scope.md << EOF
+### Phase <N> deferred items
+- <item>: deferred because <rationale> (principle: <P#>)
+EOF
+```
+
+Create the file at Phase 1 start if it does not exist:
+```bash
+touch doc/harness/tasks/TASK__<id>/deferred-scope.md
+```
+
+The file is referenced from PLAN.md's "NOT in scope" section. At Phase 6, the plan assembler reads `deferred-scope.md` and incorporates a summary into the final PLAN.md under "NOT in scope" with cross-references to the originating phase and decision principle.
+
+In `light` execution mode, deferred scope is still collected (single-voice phases can still identify out-of-scope items).
+
+After all deferred items are appended during Phases 1-4, check whether a TODOS.md exists at the project root. If it does, append a summary block:
+
+    if [ -f "TODOS.md" ]; then
+      echo "" >> TODOS.md
+      echo "### Deferred from TASK__<id> planning" >> TODOS.md
+      grep "^- " doc/harness/tasks/TASK__<id>/deferred-scope.md >> TODOS.md
+    fi
+
+If TODOS.md does not exist, skip silently. Do not create it.
+
+
+---
+
 ## Phase 6: Write PLAN artefacts
 
 **Always runs.**
@@ -854,6 +1195,35 @@ python3 plugin-legacy/scripts/write_artifact.py plan --artifact checks \
   --checks /tmp/checks_content.yaml
 ```
 
+### 6.8a Append Review Status to PLAN.md
+
+After writing PLAN.md and CHECKS.yaml, append a `## Review Status` section to `/tmp/plan_content.md` and re-run the PLAN.md CLI write to include it:
+
+Assemble the review status table from phase-transition summaries collected during Phases 1-4:
+
+```
+## Review Status
+
+| Phase | Ran | Voices | Confirmed | Disagree | User Challenges |
+|-------|-----|--------|-----------|----------|-----------------|
+| 1 CEO | yes | dual | <N> | <N> | <N> |
+| 2 Design | <yes/skipped> | <dual/—> | <N/—> | <N/—> | <N/—> |
+| 3 Eng | yes | dual | <N> | <N> | <N> |
+| 4 DX | <yes/skipped> | <dual/—> | <N/—> | <N/—> | <N/—> |
+| 4.5 Outside Voice | <yes/skipped> | — | — | <N findings/—> | — |
+| 5.5 Spec Review | <yes/skipped> | — | <N rounds/—> | <N resolved/—> | — |
+
+**Auto-decided:** <N total> | **Taste surfaced:** <N> | **User Challenges:** <N>
+**Execution mode:** <light/standard/sprinted>
+```
+
+Append this section to `/tmp/plan_content.md`, then re-run:
+```bash
+python3 plugin-legacy/scripts/write_artifact.py plan --artifact plan \
+  --task-dir doc/harness/tasks/TASK__<id>/ \
+  --input /tmp/plan_content.md
+```
+
 ### 6.8 Close session
 
 Update `PLAN_SESSION.json`:
@@ -865,21 +1235,50 @@ Set `plan_session_state: closed` in `TASK_STATE.yaml`.
 
 The task is now ready for critic-plan review.
 
+### 6.9 Completion Report
+
+After session close, emit a structured completion report:
+
+```
+STATUS: <DONE | DONE_WITH_CONCERNS | BLOCKED>
+
+Task:    TASK__<id>
+Plan:    doc/harness/tasks/TASK__<id>/PLAN.md
+Audit:   doc/harness/tasks/TASK__<id>/AUDIT_TRAIL.md
+Checks:  doc/harness/tasks/TASK__<id>/CHECKS.yaml
+
+Phases run:        <list of phases that executed, e.g. 0.0, 0, 1, 3, 4.5, 5, 5.5, 6>
+Execution mode:    <light/standard/sprinted>
+Auto-decided:      <N> decisions
+Taste surfaced:    <N> items
+User Challenges:   <N> items
+Deferred scope:    <N> items (see deferred-scope.md)
+Restore point:     <path or "none">
+
+Next: critic-plan review → harness:critic-plan
+```
+
+**STATUS selection rules:**
+- `DONE` — all phases completed nominally; no degraded voice modes; Phase 5.5 passed or skipped cleanly.
+- `DONE_WITH_CONCERNS` — any of: a phase ran in single-voice degraded mode; Phase 5.5 hit max iterations with unresolved issues; any User Challenge item left unresolved; convergence guard triggered in Phase 5.5.
+- `BLOCKED` — Phase 6 CLI write failed. (Review findings alone are never BLOCKED — use DONE_WITH_CONCERNS.)
+
 ---
+
 
 ## Execution mode branches
 
-| Mode | Phase 2 | Phase 4 | Phase 4.5 | Phase 5.5 | Dual voice | Phase 6 meta |
-|------|---------|---------|-----------|-----------|------------|--------------|
-| `light` | skip | skip | skip | skip | skip (single-voice reasoning blocks in Ph 1, Ph 3) | standard |
-| `standard` | ui_scope gate | dx_scope gate | always | always | required | standard |
-| `sprinted` | ui_scope gate | dx_scope gate | always | always (failure also emits `spec_review_warning` in PLAN.meta.json) | required | `critic_plan: mandatory` |
+| Mode | Phase 2 | Phase 4 | Phase 4.5 | Phase 5.5 | Dual voice | Mandatory outputs | Sub-skill iteration | Deferred scope | Gate options | Phase 6 meta | auto_decide |
+|------|---------|---------|-----------|-----------|------------|-------------------|---------------------|----------------|-------------|--------------|-------------|
+| `light` | skip | skip | skip | skip | skip (single-voice) | single-voice versions (no dual consensus) | single-voice depth | collected | A-E available | standard | compatible; premise + challenge gates still require user |
+| `standard` | ui_scope gate | dx_scope gate | always | always | required | full dual-voice checklists | full depth required | collected | A-E available | standard | compatible; CEO defaults SELECTIVE EXPANSION, DX defaults DX POLISH |
+| `sprinted` | ui_scope gate | dx_scope gate | always | always + `spec_review_warning` on failure | required | full dual-voice checklists | full depth required | collected | A-E available | `critic_plan: mandatory` | compatible; CEO defaults SELECTIVE EXPANSION, DX defaults DX POLISH |
 
-- **light**: Skips Phase 2, Phase 4, Phase 4.5, and Phase 5.5. Runs Phases 0, 1, 3, 5, 6 with single-voice reasoning blocks.
-- **standard**: Runs all phases including 4.5 and 5.5 under documented failure paths.
+- **light**: Skips Phase 2, Phase 4, Phase 4.5, and Phase 5.5. Runs Phases 0, 1, 3, 5, 6 with single-voice reasoning blocks. Mandatory output checklists still apply but produce single-voice versions (no consensus table). Sub-skill iteration uses single voice. Deferred scope is still collected. Gate options (A-E) are available but summary is simplified (no per-phase voice consensus scores).
+- **standard**: Runs all phases including 4.5 and 5.5 under documented failure paths. Full mandatory output checklists with dual-voice consensus. Full sub-skill iteration depth required.
 - **sprinted**: Runs all phases. Phase 5.5 failure (subagent unavailable, max iterations with unresolved issues, or convergence guard triggered) additionally emits `spec_review_warning: true` in PLAN.meta.json via the plan-meta CLI.
 
-For `light` mode, each review phase runs a single-voice reasoning block: use one Agent call with the Voice A prompt. Document `mode=single-voice` in the audit trail for each phase.
+For `light` mode, each review phase runs a single-voice reasoning block: use one Agent call with the Voice A prompt. Document `mode=single-voice` in the audit trail for each phase. The compression brake (>= 3 sentences per section) still applies in light mode.
 
 ---
 
