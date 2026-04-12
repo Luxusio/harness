@@ -27,13 +27,85 @@ allowed-tools:
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | \`/plan-ceo-review\` | Scope & strategy | 0 | — | — |
-| Codex Review | \`/codex review\` | Independent 2nd opinion | 0 | — | — |
 | Eng Review | \`/plan-eng-review\` | Architecture & tests (required) | 0 | — | — |
 | Design Review | \`/plan-design-review\` | UI/UX gaps | 0 | — | — |
 | DX Review | \`/plan-devex-review\` | Developer experience gaps | 0 | — | — |
 
 **VERDICT:** NO REVIEWS YET — run \`harness:plan\` for the full 7-phase review pipeline, or individual reviews above.
 \`\`\`
+
+## Shared Preamble
+
+This sub-skill shares common sections with the main plan skill (`plugin/skills/plan/SKILL.md`). Refer there for full details on:
+
+- **Voice/Tone** — Garry Tan style: short sentences, no hedging, active voice, technical precision.
+- **Completeness Principle (Boil the Lake)** — Every section must be fully completed. No TBD, no placeholders. If a section produces fewer than 3 sentences, expand it.
+- **AskUserQuestion Format** — Task/Phase/Step header required. Completeness scoring (X/10) per option. Effort reference table included.
+- **Search Before Building** — 3-layer knowledge hierarchy (tried-and-true → new-and-popular → first-principles). Prize first-principles above all.
+- **Context Recovery** — Check AUDIT_TRAIL.md for prior session state. Resume from last completed phase.
+- **Repo Ownership** — Flag defects outside task scope. In collaborative mode, flag but don't fix.
+
+## Prior Learnings
+
+Before review, load relevant prior learnings:
+
+```bash
+if [ -f ".harness/learnings.jsonl" ]; then
+  grep -i "dx\|developer\|api\|cli\|sdk\|onboarding\|friction" .harness/learnings.jsonl | tail -5
+fi
+```
+
+Incorporate relevant DX-related operational knowledge. Log count.
+
+## Review Readiness Dashboard
+
+Before starting review, emit a readiness dashboard:
+
+```
+## Review Readiness
+
+| Item | Status |
+|------|--------|
+| PLAN.md exists | yes/no |
+| DX scope detected | yes/no |
+| Developer personas defined | yes/no |
+| API surface documented | present/missing |
+| Prior learnings loaded | N entries |
+
+Ready to proceed: yes/no
+```
+
+## Plan File Review Report
+
+After review completes, emit a summary:
+
+```
+## DX Review Report
+
+| Metric | Value |
+|--------|-------|
+| Personas analyzed | N |
+| Friction points found | N |
+| DX scorecard dimensions | 8 |
+| Average score | X.X/10 |
+| TTHW estimate | X min |
+| Findings (high) | N |
+| Findings (med) | N |
+| Findings (low) | N |
+```
+
+## Capture Learnings
+
+After review, log operational discoveries with file metadata:
+
+```bash
+_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+mkdir -p .harness 2>/dev/null || true
+echo '{"ts":"'"$_TS"'","type":"operational","skill":"plan-devex-review","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"DESCRIPTION","files":["path/to/file1","path/to/file2"]}' >> .harness/learnings.jsonl 2>/dev/null || true
+```
+
+Only log genuine discoveries. Skip obvious facts and transient errors.
 
 ## DX First Principles
 

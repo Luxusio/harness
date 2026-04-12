@@ -25,13 +25,123 @@ allowed-tools:
 | Review | Trigger | Why | Runs | Status | Findings |
 |--------|---------|-----|------|--------|----------|
 | CEO Review | \`/plan-ceo-review\` | Scope & strategy | 0 | — | — |
-| Codex Review | \`/codex review\` | Independent 2nd opinion | 0 | — | — |
 | Eng Review | \`/plan-eng-review\` | Architecture & tests (required) | 0 | — | — |
 | Design Review | \`/plan-design-review\` | UI/UX gaps | 0 | — | — |
 | DX Review | \`/plan-devex-review\` | Developer experience gaps | 0 | — | — |
 
 **VERDICT:** NO REVIEWS YET — run \`harness:plan\` for the full 7-phase review pipeline, or individual reviews above.
 \`\`\`
+
+## Shared Preamble
+
+This sub-skill shares common sections with the main plan skill (`plugin/skills/plan/SKILL.md`). Refer there for full details on:
+
+- **Voice/Tone** — Garry Tan style: short sentences, no hedging, active voice, technical precision.
+- **Completeness Principle (Boil the Lake)** — Every section must be fully completed. No TBD, no placeholders. If a section produces fewer than 3 sentences, expand it.
+- **AskUserQuestion Format** — Task/Phase/Step header required. Completeness scoring (X/10) per option. Effort reference table included.
+- **Search Before Building** — 3-layer knowledge hierarchy (tried-and-true → new-and-popular → first-principles). Prize first-principles above all.
+- **Context Recovery** — Check AUDIT_TRAIL.md for prior session state. Resume from last completed phase.
+- **Repo Ownership** — Flag defects outside task scope. In collaborative mode, flag but don't fix.
+
+## Step 0: Pre-review Checks
+
+Before starting the engineering review, run three checks:
+
+### Search Check
+Verify all imports, references, and dependencies in the plan resolve:
+- Are all referenced files present on disk?
+- Do import paths match the actual module structure?
+- Are there circular dependencies not addressed in the plan?
+
+### Completeness Check
+Verify no required sections are missing:
+- Architecture diagram present?
+- Error handling specified?
+- Test coverage plan included?
+- Rollback strategy defined?
+
+### Distribution Check
+Verify test coverage is balanced:
+- Are all new code paths covered?
+- Is edge case coverage proportional to risk?
+- Are integration tests specified where components interact?
+
+If any check fails, flag the specific gap before proceeding.
+
+## Review Log
+
+Maintain a chronological log during review:
+
+```
+## Review Log
+
+| Time | Section | Finding | Severity |
+|------|---------|---------|----------|
+| 00:01 | Architecture | ... | ... |
+| 00:03 | Data Flow | ... | ... |
+```
+
+Append to review log as findings are discovered. Include in final review output.
+
+## Review Readiness Dashboard
+
+Before starting review, emit a readiness dashboard:
+
+```
+## Review Readiness
+
+| Item | Status |
+|------|--------|
+| PLAN.md exists | yes/no |
+| Architecture diagram | present/missing |
+| Test plan | present/missing |
+| Error handling section | present/missing |
+| Rollback section | present/missing |
+| Prior learnings loaded | N entries |
+
+Ready to proceed: yes/no
+```
+
+## Plan File Review Report
+
+After review completes, emit a summary:
+
+```
+## Engineering Review Report
+
+| Metric | Value |
+|--------|-------|
+| Files reviewed | N |
+| Code paths analyzed | N |
+| Findings (high) | N |
+| Findings (med) | N |
+| Findings (low) | N |
+| Test gaps identified | N |
+| Architecture issues | N |
+```
+
+## Next Steps Review Chaining
+
+After engineering review completes:
+
+1. If `dx_scope: true`, recommend running DX review next.
+2. If UI components were discussed, recommend design review.
+3. If scope was adjusted, recommend re-running CEO review.
+
+Present chaining recommendation as AskUserQuestion.
+
+## Rich Learnings Capture
+
+After review, log operational discoveries with file metadata:
+
+```bash
+_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+mkdir -p .harness 2>/dev/null || true
+echo '{"ts":"'"$_TS"'","type":"operational","skill":"plan-eng-review","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"DESCRIPTION","files":["path/to/file1","path/to/file2"]}' >> .harness/learnings.jsonl 2>/dev/null || true
+```
+
+Only log genuine discoveries. Skip obvious facts and transient errors.
 
 # Plan Review Mode
 

@@ -19,7 +19,94 @@ This skill implements the harness-native 7-phase dual-voice review pipeline for 
 - **Read actual code.** Each review phase MUST read actual source files, diffs, and code referenced by the plan. Reasoning from memory or plan text alone is insufficient. If a section asks for a dependency graph, ASCII diagram, or code map — read the files first.
 - **Never abort.** The pipeline does not abort. If both voices fail (blocked), surface the gap as a finding and continue. Blocked is never a terminal state except for premise gate refusal. Surface all taste decisions; never silently redirect to a shorter path. When auto_decide is active, never redirect to interactive review. Surface all taste decisions at the Phase 5 gate.
 - **Auto-decide mode.** When `auto_decide` is active, intermediate AskUserQuestion calls (except premise gate and User Challenge items) are resolved by the 6 Decision Principles. Two gates are never auto-decided: (a) premise confirmation (Phase 1.1) and (b) User Challenge items (Phase 5.3). Auto-decide replaces the USER's judgment on taste items, but does NOT reduce analysis depth.
+- **Spawned session.** If `TASK_STATE.yaml` contains `spawned_session: true` OR the environment variable `HARNESS_SPAWNED=1` is set, activate spawned mode: (a) force `auto_decide: true`, (b) auto-resolve ALL `AskUserQuestion` calls including the premise gate — use the recommended option or apply the 6 Decision Principles, (c) suppress upgrade/telemetry/routing prompts, (d) emit a prose completion report at the end instead of waiting for user interaction. Spawned mode exists so orchestrators and team workers can invoke the plan skill non-interactively.
 - **Sequential execution required.** Phases execute in strict order: 0 → 1 → 2 → 3 → 4 → 4.5 → 5 → 5.5 → 6 → 7. NEVER run phases in parallel. Each phase must complete fully before the next begins.
+
+---
+
+## Voice
+
+Write with the clarity and conviction of a great founder (Garry Tan style):
+- Short sentences. Crisp paragraphs.
+- No hedging: eliminate "I think", "maybe", "might", "perhaps".
+- Direct statements. Active voice.
+- No filler phrases: "It's worth noting that", "As a matter of fact".
+- Technical precision over marketing language.
+- Korean/English bilingual context: technical terms stay English, explanations may use Korean.
+
+## Completeness Principle — Boil the Lake
+
+Every section must be fully completed before moving on. No "TBD", no placeholders, no "this is good enough for now".
+
+If a section produces fewer than 3 sentences of analysis, it is compression and must be expanded. "No issues found" is valid only after stating what was examined and why nothing was flagged.
+
+The plan is not done until every acceptance criterion has a clear verification path and every section is complete.
+
+## Plan Mode Safe Operations
+
+During plan mode, only these operations are safe:
+- Reading any file (Read tool)
+- Asking questions (AskUserQuestion)
+- Dispatching review agents (Agent tool)
+- Writing to /tmp/ (temporary working files)
+
+These operations are NOT safe during plan mode:
+- Writing to source files under plugin/, src/, lib/
+- Git commits
+- Running build/test commands that mutate state
+
+## Skill Invocation During Plan Mode
+
+Sub-skills are loaded for their review methodology only. During planning:
+- Read skill definitions (SKILL.md files) for review checklists
+- Do NOT invoke write-capable skills
+- Do NOT modify skill definitions during a plan session
+
+## Plan Status Footer
+
+At the end of each phase, emit a status footer:
+
+```
+Phase <N> complete | Findings: <count> | Decisions: <count> | Next: Phase <N+1>
+```
+
+---
+
+## Search Before Building
+
+Before designing any solution in review phases — especially when evaluating architecture
+choices, API patterns, or tooling decisions — search first. Three layers of knowledge:
+
+- **Layer 1 (tried-and-true):** Well-established patterns with years of production validation.
+  Prize these. Do not reinvent what already works reliably. Reuse existing modules, patterns,
+  and conventions in the codebase before proposing new ones.
+
+- **Layer 2 (new-and-popular):** Recently popular approaches with growing adoption. Scrutinise
+  carefully. Ask: is this popular because it solves a real problem, or because it is new?
+  Check whether the codebase already uses it before recommending it.
+
+- **Layer 3 (first-principles):** Reasoning from fundamentals, independent of what is
+  conventional. Prize this above Layers 1 and 2 when they conflict. When first-principles
+  analysis contradicts conventional wisdom, name it explicitly and log a Eureka entry.
+
+Apply this hierarchy when Voice A/B briefs prompt reviewers to evaluate technical choices.
+Include a one-line "Layer X reasoning" note in the brief when the choice is non-obvious.
+
+### Eureka Logging
+
+When first-principles reasoning during a review phase reaches a conclusion that contradicts
+conventional wisdom or common practice, log it as a durable insight:
+
+```bash
+_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
+_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+mkdir -p .harness 2>/dev/null || true
+echo '{"ts":"'"$_TS"'","type":"eureka","skill":"plan","branch":"'"$_BRANCH"'","insight":"ONE_LINE_SUMMARY","source":"first-principles"}' >> .harness/learnings.jsonl 2>/dev/null || true
+```
+
+Replace `ONE_LINE_SUMMARY` with a concrete one-sentence description of the insight.
+Only log genuine first-principles discoveries, not restatements of common knowledge.
+Non-blocking — if the write fails, skip silently.
 
 ---
 
@@ -173,17 +260,17 @@ Applied to every contested item between Voice A and Voice B. First applicable pr
 
 | Code | Name | Rule |
 |------|------|------|
-| P1 | User Sovereignty | If the user has explicitly stated a direction, honour it. Disagreement is surfaced as context, not a block. |
-| P2 | Scope Stability | Prefer the narrower scope when both approaches are viable. Expansion requires explicit user approval. |
-| P3 | Safety First | If one option reduces risk of data loss, irreversibility, or security exposure, prefer it. |
-| P4 | Reversibility | Prefer the option that is easier to undo or roll back. |
-| P5 | Evidence Weight | Prefer the position with more concrete supporting evidence (test data, measured latency, prior precedent). |
-| P6 | Craft Standard | When all else is equal, prefer the approach that is more maintainable, readable, or testable. |
+| P1 | Choose completeness | Ship the whole thing. Pick the approach that covers more edge cases. |
+| P2 | Boil the lake | Complete every section fully, no placeholders. Fix everything in blast radius. |
+| P3 | Pragmatic | Ship working software over elegant theory. If two options fix the same thing, pick the cleaner one. |
+| P4 | DRY | Don't repeat yourself across plan sections. Reuse what exists. |
+| P5 | Explicit over clever | Readable over terse. 10-line obvious fix over 200-line abstraction. |
+| P6 | Bias toward action | Prefer forward progress over analysis paralysis. Flag concerns but don't block. |
 
 **Per-phase conflict-resolution priority:**
-- Phase 1 (CEO): P1 + P2 (user direction and scope stability dominate)
-- Phase 2 (Design): P5 + P1 (evidence-backed design choices, then user direction)
-- Phase 3 (Engineering): P5 + P3 (evidence-backed technical choices, then safety)
+- Phase 1 (CEO): P6 + P3 (action + pragmatic)
+- Phase 2 (Design): P5 + P6 (explicit + action)
+- Phase 3 (Engineering): P5 + P3 (explicit + pragmatic)
 - Phase 4 (DX): P5 + P3 (same as Engineering for API and tooling decisions)
 
 ---
@@ -313,6 +400,34 @@ This section is informational only. It never blocks.
 
 ---
 
+## Phase 0.0-S: Spawned Session Detection
+
+**Always runs first, before Phase 0.0.**
+
+Detect whether the plan skill is running inside a spawned (non-interactive) session:
+
+```bash
+_SPAWNED="false"
+if grep -q "^spawned_session: true" doc/harness/tasks/TASK__<id>/TASK_STATE.yaml 2>/dev/null; then
+  _SPAWNED="true"
+fi
+[ "${HARNESS_SPAWNED:-}" = "1" ] && _SPAWNED="true"
+echo "SPAWNED_SESSION: $_SPAWNED"
+```
+
+If `SPAWNED_SESSION: true`:
+1. Set `auto_decide: true` in local session context and record in `PLAN_SESSION.json`:
+   ```json
+   {"state": "context_open", "phase": "context", "source": "plan-skill", "auto_decide": true, "spawned": true}
+   ```
+2. Apply all spawned-mode rules from the Invariants section for the remainder of the pipeline.
+3. Log a single line to indicate spawned mode is active:
+   ```
+   [spawned-mode] Auto-decide ON. Premise gate will be auto-resolved. No interactive prompts.
+   ```
+
+If `SPAWNED_SESSION: false`, proceed normally. This phase is informational and never blocks.
+
 ## Phase 0.0: Session Recovery
 
 **Runs only when resuming an interrupted plan session.**
@@ -393,6 +508,23 @@ If `workflow_locked: true` AND `maintenance_task: false`:
 ### 0.4 Read task pack
 
 Read in this order: `TASK_STATE.yaml`, `REQUEST.md` (if exists), existing `PLAN.md` (if exists), files listed in `must_read`.
+
+### Phase 0.4.1: Git Context Intake
+
+Capture the current branch's recent commit history and working-tree diff stat for use by
+review-phase Voice briefs. This gives Voices concrete evidence of what has changed rather
+than relying solely on the REQUEST.md description.
+
+```bash
+git log --oneline -20 2>/dev/null || true
+git diff --stat HEAD 2>/dev/null || git diff --stat 2>/dev/null || true
+```
+
+Store the output as `GIT_CONTEXT` in session memory. If the commands fail or the repo has
+no commits yet, skip silently — non-blocking.
+
+When constructing Voice A/B briefs in Phases 1 and 3, prepend a `## Git context` block
+containing the output from this step. If GIT_CONTEXT is empty, omit the block.
 
 ### 0.4.5 Prerequisite offer
 
@@ -996,6 +1128,10 @@ Before collecting decisions, emit a structured summary of the completed review:
 
 ### Cross-Phase Themes: [recurring concerns identified in 5.2.5, or "none"]
 ### Deferred Items: [count and summary of items in deferred-scope.md, or "none"]
+### Deferred to TODOS.md
+[Items that were added to TODOS.md during phases 1-4. Read deferred-scope.md and list
+each item that was batch-appended to TODOS.md. Format: "- <item> (Phase <N>, <principle>)".
+If TODOS.md does not exist or no items were deferred: "none"]
 ```
 
 ### 5.1.1 Collect all decisions
@@ -1399,6 +1535,34 @@ python3 plugin-legacy/scripts/write_artifact.py plan --artifact plan \
   --task-dir doc/harness/tasks/TASK__<id>/ \
   --input /tmp/plan_content.md
 ```
+
+## Phase 6.9: Learnings Write-back
+
+**Always runs after Phase 6 completes. Non-blocking.**
+
+Reflect on the current plan session and log any operational discoveries that would save
+time in a future session. Good candidates:
+- build quirks or ordering constraints discovered during review
+- unexpected env var requirements or path assumptions
+- timing or concurrency issues identified in Phase 3 eng review
+- project-specific patterns that differ from defaults
+
+Only log genuine operational discoveries. Skip obvious facts and transient errors (network
+blips, rate limits).
+
+**Test before logging:** Would knowing this save 5+ minutes in a future session? If yes, log it.
+
+```bash
+_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
+_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
+mkdir -p .harness 2>/dev/null || true
+# Append one JSON line per learning discovered during this session
+# Example (replace with actual insight):
+# echo '{"ts":"'"$_TS"'","type":"operational","skill":"plan","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"DESCRIPTION","source":"observed"}' >> .harness/learnings.jsonl
+```
+
+If `.harness/learnings.jsonl` does not exist, create it. If the write fails for any reason,
+skip silently. This step never blocks Phase 7 or task close.
 
 ### 6.8 Close session
 
