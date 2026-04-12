@@ -19,6 +19,7 @@ This skill implements the harness-native 7-phase dual-voice review pipeline for 
 - **Read actual code.** Each review phase MUST read actual source files, diffs, and code referenced by the plan. Reasoning from memory or plan text alone is insufficient. If a section asks for a dependency graph, ASCII diagram, or code map — read the files first.
 - **Never abort.** The pipeline does not abort. If both voices fail (blocked), surface the gap as a finding and continue. Blocked is never a terminal state except for premise gate refusal. Surface all taste decisions; never silently redirect to a shorter path. When auto_decide is active, never redirect to interactive review. Surface all taste decisions at the Phase 5 gate.
 - **Auto-decide mode.** When `auto_decide` is active, intermediate AskUserQuestion calls (except premise gate and User Challenge items) are resolved by the 6 Decision Principles. Two gates are never auto-decided: (a) premise confirmation (Phase 1.1) and (b) User Challenge items (Phase 5.3). Auto-decide replaces the USER's judgment on taste items, but does NOT reduce analysis depth.
+- **Sequential execution required.** Phases execute in strict order: 0 → 1 → 2 → 3 → 4 → 4.5 → 5 → 5.5 → 6 → 7. NEVER run phases in parallel. Each phase must complete fully before the next begins.
 
 ---
 
@@ -45,6 +46,27 @@ B) ...
 **Applies to:** all AskUserQuestion calls including premise gate (Phase 1.1), prerequisite offer (Phase 0.4.5), User Challenge items (Phase 5.3), and gate options (Phase 5.4.1).
 
 Do NOT add lengthy recap of prior phases. The one-line header is sufficient orientation.
+
+**Completeness scoring (required for every option):**
+
+Each option MUST include a `Completeness: X/10` score:
+- **10** — Complete implementation: all edge cases, full coverage, no follow-up needed
+- **7** — Happy path: covers the main flow but skips some edges
+- **3** — Shortcut: defers significant work
+
+If both options are 8+, recommend the higher one. If one option is ≤5, flag it explicitly.
+
+When an option involves significant effort, show both effort scales:
+`(human: ~X days / plan-skill: ~Y min)`
+
+**Effort reference:**
+
+| Task type | Human team | Plan-skill | Compression |
+|-----------|-----------|------------|-------------|
+| Boilerplate | 2 days | 15 min | ~100× |
+| Tests | 1 day | 15 min | ~50× |
+| Feature | 1 week | 30 min | ~30× |
+| Bug fix | 4 hours | 15 min | ~20× |
 
 ---
 
@@ -166,6 +188,51 @@ Applied to every contested item between Voice A and Voice B. First applicable pr
 
 ---
 
+## Completion Status Protocol
+
+When completing the skill workflow, report status using exactly one of:
+
+- **DONE** — All steps completed successfully. Evidence provided for each claim.
+- **DONE_WITH_CONCERNS** — Completed, but with issues the user should know. List each concern.
+- **BLOCKED** — Cannot proceed. Use this format:
+  ```
+  STATUS: BLOCKED
+  REASON: [1-2 sentences]
+  ATTEMPTED: [what was tried]
+  RECOMMENDATION: [what the user should do next]
+  ```
+- **NEEDS_CONTEXT** — Missing information required to continue:
+  ```
+  STATUS: NEEDS_CONTEXT
+  MISSING: [exactly what information is needed]
+  IMPACT: [what is blocked until this is provided]
+  ```
+
+**Escalation rule:** If any phase has been attempted 3 times without success, STOP and emit
+`STATUS: BLOCKED`. Bad work is worse than no work.
+
+---
+
+## Repo Ownership — See Something, Say Something
+
+When reading source files during review phases, you may encounter issues outside the current
+task's scope (other files, other features, existing bugs).
+
+`REPO_MODE` determines how to handle these:
+
+- **`solo`** — You own everything in this repo. Investigate proactively and offer to fix.
+  Flag via one-sentence note: what you noticed and its impact.
+- **`collaborative`** — Other developers may own adjacent code. Flag via AskUserQuestion
+  but do NOT fix without explicit user approval. May be someone else's work.
+- **`unknown`** (default) — Treat as `collaborative`. Flag but do not fix.
+
+Detect repo mode from task pack or TASK_STATE.yaml (`repo_mode` field). If absent: `unknown`.
+
+Always flag anything that looks wrong — even in `collaborative` mode. One sentence,
+what you noticed and its potential impact. Never silently ignore a visible defect.
+
+---
+
 ## Decision Classification
 
 Every contested item between Voice A and Voice B is classified before it is acted on.
@@ -222,6 +289,30 @@ Audit row format (7 pipe-delimited columns):
 
 ---
 
+## Context Recovery
+
+**Always runs at skill invocation start, before Phase 0.0.**
+
+Check for prior sessions by reading the task's AUDIT_TRAIL.md phase-summary rows:
+
+```bash
+if [ -f "doc/harness/tasks/TASK__<id>/AUDIT_TRAIL.md" ]; then
+  grep "phase-summary" doc/harness/tasks/TASK__<id>/AUDIT_TRAIL.md | tail -5
+fi
+```
+
+If prior phase-summary rows are found, emit a one-paragraph welcome briefing:
+
+```
+Resuming TASK__<id>. Last completed phase: <N>. [brief summary from last phase-summary row].
+```
+
+If AUDIT_TRAIL.md is absent: proceed silently, no message.
+
+This section is informational only. It never blocks.
+
+---
+
 ## Phase 0.0: Session Recovery
 
 **Runs only when resuming an interrupted plan session.**
@@ -266,6 +357,23 @@ Write `PLAN_SESSION.json` in the task directory:
 ```
 
 Set `plan_session_state: context_open` in `TASK_STATE.yaml` via Bash.
+
+### 0.1.5 Load project learnings
+
+Check for a project learnings file:
+```bash
+if [ -f ".harness/learnings.jsonl" ]; then
+  tail -5 .harness/learnings.jsonl
+fi
+```
+
+If the file exists and has entries, read the last 5 and incorporate any relevant operational
+knowledge into the plan context (e.g. known build quirks, deferred scope patterns, env var
+requirements). Log the count:
+```
+LEARNINGS: <N> entries loaded
+```
+If the file does not exist: `LEARNINGS: 0` — proceed normally.
 
 ### 0.2 Run task_start
 
@@ -1106,14 +1214,30 @@ The file is referenced from PLAN.md's "NOT in scope" section. At Phase 6, the pl
 
 In `light` execution mode, deferred scope is still collected (single-voice phases can still identify out-of-scope items).
 
-After all deferred items are appended during Phases 1-4, check whether a TODOS.md exists at the project root. If it does, append a summary block:
+**Batch collection at Phase 3 completion (primary method):**
 
-    if [ -f "TODOS.md" ]; then
-      echo "" >> TODOS.md
-      echo "### Deferred from TASK__<id> planning" >> TODOS.md
-      grep "^- " doc/harness/tasks/TASK__<id>/deferred-scope.md >> TODOS.md
-    fi
+After Phase 3 completes and all deferred items from Phases 1-3 are in `deferred-scope.md`,
+check TODOS.md and perform a single batch append:
 
+```bash
+if [ -f "TODOS.md" ]; then
+  echo "" >> TODOS.md
+  echo "### Deferred from TASK__<id> planning (Phases 1-3)" >> TODOS.md
+  grep "^- " "doc/harness/tasks/TASK__<id>/deferred-scope.md" >> TODOS.md
+fi
+```
+
+After Phase 4 completes (if DX scope ran), append DX deferred items in a second pass:
+```bash
+if [ -f "TODOS.md" ] && grep -q "Phase 4" "doc/harness/tasks/TASK__<id>/deferred-scope.md" 2>/dev/null; then
+  echo "" >> TODOS.md
+  echo "### Deferred from TASK__<id> planning (Phase 4 DX)" >> TODOS.md
+  grep "Phase 4" -A 10 "doc/harness/tasks/TASK__<id>/deferred-scope.md" | grep "^- " >> TODOS.md
+fi
+```
+
+Do NOT scatter individual TODOS.md appends throughout Phases 1-4. Collect into
+`deferred-scope.md` incrementally, then batch-write to TODOS.md at phase completion.
 If TODOS.md does not exist, skip silently. Do not create it.
 
 
@@ -1224,6 +1348,58 @@ python3 plugin-legacy/scripts/write_artifact.py plan --artifact plan \
   --input /tmp/plan_content.md
 ```
 
+### 6.8b Append Plan Review Report to PLAN.md
+
+After all artifacts are written, append a `## Plan Review Report` section to PLAN.md
+summarising the review pipeline that was run. This makes review coverage visible directly
+in the plan file without needing to open AUDIT_TRAIL.md.
+
+```bash
+_TASK_DIR="doc/harness/tasks/TASK__<id>"
+_PHASE1_COUNTS=$(grep '"phase":"1"' "$_TASK_DIR/AUDIT_TRAIL.md" 2>/dev/null | grep phase-summary | tail -1 || echo "")
+_PHASE2_STATUS=$(grep '"phase":"2"' "$_TASK_DIR/AUDIT_TRAIL.md" 2>/dev/null | grep phase-summary | tail -1 || echo "skipped")
+_PHASE3_COUNTS=$(grep '"phase":"3"' "$_TASK_DIR/AUDIT_TRAIL.md" 2>/dev/null | grep phase-summary | tail -1 || echo "")
+_PHASE4_STATUS=$(grep '"phase":"4"' "$_TASK_DIR/AUDIT_TRAIL.md" 2>/dev/null | grep phase-summary | tail -1 || echo "skipped")
+cat >> /tmp/plan_content.md << REPORT_EOF
+
+## Plan Review Report
+
+| Phase | Ran | Status | Findings |
+|-------|-----|--------|----------|
+| 1 CEO Review | yes | complete | $(echo "$_PHASE1_COUNTS" | grep -o '"confirmed":[0-9]*' | head -1 || echo "—") confirmed |
+| 2 Design Review | $([ -n "$_PHASE2_STATUS" ] && echo "yes" || echo "no (no UI scope)") | — | — |
+| 3 Eng Review | yes | complete | $(echo "$_PHASE3_COUNTS" | grep -o '"confirmed":[0-9]*' | head -1 || echo "—") confirmed |
+| 4 DX Review | $([ -n "$_PHASE4_STATUS" ] && echo "yes" || echo "no (no DX scope)") | — | — |
+| 4.5 Outside Voice | yes | complete | — |
+| 5.5 Spec Review | yes | complete | — |
+
+**VERDICT:** REVIEWED — plan has passed the full dual-voice pipeline.
+REPORT_EOF
+```
+
+If AUDIT_TRAIL.md is absent or unreadable, write the placeholder table:
+```markdown
+## Plan Review Report
+
+| Phase | Ran | Status | Findings |
+|-------|-----|--------|----------|
+| 1 CEO Review | — | — | — |
+| 2 Design Review | — | — | — |
+| 3 Eng Review | — | — | — |
+| 4 DX Review | — | — | — |
+| 4.5 Outside Voice | — | — | — |
+| 5.5 Spec Review | — | — | — |
+
+**VERDICT:** NO AUDIT TRAIL — run /plan for full review pipeline.
+```
+
+After appending, re-run the PLAN.md CLI write:
+```bash
+python3 plugin-legacy/scripts/write_artifact.py plan --artifact plan \
+  --task-dir doc/harness/tasks/TASK__<id>/ \
+  --input /tmp/plan_content.md
+```
+
 ### 6.8 Close session
 
 Update `PLAN_SESSION.json`:
@@ -1265,6 +1441,35 @@ Next: critic-plan review → harness:critic-plan
 
 ---
 
+## Phase 7: Operational Self-Improvement
+
+**Always runs after Phase 6 completes.**
+
+Before finishing, reflect on this plan session:
+- Did any commands fail unexpectedly or require retries?
+- Did you take a wrong approach and have to backtrack?
+- Did you discover a project-specific quirk (build order, env vars, path assumptions)?
+- Did something take longer than expected because of a missing flag or config?
+
+If yes to any, log an operational learning:
+
+```bash
+_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+_KEY="SHORT_KEY"  # e.g. "write-artifact-blocked-by-guard"
+_INSIGHT="DESCRIPTION"  # one sentence, what to know next time
+mkdir -p .harness
+jq -n --arg ts "$_TS" --arg skill "plan" --arg key "$_KEY" --arg insight "$_INSIGHT" \
+  '{ts:$ts,skill:$skill,key:$key,insight:$insight,confidence:0.8,source:"observed"}' \
+  >> .harness/learnings.jsonl
+```
+
+Only log genuine operational discoveries. Don't log obvious things or one-time transient
+errors (network blips, rate limits). A good test: would knowing this save 5+ minutes
+in a future plan session? If yes, log it.
+
+This phase is informational. It never blocks.
+
+---
 
 ## Execution mode branches
 
