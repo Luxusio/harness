@@ -596,8 +596,8 @@ This sub-skill shares common sections with the main plan skill (`plugin/skills/p
 Before review, load relevant prior learnings:
 
 ```bash
-if [ -f ".harness/learnings.jsonl" ]; then
-  grep -i "design\|ui\|ux\|component\|visual" .harness/learnings.jsonl | tail -5
+if [ -f "doc/harness/learnings.jsonl" ]; then
+  grep -i "design\|ui\|ux\|component\|visual" doc/harness/learnings.jsonl | tail -5
 fi
 ```
 
@@ -645,8 +645,8 @@ After review, log operational discoveries with file metadata:
 ```bash
 _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-mkdir -p .harness 2>/dev/null || true
-echo '{"ts":"'"$_TS"'","type":"operational","skill":"plan-design-review","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"DESCRIPTION","files":["path/to/file1","path/to/file2"]}' >> .harness/learnings.jsonl 2>/dev/null || true
+mkdir -p doc/harness 2>/dev/null || true
+echo '{"ts":"'"$_TS"'","type":"operational","skill":"plan-design-review","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"DESCRIPTION","files":["path/to/file1","path/to/file2"]}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
 Only log genuine discoveries. Skip obvious facts and transient errors.

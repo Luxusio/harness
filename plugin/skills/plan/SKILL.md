@@ -3,7 +3,7 @@ name: plan
 description: Harness-native 7-phase dual-voice review pipeline that writes PLAN.md and related task contract artefacts via the CLI.
 argument-hint: <task-slug>
 user-invocable: true
-allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, Agent, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context
+allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, Agent, mcp__harness__task_start, mcp__harness__task_context
 ---
 
 This skill implements the harness-native 7-phase dual-voice review pipeline for task planning. It runs structured review across CEO, Design, Engineering, and DX lenses, builds adversarial consensus via two independent voices, classifies every decision, surfaces only contested items to the user, and writes the final task contract through the protected-artifact CLI. The old 9-step linear procedure is retired.
@@ -13,7 +13,7 @@ This skill implements the harness-native 7-phase dual-voice review pipeline for 
 - **Dual Voice required.** Every review phase (1-4) spawns Voice A and Voice B via the Agent tool. Single-voice review is prohibited; degradation matrix applies when a voice fails.
 - **Premise gate is mandatory.** Phase 1.1 emits exactly one `AskUserQuestion` before Phase 5. Premises are never auto-decided.
 - **Never-auto decisions.** User Challenge items are never auto-decided. Each gets its own `AskUserQuestion` at Phase 5.3.
-- **Write via CLI only.** PLAN.md, PLAN.meta.json, CHECKS.yaml, and AUDIT_TRAIL.md are written exclusively through `python3 plugin-legacy/scripts/write_artifact.py plan --artifact ...`. Never call Write/Edit on these artefacts directly.
+- **Write via CLI only.** PLAN.md, PLAN.meta.json, CHECKS.yaml, and AUDIT_TRAIL.md are written exclusively through `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact ...`. Never call Write/Edit on these artefacts directly.
 - **Zero browser-flag participation.** This skill does not read, write, enforce, or inspect the browser verification flag in TASK_STATE.yaml. Treat it as opaque metadata owned by critic-runtime. See `REQ__process__browser-required-enforcement.md`.
 - **Workflow-lock awareness.** The plan skill trusts the coordinator to enforce workflow_lock. No redundant check is performed within the skill itself.
 - **Read actual code.** Each review phase MUST read actual source files, diffs, and code referenced by the plan. Reasoning from memory or plan text alone is insufficient. If a section asks for a dependency graph, ASCII diagram, or code map — read the files first.
@@ -100,8 +100,8 @@ conventional wisdom or common practice, log it as a durable insight:
 ```bash
 _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-mkdir -p .harness 2>/dev/null || true
-echo '{"ts":"'"$_TS"'","type":"eureka","skill":"plan","branch":"'"$_BRANCH"'","insight":"ONE_LINE_SUMMARY","source":"first-principles"}' >> .harness/learnings.jsonl 2>/dev/null || true
+mkdir -p doc/harness 2>/dev/null || true
+echo '{"ts":"'"$_TS"'","type":"eureka","skill":"plan","branch":"'"$_BRANCH"'","insight":"ONE_LINE_SUMMARY","source":"first-principles"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
 Replace `ONE_LINE_SUMMARY` with a concrete one-sentence description of the insight.
@@ -341,28 +341,28 @@ All plan artefact writes go through the CLI. The session must be in `write_open`
 
 Write PLAN.md:
 ```bash
-python3 plugin-legacy/scripts/write_artifact.py plan --artifact plan \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact plan \
   --task-dir doc/harness/tasks/TASK__<id>/ \
   --input /tmp/plan_content.md
 ```
 
 Write PLAN.meta.json:
 ```bash
-python3 plugin-legacy/scripts/write_artifact.py plan --artifact plan-meta \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact plan-meta \
   --task-dir doc/harness/tasks/TASK__<id>/ \
   --input /tmp/plan_meta.json
 ```
 
 Write CHECKS.yaml:
 ```bash
-python3 plugin-legacy/scripts/write_artifact.py plan --artifact checks \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact checks \
   --task-dir doc/harness/tasks/TASK__<id>/ \
   --checks /tmp/checks_content.yaml
 ```
 
 Append to AUDIT_TRAIL.md:
 ```bash
-python3 plugin-legacy/scripts/write_artifact.py plan --artifact audit \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact audit \
   --task-dir doc/harness/tasks/TASK__<id>/ \
   --input /tmp/audit_row.txt \
   --append
@@ -479,8 +479,8 @@ Set `plan_session_state: context_open` in `TASK_STATE.yaml` via Bash.
 
 Check for a project learnings file:
 ```bash
-if [ -f ".harness/learnings.jsonl" ]; then
-  tail -5 .harness/learnings.jsonl
+if [ -f "doc/harness/learnings.jsonl" ]; then
+  tail -5 doc/harness/learnings.jsonl
 fi
 ```
 
@@ -495,7 +495,7 @@ If the file does not exist: `LEARNINGS: 0` — proceed normally.
 ### 0.2 Run task_start
 
 ```
-mcp__plugin_harness_harness__task_start { task_id: "<ARGUMENTS>" }
+mcp__harness__task_start { task_id: "<ARGUMENTS>" }
 ```
 
 Extract from task pack: `risk_level`, `planning_mode`, `compat.execution_mode`, `workflow_locked`, `maintenance_task`, `ui_scope`, `dx_scope`, `must_read`.
@@ -646,7 +646,7 @@ If the task pack already sets `ui_scope: true` or `dx_scope: true`, honour that 
 Read `compat.execution_mode` from the task pack:
 
 - **`light`**: Skip dual voices in Phases 1 and 3. Run single-voice reasoning block instead. Skip Phase 2 and Phase 4 entirely regardless of ui_scope/dx_scope. Produce narrow contract.
-- **`standard`** (default): Full pipeline with dual voices. Phase 2 runs only if `ui_scope=true`. Phase 4 runs only if `dx_scope=true`. Always sets `critic_plan: mandatory` in PLAN.meta.json so critic-plan FAIL is a hard block.
+- **`standard`** (default): Full pipeline with dual voices. Phase 2 runs only if `ui_scope=true`. Phase 4 runs only if `dx_scope=true`.
 
 **Auto-decide detection:** Also check for `auto_decide: true` in the task pack (TASK_STATE.yaml) or as an explicit flag passed to the skill invocation. This is independent of `execution_mode` and may be combined with any mode.
 
@@ -728,7 +728,7 @@ For each point of disagreement between Voice A and Voice B:
 
 Append CEO consensus table to `AUDIT_TRAIL.md` via:
 ```bash
-python3 plugin-legacy/scripts/write_artifact.py plan --artifact audit \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact audit \
   --task-dir doc/harness/tasks/TASK__<id>/ \
   --input /tmp/ceo_audit_rows.txt \
   --append
@@ -828,7 +828,7 @@ Classify each dimension disagreement. Apply conflict-resolution priority P5 + P1
 
 Append design consensus rows to `AUDIT_TRAIL.md` via:
 ```bash
-python3 plugin-legacy/scripts/write_artifact.py plan --artifact audit \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact audit \
   --task-dir doc/harness/tasks/TASK__<id>/ \
   --input /tmp/design_audit_rows.txt \
   --append
@@ -896,7 +896,7 @@ Classify each disagreement. Apply conflict-resolution priority P5 + P3.
 
 Append engineering consensus rows to `AUDIT_TRAIL.md` via:
 ```bash
-python3 plugin-legacy/scripts/write_artifact.py plan --artifact audit \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact audit \
   --task-dir doc/harness/tasks/TASK__<id>/ \
   --input /tmp/eng_audit_rows.txt \
   --append
@@ -1012,7 +1012,7 @@ Classify each disagreement. Apply conflict-resolution priority P5 + P3.
 
 Append DX consensus rows to `AUDIT_TRAIL.md` via:
 ```bash
-python3 plugin-legacy/scripts/write_artifact.py plan --artifact audit \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact audit \
   --task-dir doc/harness/tasks/TASK__<id>/ \
   --input /tmp/dx_audit_rows.txt \
   --append
@@ -1345,7 +1345,7 @@ Do not include harness policy boilerplate. Keep it concise and executable.
 ### 6.3 Write PLAN.md via CLI
 
 ```bash
-python3 plugin-legacy/scripts/write_artifact.py plan --artifact plan \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact plan \
   --task-dir doc/harness/tasks/TASK__<id>/ \
   --input /tmp/plan_content.md
 ```
@@ -1359,14 +1359,14 @@ Write `/tmp/plan_meta.json`:
   "planning_mode": "<value from task pack>",
   "execution_mode": "<light|standard>",
   "dual_voice_phases": ["phase1", "phase2", "phase3", "phase4"],
-  "critic_plan": "mandatory"
+  "critic_plan": "removed"
 }
 ```
 
 ### 6.5 Write PLAN.meta.json via CLI
 
 ```bash
-python3 plugin-legacy/scripts/write_artifact.py plan --artifact plan-meta \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact plan-meta \
   --task-dir doc/harness/tasks/TASK__<id>/ \
   --input /tmp/plan_meta.json
 ```
@@ -1378,7 +1378,7 @@ Write `/tmp/checks_content.yaml` with all acceptance criteria derived from PLAN.
 ### 6.7 Write CHECKS.yaml via CLI
 
 ```bash
-python3 plugin-legacy/scripts/write_artifact.py plan --artifact checks \
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact checks \
   --task-dir doc/harness/tasks/TASK__<id>/ \
   --checks /tmp/checks_content.yaml
 ```
@@ -1398,13 +1398,13 @@ Only log genuine operational discoveries. Skip obvious facts and transient error
 ```bash
 _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-mkdir -p .harness 2>/dev/null || true
+mkdir -p doc/harness 2>/dev/null || true
 # Append one JSON line per learning discovered during this session
 # Example (replace with actual insight):
-# echo '{"ts":"'"$_TS"'","type":"operational","skill":"plan","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"DESCRIPTION","source":"observed"}' >> .harness/learnings.jsonl
+# echo '{"ts":"'"$_TS"'","type":"operational","skill":"plan","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"DESCRIPTION","source":"observed"}' >> doc/harness/learnings.jsonl
 ```
 
-If `.harness/learnings.jsonl` does not exist, create it. If the write fails for any reason, skip silently. This step never blocks Phase 7 or task close.
+If `doc/harness/learnings.jsonl` does not exist, create it. If the write fails for any reason, skip silently. This step never blocks Phase 7 or task close.
 
 ### 6.9 Close session
 
@@ -1415,7 +1415,7 @@ Update `PLAN_SESSION.json`:
 
 Set `plan_session_state: closed` in `TASK_STATE.yaml`.
 
-The task is now ready for critic-plan review.
+The task is now ready for implementation.
 
 ### 6.10 Completion Report
 
@@ -1449,4 +1449,4 @@ Review log:        <N> entries (see REVIEW_LOG.jsonl)
 | `standard` | ui_scope gate | dx_scope gate | required | full dual-voice checklists | full depth required | collected | A-E available | compatible; CEO defaults SELECTIVE EXPANSION, DX defaults DX POLISH |
 
 - **light**: Skips Phase 2 and Phase 4. Runs Phases 0, 1, 3, 5, 6 with single-voice reasoning blocks. Mandatory output checklists still apply but produce single-voice versions (no consensus table). Sub-skill iteration uses single voice. Deferred scope is still collected. Gate options (A-E) are available but summary is simplified (no per-phase voice consensus scores).
-- **standard**: Full pipeline with dual voices. Phase 2 runs only if `ui_scope=true`. Phase 4 runs only if `dx_scope=true`. Full mandatory output checklists with dual-voice consensus. `critic_plan: mandatory` is set in PLAN.meta.json.
+- **standard**: Full pipeline with dual voices. Phase 2 runs only if `ui_scope=true`. Phase 4 runs only if `dx_scope=true`. Full mandatory output checklists with dual-voice consensus.

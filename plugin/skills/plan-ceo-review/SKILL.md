@@ -91,8 +91,8 @@ When first-principles reasoning reaches a conclusion that contradicts convention
 ```bash
 _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-mkdir -p .harness 2>/dev/null || true
-echo '{"ts":"'"$_TS"'","type":"eureka","skill":"plan-ceo-review","branch":"'"$_BRANCH"'","insight":"ONE_LINE_SUMMARY","source":"first-principles"}' >> .harness/learnings.jsonl 2>/dev/null || true
+mkdir -p doc/harness 2>/dev/null || true
+echo '{"ts":"'"$_TS"'","type":"eureka","skill":"plan-ceo-review","branch":"'"$_BRANCH"'","insight":"ONE_LINE_SUMMARY","source":"first-principles"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
 Only log genuine first-principles discoveries. Non-blocking — if the write fails, skip silently.
@@ -112,8 +112,8 @@ After completing this review, reflect on the session. If you discovered a projec
 ```bash
 _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-mkdir -p .harness
-echo '{"ts":"'"$_TS"'","skill":"plan-ceo-review","key":"SHORT_KEY","insight":"DESCRIPTION","confidence":0.8,"source":"observed"}' >> .harness/learnings.jsonl
+mkdir -p doc/harness
+echo '{"ts":"'"$_TS"'","skill":"plan-ceo-review","key":"SHORT_KEY","insight":"DESCRIPTION","confidence":0.8,"source":"observed"}' >> doc/harness/learnings.jsonl
 ```
 
 Only log genuine operational discoveries that would save 5+ minutes in a future session.
@@ -251,8 +251,8 @@ Write to `doc/harness/tasks/<task-id>/ceo-handoff.md`. On resume, read this note
 Search for relevant learnings from previous sessions:
 
 ```bash
-if [ -f ".harness/learnings.jsonl" ]; then
-  tail -10 .harness/learnings.jsonl
+if [ -f "doc/harness/learnings.jsonl" ]; then
+  tail -10 doc/harness/learnings.jsonl
 fi
 ```
 
@@ -317,8 +317,8 @@ If you discovered a non-obvious pattern, pitfall, or architectural insight durin
 ```bash
 _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-mkdir -p .harness 2>/dev/null || true
-echo '{"ts":"'"$_TS"'","skill":"plan-ceo-review","type":"TYPE","key":"SHORT_KEY","insight":"DESCRIPTION","confidence":N,"source":"SOURCE","files":["path/to/file"]}' >> .harness/learnings.jsonl
+mkdir -p doc/harness 2>/dev/null || true
+echo '{"ts":"'"$_TS"'","skill":"plan-ceo-review","type":"TYPE","key":"SHORT_KEY","insight":"DESCRIPTION","confidence":N,"source":"SOURCE","files":["path/to/file"]}' >> doc/harness/learnings.jsonl
 ```
 
 **Types:** `pattern`, `pitfall`, `preference`, `architecture`, `tool`, `operational`.
