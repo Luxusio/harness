@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""harness2 MCP server — self-contained, 8-field TASK_STATE.
+"""harness2 MCP server — self-contained, 6-field TASK_STATE.
 
 No plugin-legacy dependency. All operations are direct file I/O.
-8 MCP tools: task_start, task_context, task_verify, task_close,
-             write_critic_runtime, write_critic_document,
+7 MCP tools: task_start, task_context, task_verify, task_close,
+             write_critic_runtime,
              write_handoff, write_doc_sync.
 """
 
@@ -174,10 +174,6 @@ def handle_write_critic_runtime(args: dict) -> dict:
     return _write_artifact(args, "CRITIC__runtime.md", "runtime_verdict")
 
 
-def handle_write_critic_document(args: dict) -> dict:
-    return _write_artifact(args, "CRITIC__document.md", "document_verdict")
-
-
 def handle_write_handoff(args: dict) -> dict:
     return _write_artifact(args, "HANDOFF.md")
 
@@ -214,8 +210,8 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "task_id": {"type": "string"}},
          "required": ["task_id"], "additionalProperties": False},
      "handler": handle_task_close},
-    {"name": "write_critic_runtime", "title": "Write runtime critic — critic-runtime only",
-     "description": "Write CRITIC__runtime.md and set runtime_verdict.",
+    {"name": "write_critic_runtime", "title": "Write runtime verdict — QA agents only",
+     "description": "Write CRITIC__runtime.md and set runtime_verdict. Called by qa-browser, qa-api, or qa-cli.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"},
          "verdict": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED_ENV"]},
@@ -223,14 +219,6 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id", "verdict", "summary", "transcript"],
          "additionalProperties": False},
      "handler": handle_write_critic_runtime},
-    {"name": "write_critic_document", "title": "Write document critic — critic-document only",
-     "description": "Write CRITIC__document.md and set document_verdict.",
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"}, "task_dir": {"type": "string"},
-         "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
-         "summary": {"type": "string"}},
-         "required": ["verdict", "summary"], "additionalProperties": False},
-     "handler": handle_write_critic_document},
     {"name": "write_handoff", "title": "Write developer handoff — developer only",
      "description": "Write HANDOFF.md.",
      "inputSchema": {"type": "object", "properties": {
@@ -238,7 +226,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "summary": {"type": "string"}, "verification": {"type": "string"}},
          "required": ["summary", "verification"], "additionalProperties": False},
      "handler": handle_write_handoff},
-    {"name": "write_doc_sync", "title": "Write DOC_SYNC — writer only",
+    {"name": "write_doc_sync", "title": "Write DOC_SYNC — developer only",
      "description": "Write DOC_SYNC.md.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"}, "task_dir": {"type": "string"},
@@ -302,7 +290,7 @@ class McpServer:
                 "protocolVersion": self.protocol_version,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": SERVER_INFO,
-                "instructions": "harness2 MCP — 9 tools, 9-field TASK_STATE. write_* tools are subagent-only.",
+                "instructions": "harness2 MCP — 7 tools, 6-field TASK_STATE. write_* tools are subagent-only.",
             })
         elif method == "notifications/initialized":
             self.initialized = True

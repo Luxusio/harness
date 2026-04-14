@@ -13,10 +13,9 @@ from _lib import read_state, find_repo_root, TASK_DIR
 
 PROTECTED_ARTIFACTS = {
     "PLAN.md": "plan-skill",
-    "CRITIC__runtime.md": "critic-runtime",
-    "CRITIC__document.md": "critic-document",
+    "CRITIC__runtime.md": "qa-browser",  # also qa-api, qa-cli — checked by prefix match
     "HANDOFF.md": "developer",
-    "DOC_SYNC.md": "writer",
+    "DOC_SYNC.md": "developer",
 }
 
 
