@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""harness2 minimal library — stdlib only, 8-field TASK_STATE.
+"""harness2 minimal library — stdlib only, 6-field TASK_STATE.
 
 TASK_STATE schema:
-  task_id, status, runtime_verdict, document_verdict,
+  task_id, status, runtime_verdict,
   touched_paths, plan_session_state, closed_at, updated
 
 Routing is computed on-the-fly from manifest + artifacts. Never stored.
@@ -19,7 +19,7 @@ MANIFEST_PATH = "doc/harness/manifest.yaml"
 
 SCHEMA_FIELDS = (
     "task_id", "status", "runtime_verdict",
-    "document_verdict", "touched_paths", "plan_session_state",
+    "touched_paths", "plan_session_state",
     "closed_at", "updated",
 )
 
@@ -169,14 +169,13 @@ def canonical_task_id(task_id=None, slug=None, task_dir=None,
 
 
 def ensure_task_scaffold(task_dir, task_id, request_text=""):
-    """Create task dir with minimal 8-field TASK_STATE.yaml."""
+    """Create task dir with minimal 6-field TASK_STATE.yaml."""
     os.makedirs(task_dir, exist_ok=True)
     tid = _normalize_task_id(task_id, task_dir=task_dir) or task_id
     fields = {
         "task_id": tid,
         "status": "created",
         "runtime_verdict": "pending",
-        "document_verdict": "pending",
         "touched_paths": [],
         "plan_session_state": "closed",
         "closed_at": None,
@@ -235,7 +234,6 @@ def emit_compact_context(task_dir):
 
     routing = compile_routing(task_dir)
     runtime_verdict = (st.get("runtime_verdict") or "pending").upper()
-    document_verdict = (st.get("document_verdict") or "pending").upper()
     touched = st.get("touched_paths") or []
 
     has_plan = artifact_exists(task_dir, "PLAN.md")
@@ -247,17 +245,13 @@ def emit_compact_context(task_dir):
         missing_for_close.append("PLAN.md")
     if runtime_verdict != "PASS":
         missing_for_close.append("runtime_verdict PASS")
-    if document_verdict != "PASS":
-        missing_for_close.append("document_verdict PASS")
 
     if not has_plan:
         next_action = "Create PLAN.md via plan skill before source writes."
     elif runtime_verdict != "PASS":
         next_action = "Run task_verify to check runtime verification."
-    elif document_verdict != "PASS":
-        next_action = "Run write_critic_document or task_close."
     else:
-        next_action = "All verdicts PASS — run task_close."
+        next_action = "Runtime verdict PASS — run task_close."
 
     return {
         "task_id": st.get("task_id") or os.path.basename(task_dir),
@@ -265,7 +259,6 @@ def emit_compact_context(task_dir):
         "task_dir": task_dir,
         "routing": routing,
         "runtime_verdict": runtime_verdict,
-        "document_verdict": document_verdict,
         "source_write_allowed": source_write_allowed,
         "why_source_write_blocked": why_blocked,
         "touched_paths": touched,
@@ -321,8 +314,8 @@ def provenance_from_artifacts(task_dir):
         for agent, fn in {
             "plan-skill": "PLAN.md",
             "developer": "HANDOFF.md",
-            "writer": "DOC_SYNC.md",
-            "critic-runtime": "CRITIC__runtime.md",
-            "critic-document": "CRITIC__document.md",
+            "qa-browser": "CRITIC__runtime.md",
+            "qa-api": "CRITIC__runtime.md",
+            "qa-cli": "CRITIC__runtime.md",
         }.items()
     }

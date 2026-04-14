@@ -1,0 +1,140 @@
+# QA Knowledge Base
+# Accumulated testing knowledge for this project.
+# QA agents read this before testing. Agents also WRITE discoveries back here.
+# Updated: 2026-04-15
+
+# ── Service registry ──────────────────────────────────────────────
+# Each service the QA agents interact with. Auth, dev server, base URL.
+
+services: {}
+  # Example:
+  # web-app:
+  #   base_url: http://localhost:3000
+  #   auth:
+  #     required: true
+  #     method: form              # form | api-key | oauth | basic | none
+  #     login_url: /login
+  #     credentials:
+  #       email: test@example.com
+  #       password: testpass123
+  #     notes: Session cookie valid 30min. Re-login if 401.
+  #   dev_server:
+  #     command: npm run dev
+  #     port: 3000
+  #     startup_wait: 5
+  #     health_check: "curl -s -o /dev/null -w '%{http_code}' http://localhost:3000"
+  #
+  # api-server:
+  #   base_url: http://localhost:8080/api
+  #   auth:
+  #     required: true
+  #     method: api-key
+  #     header: X-API-Key
+  #     credentials:
+  #       key: test-api-key-12345
+  #     notes: Key has full access. Rotate in CI via API_KEY env var.
+
+# ── Selector hints ────────────────────────────────────────────────
+# UI elements that need special handling. Standard elements don't go here.
+# Only elements where naive interaction (click, fill) fails.
+
+selectors: []
+  # Example:
+  # - element: "Mobile hamburger menu"
+  #   service: web-app
+  #   page: /dashboard
+  #   selector: "button[aria-label='Toggle navigation']"
+  #   strategy: "click + wait_for text 'Menu'"
+  #   note: "Standard click works but menu animates in. Wait needed before interacting with menu items."
+  #   discovered: 2026-04-15
+  #
+  # - element: "Date range picker"
+  #   service: web-app
+  #   page: /reports
+  #   selector: ".date-range-picker input"
+  #   strategy: "fill with '2026-01-01 ~ 2026-03-31' then press Tab"
+  #   note: "Typing dates directly fails. Must use the exact format with ~ separator."
+  #   discovered: 2026-04-15
+  #
+  # - element: "File upload dropzone"
+  #   service: web-app
+  #   page: /upload
+  #   selector: "input[type='file']"
+  #   strategy: "upload_file directly on hidden input"
+  #   note: "Dropzone UI is a styled div. The actual input is hidden. Don't try to click the dropzone."
+  #   discovered: 2026-04-15
+
+# ── Test data ─────────────────────────────────────────────────────
+# Maps test scenarios to the data needed. "When testing X, use data Y."
+
+test_data: []
+  # Example:
+  # - scenario: "Active subscription checkout"
+  #   service: web-app
+  #   data:
+  #     user: "premium_user@test.com"
+  #     plan: "annual-premium"
+  #     payment_method: "card-ending-4242"
+  #   setup: "npm run db:seed -- --user premium_user"
+  #   verify: "Dashboard shows 'Premium' badge"
+  #
+  # - scenario: "Expired subscription retry"
+  #   service: web-app
+  #   data:
+  #     user: "expired_user@test.com"
+  #     plan: "expired-basic"
+  #   setup: "npm run db:seed -- --user expired_user"
+  #   verify: "Shows upgrade prompt, not dashboard"
+  #
+  # - scenario: "Empty state - no items"
+  #   service: web-app
+  #   data:
+  #     user: "new_user@test.com"
+  #   setup: "Create fresh user, no data"
+  #   verify: "Shows onboarding empty state"
+
+# ── Known issues ──────────────────────────────────────────────────
+# Flaky elements, race conditions, intermittent failures.
+# QA agents check this before reporting failures.
+
+known_issues: []
+  # Example:
+  # - element: "Modal close button"
+  #   service: web-app
+  #   symptom: "Sometimes takes 2 clicks to close"
+  #   cause: "Race condition with CSS animation"
+  #   workaround: "Wait 300ms after clicking close before next action"
+  #   reliability: 80%  # how often the workaround works
+  #   discovered: 2026-04-15
+  #
+  # - element: "Infinite scroll loader"
+  #   service: web-app
+  #   symptom: "Scroll triggers duplicate loads"
+  #   cause: "IntersectionObserver fires twice on fast scroll"
+  #   workaround: "Scroll incrementally by 500px using evaluate_script"
+  #   reliability: 95%
+  #   discovered: 2026-04-15
+
+# ── QA patterns ───────────────────────────────────────────────────
+# Cross-service testing patterns that QA agents should follow.
+
+patterns:
+  data_reset:
+    command: null  # e.g., "npm run db:seed -- --env test"
+    notes: "Command to reset test data to known state before QA session"
+
+  auth_flow:
+    steps: []
+      # e.g., for form auth:
+      # - "navigate to login_url"
+      # - "fill email field"
+      # - "fill password field"
+      # - "click submit"
+      # - "wait_for dashboard indicator element"
+    notes: null
+
+  screenshot_evidence:
+    before_action: true
+    after_action: true
+    on_failure: true
+    notes: "Take screenshots at these points for evidence"
