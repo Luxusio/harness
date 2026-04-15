@@ -1,9 +1,9 @@
 ---
 name: develop
-description: Implement PLAN.md with plan completion audit, scope drift detection, bisectable commits, verification gate, adversarial self-check, confidence ratings, test failure triage, fix-first pattern, and hypothesis-driven debugging. Uses parallel agents for quality audit phases and haiku for mechanical work.
+description: Implement PLAN.md with plan completion audit, scope drift detection, bisectable commits, verification gate, adversarial self-check, confidence ratings, test failure triage, fix-first pattern, hypothesis-driven debugging, per-AC visual verification, runtime smoke test, and browser-based debugging. Uses parallel agents for quality audit phases and haiku for mechanical work.
 argument-hint: <task-id>
 user-invocable: true
-allowed-tools: Read, Glob, Grep, Bash, Edit, Write, Agent, Skill, AskUserQuestion, mcp__harness__task_start, mcp__harness__task_context, mcp__harness__write_handoff, mcp__harness__write_doc_sync
+allowed-tools: Read, Glob, Grep, Bash, Edit, Write, Agent, Skill, AskUserQuestion, mcp__harness__task_start, mcp__harness__task_context, mcp__harness__write_handoff, mcp__harness__write_doc_sync, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__new_page, mcp__chrome-devtools__select_page, mcp__chrome-devtools__emulate, mcp__chrome-devtools__click, mcp__chrome-devtools__fill, mcp__chrome-devtools__press_key, mcp__chrome-devtools__type_text, mcp__chrome-devtools__hover, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__lighthouse_audit
 ---
 
 Implement the plan for a harness2 task. Reads PLAN.md, implements changes, verifies completeness, writes HANDOFF.md.
@@ -15,11 +15,15 @@ Direct, terse. Status updates, not narration.
 ## Error Philosophy
 
 Errors in this skill are consumed by the AI agent running it, not humans.
-Every error, BLOCKED condition, or stop must include a **Next step:** directive
-telling the agent exactly what to do. Vague stops waste fix cycles.
+MCP does not tolerate mid-task stops. **Never halt with a bare BLOCKED.**
+Instead, use `AskUserQuestion` to present the blocker and recovery options.
+The user decides what happens next.
 
-Bad:  "BLOCKED: PLAN.md missing"
-Good: "BLOCKED: PLAN.md missing. Next step: run plan skill to create PLAN.md for this task, or verify task_id is correct."
+Bad:  "BLOCKED: PLAN.md missing" (halts execution)
+Good: AskUserQuestion with blocker description + options:
+  - "Run plan skill to create PLAN.md"
+  - "Verify task_id is correct"
+  - "Skip and continue anyway"
 
 ## Model Routing (cost optimization)
 
@@ -33,6 +37,9 @@ Not all phases need the same intelligence. Route work to the cheapest sufficient
 | Adversarial review (4.7) | **cross-model** | Different model catches implementer's blind spots |
 | Edge case scan (4.8) | **haiku** | Pattern matching: null guards, empty checks |
 | Completion audit (Phase 4) | **haiku** | Cross-reference ACs against diff |
+| Runtime smoke (Phase 3.9) | **haiku** | Mechanical: dev server check, console scan |
+| Visual smoke (Phase 4, Agent D) | **haiku** | Mechanical: screenshot, a11y, console check |
+| Browser debugging (Phase 7) | inherit | Hypothesis formation needs reasoning + DOM inspection |
 | Debugging (Phase 7) | inherit | Hypothesis formation needs reasoning |
 
 When spawning agents, use `model="haiku"` for mechanical work. Quality gates (confidence)
@@ -47,9 +54,11 @@ Execute phases in strict order. Each phase must complete before the next begins.
 
 **Sub-file loading is lazy:** The sub-files under `plugin/skills/develop/` (fix-first-pattern.md,
 test-coverage-audit.md, adversarial-self-check.md, confidence-rated-changes.md,
-near-zero-marginal-cost.md, test-failure-triage.md, hypothesis-driven-debugging.md) are NOT
-all loaded at the start. Each file is read only in the phase that needs it. Do NOT pre-read
-sub-files — load them on demand to preserve context window for implementation.
+near-zero-marginal-cost.md, test-failure-triage.md, hypothesis-driven-debugging.md,
+runtime-smoke.md, browser-verification.md, quality-audit-pipeline.md,
+verification-gate.md) are NOT all loaded at the start. Each file is read only in the
+phase that needs it. Do NOT pre-read sub-files — load them on demand to preserve context
+window for implementation.
 
 **Idempotency guarantee:** Every phase is safe to re-run after a crash. On crash recovery,
 check PROGRESS.md and `audit/` directory to determine where to resume — do NOT restart from
@@ -88,6 +97,9 @@ rather than failing. Never install missing tools — just note and continue:
 | No QA_KNOWLEDGE.yaml | 0 | Skip. First QA session will create it. |
 | No learnings.jsonl | 1 | Skip. First session will create it. |
 | python3 unavailable for YAML parse | 0 | Use grep/cat fallback for TASK_STATE check |
+| No browser_qa_supported in manifest | 3.9, 4 (Agent D), 7 (browser debug) | Skip browser phases. Log: "Non-browser project — skipped visual verification" |
+| Dev server unreachable after 15s | 3.9 | Skip runtime smoke. Note in HANDOFF. Proceed to Phase 4. |
+| Chrome DevTools MCP unavailable | 3 (visual), 3.9, 4 (Agent D), 7 (browser debug) | Skip browser phases. Fall back to CLI-only verification. |
 
 ### Phase 0: Pre-flight check
 
@@ -110,17 +122,41 @@ Check:
 3. `TASK_STATE.yaml` has a valid `status` field (one of: created, planning, implementing, verifying, documenting, closed).
 4. No other task holds write focus (check manifest `active_task` if present).
 
-If any check fails: stop with a diagnostic table, not a bare "BLOCKED".
+If any check fails: present the diagnostic table via `AskUserQuestion` with recovery options.
+Do not halt — let the user choose how to proceed.
 
 ```
-Pre-flight Failed:
-| Check | Status | Detail |
-|-------|--------|--------|
-| manifest.yaml | MISSING | Next step: run setup skill to initialize harness |
-| TASK_STATE | INVALID | Next step: check task_id spelling or run task_start |
+AskUserQuestion:
+  Question: "Pre-flight checks failed for <task_id>. How should we proceed?"
+  Options:
+    - A) Run setup skill to fix missing pieces
+    - B) Use a different task_id
+    - C) Skip pre-flight and continue anyway (risky)
+
+  Pre-flight diagnostic:
+  | Check | Status | Detail |
+  |-------|--------|--------|
+  | manifest.yaml | MISSING | Run setup skill to initialize harness |
+  | TASK_STATE | INVALID | Check task_id spelling or run task_start |
 ```
 
 If all pass: proceed to Phase 1. Log: "Pre-flight: all checks passed (<N>s)".
+
+**Context Recovery:** Before Phase 1, check for prior session state:
+
+```bash
+_TIMELINE="doc/harness/timeline.jsonl"
+if [ -f "$_TIMELINE" ]; then
+  tail -20 "$_TIMELINE" | grep '"event":"completed"' | tail -5
+  tail -5 "$_TIMELINE" | grep -o '"skill":"[^"]*"' | tail -3
+fi
+ls -dt doc/harness/tasks/TASK__*/ 2>/dev/null | head -3
+```
+
+If prior sessions exist, display a one-line briefing:
+"Welcome back. Last session: {skill} on {branch} ({duration}s). {N} tasks on file."
+
+If an in-progress task matches the current task_id, log: "Context recovery: resuming from prior session."
 
 ### Phase 1: Load plan
 
@@ -160,7 +196,15 @@ ls doc/harness/patterns/*.md 2>/dev/null || true
 
 If learnings exist for this project type (build quirks, test commands, env deps), load them before Phase 2. Log: "Loaded N learnings from prior sessions". These inform Phase 2 (knowing test framework upfront) and Phase 7 (known flaky tests, known env requirements).
 
-If PLAN.md is absent: stop, report BLOCKED. Next step: run plan skill to create PLAN.md, or verify task_id is correct.
+If PLAN.md is absent: use `AskUserQuestion` to present recovery options:
+```
+AskUserQuestion:
+  Question: "PLAN.md not found for <task_id>. What should we do?"
+  Options:
+    - A) Run plan skill to create PLAN.md (recommended)
+    - B) Check if task_id is correct
+    - C) Abort this task
+```
 
 ### Phase 2: Read existing code + Search Before Building
 
@@ -171,6 +215,11 @@ Before writing any code, read every target file and dependency listed in PLAN.md
 - Error handling conventions
 
 Map what already exists vs what needs to change. Do NOT start implementing until this read pass completes.
+
+**Baseline screenshot (browser projects only):**
+
+Read `plugin/skills/develop/browser-verification.md` ("Phase 2: Baseline Screenshot" section)
+and follow it in full. Captures before-implementation visual state for browser projects.
 
 **Search Before Building (mandatory):** For each AC, before implementing:
 
@@ -242,6 +291,35 @@ Collect results from parallel agents, verify each, then proceed to dependent (se
 
 **If all ACs are sequential:** Skip parallelization, proceed to Phase 3 as normal. Log: "All ACs sequential — no parallelization opportunity."
 
+### Phase 3.1: Scope Lock
+
+Before writing any code, declare the allowed scope in PROGRESS.md:
+
+```yaml
+# Added to PROGRESS.md
+scope_lock:
+  allowed_paths:
+    - <file1>
+    - <file2>
+  test_paths:
+    - <test_file1>
+  forbidden_paths:
+    - <files explicitly out of scope from PLAN.md>
+```
+
+**During implementation**, before each file edit, check against scope_lock:
+- File in `allowed_paths` → proceed.
+- File in `test_paths` → proceed (test files are always in scope).
+- File not in any list → warn: "SCOPE WARNING: editing {file} not declared in scope. Adding to scope_lock."
+- File in `forbidden_paths` → BLOCK. Do not edit. Escalate to user.
+
+Auto-add newly encountered files to `allowed_paths` with a note:
+```yaml
+- path/to/new-file.ts  # auto-added during AC-003 (imported by target)
+```
+
+At Phase 5 (scope drift), cross-reference scope_lock against actual diff. Any file not in scope_lock = drift.
+
 ### Phase 3: Implement
 
 Implement changes following PLAN.md exactly. Rules:
@@ -266,6 +344,23 @@ completed_acs:
 current_ac: <next AC or "done">
 partial_ac: null  # or { id: AC-003, note: "edits done, regression test pending" }
 updated: <ISO timestamp>
+
+# Session checkpoint (survives crashes)
+decisions:
+  - choice: "Used Redis for caching instead of Memcached"
+    reason: "Already in stack, no new dependency"
+    ac: AC-001
+  - choice: "Skipped pagination for MVP, will add in follow-up"
+    reason: "User confirmed via AskUserQuestion"
+    ac: AC-003
+attempts:
+  - ac: AC-002
+    tried: "Direct SQL join"
+    failed_because: "N+1 on related entities"
+    resolved_with: "Eager loading via .includes()"
+notes:
+  - "billing.ts:156 — N+1 query, fixed with eager load"
+  - "report.ts uses async handler that looks sync — future devs beware"
 ```
 
 This enables resume if the session breaks mid-implementation. The richer schema
@@ -292,6 +387,51 @@ If PLAN.md specifies verification commands per AC, prefer those over auto-discov
 
 If per-AC tests fail: fix immediately. This catches issues when context is fresh, before they compound. Count against Phase 7 fix budget? No — these are free. Only Phase 7's full-suite failures count toward the 3-cycle limit.
 
+**Per-AC visual verification + interaction testing (browser projects only):**
+
+Read `plugin/skills/develop/browser-verification.md` ("Per-AC Visual Verification" and
+"Per-AC Interaction Testing" sections) and follow them in full. Runs for each AC that
+touches UI files. Skip for non-UI ACs (data logic, config, backend).
+
+### Phase 3.4: Test Framework Bootstrap
+
+If no test framework was detected in Phase 1, and the project has code that should be tested:
+
+1. **Check for opt-out marker:**
+   ```bash
+   [ -f doc/harness/.no-test-bootstrap ] && echo "OPT_OUT: yes" || echo "OPT_OUT: no"
+   ```
+
+2. **If no opt-out, auto-detect runtime and offer bootstrap:**
+
+   ```bash
+   _HAS_JEST=$(grep -q '"jest"' package.json 2>/dev/null && echo "yes" || echo "no")
+   _HAS_VITEST=$(grep -q '"vitest"' package.json 2>/dev/null && echo "yes" || echo "no")
+   _HAS_PYTEST=$(grep -q "pytest" pyproject.toml setup.cfg 2>/dev/null && echo "yes" || echo "no")
+   if [ "$_HAS_JEST" = "no" ] && [ "$_HAS_VITEST" = "no" ] && [ "$_HAS_PYTEST" = "no" ]; then
+     echo "NO_TEST_FRAMEWORK: true"
+   fi
+   ```
+
+3. **If no framework found**, bootstrap the minimal test setup:
+   - **JS/TS (Bun):** `bun add -d bun:test` + example test file
+   - **JS/TS (Node):** `npm install --save-dev vitest` + `vitest.config.ts` + example test file
+   - **Python:** `pip install pytest` + `conftest.py` + example test file
+   - **Go:** Built-in `testing` package. Create `_test.go` file.
+   - **Rust:** Built-in `#[cfg(test)]`. Create test module.
+
+4. **Log the bootstrap:**
+   ```bash
+   echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","type":"test-bootstrap","source":"develop","key":"TEST_BOOTSTRAP","insight":"Bootstrapped {framework} for {language} project","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+   ```
+
+5. **Note in HANDOFF:** "Test framework bootstrapped: {framework}. First test file: {path}."
+
+If the user declines test bootstrap, create the opt-out marker:
+```bash
+echo "User declined test bootstrap on $(date -u +%Y-%m-%dT%H:%M:%SZ)" > doc/harness/.no-test-bootstrap
+```
+
 ### Phase 3.5: Regression rule (mandatory)
 
 If the diff modifies existing behavior (not new code) and no existing test covers the changed path:
@@ -304,7 +444,22 @@ This runs during implementation, not after. After each AC implementation, check:
 
 Read `plugin/skills/develop/fix-first-pattern.md` and apply it during implementation.
 
-Classify code quality issues as AUTO-FIX (mechanical: dead code, missing types, N+1) or ASK (judgment: API design, architecture, security). Auto-fix mechanical issues immediately. Flag judgment items in HANDOFF.md.
+Classify code quality issues into categories and action tiers:
+
+**Maintainability categories to check:**
+
+| Category | Signal | AUTO-FIX? |
+|----------|--------|-----------|
+| Dead code | Unreachable branches, unused imports, commented-out code | Yes |
+| Magic numbers | Hardcoded values with no named constant | Yes |
+| Stale comments | Comments that contradict the code they describe | Yes |
+| DRY violations | Copy-pasted logic that could be extracted | ASK — extraction may change semantics |
+| Conditional side effects | `if` branches that mutate external state | ASK — requires careful analysis |
+| Module boundary violations | Code reaching into another module's internals | ASK — may indicate architecture issue |
+
+**Action tiers:**
+- **AUTO-FIX** (mechanical): Dead code, missing types, N+1, magic numbers, stale comments. Fix immediately.
+- **ASK** (judgment): API design, architecture, security, DRY extraction, conditional side effects, module boundary violations. Flag in HANDOFF.md.
 
 This runs continuously during Phase 3. After all ACs are done, run one final quality scan over the full diff.
 
@@ -355,6 +510,12 @@ Steps:
 
 If no build step exists (e.g., interpreted languages with no type checker): skip this phase.
 
+### Phase 3.9: Runtime Smoke (all project types)
+
+Read `plugin/skills/develop/runtime-smoke.md` and follow it in full.
+Each project type (browser/API/CLI) has its own smoke test path.
+Log `"phase_start/phase_end": "3.9"` in timeline.
+
 ### Phase 4: Plan Completion Audit (haiku)
 
 After implementation, cross-reference every acceptance criterion against the actual diff.
@@ -367,159 +528,136 @@ Agent(
   model="haiku",
   subagent_type="oh-my-claudecode:executor",
   prompt="Read PLAN.md and run `git diff --stat` and `git diff --name-only`.
-For each acceptance criterion (AC-001+), check: which files were supposed to change, did they change, is the change sufficient?
+For each acceptance criterion (AC-001+), classify completion as one of:
+- **DONE** — AC fully implemented, all expected files changed, diff covers stated scope
+- **PARTIAL** — AC started but incomplete (some expected changes missing, or implementation covers only happy path)
+- **NOT DONE** — No evidence of work on this AC in the diff
+- **CHANGED** — AC was implemented differently than planned (scope shifted, better approach found, or requirement evolved)
+Also classify each AC by category: CODE | TEST | MIGRATION | CONFIG | DOCS.
 Build a completion table:
-AC | Expected | Status | Evidence
-Report any MISSING ACs. Return the full table."
+AC | Category | Expected | Classification | Evidence | Notes
+Judgment rules:
+- **Be conservative with DONE**: require clear evidence in the diff that the specific functionality
+  described in the AC is present. A file being touched is NOT enough.
+- **Be generous with CHANGED**: if the goal is met by different means, that counts as addressed.
+  Note the difference in the Notes column.
+Report any PARTIAL/NOT DONE/CHANGED ACs with specific evidence. Return the full table."
 )
 ```
 
-If any AC is MISSING: investigate WHY before returning to Phase 3. Classify the cause:
+For each PARTIAL or NOT DONE AC, investigate WHY before returning to Phase 3. Classify the cause:
 
 | Cause | Signal | Remedy |
 |-------|--------|--------|
 | **Scope cut** | AC describes work explicitly deferred in conversation or notes | Confirm scope cut in HANDOFF. Mark AC as DEFERRED. |
 | **Context exhaustion** | AC was early in plan but implementer lost context mid-session | Check PROGRESS.md — was the AC ever started? Resume from last known state. |
 | **Misunderstood requirement** | AC text is ambiguous, implementer interpreted differently than intended | Re-read REQUEST.md and original AC. Clarify before re-implementing. |
-| **Blocked by dependency** | AC depends on external service, migration, or another AC that wasn't done | Log blocker in HANDOFF. Mark AC as BLOCKED with dependency chain. |
+| **Blocked by dependency** | AC depends on external service, migration, or another AC that wasn't done | Use `AskUserQuestion`: present dependency chain and options (skip AC, create separate task, wait). |
 | **Genuinely forgotten** | No evidence of work, no mention in conversation, no blocker | Highest priority fix. Implement immediately. Log as `genuinely-forgotten` signal. |
+| **Requirement evolved** | AC text describes old approach; implementation took a better path | Mark as CHANGED. Document the new approach in HANDOFF. No fix needed. |
 
+For CHANGED ACs: verify the new approach covers the original intent. If it doesn't, treat as PARTIAL.
 After classification: fix what's fixable, log what's blocked. Do not proceed with unclassified gaps.
 
-### Phase 4.5–4.7: Parallel Quality Audit
+### Phase 4.5–4.8: Quality Audit Pipeline
 
-Create an audit directory for crash-safe agent results:
+Read `plugin/skills/develop/quality-audit-pipeline.md` and follow it in full.
 
-```bash
-mkdir -p <task_dir>/audit
-```
-
-Spawn three agents **in parallel** — each analyzes the full diff independently
-and writes results to the audit directory (atomic write: write .tmp, then rename).
-Issue all three Agent calls in a single message.
-
-**Agent A: Test Coverage Audit (haiku)**
-
-```
-Agent(
-  name="<task_id>:test-coverage",
-  model="haiku",
-  subagent_type="oh-my-claudecode:executor",
-  prompt="You are the test coverage auditor for <task_id>.
-Read plugin/skills/develop/test-coverage-audit.md and follow it in full.
-Steps:
-1. Detect test framework (check package.json, Gemfile, pytest.ini, etc.)
-2. Run `git diff` to get all changed codepaths
-3. Trace every changed codepath — entry points, branches, error paths, edges
-4. For each path, search for existing tests (grep for test names, describe blocks)
-5. Build an ASCII coverage diagram showing TESTED/GAP for each path. Classify test type:
-   - **[→E2E]** — User flow spanning 3+ components, integration points where mocking hides failures, auth/payment/data-destruction paths
-   - **[→EVAL]** — LLM output quality, prompt template changes, scoring/classification accuracy
-   - **(unit)** — Pure functions, internal helpers, single-function edge cases (default)
-6. For uncovered paths: generate tests matching existing conventions (unit by default, E2E/eval where marked)
-CRITICAL: Write your full results (diagram + generated test code) to:
-  <task_dir>/audit/test-coverage.md
-Use atomic write: write to test-coverage.md.tmp first, then rename to test-coverage.md.
-Return: 'Results written to <task_dir>/audit/test-coverage.md' plus a 3-line summary."
-)
-```
-
-**Agent B: Confidence Ratings (inherit)**
-
-```
-Agent(
-  name="<task_id>:confidence-ratings",
-  subagent_type="oh-my-claudecode:executor",
-  prompt="You are the confidence rater for <task_id>.
-Read plugin/skills/develop/confidence-rated-changes.md and follow it in full.
-Steps:
-1. Run `git diff --stat` to get change inventory
-2. For each change unit, rate 1-10 based on complexity, testing, familiarity, integration, edge cases
-3. Build the confidence table with columns: Change, Files, Score, Risk, Mitigation
-4. For any change rated 6 or below: add specific risk, suggested verification, fallback plan
-CRITICAL: Write your full results (confidence table + low-confidence details) to:
-  <task_dir>/audit/confidence-ratings.md
-Use atomic write: write to confidence-ratings.md.tmp first, then rename.
-Return: 'Results written to <task_dir>/audit/confidence-ratings.md' plus a 3-line summary."
-)
-```
-
-**Agent C: Adversarial Self-Check (cross-model)**
-
-Use a DIFFERENT model than implementation. If implementation was Opus → Sonnet.
-If implementation was Sonnet → Haiku. Cross-model review catches blind spots.
-
-```
-Agent(
-  name="<task_id>:adversarial-check",
-  model=<downgrade from implementation model>,
-  subagent_type="oh-my-claudecode:executor",
-  prompt="You are the adversarial reviewer for <task_id>.
-Read plugin/skills/develop/adversarial-self-check.md and follow it in full.
-Steps:
-1. Run `git diff --unified=5` to get the full diff
-2. Review with attacker/chaos-engineer mindset — check: null input, timeout, idempotency, concurrent access, resource leaks, injection vectors, off-by-one, error info leakage
-3. Classify each finding as critical/high/medium/low
-4. For critical and high: provide specific fix with regression test outline
-5. For medium/low: document for HANDOFF
-Time budget: 2-5 minutes.
-CRITICAL: Write your full results (findings table + fixes) to:
-  <task_dir>/audit/adversarial-findings.md
-Use atomic write: write to adversarial-findings.md.tmp first, then rename.
-Return: 'Results written to <task_dir>/audit/adversarial-findings.md' plus a 3-line summary."
-)
-```
-
-**After all three complete — file-based merge:**
-
-1. Read each result file from `<task_dir>/audit/`:
-   - `test-coverage.md` from Agent A
-   - `confidence-ratings.md` from Agent B
-   - `adversarial-findings.md` from Agent C
-2. If any file is missing (agent crashed): log the gap, continue with available results.
-   The file-based approach means partial results survive agent failures.
-3. Merge results into HANDOFF sections:
-   - "Test Coverage" from Agent A (include diagram)
-   - "Confidence Ratings" from Agent B (include table)
-   - "Adversarial Review Findings" from Agent C
-4. If Agent C reports critical/high findings: fix immediately with regression tests.
-5. If Agent A generated test code: write the test files, run tests, commit.
-6. **Aggregate adversarial patterns:** If Agent C's findings include 2+ issues of the same category
-   (e.g., "null input", "resource leak"), log the recurring pattern to learnings:
+**Diff scope detection** — before spawning agents, classify the diff to route specialists:
 
 ```bash
-echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","type":"security-pattern","source":"adversarial","key":"VULN_CATEGORY","insight":"N instances found in this project","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+# Auto-detect diff scope from changed files
+git diff --name-only | while read f; do
+  case "$f" in
+    *.tsx|*.jsx|*.css|*.scss|*.html|*.vue|*.svelte) echo "SCOPE_FRONTEND=true" ;;
+    *.rb|*.py|*.go|*.rs|*.java|*controller*|*service*|*model*|*route*) echo "SCOPE_BACKEND=true" ;;
+    *auth*|*session*|*token*|*password*|*permission*|*guard*) echo "SCOPE_AUTH=true" ;;
+    *migration*|*schema*|*db/*|*migrate*) echo "SCOPE_MIGRATIONS=true" ;;
+    *api*|*endpoint*|*graphql*|*rest*|*openapi*) echo "SCOPE_API=true" ;;
+  esac
+done | sort -u
 ```
 
-This surfaces project-specific vulnerability patterns for future adversarial reviews.
+Use detected scopes to decide which specialist agents to dispatch (security for AUTH,
+performance for BACKEND, migration review for MIGRATIONS, etc.).
 
-### Phase 4.8: Near-Zero Marginal Cost Check (haiku)
-
-Spawn a haiku agent for this mechanical pattern scan:
-
+Before spawning Agent A, count test files for before/after tracking:
+```bash
+find . -name '*.test.*' -o -name '*.spec.*' -o -name '*_test.*' -o -name '*_spec.*' | grep -v node_modules | wc -l
 ```
-Agent(
-  name="<task_id>:edge-case-scan",
-  model="haiku",
-  subagent_type="oh-my-claudecode:executor",
-  prompt="You are the edge case scanner for <task_id>.
-Read plugin/skills/develop/near-zero-marginal-cost.md and follow it in full.
+
+After quality audit completes, count again and record delta in HANDOFF:
+`Tests: {before} → {after} (+{delta} new)`
+
+Spawns parallel agents (test coverage, confidence ratings, adversarial, visual smoke)
+plus quality synthesis agent. After synthesis: fix critical/high findings, write
+generated tests, aggregate adversarial patterns. Then run edge case scan (Phase 4.8).
+
+### Phase 4.85: Test Plan Artifact
+
+After the quality audit pipeline completes, produce a standalone test plan from
+the coverage diagram results. This artifact survives task directory cleanup and
+can be consumed by QA workflows.
+
+Write to `doc/harness/test-plans/<task_id>-test-plan.md`:
+
+```markdown
+# Test Plan: <task_id>
+Generated: YYYY-MM-DD
+Branch: <branch>
+
+## Affected Pages/Routes
+- <URL path> — <what to test and why>
+
+## Key Interactions to Verify
+- <interaction description> on <page>
+
+## Edge Cases
+- <edge case> on <page>
+
+## Critical Paths (must-work)
+- <end-to-end flow that must work>
+
+## Coverage Summary
+- Code paths: X/Y (Z%)
+- User flows: X/Y (Z%)
+- Tests generated: N
+```
+
+This is lightweight — just extract from the audit results. Do not re-run analysis.
+
+### Phase 4.9: Coverage Gate
+
+If `doc/harness/manifest.yaml` declares `coverage_minimum` or `coverage_target`, enforce coverage thresholds:
+
+```bash
+grep -E "coverage_minimum|coverage_target" doc/harness/manifest.yaml
+```
+
+| Threshold | Default | Action if not met |
+|-----------|---------|-------------------|
+| `coverage_minimum` | (none) | BLOCK — must fix before proceeding |
+| `coverage_target` | (none) | WARN — log in HANDOFF, proceed |
+
 Steps:
-1. Run `git diff` to get all changed code
-2. Scan every changed function for these patterns:
-   - Public/exported functions without null/undefined guards
-   - async paths without error handling (await without try/catch, .then without .catch)
-   - Loops/iterations that don't handle empty arrays or empty strings
-   - Array index or string offset access without bounds check
-   - Resources (file handles, connections, timers) without cleanup in error paths
-3. For each gap, classify as trivial (<1 min fix), quick (1-5 min), or judgment (>5 min)
-4. For trivial/quick: provide the exact fix (file, line, old code, new code)
-5. For judgment: describe the gap and why it needs design input
-Return: list of all gaps with classification and fixes for trivial/quick items."
-)
+1. Run the project's coverage tool on changed files only.
+2. Compare actual coverage against thresholds.
+3. If below `coverage_minimum`: write additional tests to reach the threshold.
+4. If below `coverage_target` but above `coverage_minimum`: log gap in HANDOFF.
+5. If no coverage tool exists: skip this phase.
+
+**Escalation:** If writing tests to reach `coverage_minimum` would take more than 3 cycles,
+use `AskUserQuestion`:
+```
+AskUserQuestion:
+  Question: "Coverage is at X% — below minimum Y%. Writing more tests is taking significant effort."
+  Options:
+    - A) Continue writing tests to reach the minimum
+    - B) Lower the minimum threshold for this task (update manifest)
+    - C) Defer coverage gap, document in HANDOFF as known debt
 ```
 
-Apply trivial/quick fixes from the haiku agent. Flag judgment items in HANDOFF.md.
+If no coverage thresholds are configured in manifest: skip this phase entirely.
 
 ### Phase 5: Scope Drift Detection
 
@@ -537,6 +675,19 @@ If a file was changed that is NOT in scope:
 - **Related but not listed** (e.g., shared utility used by a target file): acceptable, note it in HANDOFF.md.
 - **Unrelated change** (e.g., lint fix in a different module): revert it. It belongs in a separate task.
 - **Missing from plan but clearly needed** (e.g., PLAN.md forgot to list a file that must change for the feature to work): note it in HANDOFF.md as an unplanned-but-necessary change.
+
+**SCOPE CREEP detection:** Look beyond file-level scope checks:
+- Files changed that are unrelated to the stated intent
+- New features or refactors not mentioned in PLAN.md
+- "While I was in there..." changes that expand blast radius
+- Touched files with changes unrelated to any AC (e.g., reformatted code in a distant module)
+
+**MISSING REQUIREMENTS detection:** Compare stated intent against actual diff:
+- PLAN.md requirements not addressed by any change
+- Test coverage gaps for stated requirements
+- Partial implementations (started but not finished — model exists but controller missing, etc.)
+
+Evaluate with skepticism. If scope creep is found, revert unrelated changes before proceeding.
 
 **AC-level completeness check:** For each AC in PLAN.md, verify the diff contains
 evidence of completion — not just that target files were touched, but that the
@@ -560,6 +711,20 @@ the writer skill's job.
 ### Phase 6: Bisectable Commits
 
 Split changes into logical commits. Each commit = one coherent change.
+
+**Commit ordering (apply in this sequence):**
+
+| Order | Layer | Examples |
+|-------|-------|----------|
+| 1 | Infrastructure | Config files, build scripts, dependency additions, CI changes |
+| 2 | Models / Services / Data | Schema changes, new types, data layer, business logic |
+| 3 | Controllers / Views / API | Route handlers, UI components, API endpoints |
+| 4 | Tests | Test additions and updates (separate from implementation) |
+| 5 | Docs / Metadata | VERSION, CHANGELOG, README updates, doc_sync |
+
+This ordering ensures each commit leaves the codebase in a working state —
+later commits depend on earlier ones, not the reverse. If a bisect lands between
+commits, it stops at the infrastructure layer, not in the middle of a feature.
 
 Rules:
 - **Rename/move** separate from behavior changes.
@@ -601,85 +766,25 @@ until all per-AC tests pass.
 
 Log: `"phase_start/phase_end": "6.5"` in timeline.
 
+### Phase 6.7: Quality Score Trend Tracking
+
+Persist the quality score from Phase 8 to track codebase health over time:
+
+```bash
+mkdir -p doc/harness 2>/dev/null || true
+_QUALITY_SCORE=$(grep "Quality Score:" <task_dir>/HANDOFF.md 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' || echo "unknown")
+_AC_SCORE=$(grep "AC Completion:" <task_dir>/HANDOFF.md 2>/dev/null | head -1 | grep -oE '[0-9]+/10' || echo "unknown")
+echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","type":"quality-trend","source":"develop","task":"'"<task_id>"'","quality_score":"'"$_QUALITY_SCORE"'","ac_score":"'"$_AC_SCORE"'"}' >> doc/harness/quality-history.jsonl 2>/dev/null || true
+```
+
+This enables trend analysis: is the codebase getting healthier or accumulating debt?
+
 ### Phase 7: Verification Gate
 
-**Step 1: Run test commands from PLAN.md:**
-
-```bash
-# Run whatever PLAN.md specifies (from its verification contract section)
-<verification commands from PLAN.md>
-```
-
-If tests fail:
-1. **Classify each failure along two dimensions:**
-
-   **Dimension A: GATE vs PERIODIC**
-
-   | Tier | Criteria | Action |
-   |------|----------|--------|
-   | **GATE** (blocks completion) | Regression tests, core functionality tests, tests covering changed codepaths | Must fix. Counts toward 3-cycle limit. |
-   | **PERIODIC** (log only) | Style/lint tests on unrelated code, slow E2E for unrelated features, known-flaky tests | Log in HANDOFF. Don't block. Don't count toward fix limit. |
-
-   To determine tier: does the failing test cover code that this task changed?
-   - Yes → GATE. No → PERIODIC (unless it's a new test we wrote — then GATE).
-   - Check `learnings.jsonl` for known-flaky test entries — those are always PERIODIC.
-
-   **Dimension B: OWN vs PRE-EXISTING**
-
-   | Ownership | Criteria | Action |
-   |-----------|----------|--------|
-   | **OWN** (our code broke it) | Failing test covers codepaths modified by this task's diff | Fix within 3-cycle limit. Uses investigate skill if needed. |
-   | **PRE-EXISTING** (was broken before) | Failing test covers code NOT touched by this task, AND the same test fails on the base branch | Log in HANDOFF. Do NOT count toward fix limit. Do NOT invoke investigate. |
-
-   To determine ownership:
-   - Get changed files: `git diff --name-only <base>...HEAD`
-   - For each failing test, check: does the test file OR the code it tests appear in the diff?
-   - Yes → OWN. No → verify on base branch:
-     ```bash
-     git stash && <test_command> -- <failing-test-files> && git stash pop
-     ```
-   - If it also fails on base → PRE-EXISTING. If it passes on base → OWN (our change triggered it indirectly).
-   - **When ambiguous, default to OWN.** Only classify as PRE-EXISTING when you can prove it.
-
-**Persist flaky/pre-existing test knowledge:** For each PERIODIC or PRE-EXISTING failure,
-log to `doc/harness/learnings.jsonl` so Phase 1 can skip them in future tasks:
-
-```bash
-echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","type":"test-flaky","source":"develop-verify","key":"TEST_NAME","insight":"PRE-EXISTING/PERIODIC: <brief reason>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
-```
-
-This closes the loop: Phase 7 discovers flaky tests, learnings stores them, Phase 1 loads them.
-
-2. Read `plugin/skills/develop/test-failure-triage.md` and classify each GATE+OWN failure (T1-T4).
-3. For T1/T2 GATE failures, read `plugin/skills/develop/hypothesis-driven-debugging.md` and follow it. Form hypotheses, test them, then apply targeted fixes. Do NOT guess.
-4. Document T3/T4 and PERIODIC failures with evidence. Never claim pre-existing without verifying on base branch.
-
-Maximum 3 fix cycles for T1/T2. After 2 cycles with persistent failures, escalate:
-
-**Step 2: Investigate escalation (cycle 3):**
-
-If 2 fix cycles fail to resolve T1/T2 failures, invoke the investigate skill for structured root-cause analysis:
-
-```
-Skill("investigate", "Verification failure in task <task_id>: <failing test names>. Triage: <T1/T2>. Prior fix attempts: <summary of what was tried>.")
-```
-
-Use the investigate results for the final (3rd) fix attempt. If still failing: stop, report in HANDOFF.md.
-
-Include the triage table in HANDOFF.md under "Test Failure Triage". Note whether investigate was invoked.
-
-**Step 3: Build verification (if not already done):**
-
-If Phase 3.8 was skipped (interpreted language, no build step), run a quick sanity check:
-
-```bash
-# At minimum, verify imports resolve
-<test_command> --help 2>&1 | head -1
-# Or import check
-python -c "import <module>" 2>&1
-```
-
-This catches import errors before the QA phase.
+Read `plugin/skills/develop/verification-gate.md` and follow it in full.
+Runs test commands from PLAN.md, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING),
+triages with hypothesis-driven debugging (including browser debugging path),
+and escalates to investigate skill on cycle 3.
 
 ### Phase 8: Write HANDOFF
 
@@ -703,8 +808,53 @@ Call `mcp__harness__write_handoff` with:
 9. **Test Failure Triage**: Table from Phase 7 (if any failures occurred).
 10. **Test Results**: Per-AC test results and fix history from Phase 7.
 11. **Judgment Items**: ASK-classified items from Phase 3.6 that need human review.
-12. **Debugging Notes**: Root cause, fix, and lesson for each failure debugged in Phase 7.
-13. **Execution Metrics**: Phase timing table and fix loop counts (see below).
+12. **Debugging Notes**: Structured debug report for each failure debugged in Phase 7:
+    ```
+    ## Debug Report: <test name>
+    - **Symptom**: What the test observed (error message, wrong output, timeout)
+    - **Root cause**: The actual underlying cause (file:line)
+    - **Fix**: What was changed and why (file:line)
+    - **Evidence**: Console output, screenshots, or test output confirming the fix
+    - **Regression test**: Test added or updated to prevent recurrence
+    - **Related**: Other tests or codepaths affected by the same root cause
+    - **Status**: RESOLVED | DEFERRED | ESCALATED
+    ```
+13. **Visual Evidence**: For UI-related ACs, paths to before/after screenshots
+    captured during per-AC visual verification (Phase 3) and runtime smoke (Phase 3.9).
+    Format:
+    ```
+    | AC | Screenshot | Console Errors | Viewport |
+    |----|-----------|----------------|----------|
+    | AC-002 | audit/screenshots/AC-002-after.png | 0 | 1280x800 |
+    ```
+14. **Execution Metrics**: Phase timing table and fix loop counts (see below).
+15. **Quality Score**: Weighted numerical score (see below).
+
+**Quality Score Calculation:**
+
+```
+score = round(
+  (ac_completion * 0.40) +
+  (test_coverage * 0.30) +
+  (adversarial_clean * 0.20) +
+  (scope_discipline * 0.10)
+, 1)
+```
+
+Where:
+- `ac_completion` = (ACs completed / total ACs) × 10. Deferred ACs count as 0.5.
+- `test_coverage` = from Phase 4.5: (tested paths / total changed paths) × 10. No test framework: 5/10.
+- `adversarial_clean` = max(0, 10 - (critical × 3 + high × 1.5 + medium × 0.5)). Fixed findings count at 0.25 weight.
+- `scope_discipline` = 10 (no drift), 7 (auto-added only), 4 (justified drift), 0 (unjustified).
+
+Include in HANDOFF:
+```
+Quality Score: X.X/10
+  AC Completion: X/10 (N/M ACs)
+  Test Coverage: X/10 (N/M paths)
+  Adversarial Clean: X/10 (N findings: C critical, H high, M medium)
+  Scope Discipline: X/10 (drift: none|auto-added|justified|unjustified)
+```
 
 **Execution Metrics** — track phase start/end times throughout execution and include:
 
@@ -722,6 +872,8 @@ Call `mcp__harness__write_handoff` with:
 Fix loops: N (T1: X, T2: Y)
 Investigate invoked: yes/no
 Runtime QA: deferred to run phase (Phase 4)
+Visual verification: <skipped | N ACs verified, N screenshots>
+Runtime smoke: <skipped | PASS | FAIL>
 ```
 
 **Cleanup:** Delete PROGRESS.md from task_dir (no longer needed — HANDOFF is the permanent record).
@@ -737,28 +889,78 @@ Ask yourself:
 3. **What would you do differently?** — Process improvements for next time.
 4. **Were any prior learnings helpful?** — Feedback on learning quality. Were they stale?
 5. **Were any learnings missing?** — What should have been pre-loaded but wasn't?
-6. **Were confidence ratings calibrated?** — Compare Phase 4.6 confidence scores against Phase 7 actual results:
-   - Did a high-confidence change (>7) break in testing? → Overconfident. Log the pattern.
-   - Did a low-confidence change (≤6) pass without issues? → Underconfident. Note what made it seem risky but wasn't.
-   - Calibration events improve future confidence ratings. Log them:
+6. **Were confidence ratings calibrated?** — Compare Phase 4.6 confidence scores against Phase 7 actual results. Build a calibration table:
+
+   ```
+   File | Rated | Actual | Verdict | Lesson
+   auth.ts | 8/10 | PASS | calibrated | Complex but well-tested
+   billing.ts | 5/10 | FAIL | overconfident | N+1 hidden by mock in unit test
+   report.ts | 4/10 | PASS | underconfident | Looked risky due to async, but sequential in practice
+   ```
+
+   **Calibration metrics:**
+   - **Overconfidence rate**: (changes rated >7 that failed) / (all changes rated >7)
+   - **Underconfidence rate**: (changes rated ≤6 that passed cleanly) / (all changes rated ≤6)
+   - **Target**: overconfidence < 20%, underconfidence < 30%
+
+   For each calibration event:
 
 ```bash
-echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","type":"confidence-calibration","source":"develop-reflect","key":"overconfident|underconfident","file":"<file>","rated":<score>,"actual":"<pass|fail>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","type":"confidence-calibration","source":"develop-reflect","key":"overconfident|underconfident","file":"<file>","rated":<score>,"actual":"<pass|fail>","reason":"<why the rating was wrong>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
-For each insight, log immediately to `doc/harness/learnings.jsonl`:
+   Log the calibration metrics summary:
+   ```bash
+   echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","type":"calibration-summary","source":"develop-reflect","key":"CALIBRATION_SUMMARY","insight":"Overconfidence: X%, Underconfidence: Y%, N events total","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+   ```
 
+   **Calibration feedback loop:** When a confidence-rated change (Phase 4.6) was rated ≤6
+   but actually passed (underconfident), or rated >7 but failed (overconfident), log
+   the corrected pattern so future sessions can adjust:
+   ```bash
+   echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","type":"calibration-lesson","source":"develop-reflect","key":"confidence-pattern","insight":"Pattern <X> in <file> was rated <N> but actual was <pass|fail>. Corrective: <what to look for>","confidence":8,"task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+   ```
+   Future Phase 4.6 confidence rating agents load these lessons and apply higher
+   confidence to patterns that previously passed despite low ratings, and lower
+   confidence to patterns that previously failed despite high ratings.
+
+For each insight, log immediately to `doc/harness/learnings.jsonl`.
+Use structured types for better future retrieval:
+
+| Type | When to use |
+|------|-------------|
+| `pattern` | Reusable approach that worked |
+| `pitfall` | What NOT to do (negative lesson) |
+| `architecture` | Structural decision or constraint |
+| `tool` | Library/framework insight or quirk |
+| `operational` | Build, env, CLI, workflow knowledge |
+
+Format:
 ```bash
-echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","type":"harness-improvement","source":"develop-reflect","key":"FRICTION_KEY","insight":"DESCRIPTION","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","type":"pattern|pitfall|architecture|tool|operational","source":"develop-reflect","key":"FRICTION_KEY","insight":"DESCRIPTION","confidence":N,"files":["path/to/file1","path/to/file2"],"task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
+
+Include `files` field with paths referenced by the learning. This enables staleness
+detection: if those files are later deleted, the learning can be flagged automatically.
 
 **Learning quality feedback:** Rate the learnings loaded in Phase 1:
 - How many were loaded? How many were actually useful during execution?
 - Were any stale (referenced files/commands that no longer exist)?
 - Were any missing (something you had to discover that should have been pre-loaded)?
 
-Log: `{"key":"learning-audit","insight":"Loaded N learnings: U useful, S stale, M missing topics","task":"<task_id>"}`
-This feeds back into the learning system — stale entries get pruned, missing topics get added.
+**Staleness detection:** For each loaded learning, verify:
+1. **File existence**: If a learning references a file path, check it still exists:
+   ```bash
+   test -f <referenced_path> || echo "STALE: <learning_key> references missing file <path>"
+   ```
+2. **Contradiction check**: If two entries share the same `key` field, compare their `insight` values.
+   If they contradict (e.g., "use npm test" vs "use bun test"), the newer one wins.
+   Flag the older entry for removal.
+3. **Recency**: If a learning is older than 30 days and references a specific version or CLI flag,
+   verify it's still current. Flag if suspect.
+
+Log: `{"key":"learning-audit","insight":"Loaded N learnings: U useful, S stale, M missing topics, C contradictions","task":"<task_id>"}`
+This feeds back into the learning system — stale entries get pruned, missing topics get added, contradictions get resolved.
 
 This closes the learning loop: Phase 1 reads learnings, Phase 8.5 writes them back
 enriched with fresh experience. Future sessions benefit from today's friction.
@@ -834,6 +1036,8 @@ Confidence avg:    <X>/10  (low: <N> items)
 Adversarial:       <clean | N findings: X fixed, Y deferred>
 Edge cases:        <N> fixed, <N> deferred
 Fix-first:         <N> auto-fixed, <N> judgment items flagged
+Visual verified:   <N> ACs with screenshots | skipped (non-browser)
+Runtime smoke:     PASS | FAIL | skipped
 Fix loops:         <N> total (investigate: yes/no)
 Execution time:    <total duration>
 ```
@@ -844,10 +1048,14 @@ On any failure:
 1. Report what happened.
 2. Check current state via `task_context`.
 3. If recoverable (test failure, missing file): attempt fix within Phase 7 limits.
-4. If unrecoverable: stop, write HANDOFF.md with partial results and BLOCKED status.
+4. If unrecoverable: use `AskUserQuestion` to present the blocker with options:
+   - "Attempt partial fix and continue"
+   - "Write HANDOFF with partial results and close task"
+   - "Invoke investigate skill for deeper analysis"
+   - "Abort task entirely"
 
-Never silently continue past a failure. Every stop must include a **Next step:**
-directive so the caller (agent or human) knows exactly what to do next.
+Never silently continue past a failure. Never halt without asking the user.
+Every `AskUserQuestion` must include the blocker description and concrete recovery options.
 
 ### Completion Status Protocol
 
@@ -857,27 +1065,34 @@ Report final status using one of:
 |--------|------|-----------------|
 | **DONE** | All ACs implemented, all tests pass, HANDOFF written | Completion report (see below) |
 | **DONE_WITH_CONCERNS** | All ACs done but with caveats (deferred fixes, low-confidence areas, known gaps) | Completion report + concern list with file:line evidence |
-| **BLOCKED** | Cannot proceed — missing dependency, unfixable test failure, exhausted fix budget | Blocker description + Next step directive |
-| **NEEDS_CONTEXT** | Missing information required to continue (ambiguous AC, unclear requirement) | What's needed + where to find it |
+| **BLOCKED** | Cannot proceed — missing dependency, unfixable test failure, exhausted fix budget | AskUserQuestion with blocker + recovery options |
+| **NEEDS_CONTEXT** | Missing information required to continue (ambiguous AC, unclear requirement) | AskUserQuestion asking for the missing info |
 
-**Escalation format for BLOCKED/NEEDS_CONTEXT:**
+**Escalation via AskUserQuestion (never bare stop):**
 ```
-STATUS: BLOCKED | NEEDS_CONTEXT
-REASON: <1-2 sentences>
-ATTEMPTED: <what was tried>
-RECOMMENDATION: <what to do next>
+AskUserQuestion:
+  Question: "<BLOCKED | NEEDS_CONTEXT>: <1-2 sentence reason>"
+  Options:
+    - A) <primary recovery action> (recommended)
+    - B) <alternative action>
+    - C) <fallback action>
+
+  Context:
+  - Attempted: <what was tried>
+  - Recommendation: <what to do next>
 ```
 
-It is always OK to stop and escalate. Bad work is worse than no work.
-After 3 failed attempts at the same task, STOP and escalate rather than burning cycles.
+It is always OK to ask the user. Bad work is worse than no work.
+After 3 failed attempts at the same task, use `AskUserQuestion` to present
+the situation rather than burning cycles silently.
 
-| Condition | Report | Next step |
-|-----------|--------|-----------|
-| PLAN.md missing | BLOCKED: no plan found for task_id | Run plan skill, or verify task_id |
-| All 3 fix cycles exhausted | BLOCKED: 3/3 fix cycles used | Check HANDOFF triage table, consider investigate skill |
-| Pre-flight fails | BLOCKED: diagnostic table shown | Fix the specific check that failed (see table) |
-| Agent crashes in 4.5-4.7 | WARNING: partial audit results | Check audit/ dir for surviving files, re-run failed agent |
-| Build fails in 3.8 | BLOCKED: compilation errors | Fix errors, re-run build before proceeding to Phase 4 |
+| Condition | AskUserQuestion options |
+|-----------|------------------------|
+| PLAN.md missing | A) Run plan skill, B) Verify task_id, C) Abort task |
+| All 3 fix cycles exhausted | A) Check HANDOFF triage + invoke investigate, B) Close task with partial results, C) Skip failing test and continue |
+| Pre-flight fails | A) Run setup skill, B) Use different task_id, C) Skip checks (risky) |
+| Agent crashes in 4.5-4.7 | A) Re-run failed agent, B) Proceed with partial audit results, C) Abort quality pipeline |
+| Build fails in 3.8 | A) Fix and re-run build, B) Skip build check (interpreted language), C) Abort task |
 
 ## Self-Improvement Signals
 
@@ -902,5 +1117,9 @@ echo '{"ts":"'"$_TS"'","type":"harness-improvement","source":"develop","key":"SH
 | No test framework detected (Phase 4.5) | `no-test-framework` | "No test framework found for coverage audit" |
 | Runtime QA subagent failed | `runtime-qa-fail` | "qa-browser: AC-002 FAIL — form not found" (logged by run phase, not develop) |
 | Runtime QA dev server unreachable | `runtime-qa-no-server` | "Dev server unreachable after 15s wait" (logged by run phase) |
+| Visual smoke found broken layout | `visual-smoke-broken` | "AC-NNN: layout broken on mobile viewport" |
+| Runtime smoke page blank | `runtime-smoke-blank` | "entry_url rendered <5 DOM elements" |
+| Per-AC visual verification failed | `per-ac-visual-fail` | "AC-NNN: expected element missing after implementation" |
+| Chrome DevTools MCP unavailable | `no-browser-mcp` | "Chrome DevTools tools not available — skipped browser phases" |
 
 **When to log:** Immediately when the signal is detected, not at Phase 8. Early logging survives session crashes.

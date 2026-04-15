@@ -14,6 +14,11 @@ allowed-tools:
   - Write
   - Edit
   - AskUserQuestion
+  - mcp__chrome-devtools__navigate_page
+  - mcp__chrome-devtools__take_screenshot
+  - mcp__chrome-devtools__list_pages
+  - mcp__chrome-devtools__new_page
+  - mcp__chrome-devtools__select_page
 ---
 
 ## Context (run first)
@@ -125,7 +130,19 @@ Options:
 - B) Upgrade — update to latest harness2 conventions
 - C) Fresh start — wipe and re-bootstrap from scratch
 
-If A or B: Skip to Phase 3, preserving existing manifest values.
+If A or B: Skip to Phase 3, preserving existing manifest values. But first, re-run
+QA infrastructure checks from Phase 4.2 against the existing manifest. If browser_qa_supported
+is true but prerequisites are missing (Chrome binary, MCP config, dev_command), report each
+gap and offer to fix it. Common repair actions:
+
+| Issue | Auto-fix? | Action |
+|-------|-----------|--------|
+| Chrome DevTools MCP missing from .mcp.json | Yes | Append to .mcp.json |
+| dev_command missing from manifest | Yes | Detect from package.json, add to manifest |
+| entry_url missing from manifest | Yes | Default from framework (port table), add to manifest |
+| Browser binary not installed | No | Tell user: "Install Chromium — `sudo apt install chromium-browser` or `brew install chromium`" |
+| Test command wrong in manifest | Yes | Re-detect and update |
+
 If C: Delete `doc/harness/manifest.yaml` and `doc/harness/`, then run full setup.
 
 ---
@@ -417,6 +434,25 @@ fi
 [ -f jest.config.* ] || [ -f vitest.config.* ] || [ -f pytest.ini ] || [ -f .rspec ] && echo "HAS_TESTS: yes"
 ls .github/workflows/*.yml 2>/dev/null && echo "HAS_CI: yes"
 
+# Browser testing infrastructure
+which chromium 2>/dev/null && echo "BROWSER: chromium" || which google-chrome 2>/dev/null && echo "BROWSER: chrome" || which chromium-browser 2>/dev/null && echo "BROWSER: chromium-browser" || echo "BROWSER: none"
+[ -f .mcp.json ] && echo "HAS_MCP_CONFIG: yes" && cat .mcp.json || echo "HAS_MCP_CONFIG: no"
+grep -q "chrome-devtools" .mcp.json 2>/dev/null && echo "CHROME_MCP: configured" || echo "CHROME_MCP: not_configured"
+
+# API testing infrastructure
+which curl 2>/dev/null && echo "HAS_CURL: yes" || echo "HAS_CURL: no"
+which httpie 2>/dev/null || which http 2>/dev/null && echo "HAS_HTTPLIB: yes" || echo "HAS_HTTPLIB: no"
+
+# Dev server detection
+for cmd in "npm run dev" "yarn dev" "pnpm dev" "bun run dev" "npm start" "yarn start"; do
+  _BASE_CMD=$(echo "$cmd" | awk '{print $2}')
+  if [ -f package.json ]; then
+    grep -q "\"$_BASE_CMD\"" package.json 2>/dev/null && echo "DEV_COMMAND: $cmd" && break
+  fi
+done
+[ -f manage.py ] && echo "DEV_COMMAND: python manage.py runserver"
+[ -f go.mod ] && echo "DEV_COMMAND: go run ."
+
 # Monorepo signals
 [ -f pnpm-workspace.yaml ] || [ -f lerna.json ] || ([ -f package.json ] && grep -q workspaces package.json 2>/dev/null) && echo "MONOREPO: yes"
 ```
@@ -447,6 +483,9 @@ CENSUS RESULTS:
   CI: {yes/no}
   Frontend: {framework or "none"}
   Monorepo: {yes/no}
+  Browser: {chromium|chrome|none}
+  Chrome MCP: {configured|not_configured}
+  Dev command: {detected or "not detected"}
 ```
 
 Output: "Here's what I found about this project: ..." then proceed to Phase 2.
@@ -492,20 +531,94 @@ Options:
 
 If B: ask for build command and test command via follow-up.
 
-### Q3: Browser QA
+### Q3: QA Strategy
 
-Only ask for web frontend projects.
+Based on project type, configure the right QA approach.
+
+**For web frontend projects (browser_qa_supported):**
+
+Check prerequisites before asking. If all met, auto-enable and inform the user.
+If something is missing, ask with clear remediation.
 
 Via AskUserQuestion:
 
-> This looks like a web frontend project. harness2 can use browser-based QA to
-> verify visual output, not just test results.
+> This is a web frontend project. harness2 can verify with browser-based QA
+> (screenshots, accessibility, visual regression) in addition to unit tests.
 >
-> RECOMMENDATION: Enable browser QA for frontend projects.
+> Prerequisites check:
+> - Browser: {BROWSER or "NOT FOUND"}
+> - Chrome DevTools MCP: {CHROME_MCP or "NOT CONFIGURED"}
+> - Dev command: {DEV_COMMAND or "NOT DETECTED"}
 
-Options:
-- A) Enable browser QA (recommended for frontend)
-- B) Skip browser QA — tests only
+If all prerequisites are met:
+
+> All browser QA prerequisites are met. I'll enable browser QA.
+>
+> Options:
+> - A) Enable browser QA (recommended)
+> - B) Skip browser QA — tests only
+
+If browser is missing:
+
+> Browser QA needs Chrome/Chromium installed.
+>
+> RECOMMENDATION: Install Chromium first, then re-run setup.
+>
+> Options:
+> - A) I'll install Chrome/Chromium and come back
+> - B) Skip browser QA for now — tests only
+> - C) Install Chromium now via apt/brew (setup will do it)
+
+If Chrome DevTools MCP is not configured:
+
+> Browser QA needs the Chrome DevTools MCP server configured in .mcp.json.
+>
+> Options:
+> - A) Add Chrome DevTools MCP to .mcp.json (recommended)
+> - B) I already have it configured elsewhere (global config)
+> - C) Skip browser QA for now
+
+If dev_command not detected:
+
+> Browser QA needs a dev server command to start the app for testing.
+>
+> Options:
+> - A) Let me specify the dev command
+> - B) Skip browser QA for now
+> - C) Auto-detect later (first QA run will try)
+
+**For API projects:**
+
+> This is an API project. harness2 will use API-level QA (HTTP requests, response
+> validation, endpoint coverage).
+>
+> Options:
+> - A) Enable API QA (recommended)
+> - B) Skip — tests only
+
+No special infrastructure needed beyond curl (pre-installed on most systems).
+
+**For CLI/library projects:**
+
+> This is a CLI/library project. harness2 will use command-line QA
+> (subprocess testing, output validation, exit codes).
+>
+> Options:
+> - A) Enable CLI QA (recommended)
+> - B) Skip — tests only
+
+No special infrastructure needed.
+
+**For fullstack projects (frontend + API):**
+
+> This is a fullstack project. harness2 can run both browser QA (for frontend)
+> and API QA (for endpoints) in parallel.
+>
+> Options:
+> - A) Enable both browser + API QA (recommended)
+> - B) Browser QA only
+> - C) API QA only
+> - D) Skip — tests only
 
 ---
 
@@ -536,33 +649,110 @@ harness_version: 2
 browser_qa_supported: {true|false}
 build_command: {cmd}
 test_command: {cmd}
+dev_command: {cmd or omit}       # browser projects: command to start dev server
+entry_url: {url or omit}        # browser projects: URL to verify after dev server starts
+api_base_url: {url or omit}     # API projects: base URL for endpoint testing
 created: {date}
 ```
+
+Fields `dev_command`, `entry_url`, and `api_base_url` are optional. Only include
+the ones relevant to the project type. QA agents use these to start servers and
+route requests during verification.
+
+**Browser project fields:**
+
+If `browser_qa_supported: true`, these fields are required:
+- `dev_command`: How to start the dev server (e.g., `npm run dev`, `bun run dev`)
+- `entry_url`: Where the dev server listens (e.g., `http://localhost:3000`)
+
+Auto-detect from framework:
+| Framework | dev_command | entry_url |
+|-----------|------------|-----------|
+| Next.js | `npm run dev` | `http://localhost:3000` |
+| Vite | `npm run dev` | `http://localhost:5173` |
+| Nuxt | `npm run dev` | `http://localhost:3000` |
+| Astro | `npm run dev` | `http://localhost:4321` |
+| Angular | `npm start` | `http://localhost:4200` |
+| SvelteKit | `npm run dev` | `http://localhost:5173` |
+| Remix | `npm run dev` | `http://localhost:3000` |
+
+If `dev_command` was detected in Phase 1 census, use it. Otherwise ask the user.
+
+**API project fields:**
+
+If `project_type: api`:
+- `api_base_url`: Optional. Defaults to `http://localhost:3000` for Node.js,
+  `http://localhost:8000` for Python/Django, `http://localhost:8080` for Go.
+  Only include if non-default.
+
+**MCP configuration for browser QA:**
+
+If `browser_qa_supported: true` and Chrome DevTools MCP is not in `.mcp.json`:
+
+```bash
+# Check current .mcp.json
+if [ -f .mcp.json ]; then
+  echo "Appending Chrome DevTools MCP to existing .mcp.json"
+  # Use python to safely merge JSON
+  python3 -c "
+import json, sys
+with open('.mcp.json') as f:
+    config = json.load(f)
+if 'mcpServers' not in config:
+    config['mcpServers'] = {}
+config['mcpServers']['chrome-devtools'] = {
+    'command': 'npx',
+    'args': ['@anthropic-ai/chrome-devtools-mcp@latest']
+}
+with open('.mcp.json', 'w') as f:
+    json.dump(config, f, indent=2)
+print('Chrome DevTools MCP added to .mcp.json')
+" 2>/dev/null || echo "FAILED: could not update .mcp.json"
+else
+  # Create new .mcp.json with both harness and chrome-devtools
+  cat > .mcp.json << 'MCPJSON'
+{
+  "mcpServers": {
+    "harness": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/harness2_server.py"]
+    },
+    "chrome-devtools": {
+      "command": "npx",
+      "args": ["@anthropic-ai/chrome-devtools-mcp@latest"]
+    }
+  }
+}
+MCPJSON
+echo "Created .mcp.json with harness + Chrome DevTools MCP"
+fi
+```
+
+If user selected option B ("already configured globally"), skip MCP config.
 
 ### 3.3 Smart Defaults
 
 Apply sensible defaults based on detected project type. Don't ask what can be inferred.
 
-| Project type | browser_qa | test_command | build_command |
-|-------------|-----------|-------------|---------------|
-| Next.js | true | `npm test` or `npx jest` | `npm run build` |
-| Vite + React | true | `npx vitest run` | `npx vite build` |
-| API (Express/Fastify) | false | `npm test` | `npm run build` |
-| Python (pytest) | false | `pytest` | — |
-| Rust | false | `cargo test` | `cargo build` |
-| Go | false | `go test ./...` | `go build ./...` |
-| Monorepo | ask user | workspace-level | workspace-level |
+| Project type | browser_qa | test_command | build_command | dev_command | entry_url |
+|-------------|-----------|-------------|---------------|------------|-----------|
+| Next.js | true | `npm test` or `npx jest` | `npm run build` | `npm run dev` | `http://localhost:3000` |
+| Vite + React | true | `npx vitest run` | `npx vite build` | `npm run dev` | `http://localhost:5173` |
+| Nuxt | true | `npm test` | `npm run build` | `npm run dev` | `http://localhost:3000` |
+| Astro | true | `npm test` | `npm run build` | `npm run dev` | `http://localhost:4321` |
+| Angular | true | `ng test` | `npm run build` | `npm start` | `http://localhost:4200` |
+| SvelteKit | true | `npm test` | `npm run build` | `npm run dev` | `http://localhost:5173` |
+| Remix | true | `npm test` | `npm run build` | `npm run dev` | `http://localhost:3000` |
+| API (Express/Fastify) | false | `npm test` | `npm run build` | — | — |
+| Python (Django) | false | `pytest` | — | `python manage.py runserver` | — |
+| Python (FastAPI) | false | `pytest` | — | `uvicorn main:app` | — |
+| Rust | false | `cargo test` | `cargo build` | — | — |
+| Go | false | `go test ./...` | `go build ./...` | — | — |
+| CLI / library | false | varies | varies | — | — |
+| Monorepo | ask user | workspace-level | workspace-level | ask user | ask user |
 
 If the detected project matches a row above, use those defaults. Only ask the user
 to confirm if the detection is ambiguous or the project doesn't match any row.
-
-**Port defaults for browser QA:**
-- Next.js: 3000
-- Vite: 5173
-- Nuxt: 3000
-- Astro: 4321
-- Angular: 4200
-- SvelteKit: 5173
 
 ### 3.4 CLAUDE.md
 
@@ -626,7 +816,95 @@ echo "--- SETUP VERIFICATION ---"
 echo "--- END VERIFICATION ---"
 ```
 
-### 4.2 Completion Report
+### 4.2 QA Infrastructure Verification
+
+Verify QA prerequisites match the project type and manifest configuration.
+
+```bash
+echo "--- QA INFRASTRUCTURE ---"
+
+# Read manifest for project type
+_PROJECT_TYPE=$(grep "^project_type:" doc/harness/manifest.yaml 2>/dev/null | awk '{print $2}')
+_BROWSER_QA=$(grep "^browser_qa_supported:" doc/harness/manifest.yaml 2>/dev/null | awk '{print $2}')
+
+if [ "$_BROWSER_QA" = "true" ]; then
+  echo "QA Strategy: browser"
+
+  # Check 1: Browser binary
+  _BROWSER_BIN=$(which chromium 2>/dev/null || which google-chrome 2>/dev/null || which chromium-browser 2>/dev/null)
+  if [ -n "$_BROWSER_BIN" ]; then
+    echo "  Browser: OK ($_BROWSER_BIN)"
+  else
+    echo "  Browser: MISSING — install Chromium or Chrome"
+  fi
+
+  # Check 2: Chrome DevTools MCP config
+  if grep -q "chrome-devtools" .mcp.json 2>/dev/null; then
+    echo "  Chrome MCP: OK (in .mcp.json)"
+  elif [ -f ~/.claude/mcp.json ] && grep -q "chrome-devtools" ~/.claude/mcp.json 2>/dev/null; then
+    echo "  Chrome MCP: OK (in global config)"
+  else
+    echo "  Chrome MCP: MISSING — run setup again to configure, or add manually to .mcp.json"
+  fi
+
+  # Check 3: Dev command in manifest
+  _DEV_CMD=$(grep "^dev_command:" doc/harness/manifest.yaml 2>/dev/null | awk '{print $2}')
+  if [ -n "$_DEV_CMD" ] && [ "$_DEV_CMD" != "null" ]; then
+    echo "  Dev command: OK ($_DEV_CMD)"
+  else
+    echo "  Dev command: MISSING — browser QA needs a dev server command in manifest"
+  fi
+
+  # Check 4: Entry URL in manifest
+  _ENTRY_URL=$(grep "^entry_url:" doc/harness/manifest.yaml 2>/dev/null | awk '{print $2}')
+  if [ -n "$_ENTRY_URL" ] && [ "$_ENTRY_URL" != "null" ]; then
+    echo "  Entry URL: OK ($_ENTRY_URL)"
+  else
+    echo "  Entry URL: MISSING — browser QA needs an entry URL in manifest"
+  fi
+
+elif [ "$_PROJECT_TYPE" = "api" ]; then
+  echo "QA Strategy: API"
+  which curl 2>/dev/null && echo "  HTTP client: OK (curl)" || echo "  HTTP client: MISSING — install curl"
+
+else
+  echo "QA Strategy: CLI/tests only"
+fi
+
+echo "--- END QA INFRASTRUCTURE ---"
+```
+
+**If any QA check fails:**
+
+Report each failure with a specific fix action:
+
+```
+QA INFRASTRUCTURE ISSUES:
+  - Browser binary: MISSING
+    FIX: Install Chromium — "sudo apt install chromium-browser" or "brew install chromium"
+  - Chrome MCP: MISSING
+    FIX: Re-run setup and select "Add Chrome DevTools MCP to .mcp.json"
+  - Dev command: MISSING
+    FIX: Add "dev_command: npm run dev" to doc/harness/manifest.yaml
+```
+
+Do NOT silently continue. Every QA infrastructure gap must be reported so the
+user knows exactly what to fix. If auto-fix is possible (MCP config, manifest
+fields), offer to fix it immediately via AskUserQuestion.
+
+### 4.3 Completion Report
+
+**If MCP config was modified** (Chrome DevTools MCP added to .mcp.json):
+
+Before anything else, tell the user:
+
+> I updated .mcp.json. You need to restart Claude Code for the Chrome DevTools
+> MCP server to load. Run `/exit` and start a new session.
+
+**Do NOT skip this message.** MCP server changes only take effect on restart.
+If the user proceeds without restarting, browser QA will silently fail.
+
+**Report format:**
 
 ```
 STATUS: DONE
@@ -638,12 +916,71 @@ Created:
   - doc/harness/critics/ — plan, runtime, document playbooks
   - doc/harness/ — harness state directory
   - CLAUDE.md — {created|updated} with harness2 section
+  {If MCP was added: "  - .mcp.json — Chrome DevTools MCP configured"}
 
-Loop: plan -> develop -> verify -> document -> close
-Auto-routing is on. Just describe what you want.
+QA Strategy: {browser|api|cli|tests_only}
+  {If browser: "Browser QA enabled. Dev server: {dev_command} → {entry_url}"}
+  {If api: "API QA enabled."}
+  {If cli: "CLI QA enabled."}
+  {If tests_only: "Tests only — no runtime QA configured."}
 
-Next: try "I want to build [feature]" or "there's a bug in [area]".
+QA Infrastructure: {all checks passed | ISSUES (see below)}
+  {List each issue from 4.2 with fix instructions}
 ```
+
+**Next steps (always include, tailored to status):**
+
+If all checks passed:
+```
+You're ready. Try: "I want to build [feature]" or "there's a bug in [area]".
+```
+
+If MCP config was changed:
+```
+ACTION REQUIRED: Restart Claude Code for MCP changes to take effect.
+  1. Type /exit
+  2. Start a new session
+  3. Come back and start building
+```
+
+If browser binary is missing:
+```
+ACTION REQUIRED: Install Chrome/Chromium for browser QA.
+  1. Install: sudo apt install chromium-browser (Linux) or brew install chromium (macOS)
+  2. Restart Claude Code (/exit, then new session)
+  3. Run "setup harness" again — I'll verify it works this time
+```
+
+If dev_command or entry_url is missing:
+```
+ACTION REQUIRED: Browser QA needs dev server config.
+  Edit doc/harness/manifest.yaml and add:
+    dev_command: {suggested command}
+    entry_url: {suggested URL}
+  Then run "setup harness" to verify.
+```
+
+If multiple issues:
+```
+ACTION REQUIRED: Fix these before browser QA will work:
+  1. [issue 1 with fix]
+  2. [issue 2 with fix]
+  ...
+  After fixing, run "setup harness" to verify.
+```
+
+**Smoke test offer (optional, when all checks pass for browser projects):**
+
+```
+Want me to verify browser QA works right now?
+  A) Yes — spin up dev server, take a screenshot
+  B) No — I'll trust the setup
+```
+
+If A: run the dev_command in background, wait for entry_url to respond,
+take a screenshot via Chrome DevTools MCP, show it to the user.
+If screenshot works: "Browser QA verified. You're ready."
+If screenshot fails: report the specific error and fix instructions.
 
 If any file is MISSING:
 

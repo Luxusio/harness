@@ -115,6 +115,13 @@ After completion, check runtime_verdict:
   If A: return to Phase 3 with the QA findings as additional context.
   Retry limit: 3 cycles. After 3 FAILs, stop and report.
 
+**Persist QA failure patterns:** After each QA retry cycle, log the failure reason:
+
+```bash
+_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
+echo '{"ts":"'"$_TS"'","type":"qa-failure-pattern","source":"run-retry","key":"FAILURE_TYPE","insight":"QA failed: <reason>, workaround: <fix>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+```
+
 ### Phase 5: Close
 
 ```
@@ -286,3 +293,100 @@ Test command: `bun test` (Bun runtime, not npm)
 ```
 
 Non-blocking — if any promotion step fails, the data is still at its current tier.
+
+### Mandatory promotion + pruning (after every task close)
+
+After task close, enforce the promotion pipeline. This is NOT optional —
+learnings.jsonl is a staging area, not permanent storage.
+
+**Step 1: Aggregate learnings by key.**
+
+```bash
+# Count occurrences of each learning key
+python3 -c "
+import json, collections, sys
+counts = collections.Counter()
+entries = []
+with open('doc/harness/learnings.jsonl') as f:
+    for line in f:
+        try:
+            e = json.loads(line.strip())
+            k = e.get('key', '')
+            if k: counts[k] += 1
+            entries.append(e)
+        except: pass
+for k, c in counts.most_common(20):
+    print(f'{c}\t{k}')
+" 2>/dev/null
+```
+
+**Step 2: Promote keys appearing 2+ times to Tier 2.**
+
+For each key with count >= 2, write or append to `doc/harness/patterns/<topic>.md`:
+
+```markdown
+| <key> | <date> | run-auto-promote |
+## <key>
+<latest insight for this key>
+**Promoted from learnings:** N occurrences across M tasks
+```
+
+If the pattern doc already has this key, update the count and latest insight.
+
+**Step 3: Prune promoted entries from learnings.jsonl.**
+
+After promotion, remove entries whose keys were promoted (keep the Tier 2 doc as the source of truth):
+
+```bash
+# Keep only entries whose keys appear < 2 times (not yet promoted)
+python3 -c "
+import json
+promoted = set()
+entries = []
+with open('doc/harness/learnings.jsonl') as f:
+    for line in f:
+        try:
+            e = json.loads(line.strip())
+            entries.append(e)
+        except: pass
+# Count keys
+from collections import Counter
+counts = Counter(e.get('key','') for e in entries if e.get('key'))
+promoted = {k for k, c in counts.items() if c >= 2}
+# Write back only non-promoted entries
+with open('doc/harness/learnings.jsonl', 'w') as f:
+    for e in entries:
+        if e.get('key','') not in promoted:
+            f.write(json.dumps(e, ensure_ascii=False) + '\n')
+" 2>/dev/null
+```
+
+**Step 4: Prune stale entries (>90 days, not type:eureka).**
+
+```bash
+python3 -c "
+import json, datetime
+cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=90)).strftime('%Y-%m-%dT%H:%M:%SZ')
+entries = []
+with open('doc/harness/learnings.jsonl') as f:
+    for line in f:
+        try:
+            e = json.loads(line.strip())
+            ts = e.get('ts', '')
+            tp = e.get('type', '')
+            # Keep eureka and calibration forever, prune old transient entries
+            if tp in ('eureka', 'confidence-calibration') or ts >= cutoff:
+                entries.append(e)
+        except: pass
+with open('doc/harness/learnings.jsonl', 'w') as f:
+    for e in entries:
+        f.write(json.dumps(e, ensure_ascii=False) + '\n')
+" 2>/dev/null
+```
+
+**Step 5: Promote Tier 2 → Tier 1 (CLAUDE.md).**
+
+If any pattern doc is referenced during 2+ tasks (check git log for edits to the pattern doc), promote the one-liner to `plugin/CLAUDE.md` under the appropriate section. Keep CLAUDE.md entries to one line each.
+
+**This pipeline runs on EVERY task close.** If it fails, log a warning and continue —
+the task itself is still complete. The pipeline is housekeeping, not a gate.
