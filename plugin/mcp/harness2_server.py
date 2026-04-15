@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""harness2 MCP server — self-contained, 6-field TASK_STATE.
+"""harness2 MCP server — self-contained, 7-field TASK_STATE.
 
 No plugin-legacy dependency. All operations are direct file I/O.
 7 MCP tools: task_start, task_context, task_verify, task_close,
@@ -290,7 +290,7 @@ class McpServer:
                 "protocolVersion": self.protocol_version,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": SERVER_INFO,
-                "instructions": "harness2 MCP — 7 tools, 6-field TASK_STATE. write_* tools are subagent-only.",
+                "instructions": "harness2 MCP — 7 tools, 7-field TASK_STATE. write_* tools are subagent-only.",
             })
         elif method == "notifications/initialized":
             self.initialized = True

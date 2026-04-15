@@ -93,3 +93,40 @@ issue?" If no → skip it. If yes → classify and handle.
 After all ACs are implemented and before the adversarial self-check, run one
 final quality scan over the entire diff. Catch anything missed during per-AC
 scanning. Same classification rules apply.
+
+## 3-Attempt Escalation Rule
+
+Applies to any fix loop in develop: per-AC fix, Phase 7 verification fix, Phase 7
+browser debug (browser-verification.md). If the SAME issue fails to resolve after
+3 consecutive fix attempts, STOP. Do not try a 4th attempt.
+
+Track attempts per-issue in PROGRESS.md under `attempts:` (see Phase 3 schema).
+An "issue" is identified by {test_name | symptom | file:line} — different
+failures in the same cycle don't share a counter.
+
+On the 3rd failure, invoke `AskUserQuestion` with this structured format:
+
+```
+AskUserQuestion:
+  Question: "3 fix attempts exhausted for <issue>. How should we proceed?"
+  Context:
+    REASON: <why the current approach keeps failing — one sentence>
+    ATTEMPTED:
+      1. <attempt 1 summary + failure mode>
+      2. <attempt 2 summary + failure mode>
+      3. <attempt 3 summary + failure mode>
+    RECOMMENDATION: <best next step — invoke investigate, defer to human,
+                    widen scope, re-examine the test, etc.>
+  Options:
+    - A) Invoke investigate skill for structured root-cause analysis
+    - B) Defer — mark AC/test as DEFERRED in HANDOFF with details
+    - C) Extend budget (allow 2 more attempts — user must explicitly approve)
+    - D) Revert the changes and re-plan
+```
+
+Log the escalation:
+```bash
+echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","type":"escalation","source":"fix-first","key":"3-attempt-exhausted","issue":"<issue>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+```
+
+Never silently keep trying past 3. Thrashing is a signal to stop, not to try harder.

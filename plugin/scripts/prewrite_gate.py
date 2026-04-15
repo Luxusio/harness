@@ -16,6 +16,7 @@ PROTECTED_ARTIFACTS = {
     "CRITIC__runtime.md": "qa-browser",  # also qa-api, qa-cli — checked by prefix match
     "HANDOFF.md": "developer",
     "DOC_SYNC.md": "developer",
+    "CHECKS.yaml": "plan-skill + update_checks.py CLI",
 }
 
 
