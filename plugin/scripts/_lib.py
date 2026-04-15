@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""harness2 minimal library — stdlib only, 6-field TASK_STATE.
+"""harness2 minimal library — stdlib only, 7-field TASK_STATE.
 
 TASK_STATE schema:
   task_id, status, runtime_verdict,
@@ -169,7 +169,7 @@ def canonical_task_id(task_id=None, slug=None, task_dir=None,
 
 
 def ensure_task_scaffold(task_dir, task_id, request_text=""):
-    """Create task dir with minimal 6-field TASK_STATE.yaml."""
+    """Create task dir with minimal 7-field TASK_STATE.yaml."""
     os.makedirs(task_dir, exist_ok=True)
     tid = _normalize_task_id(task_id, task_dir=task_dir) or task_id
     fields = {

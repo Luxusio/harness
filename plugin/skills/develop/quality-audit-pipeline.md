@@ -141,6 +141,17 @@ Time budget: 2-5 minutes.
 CRITICAL: Write your full results (findings table + fixes) to:
   <task_dir>/audit/adversarial-findings.md
 Use atomic write: write to adversarial-findings.md.tmp first, then rename.
+
+ALSO append each CRITICAL/HIGH finding as a structured JSON line to:
+  <task_dir>/audit/adversarial-findings.jsonl
+One JSON object per line, schema:
+  {\"ts\":\"<ISO8601>\",\"severity\":\"critical|high\",\"confidence\":N,
+   \"category\":\"<taxonomy>\",\"file\":\"<path>\",\"line\":N,
+   \"pattern\":\"<one-line signature of the bug class>\",
+   \"snippet\":\"<the exact offending code line>\",
+   \"fix\":\"<one-line fix summary>\",\"task\":\"<task_id>\"}
+This evidence log feeds Tier 2 pattern promotion and cross-task reuse.
+
 Return: 'Results written to <task_dir>/audit/adversarial-findings.md' plus a 3-line summary."
 )
 ```

@@ -271,3 +271,76 @@ python -c "import <module>" 2>&1
 ```
 
 This catches import errors before the QA phase.
+
+## Step 3.5: Transience filter
+
+A test or check that fails on a single run is not yet a `failed` — it is a
+`transient`. Re-run the same command once. Only count the failure if it
+reproduces on the second run.
+
+```bash
+_FIRST=$(<test_command> 2>&1); _FIRST_CODE=$?
+if [ "$_FIRST_CODE" -ne 0 ]; then
+  _SECOND=$(<test_command> 2>&1); _SECOND_CODE=$?
+  if [ "$_SECOND_CODE" -eq 0 ]; then
+    # Single-run flake — log and continue
+    echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"transient","source":"verify","insight":"test passed on retry","task":"<task_id>"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+  fi
+fi
+```
+
+Only the persistent failure (both runs failing) counts toward the 3-cycle
+fix limit. Single-run failures don't trigger Phase 7 fix loops or consume
+the attempt budget — they are recorded as transient and the gate continues.
+
+Bounded: retry at most once per failure. No infinite retry loop.
+
+## Step 3.6: Severity × confidence close gate
+
+After the quality synthesis agent produces its findings table, apply this
+close-gate rule before task_close is allowed:
+
+| Severity | Confidence | Action |
+|----------|-----------|--------|
+| critical | ≥ 7 | **hard-block close.** Must fix or defer via `AskUserQuestion`. |
+| high | ≥ 8 | **hard-block close.** Must fix or defer via `AskUserQuestion`. |
+| high | 5–7 | WARN — record in HANDOFF "Adversarial Findings"; close allowed. |
+| medium / low | any | log in HANDOFF; close allowed. |
+| any | < 5 | appendix only; do not surface at gate. |
+
+A blocking finding can be cleared by either (a) fixing it (re-run gate) or
+(b) explicit user deferral with justification captured in HANDOFF. Silent
+deferral is not permitted.
+
+## Step 4: Acceptance Ledger — promote or reopen
+
+After the verification gate runs (tests + browser + build checks), update each
+AC's status in CHECKS.yaml based on the outcome. Never edit CHECKS.yaml
+directly — always call the CLI:
+
+```bash
+# AC verified (its tests green, evidence captured)
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
+  --task-dir doc/harness/tasks/<task_id>/ \
+  --ac AC-00X --status passed \
+  --evidence "<test name | file:line | HANDOFF ref>"
+
+# AC's own-code tests failed under verification — reopen
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
+  --task-dir doc/harness/tasks/<task_id>/ \
+  --ac AC-00X --status failed \
+  --note "<short reason>"
+```
+
+Transition rules:
+- `implemented_candidate -> passed` when the gate is green for that AC.
+- `implemented_candidate -> failed` when verification fails. `reopen_count`
+  auto-increments. Loop back to Phase 7 fix cycle; re-promote to
+  `implemented_candidate` after a successful fix, then `passed` on next gate.
+- `open -> deferred` only when the user has explicitly deferred an AC — record
+  the reason in `--note` and list it in HANDOFF.
+
+**Close gate:** The task MUST NOT close while any AC remains in
+`open | implemented_candidate | failed`. Every AC must be `passed` or
+`deferred` before `task_close`. High-reopen ACs (`reopen_count >= 3`) should
+surface in HANDOFF under a "Reopened ACs" section so the user sees churn.

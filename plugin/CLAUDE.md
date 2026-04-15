@@ -1,7 +1,7 @@
 # harness2 runtime rules
 
 Lightweight execution harness for Claude Code.
-8-field TASK_STATE + on-the-fly routing + artifact-provenance.
+7-field TASK_STATE + on-the-fly routing + artifact-provenance.
 Self-contained — no plugin-legacy dependency.
 
 ## 1. Canonical Loop
@@ -27,7 +27,7 @@ No step skipped. Smallest coherent diff per step.
 
 Provenance = artifact existence. No counters.
 
-## 3. TASK_STATE (6 fields only)
+## 3. TASK_STATE (7 fields only)
 
 ```yaml
 task_id: TASK__xxx
@@ -51,6 +51,7 @@ Short approvals only authorize the last explicit transition proposed.
 | Artifact | Owner |
 |----------|-------|
 | PLAN.md | plan-skill |
+| CHECKS.yaml | plan-skill (create) + update_checks.py CLI (develop/qa updates) |
 | source + HANDOFF.md + DOC_SYNC.md + distilled change doc | developer |
 | CRITIC__runtime.md | qa-browser / qa-api / qa-cli |
 
@@ -67,6 +68,8 @@ Do not write another role's artifact. Prewrite gate enforces this.
 | Architecture review | `Skill(plan-eng-review)` |
 | Design review | `Skill(plan-design-review)` |
 | DX review | `Skill(plan-devex-review)` |
+| Contract drift / "CLAUDE.md 정리" / "규약 정비" / post-upgrade cleanup | `Skill(maintain)` |
+| SessionStart reported `[maintain-suggested]` in reminders | Propose `Skill(maintain)` to user |
 | Explanation | Direct answer |
 
 ## 8. Verification
@@ -78,6 +81,41 @@ Do not claim success from static inspection when runtime verification is require
 
 Runtime verdict must be PASS before close.
 Use `task_close`. If blocked, fix the stated gate.
+
+## 9a. Note freshness
+
+Notes under `doc/**/*.md` may declare source dependencies in frontmatter:
+
+```yaml
+---
+freshness: current        # current | suspect | stale | superseded
+invalidated_by_paths:
+  - path/or/prefix/that/invalidates/this/note
+  - another/source/file.py
+---
+```
+
+On every SessionStart (and whenever explicitly run), the hook
+`scripts/note_freshness.py` scans `git diff HEAD~1 HEAD`. If any changed path
+matches a note's `invalidated_by_paths`, that note's `freshness` flips from
+`current` to `suspect` and `freshness_updated` is stamped.
+
+Writer-role agents must verify `freshness: current` before citing a note as
+authoritative. `suspect` notes are still readable but require re-validation
+against current source before trust. Use `--paths` arg to invalidate against
+an explicit file list when git history isn't the right source.
+
+## 9b. Acceptance Ledger (CHECKS.yaml)
+
+CHECKS.yaml is the per-task AC ledger. Plan-skill creates each AC with
+`status: open`. The develop skill promotes ACs to
+`implemented_candidate` after per-AC tests pass (Phase 3), then the
+verification gate (Phase 7) promotes them to `passed` — or reopens them
+to `failed` (auto-incrementing `reopen_count`). Only `passed` or
+`deferred` ACs satisfy the close gate.
+
+Writes go through `scripts/update_checks.py` only. Never edit CHECKS.yaml by
+hand — the prewrite gate rejects direct writes.
 
 ## 10. Tiered Learning
 
