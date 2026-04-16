@@ -145,7 +145,31 @@ Match → apply without asking. Only confirm if ambiguous or no match.
 
 ## 3.4 CLAUDE.md
 
-Create if absent; append harness2 section if present. Under 20 lines. Include: harness2 mode declaration, manifest.yaml link, canonical loop (plan→develop→verify→close), "just describe what you want — auto-routing is on". Don't dump full runtime rules — those live in `plugin/CLAUDE.md`.
+Create if absent; append harness2 section if present. Under 40 lines. Include: harness2 mode declaration, manifest.yaml link, canonical loop (plan→develop→verify→close), the harness-routing block below, and "just describe what you want — auto-routing is on". Don't dump full runtime rules — those live in `plugin/CLAUDE.md`.
+
+### Harness routing block (emit into user's CLAUDE.md)
+
+The emitted block must be idempotent (skip re-inject if present). Marker: `<!-- harness:routing-injected -->`.
+
+```bash
+if grep -q "harness:routing-injected" CLAUDE.md 2>/dev/null; then
+  echo "Harness routing block already present — skipping"
+else
+  cat >> CLAUDE.md << 'ROUTING_EOF'
+
+## Harness routing
+<!-- harness:routing-injected -->
+- Run the full cycle (plan → develop → verify → close) → `Skill(harness:run)`
+- Plan only → `Skill(harness:plan)`
+- Implement an approved PLAN.md → `Skill(harness:develop)`
+- Bootstrap harness in a new project / repair existing → `Skill(harness:setup)`
+- Contract drift / post-upgrade cleanup → `Skill(harness:maintain)`
+- Read-only question or explanation → answer directly, no skill
+ROUTING_EOF
+fi
+```
+
+Note: no `Default agent is X` line. The harness routes via skills, not agent switching.
 
 ## 3.5 Critic playbooks
 

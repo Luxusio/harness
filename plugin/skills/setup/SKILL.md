@@ -153,7 +153,7 @@ AskUserQuestion:
   A) Add routing rules to CLAUDE.md (recommended)
   B) No thanks
 ```
-A → append routing section to CLAUDE.md; `touch "$_MARKER_DIR/routing-injected"`. B → `_harness_config_set routing_declined true`.
+A → emit the idempotent routing block from `bootstrap.md` Section 3.4 (marker: `harness:routing-injected`) into CLAUDE.md; `touch "$_MARKER_DIR/routing-injected"`. B → `_harness_config_set routing_declined true`.
 
 ---
 

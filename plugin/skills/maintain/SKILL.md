@@ -9,8 +9,8 @@ description: |
   Trigger keywords: "maintain", "contract drift", "CLAUDE.md 정리",
   "규약 정비", "contracts 꼬임", "harness upgrade cleanup".
 
-  Also auto-suggested by the harness agent when the SessionStart hook
-  reports hard drift in CONTRACTS.md.
+  Also auto-suggested when the SessionStart hook reports hard drift in
+  CONTRACTS.md.
 user-invocable: true
 allowed-tools: Read, Bash, Edit, AskUserQuestion
 ---

@@ -36,15 +36,12 @@ class PluginAgentContractTests(unittest.TestCase):
             self.assertNotRegex(frontmatter, r"^permissionMode:", msg=path.name)
             self.assertNotRegex(frontmatter, r"^hooks:", msg=path.name)
 
-    def test_harness_agent_exposes_real_orchestration_tools(self):
-        frontmatter, body = split_frontmatter("plugin/agents/harness.md")
-        tools = parse_csv_field(frontmatter, "tools")
-        for required in ("Agent", "Skill", "AskUserQuestion"):
-            self.assertIn(required, tools)
-        referenced = sorted(set(re.findall(r"`(mcp__plugin_harness_harness__[A-Za-z0-9_]+)`", body)))
-        for required in referenced:
-            self.assertIn(required, tools, msg=f"harness.md references {required} without allowlisting it")
-        self.assertNotRegex(frontmatter, r"^skills:")
+    def test_no_harness_orchestrator_agent(self):
+        """The 'harness' orchestrator agent was removed — routing is skill-based now."""
+        self.assertFalse(
+            (REPO_ROOT / "plugin/agents/harness.md").exists(),
+            "plugin/agents/harness.md must not exist — harness runtime routes via skills (harness:run|plan|develop|setup|maintain), not an orchestrator agent",
+        )
 
     def test_runtime_critic_inherits_session_tools_but_cannot_edit(self):
         frontmatter = extract_frontmatter("plugin/agents/critic-runtime.md")
@@ -58,18 +55,9 @@ class PluginAgentContractTests(unittest.TestCase):
         self.assertIn("harness", config.get("mcpServers", {}))
 
     def test_agents_and_skills_expose_required_harness_mcp_tools(self):
-        harness_tools = parse_csv_field(extract_frontmatter("plugin/agents/harness.md"), "tools")
-        for required in (
-            "mcp__plugin_harness_harness__task_start",
-            "mcp__plugin_harness_harness__task_context",
-            "mcp__plugin_harness_harness__task_update_from_git_diff",
-            "mcp__plugin_harness_harness__task_verify",
-            "mcp__plugin_harness_harness__task_close",
-            "mcp__plugin_harness_harness__team_bootstrap",
-            "mcp__plugin_harness_harness__team_dispatch",
-        ):
-            self.assertIn(required, harness_tools)
-
+        # Harness orchestrator agent is gone; plan skill is the user-facing entry
+        # into MCP-gated work. Assert plan + critic skills still allowlist the
+        # required MCP tools.
         plan_tools = parse_csv_field((REPO_ROOT / "plugin/skills/plan/SKILL.md").read_text(encoding="utf-8").split("---\n", 2)[1], "allowed-tools")
         for required in ("mcp__plugin_harness_harness__task_start", "mcp__plugin_harness_harness__task_context"):
             self.assertIn(required, plan_tools)

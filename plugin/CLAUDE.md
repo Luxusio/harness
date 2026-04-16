@@ -4,6 +4,11 @@ Lightweight execution harness for Claude Code.
 7-field TASK_STATE + on-the-fly routing + artifact-provenance.
 Self-contained — no plugin-legacy dependency.
 
+Harness rules apply to any caller — the main Claude session, a sub-skill,
+or an MCP client — whenever a repo-mutating task runs through the
+canonical loop. There is no separate "harness agent" that owns the
+workflow; skills and MCP tools are the sole runtime surface.
+
 ## 1. Canonical Loop
 
 Every repo-mutating task:
@@ -14,7 +19,7 @@ No step skipped. Smallest coherent diff per step.
 
 ## 2. MCP tools
 
-**Core (coordinator):**
+**Core (task driver — main session or run skill):**
 - `task_start` — create/resume task, return fresh context
 - `task_context` — refresh task state (only when needed)
 - `task_verify` — sync changed paths + check verification

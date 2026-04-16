@@ -5,7 +5,7 @@ WS-4 requirement (PLAN.md §10.3):
   - maintenance_task=true  → workflow control surface write ALLOWED
   - Non-surface files are unaffected by this gate
   - hctl.py itself is in the surface set
-  - plugin/CLAUDE.md and plugin/agents/harness.md are in the surface set
+  - plugin/CLAUDE.md is in the surface set (harness orchestrator agent was removed)
   - Escape hatch HARNESS_SKIP_PREWRITE=1 bypasses the lock
 
 Run with: python -m unittest discover -s tests -p 'test_*.py'
@@ -35,9 +35,6 @@ class TestIsWorkflowControlSurface(unittest.TestCase):
 
     def test_plugin_claude_md(self):
         self.assertTrue(_is_workflow_control_surface("plugin/CLAUDE.md"))
-
-    def test_plugin_agents_harness(self):
-        self.assertTrue(_is_workflow_control_surface("plugin/agents/harness.md"))
 
     def test_execution_modes_doc(self):
         self.assertTrue(_is_workflow_control_surface("plugin/docs/execution-modes.md"))

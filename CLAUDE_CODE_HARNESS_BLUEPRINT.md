@@ -4,7 +4,7 @@
 
 이 문서는 다음 목표를 만족하는 Claude Code plugin/프로젝트 구조 설계다.
 
-- main agent는 `harness`
+- main entrypoint는 `harness` plugin — main Claude session이 `Skill(harness:*)`을 직접 호출한다 (별도 orchestrator agent 없음)
 - 생산 lane은 `/plan` skill, `developer` subagent, `writer` subagent
 - critic은 `plan / runtime / document` 3종 (unified document critic)
 - durable memory는 `doc/` 아래 root 확장 방식으로 저장한다
@@ -108,7 +108,7 @@ updated: 2026-03-27
 @doc/common/CLAUDE.md
 
 # Operating mode
-- Default operating agent is harness.
+- Repo-mutating work routes through harness skills (`Skill(harness:run)` / `Skill(harness:plan)` / `Skill(harness:develop)` / `Skill(harness:setup)` / `Skill(harness:maintain)`). No separate orchestrator agent — the main Claude session invokes skills directly.
 - Every substantial repo-mutating task follows:
   request -> contract plan -> plan critic -> implement -> runtime QA -> persistence -> docs sync -> document critic -> close.
 - New durable roots or durable structure changes go through critic-document.
@@ -611,7 +611,7 @@ critic-runtime이 optional로 실행할 수 있다.
 9. obvious root candidates → critic-document 승인
 10. reviewable diff → user 확인 후 반영
 11. .gitignore 설정
-12. harness agent 활성화
+12. CLAUDE.md에 `## Harness routing` 블록 주입 (마커: `<!-- harness:routing-injected -->`)
 
 ### 13.1 setup 산출물 최소 집합
 

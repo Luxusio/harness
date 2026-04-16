@@ -6,8 +6,16 @@ updated: 2026-04-15
 
 @doc/CLAUDE.md
 
+## Harness routing
+<!-- harness:routing-injected -->
+- Run the full cycle (plan → develop → verify → close) → `Skill(harness:run)`
+- Plan only → `Skill(harness:plan)`
+- Implement an approved PLAN.md → `Skill(harness:develop)`
+- Bootstrap harness in a new project / repair existing → `Skill(harness:setup)`
+- Contract drift / post-upgrade cleanup → `Skill(harness:maintain)`
+- Read-only question or explanation → answer directly, no skill
+
 # Operating mode
-- Default agent is harness — an execution harness with verdict invalidation.
 - `doc/harness/manifest.yaml` is the initialization marker.
 - Canonical loop for every repo-mutating task: **plan → develop → verify → close**. Smallest coherent diff per step. No step skipped. See `plugin/CLAUDE.md` for the authoritative runtime rules.
 - The only hard gate at task completion is `runtime_verdict: PASS`. Stale PASS (after touched-path changes) does not count — `task_verify` re-syncs and re-gates.
