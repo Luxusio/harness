@@ -85,6 +85,16 @@ _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 echo '{"ts":"'"$_TS"'","type":"qa-failure-pattern","source":"run-retry","key":"FAILURE_TYPE","insight":"QA failed: <reason>, workaround: <fix>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
+### Phase 4.5: Health score snapshot
+
+Before closing, capture the final project health score:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/health.py 2>&1 || true
+```
+
+Store the printed score for inclusion in the completion report. The script auto-appends to `doc/harness/health-history.jsonl`.
+
 ### Phase 5: Close
 
 ```
@@ -105,6 +115,7 @@ Dir:     <task_dir>
 
 Phases completed: plan, develop, verify, close
 Runtime verdict:  PASS
+Health score:     <score>/10
 Files changed:    <count>
 Doc:              doc/changes/<date>-<slug>.md
 ```

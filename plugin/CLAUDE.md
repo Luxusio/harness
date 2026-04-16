@@ -117,7 +117,37 @@ to `failed` (auto-incrementing `reopen_count`). Only `passed` or
 Writes go through `scripts/update_checks.py` only. Never edit CHECKS.yaml by
 hand — the prewrite gate rejects direct writes.
 
-## 10. Tiered Learning
+## 10. Iron Law (bugfix ACs)
+
+`kind: bugfix` ACs in CHECKS.yaml cannot be promoted to `implemented_candidate`
+or `passed` unless `root_cause` is set. Enforced by `update_checks.py`:
+
+```bash
+python3 scripts/update_checks.py --task-dir TASK_DIR --ac AC-001 \
+  --status implemented_candidate --root-cause "off-by-one in loop bound"
+```
+
+Without `--root-cause`, the command exits 1 with an Iron Law violation message.
+Once set, `root_cause` persists across subsequent transitions.
+
+## 11. Quality scripts
+
+All scripts under `plugin/scripts/`. Stdlib only (PIL optional for canary).
+
+| Script | Purpose | State file (gitignored) |
+|--------|---------|------------------------|
+| `health.py` | Weighted composite 0–10 score | `doc/harness/health-history.jsonl` |
+| `benchmark.py` | Numeric metrics vs baseline, WARN/REGR thresholds | `doc/harness/benchmark/{baseline.json,history.jsonl}` |
+| `audit.py` | Generic categorized audit (CSO-style) | `doc/harness/audits/<category>-history.jsonl` |
+| `canary.py` | Visual regression baseline + sha/pixel diff | `doc/harness/visual-baselines/<task-id>/` |
+| `search_learnings.py` | Keyword/type/skill/since search over Tier 3 | reads `doc/harness/learnings.jsonl` |
+| `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/<task-id>.md` |
+
+All activated via manifest optional keys: `health_components`, `benchmark_components`,
+`audit_categories`. Health falls back to `test_command` when no components declared.
+Benchmark and audit are inactive until their manifest keys exist.
+
+## 12. Tiered Learning
 
 Every skill logs discoveries. Three tiers:
 
