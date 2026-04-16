@@ -1,5 +1,8 @@
 {
   "name": "harness-plugin",
+  "metadata": {
+    "description": "Execution harness for AI-assisted repository work with plan-develop-verify-close loops"
+  },
   "owner": {
     "name": "Luxus",
     "email": "rw051713@gmail.com"
