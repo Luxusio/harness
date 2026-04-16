@@ -180,6 +180,7 @@ _HARNESS_IGNORES=(
   "doc/harness/local.yaml"
   "doc/harness/.markers/"
   "doc/harness/.interview-answers.json"
+  "doc/harness/retros/"
 )
 
 _NEEDS_HEADER=true
