@@ -132,7 +132,9 @@ def _gather_changed(from_git: int | None, explicit: list[str]) -> set[str]:
                 repo_root = rr.stdout.strip()
         except (OSError, subprocess.SubprocessError):
             pass
-        rev = f"HEAD~{from_git}" if from_git > 0 else "HEAD"
+        if from_git == 0:
+            return paths
+        rev = f"HEAD~{from_git}"
         r = subprocess.run(
             ["git", "diff", "--name-only", rev, "HEAD"],
             capture_output=True, text=True, check=False,

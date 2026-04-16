@@ -164,8 +164,9 @@ def handle_task_close(args: dict) -> dict:
     })
 
 
-def _write_artifact(args: dict, filename: str, verdict_field: str | None = None) -> dict:
-    """Common artifact write: create file, optionally update verdict."""
+def _write_artifact(args: dict, filename: str, verdict_field: str | None = None,
+                    verdict_value: str | None = None) -> dict:
+    """Common artifact write: create file, optionally update verdict. Atomic."""
     td = _opt(args, "task_dir")
     ti = _opt(args, "task_id") or (os.path.basename(td.rstrip("/")) if td else None)
     if not ti:
@@ -178,11 +179,22 @@ def _write_artifact(args: dict, filename: str, verdict_field: str | None = None)
             content_parts.append(f"\n## {key.title()}\n{val}\n")
     path = os.path.join(td, filename)
     os.makedirs(td, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(content_parts))
+    import tempfile
+    text = "\n".join(content_parts)
+    fd, tmp = tempfile.mkstemp(dir=td, prefix=f".{filename}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     result = {"artifact": filename, "task_dir": td}
     if verdict_field:
-        verdict = _opt(args, "verdict") or "PASS"
+        verdict = verdict_value or _opt(args, "verdict") or "PASS"
         set_state_field(td, verdict_field, verdict)
         result["verdict"] = verdict
     return _ok(result)
@@ -192,7 +204,7 @@ def handle_write_critic_runtime(args: dict) -> dict:
     verdict = _req(args, "verdict")
     if verdict not in ("PASS", "FAIL", "BLOCKED_ENV"):
         return _err(f"invalid verdict '{verdict}' — must be PASS, FAIL, or BLOCKED_ENV")
-    return _write_artifact(args, "CRITIC__runtime.md", "runtime_verdict")
+    return _write_artifact(args, "CRITIC__runtime.md", "runtime_verdict", verdict_value=verdict)
 
 
 def handle_write_handoff(args: dict) -> dict:
