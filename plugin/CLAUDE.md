@@ -34,7 +34,7 @@ task_id: TASK__xxx
 status: created|planning|implementing|verifying|closed
 runtime_verdict: pending|PASS|FAIL
 touched_paths: []
-plan_session_state: closed|open
+plan_session_state: closed|context_open|write_open
 closed_at: null
 updated: 2026-04-14T00:00:00Z
 ```

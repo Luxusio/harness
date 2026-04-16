@@ -169,8 +169,14 @@ def canonical_task_id(task_id=None, slug=None, task_dir=None,
 
 
 def ensure_task_scaffold(task_dir, task_id, request_text=""):
-    """Create task dir with minimal 7-field TASK_STATE.yaml."""
+    """Create task dir with minimal 7-field TASK_STATE.yaml. Preserves existing state on resume."""
     os.makedirs(task_dir, exist_ok=True)
+    if os.path.isfile(state_file(task_dir)):
+        existing = read_state(task_dir)
+        if existing:
+            created = [state_file(task_dir)]
+            tid = existing.get("task_id") or _normalize_task_id(task_id, task_dir=task_dir) or task_id
+            return {"created": created, "task_dir": task_dir, "task_id": tid}
     tid = _normalize_task_id(task_id, task_dir=task_dir) or task_id
     fields = {
         "task_id": tid,
@@ -240,9 +246,13 @@ def emit_compact_context(task_dir):
     source_write_allowed = has_plan
     why_blocked = "" if source_write_allowed else "PLAN.md does not exist yet"
 
+    has_handoff = artifact_exists(task_dir, "HANDOFF.md")
+
     missing_for_close = []
     if not has_plan:
         missing_for_close.append("PLAN.md")
+    if not has_handoff:
+        missing_for_close.append("HANDOFF.md")
     if runtime_verdict != "PASS":
         missing_for_close.append("runtime_verdict PASS")
 
