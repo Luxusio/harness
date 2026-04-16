@@ -57,7 +57,7 @@ Short approvals only authorize the last explicit transition proposed.
 
 Do not write another role's artifact. Prewrite gate enforces this.
 
-## 7. Auto-routing
+## 6. Auto-routing
 
 | Intent | Route to |
 |--------|----------|
@@ -72,17 +72,17 @@ Do not write another role's artifact. Prewrite gate enforces this.
 | SessionStart reported `[maintain-suggested]` in reminders | Propose `Skill(maintain)` to user |
 | Explanation | Direct answer |
 
-## 8. Verification
+## 7. Verification
 
 `task_verify` syncs paths and checks verification state.
 Do not claim success from static inspection when runtime verification is required.
 
-## 9. Finish cleanly
+## 8. Finish cleanly
 
 Runtime verdict must be PASS before close.
 Use `task_close`. If blocked, fix the stated gate.
 
-## 9a. Note freshness
+## 8a. Note freshness
 
 Notes under `doc/**/*.md` may declare source dependencies in frontmatter:
 
@@ -105,7 +105,7 @@ authoritative. `suspect` notes are still readable but require re-validation
 against current source before trust. Use `--paths` arg to invalidate against
 an explicit file list when git history isn't the right source.
 
-## 9b. Acceptance Ledger (CHECKS.yaml)
+## 8b. Acceptance Ledger (CHECKS.yaml)
 
 CHECKS.yaml is the per-task AC ledger. Plan-skill creates each AC with
 `status: open`. The develop skill promotes ACs to
@@ -117,7 +117,7 @@ to `failed` (auto-incrementing `reopen_count`). Only `passed` or
 Writes go through `scripts/update_checks.py` only. Never edit CHECKS.yaml by
 hand — the prewrite gate rejects direct writes.
 
-## 10. Iron Law (bugfix ACs)
+## 9. Iron Law (bugfix ACs)
 
 `kind: bugfix` ACs in CHECKS.yaml cannot be promoted to `implemented_candidate`
 or `passed` unless `root_cause` is set. Enforced by `update_checks.py`:
@@ -130,7 +130,7 @@ python3 scripts/update_checks.py --task-dir TASK_DIR --ac AC-001 \
 Without `--root-cause`, the command exits 1 with an Iron Law violation message.
 Once set, `root_cause` persists across subsequent transitions.
 
-## 11. Quality scripts
+## 10. Quality scripts
 
 All scripts under `plugin/scripts/`. Stdlib only (PIL optional for canary).
 
@@ -150,7 +150,7 @@ All activated via manifest optional keys: `health_components`, `benchmark_compon
 `audit_categories`. Health falls back to `test_command` when no components declared.
 Benchmark and audit are inactive until their manifest keys exist.
 
-## 12. Tiered Learning
+## 11. Tiered Learning
 
 Every skill logs discoveries. Three tiers:
 

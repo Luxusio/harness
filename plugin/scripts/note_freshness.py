@@ -117,10 +117,21 @@ def _gather_changed(from_git: int | None, explicit: list[str]) -> set[str]:
     if from_git is None:
         return paths
     try:
+        repo_root = os.getcwd()
+        try:
+            rr = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, check=False,
+            )
+            if rr.returncode == 0 and rr.stdout.strip():
+                repo_root = rr.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
         rev = f"HEAD~{from_git}" if from_git > 0 else "HEAD"
         r = subprocess.run(
             ["git", "diff", "--name-only", rev, "HEAD"],
             capture_output=True, text=True, check=False,
+            cwd=repo_root,
         )
         for ln in r.stdout.splitlines():
             ln = ln.strip()

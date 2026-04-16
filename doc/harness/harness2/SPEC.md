@@ -18,10 +18,10 @@ harness2 is the next-generation harness that bundles gstack-quality skills nativ
 Every repo-mutating task follows this fixed sequence:
 
 ```
-intent → plan → develop → verify → document → close
+plan → develop → verify → close
 ```
 
-No step may be skipped. The loop may cycle back (verify inadequacy → return to develop or plan) but always closes forward through document → close.
+No step may be skipped. The loop may cycle back (verify inadequacy → return to develop or plan) but always closes forward through close. Documentation (HANDOFF.md, DOC_SYNC.md) is part of the develop step, not a separate phase.
 
 ### Loop Step Definitions
 

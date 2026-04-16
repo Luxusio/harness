@@ -123,7 +123,7 @@ All ACs start `status: open`, `reopen_count: 0`. Later skills (develop, qa) muta
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact checks \
   --task-dir doc/harness/tasks/TASK__<id>/ \
-  --checks /tmp/checks_content.yaml
+  --input /tmp/checks_content.yaml
 ```
 
 ## 6.8 Learnings write-back (non-blocking)

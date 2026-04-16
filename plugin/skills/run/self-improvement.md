@@ -1,6 +1,6 @@
 # Self-Improvement & Tiered Learning
 
-Sub-file for run/SKILL.md. After each task close, regardless of outcome, run this pipeline. See `plugin/CLAUDE.md` §12 for the tiered-learning model. This file covers the run-skill-specific mechanics.
+Sub-file for run/SKILL.md. After each task close, regardless of outcome, run this pipeline. See `plugin/CLAUDE.md` §11 for the tiered-learning model. This file covers the run-skill-specific mechanics.
 
 ---
 

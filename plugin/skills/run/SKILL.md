@@ -62,7 +62,7 @@ Agent(
   subagent_type="oh-my-claudecode:executor",
   prompt="You are the <lens> QA agent for <task_id>.
 Task dir: <task_dir>
-Read plugin/agents/qa-<lens>.md for your full role definition.
+Read ${CLAUDE_PLUGIN_ROOT}/agents/qa-<lens>.md for your full role definition.
 Follow it exactly — all four roles (operation, intent, UX/design, runtime).
 Call mcp__harness__write_critic_runtime with verdict, summary, and full transcript."
 )

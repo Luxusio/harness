@@ -4,7 +4,7 @@
 The Tier 3 learnings.jsonl is append-only and grows large. This grep-based
 searcher surfaces relevant entries by keyword, type, skill, or recency.
 
-JSONL line shape (per plugin/CLAUDE.md §12):
+JSONL line shape (per plugin/CLAUDE.md §11):
     {"ts": "...", "type": "...", "skill": "...", "branch": "...",
      "key": "...", "insight": "...", "source": "..."}
 
