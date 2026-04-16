@@ -51,7 +51,7 @@ routing rules explicit and idempotent.
 
 ## Migration for existing hosts
 
-Hosts already set up with harness2 will continue to work — the old
+Hosts already set up with harness will continue to work — the old
 "Default agent is harness" line has no runtime effect. Running
 `Skill(harness:setup)` on an existing project with `A) Repair` appends
 the routing block idempotently (the `harness:routing-injected` marker

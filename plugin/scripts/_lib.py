@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""harness2 minimal library — stdlib only, 7-field TASK_STATE.
+"""harness minimal library — stdlib only, 7-field TASK_STATE.
 
 TASK_STATE schema:
   task_id, status, runtime_verdict,

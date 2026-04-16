@@ -1,6 +1,6 @@
-# harness2 setup skill enrichment
+# harness setup skill enrichment
 date: 2026-04-09
-task: TASK__harness2-setup-enrich
+task: TASK__harness-setup-enrich
 
 ## Decisions
 

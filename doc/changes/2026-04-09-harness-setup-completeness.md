@@ -1,6 +1,6 @@
-# Change: harness2 setup skill — completeness principle enrichment
+# Change: harness setup skill — completeness principle enrichment
 date: 2026-04-09
-task: TASK__harness2-setup-completeness
+task: TASK__harness-setup-completeness
 file: plugin2/skills/setup/SKILL.md
 
 ## Decisions
@@ -15,10 +15,10 @@ file: plugin2/skills/setup/SKILL.md
 - New `## Completeness Principle — Boil the Lake` section inserted after AskUserQuestion Format with lake/ocean framing and 4-row effort reference table (~100x to ~20x compression ratios).
 
 ## Caveats
-- Effort table figures (e.g. "Boilerplate: 2 days human / 15 min CC+harness2") are illustrative benchmarks, not measured data.
+- Effort table figures (e.g. "Boilerplate: 2 days human / 15 min CC+harness") are illustrative benchmarks, not measured data.
 - Change is confined to plugin2; plugin/ (harness1 templates) was not updated — no template-sync obligation triggered since plugin2 is a separate plugin root.
 
 ## Verification
 - critic-runtime PASS: all 6 grep ACs confirmed at expected line numbers (196, 207, 186+212, 99, 103).
 - Line count 540 meets AC-006 minimum.
-- No regression to prior enrichments (Voice banned vocab, Context Recovery, Prior Learnings, Smart Defaults from TASK__harness2-setup-enrich).
+- No regression to prior enrichments (Voice banned vocab, Context Recovery, Prior Learnings, Smart Defaults from TASK__harness-setup-enrich).

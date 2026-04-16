@@ -1,9 +1,9 @@
-# harness2 Skill Import List
+# harness Skill Import List
 
-tags: [harness2, import, gstack]
+tags: [harness, import, gstack]
 status: draft
 created: 2026-04-09
-task_ref: TASK__harness2-architecture
+task_ref: TASK__harness-architecture
 
 This document records the import decision for each candidate gstack skill.
 Each entry covers: import decision, rationale, and gstack-specific infrastructure to strip.
@@ -56,7 +56,7 @@ A skill is imported if it meets all three:
 
 **Retained content:** Phase structure (investigate → analyze → hypothesize → implement), Iron Law (no fixes without root cause), freeze/scope boundary hooks (rewrite to harness hook style).
 
-**Adaptation notes:** Replace `(gstack)` tag in description with `(harness2)`. Freeze hook commands reference gstack skill dir path — rewrite to harness skill path.
+**Adaptation notes:** Replace `(gstack)` tag in description with `(harness)`. Freeze hook commands reference gstack skill dir path — rewrite to harness skill path.
 
 ---
 
@@ -171,7 +171,7 @@ A skill is imported if it meets all three:
 Every imported SKILL.md has its preamble bash block replaced with a minimal harness-native context block:
 
 ```bash
-# harness2 context
+# harness context
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 echo "BRANCH: $_BRANCH"
 _PROJECT=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")
@@ -190,6 +190,6 @@ All references to the following are removed:
 - `PROACTIVE`, `SKILL_PREFIX`, `LAKE_INTRO`, `TEL_PROMPTED`, `PROACTIVE_PROMPTED`
 - `HAS_ROUTING`, `ROUTING_DECLINED`, `VENDORED_GSTACK`
 - YC / Boil the Lake references
-- `(gstack)` tag in descriptions → replaced with `(harness2)`
+- `(gstack)` tag in descriptions → replaced with `(harness)`
 - `AUTO-GENERATED from SKILL.md.tmpl` comment → remove
 - `Regenerate: bun run gen:skill-docs` comment → remove

@@ -6,7 +6,7 @@ user-invocable: true
 allowed-tools: Read, Glob, Grep, Bash, Agent, Skill, AskUserQuestion, mcp__harness__task_start, mcp__harness__task_context, mcp__harness__task_verify, mcp__harness__task_close
 ---
 
-Orchestrate the full harness2 development cycle for a task.
+Orchestrate the full harness development cycle for a task.
 
 ## Sub-file
 

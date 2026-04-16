@@ -1,11 +1,11 @@
-# harness2 Auto-Routing
+# harness Auto-Routing
 
-tags: [harness2, routing, intent]
+tags: [harness, routing, intent]
 status: draft
 created: 2026-04-09
-task_ref: TASK__harness2-architecture
+task_ref: TASK__harness-architecture
 
-Auto-routing is harness2's zero-learning-curve interface. When a user expresses intent in natural language, harness reads the pattern and routes to the appropriate specialist without requiring slash commands.
+Auto-routing is harness's zero-learning-curve interface. When a user expresses intent in natural language, harness reads the pattern and routes to the appropriate specialist without requiring slash commands.
 
 ---
 

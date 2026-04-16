@@ -97,13 +97,13 @@ Do NOT skip. Without restart, browser QA silently fails.
 ```
 STATUS: DONE
 
-harness2 is set up for {project}.
+harness is set up for {project}.
 
 Created:
   - doc/harness/manifest.yaml — {project_type}, harness v2
   - doc/harness/critics/ — plan, runtime, document playbooks
   - doc/harness/ — harness state directory
-  - CLAUDE.md — {created|updated} with harness2 section
+  - CLAUDE.md — {created|updated} with harness section
   {If MCP was added: "  - .mcp.json — Chrome DevTools MCP configured"}
 
 QA Strategy: {browser|api|cli|tests_only}
