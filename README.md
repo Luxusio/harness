@@ -28,6 +28,12 @@ ln -s "$(pwd)/plugin" ~/.claude/plugins/harness
 claude plugin validate ~/.claude/plugins/harness
 ```
 
+Then in Claude Code:
+
+```
+/plugin install harness
+```
+
 ### Uninstall
 
 ```bash
