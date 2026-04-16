@@ -35,7 +35,7 @@ def main():
     if not file_path:
         sys.exit(0)
 
-    file_path = os.path.normpath(file_path)
+    file_path = os.path.abspath(file_path)
     repo_root = find_repo_root()
     tasks_dir = os.path.join(repo_root, TASK_DIR)
 

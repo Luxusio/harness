@@ -194,7 +194,7 @@ def run(repo_root: str, threshold: int, dry_run: bool) -> int:
         print(f"  [dry-run] would prune {len(stale_ids)} stale entries")
 
     # Write back
-    if not dry_run and (promotable or stale):
+    if not dry_run and (promotable or stale_ids):
         _write_entries(learn_path, entries)
         print(f"learnings.jsonl: {len(entries)} entries remaining")
 

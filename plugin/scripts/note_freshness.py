@@ -98,8 +98,7 @@ def _set_scalar(frontmatter: str, field: str, value: str) -> str:
     new_fm, n = re.subn(pattern, replacement, frontmatter, count=1, flags=re.MULTILINE)
     if n:
         return new_fm
-    if not new_fm.endswith("\n"):
-        new_fm += "\n"
+    new_fm = new_fm.rstrip("\n") + "\n"
     return new_fm + f"{field}: {value}\n"
 
 
