@@ -16,3 +16,9 @@ doc/harness/.routing-state.json
 doc/harness/local.yaml
 doc/harness/.markers/
 doc/harness/timeline.jsonl
+doc/harness/learnings.jsonl
+doc/harness/checkpoints/
+doc/harness/health-history.jsonl
+doc/harness/benchmark/
+doc/harness/audits/
+doc/harness/visual-baselines/

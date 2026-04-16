@@ -48,19 +48,13 @@ Verify `doc/harness/manifest.yaml` and `TASK_STATE.yaml` parse and `status` is o
 
 **Context Recovery:** tail `doc/harness/timeline.jsonl` for last 5 completed skills and 3 newest tasks. If an in-progress task matches the current `task_id`, log "resuming from prior session".
 
-**Health baseline snapshot:** capture project metrics for Phase 8 delta. Best-effort — skip cleanly. Write `<task_dir>/audit/health-baseline.json`:
+**Health baseline snapshot:** capture composite health score for Phase 8 delta. Best-effort — skip cleanly.
 
 ```bash
-_OUT="<task_dir>/audit/health-baseline.json"
-mkdir -p "$(dirname "$_OUT")"
-_TESTS=$(find . -type f \( -name '*.test.*' -o -name '*.spec.*' -o -name '*_test.*' -o -name '*_spec.*' \) 2>/dev/null | grep -v node_modules | wc -l | tr -d ' ')
-_LINT=$(<lint_command> 2>&1 | grep -ciE 'error|problem' || echo 0)
-_TYPE=$(<typecheck_command> 2>&1 | grep -ciE 'error' || echo 0)
-printf '{"ts":"%s","tests":%s,"lint_errors":%s,"type_errors":%s}\n' \
-  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$_TESTS" "$_LINT" "$_TYPE" > "$_OUT"
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/health.py --dry-run > "<task_dir>/audit/health-baseline.txt" 2>&1 || true
 ```
 
-Detect `<lint_command>` / `<typecheck_command>` from `package.json` scripts or manifest. Record `null` if not found.
+Reads `health_components` from manifest (falls back to `test_command`). Output includes per-component PASS/FAIL + composite 0–10 score. `--dry-run` prevents appending to project-level history at this stage.
 
 ### Phase 1: Load plan
 
@@ -144,6 +138,16 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
 Per-AC test failures → fix immediately. These are free; only Phase 7 full-suite failures count toward the 3-cycle limit.
 
 **Per-AC visual verification** (browser projects only): see `browser-verification.md` → "Per-AC Visual Verification" and "Per-AC Interaction Testing".
+
+### Phase 3.3: Auto-checkpoint (post all ACs)
+
+After all ACs reach `implemented_candidate`, snapshot task state for session resume:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_checkpoint.py \
+  --task-dir doc/harness/tasks/<task_id>/ \
+  --note "Phase 3 complete — all ACs at implemented_candidate"
+```
 
 ### Phase 3.4–3.6: Per-AC Quality Gate
 
@@ -233,6 +237,24 @@ Read `verification-gate.md` in full. Runs test commands from PLAN.md, classifies
   - `high` AND confidence ≥ 8
   Lower severities flow into HANDOFF as deferred — do not block close.
 - **Acceptance Ledger promotion** — on gate pass, `update_checks.py --status passed`. On gate fail, `--status failed` (auto-increments `reopen_count`), loop back to fix cycle. Close gate requires every AC to be `passed` or `deferred`.
+
+### Phase 7.5: Auto-checkpoint (post verify gate)
+
+After Phase 7 completes (pass or fail), snapshot for mid-task resume:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_checkpoint.py \
+  --task-dir doc/harness/tasks/<task_id>/ \
+  --note "Phase 7 done — runtime_verdict=$(grep runtime_verdict <task_dir>/TASK_STATE.yaml | awk '{print $2}')"
+```
+
+### Phase 7.6: Health score capture
+
+Run health score and append to project-level history (Phase 8 uses the delta against Phase 0 baseline):
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/health.py > "<task_dir>/audit/health-after.txt" 2>&1 || true
+```
 
 ### Phase 8: Write HANDOFF
 

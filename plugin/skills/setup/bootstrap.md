@@ -29,9 +29,40 @@ dev_command: {cmd or omit}       # browser: dev server start command
 entry_url: {url or omit}        # browser: URL after dev server starts
 api_base_url: {url or omit}     # API: endpoint base URL
 created: {date}
+
+# --- Health scoring (optional) ---
+# Override default (test_command only). Each component: name, command, weight.
+# health_components:
+#   - name: typecheck
+#     command: "npx tsc --noEmit"
+#     weight: 0.25
+#   - name: lint
+#     command: "npx eslint . --quiet"
+#     weight: 0.20
+#   - name: test
+#     command: "{test_command}"
+#     weight: 0.30
+
+# --- Benchmark (optional) ---
+# Each component: name, command (prints one numeric value), unit, lower_is_better.
+# benchmark_components:
+#   - name: build_time_ms
+#     command: "{build_command} 2>&1 | tail -1"
+#     unit: ms
+#     lower_is_better: true
+
+# --- Audit categories (optional, CSO-style) ---
+# Each category lists checks: name, command (exit 0=clean, non-0=finding), severity, min_confidence.
+# audit_categories:
+#   security:
+#     - name: secrets-scan
+#       command: "git secrets --scan || true"
+#       severity: high
+#       min_confidence: 8
 ```
 
 `dev_command`, `entry_url`, `api_base_url` are optional — only include the ones relevant to the project type.
+`health_components`, `benchmark_components`, `audit_categories` are optional — omit to use defaults (health falls back to `test_command`; benchmark/audit are inactive until declared).
 
 ### Browser project fields (required when browser_qa_supported: true)
 
@@ -131,12 +162,37 @@ mkdir -p doc/harness
 touch doc/harness/.gitkeep
 ```
 
-Add to `.gitignore` if absent:
-```
-doc/harness/learnings.jsonl
-doc/harness/checkpoints/
-doc/harness/health-history.jsonl
-doc/harness/tasks/
+Append harness operational paths to `.gitignore` (idempotent — skips lines already present):
+
+```bash
+_GITIGNORE="${_ROOT}/.gitignore"
+touch "$_GITIGNORE"
+
+_HARNESS_IGNORES=(
+  "doc/harness/tasks/"
+  "doc/harness/learnings.jsonl"
+  "doc/harness/timeline.jsonl"
+  "doc/harness/checkpoints/"
+  "doc/harness/health-history.jsonl"
+  "doc/harness/benchmark/"
+  "doc/harness/audits/"
+  "doc/harness/visual-baselines/"
+  "doc/harness/local.yaml"
+  "doc/harness/.markers/"
+  "doc/harness/.interview-answers.json"
+)
+
+_NEEDS_HEADER=true
+for _ENTRY in "${_HARNESS_IGNORES[@]}"; do
+  if ! grep -qxF "$_ENTRY" "$_GITIGNORE" 2>/dev/null; then
+    if [ "$_NEEDS_HEADER" = true ]; then
+      echo "" >> "$_GITIGNORE"
+      echo "# harness — operational artifacts (ephemeral, not durable knowledge)" >> "$_GITIGNORE"
+      _NEEDS_HEADER=false
+    fi
+    echo "$_ENTRY" >> "$_GITIGNORE"
+  fi
+done
 ```
 
 ## 3.7 Contracts installation (non-destructive)

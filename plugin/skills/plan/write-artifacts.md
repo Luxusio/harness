@@ -106,8 +106,10 @@ Write `/tmp/checks_content.yaml` with all acceptance criteria from PLAN.md.
 - id: AC-001
   title: "<what passes when this AC is satisfied>"
   status: open                    # open | implemented_candidate | passed | failed | deferred
-  kind: functional                # functional | verification | doc | performance | security
+  kind: functional                # functional | verification | doc | performance | security | bugfix
   owner: developer                # developer | qa-browser | qa-api | qa-cli
+  completeness: 7                 # 0-10 plan-time completeness score (3=shortcut, 7=happy path, 10=all cases). Immutable after plan close.
+  root_cause: ""                  # REQUIRED when kind=bugfix. One-line confirmed cause (Iron Law). Update_checks blocks promotion to implemented_candidate without it.
   reopen_count: 0                 # auto-increments on transition into 'failed'
   last_updated: <ISO8601>
   evidence: ""                    # file:line | test name | HANDOFF section (filled by develop)

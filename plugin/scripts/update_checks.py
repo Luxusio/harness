@@ -8,8 +8,10 @@ Schema per AC (extended from plan-time baseline):
   - id: AC-001
     title: "..."
     status: open | implemented_candidate | passed | failed | deferred
-    kind: functional | verification | doc | ...
+    kind: functional | verification | doc | ... | bugfix
     owner: developer | qa-browser | ...
+    completeness: 0-10   # plan-time score, preserved round-trip (not mutated by this CLI)
+    root_cause: "..."    # REQUIRED for kind=bugfix before promotion to implemented_candidate (Iron Law)
     reopen_count: 0
     last_updated: <ISO8601>
     evidence: "<file:line | test name | HANDOFF ref>"   # optional
@@ -19,6 +21,9 @@ Transitions:
   * setting status=failed increments reopen_count
   * last_updated is always refreshed
   * evidence/note are replaced when provided, left alone otherwise
+  * completeness is plan-owned — this CLI never mutates it, preserved via block round-trip
+  * Iron Law: kind=bugfix AC blocked from implemented_candidate / passed unless root_cause is non-empty
+    (set via --root-cause "<one-line confirmed cause>")
 """
 from __future__ import annotations
 
@@ -111,6 +116,7 @@ def update_check(
     status: str,
     evidence: str | None = None,
     note: str | None = None,
+    root_cause: str | None = None,
 ) -> dict:
     if status not in VALID_STATUS:
         raise ValueError(f"invalid status '{status}' — must be one of {sorted(VALID_STATUS)}")
@@ -139,6 +145,18 @@ def update_check(
     if status == "failed" and prior != "failed":
         reopen += 1
 
+    # Iron Law: bugfix ACs require root_cause before non-open status
+    kind = (_field_value(block, "kind") or "").strip()
+    if kind == "bugfix" and status in ("implemented_candidate", "passed"):
+        existing_rc = (_field_value(block, "root_cause") or "").strip().strip('"').strip("'")
+        incoming_rc = (root_cause or "").strip()
+        if not existing_rc and not incoming_rc:
+            raise ValueError(
+                f"Iron Law violation: AC '{ac_id}' is kind=bugfix and cannot be "
+                f"promoted to '{status}' without root_cause. Use --root-cause "
+                f'"<one-line confirmed cause>".'
+            )
+
     block = _set_field(block, "status", status)
     block = _set_field(block, "reopen_count", str(reopen))
     block = _set_field(block, "last_updated", now_iso())
@@ -146,6 +164,8 @@ def update_check(
         block = _set_field(block, "evidence", _yaml_quote(evidence))
     if note is not None:
         block = _set_field(block, "note", _yaml_quote(note))
+    if root_cause is not None:
+        block = _set_field(block, "root_cause", _yaml_quote(root_cause))
 
     blocks[target_idx] = block
     _atomic_write(checks_path, "".join(blocks))
@@ -166,11 +186,15 @@ def main() -> int:
     p.add_argument("--status", required=True, choices=sorted(VALID_STATUS))
     p.add_argument("--evidence", default=None, help="One-line evidence (file:line, test name, HANDOFF ref)")
     p.add_argument("--note", default=None, help="Free-form note")
+    p.add_argument("--root-cause", default=None, dest="root_cause",
+                   help="Confirmed root cause (Iron Law: required for kind=bugfix promotion)")
     args = p.parse_args()
 
     checks = os.path.join(os.path.abspath(args.task_dir), "CHECKS.yaml")
     try:
-        result = update_check(checks, args.ac, args.status, args.evidence, args.note)
+        result = update_check(
+            checks, args.ac, args.status, args.evidence, args.note, args.root_cause
+        )
     except (FileNotFoundError, KeyError, ValueError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
