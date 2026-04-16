@@ -73,7 +73,7 @@ def main() -> int:
     branch = branch_m.group(1).strip() if branch_m else ""
 
     active_acs = _extract("Active ACs")
-    ac_count = len(re.findall(r"^\- \*\*AC-", active_acs, re.MULTILINE))
+    ac_count = len(re.findall(r"^\- \*\*\w+", active_acs, re.MULTILINE))
 
     parts = [f"[checkpoint] {task_id}"]
     if branch:

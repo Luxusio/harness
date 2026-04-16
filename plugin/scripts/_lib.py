@@ -77,7 +77,10 @@ def _yaml_fmt(val):
     if isinstance(val, list):
         if not val:
             return "[]"
-        return "\n" + "\n".join(f"  - {v}" for v in val)
+        def _quote_item(v):
+            s = str(v)
+            return f'"{s}"' if ":" in s or s != s.strip() else s
+        return "\n" + "\n".join(f"  - {_quote_item(v)}" for v in val)
     return str(val)
 
 
@@ -103,14 +106,25 @@ def read_state(task_dir):
 
 
 def write_state(task_dir, fields):
-    """Write TASK_STATE.yaml preserving field order."""
+    """Write TASK_STATE.yaml preserving field order. Atomic via tempfile."""
     path = state_file(task_dir)
     os.makedirs(task_dir, exist_ok=True)
-    lines = []
+    content = []
     for field in SCHEMA_FIELDS:
-        lines.append(f"{field}: {_yaml_fmt(fields.get(field))}")
-    with open(path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
+        content.append(f"{field}: {_yaml_fmt(fields.get(field))}")
+    text = "\n".join(content) + "\n"
+    import tempfile
+    fd, tmp = tempfile.mkstemp(dir=task_dir, prefix=".state.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return True
 
 
