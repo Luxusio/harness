@@ -189,6 +189,9 @@ def _write_artifact(args: dict, filename: str, verdict_field: str | None = None)
 
 
 def handle_write_critic_runtime(args: dict) -> dict:
+    verdict = _req(args, "verdict")
+    if verdict not in ("PASS", "FAIL", "BLOCKED_ENV"):
+        return _err(f"invalid verdict '{verdict}' — must be PASS, FAIL, or BLOCKED_ENV")
     return _write_artifact(args, "CRITIC__runtime.md", "runtime_verdict")
 
 
