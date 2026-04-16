@@ -12,6 +12,7 @@ Provenance is derived from artifact existence, not counters.
 import os
 import re
 import subprocess
+import tempfile
 from datetime import datetime, timezone
 
 TASK_DIR = "doc/harness/tasks"
@@ -113,7 +114,6 @@ def write_state(task_dir, fields):
     for field in SCHEMA_FIELDS:
         content.append(f"{field}: {_yaml_fmt(fields.get(field))}")
     text = "\n".join(content) + "\n"
-    import tempfile
     fd, tmp = tempfile.mkstemp(dir=task_dir, prefix=".state.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
