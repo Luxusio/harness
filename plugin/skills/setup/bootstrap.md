@@ -1,6 +1,6 @@
 # Phase 3: Bootstrap Core Structure
 
-Sub-file for setup/SKILL.md. Creates harness2 scaffolding from census + user answers. Skip existing files unless Fresh start.
+Sub-file for setup/SKILL.md. Creates harness scaffolding from census + user answers. Skip existing files unless Fresh start.
 
 ---
 
@@ -108,7 +108,7 @@ else
   "mcpServers": {
     "harness": {
       "command": "python3",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/harness2_server.py"]
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/harness_server.py"]
     },
     "chrome-devtools": {
       "command": "npx",
@@ -145,7 +145,7 @@ Match → apply without asking. Only confirm if ambiguous or no match.
 
 ## 3.4 CLAUDE.md
 
-Create if absent; append harness2 section if present. Under 40 lines. Include: harness2 mode declaration, manifest.yaml link, canonical loop (plan→develop→verify→close), the harness-routing block below, and "just describe what you want — auto-routing is on". Don't dump full runtime rules — those live in `plugin/CLAUDE.md`.
+Create if absent; append harness section if present. Under 40 lines. Include: harness mode declaration, manifest.yaml link, canonical loop (plan→develop→verify→close), the harness-routing block below, and "just describe what you want — auto-routing is on". Don't dump full runtime rules — those live in `plugin/CLAUDE.md`.
 
 ### Legacy line cleanup (migration)
 

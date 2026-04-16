@@ -1,4 +1,4 @@
-# harness2 runtime rules
+# harness runtime rules
 
 Lightweight execution harness for Claude Code.
 7-field TASK_STATE + on-the-fly routing + artifact-provenance.

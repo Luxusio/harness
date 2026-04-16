@@ -2,7 +2,7 @@
 date: 2026-04-16
 task: TASK__plugin-release-prep-v2.2.0
 status: shipped
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/.claude-plugin/plugin.json
   - plugin/.claude-plugin/marketplace.json
@@ -10,6 +10,7 @@ invalidated_by_paths:
   - plugin/skills/setup/SKILL.md
   - plugin/skills/setup/verify-report.md
   - plugin/CHANGELOG.md
+freshness_updated: 2026-04-16T07:23:23Z
 ---
 
 # plugin-release-prep v2.2.0

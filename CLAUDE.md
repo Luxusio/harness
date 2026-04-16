@@ -4,6 +4,7 @@ summary: 프로젝트 진입점. 운영 규칙과 doc registry 참조.
 always_load: [doc/CLAUDE.md]
 updated: 2026-04-15
 
+@CONTRACTS.md
 @doc/CLAUDE.md
 
 ## Harness routing

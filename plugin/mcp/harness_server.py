@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""harness2 MCP server — self-contained, 7-field TASK_STATE.
+"""harness MCP server — self-contained, 7-field TASK_STATE.
 
 No plugin-legacy dependency. All operations are direct file I/O.
 7 MCP tools: task_start, task_context, task_verify, task_close,
@@ -18,7 +18,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 SUPPORTED_PROTOCOLS = ("2025-11-25", "2025-06-18")
-SERVER_INFO = {"name": "harness2", "title": "harness2 Control Plane", "version": "2.0.0"}
+SERVER_INFO = {"name": "harness", "title": "harness Control Plane", "version": "2.0.0"}
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 from _lib import (  # type: ignore
@@ -323,7 +323,7 @@ class McpServer:
                 "protocolVersion": self.protocol_version,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": SERVER_INFO,
-                "instructions": "harness2 MCP — 7 tools, 7-field TASK_STATE. write_* tools are subagent-only.",
+                "instructions": "harness MCP — 7 tools, 7-field TASK_STATE. write_* tools are subagent-only.",
             })
         elif method == "notifications/initialized":
             self.initialized = True

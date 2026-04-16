@@ -1,15 +1,15 @@
-# harness2 Architecture Specification
+# harness Architecture Specification
 
-tags: [harness2, spec, architecture]
+tags: [harness, spec, architecture]
 status: draft
 created: 2026-04-09
-task_ref: TASK__harness2-architecture
+task_ref: TASK__harness-architecture
 
 ---
 
 ## Overview
 
-harness2 is the next-generation harness that bundles gstack-quality skills natively — users install harness2 only and get investigate, health, review, checkpoint, learn, and retro without installing gstack. It preserves harness's canonical loop and documentation discipline, and adds automatic intent routing so users never need to memorize skill commands.
+harness is the next-generation harness that bundles gstack-quality skills natively — users install harness only and get investigate, health, review, checkpoint, learn, and retro without installing gstack. It preserves harness's canonical loop and documentation discipline, and adds automatic intent routing so users never need to memorize skill commands.
 
 ---
 
@@ -69,7 +69,7 @@ Intent adequacy check answers: "Does it solve what the user wanted?"
 
 ## Two Invariants
 
-These are the only hard invariants in harness2. Everything else is best-practice guidance.
+These are the only hard invariants in harness. Everything else is best-practice guidance.
 
 1. **Canonical loop structure is preserved.** The sequence intent → plan → develop → verify → document → close is never collapsed or reordered.
 
@@ -81,7 +81,7 @@ Stale PASS does not count: if files change after a PASS verdict, that verdict is
 
 ## Responsibility Boundaries
 
-### What harness2 does
+### What harness does
 
 - Reads user intent and auto-routes to the appropriate specialist
 - Enforces the canonical loop for all repo-mutating tasks
@@ -91,7 +91,7 @@ Stale PASS does not count: if files change after a PASS verdict, that verdict is
 - Displays session welcome preamble on start
 - Provides natively owned specialist skills (investigate, health, review, checkpoint, learn, retro)
 
-### What harness2 does not do
+### What harness does not do
 
 - Browser-based QA (browser_qa_supported: false)
 - gstack telemetry, gstack-config, gstack-slug, gstack-update-check
@@ -104,7 +104,7 @@ Stale PASS does not count: if files change after a PASS verdict, that verdict is
 
 ## gstack Differentiators
 
-| Dimension | gstack | harness2 |
+| Dimension | gstack | harness |
 |-----------|--------|----------|
 | Skill invocation | User types `/skill` manually | Auto-routing based on intent |
 | Learning curve | Must know skill names and when to use them | Zero — just describe the task |
@@ -115,13 +115,13 @@ Stale PASS does not count: if files change after a PASS verdict, that verdict is
 
 ### Auto-Routing (zero learning curve)
 
-When a user states an intent in natural language, harness2 reads the pattern and routes without prompting. The user says "there's a bug in X" and the investigate specialist activates. No `/investigate` required.
+When a user states an intent in natural language, harness reads the pattern and routes without prompting. The user says "there's a bug in X" and the investigate specialist activates. No `/investigate` required.
 
 See `AUTO_ROUTING.md` for the full intent pattern → specialist mapping table.
 
 ## Bundled Skills
 
-harness2 bundles 6 gstack-quality skills natively in `plugin2/skills/`. Users get all of these without installing gstack:
+harness bundles 6 gstack-quality skills natively in `plugin2/skills/`. Users get all of these without installing gstack:
 
 | Skill | Purpose |
 |-------|---------|
@@ -178,7 +178,7 @@ Type a task, ask a question, or say "show tasks" to see open work.
 
 ### Preamble vs gstack Comparison
 
-gstack's preamble runs a multi-step bash block, prompts for telemetry, introduces "Boil the Lake", and may trigger PROACTIVE and routing setup dialogs. harness2's welcome is a single static display with minimal dynamic fields. No prompts, no setup dialogs, no external binary calls.
+gstack's preamble runs a multi-step bash block, prompts for telemetry, introduces "Boil the Lake", and may trigger PROACTIVE and routing setup dialogs. harness's welcome is a single static display with minimal dynamic fields. No prompts, no setup dialogs, no external binary calls.
 
 ---
 

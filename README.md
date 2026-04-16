@@ -152,7 +152,7 @@ doc/harness/learnings.jsonl   # Tier 3: raw signals, session-transient
 
 ## MCP tools
 
-7 tools via `plugin/mcp/harness2_server.py`:
+7 tools via `plugin/mcp/harness_server.py`:
 
 | Tool | Purpose |
 |------|---------|
@@ -182,7 +182,7 @@ plugin/
   .mcp.json                     # MCP server config
   CLAUDE.md                     # runtime rules
   hooks/hooks.json              # hook config
-  mcp/harness2_server.py        # 7-tool MCP server
+  mcp/harness_server.py        # 7-tool MCP server
   agents/                       # agent definitions
   skills/                       # plan, develop, run, setup, maintain
   scripts/                      # _lib.py + 14 scripts

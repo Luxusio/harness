@@ -1,6 +1,6 @@
 # plugin/scripts/
 
-Minimal harness2 scripts. Self-contained — no plugin-legacy dependency.
+Minimal harness scripts. Self-contained — no plugin-legacy dependency.
 
 ## Files
 

@@ -2,10 +2,10 @@
 name: setup
 version: 1.0.0
 description: |
-  Bootstrap harness2 in the current repository. Interactive setup with
+  Bootstrap harness in the current repository. Interactive setup with
   project detection, AskUserQuestion-based configuration, and core
   structure generation. Use when asked "set up harness", "bootstrap",
-  "initialize harness2", or on first run in a new project.
+  "initialize harness", or on first run in a new project.
 allowed-tools:
   - Bash
   - Read
@@ -40,7 +40,7 @@ Phase 2 (interactive Q1-Q3) stays inline below.
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 _PROJECT=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")
 _ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-echo "harness2 setup | PROJECT: $_PROJECT | BRANCH: $_BRANCH"
+echo "harness setup | PROJECT: $_PROJECT | BRANCH: $_BRANCH"
 
 [ -f doc/harness/manifest.yaml ] && echo "EXISTING_SETUP: yes" && head -20 doc/harness/manifest.yaml || echo "EXISTING_SETUP: no"
 [ -f CLAUDE.md ] && echo "HAS_CLAUDE_MD: yes" || echo "HAS_CLAUDE_MD: no"
@@ -129,7 +129,7 @@ C: delete `doc/harness/manifest.yaml` and `doc/harness/`, run full setup.
 ### Lake Intro (once per project)
 
 If `LAKE_INTRO=no`:
-> harness2 follows the **Boil the Lake** principle — always do the complete thing when AI makes the marginal cost near-zero.
+> harness follows the **Boil the Lake** principle — always do the complete thing when AI makes the marginal cost near-zero.
 
 Then: `touch "$_MARKER_DIR/lake-intro-seen"`.
 
@@ -138,7 +138,7 @@ Then: `touch "$_MARKER_DIR/lake-intro-seen"`.
 If `PROACTIVE_PROMPTED=no` AND `LAKE_INTRO=yes`:
 ```
 AskUserQuestion:
-  "harness2 can proactively figure out when to invoke setup. Recommended: keep on."
+  "harness can proactively figure out when to invoke setup. Recommended: keep on."
   A) Keep proactive on → _harness_config_set proactive true
   B) Turn off → _harness_config_set proactive false
 ```
@@ -149,7 +149,7 @@ Then: `touch "$_MARKER_DIR/proactive-prompted"`.
 If `ROUTING_INJECTED=no` AND `ROUTING_DECLINED=false` AND `PROACTIVE_PROMPTED=yes`:
 ```
 AskUserQuestion:
-  "harness2 works best when CLAUDE.md includes skill routing rules. ~5 lines."
+  "harness works best when CLAUDE.md includes skill routing rules. ~5 lines."
   A) Add routing rules to CLAUDE.md (recommended)
   B) No thanks
 ```
@@ -190,7 +190,7 @@ if [ -f "$_ROOT/doc/harness/timeline.jsonl" ]; then
 fi
 ```
 
-If artifacts found: synthesize one-paragraph welcome-back briefing. If manifest exists: "harness2 is already set up. Manifest shows {project_type} project." → offer repair/upgrade/fresh.
+If artifacts found: synthesize one-paragraph welcome-back briefing. If manifest exists: "harness is already set up. Manifest shows {project_type} project." → offer repair/upgrade/fresh.
 
 ## Prior Learnings
 
@@ -219,7 +219,7 @@ Assume the user hasn't looked at this window in 20 min. If you'd need to read so
 
 AI makes completeness near-free. Always recommend complete setup over shortcuts. A "lake" (full config, critic playbooks, gitignore, CLAUDE.md) is boilable; an "ocean" (full codebase migration) is not.
 
-| Task type     | Human team | CC+harness2 | Compression |
+| Task type     | Human team | CC+harness | Compression |
 |---------------|-----------|-------------|-------------|
 | Boilerplate   | 2 days    | 15 min      | ~100× |
 | Tests setup   | 1 day     | 15 min      | ~50× |
@@ -292,7 +292,7 @@ Interview output narrows Q1-Q3 below — check `doc/harness/.interview-answers.j
 Skip if census determined type clearly.
 ```
 AskUserQuestion:
-  "Setting up harness2 for {project} on {branch}. Detected as {detected_type}. Right?"
+  "Setting up harness for {project} on {branch}. Detected as {detected_type}. Right?"
   RECOMMENDATION: Choose detected unless wrong.
   A) {detected_type} (detected)
   B) Web frontend — browser-rendered UI (React/Vue/Next.js/…)
@@ -305,7 +305,7 @@ AskUserQuestion:
 Skip if build/test commands auto-detected.
 ```
 AskUserQuestion:
-  "I need build and test commands so harness2 can verify tasks."
+  "I need build and test commands so harness can verify tasks."
   A) Auto-detected: `{build_cmd}` / `{test_cmd}` — looks right
   B) Let me specify
 ```
@@ -335,7 +335,7 @@ If dev_command missing: `A) Specify command | B) Skip | C) Auto-detect later`.
 
 ```
 AskUserQuestion:
-  "harness2 can track project health (0-10 composite), benchmark perf regressions, and run categorized audits (security, a11y, etc.) across tasks. All optional, configurable later."
+  "harness can track project health (0-10 composite), benchmark perf regressions, and run categorized audits (security, a11y, etc.) across tasks. All optional, configurable later."
   RECOMMENDATION: Choose A. Near-zero setup cost — harness auto-detects test_command as the default health component.
   Completeness: A=8/10, B=5/10
   A) Enable health scoring (recommended — uses test_command as default, extend with health_components later)
