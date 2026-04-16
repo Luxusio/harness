@@ -65,7 +65,7 @@ def _read_components(repo_root: str) -> list[dict]:
         items.append(cur)
     for it in items:
         try:
-            it["weight"] = float(it.get("weight", 1))
+            it["weight"] = max(0.0, float(it.get("weight", 1)))
         except (ValueError, TypeError):
             it["weight"] = 1.0
     return items

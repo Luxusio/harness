@@ -44,7 +44,7 @@ Phases run in strict order; each phase must complete before the next. Sub-files 
 
 ### Phase 0: Pre-flight
 
-Verify `doc/harness/manifest.yaml` and `TASK_STATE.yaml` parse and `status` is one of: created, planning, implementing, verifying, documenting, closed. No other task holds write focus. On failure, `AskUserQuestion` with setup-skill / task-id / continue-anyway options.
+Verify `doc/harness/manifest.yaml` and `TASK_STATE.yaml` parse and `status` is one of: created, planning, implementing, verifying, closed. No other task holds write focus. On failure, `AskUserQuestion` with setup-skill / task-id / continue-anyway options.
 
 **Context Recovery:** tail `doc/harness/timeline.jsonl` for last 5 completed skills and 3 newest tasks. If an in-progress task matches the current `task_id`, log "resuming from prior session".
 

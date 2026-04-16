@@ -32,7 +32,7 @@ Provenance = artifact existence. No counters.
 ```yaml
 task_id: TASK__xxx
 status: created|planning|implementing|verifying|closed
-runtime_verdict: pending|PASS|FAIL
+runtime_verdict: pending|PASS|FAIL|BLOCKED_ENV
 touched_paths: []
 plan_session_state: closed|context_open|write_open
 closed_at: null

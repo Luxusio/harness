@@ -144,8 +144,11 @@ def handle_task_close(args: dict) -> dict:
         return _err("task_close blocked", data={
             "task_dir": td, "missing_for_close": missing, "task_context": ctx,
         })
-    set_state_field(td, "status", "closed")
-    set_state_field(td, "closed_at", now_iso())
+    st = read_state(td)
+    st["status"] = "closed"
+    st["closed_at"] = now_iso()
+    st["updated"] = now_iso()
+    write_state(td, st)
 
     # Clean up .active marker
     active_file = os.path.join(find_repo_root(), "doc", "harness", "tasks", ".active")
@@ -201,7 +204,7 @@ def handle_write_doc_sync(args: dict) -> dict:
 
 TOOL_DEFS: list[dict[str, Any]] = [
     {"name": "task_start", "title": "Create or resume a task",
-     "description": "Create task scaffolding (9-field TASK_STATE) and return fresh context.",
+     "description": "Create task scaffolding (7-field TASK_STATE) and return fresh context.",
      "inputSchema": {"type": "object", "properties": {
          "task_dir": {"type": "string"}, "task_id": {"type": "string"},
          "slug": {"type": "string"}, "request_file": {"type": "string"}},

@@ -154,10 +154,18 @@ def write_checkpoint(task_dir: str, note: str = "") -> str:
     if note:
         lines.extend(["## Note", "", note, ""])
 
-    tmp = ck_path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
-    os.replace(tmp, ck_path)
+    import tempfile
+    fd, tmp = tempfile.mkstemp(dir=ck_dir, prefix=".ckpt.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        os.replace(tmp, ck_path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return ck_path
 
 
