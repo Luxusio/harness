@@ -1,0 +1,19 @@
+{
+  "name": "harness-plugin",
+  "owner": {
+    "name": "Luxus",
+    "email": "rw051713@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "harness",
+      "description": "Execution harness enforcing plan-develop-verify-close loops with acceptance ledgers, Iron Law debugging, and tiered learning.",
+      "version": "2.1.0",
+      "author": {
+        "name": "Luxus",
+        "email": "rw051713@gmail.com"
+      },
+      "source": "./"
+    }
+  ]
+}
