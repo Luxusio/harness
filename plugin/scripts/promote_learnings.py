@@ -122,6 +122,9 @@ def _append_pattern(patterns_dir: str, topic: str, key: str,
 
 
 def _tier1_candidates(repo_root: str, patterns_dir: str) -> list[str]:
+    # Proxy: count git commits touching pattern docs. Not a perfect match for
+    # "referenced in 2+ tasks" (plugin/CLAUDE.md §11) but practical — a pattern
+    # doc committed in separate tasks will have separate commits.
     if not os.path.isdir(patterns_dir):
         return []
     candidates = []

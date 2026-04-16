@@ -293,18 +293,23 @@ def sync_touched_paths(task_dir, new_paths=None):
 
 
 def sync_from_git_diff(task_dir):
-    """Sync touched paths from git diff."""
+    """Sync touched paths from git diff (unstaged + staged)."""
     repo_root = find_repo_root(task_dir)
-    result = subprocess.run(
+    changed = set()
+    # Unstaged changes
+    r1 = subprocess.run(
         ["git", "diff", "--name-only", "HEAD"],
         capture_output=True, text=True, cwd=repo_root,
     )
-    if result.returncode != 0:
-        result = subprocess.run(
-            ["git", "diff", "--name-only"],
-            capture_output=True, text=True, cwd=repo_root,
-        )
-    changed = [f.strip() for f in result.stdout.strip().splitlines() if f.strip()]
+    if r1.returncode == 0:
+        changed.update(f.strip() for f in r1.stdout.splitlines() if f.strip())
+    # Staged changes (git add'd but not committed)
+    r2 = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "HEAD"],
+        capture_output=True, text=True, cwd=repo_root,
+    )
+    if r2.returncode == 0:
+        changed.update(f.strip() for f in r2.stdout.splitlines() if f.strip())
     if not changed:
         return []
     return sync_touched_paths(task_dir, changed)
