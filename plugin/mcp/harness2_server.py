@@ -96,6 +96,13 @@ def handle_task_start(args: dict) -> dict:
                 pass
 
     ensure_task_scaffold(task_dir, tid, request_text=request_text)
+
+    # Write .active marker so prewrite_gate can enforce plan-first
+    active_file = os.path.join(repo_root, "doc", "harness", "tasks", ".active")
+    os.makedirs(os.path.dirname(active_file), exist_ok=True)
+    with open(active_file, "w", encoding="utf-8") as f:
+        f.write(task_dir)
+
     ctx = emit_compact_context(task_dir)
     if "error" in ctx:
         return _err("task_start failed", data={"task_dir": task_dir})
@@ -139,6 +146,14 @@ def handle_task_close(args: dict) -> dict:
         })
     set_state_field(td, "status", "closed")
     set_state_field(td, "closed_at", now_iso())
+
+    # Clean up .active marker
+    active_file = os.path.join(find_repo_root(), "doc", "harness", "tasks", ".active")
+    try:
+        if os.path.isfile(active_file):
+            os.remove(active_file)
+    except OSError:
+        pass
     st = read_state(td)
     return _ok({
         "task_dir": td, "closed": True, "status": st.get("status"),

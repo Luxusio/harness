@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import subprocess, os; branch=subprocess.run(['git','branch','--show-current'],capture_output=True,text=True,cwd=os.getcwd()).stdout.strip() or 'unknown'; project=os.path.basename(os.getcwd()); print(f'harness2 — ready.\\nProject: {project}  Branch: {branch}\\nLoop: plan → develop → verify → document → close\\nAuto-routing on. Just describe what you want.')\"",
+            "command": "python3 -c \"import subprocess, os; branch=subprocess.run(['git','branch','--show-current'],capture_output=True,text=True,cwd=os.getcwd()).stdout.strip() or 'unknown'; project=os.path.basename(os.getcwd()); print(f'harness2 — ready.\\nProject: {project}  Branch: {branch}\\nLoop: plan → develop → verify → close\\nAuto-routing on. Just describe what you want.')\"",
             "timeout": 5,
             "statusMessage": "harness2 ready"
           },
@@ -35,7 +35,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/stop_gate.py",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/stop_gate.py || true",
             "timeout": 10,
             "statusMessage": "Checking open tasks"
           }

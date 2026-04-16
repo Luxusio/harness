@@ -37,17 +37,19 @@ def main():
 
     file_path = os.path.normpath(file_path)
     repo_root = find_repo_root()
+    tasks_dir = os.path.join(repo_root, TASK_DIR)
 
-    # Block writes to protected artifacts
+    # Allow writes inside task dirs (except protected artifacts there)
+    inside_task_dir = file_path.startswith(tasks_dir)
+
+    # Block protected artifacts only inside task directories
     basename = os.path.basename(file_path)
-    if basename in PROTECTED_ARTIFACTS:
+    if inside_task_dir and basename in PROTECTED_ARTIFACTS:
         owner = PROTECTED_ARTIFACTS[basename]
-        print(f"BLOCKED: {basename} is owned by {owner}. Use the appropriate MCP tool.", file=sys.stderr)
+        print(f"BLOCKED: {basename} is owned by {owner}. Use the appropriate CLI/MCP tool.", file=sys.stderr)
         sys.exit(2)
 
-    # Allow writes inside task dirs
-    tasks_dir = os.path.join(repo_root, TASK_DIR)
-    if file_path.startswith(tasks_dir):
+    if inside_task_dir:
         sys.exit(0)
 
     # For source files, check PLAN.md exists on active task

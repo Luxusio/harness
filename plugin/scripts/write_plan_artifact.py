@@ -60,7 +60,7 @@ def _validate_task_dir(task_dir: str) -> None:
 
 
 def _validate_session(task_dir: str) -> tuple[bool, str]:
-    """Check PLAN_SESSION.json: state=open, phase=write, source=plan-skill."""
+    """Check PLAN_SESSION.json: state=write_open, phase=write, source=plan-skill."""
     token_path = os.path.join(task_dir, "PLAN_SESSION.json")
     if not os.path.isfile(token_path):
         return False, "PLAN_SESSION.json not found"
@@ -69,8 +69,8 @@ def _validate_session(task_dir: str) -> tuple[bool, str]:
             token = json.load(f)
     except (json.JSONDecodeError, OSError) as e:
         return False, f"PLAN_SESSION.json unreadable: {e}"
-    if token.get("state") != "open":
-        return False, f"state={token.get('state')!r} (expected 'open')"
+    if token.get("state") != "write_open":
+        return False, f"state={token.get('state')!r} (expected 'write_open')"
     if token.get("phase") != "write":
         return False, f"phase={token.get('phase')!r} (expected 'write')"
     if token.get("source") != "plan-skill":
