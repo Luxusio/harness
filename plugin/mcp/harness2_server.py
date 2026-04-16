@@ -242,14 +242,14 @@ TOOL_DEFS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"}, "task_dir": {"type": "string"},
          "summary": {"type": "string"}, "verification": {"type": "string"}},
-         "required": ["summary", "verification"], "additionalProperties": False},
+         "required": ["task_id", "summary", "verification"], "additionalProperties": False},
      "handler": handle_write_handoff},
     {"name": "write_doc_sync", "title": "Write DOC_SYNC — developer only",
      "description": "Write DOC_SYNC.md.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"}, "task_dir": {"type": "string"},
          "summary": {"type": "string"}},
-         "required": ["summary"], "additionalProperties": False},
+         "required": ["task_id", "summary"], "additionalProperties": False},
      "handler": handle_write_doc_sync},
 ]
 

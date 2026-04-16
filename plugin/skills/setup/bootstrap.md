@@ -185,6 +185,9 @@ _HARNESS_IGNORES=(
 )
 
 _NEEDS_HEADER=true
+if grep -qF "# harness" "$_GITIGNORE" 2>/dev/null; then
+  _NEEDS_HEADER=false
+fi
 for _ENTRY in "${_HARNESS_IGNORES[@]}"; do
   if ! grep -qxF "$_ENTRY" "$_GITIGNORE" 2>/dev/null; then
     if [ "$_NEEDS_HEADER" = true ]; then

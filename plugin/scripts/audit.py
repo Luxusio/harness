@@ -147,8 +147,11 @@ def run_category(repo_root: str, category: str) -> int:
     findings = 0
     print(f"audit category: {category}")
     for c in checks:
-        name = c.get("name") or c.get("check") or "<unnamed>"
+        name = c.get("name") or c.get("check") or ""
         cmd = c.get("command", "")
+        if not name:
+            print(f"  WARNING: check entry has no 'name' field — skipping (ensure name: is first on the '- ' line)")
+            continue
         if not cmd:
             print(f"  {name:30s} SKIP (no command)")
             continue
