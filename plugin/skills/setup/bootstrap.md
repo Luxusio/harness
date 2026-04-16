@@ -147,6 +147,20 @@ Match → apply without asking. Only confirm if ambiguous or no match.
 
 Create if absent; append harness2 section if present. Under 40 lines. Include: harness2 mode declaration, manifest.yaml link, canonical loop (plan→develop→verify→close), the harness-routing block below, and "just describe what you want — auto-routing is on". Don't dump full runtime rules — those live in `plugin/CLAUDE.md`.
 
+### Legacy line cleanup (migration)
+
+Remove any pre-existing `Default (operating) agent is harness` line from old installs so the new routing block is the only authoritative source. Run BEFORE the routing-block injection below. Idempotent — no-op when the line is absent. Portable across GNU/BSD sed by using grep -v + mv.
+
+```bash
+if [ -f CLAUDE.md ] && grep -qE "^- Default (agent|operating agent) is harness" CLAUDE.md; then
+  # portable sed -i (GNU vs BSD): use tmp file
+  _TMP_CLAUDE=$(mktemp)
+  grep -vE "^- Default (agent|operating agent) is harness" CLAUDE.md > "$_TMP_CLAUDE"
+  mv "$_TMP_CLAUDE" CLAUDE.md
+  echo "Legacy 'Default agent is harness' line removed"
+fi
+```
+
 ### Harness routing block (emit into user's CLAUDE.md)
 
 The emitted block must be idempotent (skip re-inject if present). Marker: `<!-- harness:routing-injected -->`.

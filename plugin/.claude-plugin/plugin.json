@@ -1,5 +1,5 @@
 {
   "name": "harness",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Execution harness for AI-assisted repository work. Enforces plan-develop-verify-close loops with acceptance ledgers, Iron Law debugging, and tiered learning."
 }

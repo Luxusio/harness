@@ -78,7 +78,7 @@ _CONTRIBUTORS=$(git log --oneline --format='%ae' 2>/dev/null | sort -u | wc -l |
 [ "$_CONTRIBUTORS" -le 1 ] 2>/dev/null && _REPO_MODE="solo" || _REPO_MODE="collaborative"
 
 # Version check
-_HARNESS_VERSION="2.0.0"
+_HARNESS_VERSION="2.2.0"
 _INSTALLED_VERSION=$(cat "$_ROOT/doc/harness/.version" 2>/dev/null || echo "")
 [ -n "$_INSTALLED_VERSION" ] && [ "$_INSTALLED_VERSION" != "$_HARNESS_VERSION" ] && echo "UPGRADE_AVAILABLE: $_INSTALLED_VERSION -> $_HARNESS_VERSION" || echo "UPGRADE_AVAILABLE: no"
 ```
@@ -153,7 +153,7 @@ AskUserQuestion:
   A) Add routing rules to CLAUDE.md (recommended)
   B) No thanks
 ```
-A → emit the idempotent routing block from `bootstrap.md` Section 3.4 (marker: `harness:routing-injected`) into CLAUDE.md; `touch "$_MARKER_DIR/routing-injected"`. B → `_harness_config_set routing_declined true`.
+A → emit the idempotent routing block from `bootstrap.md` Section 3.4 (marker: `harness:routing-injected`) into CLAUDE.md; `touch "$_MARKER_DIR/routing-injected"`. B → `_harness_config_set routing_declined true`. Before injection, run the legacy cleanup from §3.4 to strip any stale `Default agent is harness` line.
 
 ---
 

@@ -17,6 +17,25 @@ grep -q "harness:routing-injected" CLAUDE.md 2>/dev/null && echo "  Harness rout
 [ -f doc/harness/critics/document.md ] && echo "critics/document.md: OK" || echo "critics/document.md: MISSING"
 ```
 
+### Runtime deps (test runner)
+
+For library/CLI projects with a pytest-based `test_command`, confirm pytest is importable. Setup should surface a missing test runner here rather than letting future verify gates FAIL cryptically.
+
+```bash
+_TEST_CMD=$(grep -E "^test_command:" doc/harness/manifest.yaml 2>/dev/null | cut -d'"' -f2)
+if echo "$_TEST_CMD" | grep -q "pytest"; then
+  if ! python3 -m pytest --version >/dev/null 2>&1; then
+    echo "  pytest: MISSING — install via one of:"
+    echo "    pip install --user pytest"
+    echo "    pip install --user --break-system-packages pytest   # if PEP 668 blocks"
+    echo "    pipx install pytest"
+    echo "  Note: test_command is '$_TEST_CMD' but pytest is not importable. verify gate will FAIL."
+  else
+    echo "  pytest: $(python3 -m pytest --version 2>&1 | head -1)"
+  fi
+fi
+```
+
 ## 4.2 QA infrastructure verification
 
 ```bash
