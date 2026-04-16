@@ -4,37 +4,37 @@ Execution harness for AI-assisted repository work. Enforces a **plan → develop
 
 ## Install
 
-Claude Code에서 아래 명령어를 실행합니다:
+Run these commands in Claude Code:
 
 ```bash
-# 1. marketplace 등록
-/plugin marketplace add <harness-repo-url>
+# 1. Register the marketplace
+/plugin marketplace add https://github.com/Luxusio/harness
 
-# 2. 플러그인 설치
+# 2. Install the plugin
 /plugin install harness
 ```
 
-### 로컬 개발용 (symlink)
+### Local development (symlink)
 
 ```bash
-# 리포 클론
-git clone <repo-url> harness-plugin
+# Clone the repo
+git clone https://github.com/Luxusio/harness harness-plugin
 cd harness-plugin
 
-# Claude Code 플러그인 디렉토리에 심링크
+# Symlink into Claude Code plugins directory
 ln -s "$(pwd)/plugin" ~/.claude/plugins/harness
 
-# 검증
+# Verify
 claude plugin validate ~/.claude/plugins/harness
 ```
 
-### 삭제
+### Uninstall
 
 ```bash
-# marketplace 설치
+# Marketplace install
 /plugin uninstall harness
 
-# symlink 설치
+# Symlink install
 rm ~/.claude/plugins/harness
 ```
 
