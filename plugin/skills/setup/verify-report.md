@@ -10,6 +10,7 @@ Sub-file for setup/SKILL.md.
 echo "--- SETUP VERIFICATION ---"
 [ -f doc/harness/manifest.yaml ] && echo "manifest.yaml: OK" || echo "manifest.yaml: MISSING"
 [ -f CLAUDE.md ] && echo "CLAUDE.md: OK" || echo "CLAUDE.md: MISSING"
+grep -q "harness:routing-injected" CLAUDE.md 2>/dev/null && echo "  Harness routing block: present" || echo "  Harness routing block: MISSING — run setup routing-injection"
 [ -d doc/harness ] && echo "doc/harness/: OK" || echo "doc/harness/: MISSING"
 [ -f doc/harness/critics/plan.md ] && echo "critics/plan.md: OK" || echo "critics/plan.md: MISSING"
 [ -f doc/harness/critics/runtime.md ] && echo "critics/runtime.md: OK" || echo "critics/runtime.md: MISSING"
