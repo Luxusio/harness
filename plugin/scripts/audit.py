@@ -22,6 +22,10 @@ Manifest example:
 A check command exits 0 = clean (no finding); non-zero = finding (severity
 applies). Stdout last 10 lines captured as evidence.
 
+NOTE: In each check entry, `name` MUST be the first field on the `- ` line.
+The YAML mini-parser is order-dependent — subsequent fields (command, severity,
+min_confidence) are parsed from indented continuation lines.
+
 Findings JSONL line:
   {ts, category, check, severity, confidence, evidence_tail, branch}
 

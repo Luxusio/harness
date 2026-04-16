@@ -46,16 +46,22 @@ def _atomic_write(path: str, content: str) -> None:
         raise
 
 
-def _split_frontmatter(text: str) -> tuple[str | None, str]:
+def _split_frontmatter(text: str) -> tuple[str | None, str, int]:
+    """Return (frontmatter_content, body_after_closing_fence, closing_fence_line_index).
+
+    Returns (None, text, -1) if no valid frontmatter found.
+    """
     if not text.startswith("---"):
-        return None, text
+        return None, text, -1
     lines = text.splitlines(keepends=True)
     if not lines or lines[0].rstrip() != "---":
-        return None, text
+        return None, text, -1
     for i in range(1, len(lines)):
         if lines[i].rstrip() == "---":
-            return "".join(lines[1:i]), "".join(lines[:1] + lines[i:])
-    return None, text
+            fm = "".join(lines[1:i])
+            body = "".join(lines[i + 1:])
+            return fm, body, i
+    return None, text, -1
 
 
 def _read_array(frontmatter: str, field: str) -> list[str]:
@@ -98,10 +104,10 @@ def _set_scalar(frontmatter: str, field: str, value: str) -> str:
 
 
 def _path_matches(note_pattern: str, changed: set[str]) -> bool:
-    """Treat note_pattern as a prefix OR exact file match."""
+    """Treat note_pattern as an exact file match OR directory prefix match."""
     p = note_pattern.rstrip("/")
     for ch in changed:
-        if ch == p or ch.startswith(p + "/") or ch.startswith(p):
+        if ch == p or ch.startswith(p + "/"):
             return True
     return False
 
@@ -156,7 +162,7 @@ def scan(doc_root: str, changed: set[str]) -> list[dict]:
                     text = f.read()
             except OSError:
                 continue
-            fm, body = _split_frontmatter(text)
+            fm, body, _fence_idx = _split_frontmatter(text)
             if fm is None:
                 continue
             invalidated = _read_array(fm, "invalidated_by_paths")
@@ -170,17 +176,9 @@ def scan(doc_root: str, changed: set[str]) -> list[dict]:
                 continue
             new_fm = _set_scalar(fm, "freshness", FRESHNESS_SUSPECT)
             new_fm = _set_scalar(new_fm, "freshness_updated", now_iso())
-            # Reconstruct text: split produced body starting with '---\n'.
-            # We placed all between-fences content in fm; body starts with the
-            # opening '---\n' + everything from the closing fence onward.
-            # Rebuild:
-            new_text = "---\n" + new_fm
-            if not new_text.endswith("\n"):
-                new_text += "\n"
-            # Find closing fence in original to stitch remainder
-            idx = text.find("\n---", len(fm) + 3)
-            remainder = text[idx:] if idx >= 0 else "\n---\n"
-            new_text += remainder.lstrip("\n")
+            if not new_fm.endswith("\n"):
+                new_fm += "\n"
+            new_text = "---\n" + new_fm + "---\n" + body
             try:
                 _atomic_write(path, new_text)
             except OSError:

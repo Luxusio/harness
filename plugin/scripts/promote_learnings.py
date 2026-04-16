@@ -182,17 +182,16 @@ def run(repo_root: str, threshold: int, dry_run: bool) -> int:
 
     # Step 4: Prune stale
     cutoff = (datetime.now(timezone.utc) - timedelta(days=STALE_DAYS)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    stale = [
-        e for e in entries
-        if e.get("type", "") not in KEEP_TYPES
-        and (e.get("ts", "") or "") < cutoff
-        and e.get("ts", "")  # skip entries without ts
-    ]
-    if stale and not dry_run:
-        entries = [e for e in entries if e not in stale]
-        print(f"pruned {len(stale)} stale entries (>{STALE_DAYS} days)")
-    elif stale:
-        print(f"  [dry-run] would prune {len(stale)} stale entries")
+    stale_ids = set()
+    for e in entries:
+        ts = e.get("ts", "")
+        if ts and ts < cutoff and e.get("type", "") not in KEEP_TYPES:
+            stale_ids.add(id(e))
+    if stale_ids and not dry_run:
+        entries = [e for e in entries if id(e) not in stale_ids]
+        print(f"pruned {len(stale_ids)} stale entries (>{STALE_DAYS} days)")
+    elif stale_ids:
+        print(f"  [dry-run] would prune {len(stale_ids)} stale entries")
 
     # Write back
     if not dry_run and (promotable or stale):

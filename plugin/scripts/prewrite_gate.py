@@ -58,7 +58,7 @@ def main():
         try:
             with open(active_file) as f:
                 active_dir = f.read().strip()
-            if active_dir:
+            if active_dir and os.path.isdir(active_dir) and active_dir.startswith(tasks_dir):
                 if not os.path.isfile(os.path.join(active_dir, "PLAN.md")):
                     if not os.path.isfile(os.path.join(active_dir, "MAINTENANCE")):
                         print("BLOCKED: PLAN.md does not exist yet. Run plan skill first.", file=sys.stderr)
