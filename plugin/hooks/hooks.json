@@ -17,6 +17,12 @@
           },
           {
             "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/inject_checkpoint.py || true",
+            "timeout": 5,
+            "statusMessage": "Checking for task checkpoint"
+          },
+          {
+            "type": "command",
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/contract_lint.py --quick --quiet || echo '[maintain-suggested] CONTRACTS.md drift — run maintain skill'",
             "timeout": 5,
             "statusMessage": "Checking contract drift"

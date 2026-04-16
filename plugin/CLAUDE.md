@@ -142,6 +142,9 @@ All scripts under `plugin/scripts/`. Stdlib only (PIL optional for canary).
 | `canary.py` | Visual regression baseline + sha/pixel diff | `doc/harness/visual-baselines/<task-id>/` |
 | `search_learnings.py` | Keyword/type/skill/since search over Tier 3 | reads `doc/harness/learnings.jsonl` |
 | `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/<task-id>.md` |
+| `inject_checkpoint.py` | SessionStart hook — surface latest checkpoint | reads `doc/harness/checkpoints/` |
+| `promote_learnings.py` | Tier 3→2 promotion + stale pruning | `doc/harness/patterns/<topic>.md` |
+| `retro.py` | Weekly retrospective (git + learnings + health) | `doc/harness/retros/<date>.md` |
 
 All activated via manifest optional keys: `health_components`, `benchmark_components`,
 `audit_categories`. Health falls back to `test_command` when no components declared.

@@ -77,79 +77,25 @@ Append if doc exists — never overwrite.
 
 Housekeeping, not a gate. If any step fails, log a warning and continue. learnings.jsonl is staging, not permanent storage.
 
-### Step 1: Aggregate learnings by key
+### Steps 1–5: Automated promotion + pruning
+
+All five steps (aggregate by key, promote to Tier 2 patterns, prune promoted,
+prune stale >90 days, report Tier 1 candidates) are handled by a single script:
 
 ```bash
-python3 -c "
-import json, collections
-counts = collections.Counter()
-entries = []
-with open('doc/harness/learnings.jsonl') as f:
-    for line in f:
-        try:
-            e = json.loads(line.strip())
-            k = e.get('key', '')
-            if k: counts[k] += 1
-            entries.append(e)
-        except: pass
-for k, c in counts.most_common(20):
-    print(f'{c}\t{k}')
-" 2>/dev/null
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/promote_learnings.py 2>/dev/null || true
 ```
 
-### Step 2: Promote keys with count ≥ 2 to Tier 2
+The script:
+- Promotes keys with ≥2 occurrences to `doc/harness/patterns/<topic>.md`
+- Auto-maps keys to topic files (test→testing.md, build→build.md, verify→verification.md, etc.)
+- Prunes promoted + stale (>90 day, non-eureka) entries from learnings.jsonl
+- Reports Tier 1 candidates (pattern docs with 2+ git commits → promote one-liner to CLAUDE.md)
 
-Append (or update) in `doc/harness/patterns/<topic>.md`:
-```markdown
-| <key> | <date> | run-auto-promote |
-## <key>
-<latest insight>
-**Promoted from learnings:** N occurrences across M tasks
-```
-Update count + latest insight if entry exists.
+Use `--dry-run` to preview without modifying files. `--threshold N` to adjust the promotion bar.
 
-### Step 3: Prune promoted entries from learnings.jsonl
+### Step 5b: Promote Tier 2 → Tier 1 (CLAUDE.md)
 
-```bash
-python3 -c "
-import json
-from collections import Counter
-entries = []
-with open('doc/harness/learnings.jsonl') as f:
-    for line in f:
-        try: entries.append(json.loads(line.strip()))
-        except: pass
-counts = Counter(e.get('key','') for e in entries if e.get('key'))
-promoted = {k for k, c in counts.items() if c >= 2}
-with open('doc/harness/learnings.jsonl', 'w') as f:
-    for e in entries:
-        if e.get('key','') not in promoted:
-            f.write(json.dumps(e, ensure_ascii=False) + '\n')
-" 2>/dev/null
-```
-
-### Step 4: Prune stale entries (>90 days, keep eureka/calibration forever)
-
-```bash
-python3 -c "
-import json, datetime
-cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=90)).strftime('%Y-%m-%dT%H:%M:%SZ')
-entries = []
-with open('doc/harness/learnings.jsonl') as f:
-    for line in f:
-        try:
-            e = json.loads(line.strip())
-            ts = e.get('ts', '')
-            tp = e.get('type', '')
-            if tp in ('eureka', 'confidence-calibration') or ts >= cutoff:
-                entries.append(e)
-        except: pass
-with open('doc/harness/learnings.jsonl', 'w') as f:
-    for e in entries:
-        f.write(json.dumps(e, ensure_ascii=False) + '\n')
-" 2>/dev/null
-```
-
-### Step 5: Promote Tier 2 → Tier 1 (CLAUDE.md)
-
-If any pattern doc is referenced in 2+ tasks (check `git log` on the pattern doc path), promote the one-liner into the project `CLAUDE.md` under the appropriate section. One line per entry — details stay in the pattern doc.
+When `promote_learnings.py` reports Tier 1 candidates, manually promote the key fact
+as a one-liner into the project `CLAUDE.md` under the appropriate section.
+Details stay in the pattern doc.
