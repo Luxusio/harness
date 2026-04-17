@@ -204,3 +204,24 @@ Rules for write-back:
 - Don't write obvious things ("send JSON with Content-Type header").
 - Include `discovered: <date>` so stale entries can be pruned later.
 - Keep entries concise. One trick per entry.
+
+## Codifiable block contract
+
+For every AC whose verification can be reduced to a deterministic command with
+a known expected_exit and a stdout/stderr substring check, emit a `codifiable:`
+YAML block in the transcript. Format:
+
+```yaml
+codifiable:
+  - behavior: short_snake_case_name
+    command: "exact bash command"
+    expected_exit: 0
+    expected_stdout_contains: ["substring1"]
+    expected_stderr_contains: []
+```
+
+Multiple blocks per transcript are allowed. The post-QA codifier
+(`plugin/scripts/qa_codifier.py`) parses these blocks and writes regression
+tests into `tests/regression/<sanitized-task-id>/<behavior>.py`. Non-codifiable
+scenarios (complex prose, manual flows) stay prose — the codifier ignores
+them.

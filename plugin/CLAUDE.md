@@ -186,3 +186,13 @@ Test command: `bun test` (Bun runtime)
 **When to log:** Any discovery that would save 5+ minutes in a future session.
 **What to log:** Build quirks, env var requirements, ordering constraints, port numbers, framework specifics, wrong manifest fields.
 **What NOT to log:** Code patterns (read from files), git history (read from git), task-specific details (in task dir).
+
+## 12. Environment variables
+
+| Variable | Effect | Semantics |
+|----------|--------|-----------|
+| `HARNESS_DISABLE_SCOPE_LOCK` | Bypass PROGRESS.md forbidden_paths gate once | one-shot (cleared after one bypass) |
+| `HARNESS_DISABLE_RETRO` | Skip auto-retro post-close trigger | session-wide while set |
+| `HARNESS_DISABLE_HYGIENE` | Skip Tier-3 hygiene audit post-close | session-wide while set |
+| `HARNESS_SKIP_INTERVIEW` | Setup skill auto-accepts defaults | session-wide while set |
+| `HARNESS_SPAWNED` | Orchestrator-spawned session: auto-resolve prompts | session-wide while set |
