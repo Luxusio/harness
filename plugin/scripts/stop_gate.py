@@ -24,9 +24,12 @@ def main():
             open_tasks.append((entry.name, status))
 
     if open_tasks:
-        print(f"Open tasks: {len(open_tasks)}")
+        print(f"BLOCKED: {len(open_tasks)} open task(s) — complete the canonical loop before stopping.", file=sys.stderr)
         for name, status in open_tasks[:3]:
-            print(f"  - {name} [{status}]")
+            print(f"  - {name} [{status}] → run Skill(harness:develop) or Skill(harness:run) to continue", file=sys.stderr)
+        if len(open_tasks) > 3:
+            print(f"  ... and {len(open_tasks) - 3} more", file=sys.stderr)
+        sys.exit(2)
 
     sys.exit(0)
 
