@@ -256,6 +256,30 @@ Run health score and append to project-level history (Phase 8 uses the delta aga
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/health.py > "<task_dir>/audit/health-after.txt" 2>&1 || true
 ```
 
+### Phase 7.7: Dogfood (post-QA, pre-HANDOFF)
+
+After the verification gate passes, spawn the dogfooder agent to use the product
+as a power user. The dogfooder finds friction, gaps, and missing workflows — things
+QA doesn't catch because they aren't bugs.
+
+```
+Agent({
+  subagent_type: "harness:dogfooder",
+  prompt: "Dogfood task <task_id>. PLAN.md: <task_dir>/PLAN.md. HANDOFF will be written after you. Write findings to <task_dir>/DOGFOOD.md.",
+  mode: "auto"
+})
+```
+
+The dogfooder does NOT gate task completion. Its output is:
+- `<task_dir>/DOGFOOD.md` — structured suggestion list with prioritized backlog.
+- If high-impact findings exist, it recommends re-planning. Include this recommendation
+  in HANDOFF Phase 8 under "Dogfood Findings".
+
+Skip conditions:
+- `runtime_verdict` is not PASS (QA must pass first).
+- Task is maintenance-only (no user-facing change).
+- PLAN.md has no user-facing ACs (pure infra/refactor).
+
 ### Phase 8: Write HANDOFF
 
 **Concreteness standard:** every entry must locate without searching — name file, function, line. "Fixed auth bug" is not acceptable; `auth.ts:47 — added null check on session.token` is.
@@ -277,7 +301,9 @@ Call `mcp__harness__write_handoff` with:
 13. Visual Evidence (AC → screenshot path → console errors → viewport)
 14. Execution Metrics (phase timing + fix loop counts)
 15. Quality Score (weighted)
-16. Health Delta — recompute metrics from Phase 0 baseline:
+16. Dogfood Findings — from Phase 7.7 `DOGFOOD.md`: high-impact suggestions summary,
+    re-plan recommendation if any. "No dogfood findings" if skipped or clean.
+17. Health Delta — recompute metrics from Phase 0 baseline:
 
     ```
     | Metric | Before | After | Δ |
