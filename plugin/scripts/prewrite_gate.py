@@ -46,25 +46,60 @@ def main():
     basename = os.path.basename(file_path)
     if inside_task_dir and basename in PROTECTED_ARTIFACTS:
         owner = PROTECTED_ARTIFACTS[basename]
-        print(f"BLOCKED: {basename} is owned by {owner}. Use the appropriate CLI/MCP tool.", file=sys.stderr)
+        print(f"BLOCKED: {basename} is owned by {owner}. Use the owning skill or MCP tool (e.g. Skill(harness:plan) for PLAN.md).", file=sys.stderr)
         sys.exit(2)
 
     if inside_task_dir:
         sys.exit(0)
 
-    # For source files, check PLAN.md exists on active task
+    # Exempt paths — allowed without an active task
+    exempt_prefixes = [
+        os.path.join(repo_root, "doc", "harness", "learnings.jsonl"),
+        os.path.join(repo_root, "doc", "harness", "qa"),
+        os.path.join(repo_root, "doc", "harness", "checkpoints"),
+        os.path.join(repo_root, "doc", "harness", "health-history.jsonl"),
+        os.path.join(repo_root, "doc", "harness", "patterns"),
+        os.path.join(repo_root, "doc", "harness", "retros"),
+        os.path.join(repo_root, "doc", "harness", "visual-baselines"),
+        os.path.join(repo_root, "doc", "harness", "benchmark"),
+        os.path.join(repo_root, "doc", "harness", "audits"),
+    ]
+    for prefix in exempt_prefixes:
+        if file_path == prefix or file_path.startswith(prefix + os.sep):
+            sys.exit(0)
+
+    # For source files, require an active task with PLAN.md
     active_file = os.path.join(tasks_dir, ".active")
-    if os.path.isfile(active_file):
-        try:
-            with open(active_file) as f:
-                active_dir = f.read().strip()
-            if active_dir and os.path.isdir(active_dir) and active_dir.startswith(tasks_dir):
-                if not os.path.isfile(os.path.join(active_dir, "PLAN.md")):
-                    if not os.path.isfile(os.path.join(active_dir, "MAINTENANCE")):
-                        print("BLOCKED: PLAN.md does not exist yet. Run plan skill first.", file=sys.stderr)
-                        sys.exit(2)
-        except Exception:
-            pass
+    if not os.path.isfile(active_file):
+        print(
+            "BLOCKED: No active task. Source writes require the canonical loop. "
+            "Run Skill(harness:run) or Skill(harness:plan) first.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+    try:
+        with open(active_file) as f:
+            active_dir = f.read().strip()
+        if active_dir and os.path.isdir(active_dir) and active_dir.startswith(tasks_dir):
+            if not os.path.isfile(os.path.join(active_dir, "PLAN.md")):
+                if not os.path.isfile(os.path.join(active_dir, "MAINTENANCE")):
+                    print("BLOCKED: PLAN.md does not exist yet. Run Skill(harness:plan) first.", file=sys.stderr)
+                    sys.exit(2)
+        else:
+            print(
+                "BLOCKED: Active task points to invalid path. "
+                "Run Skill(harness:run) to create a new task.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+    except Exception as exc:
+        print(
+            f"BLOCKED: Cannot read .active file ({exc}). "
+            "Run Skill(harness:run) to create a new task.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     sys.exit(0)
 
