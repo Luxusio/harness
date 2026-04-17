@@ -155,6 +155,11 @@ Runs continuously during Phase 3.
 
 - **3.4 Test framework bootstrap** — if project has no framework and no `doc/harness/.no-test-bootstrap` opt-out marker, offer minimal setup (JS/TS: vitest or bun:test; Python: pytest; Go/Rust: built-in). Log bootstrap to `learnings.jsonl` type `test-bootstrap`. If user declines, create opt-out marker.
 - **3.5 Regression rule** — if the diff modifies existing behavior and no test covers the changed path, write a regression test immediately. Commit separately: `test: regression test for <what>`.
+  After Phase 7 PASS and before Phase 8 HANDOFF, run the QA codifier to capture structured regression tests from CRITIC__runtime.md:
+  ```bash
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/qa_codifier.py --task-dir <task_dir> 2>/dev/null || true
+  ```
+  The codifier parses `codifiable:` YAML blocks emitted by qa-cli/qa-api agents and stages validated tests to `tests/regression/<sanitized-task-id>/`. Never blocks task close.
 - **3.6 Fix-first pattern** — see `fix-first-pattern.md`. Classify AUTO-FIX (dead code, magic numbers, stale comments, missing guards) and ASK (API design, architecture, security, DRY extractions). Auto-fix immediately; flag ASK in HANDOFF "Judgment Items". The **3-attempt escalation rule** also lives in this sub-file and applies to every fix loop (per-AC, Phase 7, browser debug).
 
 ### Phase 3.7–3.9: Post-implementation health
@@ -324,7 +329,7 @@ score = (ac_completion × 0.40) + (test_coverage × 0.30)
 - `adversarial_clean` = max(0, 10 - (crit × 3 + high × 1.5 + med × 0.5)). Fixed at 0.25 weight.
 - `scope_discipline` = 10 / 7 / 4 / 0 (none / auto-added / justified / unjustified).
 
-**Cleanup:** delete PROGRESS.md from task_dir — HANDOFF is the permanent record.
+**Cleanup:** PROGRESS.md persists beyond Phase 8 — it is the scope-lock contract for any post-HANDOFF edits. Do NOT delete it. HANDOFF.md is the narrative permanent record; PROGRESS.md is the machine-readable scope boundary.
 
 ### Phase 8.5: Reflect and Log
 
