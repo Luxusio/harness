@@ -344,6 +344,48 @@ AskUserQuestion:
 
 If A: manifest gets `health_components` uncommenting the default entry that wraps `test_command`. Benchmark and audit stay commented — user activates by uncommenting and filling in `benchmark_components` / `audit_categories`.
 
+## Phase 2.5: Health Stack Auto-Detection
+
+Run after project interview, before bootstrap. Idempotent: if `health_components:` key is already present in manifest.yaml (content or empty list), skip with log line and proceed.
+
+```bash
+# Idempotent check
+_MANIFEST="$_ROOT/doc/harness/manifest.yaml"
+if [ -f "$_MANIFEST" ] && grep -q "^health_components:" "$_MANIFEST" 2>/dev/null; then
+  echo "health_components already set — skipping auto-detect"
+else
+  # 9-signal scan
+  _DETECTED=""
+  [ -f tsconfig.json ] && _DETECTED="$_DETECTED typecheck:npx tsc --noEmit"
+  [ -f biome.json ] || [ -f biome.jsonc ] && _DETECTED="$_DETECTED lint:npx biome check ."
+  ls eslint.config.* 2>/dev/null | grep -q . && _DETECTED="$_DETECTED lint:npx eslint ."
+  if [ -f pyproject.toml ]; then
+    grep -q "pytest" pyproject.toml 2>/dev/null && _DETECTED="$_DETECTED test:pytest"
+    grep -q "ruff" pyproject.toml 2>/dev/null && _DETECTED="$_DETECTED lint:ruff check ."
+  fi
+  if [ -f package.json ]; then
+    grep -q '"test"' package.json 2>/dev/null && _DETECTED="$_DETECTED test:npm test"
+    grep -q '"knip"' package.json 2>/dev/null && _DETECTED="$_DETECTED deadcode:npx knip"
+  fi
+  [ -f Cargo.toml ] && _DETECTED="$_DETECTED test:cargo test"
+  [ -f go.mod ] && _DETECTED="$_DETECTED test:go test ./..."
+  command -v shellcheck >/dev/null 2>&1 && ls *.sh 2>/dev/null | grep -q . && _DETECTED="$_DETECTED shell:shellcheck *.sh"
+  echo "Detected health components: $_DETECTED"
+fi
+```
+
+If signals detected, prompt (or auto-accept if `HARNESS_SPAWNED=1`):
+
+```
+AskUserQuestion:
+  "Detected health tooling. Write these to manifest health_components? [Y/n]"
+  RECOMMENDATION: Y — health scoring compounds across tasks with zero extra setup.
+  A) Yes, write detected components (recommended)
+  B) No, skip
+```
+
+If user accepts (or HARNESS_SPAWNED=1): write `health_components:` block to manifest with one entry per detected signal. If user declines or no signals detected: write `health_components: []` as explicit opt-out marker so this step is skipped on re-run.
+
 ## Phase 3: Bootstrap Core Structure
 
 See `bootstrap.md` — directory creation, manifest.yaml (with smart-defaults table and MCP config), CLAUDE.md, critic playbooks, doc/harness/ directory + gitignore, non-destructive contracts installation (CONTRACTS.md + CONTRACTS.local.md + @import line + lint check).
