@@ -226,3 +226,8 @@ Rules for write-back:
 - Don't write obvious things ("click the submit button to submit").
 - Include `discovered: <date>` so stale entries can be pruned later.
 - Keep entries concise. One trick per entry, not a paragraph.
+
+## Codifiable block contract
+
+Browser verdicts are NOT codified in v1. Playwright-based regression capture
+is a v2 follow-up. Keep browser QA evidence as prose transcripts only.
