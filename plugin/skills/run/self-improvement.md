@@ -85,6 +85,56 @@ prune stale >90 days, report Tier 1 candidates) are handled by a single script:
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/promote_learnings.py 2>/dev/null || true
 ```
+### Step 5c: Auto-retro trigger
+
+After promote_learnings.py, check if a retro should fire (>=3 tasks closed since last retro):
+
+```bash
+_LAST_RETRO=$(ls -t doc/harness/retros/*.md 2>/dev/null | head -1)
+_LAST_RETRO_TS=$(stat -c %Y "$_LAST_RETRO" 2>/dev/null || echo 0)
+_TASKS_SINCE=$(python3 -c "
+import json, sys, os
+tl = 'doc/harness/timeline.jsonl'
+last_ts = int('$_LAST_RETRO_TS')
+count = 0
+if os.path.isfile(tl):
+    with open(tl) as f:
+        for ln in f:
+            try:
+                e = json.loads(ln)
+                if e.get('event') == 'completed' and e.get('skill') == 'run':
+                    import datetime
+                    ts_str = e.get('ts','')
+                    if ts_str:
+                        try:
+                            from datetime import datetime, timezone
+                            t = datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
+                            if int(t.timestamp()) > last_ts:
+                                count += 1
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+print(count)
+" 2>/dev/null || echo 0)
+if [ "\${_TASKS_SINCE:-0}" -ge 3 ] && [ "\${HARNESS_DISABLE_RETRO:-}" != "1" ]; then
+  _RETRO_FIRST=$([ -z "$_LAST_RETRO" ] && echo "true" || echo "false")
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/retro.py --save 2>/dev/null && _RETRO_OUT=$(ls -t doc/harness/retros/*.md 2>/dev/null | head -1) || _RETRO_OUT=""
+  if [ "$_RETRO_FIRST" = "true" ] && [ -n "$_RETRO_OUT" ]; then
+    echo "Auto-retro enabled. Silence with HARNESS_DISABLE_RETRO=1. Output at $_RETRO_OUT."
+  fi
+  echo "Auto-ran: retro=$_RETRO_OUT"
+fi
+```
+
+**HANDOFF Auto-ran section:** Developer Phase 8 must include a section:
+```
+## Auto-ran
+- retro: <path or "(none, threshold not met)">
+- hygiene: <N warnings or "(none)">
+```
+If pipeline output is empty, emit `Auto-ran: (none, threshold not met)`.
+
 
 The script:
 - Promotes keys with ≥2 occurrences to `doc/harness/patterns/<topic>.md`
