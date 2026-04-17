@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -346,7 +347,7 @@ def codify(task_dir: str, transcript_path: str | None = None) -> int:
             os.makedirs(target_dir, exist_ok=True)
             final_behavior = _unique_behavior_name(target_dir, behavior, ext)
             target_path = os.path.join(target_dir, f"{final_behavior}.{ext}")
-            os.replace(stage_path, target_path)
+            shutil.move(stage_path, target_path)
             moved += 1
             print(f"codifier: staged {final_behavior}.{ext} -> {os.path.relpath(target_path, repo_root)}")
 
