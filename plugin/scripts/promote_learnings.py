@@ -145,6 +145,91 @@ def _tier1_candidates(repo_root: str, patterns_dir: str) -> list[str]:
     return candidates
 
 
+
+def _audit_stale_files(entries: list[dict], repo_root: str) -> int:
+    """Audit entries whose files[] contain paths that no longer exist.
+
+    Warn-only (stderr). Never mutates learnings.jsonl.
+    Deduplicates by path — one warning per unique missing path.
+    Returns count of unique missing paths flagged.
+    """
+    seen_paths: set[str] = set()
+    warned = 0
+    for e in entries:
+        files = e.get("files") or []
+        if isinstance(files, str):
+            files = [files]
+        for rel in files:
+            if not rel or not isinstance(rel, str):
+                continue
+            if rel in seen_paths:
+                continue
+            abs_path = os.path.join(repo_root, rel)
+            if not os.path.isfile(abs_path):
+                seen_paths.add(rel)
+                key = e.get("key", "?")
+                print(
+                    f"[hygiene] stale-file: path={rel!r} first seen in key={key!r}",
+                    file=sys.stderr,
+                )
+                warned += 1
+    return warned
+
+
+def _audit_contradictions(entries: list[dict]) -> int:
+    """Audit entries with the same key that may contradict each other.
+
+    Filter: pairs with ts difference < 30 days OR same source.
+    Warn-only (stderr). Never mutates learnings.jsonl.
+    Emits at most ONE warning per key (latest vs earliest qualifying prior).
+    Returns count of keys flagged.
+    """
+    from collections import defaultdict
+    by_key: dict[str, list[dict]] = defaultdict(list)
+    for e in entries:
+        k = e.get("key", "")
+        if k:
+            by_key[k].append(e)
+
+    cutoff_days = 30
+    warned = 0
+    for key, group in by_key.items():
+        if len(group) < 2:
+            continue
+        # Sort by ts ascending
+        def _ts_sort(e):
+            return e.get("ts") or ""
+        group_sorted = sorted(group, key=_ts_sort)
+        latest = group_sorted[-1]
+        # Find the first qualifying prior (one warning per key max)
+        for prior in group_sorted[:-1]:
+            same_source = (prior.get("source") or "") == (latest.get("source") or "") and (prior.get("source") or "") != ""
+            recent = False
+            try:
+                from datetime import datetime, timezone
+                fmt = "%Y-%m-%dT%H:%M:%SZ"
+                t_prior = datetime.strptime(prior.get("ts", ""), fmt).replace(tzinfo=timezone.utc)
+                t_latest = datetime.strptime(latest.get("ts", ""), fmt).replace(tzinfo=timezone.utc)
+                if abs((t_latest - t_prior).days) < cutoff_days:
+                    recent = True
+            except Exception:
+                pass
+            if recent or same_source:
+                reason = "recent (<30d)" if recent else f"same source={latest.get('source')!r}"
+                insight_prior = str(prior.get("insight", "?"))[:50]
+                insight_latest = str(latest.get("insight", "?"))[:50]
+                print(
+                    f"[hygiene] contradiction: key={key!r} "
+                    f"prior={insight_prior!r} "
+                    f"vs latest={insight_latest!r} "
+                    f"({reason})",
+                    file=sys.stderr,
+                )
+                warned += 1
+                break  # one warning per key
+    return warned
+
+
 def run(repo_root: str, threshold: int, dry_run: bool) -> int:
     learn_path = os.path.join(repo_root, LEARNINGS)
     patterns_dir = os.path.join(repo_root, PATTERNS_DIR)
@@ -203,6 +288,13 @@ def run(repo_root: str, threshold: int, dry_run: bool) -> int:
     if candidates:
         print(f"Tier 1 candidates (referenced in 2+ commits): {', '.join(candidates)}")
         print("  → Promote key facts to project CLAUDE.md as one-liners")
+
+    # Step 6: Hygiene audits (warn-only, never mutate)
+    stale_warns = _audit_stale_files(entries, repo_root)
+    contra_warns = _audit_contradictions(entries)
+    total_hygiene = stale_warns + contra_warns
+    if total_hygiene:
+        print(f"hygiene: {stale_warns} stale-file + {contra_warns} contradiction warnings (see stderr)", flush=True)
 
     return 0
 
