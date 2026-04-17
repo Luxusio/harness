@@ -1,0 +1,200 @@
+{"ts": "2026-04-17T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_0", "insight": "insight for key_0 iteration 0", "files": ["src/file_0.py"]}
+{"ts": "2026-04-16T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_1", "insight": "insight for key_1 iteration 1", "files": ["src/file_1.py"]}
+{"ts": "2026-04-15T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_2", "insight": "insight for key_2 iteration 2", "files": ["src/file_2.py"]}
+{"ts": "2026-04-14T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_3", "insight": "insight for key_3 iteration 3", "files": ["src/file_3.py"]}
+{"ts": "2026-04-13T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_4", "insight": "insight for key_4 iteration 4", "files": ["src/file_4.py"]}
+{"ts": "2026-04-12T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_5", "insight": "insight for key_5 iteration 5", "files": ["src/file_5.py"]}
+{"ts": "2026-04-11T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_6", "insight": "insight for key_6 iteration 6", "files": ["src/file_6.py"]}
+{"ts": "2026-04-10T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_7", "insight": "insight for key_7 iteration 7", "files": ["src/file_7.py"]}
+{"ts": "2026-04-09T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_8", "insight": "insight for key_8 iteration 8", "files": ["src/file_8.py"]}
+{"ts": "2026-04-08T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_9", "insight": "insight for key_9 iteration 9", "files": ["src/file_9.py"]}
+{"ts": "2026-04-07T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_10", "insight": "insight for key_10 iteration 10", "files": ["src/file_0.py"]}
+{"ts": "2026-04-06T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_11", "insight": "insight for key_11 iteration 11", "files": ["src/file_1.py"]}
+{"ts": "2026-04-05T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_12", "insight": "insight for key_12 iteration 12", "files": ["src/file_2.py"]}
+{"ts": "2026-04-04T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_13", "insight": "insight for key_13 iteration 13", "files": ["src/file_3.py"]}
+{"ts": "2026-04-03T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_14", "insight": "insight for key_14 iteration 14", "files": ["src/file_4.py"]}
+{"ts": "2026-04-02T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_15", "insight": "insight for key_15 iteration 15", "files": ["src/file_5.py"]}
+{"ts": "2026-04-01T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_16", "insight": "insight for key_16 iteration 16", "files": ["src/file_6.py"]}
+{"ts": "2026-03-31T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_17", "insight": "insight for key_17 iteration 17", "files": ["src/file_7.py"]}
+{"ts": "2026-03-30T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_18", "insight": "insight for key_18 iteration 18", "files": ["src/file_8.py"]}
+{"ts": "2026-03-29T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_19", "insight": "insight for key_19 iteration 19", "files": ["src/file_9.py"]}
+{"ts": "2026-03-28T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_0", "insight": "insight for key_0 iteration 20", "files": ["src/file_0.py"]}
+{"ts": "2026-03-27T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_1", "insight": "insight for key_1 iteration 21", "files": ["src/file_1.py"]}
+{"ts": "2026-03-26T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_2", "insight": "insight for key_2 iteration 22", "files": ["src/file_2.py"]}
+{"ts": "2026-03-25T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_3", "insight": "insight for key_3 iteration 23", "files": ["src/file_3.py"]}
+{"ts": "2026-03-24T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_4", "insight": "insight for key_4 iteration 24", "files": ["src/file_4.py"]}
+{"ts": "2026-03-23T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_5", "insight": "insight for key_5 iteration 25", "files": ["src/file_5.py"]}
+{"ts": "2026-03-22T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_6", "insight": "insight for key_6 iteration 26", "files": ["src/file_6.py"]}
+{"ts": "2026-03-21T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_7", "insight": "insight for key_7 iteration 27", "files": ["src/file_7.py"]}
+{"ts": "2026-03-20T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_8", "insight": "insight for key_8 iteration 28", "files": ["src/file_8.py"]}
+{"ts": "2026-03-19T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_9", "insight": "insight for key_9 iteration 29", "files": ["src/file_9.py"]}
+{"ts": "2026-03-18T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_10", "insight": "insight for key_10 iteration 30", "files": ["src/file_0.py"]}
+{"ts": "2026-03-17T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_11", "insight": "insight for key_11 iteration 31", "files": ["src/file_1.py"]}
+{"ts": "2026-03-16T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_12", "insight": "insight for key_12 iteration 32", "files": ["src/file_2.py"]}
+{"ts": "2026-03-15T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_13", "insight": "insight for key_13 iteration 33", "files": ["src/file_3.py"]}
+{"ts": "2026-03-14T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_14", "insight": "insight for key_14 iteration 34", "files": ["src/file_4.py"]}
+{"ts": "2026-03-13T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_15", "insight": "insight for key_15 iteration 35", "files": ["src/file_5.py"]}
+{"ts": "2026-03-12T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_16", "insight": "insight for key_16 iteration 36", "files": ["src/file_6.py"]}
+{"ts": "2026-03-11T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_17", "insight": "insight for key_17 iteration 37", "files": ["src/file_7.py"]}
+{"ts": "2026-03-10T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_18", "insight": "insight for key_18 iteration 38", "files": ["src/file_8.py"]}
+{"ts": "2026-03-09T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_19", "insight": "insight for key_19 iteration 39", "files": ["src/file_9.py"]}
+{"ts": "2026-03-08T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_0", "insight": "insight for key_0 iteration 40", "files": ["src/file_0.py"]}
+{"ts": "2026-03-07T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_1", "insight": "insight for key_1 iteration 41", "files": ["src/file_1.py"]}
+{"ts": "2026-03-06T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_2", "insight": "insight for key_2 iteration 42", "files": ["src/file_2.py"]}
+{"ts": "2026-03-05T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_3", "insight": "insight for key_3 iteration 43", "files": ["src/file_3.py"]}
+{"ts": "2026-03-04T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_4", "insight": "insight for key_4 iteration 44", "files": ["src/file_4.py"]}
+{"ts": "2026-03-03T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_5", "insight": "insight for key_5 iteration 45", "files": ["src/file_5.py"]}
+{"ts": "2026-03-02T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_6", "insight": "insight for key_6 iteration 46", "files": ["src/file_6.py"]}
+{"ts": "2026-03-01T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_7", "insight": "insight for key_7 iteration 47", "files": ["src/file_7.py"]}
+{"ts": "2026-02-28T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_8", "insight": "insight for key_8 iteration 48", "files": ["src/file_8.py"]}
+{"ts": "2026-02-27T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_9", "insight": "insight for key_9 iteration 49", "files": ["src/file_9.py"]}
+{"ts": "2026-02-26T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_10", "insight": "insight for key_10 iteration 50", "files": ["src/file_0.py"]}
+{"ts": "2026-02-25T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_11", "insight": "insight for key_11 iteration 51", "files": ["src/file_1.py"]}
+{"ts": "2026-02-24T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_12", "insight": "insight for key_12 iteration 52", "files": ["src/file_2.py"]}
+{"ts": "2026-02-23T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_13", "insight": "insight for key_13 iteration 53", "files": ["src/file_3.py"]}
+{"ts": "2026-02-22T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_14", "insight": "insight for key_14 iteration 54", "files": ["src/file_4.py"]}
+{"ts": "2026-02-21T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_15", "insight": "insight for key_15 iteration 55", "files": ["src/file_5.py"]}
+{"ts": "2026-02-20T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_16", "insight": "insight for key_16 iteration 56", "files": ["src/file_6.py"]}
+{"ts": "2026-02-19T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_17", "insight": "insight for key_17 iteration 57", "files": ["src/file_7.py"]}
+{"ts": "2026-02-18T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_18", "insight": "insight for key_18 iteration 58", "files": ["src/file_8.py"]}
+{"ts": "2026-02-17T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_19", "insight": "insight for key_19 iteration 59", "files": ["src/file_9.py"]}
+{"ts": "2026-02-16T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_0", "insight": "insight for key_0 iteration 60", "files": ["src/file_0.py"]}
+{"ts": "2026-02-15T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_1", "insight": "insight for key_1 iteration 61", "files": ["src/file_1.py"]}
+{"ts": "2026-02-14T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_2", "insight": "insight for key_2 iteration 62", "files": ["src/file_2.py"]}
+{"ts": "2026-02-13T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_3", "insight": "insight for key_3 iteration 63", "files": ["src/file_3.py"]}
+{"ts": "2026-02-12T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_4", "insight": "insight for key_4 iteration 64", "files": ["src/file_4.py"]}
+{"ts": "2026-02-11T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_5", "insight": "insight for key_5 iteration 65", "files": ["src/file_5.py"]}
+{"ts": "2026-02-10T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_6", "insight": "insight for key_6 iteration 66", "files": ["src/file_6.py"]}
+{"ts": "2026-02-09T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_7", "insight": "insight for key_7 iteration 67", "files": ["src/file_7.py"]}
+{"ts": "2026-02-08T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_8", "insight": "insight for key_8 iteration 68", "files": ["src/file_8.py"]}
+{"ts": "2026-02-07T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_9", "insight": "insight for key_9 iteration 69", "files": ["src/file_9.py"]}
+{"ts": "2026-02-06T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_10", "insight": "insight for key_10 iteration 70", "files": ["src/file_0.py"]}
+{"ts": "2026-02-05T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_11", "insight": "insight for key_11 iteration 71", "files": ["src/file_1.py"]}
+{"ts": "2026-02-04T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_12", "insight": "insight for key_12 iteration 72", "files": ["src/file_2.py"]}
+{"ts": "2026-02-03T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_13", "insight": "insight for key_13 iteration 73", "files": ["src/file_3.py"]}
+{"ts": "2026-02-02T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_14", "insight": "insight for key_14 iteration 74", "files": ["src/file_4.py"]}
+{"ts": "2026-02-01T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_15", "insight": "insight for key_15 iteration 75", "files": ["src/file_5.py"]}
+{"ts": "2026-01-31T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_16", "insight": "insight for key_16 iteration 76", "files": ["src/file_6.py"]}
+{"ts": "2026-01-30T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_17", "insight": "insight for key_17 iteration 77", "files": ["src/file_7.py"]}
+{"ts": "2026-01-29T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_18", "insight": "insight for key_18 iteration 78", "files": ["src/file_8.py"]}
+{"ts": "2026-01-28T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_19", "insight": "insight for key_19 iteration 79", "files": ["src/file_9.py"]}
+{"ts": "2026-01-27T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_0", "insight": "insight for key_0 iteration 80", "files": ["src/file_0.py"]}
+{"ts": "2026-01-26T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_1", "insight": "insight for key_1 iteration 81", "files": ["src/file_1.py"]}
+{"ts": "2026-01-25T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_2", "insight": "insight for key_2 iteration 82", "files": ["src/file_2.py"]}
+{"ts": "2026-01-24T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_3", "insight": "insight for key_3 iteration 83", "files": ["src/file_3.py"]}
+{"ts": "2026-01-23T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_4", "insight": "insight for key_4 iteration 84", "files": ["src/file_4.py"]}
+{"ts": "2026-01-22T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_5", "insight": "insight for key_5 iteration 85", "files": ["src/file_5.py"]}
+{"ts": "2026-01-21T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_6", "insight": "insight for key_6 iteration 86", "files": ["src/file_6.py"]}
+{"ts": "2026-01-20T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_7", "insight": "insight for key_7 iteration 87", "files": ["src/file_7.py"]}
+{"ts": "2026-01-19T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_8", "insight": "insight for key_8 iteration 88", "files": ["src/file_8.py"]}
+{"ts": "2026-01-18T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_9", "insight": "insight for key_9 iteration 89", "files": ["src/file_9.py"]}
+{"ts": "2026-01-17T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_10", "insight": "insight for key_10 iteration 90", "files": ["src/file_0.py"]}
+{"ts": "2026-01-16T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_11", "insight": "insight for key_11 iteration 91", "files": ["src/file_1.py"]}
+{"ts": "2026-01-15T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_12", "insight": "insight for key_12 iteration 92", "files": ["src/file_2.py"]}
+{"ts": "2026-01-14T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_13", "insight": "insight for key_13 iteration 93", "files": ["src/file_3.py"]}
+{"ts": "2026-01-13T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_14", "insight": "insight for key_14 iteration 94", "files": ["src/file_4.py"]}
+{"ts": "2026-01-12T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_15", "insight": "insight for key_15 iteration 95", "files": ["src/file_5.py"]}
+{"ts": "2026-01-11T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_16", "insight": "insight for key_16 iteration 96", "files": ["src/file_6.py"]}
+{"ts": "2026-01-10T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_17", "insight": "insight for key_17 iteration 97", "files": ["src/file_7.py"]}
+{"ts": "2026-01-09T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_18", "insight": "insight for key_18 iteration 98", "files": ["src/file_8.py"]}
+{"ts": "2026-01-08T12:35:48Z", "type": "harness-improvement", "source": "run", "key": "key_19", "insight": "insight for key_19 iteration 99", "files": ["src/file_9.py"]}
+{"ts": "2026-04-17T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 0"}
+{"ts": "2026-04-17T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 1"}
+{"ts": "2026-04-16T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 2"}
+{"ts": "2026-04-16T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 3"}
+{"ts": "2026-04-15T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 4"}
+{"ts": "2026-04-15T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 5"}
+{"ts": "2026-04-14T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 6"}
+{"ts": "2026-04-14T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 7"}
+{"ts": "2026-04-13T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 8"}
+{"ts": "2026-04-13T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 9"}
+{"ts": "2026-04-12T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 10"}
+{"ts": "2026-04-12T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 11"}
+{"ts": "2026-04-11T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 12"}
+{"ts": "2026-04-11T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 13"}
+{"ts": "2026-04-10T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 14"}
+{"ts": "2026-04-10T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 15"}
+{"ts": "2026-04-09T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 16"}
+{"ts": "2026-04-09T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 17"}
+{"ts": "2026-04-08T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 18"}
+{"ts": "2026-04-08T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 19"}
+{"ts": "2026-04-07T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 20"}
+{"ts": "2026-04-07T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 21"}
+{"ts": "2026-04-06T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 22"}
+{"ts": "2026-04-06T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 23"}
+{"ts": "2026-04-05T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 24"}
+{"ts": "2026-04-05T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 25"}
+{"ts": "2026-04-04T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 26"}
+{"ts": "2026-04-04T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 27"}
+{"ts": "2026-04-03T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 28"}
+{"ts": "2026-04-03T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 29"}
+{"ts": "2026-04-02T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 30"}
+{"ts": "2026-04-02T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 31"}
+{"ts": "2026-04-01T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 32"}
+{"ts": "2026-04-01T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 33"}
+{"ts": "2026-03-31T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 34"}
+{"ts": "2026-03-31T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 35"}
+{"ts": "2026-03-30T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 36"}
+{"ts": "2026-03-30T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 37"}
+{"ts": "2026-03-29T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 38"}
+{"ts": "2026-03-29T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 39"}
+{"ts": "2026-03-28T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 40"}
+{"ts": "2026-03-28T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 41"}
+{"ts": "2026-03-27T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 42"}
+{"ts": "2026-03-27T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 43"}
+{"ts": "2026-03-26T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 44"}
+{"ts": "2026-03-26T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 45"}
+{"ts": "2026-03-25T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 46"}
+{"ts": "2026-03-25T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 47"}
+{"ts": "2026-03-24T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 48"}
+{"ts": "2026-03-24T12:35:48Z", "type": "operational", "source": "qa-cli", "key": "duplicate-key", "insight": "possibly contradicting insight 49"}
+{"ts": "2025-09-29T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_0", "insight": "old insight 0"}
+{"ts": "2025-09-28T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_1", "insight": "old insight 1"}
+{"ts": "2025-09-27T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_2", "insight": "old insight 2"}
+{"ts": "2025-09-26T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_3", "insight": "old insight 3"}
+{"ts": "2025-09-25T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_4", "insight": "old insight 4"}
+{"ts": "2025-09-24T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_5", "insight": "old insight 5"}
+{"ts": "2025-09-23T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_6", "insight": "old insight 6"}
+{"ts": "2025-09-22T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_7", "insight": "old insight 7"}
+{"ts": "2025-09-21T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_8", "insight": "old insight 8"}
+{"ts": "2025-09-20T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_9", "insight": "old insight 9"}
+{"ts": "2025-09-19T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_10", "insight": "old insight 10"}
+{"ts": "2025-09-18T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_11", "insight": "old insight 11"}
+{"ts": "2025-09-17T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_12", "insight": "old insight 12"}
+{"ts": "2025-09-16T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_13", "insight": "old insight 13"}
+{"ts": "2025-09-15T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_14", "insight": "old insight 14"}
+{"ts": "2025-09-14T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_15", "insight": "old insight 15"}
+{"ts": "2025-09-13T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_16", "insight": "old insight 16"}
+{"ts": "2025-09-12T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_17", "insight": "old insight 17"}
+{"ts": "2025-09-11T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_18", "insight": "old insight 18"}
+{"ts": "2025-09-10T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_19", "insight": "old insight 19"}
+{"ts": "2025-09-09T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_20", "insight": "old insight 20"}
+{"ts": "2025-09-08T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_21", "insight": "old insight 21"}
+{"ts": "2025-09-07T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_22", "insight": "old insight 22"}
+{"ts": "2025-09-06T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_23", "insight": "old insight 23"}
+{"ts": "2025-09-05T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_24", "insight": "old insight 24"}
+{"ts": "2025-09-04T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_25", "insight": "old insight 25"}
+{"ts": "2025-09-03T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_26", "insight": "old insight 26"}
+{"ts": "2025-09-02T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_27", "insight": "old insight 27"}
+{"ts": "2025-09-01T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_28", "insight": "old insight 28"}
+{"ts": "2025-08-31T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_29", "insight": "old insight 29"}
+{"ts": "2025-08-30T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_30", "insight": "old insight 30"}
+{"ts": "2025-08-29T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_31", "insight": "old insight 31"}
+{"ts": "2025-08-28T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_32", "insight": "old insight 32"}
+{"ts": "2025-08-27T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_33", "insight": "old insight 33"}
+{"ts": "2025-08-26T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_34", "insight": "old insight 34"}
+{"ts": "2025-08-25T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_35", "insight": "old insight 35"}
+{"ts": "2025-08-24T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_36", "insight": "old insight 36"}
+{"ts": "2025-08-23T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_37", "insight": "old insight 37"}
+{"ts": "2025-08-22T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_38", "insight": "old insight 38"}
+{"ts": "2025-08-21T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_39", "insight": "old insight 39"}
+{"ts": "2025-08-20T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_40", "insight": "old insight 40"}
+{"ts": "2025-08-19T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_41", "insight": "old insight 41"}
+{"ts": "2025-08-18T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_42", "insight": "old insight 42"}
+{"ts": "2025-08-17T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_43", "insight": "old insight 43"}
+{"ts": "2025-08-16T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_44", "insight": "old insight 44"}
+{"ts": "2025-08-15T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_45", "insight": "old insight 45"}
+{"ts": "2025-08-14T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_46", "insight": "old insight 46"}
+{"ts": "2025-08-13T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_47", "insight": "old insight 47"}
+{"ts": "2025-08-12T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_48", "insight": "old insight 48"}
+{"ts": "2025-08-11T12:35:48Z", "type": "pattern", "source": "develop", "key": "old_key_49", "insight": "old insight 49"}
