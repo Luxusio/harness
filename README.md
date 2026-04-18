@@ -71,9 +71,11 @@ plan → develop → verify → close
 | Step | What happens |
 |------|-------------|
 | **plan** | 7-phase dual-voice review pipeline writes PLAN.md + CHECKS.yaml |
-| **develop** | Implement per-AC, checkpoint progress, run quality audit |
+| **develop** | Implement per-AC, checkpoint progress, run quality audit, dogfood |
 | **verify** | QA agent(s) write CRITIC__runtime.md with runtime_verdict |
 | **close** | Gate: PLAN.md + HANDOFF.md exist + runtime_verdict = PASS |
+
+After close, `/harness:run` runs a self-improvement pass — surfaces friction signals into `learnings.jsonl`, promotes recurring keys into Tier 2 patterns, and prunes stale entries.
 
 ## TASK_STATE (7 fields)
 
@@ -86,6 +88,8 @@ plan_session_state: closed|context_open|write_open
 closed_at: null
 updated: <ISO8601>
 ```
+
+`BLOCKED_ENV` keeps the task open — QA has surfaced an environmental blocker that cannot be resolved without user action. `task_close` refuses to close anything except fresh `PASS`.
 
 ## Acceptance ledger (CHECKS.yaml)
 
@@ -112,6 +116,20 @@ python3 scripts/update_checks.py --task-dir TASK_DIR --ac AC-001 \
   --status implemented_candidate --root-cause "off-by-one in loop bound"
 ```
 
+## Agents
+
+All under `plugin/agents/`. Narrow tool surface — each agent gets only what its role demands.
+
+| Agent | Role |
+|-------|------|
+| `developer` | Implements PLAN.md per AC, writes HANDOFF.md |
+| `dogfooder` | Post-QA power-user pass; finds friction + missing workflows |
+| `qa-browser` | Browser-first runtime QA via Chrome DevTools MCP |
+| `qa-api` | API runtime QA via curl / httpie |
+| `qa-cli` | CLI / library runtime QA |
+
+QA agents write the runtime verdict via `mcp__harness__write_critic_runtime`. They never hold `Edit`/`Write` on source files.
+
 ## Quality scripts
 
 All under `plugin/scripts/`. Stdlib only.
@@ -125,8 +143,11 @@ All under `plugin/scripts/`. Stdlib only.
 | `search_learnings.py` | Keyword/filter search over Tier 3 learnings | reads `learnings.jsonl` |
 | `promote_learnings.py` | Tier 3 → Tier 2 promotion + stale pruning | `doc/harness/patterns/` |
 | `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/` |
-| `inject_checkpoint.py` | SessionStart hook — surfaces latest checkpoint | reads `checkpoints/` |
 | `retro.py` | Weekly retrospective (git + learnings + health) | `doc/harness/retros/` |
+| `qa_codifier.py` | Parses QA transcripts → regression tests under `tests/regression/` | — |
+| `golden_replay.py` | Record/replay runtime smoke runs for deterministic regression | `doc/harness/replays/` |
+| `update_checks.py` | Atomic CHECKS.yaml AC status transitions (plan-first) | task-local |
+| `write_plan_artifact.py` | CLI writer for PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md | task-local |
 
 Activated via optional manifest keys: `health_components`, `benchmark_components`, `audit_categories`. Health falls back to `test_command` when no components declared.
 
@@ -138,7 +159,7 @@ doc/harness/patterns/*.md     # Tier 2: detailed patterns, read when relevant
 doc/harness/learnings.jsonl   # Tier 3: raw signals, session-transient
 ```
 
-`promote_learnings.py` auto-promotes keys with 2+ occurrences from Tier 3 → Tier 2, prunes stale entries (>90 days, keeps eureka/calibration forever), and reports Tier 1 candidates.
+The post-close self-improvement pass (`/harness:run`) auto-promotes keys with 2+ occurrences from Tier 3 → Tier 2, prunes stale entries (>90 days, keeps eureka/calibration forever), and reports Tier 1 candidates. `qa_codifier.py` separately turns validated QA failures into regression tests.
 
 ## Hooks
 
@@ -149,6 +170,8 @@ doc/harness/learnings.jsonl   # Tier 3: raw signals, session-transient
 | SessionStart | `contract_lint.py` | Detect CONTRACTS.md drift |
 | Stop | `stop_gate.py` | Warn if open tasks remain |
 | PreToolUse | `prewrite_gate.py` | Artifact ownership + plan-first rule |
+
+All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook degrades gracefully; it never blocks the session.
 
 ## MCP tools
 
@@ -171,8 +194,10 @@ doc/harness/learnings.jsonl   # Tier 3: raw signals, session-transient
 | `/harness:setup` | Bootstrap harness in target project |
 | `/harness:plan` | 7-phase dual-voice review → PLAN.md + CHECKS.yaml |
 | `/harness:develop` | Implement plan with quality audit pipeline |
-| `/harness:run` | Full cycle: plan → develop → verify → close |
+| `/harness:run` | Full cycle: plan → develop → verify → close + self-improvement |
 | `/harness:maintain` | Contract drift, doc cleanup, re-interview |
+
+`/harness:plan` internally dispatches four review sub-skills (`plan-ceo-review`, `plan-design-review`, `plan-eng-review`, `plan-devex-review`) as dual-voice reviewers — they are not invoked directly.
 
 ## Plugin structure
 
@@ -182,10 +207,10 @@ plugin/
   .mcp.json                     # MCP server config
   CLAUDE.md                     # runtime rules
   hooks/hooks.json              # hook config
-  mcp/harness_server.py        # 7-tool MCP server
-  agents/                       # agent definitions
-  skills/                       # plan, develop, run, setup, maintain
-  scripts/                      # _lib.py + 14 scripts
+  mcp/harness_server.py         # 7-tool MCP server
+  agents/                       # 5 agents: developer, dogfooder, qa-{api,browser,cli}
+  skills/                       # 5 user-facing + 4 review sub-skills
+  scripts/                      # _lib.py + 17 stdlib scripts
 ```
 
 ## Development
