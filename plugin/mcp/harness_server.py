@@ -27,6 +27,10 @@ from _lib import (  # type: ignore
     artifact_exists, canonical_task_dir, canonical_task_id,
     find_repo_root,
 )
+try:
+    from environment_snapshot import snapshot as _env_snapshot  # type: ignore
+except Exception:
+    _env_snapshot = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -259,10 +263,21 @@ def handle_task_start(args: dict) -> dict:
     with open(active_file, "w", encoding="utf-8") as f:
         f.write(task_dir)
 
+    # Best-effort environment snapshot: probe failure must never block task_start.
+    snapshot_path = ""
+    if _env_snapshot is not None:
+        try:
+            snapshot_path = _env_snapshot(task_dir, repo_root) or ""
+        except Exception:
+            snapshot_path = ""
+
     ctx = emit_compact_context(task_dir)
     if "error" in ctx:
         return _err("task_start failed", data={"task_dir": task_dir})
-    return _ok({"task_dir": task_dir, "task_id": tid, "task_context": ctx})
+    return _ok({
+        "task_dir": task_dir, "task_id": tid, "task_context": ctx,
+        "environment_snapshot": snapshot_path,
+    })
 
 
 def handle_task_context(args: dict) -> dict:
