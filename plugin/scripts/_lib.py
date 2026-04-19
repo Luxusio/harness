@@ -29,6 +29,125 @@ def now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# ── Hook I/O + gate signalling ───────────────────────────────────────────
+#
+# Claude Code hooks receive tool context on stdin (JSON) and signal decisions
+# via stdout JSON. Exit codes are masked by `|| true` (C-12 fail-safe), so
+# exit-based signalling is unreliable; stdout payload is authoritative.
+
+import json as _json  # noqa: E402  (kept after module constants on purpose)
+import sys as _sys    # noqa: E402
+
+
+_STDIN_CAP_BYTES = 1 << 16  # 64 KiB read cap for hook payload
+
+
+def read_hook_input():
+    """Read stdin payload from Claude Code hook (capped at 64 KiB).
+
+    Returns parsed JSON dict, or empty dict on any failure. Never raises —
+    callers on the hot path must not block when stdin is malformed or absent.
+    """
+    try:
+        raw = _sys.stdin.read(_STDIN_CAP_BYTES)
+    except Exception:
+        return {}
+    if not raw:
+        return {}
+    try:
+        data = _json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def emit_permission_decision(decision, reason=""):
+    """Emit a Claude Code PreToolUse permission decision on stdout.
+
+    ``decision="deny"`` writes the hookSpecificOutput envelope and returns.
+    Any other value (``"allow"``) is silent — silence is the trust signal for
+    allowed calls (Phase 4 DX consensus). Never raises.
+
+    Caller is responsible for exiting 0 after this returns; the hook's ``|| true``
+    wrapper guarantees the shell exit code is 0 regardless.
+    """
+    if decision != "deny":
+        return
+    envelope = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": str(reason)[:2000],
+        }
+    }
+    try:
+        _sys.stdout.write(_json.dumps(envelope))
+        _sys.stdout.flush()
+    except Exception:
+        pass
+
+
+_ESCAPE_KEYS = {
+    "prewrite": "HARNESS_SKIP_PREWRITE",
+    "mcp_bash_guard": "HARNESS_SKIP_MCP_GUARD",
+}
+
+
+def _escape_hint(gate_name):
+    """Render the one-shot escape-hatch hint appended to deny messages.
+
+    ``gate_name`` is the canonical gate name. Returns a string like
+    ``escape: HARNESS_SKIP_PREWRITE=1 <retry>``. Unknown gate names fall back
+    to ``HARNESS_SKIP_<UPPER>`` but callers should use the canonical keys so
+    the hint stays grep-stable across scripts.
+    """
+    key = _ESCAPE_KEYS.get(
+        gate_name,
+        "HARNESS_SKIP_" + str(gate_name or "").upper().replace("-", "_"),
+    )
+    return f"escape: {key}=1 <retry>"
+
+
+def _log_gate_error(exc, source):
+    """Append a gate-exception entry to doc/harness/learnings.jsonl.
+
+    Best-effort; any failure is swallowed. Used by gate scripts' outer
+    try/except so silent fail-open doesn't decay into an invisible dead gate.
+    """
+    try:
+        repo_root = find_repo_root()
+        learn_path = os.path.join(repo_root, "doc", "harness", "learnings.jsonl")
+        os.makedirs(os.path.dirname(learn_path), exist_ok=True)
+        entry = _json.dumps({
+            "ts": now_iso(),
+            "type": "gate-error",
+            "source": str(source or "gate"),
+            "error": f"{type(exc).__name__}: {str(exc)[:400]}",
+        })
+        with open(learn_path, "a", encoding="utf-8") as f:
+            f.write(entry + "\n")
+    except Exception:
+        pass
+
+
+def log_gate_bypass(gate_name, path=""):
+    """Append a gate-bypass entry when an escape-hatch env var short-circuits a gate."""
+    try:
+        repo_root = find_repo_root()
+        learn_path = os.path.join(repo_root, "doc", "harness", "learnings.jsonl")
+        os.makedirs(os.path.dirname(learn_path), exist_ok=True)
+        entry = _json.dumps({
+            "ts": now_iso(),
+            "type": "gate-bypass",
+            "source": str(gate_name or "gate"),
+            "path": str(path or ""),
+        })
+        with open(learn_path, "a", encoding="utf-8") as f:
+            f.write(entry + "\n")
+    except Exception:
+        pass
+
+
 # ── YAML helpers (simple key-value + block arrays, no pyyaml) ────────────
 
 
