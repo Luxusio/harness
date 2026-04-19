@@ -170,8 +170,9 @@ The post-close self-improvement pass (`/harness:run`) auto-promotes keys with 2+
 | SessionStart | `contract_lint.py` | Detect CONTRACTS.md drift |
 | Stop | `stop_gate.py` | Warn if open tasks remain |
 | PreToolUse | `prewrite_gate.py` | Artifact ownership + plan-first rule |
+| PreToolUse (Bash) | `mcp_bash_guard.py` | Block Bash-layer mutations of source / protected / workflow-control paths |
 
-All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook degrades gracefully; it never blocks the session.
+All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook degrades gracefully; it never blocks the session. Gates signal decisions via stdout JSON (`hookSpecificOutput.permissionDecision`), so blocking survives the `|| true` wrapper while a script crash still exits 0.
 
 ## MCP tools
 
