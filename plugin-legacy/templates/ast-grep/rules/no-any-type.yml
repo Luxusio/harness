@@ -1,7 +1,0 @@
-id: no-any-type
-language: typescript
-rule:
-  pattern: ": any"
-message: "Explicit 'any' type — consider narrowing the type"
-severity: hint
-note: "Sample rule. Broad any types reduce type safety."
