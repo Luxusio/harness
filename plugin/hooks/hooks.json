@@ -76,6 +76,19 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/tool_routing.py || true",
+            "timeout": 3,
+            "statusMessage": "Routing hint on bash failures"
+          }
+        ]
+      }
     ]
   }
 }

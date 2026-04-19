@@ -92,18 +92,22 @@ _CHECKS_ID_RE = re.compile(r"^-\s+id:\s*(\S+)", re.MULTILINE)
 _CHECKS_BLOCK_RE = re.compile(r"^-\s+id:\s*", re.MULTILINE)
 
 
-def _open_acs(task_dir: str) -> list[tuple[str, str]]:
-    """Return up to _AC_CAP non-terminal (id, truncated_title) pairs.
+def _open_acs(task_dir: str) -> tuple[list[tuple[str, str]], int]:
+    """Return ``(non_terminal_acs, reopen_total)``.
 
-    Non-terminal = status not in {passed, deferred}. Returned in file order.
+    ``non_terminal_acs`` is up to ``_AC_CAP`` ``(id, truncated_title)`` pairs
+    with status NOT in ``{passed, deferred}``. ``reopen_total`` sums
+    ``reopen_count`` across those rendered entries only — unrendered reopens
+    are intentionally excluded to match the ``⚠reopened=<N>`` signal shown on
+    the summary line.
     """
     checks_path = os.path.join(task_dir, "CHECKS.yaml")
     if not os.path.isfile(checks_path):
-        return []
+        return [], 0
     try:
         text = open(checks_path, encoding="utf-8").read()
     except OSError:
-        return []
+        return [], 0
     blocks: list[str] = []
     current: list[str] = []
     for line in text.splitlines():
@@ -117,6 +121,7 @@ def _open_acs(task_dir: str) -> list[tuple[str, str]]:
         blocks.append("\n".join(current))
 
     out: list[tuple[str, str]] = []
+    reopen_total = 0
     for block in blocks:
         m_id = _CHECKS_ID_RE.match(block)
         if not m_id:
@@ -129,10 +134,16 @@ def _open_acs(task_dir: str) -> list[tuple[str, str]]:
         title = (m_title.group(1) if m_title else "").strip().strip('"').strip("'")
         if len(title) > _TITLE_MAX:
             title = title[: _TITLE_MAX - 1] + "…"
+        m_reopen = re.search(r"^\s+reopen_count:\s*(\d+)", block, re.MULTILINE)
+        if m_reopen:
+            try:
+                reopen_total += int(m_reopen.group(1))
+            except ValueError:
+                pass
         out.append((m_id.group(1), title))
         if len(out) >= _AC_CAP:
             break
-    return out
+    return out, reopen_total
 
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)^---\s*\n", re.MULTILINE | re.DOTALL)
@@ -201,10 +212,13 @@ def _build_block(task_dir: str, repo_root: str) -> str:
         verdict_piece += " stale"
     pieces.append(verdict_piece)
 
-    acs = _open_acs(task_dir)
+    acs, reopen_total = _open_acs(task_dir)
     if acs:
         ac_strs = [f"{ac_id}:{title}" if title else ac_id for ac_id, title in acs]
-        pieces.append("open=" + ",".join(ac_strs))
+        summary = "open=" + ",".join(ac_strs)
+        if reopen_total > 0:
+            summary += f" ⚠reopened={reopen_total}"
+        pieces.append(summary)
 
     suspects = _suspect_notes(repo_root)
     if suspects:
