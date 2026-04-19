@@ -1,5 +1,0 @@
-{
-  "name": "harness",
-  "version": "2.1.0",
-  "description": "MCP-first execution harness with plan-implement-verify loops, evidence bundles, and DOC_SYNC enforcement."
-}

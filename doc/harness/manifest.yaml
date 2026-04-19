@@ -14,11 +14,9 @@ build_command: ""
 smoke_command: ""
 healthcheck_command: ""
 
-# --- Verify commands (used by verify.py) ---
+# --- Verify commands (MCP task_verify is authoritative; these are CLI fallback) ---
 verify_commands:
-  - python3 plugin-legacy/scripts/verify.py
-  - python3 plugin-legacy/scripts/verify.py healthcheck
-  - python3 plugin-legacy/scripts/verify.py smoke
+  - python3 -m pytest tests/
 
 # --- QA ---
 qa:
