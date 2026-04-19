@@ -27,6 +27,18 @@ class TestHooksJson(unittest.TestCase):
         self.assertEqual(len(prewrite), 1, f"expected one prewrite hook, got {prewrite}")
         self.assertEqual(len(bash_guard), 1, f"expected one bash_guard hook, got {bash_guard}")
 
+    def test_user_prompt_submit_registers_prompt_memory(self):
+        """AC-007: UserPromptSubmit entry for prompt_memory with fail-safe."""
+        entries = self.data["hooks"].get("UserPromptSubmit", [])
+        commands = []
+        for entry in entries:
+            for h in entry.get("hooks", []):
+                commands.append(h["command"])
+        pm = [c for c in commands if "prompt_memory.py" in c]
+        self.assertEqual(len(pm), 1, f"expected one prompt_memory hook, got {pm}")
+        self.assertTrue(pm[0].rstrip().endswith("|| true"),
+                        f"prompt_memory must fail-safe with `|| true`: {pm[0]!r}")
+
     def test_bash_guard_matcher_is_bash(self):
         entries = self.data["hooks"]["PreToolUse"]
         bash_entries = [e for e in entries
