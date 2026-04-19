@@ -52,6 +52,17 @@
             "statusMessage": "Checking write gate"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/mcp_bash_guard.py || true",
+            "timeout": 3,
+            "statusMessage": "Checking bash mutation guard"
+          }
+        ]
       }
     ]
   }
