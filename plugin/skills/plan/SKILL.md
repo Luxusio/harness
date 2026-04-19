@@ -184,7 +184,8 @@ Cognitive load:
   ⚠ High ambiguity (<N> challenges). Questions grouped by phase. One question per challenge.
   ```
 
-Per-challenge format:
+Per-challenge format — invoke `AskUserQuestion` with the challenge framed as a single question. Use the following body inside the `question` field (preserve the five-line block so reasoning is visible in the UI):
+
 ```
 User Challenge: <item title>
 
@@ -193,14 +194,15 @@ Both reviewers recommend: <alternative>
 Reasoning: <why both voices agree>
 Blind spots: <what voices may miss about your context>
 Downside cost of proceeding as stated: <concrete estimate>
-
-How would you like to proceed?
-A) Keep my original direction
-B) Accept the recommendation
-C) Modify: (please describe)
 ```
 
-Wait for each response before next.
+Options (3 — keep in this order, put "Accept the recommendation" first so the Recommended label sticks to it):
+
+1. **Accept the recommendation (Recommended)** — switch to the reviewers' alternative.
+2. **Keep my original direction** — proceed with the stated direction; reviewers' concern is accepted as a known risk.
+3. **Modify** — user-specified change (the reviewers' alternative needs adjustment).
+
+Map `Other` (AskUserQuestion's built-in free-text escape) to option 3 (Modify) — treat the user's note as the modified direction and fold it into scope. One question per challenge; wait for each answer before emitting the next.
 
 ### 5.4 Final scope confirmation
 
@@ -208,27 +210,26 @@ If 5.3 responses changed scope, confirm updated scope before Phase 6.
 
 ### 5.4.1 Gate response options
 
-```
-How would you like to proceed?
+Invoke `AskUserQuestion` with the 5.1 rich plan review summary as context (the summary must already be visible in the preceding agent message) and the following gate question. Four options — interrogate and user-challenge overrides collapse into the built-in `Other` free-text mechanism.
 
-A) Approve as-is — accept all, proceed to Phase 6
-B) Approve with overrides — specify which taste decisions to change
-B2) Approve with user challenge responses — specify how to resolve outstanding
-C) Interrogate — ask about any decision before approving
-D) Revise — re-run affected phases (max 3 revision cycles):
-   - Scope concerns → Phase 1
-   - Design concerns → Phase 2
-   - Test/architecture concerns → Phase 3
-   - DX concerns → Phase 4
-E) Reject — start over from Phase 0 (clears all phase state)
+`question` (use verbatim):
 ```
+Plan review complete. Approve as-is, approve with overrides, revise a phase, or reject?
+```
+
+Options (4 — keep this order so the Recommended label sticks to Approve):
+
+1. **Approve as-is (Recommended)** — accept every taste decision and proceed to Phase 6.
+2. **Approve with overrides** — specify which taste decisions to flip or which user-challenge responses to apply (use `Other` to list the overrides).
+3. **Revise — re-run a phase** — pick one phase to re-run (Scope → Phase 1; Design → Phase 2; Test/architecture → Phase 3; DX → Phase 4). If the user picks this, follow up with a second `AskUserQuestion` asking which phase to re-run.
+4. **Reject** — start over from Phase 0 (clears all phase state).
 
 **Handling:**
-- **A:** proceed to Phase 6.
-- **B / B2:** apply overrides/responses, re-present 5.1 summary with changes noted, re-offer A-E.
-- **C:** answer fully, re-present summary, re-offer A-E.
-- **D:** re-run affected phases with updated scope; increment cycle counter; after 3 cycles proceed to Phase 6 with warning.
-- **E:** clear all phase-level state, reset to Phase 0.
+- **Approve as-is:** proceed to Phase 6.
+- **Approve with overrides:** apply overrides (parse the `Other` free-text or the notes field); re-present the 5.1 summary with changes noted; re-offer the gate.
+- **Other (no option picked, free-text only):** treat as Interrogate — answer the user's question fully, then re-present the 5.1 summary and re-offer the gate.
+- **Revise:** ask the follow-up phase-selection question, re-run affected phases with updated scope; increment cycle counter; after 3 cycles proceed to Phase 6 with a warning block at the top of PLAN.md.
+- **Reject:** clear all phase-level state and reset to Phase 0.
 
 ---
 
