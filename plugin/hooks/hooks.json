@@ -64,6 +64,18 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/prompt_memory.py || true",
+            "timeout": 3,
+            "statusMessage": "Injecting task context"
+          }
+        ]
+      }
     ]
   }
 }
