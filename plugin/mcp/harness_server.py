@@ -60,6 +60,162 @@ def _task_artifact_rel(td: str, fn: str) -> str:
     return f"doc/harness/tasks/{os.path.basename(td)}/{fn}" if artifact_exists(td, fn) else ""
 
 
+# ── PR2 close-gate helpers ──────────────────────────────────────────────
+
+
+# Extensions / path fragments skipped during runtime-stale mtime scan.
+# These churn without reflecting a real code change (Python caches, macOS
+# metadata, editor swap files). Including them would produce false-positive
+# stale verdicts.
+_STALE_CHECK_SKIP_SUFFIXES = (
+    ".pyc", ".pyo", ".pyd",
+)
+_STALE_CHECK_SKIP_FRAGMENTS = (
+    "__pycache__/", "/.DS_Store", ".swp", ".swo",
+)
+_STALE_CHECK_PATH_CAP = 1000  # bound mtime scan in pathological cases
+
+
+def _stale_skip(relpath: str) -> bool:
+    if not relpath:
+        return True
+    for suf in _STALE_CHECK_SKIP_SUFFIXES:
+        if relpath.endswith(suf):
+            return True
+    for frag in _STALE_CHECK_SKIP_FRAGMENTS:
+        if frag in relpath or relpath.endswith(frag.strip("/")):
+            return True
+    return False
+
+
+def _runtime_is_stale(td: str) -> tuple[bool, str]:
+    """Return (stale, offending_path).
+
+    Stale when any file in ``touched_paths`` has ``mtime > mtime(CRITIC__runtime.md)``.
+    Skips Python caches / OS metadata per ``_STALE_CHECK_SKIP_*`` so generated
+    churn doesn't invalidate a legitimate PASS. If ``CRITIC__runtime.md`` is
+    absent the caller should already be blocked by the ``runtime_verdict PASS``
+    gate; return ``(False, "")`` here so we don't double-fire.
+    """
+    critic_path = os.path.join(td, "CRITIC__runtime.md")
+    if not os.path.isfile(critic_path):
+        return False, ""
+    try:
+        critic_mtime = os.path.getmtime(critic_path)
+    except OSError:
+        return False, ""
+
+    st = read_state(td)
+    touched = st.get("touched_paths") or []
+    if not touched:
+        return False, ""
+
+    repo_root = find_repo_root()
+    for rel in touched[:_STALE_CHECK_PATH_CAP]:
+        if _stale_skip(rel):
+            continue
+        abs_path = rel if os.path.isabs(rel) else os.path.join(repo_root, rel)
+        try:
+            m = os.path.getmtime(abs_path)
+        except OSError:
+            # File was deleted / renamed since last sync. Treat as stale;
+            # the next task_verify will re-sync and prune the entry.
+            return True, rel
+        if m > critic_mtime:
+            return True, rel
+    return False, ""
+
+
+def _parse_checks_yaml(td: str) -> list[dict] | None:
+    """Parse CHECKS.yaml into [{id, status, title}, ...].
+
+    Returns ``None`` when the file is missing (pre-PR2 task compatibility);
+    caller warn-logs and proceeds. Returns ``[]`` when the file is present
+    but empty or unparseable — treat as same as missing after logging. Uses
+    block-scanning so we don't pull in PyYAML; matches the
+    ``update_checks.py`` parser shape.
+    """
+    checks_path = os.path.join(td, "CHECKS.yaml")
+    if not os.path.isfile(checks_path):
+        return None
+    try:
+        with open(checks_path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return []
+
+    import re
+    blocks: list[str] = []
+    current: list[str] = []
+    for line in text.splitlines():
+        if re.match(r"^-\s+id:\s*", line):
+            if current:
+                blocks.append("\n".join(current))
+            current = [line]
+        elif current:
+            current.append(line)
+    if current:
+        blocks.append("\n".join(current))
+
+    items: list[dict] = []
+    for block in blocks:
+        m_id = re.match(r"^-\s+id:\s*(\S+)", block)
+        m_status = re.search(r"^\s+status:\s*(\S+)", block, re.MULTILINE)
+        m_title = re.search(r'^\s+title:\s*"?(.*?)"?\s*$', block, re.MULTILINE)
+        if not m_id:
+            continue
+        title = (m_title.group(1) if m_title else "").strip().strip('"').strip("'")
+        if len(title) > 120:
+            title = title[:117] + "..."
+        items.append({
+            "id": m_id.group(1),
+            "status": (m_status.group(1) if m_status else "open").strip(),
+            "title": title,
+        })
+    return items
+
+
+_CHECKS_GATE_TERMINAL = {"passed", "deferred"}
+
+
+def _checks_gate_status(td: str) -> tuple[str, list[dict]]:
+    """Return (``"ok"``|``"blocked"``|``"absent"``, blocking_acs).
+
+    - ``ok``: CHECKS.yaml present, every AC in {passed, deferred}.
+    - ``blocked``: CHECKS.yaml present, at least one AC not terminal.
+      ``blocking_acs`` is the non-terminal subset (id, status, title).
+    - ``absent``: CHECKS.yaml missing — caller warn-logs and proceeds.
+    """
+    items = _parse_checks_yaml(td)
+    if items is None:
+        return "absent", []
+    if not items:
+        return "absent", []
+    blocking = [ac for ac in items if ac["status"] not in _CHECKS_GATE_TERMINAL]
+    return ("blocked" if blocking else "ok"), blocking
+
+
+def _log_gate_warn(task_id: str, key: str, insight: str) -> None:
+    """Append a one-line gate-warn entry to doc/harness/learnings.jsonl."""
+    try:
+        import json as _json
+        repo_root = find_repo_root()
+        learn = os.path.join(repo_root, "doc", "harness", "learnings.jsonl")
+        os.makedirs(os.path.dirname(learn), exist_ok=True)
+        entry = _json.dumps({
+            "ts": now_iso(),
+            "type": "gate-warn",
+            "source": "task_close",
+            "key": key,
+            "insight": insight,
+            "task_id": task_id,
+        })
+        with open(learn, "a", encoding="utf-8") as f:
+            f.write(entry + "\n")
+    except Exception:
+        pass
+
+
 def _resolve_td(args: dict) -> str:
     td = _opt(args, "task_dir")
     ti = _opt(args, "task_id")
@@ -122,6 +278,17 @@ def handle_task_verify(args: dict) -> dict:
     ti = _req(args, "task_id")
     td = canonical_task_dir(task_id=ti)
     sync_from_git_diff(td)
+
+    # Stale check: if any touched path is newer than CRITIC__runtime.md,
+    # revert the stored verdict to pending so task_close won't accept a
+    # frozen PASS. task_verify is the natural place to clear the bit —
+    # re-running QA re-writes CRITIC__runtime.md with a fresh mtime.
+    stale, stale_path = _runtime_is_stale(td)
+    if stale:
+        st = read_state(td)
+        if (st.get("runtime_verdict") or "").upper() == "PASS":
+            set_state_field(td, "runtime_verdict", "pending")
+
     st = read_state(td)
     rv = (st.get("runtime_verdict") or "pending").upper()
     ctx = emit_compact_context(td)
@@ -131,6 +298,8 @@ def handle_task_verify(args: dict) -> dict:
         "next_action": ctx.get("next_action", ""),
         "missing_for_close": ctx.get("missing_for_close", []),
         "report_path": _task_artifact_rel(td, "CRITIC__runtime.md"),
+        "stale": stale,
+        "stale_path": stale_path,
     })
 
 
@@ -144,6 +313,30 @@ def handle_task_close(args: dict) -> dict:
         return _err("task_close blocked", data={
             "task_dir": td, "missing_for_close": missing, "task_context": ctx,
         })
+
+    # PR2 runtime-stale gate: refuse close when a touched path is newer
+    # than CRITIC__runtime.md. Caller must re-run task_verify so QA can
+    # re-issue a fresh PASS.
+    stale, stale_path = _runtime_is_stale(td)
+    if stale:
+        return _err("task_close blocked: runtime_verdict stale — re-run task_verify", data={
+            "task_dir": td, "stale_path": stale_path,
+        })
+
+    # PR2 CHECKS gate: refuse close when any AC is non-terminal.
+    # Absent CHECKS.yaml → warn-log + proceed (pre-PR2 tasks).
+    checks_status, blocking = _checks_gate_status(td)
+    if checks_status == "blocked":
+        return _err("task_close blocked: CHECKS gate", data={
+            "task_dir": td, "blocking_acs": blocking,
+        })
+    if checks_status == "absent":
+        _log_gate_warn(
+            ti,
+            "checks-missing-at-close",
+            "CHECKS.yaml absent at close; pre-PR2 task compatibility path.",
+        )
+
     st = read_state(td)
     st["status"] = "closed"
     st["closed_at"] = now_iso()

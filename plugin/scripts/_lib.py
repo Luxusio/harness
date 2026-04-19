@@ -426,23 +426,41 @@ def sync_touched_paths(task_dir, new_paths=None):
 
 
 def sync_from_git_diff(task_dir):
-    """Sync touched paths from git diff (unstaged + staged)."""
+    """Sync touched paths from git state.
+
+    Three sources:
+      1. Unstaged modifications (``git diff --name-only HEAD``).
+      2. Staged modifications (``git diff --cached --name-only HEAD``).
+      3. Untracked-but-not-ignored files (``git ls-files --others --exclude-standard``).
+
+    Untracked inclusion matters for the PR2 stale-verdict check: a new file
+    created after ``runtime_verdict: PASS`` must show up in ``touched_paths``
+    so mtime comparison can refuse ``task_close``. ``.gitignore`` entries
+    stay excluded via ``--exclude-standard``.
+    """
     repo_root = find_repo_root(task_dir)
     changed = set()
-    # Unstaged changes
+    # 1. Unstaged modifications
     r1 = subprocess.run(
         ["git", "diff", "--name-only", "HEAD"],
         capture_output=True, text=True, cwd=repo_root,
     )
     if r1.returncode == 0:
         changed.update(f.strip() for f in r1.stdout.splitlines() if f.strip())
-    # Staged changes (git add'd but not committed)
+    # 2. Staged modifications (git add'd but not committed)
     r2 = subprocess.run(
         ["git", "diff", "--cached", "--name-only", "HEAD"],
         capture_output=True, text=True, cwd=repo_root,
     )
     if r2.returncode == 0:
         changed.update(f.strip() for f in r2.stdout.splitlines() if f.strip())
+    # 3. Untracked files (respects .gitignore via --exclude-standard)
+    r3 = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        capture_output=True, text=True, cwd=repo_root,
+    )
+    if r3.returncode == 0:
+        changed.update(f.strip() for f in r3.stdout.splitlines() if f.strip())
     if not changed:
         return []
     return sync_touched_paths(task_dir, changed)
