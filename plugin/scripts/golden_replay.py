@@ -12,6 +12,8 @@ Covered today:
   4. contract_lint.py --check-weight — flags over-budget SKILL.md files.
   5. prewrite_gate.py — emits JSON permissionDecision=deny on protected artifact.
   6. mcp_bash_guard.py — emits JSON permissionDecision=deny on `sed -i` into workflow-control-surface.
+  7. harness_server.task_close — blocks when any CHECKS.yaml AC is non-terminal.
+  8. harness_server.task_close — blocks when touched path is newer than CRITIC__runtime.md.
 
 Invoke:
   python3 plugin/scripts/golden_replay.py           # all tests
@@ -283,6 +285,114 @@ def test_bash_guard_deny_on_sed_into_workflow_control() -> TestResult:
     return TestResult("bash_guard_deny", True)
 
 
+def _load_mcp_server():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "harness_server",
+        os.path.join(_repo_root(), "plugin", "mcp", "harness_server.py"),
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _prepare_scratch_task(tmp: str, task_id: str, *,
+                          checks_yaml: str | None,
+                          touched_paths: list[str] | None = None,
+                          critic_mtime: int | None = None) -> str:
+    import os as _os
+    task_dir = _os.path.join(tmp, task_id)
+    _os.makedirs(task_dir, exist_ok=True)
+    tp = touched_paths or []
+    tp_block = "[]" if not tp else "\n" + "\n".join(f"  - {p}" for p in tp)
+    with open(_os.path.join(task_dir, "TASK_STATE.yaml"), "w") as f:
+        f.write(
+            f"task_id: {task_id}\nstatus: created\nruntime_verdict: PASS\n"
+            f"touched_paths: {tp_block}\nplan_session_state: closed\n"
+            f"closed_at: null\nupdated: 2026-04-19T00:00:00Z\n"
+        )
+    with open(_os.path.join(task_dir, "PLAN.md"), "w") as f:
+        f.write("# plan\n")
+    with open(_os.path.join(task_dir, "HANDOFF.md"), "w") as f:
+        f.write("# handoff\n")
+    with open(_os.path.join(task_dir, "CRITIC__runtime.md"), "w") as f:
+        f.write("# critic\n")
+    if critic_mtime is not None:
+        _os.utime(_os.path.join(task_dir, "CRITIC__runtime.md"),
+                  (critic_mtime, critic_mtime))
+    if checks_yaml is not None:
+        with open(_os.path.join(task_dir, "CHECKS.yaml"), "w") as f:
+            f.write(checks_yaml)
+    return task_dir
+
+
+def test_task_close_blocks_on_failed_ac() -> TestResult:
+    """task_close must refuse when any CHECKS.yaml AC is not in {passed, deferred}."""
+    hs = _load_mcp_server()
+    with tempfile.TemporaryDirectory() as tmp:
+        task_dir = _prepare_scratch_task(
+            tmp, "TASK__gr-pr2-failed-ac",
+            checks_yaml=(
+                '- id: AC-001\n  title: "ok"\n  status: passed\n  kind: functional\n'
+                '- id: AC-002\n  title: "bad"\n  status: failed\n  kind: functional\n'
+            ),
+        )
+        orig = hs.canonical_task_dir
+        orig_sync = hs.sync_from_git_diff
+        hs.canonical_task_dir = lambda task_id=None, **kw: task_dir
+        hs.sync_from_git_diff = lambda td: []
+        try:
+            result = hs.call_tool("task_close", {"task_id": "TASK__gr-pr2-failed-ac"})
+        finally:
+            hs.canonical_task_dir = orig
+            hs.sync_from_git_diff = orig_sync
+    if not result.get("isError"):
+        return TestResult("task_close_blocks_on_failed_ac", False,
+                          f"expected error, got: {result!r}")
+    err = result["structuredContent"]
+    if "CHECKS gate" not in err.get("error", ""):
+        return TestResult("task_close_blocks_on_failed_ac", False,
+                          f"error missing CHECKS gate marker: {err!r}")
+    blocking = err.get("blocking_acs", [])
+    if not blocking or blocking[0]["id"] != "AC-002":
+        return TestResult("task_close_blocks_on_failed_ac", False,
+                          f"blocking_acs missing AC-002: {blocking!r}")
+    return TestResult("task_close_blocks_on_failed_ac", True)
+
+
+def test_task_close_blocks_on_stale_verdict() -> TestResult:
+    """task_close must refuse when touched path is newer than CRITIC__runtime.md."""
+    import os as _os
+    hs = _load_mcp_server()
+    with tempfile.TemporaryDirectory() as tmp:
+        task_dir = _prepare_scratch_task(
+            tmp, "TASK__gr-pr2-stale",
+            checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+            touched_paths=["plugin/scripts/health.py"],
+            critic_mtime=100,  # ancient critic; real file mtime is current
+        )
+        orig = hs.canonical_task_dir
+        orig_sync = hs.sync_from_git_diff
+        hs.canonical_task_dir = lambda task_id=None, **kw: task_dir
+        hs.sync_from_git_diff = lambda td: []
+        try:
+            result = hs.call_tool("task_close", {"task_id": "TASK__gr-pr2-stale"})
+        finally:
+            hs.canonical_task_dir = orig
+            hs.sync_from_git_diff = orig_sync
+    if not result.get("isError"):
+        return TestResult("task_close_blocks_on_stale_verdict", False,
+                          f"expected error, got: {result!r}")
+    err = result["structuredContent"]
+    if "stale" not in err.get("error", ""):
+        return TestResult("task_close_blocks_on_stale_verdict", False,
+                          f"error missing stale marker: {err!r}")
+    if err.get("stale_path") != "plugin/scripts/health.py":
+        return TestResult("task_close_blocks_on_stale_verdict", False,
+                          f"stale_path mismatch: {err!r}")
+    return TestResult("task_close_blocks_on_stale_verdict", True)
+
+
 TESTS = [
     test_contract_lint_template,
     test_update_checks_lifecycle,
@@ -291,6 +401,8 @@ TESTS = [
     test_check_weight_flags_oversized,
     test_prewrite_json_deny_on_protected_artifact,
     test_bash_guard_deny_on_sed_into_workflow_control,
+    test_task_close_blocks_on_failed_ac,
+    test_task_close_blocks_on_stale_verdict,
 ]
 
 
