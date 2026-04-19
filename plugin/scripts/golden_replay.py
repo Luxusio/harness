@@ -14,6 +14,7 @@ Covered today:
   6. mcp_bash_guard.py — emits JSON permissionDecision=deny on `sed -i` into workflow-control-surface.
   7. harness_server.task_close — blocks when any CHECKS.yaml AC is non-terminal.
   8. harness_server.task_close — blocks when touched path is newer than CRITIC__runtime.md.
+  9. prompt_memory.py — emits [harness-context] with task/verdict/stale/ACs/notes for an active task.
 
 Invoke:
   python3 plugin/scripts/golden_replay.py           # all tests
@@ -393,6 +394,77 @@ def test_task_close_blocks_on_stale_verdict() -> TestResult:
     return TestResult("task_close_blocks_on_stale_verdict", True)
 
 
+def test_prompt_memory_emits_context_block() -> TestResult:
+    """prompt_memory.py emits [harness-context] with task / verdict / stale / ACs / notes."""
+    import os as _os
+    import time as _time
+    prompt = _os.path.join(SCRIPTS, "prompt_memory.py")
+    with tempfile.TemporaryDirectory() as tmp:
+        base = tmp
+        _os.makedirs(_os.path.join(base, ".git"))
+        tasks = _os.path.join(base, "doc", "harness", "tasks")
+        _os.makedirs(tasks)
+        task_dir = _os.path.join(tasks, "TASK__gr-pr3")
+        _os.makedirs(task_dir)
+        with open(_os.path.join(task_dir, "PLAN.md"), "w") as f:
+            f.write("# plan\n")
+        with open(_os.path.join(task_dir, "TASK_STATE.yaml"), "w") as f:
+            f.write(
+                "task_id: TASK__gr-pr3\nstatus: implementing\n"
+                "runtime_verdict: PASS\n"
+                "touched_paths:\n  - src/foo.py\n"
+                "plan_session_state: closed\nclosed_at: null\n"
+                "updated: 2026-04-19T00:00:00Z\n"
+            )
+        with open(_os.path.join(task_dir, "CRITIC__runtime.md"), "w") as f:
+            f.write("# critic\n")
+        with open(_os.path.join(task_dir, "CHECKS.yaml"), "w") as f:
+            f.write(
+                '- id: AC-001\n  title: "first open"\n  status: open\n  kind: functional\n'
+                '- id: AC-002\n  title: "second failed"\n  status: failed\n  kind: functional\n'
+                '- id: AC-003\n  title: "done"\n  status: passed\n  kind: functional\n'
+            )
+        # Make CRITIC ancient so the touched path looks stale
+        _os.utime(_os.path.join(task_dir, "CRITIC__runtime.md"), (100, 100))
+        _os.makedirs(_os.path.join(base, "src"))
+        src = _os.path.join(base, "src", "foo.py")
+        with open(src, "w") as f:
+            f.write("pass\n")
+        now = _time.time()
+        _os.utime(src, (now, now))
+        # Suspect note
+        _os.makedirs(_os.path.join(base, "doc", "common"))
+        with open(_os.path.join(base, "doc", "common", "sus.md"), "w") as f:
+            f.write("---\nfreshness: suspect\n---\nbody\n")
+        with open(_os.path.join(tasks, ".active"), "w") as f:
+            f.write(task_dir)
+
+        env = _os.environ.copy()
+        env["CLAUDE_PLUGIN_ROOT"] = _os.path.join(ROOT, "plugin")
+        r = subprocess.run(
+            ["python3", prompt],
+            input="",
+            capture_output=True, text=True, cwd=base, env=env, timeout=5,
+        )
+    if r.returncode != 0:
+        return TestResult("prompt_memory_context_block", False,
+                          f"exit {r.returncode}: {r.stderr[:200]}")
+    out = r.stdout
+    for needle in ("[harness-context]", "task=TASK__gr-pr3",
+                   "verdict=PASS stale", "AC-001:", "AC-002:",
+                   "doc/common/sus.md"):
+        if needle not in out:
+            return TestResult("prompt_memory_context_block", False,
+                              f"missing {needle!r} in stdout: {out!r}")
+    if "AC-003:" in out:
+        return TestResult("prompt_memory_context_block", False,
+                          f"terminal AC should be hidden: {out!r}")
+    if len(out) > 400:
+        return TestResult("prompt_memory_context_block", False,
+                          f"output exceeded 400 chars: {len(out)}")
+    return TestResult("prompt_memory_context_block", True)
+
+
 TESTS = [
     test_contract_lint_template,
     test_update_checks_lifecycle,
@@ -403,6 +475,7 @@ TESTS = [
     test_bash_guard_deny_on_sed_into_workflow_control,
     test_task_close_blocks_on_failed_ac,
     test_task_close_blocks_on_stale_verdict,
+    test_prompt_memory_emits_context_block,
 ]
 
 
