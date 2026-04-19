@@ -10,6 +10,8 @@ Covered today:
   2. update_checks.py — AC lifecycle transitions are deterministic.
   3. note_freshness.py — current → suspect flip on path match.
   4. contract_lint.py --check-weight — flags over-budget SKILL.md files.
+  5. prewrite_gate.py — emits JSON permissionDecision=deny on protected artifact.
+  6. mcp_bash_guard.py — emits JSON permissionDecision=deny on `sed -i` into workflow-control-surface.
 
 Invoke:
   python3 plugin/scripts/golden_replay.py           # all tests
@@ -186,12 +188,109 @@ def test_check_weight_flags_oversized() -> TestResult:
     return TestResult("check_weight_flags_oversized", True)
 
 
+def _repo_root() -> str:
+    # ROOT in this file is plugin/ (golden_replay sits in plugin/scripts/).
+    # Walk up one more level for the real git repo root.
+    return os.path.dirname(ROOT)
+
+
+def _invoke_hook(script_path: str, payload: dict) -> subprocess.CompletedProcess:
+    import json
+    repo = _repo_root()
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_ROOT"] = ROOT  # ROOT is plugin/
+    return subprocess.run(
+        ["python3", script_path],
+        input=json.dumps(payload),
+        capture_output=True, text=True, cwd=repo, env=env, timeout=5,
+    )
+
+
+def _parse_decision(stdout: str):
+    import json
+    if not stdout.strip():
+        return None, None
+    try:
+        data = json.loads(stdout)
+        hso = data.get("hookSpecificOutput") or {}
+        return hso.get("permissionDecision"), hso.get("permissionDecisionReason")
+    except Exception:
+        return None, None
+
+
+def test_prewrite_json_deny_on_protected_artifact() -> TestResult:
+    """prewrite_gate emits JSON deny (not exit 2) on protected artifact write."""
+    import shutil
+    gate = os.path.join(SCRIPTS, "prewrite_gate.py")
+    tasks_root = os.path.join(_repo_root(), "doc", "harness", "tasks")
+    scratch = os.path.join(tasks_root, "TASK__golden-replay-prewrite")
+    active = os.path.join(tasks_root, ".active")
+    prev_active = None
+    if os.path.isfile(active):
+        with open(active) as f:
+            prev_active = f.read()
+    os.makedirs(scratch, exist_ok=True)
+    try:
+        with open(os.path.join(scratch, "PLAN.md"), "w") as f:
+            f.write("# plan\n")
+        with open(active, "w") as f:
+            f.write(scratch)
+        plan = os.path.join(scratch, "PLAN.md")
+        r = _invoke_hook(gate, {"tool_name": "Write", "tool_input": {"file_path": plan}})
+        if r.returncode != 0:
+            return TestResult("prewrite_json_deny", False,
+                              f"expected exit 0 (|| true compatibility), got {r.returncode}")
+        decision, reason = _parse_decision(r.stdout)
+        if decision != "deny":
+            return TestResult("prewrite_json_deny", False,
+                              f"decision={decision!r} (expected deny); stdout={r.stdout[:200]!r}")
+        if reason is None or "C-05-protected-artifact" not in reason:
+            return TestResult("prewrite_json_deny", False,
+                              f"reason missing rule id; reason={reason!r}")
+        if "HARNESS_SKIP_PREWRITE" not in reason:
+            return TestResult("prewrite_json_deny", False,
+                              "reason missing escape hint")
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+        if prev_active is not None:
+            with open(active, "w") as f:
+                f.write(prev_active)
+        else:
+            try:
+                os.unlink(active)
+            except OSError:
+                pass
+    return TestResult("prewrite_json_deny", True)
+
+
+def test_bash_guard_deny_on_sed_into_workflow_control() -> TestResult:
+    """mcp_bash_guard emits JSON deny on `sed -i` targeting a workflow-control-surface file."""
+    guard = os.path.join(SCRIPTS, "mcp_bash_guard.py")
+    cmd = "sed -i 's/a/b/' plugin/hooks/hooks.json"
+    r = _invoke_hook(guard, {"tool_name": "Bash", "tool_input": {"command": cmd}})
+    if r.returncode != 0:
+        return TestResult("bash_guard_deny", False,
+                          f"expected exit 0, got {r.returncode}")
+    decision, reason = _parse_decision(r.stdout)
+    if decision != "deny":
+        return TestResult("bash_guard_deny", False,
+                          f"decision={decision!r}; stdout={r.stdout[:200]!r}")
+    if reason is None or "rule=workflow-control-surface" not in reason:
+        return TestResult("bash_guard_deny", False,
+                          f"reason missing rule=workflow-control-surface; reason={reason!r}")
+    if "HARNESS_SKIP_MCP_GUARD" not in reason:
+        return TestResult("bash_guard_deny", False, "reason missing escape hint")
+    return TestResult("bash_guard_deny", True)
+
+
 TESTS = [
     test_contract_lint_template,
     test_update_checks_lifecycle,
     test_update_checks_reopen,
     test_note_freshness_flip,
     test_check_weight_flags_oversized,
+    test_prewrite_json_deny_on_protected_artifact,
+    test_bash_guard_deny_on_sed_into_workflow_control,
 ]
 
 
