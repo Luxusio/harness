@@ -23,8 +23,11 @@ TESTS_DIR = REPO_ROOT / "tests"
 sys.path.insert(0, str(SCRIPT_DIR))
 os.environ["HARNESS_SKIP_STDIN"] = "1"
 
-# Allowed top-level module names (stdlib only).
+# Allowed top-level module names (stdlib + pytest conftest convention).
+# `conftest` is pytest's per-directory fixture module; shared test helpers live
+# there and top-level imports across tests/ are idiomatic.
 STDLIB_MODULES = {
+    "conftest",
     "os", "sys", "re", "json", "ast", "tempfile", "textwrap",
     "unittest", "pathlib", "subprocess", "io", "hashlib", "datetime",
     "collections", "itertools", "functools", "contextlib", "shutil",

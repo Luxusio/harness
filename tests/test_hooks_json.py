@@ -1,0 +1,59 @@
+"""AC-004: plugin/hooks/hooks.json registers both gates with `|| true` preserved.
+"""
+from __future__ import annotations
+
+import json
+import os
+import unittest
+
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HOOKS = os.path.join(REPO_ROOT, "plugin", "hooks", "hooks.json")
+
+
+class TestHooksJson(unittest.TestCase):
+    def setUp(self):
+        with open(HOOKS, encoding="utf-8") as f:
+            self.data = json.load(f)
+
+    def test_pretooluse_has_both_gates(self):
+        entries = self.data["hooks"]["PreToolUse"]
+        commands = []
+        for entry in entries:
+            for h in entry.get("hooks", []):
+                commands.append((entry.get("matcher"), h["command"]))
+        prewrite = [c for m, c in commands if "prewrite_gate.py" in c]
+        bash_guard = [c for m, c in commands if "mcp_bash_guard.py" in c]
+        self.assertEqual(len(prewrite), 1, f"expected one prewrite hook, got {prewrite}")
+        self.assertEqual(len(bash_guard), 1, f"expected one bash_guard hook, got {bash_guard}")
+
+    def test_bash_guard_matcher_is_bash(self):
+        entries = self.data["hooks"]["PreToolUse"]
+        bash_entries = [e for e in entries
+                        if any("mcp_bash_guard.py" in h["command"] for h in e.get("hooks", []))]
+        self.assertEqual(len(bash_entries), 1)
+        self.assertEqual(bash_entries[0].get("matcher"), "Bash")
+
+    def test_both_gate_commands_have_fail_safe(self):
+        """C-12: every hook must end with `|| true` (fail-safe)."""
+        entries = self.data["hooks"]["PreToolUse"]
+        for entry in entries:
+            for h in entry.get("hooks", []):
+                cmd = h["command"]
+                # Only gate scripts (prewrite, bash_guard) need fail-safe.
+                if "prewrite_gate.py" in cmd or "mcp_bash_guard.py" in cmd:
+                    self.assertTrue(cmd.rstrip().endswith("|| true"),
+                                    f"missing `|| true`: {cmd!r}")
+
+    def test_timeouts_are_bounded(self):
+        """C-12 convention: every hook timeout ≤ 10s."""
+        for event, entries in self.data["hooks"].items():
+            for entry in entries:
+                for h in entry.get("hooks", []):
+                    timeout = h.get("timeout", 5)
+                    self.assertLessEqual(timeout, 10,
+                                         f"{event} timeout > 10s: {h}")
+
+
+if __name__ == "__main__":
+    unittest.main()
