@@ -172,6 +172,8 @@ The post-close self-improvement pass (`/harness:run`) auto-promotes keys with 2+
 | PreToolUse | `prewrite_gate.py` | Artifact ownership + plan-first rule |
 | PreToolUse (Bash) | `mcp_bash_guard.py` | Block Bash-layer mutations of source / protected / workflow-control paths |
 | UserPromptSubmit | `prompt_memory.py` | Inject `[harness-context]` block on each prompt (active task + verdict + open ACs + suspect notes) |
+| PostToolUse (Bash) | `tool_routing.py` | Emit `[harness-hint]` on known failures (wrong test command, missing script) |
+| (task_start) | `environment_snapshot.py` | One-shot probe invoked from `task_start`; writes `ENVIRONMENT_SNAPSHOT.md` into the task dir |
 
 All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook degrades gracefully; it never blocks the session. Gates signal decisions via stdout JSON (`hookSpecificOutput.permissionDecision`), so blocking survives the `|| true` wrapper while a script crash still exits 0.
 

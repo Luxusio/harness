@@ -224,6 +224,37 @@ class TestPromptMemory(unittest.TestCase):
             r = _invoke(str(base))
         self.assertLessEqual(len(r.stdout), 400, f"{len(r.stdout)} > 400: {r.stdout!r}")
 
+    # ---- Reopened AC warning (PR4 extension) ----
+    def test_reopened_ac_warning_rendered(self):
+        checks = (
+            '- id: AC-001\n  title: "still open"\n  status: open\n  kind: functional\n'
+            '  reopen_count: 2\n'
+            '- id: AC-002\n  title: "second"\n  status: failed\n  kind: functional\n'
+            '  reopen_count: 1\n'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(
+                Path(tmp), active_task_id="TASK__reopen",
+                checks_yaml=checks,
+            )
+            r = _invoke(str(base))
+        self.assertIn("open=", r.stdout)
+        self.assertIn("⚠reopened=3", r.stdout)
+
+    def test_no_reopen_warning_when_counts_zero(self):
+        checks = (
+            '- id: AC-001\n  title: "clean"\n  status: open\n  kind: functional\n'
+            '  reopen_count: 0\n'
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(
+                Path(tmp), active_task_id="TASK__noreopen",
+                checks_yaml=checks,
+            )
+            r = _invoke(str(base))
+        self.assertIn("open=", r.stdout)
+        self.assertNotIn("reopened=", r.stdout)
+
     # ---- Perf sanity: hook stays fast even with deep doc tree ----
     def test_hook_completes_quickly(self):
         with tempfile.TemporaryDirectory() as tmp:
