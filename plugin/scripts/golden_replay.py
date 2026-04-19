@@ -6,15 +6,17 @@ scripts and compares outputs against expected snapshots. Exit 0 on
 all-pass, 1 on any regression.
 
 Covered today:
-  1. contract_lint.py — the shipped template must lint clean.
-  2. update_checks.py — AC lifecycle transitions are deterministic.
-  3. note_freshness.py — current → suspect flip on path match.
-  4. contract_lint.py --check-weight — flags over-budget SKILL.md files.
-  5. prewrite_gate.py — emits JSON permissionDecision=deny on protected artifact.
-  6. mcp_bash_guard.py — emits JSON permissionDecision=deny on `sed -i` into workflow-control-surface.
-  7. harness_server.task_close — blocks when any CHECKS.yaml AC is non-terminal.
-  8. harness_server.task_close — blocks when touched path is newer than CRITIC__runtime.md.
-  9. prompt_memory.py — emits [harness-context] with task/verdict/stale/ACs/notes for an active task.
+   1. contract_lint.py — the shipped template must lint clean.
+   2. update_checks.py — AC lifecycle transitions are deterministic.
+   3. note_freshness.py — current → suspect flip on path match.
+   4. contract_lint.py --check-weight — flags over-budget SKILL.md files.
+   5. prewrite_gate.py — emits JSON permissionDecision=deny on protected artifact.
+   6. mcp_bash_guard.py — emits JSON permissionDecision=deny on `sed -i` into workflow-control-surface.
+   7. harness_server.task_close — blocks when any CHECKS.yaml AC is non-terminal.
+   8. harness_server.task_close — blocks when touched path is newer than CRITIC__runtime.md.
+   9. prompt_memory.py — emits [harness-context] with task/verdict/stale/ACs/notes for an active task.
+  10. environment_snapshot.snapshot — writes ENVIRONMENT_SNAPSHOT.md with required sections.
+  11. tool_routing.py — emits [harness-hint] on `command not found: pytest`.
 
 Invoke:
   python3 plugin/scripts/golden_replay.py           # all tests
@@ -465,6 +467,71 @@ def test_prompt_memory_emits_context_block() -> TestResult:
     return TestResult("prompt_memory_context_block", True)
 
 
+def test_environment_snapshot_writes_block() -> TestResult:
+    """environment_snapshot.snapshot writes an ENVIRONMENT_SNAPSHOT.md with required sections."""
+    import importlib.util as _iu
+    import os as _os
+    spec = _iu.spec_from_file_location(
+        "environment_snapshot",
+        _os.path.join(SCRIPTS, "environment_snapshot.py"),
+    )
+    mod = _iu.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    with tempfile.TemporaryDirectory() as tmp:
+        _os.makedirs(_os.path.join(tmp, ".git"))
+        _os.makedirs(_os.path.join(tmp, "doc", "harness"))
+        with open(_os.path.join(tmp, "doc", "harness", "manifest.yaml"), "w") as f:
+            f.write(
+                'test_command: "python3 -m pytest"\n'
+                'project_meta:\n  shape: library\n'
+                'tooling:\n  ast_grep_ready: true\n  lsp_ready: false\n'
+            )
+        task_dir = _os.path.join(tmp, "task")
+        _os.makedirs(task_dir)
+        path = mod.snapshot(task_dir, tmp)
+        if not path:
+            return TestResult("environment_snapshot_writes_block", False, "snapshot returned empty path")
+        body = open(path).read()
+        for needle in ("## Repo", "## Manifest", "## Tooling", "## Root entries",
+                       "python3 -m pytest", "ast_grep_ready: true"):
+            if needle not in body:
+                return TestResult("environment_snapshot_writes_block", False,
+                                  f"missing {needle!r}: body={body[:200]!r}")
+    return TestResult("environment_snapshot_writes_block", True)
+
+
+def test_tool_routing_suggests_test_command() -> TestResult:
+    """tool_routing.py emits [harness-hint] citing manifest test_command on pytest-not-found."""
+    import json as _json
+    import os as _os
+    routing = _os.path.join(SCRIPTS, "tool_routing.py")
+    with tempfile.TemporaryDirectory() as tmp:
+        _os.makedirs(_os.path.join(tmp, ".git"))
+        _os.makedirs(_os.path.join(tmp, "doc", "harness"))
+        with open(_os.path.join(tmp, "doc", "harness", "manifest.yaml"), "w") as f:
+            f.write('test_command: "python3 -m pytest"\n')
+        payload = {
+            "tool_name": "Bash",
+            "tool_response": {"stderr": "bash: pytest: command not found"},
+        }
+        env = _os.environ.copy()
+        env["CLAUDE_PLUGIN_ROOT"] = _os.path.join(ROOT, "plugin")
+        r = subprocess.run(
+            ["python3", routing], input=_json.dumps(payload),
+            capture_output=True, text=True, cwd=tmp, env=env, timeout=5,
+        )
+    if r.returncode != 0:
+        return TestResult("tool_routing_suggests_test_command", False,
+                          f"exit={r.returncode} stderr={r.stderr[:200]}")
+    if "[harness-hint]" not in r.stdout:
+        return TestResult("tool_routing_suggests_test_command", False,
+                          f"hint prefix missing: {r.stdout!r}")
+    if "python3 -m pytest" not in r.stdout:
+        return TestResult("tool_routing_suggests_test_command", False,
+                          f"test_command not cited: {r.stdout!r}")
+    return TestResult("tool_routing_suggests_test_command", True)
+
+
 TESTS = [
     test_contract_lint_template,
     test_update_checks_lifecycle,
@@ -476,6 +543,8 @@ TESTS = [
     test_task_close_blocks_on_failed_ac,
     test_task_close_blocks_on_stale_verdict,
     test_prompt_memory_emits_context_block,
+    test_environment_snapshot_writes_block,
+    test_tool_routing_suggests_test_command,
 ]
 
 
