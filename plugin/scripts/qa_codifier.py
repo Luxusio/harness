@@ -140,6 +140,24 @@ def _parse_codifiable_yaml(text: str) -> list[dict]:
             continue
         if current is None:
             continue
+        # ac_id field: scalar or inline list
+        m_ac = re.match(r"^\s+ac_id:\s*(.*)$", ln)
+        if m_ac:
+            raw = m_ac.group(1).strip()
+            if raw.startswith("[") and raw.endswith("]"):
+                # Inline list: [AC-001, AC-002]
+                inner = raw[1:-1].strip()
+                if inner:
+                    items = [x.strip().strip('"').strip("'").upper()
+                             for x in inner.split(",")]
+                    current["ac_id"] = [x for x in items if x]
+                else:
+                    current["ac_id"] = None
+            elif raw:
+                current["ac_id"] = raw.strip('"').strip("'").upper()
+            else:
+                current["ac_id"] = None
+            continue
         # Field lines
         for field in ("command", "expected_exit"):
             m2 = re.match(rf"^\s+{re.escape(field)}:\s*(.+)$", ln)
@@ -268,10 +286,40 @@ def _unique_behavior_name(target_dir: str, behavior: str, ext: str) -> str:
     return f"{behavior}_{suffix}"
 
 
-def codify(task_dir: str, transcript_path: str | None = None) -> int:
+# AC-004 trivial-command filter regexes (compiled once at module load)
+# Pattern 1: bare echo with no pipe/ampersand/semicolon/subshell chars after first space.
+#   Rejects: "echo hello"
+#   Accepts: "echo hello | grep x", "echo $(date)", "echo `date`"
+# Note: pattern 2 rejects "myapp --version > /dev/null" as an accepted cost (documented in HANDOFF).
+_RE_TRIVIAL_ECHO = re.compile(r"^echo\s+[^|&;$`()]*$")
+_RE_TRIVIAL_VERSION = re.compile(r"^[\w/.-]+\s*--version\s*$")
+_RE_TRIVIAL_TRUE = re.compile(r"^(true|:)\s*$")
+
+
+def _is_trivial_command(cmd: str) -> bool:
+    """Return True if cmd is a trivial no-product-contact command.
+
+    Trivial patterns (each compiled as a module-level regex):
+    - Bare echo with no pipes, ampersands, semicolons, or subshells: rejects "echo hello"
+    - Bare --version flag with no chaining: rejects "python3 --version"
+    - Bare true or : shell no-ops
+    """
+    cmd = cmd.strip()
+    return bool(
+        _RE_TRIVIAL_ECHO.match(cmd)
+        or _RE_TRIVIAL_VERSION.match(cmd)
+        or _RE_TRIVIAL_TRUE.match(cmd)
+    )
+
+
+# AC-003 ac_id validation regex
+_RE_VALID_AC_ID = re.compile(r"^AC-\d+$")
+
+
+def codify(task_dir: str, transcript_path: str | None = None, target_root: str | None = None) -> int:
     """Main codification pipeline. Always returns 0."""
     try:
-        repo_root = find_repo_root()
+        repo_root = target_root if target_root is not None else find_repo_root()
         task_id = os.path.basename(os.path.normpath(task_dir))
 
         # Read transcript
@@ -291,7 +339,7 @@ def codify(task_dir: str, transcript_path: str | None = None) -> int:
                  "no codifiable blocks found in transcript", task_id)
             return 0
 
-        # Infer test format
+        # Infer test format (uses the resolved repo_root, not a second find_repo_root())
         manifest_path = os.path.join(repo_root, "doc", "harness", "manifest.yaml")
         fmt = _infer_test_format(manifest_path)
         ext = "py" if fmt == "pytest" else ("js" if fmt == "js" else "sh")
@@ -315,16 +363,42 @@ def codify(task_dir: str, transcript_path: str | None = None) -> int:
             expected_stdout = block.get("expected_stdout_contains", [])
             expected_stderr = block.get("expected_stderr_contains", [])
 
+            # AC-003: validate ac_id — skip + log on missing or malformed
+            ac_id = block.get("ac_id")
+            if ac_id is None:
+                _log(repo_root, "codifier-rejected", "missing-ac_id", behavior, task_id)
+                continue
+            # Validate scalar or list
+            if isinstance(ac_id, list):
+                valid = all(_RE_VALID_AC_ID.match(str(x)) for x in ac_id)
+                first_ac = ac_id[0] if ac_id else None
+            else:
+                valid = bool(_RE_VALID_AC_ID.match(str(ac_id)))
+                first_ac = ac_id
+            if not valid or first_ac is None:
+                _log(repo_root, "codifier-rejected", "invalid-ac_id", behavior, task_id)
+                continue
+            # Build filename prefix: ac_001__ from first ac_id
+            ac_num = re.search(r"\d+", str(first_ac))
+            ac_prefix = f"ac_{int(ac_num.group()):03d}__" if ac_num else "ac_000__"
+            prefixed_behavior = ac_prefix + behavior
+
+            # AC-004: reject trivial commands — skip + log
+            if _is_trivial_command(command):
+                _log(repo_root, "codifier-rejected", "trivial-command",
+                     f"{behavior}::{command}", task_id)
+                continue
+
             # Render
             if fmt == "pytest":
-                code = _render_pytest(behavior, command, expected_exit, expected_stdout, expected_stderr)
+                code = _render_pytest(prefixed_behavior, command, expected_exit, expected_stdout, expected_stderr)
             elif fmt == "js":
-                code = _render_js(behavior, command, expected_exit, expected_stdout, expected_stderr)
+                code = _render_js(prefixed_behavior, command, expected_exit, expected_stdout, expected_stderr)
             else:
-                code = _render_shell(behavior, command, expected_exit, expected_stdout, expected_stderr)
+                code = _render_shell(prefixed_behavior, command, expected_exit, expected_stdout, expected_stderr)
 
             # Stage
-            stage_path = os.path.join(staging_dir, f"{behavior}.{ext}")
+            stage_path = os.path.join(staging_dir, f"{prefixed_behavior}.{ext}")
             with open(stage_path, "w", encoding="utf-8") as f:
                 f.write(code)
 
@@ -339,13 +413,13 @@ def codify(task_dir: str, transcript_path: str | None = None) -> int:
 
             if not ok:
                 _log(repo_root, "codifier-fail", "codifier-fail",
-                     f"compile-check failed for {behavior} in {task_id}, left in staging",
+                     f"compile-check failed for {prefixed_behavior} in {task_id}, left in staging",
                      task_id)
                 continue
 
             # Move to target
             os.makedirs(target_dir, exist_ok=True)
-            final_behavior = _unique_behavior_name(target_dir, behavior, ext)
+            final_behavior = _unique_behavior_name(target_dir, prefixed_behavior, ext)
             target_path = os.path.join(target_dir, f"{final_behavior}.{ext}")
             shutil.move(stage_path, target_path)
             moved += 1
