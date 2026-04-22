@@ -220,6 +220,12 @@ _HARNESS_IGNORES=(
   "doc/harness/.interview-answers.json"
   "doc/harness/retros/"
   "doc/harness/quality-trend.jsonl"
+  "doc/harness/hygiene.yaml"
+  "doc/harness/.maintain-last-run"
+  "doc/harness/.maintain-observe.log"
+  "doc/harness/.maintain-pending.json"
+  "doc/harness/.hygiene.lock"
+  "doc/harness/.hygiene-session-count"
 )
 
 _NEEDS_HEADER=true
