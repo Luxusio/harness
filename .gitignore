@@ -1,6 +1,7 @@
 .omc
 .claude/settings.local.json
 .claude/harness/
+.claude/scheduled_tasks.lock
 __pycache__
 .DS_Store
 *.pyc
@@ -25,3 +26,11 @@ doc/harness/visual-baselines/
 doc/harness/retros/
 doc/harness/quality-trend.jsonl
 doc/harness/.interview-answers.json
+
+# auto-hygiene runtime state (per-user; template at plugin/skills/setup/templates/hygiene.yaml)
+doc/harness/hygiene.yaml
+doc/harness/.maintain-last-run
+doc/harness/.maintain-observe.log
+doc/harness/.maintain-pending.json
+doc/harness/.hygiene.lock
+doc/harness/.hygiene-session-count
