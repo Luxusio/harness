@@ -66,7 +66,7 @@ def _split_blocks(text: str) -> list[str]:
     blocks: list[list[str]] = [[]]
     in_ac = False
     for ln in lines:
-        if re.match(r"^-\s+id:\s*", ln):
+        if re.match(r"^\s*-\s+id:\s*", ln):
             blocks.append([ln])
             in_ac = True
         elif in_ac:
@@ -77,7 +77,7 @@ def _split_blocks(text: str) -> list[str]:
 
 
 def _ac_id(block: str) -> str | None:
-    m = re.match(r"^-\s+id:\s*(\S+)", block)
+    m = re.match(r"^\s*-\s+id:\s*(\S+)", block)
     return m.group(1).strip().strip('"').strip("'") if m else None
 
 

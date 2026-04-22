@@ -13,6 +13,9 @@ Signalling contract:
     a broken ``_lib`` cannot freeze the session.
 
 Escape hatch: ``HARNESS_SKIP_PREWRITE=1`` → one-shot allow + log ``gate-bypass``.
+Dormant-repo fail-open: if no .active pointer exists AND tasks_dir has no
+  open (non-closed/stale/archived) task, the gate returns 0 silently.
+  Users who have harness residue but aren't mid-flow are not blocked.
 """
 from __future__ import annotations
 
@@ -329,6 +332,36 @@ def _handle_scope_lock(file_path, active_dir, repo_root, task_id):
     return False, ""
 
 
+# ── Dormant-repo helper ────────────────────────────────────────────────────
+
+
+def _has_open_tasks(tasks_dir: str) -> bool:
+    """Return True if tasks_dir contains any TASK__* whose status is not
+    closed/stale/archived. Missing or unreadable status is treated as open
+    (conservative: err toward deny rather than silent allow)."""
+    if not os.path.isdir(tasks_dir):
+        return False
+    for entry in os.listdir(tasks_dir):
+        if not entry.startswith("TASK__"):
+            continue
+        state_file = os.path.join(tasks_dir, entry, "TASK_STATE.yaml")
+        if not os.path.isfile(state_file):
+            return True  # malformed task dir — treat as open (conservative)
+        try:
+            # minimal line-scan for status: avoid full YAML parse to stay stdlib-light
+            status = ""
+            with open(state_file) as f:
+                for line in f:
+                    if line.startswith("status:"):
+                        status = line.split(":", 1)[1].strip()
+                        break
+            if status not in ("closed", "stale", "archived"):
+                return True
+        except Exception:
+            return True  # read error — conservative
+    return False
+
+
 # ── Main ───────────────────────────────────────────────────────────────────
 
 
@@ -408,6 +441,10 @@ def main():
     # Source files require an active task with PLAN.md.
     active_file = os.path.join(tasks_dir, ".active")
     if not os.path.isfile(active_file):
+        # Dormant-repo guard: if no open tasks exist, the repo isn't mid-flow
+        # (only harness residue) — fail-open rather than deny every source edit.
+        if not _has_open_tasks(tasks_dir):
+            return 0
         human = (
             "No active task. Source writes require the canonical loop. "
             "Run Skill(harness:run) or Skill(harness:plan) first."
