@@ -209,19 +209,61 @@ Rules for write-back:
 
 For every AC whose verification can be reduced to a deterministic command with
 a known expected_exit and a stdout/stderr substring check, emit a `codifiable:`
-YAML block in the transcript. Format:
+YAML block in the transcript.
+
+**Required fields:** `behavior`, `ac_id`, `command`, `expected_exit`,
+`expected_stdout_contains`, `expected_stderr_contains`.
+
+`ac_id` is mandatory. Blocks without a valid `ac_id` are rejected by the
+codifier with a `codifier-rejected / missing-ac_id` log entry.
+
+### Good example (product-binding command with stable stdout substring)
 
 ```yaml
 codifiable:
-  - behavior: short_snake_case_name
-    command: "exact bash command"
+  - behavior: update_checks_help_exits_zero
+    ac_id: AC-001
+    command: "python3 plugin/scripts/update_checks.py --help"
     expected_exit: 0
-    expected_stdout_contains: ["substring1"]
+    expected_stdout_contains: ["usage"]
     expected_stderr_contains: []
 ```
 
+Why this works: invokes a real harness script, asserts a stable stdout
+substring drawn from actual `--help` output, traces to a specific AC.
+
+### Bad examples — do NOT emit these
+
+```yaml
+# BAD: echo hello — trivial, exercises no product code
+codifiable:
+  - behavior: echo_check
+    ac_id: AC-001
+    command: "echo hello"
+    expected_exit: 0
+    expected_stdout_contains: ["hello"]
+    expected_stderr_contains: []
+```
+
+Why this fails: `echo hello` is a trivial command with no product contact.
+The codifier rejects it (`codifier-rejected / trivial-command`).
+
+```yaml
+# BAD: python3 --version — trivial, only checks interpreter presence
+codifiable:
+  - behavior: python_version
+    ac_id: AC-001
+    command: "python3 --version"
+    expected_exit: 0
+    expected_stdout_contains: []
+    expected_stderr_contains: []
+```
+
+Why this fails: `python3 --version` does not exercise any product code path.
+The codifier rejects it (`codifier-rejected / trivial-command`).
+
 Multiple blocks per transcript are allowed. The post-QA codifier
 (`plugin/scripts/qa_codifier.py`) parses these blocks and writes regression
-tests into `tests/regression/<sanitized-task-id>/<behavior>.py`. Non-codifiable
-scenarios (complex prose, manual flows) stay prose — the codifier ignores
-them.
+tests into `tests/regression/<sanitized-task-id>/ac_NNN__<behavior>.py`.
+Non-codifiable scenarios (complex prose, manual flows) stay prose — the
+codifier ignores them.
