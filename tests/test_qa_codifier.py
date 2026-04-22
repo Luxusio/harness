@@ -96,8 +96,8 @@ codifiable:
         self.assertEqual(blocks, [])
 
     def test_fixture_transcript_parsed(self):
-        """Fixture CRITIC__runtime.md should yield codifiable blocks."""
-        fixture = os.path.join(FIXTURES, "CRITIC_runtime_codifiable.md")
+        """Fixture CRITIC__qa.md should yield codifiable blocks."""
+        fixture = os.path.join(FIXTURES, "CRITIC_qa_codifiable.md")
         with open(fixture) as f:
             transcript = f.read()
         blocks = self.module._parse_codifiable_blocks(transcript)
@@ -140,7 +140,7 @@ class TestCodifierPipeline(unittest.TestCase):
         self.module = qa_codifier
 
     def test_no_transcript_exits_0(self):
-        """Missing CRITIC__runtime.md should exit 0 (never blocks)."""
+        """Missing CRITIC__qa.md should exit 0 (never blocks)."""
         with tempfile.TemporaryDirectory() as d:
             result = self.module.codify(d, transcript_path="/nonexistent/transcript.md",
                                         target_root=d)
@@ -149,7 +149,7 @@ class TestCodifierPipeline(unittest.TestCase):
     def test_empty_transcript_exits_0(self):
         """Transcript with no codifiable blocks should exit 0."""
         with tempfile.TemporaryDirectory() as d:
-            transcript = os.path.join(d, "CRITIC__runtime.md")
+            transcript = os.path.join(d, "CRITIC__qa.md")
             with open(transcript, "w") as f:
                 f.write("AC-001: PASS — manual verification only.\n")
             result = self.module.codify(d, transcript_path=transcript, target_root=d)
@@ -157,7 +157,7 @@ class TestCodifierPipeline(unittest.TestCase):
 
     def test_codify_with_fixture_exits_0(self):
         """Fixture with codifiable blocks should exit 0 and produce tests."""
-        fixture = os.path.join(FIXTURES, "CRITIC_runtime_codifiable.md")
+        fixture = os.path.join(FIXTURES, "CRITIC_qa_codifiable.md")
         with tempfile.TemporaryDirectory() as task_dir:
             with tempfile.TemporaryDirectory() as fake_root:
                 manifest_dir = os.path.join(fake_root, "doc", "harness")
@@ -215,7 +215,7 @@ class TestCodifierPipeline(unittest.TestCase):
     def test_codifier_never_crashes_on_garbage(self):
         """Codifier should return 0 even on garbage transcript."""
         with tempfile.TemporaryDirectory() as d:
-            transcript = os.path.join(d, "CRITIC__runtime.md")
+            transcript = os.path.join(d, "CRITIC__qa.md")
             with open(transcript, "w") as f:
                 f.write("codifiable:\n  - behavior: !!garbage yaml\n    command: [not: valid\n")
             result = self.module.codify(d, transcript_path=transcript)
@@ -352,7 +352,7 @@ class TestParseCodifiableYamlAcId(unittest.TestCase):
 
     def test_fixture_transcript_has_ac_id(self):
         """AC-006: updated fixture blocks must expose ac_id field."""
-        fixture = os.path.join(FIXTURES, "CRITIC_runtime_codifiable.md")
+        fixture = os.path.join(FIXTURES, "CRITIC_qa_codifiable.md")
         with open(fixture) as f:
             transcript = f.read()
         blocks = self.module._parse_codifiable_blocks(transcript)
@@ -372,7 +372,7 @@ class TestCodifierAcIdFiltering(unittest.TestCase):
 
     def _run_codify(self, transcript_text, fake_root):
         with tempfile.TemporaryDirectory() as task_dir:
-            transcript = os.path.join(task_dir, "CRITIC__runtime.md")
+            transcript = os.path.join(task_dir, "CRITIC__qa.md")
             with open(transcript, "w") as f:
                 f.write(transcript_text)
             result = self.module.codify(task_dir, transcript_path=transcript,
@@ -526,7 +526,7 @@ class TestTrivialCommandFilter(unittest.TestCase):
         with tempfile.TemporaryDirectory() as fake_root:
             _make_fake_root_with_manifest(fake_root)
             with tempfile.TemporaryDirectory() as task_dir:
-                transcript = os.path.join(task_dir, "CRITIC__runtime.md")
+                transcript = os.path.join(task_dir, "CRITIC__qa.md")
                 with open(transcript, "w") as f:
                     f.write(FIXTURE_TRANSCRIPT_TRIVIAL)
                 self.module.codify(task_dir, transcript_path=transcript,
@@ -543,7 +543,7 @@ class TestTrivialCommandFilter(unittest.TestCase):
         with tempfile.TemporaryDirectory() as fake_root:
             _make_fake_root_with_manifest(fake_root)
             with tempfile.TemporaryDirectory() as task_dir:
-                transcript = os.path.join(task_dir, "CRITIC__runtime.md")
+                transcript = os.path.join(task_dir, "CRITIC__qa.md")
                 with open(transcript, "w") as f:
                     f.write(FIXTURE_TRANSCRIPT_WITH_AC_ID)
                 self.module.codify(task_dir, transcript_path=transcript,
@@ -566,7 +566,7 @@ class TestTrivialCommandFilter(unittest.TestCase):
         with tempfile.TemporaryDirectory() as task_dir:
             with tempfile.TemporaryDirectory() as fake_root:
                 _make_fake_root_with_manifest(fake_root)
-                transcript = os.path.join(task_dir, "CRITIC__runtime.md")
+                transcript = os.path.join(task_dir, "CRITIC__qa.md")
                 with open(transcript, "w") as f:
                     f.write(FIXTURE_TRANSCRIPT_WITH_AC_ID)
                 result = self.module.codify(task_dir, transcript_path=transcript,

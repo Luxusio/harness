@@ -1,0 +1,43 @@
+# doc/harness/hygiene.yaml — auto-hygiene configuration
+#
+# FIELD REFERENCE (every field is optional; defaults shown):
+#
+#   enabled: bool (default: true)
+#     Master on/off switch for the auto-hygiene system.
+#     Set to false to disable all automatic doc scanning and contract drift
+#     application without removing the hook entry from hooks.json.
+#     Example: enabled: false
+#
+#   observer_until_session: int (default: 14)
+#     Number of SessionStart events to run in observer-only mode before
+#     allowing any automatic writes (archive or contract edits).
+#     During observer mode hygiene_scan.py writes intentions to
+#     doc/harness/.maintain-observe.log but performs ZERO git mv or Edits.
+#     Example: observer_until_session: 7
+#
+#   pin_paths: list[glob] (default: [])
+#     List of doc/ paths (relative, no leading /, no .. traversal) that
+#     are always classified as KEEP regardless of content signals.
+#     Supports exact paths and glob patterns (fnmatch style).
+#     Malformed entries are skipped with an INFO log; valid entries
+#     from the same file still apply.
+#     Example:
+#       pin_paths:
+#         - doc/common/CLAUDE.md
+#         - doc/changes/2026-*.md
+#
+# CANONICAL DISABLE PATH:
+#   Set `enabled: false` in this file. This is the documented per-feature
+#   off-switch. Global kill-switches (OMC_SKIP_HOOKS, DISABLE_OMC,
+#   removing the hook entry) also work but are not the preferred path.
+#
+# FRONTMATTER FIELDS (optional, added to individual doc files):
+#   superseded_by: <path>   — this doc is replaced by <path>; if target
+#                             exists AND reference_count == 0, classify REMOVE
+#   distilled_to: <path>    — key content promoted to <path>; if target exists
+#                             AND reference_count == 0, classify REMOVE
+#   Absence of both fields NEVER causes REMOVE classification alone.
+
+enabled: true
+observer_until_session: 14
+pin_paths: []

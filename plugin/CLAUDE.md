@@ -26,7 +26,7 @@ No step skipped. Smallest coherent diff per step.
 - `task_close` — gate: runtime verdict PASS → close
 
 **Artifact writes (subagent-only — coordinator must NOT call):**
-- `write_critic_runtime` → CRITIC__runtime.md + runtime_verdict
+- `write_critic_qa` → CRITIC__qa.md + runtime_verdict
 - `write_handoff` → HANDOFF.md
 - `write_doc_sync` → DOC_SYNC.md
 
@@ -58,7 +58,7 @@ Short approvals only authorize the last explicit transition proposed.
 | PLAN.md | plan-skill |
 | CHECKS.yaml | plan-skill (create) + update_checks.py CLI (develop/qa updates) |
 | source + HANDOFF.md + DOC_SYNC.md + distilled change doc | developer |
-| CRITIC__runtime.md | qa-browser / qa-api / qa-cli |
+| CRITIC__qa.md | qa-browser / qa-api / qa-cli |
 
 Do not write another role's artifact. Prewrite gate enforces this.
 
@@ -150,6 +150,7 @@ All scripts under `plugin/scripts/`. Stdlib only (PIL optional for canary).
 | `inject_checkpoint.py` | SessionStart hook — surface latest checkpoint | reads `doc/harness/checkpoints/` |
 | `promote_learnings.py` | Tier 3→2 promotion + stale pruning | `doc/harness/patterns/<topic>.md` |
 | `retro.py` | Weekly retrospective (git + learnings + health) | `doc/harness/retros/<date>.md` |
+| `hygiene_scan.py` | SessionStart auto-hygiene (contract drift + doc classification) | `doc/harness/.maintain-last-run` + `doc/harness/.hygiene-session-count` |
 
 All activated via manifest optional keys: `health_components`, `benchmark_components`,
 `audit_categories`. Health falls back to `test_command` when no components declared.

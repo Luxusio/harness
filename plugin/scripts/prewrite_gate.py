@@ -52,7 +52,7 @@ PROTECTED_ARTIFACTS = {
     "PLAN.meta.json": "plan-skill",
     "CHECKS.yaml": "plan-skill-or-update_checks",
     "AUDIT_TRAIL.md": "plan-skill",
-    "CRITIC__runtime.md": "qa-cli",
+    "CRITIC__qa.md": "qa-cli",
     "HANDOFF.md": "developer",
     "DOC_SYNC.md": "developer",
 }
@@ -63,7 +63,7 @@ PROTECTED_ARTIFACT_HUMAN = {
     "PLAN.meta.json": "plan-skill",
     "CHECKS.yaml": "plan-skill (initial) + scripts/update_checks.py (updates)",
     "AUDIT_TRAIL.md": "plan-skill",
-    "CRITIC__runtime.md": "qa-browser / qa-api / qa-cli",
+    "CRITIC__qa.md": "qa-browser / qa-api / qa-cli",
     "HANDOFF.md": "developer",
     "DOC_SYNC.md": "developer",
 }

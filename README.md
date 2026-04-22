@@ -148,6 +148,9 @@ All under `plugin/scripts/`. Stdlib only.
 | `golden_replay.py` | Record/replay runtime smoke runs for deterministic regression | `doc/harness/replays/` |
 | `update_checks.py` | Atomic CHECKS.yaml AC status transitions (plan-first) | task-local |
 | `write_plan_artifact.py` | CLI writer for PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md | task-local |
+| `hygiene_scan.py` | SessionStart auto-hygiene: Tier A/B auto-apply + doc archive pass | `doc/harness/.maintain-pending.json` |
+| `doc_hygiene.py` | Content-signal KEEP/REMOVE/REVIEW classifier; archives stale docs via `git mv` | `doc/harness/.maintain-pending.json` |
+| `maintain_restore.py` | Restore an archived file back to original location via `git mv` | — |
 
 Activated via optional manifest keys: `health_components`, `benchmark_components`, `audit_categories`. Health falls back to `test_command` when no components declared.
 

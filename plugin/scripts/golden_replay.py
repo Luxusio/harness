@@ -13,7 +13,7 @@ Covered today:
    5. prewrite_gate.py — emits JSON permissionDecision=deny on protected artifact.
    6. mcp_bash_guard.py — emits JSON permissionDecision=deny on `sed -i` into workflow-control-surface.
    7. harness_server.task_close — blocks when any CHECKS.yaml AC is non-terminal.
-   8. harness_server.task_close — blocks when touched path is newer than CRITIC__runtime.md.
+   8. harness_server.task_close — blocks when touched path is newer than CRITIC__qa.md.
    9. prompt_memory.py — emits [harness-context] with task/verdict/stale/ACs/notes for an active task.
   10. environment_snapshot.snapshot — writes ENVIRONMENT_SNAPSHOT.md with required sections.
   11. tool_routing.py — emits [harness-hint] on `command not found: pytest`.
@@ -318,10 +318,10 @@ def _prepare_scratch_task(tmp: str, task_id: str, *,
         f.write("# plan\n")
     with open(_os.path.join(task_dir, "HANDOFF.md"), "w") as f:
         f.write("# handoff\n")
-    with open(_os.path.join(task_dir, "CRITIC__runtime.md"), "w") as f:
+    with open(_os.path.join(task_dir, "CRITIC__qa.md"), "w") as f:
         f.write("# critic\n")
     if critic_mtime is not None:
-        _os.utime(_os.path.join(task_dir, "CRITIC__runtime.md"),
+        _os.utime(_os.path.join(task_dir, "CRITIC__qa.md"),
                   (critic_mtime, critic_mtime))
     if checks_yaml is not None:
         with open(_os.path.join(task_dir, "CHECKS.yaml"), "w") as f:
@@ -364,7 +364,7 @@ def test_task_close_blocks_on_failed_ac() -> TestResult:
 
 
 def test_task_close_blocks_on_stale_verdict() -> TestResult:
-    """task_close must refuse when touched path is newer than CRITIC__runtime.md."""
+    """task_close must refuse when touched path is newer than CRITIC__qa.md."""
     import os as _os
     hs = _load_mcp_server()
     with tempfile.TemporaryDirectory() as tmp:
@@ -418,7 +418,7 @@ def test_prompt_memory_emits_context_block() -> TestResult:
                 "plan_session_state: closed\nclosed_at: null\n"
                 "updated: 2026-04-19T00:00:00Z\n"
             )
-        with open(_os.path.join(task_dir, "CRITIC__runtime.md"), "w") as f:
+        with open(_os.path.join(task_dir, "CRITIC__qa.md"), "w") as f:
             f.write("# critic\n")
         with open(_os.path.join(task_dir, "CHECKS.yaml"), "w") as f:
             f.write(
@@ -427,7 +427,7 @@ def test_prompt_memory_emits_context_block() -> TestResult:
                 '- id: AC-003\n  title: "done"\n  status: passed\n  kind: functional\n'
             )
         # Make CRITIC ancient so the touched path looks stale
-        _os.utime(_os.path.join(task_dir, "CRITIC__runtime.md"), (100, 100))
+        _os.utime(_os.path.join(task_dir, "CRITIC__qa.md"), (100, 100))
         _os.makedirs(_os.path.join(base, "src"))
         src = _os.path.join(base, "src", "foo.py")
         with open(src, "w") as f:

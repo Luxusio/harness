@@ -3,7 +3,7 @@
 
 No plugin-legacy dependency. All operations are direct file I/O.
 7 MCP tools: task_start, task_context, task_verify, task_close,
-             write_critic_runtime,
+             write_critic_qa,
              write_handoff, write_doc_sync.
 """
 
@@ -95,13 +95,13 @@ def _stale_skip(relpath: str) -> bool:
 def _runtime_is_stale(td: str) -> tuple[bool, str]:
     """Return (stale, offending_path).
 
-    Stale when any file in ``touched_paths`` has ``mtime > mtime(CRITIC__runtime.md)``.
+    Stale when any file in ``touched_paths`` has ``mtime > mtime(CRITIC__qa.md)``.
     Skips Python caches / OS metadata per ``_STALE_CHECK_SKIP_*`` so generated
-    churn doesn't invalidate a legitimate PASS. If ``CRITIC__runtime.md`` is
+    churn doesn't invalidate a legitimate PASS. If ``CRITIC__qa.md`` is
     absent the caller should already be blocked by the ``runtime_verdict PASS``
     gate; return ``(False, "")`` here so we don't double-fire.
     """
-    critic_path = os.path.join(td, "CRITIC__runtime.md")
+    critic_path = os.path.join(td, "CRITIC__qa.md")
     if not os.path.isfile(critic_path):
         return False, ""
     try:
@@ -294,10 +294,10 @@ def handle_task_verify(args: dict) -> dict:
     td = canonical_task_dir(task_id=ti)
     sync_from_git_diff(td)
 
-    # Stale check: if any touched path is newer than CRITIC__runtime.md,
+    # Stale check: if any touched path is newer than CRITIC__qa.md,
     # revert the stored verdict to pending so task_close won't accept a
     # frozen PASS. task_verify is the natural place to clear the bit —
-    # re-running QA re-writes CRITIC__runtime.md with a fresh mtime.
+    # re-running QA re-writes CRITIC__qa.md with a fresh mtime.
     stale, stale_path = _runtime_is_stale(td)
     if stale:
         st = read_state(td)
@@ -312,7 +312,7 @@ def handle_task_verify(args: dict) -> dict:
         "touched_paths": st.get("touched_paths") or [],
         "next_action": ctx.get("next_action", ""),
         "missing_for_close": ctx.get("missing_for_close", []),
-        "report_path": _task_artifact_rel(td, "CRITIC__runtime.md"),
+        "report_path": _task_artifact_rel(td, "CRITIC__qa.md"),
         "stale": stale,
         "stale_path": stale_path,
     })
@@ -330,7 +330,7 @@ def handle_task_close(args: dict) -> dict:
         })
 
     # PR2 runtime-stale gate: refuse close when a touched path is newer
-    # than CRITIC__runtime.md. Caller must re-run task_verify so QA can
+    # than CRITIC__qa.md. Caller must re-run task_verify so QA can
     # re-issue a fresh PASS.
     stale, stale_path = _runtime_is_stale(td)
     if stale:
@@ -408,11 +408,11 @@ def _write_artifact(args: dict, filename: str, verdict_field: str | None = None,
     return _ok(result)
 
 
-def handle_write_critic_runtime(args: dict) -> dict:
+def handle_write_critic_qa(args: dict) -> dict:
     verdict = _req(args, "verdict")
     if verdict not in ("PASS", "FAIL", "BLOCKED_ENV"):
         return _err(f"invalid verdict '{verdict}' — must be PASS, FAIL, or BLOCKED_ENV")
-    return _write_artifact(args, "CRITIC__runtime.md", "runtime_verdict", verdict_value=verdict)
+    return _write_artifact(args, "CRITIC__qa.md", "runtime_verdict", verdict_value=verdict)
 
 
 def handle_write_handoff(args: dict) -> dict:
@@ -451,15 +451,15 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "task_id": {"type": "string"}},
          "required": ["task_id"], "additionalProperties": False},
      "handler": handle_task_close},
-    {"name": "write_critic_runtime", "title": "Write runtime verdict — QA agents only",
-     "description": "Write CRITIC__runtime.md and set runtime_verdict. Called by qa-browser, qa-api, or qa-cli.",
+    {"name": "write_critic_qa", "title": "Write runtime verdict — QA agents only",
+     "description": "Write CRITIC__qa.md and set runtime_verdict. Called by qa-browser, qa-api, or qa-cli.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"},
          "verdict": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED_ENV"]},
          "summary": {"type": "string"}, "transcript": {"type": "string"}},
          "required": ["task_id", "verdict", "summary", "transcript"],
          "additionalProperties": False},
-     "handler": handle_write_critic_runtime},
+     "handler": handle_write_critic_qa},
     {"name": "write_handoff", "title": "Write developer handoff — developer only",
      "description": "Write HANDOFF.md.",
      "inputSchema": {"type": "object", "properties": {

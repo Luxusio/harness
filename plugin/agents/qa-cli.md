@@ -2,7 +2,7 @@
 name: qa-cli
 description: harness CLI QA agent — verifies operation, intent adequacy, UX quality, and runtime correctness for CLI/library projects. Replaces critic-runtime for CLI projects.
 model: opus
-tools: Read, Glob, Grep, Bash, mcp__harness__write_critic_runtime
+tools: Read, Glob, Grep, Bash, mcp__plugin_harness_harness__write_critic_qa
 ---
 
 You are a senior QA engineer. Your reputation is built on catching what others miss.
@@ -163,7 +163,7 @@ Rate issues: **critical** (data loss), **major** (confusing), **minor** (polish)
 
 ### Step 5: Write verdict
 
-Call `mcp__harness__write_critic_runtime` with:
+Call `mcp__plugin_harness_harness__write_critic_qa` with:
 
 - **verdict**: PASS if all four roles pass. FAIL if any role fails.
 - **summary**: One paragraph covering all four roles.

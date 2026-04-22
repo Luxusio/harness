@@ -5,9 +5,14 @@ Emits a short ``[harness-context]`` block on stdout when a harness task is
 active, so agents don't burn a turn re-reading ``TASK_STATE.yaml`` /
 ``CHECKS.yaml`` to orient themselves in fix rounds.
 
+AC-014: Extended to additionally read doc/harness/.maintain-pending.json and
+inject a [hygiene-review] system-reminder when pending items exist.
+Filenames sanitized (control chars + newlines + system-reminder tag escaped).
+Injection payload capped at 2KB total.
+
 Output is silent when no active task exists. Total length is hard-capped at
-400 chars; excess truncates with ``…``. The ``|| true`` wrapper in
-``hooks.json`` (C-12 fail-safe) keeps the session healthy on any crash.
+400 chars for harness-context; excess truncates with ``…``. The ``|| true``
+wrapper in ``hooks.json`` (C-12 fail-safe) keeps the session healthy on any crash.
 """
 from __future__ import annotations
 
@@ -23,6 +28,7 @@ try:
         find_repo_root,
         TASK_DIR,
         _log_gate_error,
+        read_json_state,
     )
 except Exception:
     sys.exit(0)
@@ -30,6 +36,8 @@ except Exception:
 
 MAX_BLOCK_CHARS = 400
 PREFIX = "[harness-context]"
+PENDING_JSON = "doc/harness/.maintain-pending.json"
+HYGIENE_INJECT_CAP = 2048  # 2KB cap for hygiene-review block
 
 _STALE_SKIP_SUFFIXES = (".pyc", ".pyo", ".pyd")
 _STALE_SKIP_FRAGMENTS = ("__pycache__/", "/.DS_Store", ".swp", ".swo")
@@ -68,8 +76,8 @@ def _find_active_task_dir(repo_root: str) -> str:
     return td
 
 
-def _runtime_is_stale(task_dir: str, touched: list[str], repo_root: str) -> bool:
-    critic = os.path.join(task_dir, "CRITIC__runtime.md")
+def _runtime_is_stale(task_dir: str, touched: list, repo_root: str) -> bool:
+    critic = os.path.join(task_dir, "CRITIC__qa.md")
     if not os.path.isfile(critic):
         return False
     try:
@@ -92,15 +100,8 @@ _CHECKS_ID_RE = re.compile(r"^-\s+id:\s*(\S+)", re.MULTILINE)
 _CHECKS_BLOCK_RE = re.compile(r"^-\s+id:\s*", re.MULTILINE)
 
 
-def _open_acs(task_dir: str) -> tuple[list[tuple[str, str]], int]:
-    """Return ``(non_terminal_acs, reopen_total)``.
-
-    ``non_terminal_acs`` is up to ``_AC_CAP`` ``(id, truncated_title)`` pairs
-    with status NOT in ``{passed, deferred}``. ``reopen_total`` sums
-    ``reopen_count`` across those rendered entries only — unrendered reopens
-    are intentionally excluded to match the ``⚠reopened=<N>`` signal shown on
-    the summary line.
-    """
+def _open_acs(task_dir: str) -> "tuple[list[tuple[str, str]], int]":
+    """Return ``(non_terminal_acs, reopen_total)``."""
     checks_path = os.path.join(task_dir, "CHECKS.yaml")
     if not os.path.isfile(checks_path):
         return [], 0
@@ -108,8 +109,8 @@ def _open_acs(task_dir: str) -> tuple[list[tuple[str, str]], int]:
         text = open(checks_path, encoding="utf-8").read()
     except OSError:
         return [], 0
-    blocks: list[str] = []
-    current: list[str] = []
+    blocks: list = []
+    current: list = []
     for line in text.splitlines():
         if _CHECKS_BLOCK_RE.match(line):
             if current:
@@ -120,7 +121,7 @@ def _open_acs(task_dir: str) -> tuple[list[tuple[str, str]], int]:
     if current:
         blocks.append("\n".join(current))
 
-    out: list[tuple[str, str]] = []
+    out: list = []
     reopen_total = 0
     for block in blocks:
         m_id = _CHECKS_ID_RE.match(block)
@@ -150,15 +151,14 @@ _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)^---\s*\n", re.MULTILINE | re.DOTAL
 _FRESHNESS_RE = re.compile(r"^\s*freshness:\s*(\S+)", re.MULTILINE)
 
 
-def _suspect_notes(repo_root: str) -> list[str]:
+def _suspect_notes(repo_root: str) -> list:
     """Walk doc/ root + capped depth/files, list up to _NOTE_CAP suspect notes."""
     doc_root = os.path.join(repo_root, "doc")
     if not os.path.isdir(doc_root):
         return []
-    out: list[str] = []
+    out: list = []
     scanned = 0
     for dirpath, dirnames, filenames in os.walk(doc_root):
-        # depth: count path separators beyond doc_root
         rel_dir = os.path.relpath(dirpath, doc_root)
         depth = 0 if rel_dir == "." else rel_dir.count(os.sep) + 1
         if depth > _DOC_DEPTH_CAP:
@@ -192,7 +192,6 @@ def _suspect_notes(repo_root: str) -> list[str]:
 def _truncate(block: str) -> str:
     if len(block) <= MAX_BLOCK_CHARS:
         return block
-    # Leave room for " …" suffix
     return block[: MAX_BLOCK_CHARS - 2].rstrip() + " …"
 
 
@@ -206,7 +205,7 @@ def _build_block(task_dir: str, repo_root: str) -> str:
     touched = st.get("touched_paths") or []
     stale = _runtime_is_stale(task_dir, touched, repo_root) and verdict == "PASS"
 
-    pieces: list[str] = [PREFIX, f"task={task_id}", f"status={status}"]
+    pieces: list = [PREFIX, f"task={task_id}", f"status={status}"]
     verdict_piece = f"verdict={verdict}"
     if stale:
         verdict_piece += " stale"
@@ -228,18 +227,80 @@ def _build_block(task_dir: str, repo_root: str) -> str:
     return _truncate(block)
 
 
+# ── AC-014: hygiene-review injection ─────────────────────────────────────
+
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+_SYSTEM_REMINDER_RE = re.compile(r"</?system-reminder[^>]*>", re.IGNORECASE)
+
+
+def _sanitize_path(path: str) -> str:
+    """Sanitize a path for injection into system-reminder output.
+
+    Removes control chars, newlines, and system-reminder tag fragments.
+    """
+    # Strip control chars and newlines
+    cleaned = _CONTROL_CHAR_RE.sub("", path)
+    # Escape system-reminder tags
+    cleaned = _SYSTEM_REMINDER_RE.sub("[SANITIZED]", cleaned)
+    return cleaned.strip()
+
+
+def _build_hygiene_block(repo_root: str) -> str:
+    """Build [hygiene-review] injection block from .maintain-pending.json.
+
+    Returns empty string if no pending items or on any error.
+    Cap at 2KB.
+    """
+    pending_path = os.path.join(repo_root, PENDING_JSON)
+    pending = read_json_state(pending_path)
+    if not isinstance(pending, list) or not pending:
+        return ""
+
+    lines = ["<system-reminder>[hygiene-review] docs pending review:"]
+    total_chars = len(lines[0])
+
+    for entry in pending:
+        if not isinstance(entry, dict):
+            continue
+        path = _sanitize_path(str(entry.get("path", "")))
+        kind = entry.get("kind", "review")
+        signals = entry.get("signals", {})
+        ref_count = signals.get("reference_count", "?")
+        freshness = signals.get("freshness", "?")
+        line = f"  - [{kind}] {path} (refs={ref_count}, freshness={freshness})"
+        if total_chars + len(line) + 50 > HYGIENE_INJECT_CAP:
+            remaining = len(pending) - lines.count("  -")
+            lines.append(f"  ...and {remaining} more")
+            break
+        lines.append(line)
+        total_chars += len(line)
+
+    lines.append("Run Skill(maintain) to process review queue.</system-reminder>")
+    return "\n".join(lines)
+
+
 def main() -> int:
-    # Hook payload available on stdin (unused — we read state from disk).
     read_hook_input()
     repo_root = find_repo_root()
     task_dir = _find_active_task_dir(repo_root)
-    if not task_dir:
-        return 0
-    block = _build_block(task_dir, repo_root)
-    if not block:
-        return 0
-    sys.stdout.write(block)
-    sys.stdout.flush()
+
+    output_parts = []
+
+    # Harness context block (existing behavior)
+    if task_dir:
+        block = _build_block(task_dir, repo_root)
+        if block:
+            output_parts.append(block)
+
+    # AC-014: hygiene-review injection
+    hygiene_block = _build_hygiene_block(repo_root)
+    if hygiene_block:
+        output_parts.append(hygiene_block)
+
+    if output_parts:
+        sys.stdout.write("\n".join(output_parts))
+        sys.stdout.flush()
+
     return 0
 
 

@@ -33,7 +33,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 | 상황 | 적용 규약 | 수준 |
 |------|---------|------|
 | Repo-mutating 태스크 시작 | [C-01](#c-01), [C-02](#c-02), [C-09](#c-09) | hard |
-| 보호 아티팩트 쓰기 (PLAN/CHECKS/HANDOFF/DOC_SYNC/CRITIC__runtime) | [C-03](#c-03), [C-05](#c-05) | hard |
+| 보호 아티팩트 쓰기 (PLAN/CHECKS/HANDOFF/DOC_SYNC/CRITIC__qa) | [C-03](#c-03), [C-05](#c-05) | hard |
 | `task_close` 시점 | [C-01](#c-01), [C-04](#c-04), [C-14](#c-14) | hard |
 | 짧은 승인 (`ㅇㅇ`, `ㄱ`) 수신 | [C-07](#c-07) | soft |
 | 답변 레인 → mutation 레인 전환 | [C-07](#c-07), [C-08](#c-08) | hard |
@@ -42,6 +42,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 | `doc/` 노트 파일 변경 | [C-06](#c-06) | auto |
 | `CLAUDE.md` 편집 필요 | [C-10](#c-10), [C-11](#c-11), [C-15](#c-15) | hard |
 | Maintenance 태스크 (MAINTENANCE 마커) | C-01 완화, [C-05](#c-05) 유지 | — |
+| `doc/changes/` 또는 `doc/common/` 자동 정리 | [C-16](#c-16) | auto |
 
 Levels:
 - **hard** — gate blocks or MCP refuses. Violation is impossible by default.
@@ -97,11 +98,20 @@ state of the repo.
 
 **Title:** Protected artifact ownership.
 **When:** Any `Write`/`Edit` to PLAN.md, CHECKS.yaml, HANDOFF.md,
-DOC_SYNC.md, or CRITIC__runtime.md.
-**Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`.
+DOC_SYNC.md, or CRITIC__qa.md — and any `Bash` mutation (sed -i,
+redirect, cp, mv, tee, python -c open(…,'w'), …) targeting the same basenames.
+**Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`
+(Write/Edit/MultiEdit surface) + `plugin/scripts/mcp_bash_guard.py`
+(Bash surface; same helper classifiers).
 **On violation:** hard-block. Agent must route through the owning skill or CLI.
 **Why:** Provenance is derived from artifact existence. Wrong writer = wrong
-provenance = broken audit chain.
+provenance = broken audit chain. The Bash surface was added in PR1
+(`TASK__gate-reliability-pr1`) to close the `sed -i PLAN.md` / `echo >> CHECKS.yaml` bypass.
+
+**Note (AC-019):** `doc/changes/**` and `doc/common/**` writes by
+`hygiene_scan.py` and `doc_hygiene.py` are authorized via C-16. These paths
+are NOT in PROTECTED_ARTIFACTS; their protection comes from hygiene.yaml
+validation, the observer phase, and `maintain_restore.py`.
 
 ### C-06
 
@@ -154,6 +164,9 @@ edits CLAUDE.md's harness-managed section.
 **When:** Any change to rules between the `harness:managed-begin/end` markers.
 **Enforced by:** `plugin/scripts/contract_lint.py` (SessionStart hook) —
 detects marker tampering; `maintain` skill regenerates from template.
+Authorized writers for additive Edits within the managed block:
+`maintain` skill (all changes) and `hygiene_scan.py` (additive Edits only,
+never deletions, never edits outside the managed block markers).
 **On violation:** soft-warn. User can move content to `CONTRACTS.local.md`.
 **Why:** The managed block is upgraded atomically on harness release; manual
 edits are lost.
@@ -185,7 +198,7 @@ extra phase is a new failure point.
 
 **Title:** PASS verdicts require structured evidence.
 **When:** `runtime_verdict` transitions to `PASS`.
-**Enforced by:** `CRITIC__runtime.md` schema — must contain specific
+**Enforced by:** `CRITIC__qa.md` schema — must contain specific
 test/screenshot/log references, not a bare verdict.
 **On violation:** soft-warn. `task_close` additionally demands the file
 exists and is fresh (C-04).
@@ -202,6 +215,39 @@ exists and is fresh (C-04).
 present a diff via `AskUserQuestion` first.
 **Why:** User trust is the most load-bearing contract. Surprise overwrites
 break it immediately.
+
+### C-16
+
+**Title:** Auto-hygiene — content-signal doc classification + contract drift auto-apply.
+**When:** SessionStart (automatic) and whenever `Skill(maintain)` is invoked.
+**Enforced by:** `plugin/scripts/hygiene_scan.py` (SessionStart hook, after
+`contract_lint --quick`); `plugin/scripts/doc_hygiene.py` (called by
+hygiene_scan); `doc/harness/hygiene.yaml` (config + canonical disable path).
+**On violation:** auto — hygiene is advisory; failure degrades to no-op.
+**Why:** Without automatic cleanup, `doc/changes/` and `doc/common/` accumulate
+indefinitely. Institutional memory erodes when the signal-to-noise ratio drops.
+
+**Tier A/B/C mapping (contract drift):**
+- `[INFO]` (Tier A): auto-applied as additive Edit within managed-block markers. No deletions.
+- `[SOFT]` additive (Tier B): auto-applied if action is matrix-row addition or contract heading addition only. Modifications/deletions deferred.
+- `[HARD]` (Tier C): deferred. Entry written to `.maintain-pending.json`; user confirms via `Skill(maintain)`.
+
+**KEEP-on-doubt rule:** absence of `superseded_by` or `distilled_to` frontmatter
+fields NEVER alone classifies a doc as REMOVE. Cold-start docs (no new frontmatter)
+always classify as KEEP or REVIEW.
+
+**Observer phase:** first `observer_until_session` sessions (default 14) run
+in observer-only mode — no archive writes, no contract edits. Intentions logged
+to `doc/harness/.maintain-observe.log`.
+
+**Restore:** `python3 plugin/scripts/maintain_restore.py <archive-path>`.
+Archive commit message always embeds the copy-pasteable restore command.
+
+**Frontmatter fields (optional, added to individual doc files):**
+- `superseded_by: <path>` — this doc is replaced by `<path>`; if target exists
+  AND `reference_count == 0`, classify REMOVE.
+- `distilled_to: <path>` — key content promoted to `<path>`; if target exists
+  AND `reference_count == 0`, classify REMOVE.
 
 <!-- harness:managed-end -->
 

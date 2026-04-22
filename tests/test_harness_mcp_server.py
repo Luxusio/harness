@@ -20,7 +20,7 @@ EXPECTED_TOOLS = {
     "task_context",
     "task_verify",
     "task_close",
-    "write_critic_runtime",
+    "write_critic_qa",
     "write_handoff",
     "write_doc_sync",
 }
@@ -106,7 +106,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         if write_handoff:
             (task_dir / "HANDOFF.md").write_text("# handoff\n", encoding="utf-8")
         if write_critic:
-            (task_dir / "CRITIC__runtime.md").write_text("# critic\nverdict: PASS\n", encoding="utf-8")
+            (task_dir / "CRITIC__qa.md").write_text("# critic\nverdict: PASS\n", encoding="utf-8")
         if checks_yaml is not None:
             (task_dir / "CHECKS.yaml").write_text(checks_yaml, encoding="utf-8")
         return str(task_dir)
@@ -191,7 +191,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         self.assertNotIn("isError", result)
         self.assertTrue(result["structuredContent"]["closed"])
 
-    # ---- AC-004: stale CRITIC__runtime refuses close ----
+    # ---- AC-004: stale CRITIC__qa refuses close ----
     def test_close_rejects_stale_verdict(self):
         import os as _os
         with tempfile.TemporaryDirectory() as tmp:
@@ -201,7 +201,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 touched_paths=["plugin/scripts/health.py"],
             )
             # Make CRITIC older than touched path
-            critic = _os.path.join(td, "CRITIC__runtime.md")
+            critic = _os.path.join(td, "CRITIC__qa.md")
             _os.utime(critic, (100, 100))
             self._patch(td)
             try:
@@ -221,7 +221,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
                 touched_paths=["plugin/scripts/health.py"],
             )
-            _os.utime(_os.path.join(td, "CRITIC__runtime.md"), (100, 100))
+            _os.utime(_os.path.join(td, "CRITIC__qa.md"), (100, 100))
             self._patch(td)
             try:
                 result = harness_server.call_tool("task_verify", {"task_id": "TASK__pr2-006"})
@@ -243,7 +243,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
                 touched_paths=["plugin/scripts/__pycache__/health.cpython-311.pyc"],
             )
-            _os.utime(_os.path.join(td, "CRITIC__runtime.md"), (100, 100))
+            _os.utime(_os.path.join(td, "CRITIC__qa.md"), (100, 100))
             self._patch(td)
             try:
                 result = harness_server.call_tool("task_close", {"task_id": "TASK__pr2-006b"})
