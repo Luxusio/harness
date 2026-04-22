@@ -26,6 +26,12 @@
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/contract_lint.py --quick --quiet || echo '[maintain-suggested] CONTRACTS.md drift — run maintain skill'",
             "timeout": 5,
             "statusMessage": "Checking contract drift"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_scan.py --apply-safe || true",
+            "timeout": 10,
+            "statusMessage": "Auto-hygiene check"
           }
         ]
       }

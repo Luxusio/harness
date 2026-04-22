@@ -70,7 +70,7 @@ _PY_PATTERNS = [
 
 # Protected-artifact → owning MCP/CLI tool (for human-text fix hint).
 _ARTIFACT_TOOL_HINT = {
-    "CRITIC__runtime.md": "mcp__harness__write_critic_runtime",
+    "CRITIC__qa.md": "mcp__plugin_harness_harness__write_critic_qa",
     "HANDOFF.md": "mcp__harness__write_handoff",
     "DOC_SYNC.md": "mcp__harness__write_doc_sync",
     "PLAN.md": "Skill(harness:plan)",

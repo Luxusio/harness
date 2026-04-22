@@ -1,4 +1,4 @@
-# CRITIC__runtime.md — test fixture
+# CRITIC__qa.md — test fixture
 
 ## Verdict: PASS
 

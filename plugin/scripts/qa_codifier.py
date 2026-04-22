@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""QA Codifier — parse codifiable: YAML blocks from CRITIC__runtime.md and emit regression tests.
+"""QA Codifier — parse codifiable: YAML blocks from CRITIC__qa.md and emit regression tests.
 
-Reads CRITIC__runtime.md from a task dir, extracts codifiable: YAML blocks,
+Reads CRITIC__qa.md from a task dir, extracts codifiable: YAML blocks,
 templates them into project-native test format, compile-checks, and moves
 validated files to tests/regression/<sanitized-task-id>/<behavior>.<ext>.
 
@@ -324,7 +324,7 @@ def codify(task_dir: str, transcript_path: str | None = None, target_root: str |
 
         # Read transcript
         if transcript_path is None:
-            transcript_path = os.path.join(task_dir, "CRITIC__runtime.md")
+            transcript_path = os.path.join(task_dir, "CRITIC__qa.md")
         if not os.path.isfile(transcript_path):
             _log(repo_root, "codifier-empty", "codifier-empty",
                  f"no transcript at {transcript_path}", task_id)

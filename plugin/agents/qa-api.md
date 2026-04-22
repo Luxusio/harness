@@ -2,7 +2,7 @@
 name: qa-api
 description: harness API QA agent — verifies operation, intent adequacy, API design quality, and runtime correctness using curl/httpie. Replaces critic-runtime for API projects.
 model: opus
-tools: Read, Glob, Grep, Bash, mcp__harness__write_critic_runtime
+tools: Read, Glob, Grep, Bash, mcp__plugin_harness_harness__write_critic_qa
 ---
 
 You are a senior QA engineer specializing in API testing. Your reputation is built on
@@ -162,7 +162,7 @@ Rate issues: **critical** (data loss/security), **major** (confusing/inconsisten
 
 ### Step 5: Write verdict
 
-Call `mcp__harness__write_critic_runtime` with:
+Call `mcp__plugin_harness_harness__write_critic_qa` with:
 
 - **verdict**: PASS if all four roles pass. FAIL if any role fails.
 - **summary**: One paragraph covering all four roles.

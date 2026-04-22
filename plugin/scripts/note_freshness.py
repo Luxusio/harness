@@ -12,6 +12,9 @@ Change source:
 
 Safe to run on every SessionStart. Best-effort — never fails the session.
 Stdlib only.
+
+AC-001: frontmatter parser functions are now imported from _lib.py public API.
+Private aliases (_split_frontmatter etc.) kept for any existing callers.
 """
 from __future__ import annotations
 
@@ -22,6 +25,76 @@ import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
+
+# AC-001: import public frontmatter API from _lib.py
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    from _lib import (  # type: ignore
+        split_frontmatter,
+        read_array_field,
+        read_scalar_field,
+        set_scalar_field,
+    )
+    # Private aliases for backward compat
+    _split_frontmatter = split_frontmatter
+    _read_array = read_array_field
+    _read_scalar = read_scalar_field
+    _set_scalar = set_scalar_field
+except ImportError:
+    # Fallback: define locally if _lib import fails (should never happen)
+    def split_frontmatter(text):  # type: ignore[misc]
+        if not text.startswith("---"):
+            return None, text, -1
+        lines = text.splitlines(keepends=True)
+        if not lines or lines[0].rstrip() != "---":
+            return None, text, -1
+        for i in range(1, len(lines)):
+            if lines[i].rstrip() == "---":
+                fm = "".join(lines[1:i])
+                body = "".join(lines[i + 1:])
+                return fm, body, i
+        return None, text, -1
+
+    def read_array_field(frontmatter, field):  # type: ignore[misc]
+        lines = frontmatter.splitlines()
+        prefix = field + ":"
+        for i, ln in enumerate(lines):
+            if ln.startswith(prefix):
+                rest = ln[len(prefix):].strip()
+                if rest.startswith("[") and rest.endswith("]"):
+                    inner = rest[1:-1].strip()
+                    if not inner:
+                        return []
+                    return [x.strip().strip('"').strip("'") for x in inner.split(",")]
+                items: list = []
+                for j in range(i + 1, len(lines)):
+                    m = re.match(r"^\s+-\s+(.+?)\s*$", lines[j])
+                    if not m:
+                        break
+                    items.append(m.group(1).strip().strip('"').strip("'"))
+                return items
+        return []
+
+    def read_scalar_field(frontmatter, field):  # type: ignore[misc]
+        m = re.search(rf"^{re.escape(field)}:\s*(.*)$", frontmatter, re.MULTILINE)
+        if not m:
+            return None
+        return m.group(1).strip().strip('"').strip("'")
+
+    def set_scalar_field(frontmatter, field, value):  # type: ignore[misc]
+        pattern = rf"^{re.escape(field)}:\s*.*$"
+        replacement = f"{field}: {value}"
+        new_fm, n = re.subn(pattern, replacement, frontmatter, count=1, flags=re.MULTILINE)
+        if n:
+            return new_fm
+        new_fm = new_fm.rstrip("\n") + "\n"
+        return new_fm + f"{field}: {value}\n"
+
+    _split_frontmatter = split_frontmatter
+    _read_array = read_array_field
+    _read_scalar = read_scalar_field
+    _set_scalar = set_scalar_field
+
 
 FRESHNESS_CURRENT = "current"
 FRESHNESS_SUSPECT = "suspect"
@@ -46,63 +119,7 @@ def _atomic_write(path: str, content: str) -> None:
         raise
 
 
-def _split_frontmatter(text: str) -> tuple[str | None, str, int]:
-    """Return (frontmatter_content, body_after_closing_fence, closing_fence_line_index).
-
-    Returns (None, text, -1) if no valid frontmatter found.
-    """
-    if not text.startswith("---"):
-        return None, text, -1
-    lines = text.splitlines(keepends=True)
-    if not lines or lines[0].rstrip() != "---":
-        return None, text, -1
-    for i in range(1, len(lines)):
-        if lines[i].rstrip() == "---":
-            fm = "".join(lines[1:i])
-            body = "".join(lines[i + 1:])
-            return fm, body, i
-    return None, text, -1
-
-
-def _read_array(frontmatter: str, field: str) -> list[str]:
-    lines = frontmatter.splitlines()
-    prefix = field + ":"
-    for i, ln in enumerate(lines):
-        if ln.startswith(prefix):
-            rest = ln[len(prefix):].strip()
-            if rest.startswith("[") and rest.endswith("]"):
-                inner = rest[1:-1].strip()
-                if not inner:
-                    return []
-                return [x.strip().strip('"').strip("'") for x in inner.split(",")]
-            items: list[str] = []
-            for j in range(i + 1, len(lines)):
-                m = re.match(r"^\s+-\s+(.+?)\s*$", lines[j])
-                if not m:
-                    break
-                items.append(m.group(1).strip().strip('"').strip("'"))
-            return items
-    return []
-
-
-def _read_scalar(frontmatter: str, field: str) -> str | None:
-    m = re.search(rf"^{re.escape(field)}:\s*(.*)$", frontmatter, re.MULTILINE)
-    if not m:
-        return None
-    return m.group(1).strip().strip('"').strip("'")
-
-
-def _set_scalar(frontmatter: str, field: str, value: str) -> str:
-    pattern = rf"^{re.escape(field)}:\s*.*$"
-    replacement = f"{field}: {value}"
-    new_fm, n = re.subn(pattern, replacement, frontmatter, count=1, flags=re.MULTILINE)
-    if n:
-        return new_fm
-    new_fm = new_fm.rstrip("\n") + "\n"
-    return new_fm + f"{field}: {value}\n"
-
-
-def _path_matches(note_pattern: str, changed: set[str]) -> bool:
+def _path_matches(note_pattern: str, changed: set) -> bool:
     """Treat note_pattern as an exact file match OR directory prefix match."""
     p = note_pattern.rstrip("/")
     for ch in changed:
@@ -111,8 +128,8 @@ def _path_matches(note_pattern: str, changed: set[str]) -> bool:
     return False
 
 
-def _gather_changed(from_git: int | None, explicit: list[str]) -> set[str]:
-    paths: set[str] = set()
+def _gather_changed(from_git, explicit: list) -> set:
+    paths: set = set()
     for p in explicit:
         for part in p.split():
             if part:
@@ -149,8 +166,8 @@ def _gather_changed(from_git: int | None, explicit: list[str]) -> set[str]:
     return paths
 
 
-def scan(doc_root: str, changed: set[str]) -> list[dict]:
-    results: list[dict] = []
+def scan(doc_root: str, changed: set) -> list:
+    results: list = []
     if not os.path.isdir(doc_root):
         return results
     for dirpath, _, filenames in os.walk(doc_root):
@@ -163,20 +180,20 @@ def scan(doc_root: str, changed: set[str]) -> list[dict]:
                     text = f.read()
             except OSError:
                 continue
-            fm, body, _fence_idx = _split_frontmatter(text)
+            fm, body, _fence_idx = split_frontmatter(text)
             if fm is None:
                 continue
-            invalidated = _read_array(fm, "invalidated_by_paths")
+            invalidated = read_array_field(fm, "invalidated_by_paths")
             if not invalidated:
                 continue
-            freshness = _read_scalar(fm, "freshness") or FRESHNESS_CURRENT
+            freshness = read_scalar_field(fm, "freshness") or FRESHNESS_CURRENT
             if freshness != FRESHNESS_CURRENT:
                 continue
             hit = next((p for p in invalidated if _path_matches(p, changed)), None)
             if not hit:
                 continue
-            new_fm = _set_scalar(fm, "freshness", FRESHNESS_SUSPECT)
-            new_fm = _set_scalar(new_fm, "freshness_updated", now_iso())
+            new_fm = set_scalar_field(fm, "freshness", FRESHNESS_SUSPECT)
+            new_fm = set_scalar_field(new_fm, "freshness_updated", now_iso())
             if not new_fm.endswith("\n"):
                 new_fm += "\n"
             new_text = "---\n" + new_fm + "---\n" + body

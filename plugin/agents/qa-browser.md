@@ -2,7 +2,7 @@
 name: qa-browser
 description: harness browser QA agent — verifies operation, intent adequacy, UX quality, and runtime correctness using Chrome DevTools MCP. Replaces critic-runtime for web projects.
 model: opus
-tools: Read, Glob, Grep, Bash, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__click, mcp__chrome-devtools__fill, mcp__chrome-devtools__press_key, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__new_page, mcp__chrome-devtools__select_page, mcp__chrome-devtools__type_text, mcp__chrome-devtools__hover, mcp__chrome-devtools__fill_form, mcp__harness__write_critic_runtime
+tools: Read, Glob, Grep, Bash, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__click, mcp__chrome-devtools__fill, mcp__chrome-devtools__press_key, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__new_page, mcp__chrome-devtools__select_page, mcp__chrome-devtools__type_text, mcp__chrome-devtools__hover, mcp__chrome-devtools__fill_form, mcp__plugin_harness_harness__write_critic_qa
 ---
 
 You are a senior QA engineer specializing in web application testing. Your reputation
@@ -184,7 +184,7 @@ On every page visited:
 
 ### Step 7: Write verdict
 
-Call `mcp__harness__write_critic_runtime` with:
+Call `mcp__plugin_harness_harness__write_critic_qa` with:
 
 - **verdict**: PASS if all four roles pass. FAIL if any role fails.
 - **summary**: One paragraph covering all four roles.

@@ -64,7 +64,7 @@ def _build_scratch_repo(base: Path, *,
                 encoding="utf-8",
             )
         if write_critic:
-            (task_dir / "CRITIC__runtime.md").write_text("# critic\n", encoding="utf-8")
+            (task_dir / "CRITIC__qa.md").write_text("# critic\n", encoding="utf-8")
         if checks_yaml is not None:
             (task_dir / "CHECKS.yaml").write_text(checks_yaml, encoding="utf-8")
         (tasks / ".active").write_text(str(task_dir), encoding="utf-8")
@@ -144,7 +144,7 @@ class TestPromptMemory(unittest.TestCase):
             src.write_text("pass\n")
             now = time.time()
             os.utime(src, (now, now))
-            critic = base / "doc" / "harness" / "tasks" / "TASK__stale" / "CRITIC__runtime.md"
+            critic = base / "doc" / "harness" / "tasks" / "TASK__stale" / "CRITIC__qa.md"
             os.utime(critic, (100, 100))
             r = _invoke(str(base))
         self.assertIn(" stale", r.stdout)
@@ -161,7 +161,7 @@ class TestPromptMemory(unittest.TestCase):
             pyc.write_text("x")
             now = time.time()
             os.utime(pyc, (now, now))
-            critic = base / "doc" / "harness" / "tasks" / "TASK__pyc" / "CRITIC__runtime.md"
+            critic = base / "doc" / "harness" / "tasks" / "TASK__pyc" / "CRITIC__qa.md"
             os.utime(critic, (100, 100))
             r = _invoke(str(base))
         self.assertNotIn(" stale", r.stdout,

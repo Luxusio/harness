@@ -64,7 +64,7 @@ Agent(
 Task dir: <task_dir>
 Read ${CLAUDE_PLUGIN_ROOT}/agents/qa-<lens>.md for your full role definition.
 Follow it exactly — all four roles (operation, intent, UX/design, runtime).
-Call mcp__harness__write_critic_runtime with verdict, summary, and full transcript."
+Call mcp__plugin_harness_harness__write_critic_qa with verdict, summary, and full transcript."
 )
 ```
 

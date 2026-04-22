@@ -306,3 +306,81 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/contract_lint.py" \
 ```
 
 WARN is non-blocking. `maintain` exists to repair drift.
+
+### 3.7.5 Auto-hygiene bootstrap (single atomic step)
+
+This step installs the auto-hygiene system. **Order is critical:** C-16 in
+CONTRACTS.md MUST land before the `hygiene_scan.py` hook entry in hooks.json,
+so that `hygiene_scan.py`'s own C-16 self-detect passes on first run.
+
+Run as a single logical transaction (all-or-nothing):
+
+**Step A — hygiene.yaml stub (idempotent)**
+
+```bash
+_HYGIENE_YAML="${_ROOT}/doc/harness/hygiene.yaml"
+_HYGIENE_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/hygiene.yaml"
+if [ ! -f "$_HYGIENE_YAML" ]; then
+  cp "$_HYGIENE_TEMPLATE" "$_HYGIENE_YAML"
+  echo "hygiene.yaml installed"
+else
+  echo "hygiene.yaml already present — skip"
+fi
+```
+
+**Step B — CONTRACTS.md C-16 patch (idempotent, managed-block only)**
+
+Fresh install: template already includes C-16 (§3.7.1 above). For upgrade
+installs where CONTRACTS.md exists with `harness:managed-begin` but lacks C-16,
+apply a managed-block patch. Per C-15, show AskUserQuestion diff preview first:
+
+```bash
+if grep -q "harness:managed-begin" CONTRACTS.md 2>/dev/null && \
+   ! grep -q "### C-16" CONTRACTS.md 2>/dev/null; then
+  echo "CONTRACTS.md missing C-16 — upgrade patch needed"
+  # AskUserQuestion: show diff of C-16 addition, A) Apply B) Skip
+  # On A: Edit tool appends C-16 stanza inside managed-block BEFORE managed-end marker
+fi
+```
+
+The C-16 text to insert is the full 4-field stanza from the managed template.
+Also ensure C-11 names `hygiene_scan.py` as authorized additive writer (already
+in template; for upgrades, patch C-11 body via the same AskUserQuestion flow).
+Also ensure C-05 contains the AC-019 doc/changes note (already in template).
+
+**Step C — hooks.json hygiene_scan entry (idempotent, AFTER steps A+B)**
+
+Only after CONTRACTS.md has C-16 (step B verified), add the hook entry:
+
+```bash
+if ! grep -q "hygiene_scan.py" "${CLAUDE_PLUGIN_ROOT}/hooks/hooks.json" 2>/dev/null; then
+  python3 -c "
+import json, sys
+hooks_path = '${CLAUDE_PLUGIN_ROOT}/hooks/hooks.json'
+with open(hooks_path) as f:
+    data = json.load(f)
+session_hooks = data['hooks']['SessionStart'][0]['hooks']
+# Insert AFTER contract_lint --quick entry
+lint_idx = next((i for i, h in enumerate(session_hooks)
+                 if 'contract_lint' in h.get('command', '')), len(session_hooks) - 1)
+hygiene_entry = {
+    'type': 'command',
+    'command': 'python3 \${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_scan.py --apply-safe || true',
+    'timeout': 10,
+    'statusMessage': 'Auto-hygiene check'
+}
+session_hooks.insert(lint_idx + 1, hygiene_entry)
+import tempfile, os
+tmp = hooks_path + '.tmp'
+with open(tmp, 'w') as f:
+    json.dump(data, f, indent=2)
+os.replace(tmp, hooks_path)
+print('hygiene_scan.py hook entry added')
+"
+else
+  echo "hygiene_scan.py hook already present — skip"
+fi
+```
+
+**Invariant:** If step B fails or is skipped, step C must NOT run. The hook
+entry goes in only after C-16 is confirmed present in CONTRACTS.md.

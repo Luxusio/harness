@@ -204,6 +204,84 @@ def _yaml_fmt(val):
     return str(val)
 
 
+# ── Frontmatter public API (AC-001) ─────────────────────────────────────
+#
+# Promoted from note_freshness.py private helpers. These four functions form
+# the canonical frontmatter read/write surface used by doc_hygiene.py,
+# hygiene_scan.py, and note_freshness.py (which re-imports them).
+
+
+def split_frontmatter(text: str) -> "tuple[str | None, str, int]":
+    """Return (frontmatter_content, body_after_closing_fence, closing_fence_line_index).
+
+    Returns (None, text, -1) if no valid frontmatter found.
+    Public alias for the parser promoted from note_freshness.py.
+    """
+    if not text.startswith("---"):
+        return None, text, -1
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip() != "---":
+        return None, text, -1
+    for i in range(1, len(lines)):
+        if lines[i].rstrip() == "---":
+            fm = "".join(lines[1:i])
+            body = "".join(lines[i + 1:])
+            return fm, body, i
+    return None, text, -1
+
+
+def read_array_field(frontmatter: str, field: str) -> "list[str]":
+    """Read a YAML array field from frontmatter string.
+
+    Supports both compact ``[a, b]`` and block ``- item`` styles.
+    Public alias promoted from note_freshness.py ``_read_array``.
+    """
+    lines = frontmatter.splitlines()
+    prefix = field + ":"
+    for i, ln in enumerate(lines):
+        if ln.startswith(prefix):
+            rest = ln[len(prefix):].strip()
+            if rest.startswith("[") and rest.endswith("]"):
+                inner = rest[1:-1].strip()
+                if not inner:
+                    return []
+                return [x.strip().strip('"').strip("'") for x in inner.split(",")]
+            items: list = []
+            for j in range(i + 1, len(lines)):
+                m = re.match(r"^\s+-\s+(.+?)\s*$", lines[j])
+                if not m:
+                    break
+                items.append(m.group(1).strip().strip('"').strip("'"))
+            return items
+    return []
+
+
+def read_scalar_field(frontmatter: str, field: str) -> "str | None":
+    """Read a scalar field from frontmatter string.
+
+    Public alias promoted from note_freshness.py ``_read_scalar``.
+    """
+    m = re.search(rf"^{re.escape(field)}:\s*(.*)$", frontmatter, re.MULTILINE)
+    if not m:
+        return None
+    return m.group(1).strip().strip('"').strip("'")
+
+
+def set_scalar_field(frontmatter: str, field: str, value: str) -> str:
+    """Set (or append) a scalar field in frontmatter string.
+
+    Public alias promoted from note_freshness.py ``_set_scalar``.
+    If the field exists it is replaced in-place; otherwise appended.
+    """
+    pattern = rf"^{re.escape(field)}:\s*.*$"
+    replacement = f"{field}: {value}"
+    new_fm, n = re.subn(pattern, replacement, frontmatter, count=1, flags=re.MULTILINE)
+    if n:
+        return new_fm
+    new_fm = new_fm.rstrip("\n") + "\n"
+    return new_fm + f"{field}: {value}\n"
+
+
 # ── Task state read/write ────────────────────────────────────────────────
 
 
@@ -480,8 +558,41 @@ def provenance_from_artifacts(task_dir):
         for agent, fn in {
             "plan-skill": "PLAN.md",
             "developer": "HANDOFF.md",
-            "qa-browser": "CRITIC__runtime.md",
-            "qa-api": "CRITIC__runtime.md",
-            "qa-cli": "CRITIC__runtime.md",
+            "qa-browser": "CRITIC__qa.md",
+            "qa-api": "CRITIC__qa.md",
+            "qa-cli": "CRITIC__qa.md",
         }.items()
     }
+
+
+# ── Atomic JSON state helpers ─────────────────────────────────────────────
+
+
+def read_json_state(path: str):
+    """Read JSON state file. Returns None on missing/corrupt file."""
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return _json.load(f)
+    except Exception:
+        return None
+
+
+def write_json_state(path: str, data) -> bool:
+    """Atomically write JSON state file. Returns True on success."""
+    d = os.path.dirname(path) or "."
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".json.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            _json.dump(data, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+        return True
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
