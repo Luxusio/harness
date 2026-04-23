@@ -67,6 +67,7 @@ Do not write another role's artifact. Prewrite gate enforces this.
 | Intent | Route to |
 |--------|----------|
 | Set up harness | `Skill(setup)` |
+| Pre-planning / scope-sharpening (product framing before a task) | `Skill(harness:setup)` (fills the office-hours role; no separate office-hours skill) |
 | New feature / build something | `Skill(harness:plan)` |
 | Run full cycle | `Skill(harness:run)` |
 | CEO review | `Skill(plan-ceo-review)` |
