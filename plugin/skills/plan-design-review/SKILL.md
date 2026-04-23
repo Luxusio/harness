@@ -94,6 +94,37 @@ comparison boards. The user just needs to see the HTML file in any browser.
 `docs/designs/`, `/tmp/`, or any project-local directory. Design artifacts are USER
 data, not project files. They persist across branches, conversations, and workspaces.
 
+## PRE-REVIEW SYSTEM AUDIT (before Step 0)
+
+Two pre-flight checks that must run before Step 0. Both are fast; both prevent wasted review cycles.
+
+### Retrospective check
+
+Look for prior design reviews on the same files. If the plan touches surfaces that were reviewed recently, recall the prior findings instead of re-deriving them:
+
+```bash
+_PLAN_FILES=$(grep -oE "plugin/skills/[a-z-]+/|src/[a-zA-Z/]+\.(tsx|jsx|css|html|vue|svelte)" doc/harness/tasks/TASK__*/PLAN.md 2>/dev/null | sort -u)
+for _f in $_PLAN_FILES; do
+  git log --oneline -5 --all -- "$_f" 2>/dev/null | grep -iE "design|ui|ux|visual" | head -3
+done
+```
+
+Surface any prior design-related commits for files in scope. If recent commits show prior design review touched the same surface, the reviewer MUST read those commit messages and factor them into this review (don't re-flag what was already decided).
+
+### UI scope detection
+
+Exit early if the plan contains no UI scope. A design review on backend-only changes is wasted effort.
+
+```bash
+_UI_HITS=$(grep -ciE "\bui\b|frontend|component|css|html|react|vue|button|modal|dashboard|sidebar|nav|dialog|layout|visual|stylesheet|design system" doc/harness/tasks/TASK__*/PLAN.md 2>/dev/null | head -1)
+if [ "${_UI_HITS:-0}" -lt 2 ]; then
+  echo "skipped, no UI scope"
+  # Log to AUDIT_TRAIL and exit cleanly — do not proceed to Step 0
+fi
+```
+
+2+ UI keyword hits required. If zero or one hit, emit `skipped, no UI scope` in the phase-transition summary and exit. Do NOT run Step 0 onward on a backend-only plan.
+
 ## Step 0: Design Scope Assessment
 
 ### 0A. Initial Design Rating
@@ -602,6 +633,29 @@ fi
 ```
 
 Incorporate relevant design-related operational knowledge. Log count.
+
+### Cross-project toggle
+
+If `HARNESS_CROSS_PROJECT_LEARNINGS=1` is set, also load Tier-2 design patterns from other projects sharing this harness install:
+
+```bash
+if [ "${HARNESS_CROSS_PROJECT_LEARNINGS:-0}" = "1" ]; then
+  ls doc/harness/patterns/design-*.md 2>/dev/null | head -5
+  # Read top match; apply only if the pattern explicitly applies to the current design scope
+fi
+```
+
+Cross-project learnings compound — a pattern that fixed an AI-slop landing page in one repo usually applies elsewhere. Default OFF to prevent noise; enabled per-session via env var.
+
+### Prior learning callout format
+
+When a pass finding triggers a prior learning match, annotate the finding:
+
+```
+Prior learning applied: <key> (confidence N/10, from <YYYY-MM-DD>) — <one-line why this applies>
+```
+
+Only annotate when the learning materially shapes the finding. Do NOT annotate every pass with a learning if no match.
 
 ## Review Readiness Dashboard
 
