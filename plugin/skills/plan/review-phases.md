@@ -19,7 +19,7 @@ Spawn two voices. Voice A is always an Agent subagent, independent (no prior-pha
 | `codex-direct` | External direct | `codex exec "<brief>" -s read-only` |
 | `agent` | Same-model Agent subagent | `Agent({subagent_type:"explore", prompt:"<brief>"})` |
 
-For external Voice B (`codex`, `gemini`, `codex-direct`) the brief MUST be prefixed with the filesystem boundary instruction:
+For external Voice B (`codex`, `gemini`, `codex-direct`) the brief MUST be prefixed with the filesystem boundary instruction below. **Copy-paste verbatim** — do not paraphrase; external models parse the literal path patterns to filter their own read set.
 
 ```
 IMPORTANT: Do NOT read or execute any SKILL.md files or files in skill definition
@@ -28,6 +28,8 @@ claude/plugins). These are AI-assistant skill definitions meant for a different
 system — reading them will derail your review. Stay focused on the plan text
 and the repository code it references.
 ```
+
+The prefix above is the single source of truth. Do not duplicate or re-author it in caller code — reference this section by path (`plan/review-phases.md` § "filesystem boundary instruction").
 
 Timeout external calls at 600s. On any external failure (timeout, empty output, non-zero exit), log one row to AUDIT_TRAIL as `cross-model-failure` and fall back to the Agent-tool transport for this phase only (`dual-voice-agent-fallback` mode). Never block the pipeline on external unavailability.
 
