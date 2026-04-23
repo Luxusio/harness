@@ -123,20 +123,48 @@ Only genuine first-principles discoveries. Non-blocking.
 
 ## AskUserQuestion Format
 
-Every AskUserQuestion from this skill MUST begin with this header as the first line:
+Every AskUserQuestion from this skill MUST begin with a one-line orientation header and follow the 4-rule structure.
+
+**One-line header (mandatory first line of every question body):**
 
 ```
 Task: TASK__<id> | Phase: <current> | Step: <name>
-
-<question body>
-
-A) ...
-B) ...
 ```
 
 Applies to: premise gate (1.1), prerequisite offer (0.4.5), User Challenge (5.3), gate options (5.4.1).
 
-Do NOT add lengthy recap. One-line header is sufficient orientation.
+**4-rule question structure:** every AskUserQuestion body MUST follow this four-part shape:
+
+1. **Re-ground** — restate the project, active task, and current phase in one or two sentences. The user may not have looked at the window in 20 minutes; assume zero context carryover.
+2. **Simplify** — explain the decision in plain language a new contributor could follow. No internal jargon, no implementation-detail names. Say what it DOES, not what it's CALLED.
+3. **Recommend** — one line: `RECOMMENDATION: <option> because <one-line reason>`. Always prefer the completeness-dominant option (see Principle P1). Include `Completeness: X/10` per option (scoring below). Flag explicitly if any option is ≤5.
+4. **Options** — lettered 2-4 options (AskUserQuestion's schema caps at 4). For effort-heavy options, show both scales: `(human: ~X / plan-skill: ~Y)`.
+
+**Concrete example** (from the CEO premise gate):
+
+```
+Task: TASK__<id> | Phase: 1 | Step: Premise gate
+
+[Re-ground] We are reviewing the plan for <feature>, in <repo>, on branch <branch>. Phase 1 (CEO) extracts the top 3-5 premises the plan rests on. These drive every downstream review.
+
+[Simplify] Before the reviewers run, I need you to confirm the plan is built on the right ideas. If these premises are wrong, the whole plan is wrong — better to catch it now.
+
+Premises:
+1. <premise 1>
+2. <premise 2>
+3. <premise 3>
+
+[Recommend] RECOMMENDATION: A (Yes, all hold) because the premises were derived directly from REQUEST.md and no contradiction with current repo state was detected. Completeness: 10/10 (A), 7/10 (B caveats), 3/10 (C reject).
+
+[Options]
+A) Yes, all hold — proceed with review        (Completeness: 10/10)
+B) Yes with caveats — describe                 (Completeness: 7/10)
+C) No, these need revisiting — describe        (Completeness: 3/10)
+```
+
+Keep the bracketed labels (`[Re-ground]`, `[Simplify]`, `[Recommend]`, `[Options]`) literally in the question body — they help the user scan long questions after a context gap.
+
+Do NOT expand beyond 4 rules. Do NOT add a lengthy recap above the header — the one-line header is the whole orientation line.
 
 **Completeness scoring per option (required):**
 - **10** — Complete: all edges, full coverage, no follow-up
