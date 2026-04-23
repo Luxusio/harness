@@ -145,12 +145,12 @@ If a design doc exists, read it. Use it as the source of truth for the problem s
 
 ### Handoff note check
 
-If a prior plan-ceo-review (or /office-hours) session paused partway through, it may have left a HANDOFF note. Read it before re-asking premise questions:
+If a prior plan-ceo-review or `Skill(harness:setup)` session paused partway through, it may have left a HANDOFF note. Read it before re-asking premise questions:
 
 ```bash
 _TASK_DIR="doc/harness/tasks/$(ls doc/harness/tasks/ 2>/dev/null | grep TASK__ | head -1)"
 if [ -f "$_TASK_DIR/HANDOFF.md" ]; then
-  grep -A3 "CEO Review Handoff\|office-hours Handoff\|paused at\|resume from" "$_TASK_DIR/HANDOFF.md" 2>/dev/null | head -20
+  grep -A3 "CEO Review Handoff\|setup Handoff\|paused at\|resume from" "$_TASK_DIR/HANDOFF.md" 2>/dev/null | head -20
 fi
 ```
 
@@ -174,13 +174,13 @@ Feed into the Premise Challenge (0A) and Dream State Mapping (0C). If you find a
 
 Identify 2-3 files or patterns in the existing codebase that are particularly well-designed. Note them as style references for the review. Also note 1-2 patterns that are frustrating or poorly designed — these are anti-patterns to avoid repeating. Report findings before proceeding to Step 0.
 
-## Mid-session office-hours detection
+## Mid-session scope-sharpening detection
 
 During Step 0A (Premise Challenge), if the user can't articulate the problem, keeps changing the problem statement, answers with "I'm not sure," or is clearly exploring rather than reviewing — offer to sharpen scope:
 
-> "It sounds like you're still figuring out what to build. Want to pause and sharpen the scope before continuing?"
+> "It sounds like you're still figuring out what to build. Want to pause and sharpen the scope before continuing? (`Skill(harness:setup)` owns this flow in harness.)"
 
-Options: A) Yes, sharpen scope first. B) No, keep going.
+Options: A) Yes, sharpen scope first (invoke `Skill(harness:setup)`). B) No, keep going.
 
 If they keep going, proceed normally — no guilt, no re-asking.
 
