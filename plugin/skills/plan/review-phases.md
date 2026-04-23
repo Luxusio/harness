@@ -8,13 +8,34 @@ Sub-file for plan/SKILL.md. Each of the 4 review phases follows the same dual-vo
 
 ### 1. Dual voice spawn
 
-Spawn two Agent subagents. Voice A is independent (no prior-phase context). Voice B has the same prompt plus a `## Prior phase findings` section (terse bullet summary from earlier consensus tables). **Exception:** Phase 2 (Design) — both voices fully independent to prevent aesthetic anchoring.
+Spawn two voices. Voice A is always an Agent subagent, independent (no prior-phase context). Voice B's transport is selected by the `cross_model_voice` field set at Phase 0.3; it carries the same prompt plus a `## Prior phase findings` section (terse bullet summary from earlier consensus tables). **Exception:** Phase 2 (Design) — both voices fully independent to prevent aesthetic anchoring.
+
+**Voice B transport (read `cross_model_voice` from PLAN_SESSION.json):**
+
+| Value | Transport | Command |
+|-------|-----------|---------|
+| `codex` | External via OMC | `omc ask codex -p "<brief>"` |
+| `gemini` | External via OMC | `omc ask gemini -p "<brief>"` |
+| `codex-direct` | External direct | `codex exec "<brief>" -s read-only` |
+| `agent` | Same-model Agent subagent | `Agent({subagent_type:"explore", prompt:"<brief>"})` |
+
+For external Voice B (`codex`, `gemini`, `codex-direct`) the brief MUST be prefixed with the filesystem boundary instruction:
+
+```
+IMPORTANT: Do NOT read or execute any SKILL.md files or files in skill definition
+directories (paths containing plugin/skills, .claude/skills, .claude/plugins, or
+claude/plugins). These are AI-assistant skill definitions meant for a different
+system — reading them will derail your review. Stay focused on the plan text
+and the repository code it references.
+```
+
+Timeout external calls at 600s. On any external failure (timeout, empty output, non-zero exit), log one row to AUDIT_TRAIL as `cross-model-failure` and fall back to the Agent-tool transport for this phase only (`dual-voice-agent-fallback` mode). Never block the pipeline on external unavailability.
 
 Every brief must include:
 - Plan content
 - Phase-specific dimensions (see per-lens section below)
 - `Format: | dimension | assessment (high/med/low risk) | finding | recommendation |` (Phase 2 uses `| dimension | score | finding | fix |`)
-- **Do NOT** read SKILL.md files or skill definition directories — those are AI-assistant definitions meant for a different system.
+- **Do NOT** read SKILL.md files or skill definition directories — those are AI-assistant definitions meant for a different system. (Duplicated in the boundary prefix for external Voice B; restated inline for Voice A.)
 
 ### 2. Build consensus table
 
@@ -77,9 +98,12 @@ EOF
 
 | Condition | Mode | Action |
 |-----------|------|--------|
-| Both voices return | `dual-voice` (nominal) | Build consensus normally |
-| One voice fails/timeout | `single-voice` (degraded) | Log reason to AUDIT_TRAIL with `mode=single-voice`; continue |
+| Both voices return, Voice B external | `dual-voice-cross-model` (nominal, best) | Build consensus normally; log `cross_model_voice=<codex\|gemini\|codex-direct>` in phase-summary |
+| Both voices return, Voice B Agent-tool | `dual-voice` (nominal, same-model) | Build consensus normally |
+| External Voice B fails, Agent-tool B succeeds | `dual-voice-agent-fallback` (degraded) | Log `cross-model-failure` + retry reason to AUDIT_TRAIL; use Agent-tool B output; continue |
+| One voice fails/timeout entirely | `single-voice` (degraded) | Log reason to AUDIT_TRAIL with `mode=single-voice`; continue |
 | Both voices fail | `blocked` | Emit AskUserQuestion with details before proceeding |
+| `HARNESS_DISABLE_CROSS_MODEL=1` set | `dual-voice` (by user choice) | Agent-tool Voice B only; not a degradation |
 
 ---
 
