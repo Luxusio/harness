@@ -209,6 +209,40 @@ Note the product type; it influences which persona options are offered in Step 0
 
 ---
 
+## PRE-REVIEW SYSTEM AUDIT (before Step 0)
+
+Two pre-flight audits run before Step 0 to gather DX evidence and surface prior context. Both are fast and fail-safe.
+
+### Retrospective check
+
+Look for prior DX reviews on overlapping surfaces. If the plan touches CLI/API/SDK/docs that were reviewed recently, prior findings must inform this review:
+
+```bash
+git log --oneline -30 --all -- 'README*' 'docs/**' 'cli/**' '*api*' '*cli*' 2>/dev/null | grep -iE "dx|devex|docs|cli|api|onboarding|getting.started|error.message" | head -10
+```
+
+Surface any prior DX-related commits. If prior commits addressed similar concerns, the reviewer MUST read the commit messages and avoid re-flagging what was already decided.
+
+### DX artifact scan
+
+Scan the repo for DX-relevant evidence so Step 0 (persona, TTHW, magical moment) can reference concrete artifacts, not vibes:
+
+```bash
+# Getting-started surface area
+ls README* INSTALL* QUICKSTART* GETTING_STARTED* 2>/dev/null | head -5
+
+# CLI help (if this is a CLI product)
+find . -type f \( -name "*.rs" -o -name "*.go" -o -name "*.ts" -o -name "*.py" \) -path "*/cli/*" 2>/dev/null | head -5
+
+# Examples / tutorials
+find examples/ docs/examples/ tutorials/ -type f 2>/dev/null | head -10
+
+# Error messages grep (look for actual error text quality)
+grep -riE "^[[:space:]]*(error|Error|ERROR).*[:!]" --include='*.py' --include='*.ts' --include='*.go' --include='*.rs' src/ cli/ lib/ 2>/dev/null | head -10
+```
+
+If artifacts are found: read them before Step 0. The reviewer's Step 0 persona and TTHW must reference these artifacts by name. If zero DX artifacts found: flag as critical gap (this is a DX emergency — the product has no public DX surface).
+
 ## Step 0: DX Investigation (before scoring)
 
 The core principle: **gather evidence and force decisions BEFORE scoring, not during
@@ -553,6 +587,8 @@ DX TREND (prior reviews):
 
 ### Pass 1: Getting Started Experience (Zero Friction)
 
+**Load reference:** Read the `## Pass 1` section from `plugin/skills/plan-devex-review/dx-hall-of-fame.md` before scoring this pass. Do NOT load the entire file.
+
 Rate 0-10: Can a developer go from zero to hello world in under 5 minutes?
 
 **Evidence recall:** Reference the competitive benchmark from 0C (target tier), the
@@ -580,6 +616,8 @@ in one terminal session without leaving the terminal?
 
 ### Pass 2: API/CLI/SDK Design (Usable + Useful)
 
+**Load reference:** Read the `## Pass 2` section from `plugin/skills/plan-devex-review/dx-hall-of-fame.md` before scoring this pass. Do NOT load the entire file.
+
 Rate 0-10: Is the interface intuitive, consistent, and complete?
 
 **Evidence recall:** Does the API surface match [persona from 0A]'s mental model?
@@ -601,6 +639,8 @@ Good API design test: Can a [persona] use this API correctly after seeing one ex
 **STOP.** AskUserQuestion once per issue. Recommend + WHY.
 
 ### Pass 3: Error Messages & Debugging (Fight Uncertainty)
+
+**Load reference:** Read the `## Pass 3` section from `plugin/skills/plan-devex-review/dx-hall-of-fame.md` before scoring this pass. Do NOT load the entire file.
 
 Rate 0-10: When something goes wrong, does the developer know what happened, why,
 and how to fix it?
@@ -625,6 +665,8 @@ Also evaluate:
 
 ### Pass 4: Documentation & Learning (Findable + Learn by Doing)
 
+**Load reference:** Read the `## Pass 4` section from `plugin/skills/plan-devex-review/dx-hall-of-fame.md` before scoring this pass. Do NOT load the entire file.
+
 Rate 0-10: Can a developer find what they need and learn by doing?
 
 **Evidence recall:** Does the docs architecture match [persona from 0A]'s learning
@@ -643,6 +685,8 @@ Evaluate:
 
 ### Pass 5: Upgrade & Migration Path (Credible)
 
+**Load reference:** Read the `## Pass 5` section from `plugin/skills/plan-devex-review/dx-hall-of-fame.md` before scoring this pass. Do NOT load the entire file.
+
 Rate 0-10: Can developers upgrade without fear?
 
 Evaluate:
@@ -655,6 +699,8 @@ Evaluate:
 **STOP.** AskUserQuestion once per issue. Recommend + WHY.
 
 ### Pass 6: Developer Environment & Tooling (Valuable + Accessible)
+
+**Load reference:** Read the `## Pass 6` section from `plugin/skills/plan-devex-review/dx-hall-of-fame.md` before scoring this pass. Do NOT load the entire file.
 
 Rate 0-10: Does this integrate into developers' existing workflows?
 
@@ -675,6 +721,8 @@ Evaluate:
 
 ### Pass 7: Community & Ecosystem (Findable + Desirable)
 
+**Load reference:** Read the `## Pass 7` section from `plugin/skills/plan-devex-review/dx-hall-of-fame.md` before scoring this pass. Do NOT load the entire file.
+
 Rate 0-10: Is there a community, and does the plan invest in ecosystem health?
 
 Evaluate:
@@ -688,6 +736,8 @@ Evaluate:
 **STOP.** AskUserQuestion once per issue. Recommend + WHY.
 
 ### Pass 8: DX Measurement & Feedback Loops (Implement + Refine)
+
+**Load reference:** Read the `## Pass 8` section from `plugin/skills/plan-devex-review/dx-hall-of-fame.md` before scoring this pass. Do NOT load the entire file.
 
 Rate 0-10: Does the plan include ways to measure and improve DX over time?
 
