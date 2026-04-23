@@ -134,16 +134,16 @@ Store as `BASE_BRANCH`.
 
 **Trigger:** REQUEST.md absent OR < 15 non-empty lines.
 
-If `plugin/skills/office-hours/SKILL.md` exists: emit one AskUserQuestion:
-- A) Run office-hours prerequisite → invoke, resume at 0.5 with output
-- B) Skip → proceed to 0.5
-- C) Clarify inline → 3 goal-sharpening questions (outcome / NOT in scope / success)
+Emit one AskUserQuestion:
+- A) Clarify inline → 3 goal-sharpening questions (outcome / NOT in scope / success)
+- B) Skip → proceed to 0.5 with thin REQUEST.md (premise challenge will surface the gap)
+- C) Re-run setup first → user has unfinished project framing; `Skill(harness:setup)` owns pre-plan scope-sharpening in harness
 
-If office-hours absent: emit C directly.
-
-After office-hours: `find doc/ -name "*design*.md" -newer TASK_STATE.yaml` — if found, read and append as `## Design Context` to task pack. Log discovery to AUDIT_TRAIL via `--artifact audit`.
+After setup (if chosen): `find doc/ -name "*design*.md" -newer TASK_STATE.yaml` — if found, read and append as `## Design Context` to task pack. Log discovery to AUDIT_TRAIL via `--artifact audit`.
 
 Skip cleanly if trigger not met. Never loop.
+
+**Note:** harness does not ship a separate `office-hours` skill. `Skill(harness:setup)` fills the pre-planning / scope-sharpening role through its interactive intake flow.
 
 ## Phase 0.5: Restore point
 
