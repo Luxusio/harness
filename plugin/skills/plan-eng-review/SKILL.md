@@ -235,6 +235,9 @@ If `CROSS_PROJECT` is `unset` (first time): Use AskUserQuestion:
 smarter on their codebase over time.
 
 ### 1. Architecture review
+
+**MUST READ** `plugin/skills/plan-eng-review/rubrics-threat-rollback.md` before completing this section. Answer the 6 security + 4 rollback questions inline in the review — skipping is a compression violation (see `plan/review-phases.md` § "Compression brake"). The rubric is a plan-time gut-check, not a runtime audit.
+
 Evaluate:
 * Overall system design and component boundaries.
 * Dependency graph and coupling concerns.
