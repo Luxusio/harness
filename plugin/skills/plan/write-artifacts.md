@@ -151,6 +151,28 @@ Set `plan_session_state: closed` in TASK_STATE.yaml. Task is now ready for imple
 
 ## 6.10 Completion report
 
+**Lake Score computation** (from CHECKS.yaml per-AC `completeness` field):
+
+```bash
+python3 - <<'PY' 2>/dev/null || echo "Lake Score: n/a"
+import yaml, pathlib
+p = pathlib.Path("doc/harness/tasks/TASK__<id>/CHECKS.yaml")
+if not p.exists():
+    print("Lake Score: n/a (no CHECKS.yaml)")
+else:
+    acs = yaml.safe_load(p.read_text()) or []
+    scores = [ac.get("completeness") for ac in acs
+              if isinstance(ac, dict) and isinstance(ac.get("completeness"), (int, float))]
+    if not scores:
+        print("Lake Score: n/a (no completeness fields)")
+    else:
+        avg = round(sum(scores) / len(scores), 1)
+        print(f"Lake Score: {avg}/10 (from {len(scores)} ACs)")
+PY
+```
+
+The Lake Score is the mean plan-time completeness of every AC, rounded to one decimal. High (≥8) = every AC covers full edge surface; low (≤5) = plan has structural shortcuts.
+
 ```
 STATUS: <DONE | DONE_WITH_CONCERNS | BLOCKED>
 
@@ -164,6 +186,7 @@ Taste surfaced:    <N> items
 User Challenges:   <N> items
 Deferred scope:    <N> items (see deferred-scope.md)
 Review log:        <N> entries (see REVIEW_LOG.jsonl)
+Lake Score:        <avg>/10 (from <N> ACs)   ← from the computation above; emit "n/a" if CHECKS.yaml absent or empty
 ```
 
 - **DONE_WITH_CONCERNS** — any of: phase ran single-voice degraded; User Challenge unresolved; convergence guard issues.
