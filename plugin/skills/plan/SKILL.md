@@ -214,8 +214,10 @@ Invoke `AskUserQuestion` with the 5.1 rich plan review summary as context (the s
 
 `question` (use verbatim):
 ```
-Plan review complete. Approve as-is, approve with overrides, revise a phase, or reject?
+Plan review complete. Approve as-is, approve with overrides, revise a phase, or reject? (Or ask a question first via Other — Interrogate.)
 ```
+
+The `Other` free-text is the Interrogate escape hatch. If the user wants to ask a clarifying question before choosing, they type it into `Other`; the handler below treats it as Interrogate and re-presents the gate after answering.
 
 Options (4 — keep this order so the Recommended label sticks to Approve):
 
