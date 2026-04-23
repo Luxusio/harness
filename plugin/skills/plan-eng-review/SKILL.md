@@ -45,7 +45,7 @@ This sub-skill shares common sections with the main plan skill (`plugin/skills/p
 
 ## Step 0: Pre-review Checks
 
-Before starting the engineering review, run three checks:
+Before starting the engineering review, run seven checks. Each is a scope/quality gate that can reduce wasted review effort by catching cheap wins upfront.
 
 ### Search Check
 Verify all imports, references, and dependencies in the plan resolve:
@@ -65,6 +65,26 @@ Verify test coverage is balanced:
 - Are all new code paths covered?
 - Is edge case coverage proportional to risk?
 - Are integration tests specified where components interact?
+
+### Existing-code reuse audit
+Before any new module is proposed, grep the repo for existing solutions. Map each sub-problem in the plan to existing code that could be extended instead of duplicated:
+
+```
+| Sub-problem | Existing candidate | Reuse verdict |
+|-------------|-------------------|---------------|
+| <problem>   | <file:function>   | reuse / extend / replace / no match |
+```
+
+Any "no match" row requires a one-line justification for why a new module is warranted. Default posture: extend over duplicate.
+
+### Minimum scope analysis
+Ask: what is the smallest diff that achieves the stated outcome? If the plan's proposed diff is materially larger than the minimum, either (a) the extra scope is justified explicitly in the plan, or (b) the plan needs reduction. List the minimum-viable diff alongside the proposed diff for comparison.
+
+### Complexity smell test
+Trigger if the plan touches **≥8 files** OR **≥2 services** OR introduces **a new top-level module**. Any trigger requires a paragraph in the plan explaining why the complexity is necessary. If the plan triggers the smell test silently (no justification), flag as a critical gap before Review Sections — the plan must defend the complexity or reduce it.
+
+### TODOS.md cross-reference
+Before starting architecture review, read `TODOS.md` (if present at repo root). If any plan item overlaps with an existing TODOS entry, either fold the TODOS item into the plan's acceptance criteria or explicitly note that it remains deferred. Prevents the common failure mode where plans implicitly duplicate or contradict pre-existing deferred work.
 
 If any check fails, flag the specific gap before proceeding.
 
@@ -771,6 +791,27 @@ At the end of the review, fill in and display this summary so the user can see a
 
 ## Retrospective learning
 Check the git log for this branch. If there are prior commits suggesting a previous review cycle (e.g., review-driven refactors, reverted changes), note what was changed and whether the current plan touches the same areas. Be more aggressive reviewing areas that were previously problematic.
+
+## Operational Self-Improvement
+
+After the review completes, run a 5-minute-save test: scan the session for operational surprises that would save 5+ minutes in a future review if known upfront. Examples:
+
+- A command that needed a non-obvious flag to produce useful output.
+- An ordering constraint (must run X before Y).
+- An undocumented env var, port, or config path.
+- A framework quirk that wasted a cycle.
+- A pattern match that surfaced a learning the reviewer didn't have loaded.
+
+Log each discovery to `doc/harness/learnings.jsonl` with `type:"operational"` and `source:"plan-eng-review"`:
+
+```bash
+_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+echo '{"ts":"'"$_TS"'","type":"operational","source":"plan-eng-review","key":"SHORT_KEY","insight":"<one-line actionable instruction>","confidence":N,"task":"TASK__<id>"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+```
+
+This runs in addition to the plan orchestrator's write-artifacts Phase 6.8 learnings write-back — the orchestrator captures cross-phase learnings; this sub-skill captures eng-review-specific ones even when the sub-skill is invoked standalone (e.g. via `Skill(plan-eng-review)` directly). The `source` field distinguishes origin so the orchestrator can dedupe later if needed.
+
+Skip obvious facts, transient errors, and duplicate-entry risk. If the session surfaced no operational friction, skip silently — never fabricate.
 
 ## Formatting rules
 * NUMBER issues (1, 2, 3...) and LETTERS for options (A, B, C...).
