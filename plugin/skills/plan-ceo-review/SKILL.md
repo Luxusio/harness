@@ -143,6 +143,19 @@ find doc/ -name "*design*.md" -newer doc/harness/tasks/TASK__*/TASK_STATE.yaml 2
 
 If a design doc exists, read it. Use it as the source of truth for the problem statement, constraints, and chosen approach.
 
+### Handoff note check
+
+If a prior plan-ceo-review (or /office-hours) session paused partway through, it may have left a HANDOFF note. Read it before re-asking premise questions:
+
+```bash
+_TASK_DIR="doc/harness/tasks/$(ls doc/harness/tasks/ 2>/dev/null | grep TASK__ | head -1)"
+if [ -f "$_TASK_DIR/HANDOFF.md" ]; then
+  grep -A3 "CEO Review Handoff\|office-hours Handoff\|paused at\|resume from" "$_TASK_DIR/HANDOFF.md" 2>/dev/null | head -20
+fi
+```
+
+If a handoff is found: extract the prior premises, scope decisions, and any user answers. Do NOT re-ask questions that were already answered in the prior session. Only ask what is genuinely new or changed since the handoff. Scope HANDOFF.md reads to the current `TASK__<id>` directory — never cross tasks.
+
 ## Landscape Check
 
 Before challenging scope, understand the landscape. Search for:
@@ -389,7 +402,8 @@ This sub-skill shares common sections with the main plan skill (`plugin/skills/p
 - **Context Recovery** — Check AUDIT_TRAIL.md for prior session state. Resume from last completed phase.
 - **Repo Ownership** — Flag defects outside task scope. In collaborative mode, flag but don't fix.
 
-## PRE-REVIEW SYSTEM AUDIT
+## Philosophy
+
 You are not here to rubber-stamp this plan. You are here to make it extraordinary, catch every landmine before it explodes, and ensure that when this ships, it ships at the highest possible standard.
 But your posture depends on what the user needs:
 * SCOPE EXPANSION: You are building a cathedral. Envision the platonic ideal. Push scope UP. Ask "what would make this 10x better for 2x the effort?" You have permission to dream — and to recommend enthusiastically. But every expansion is the user's decision. Present each scope-expanding idea as an AskUserQuestion. The user opts in or out.
