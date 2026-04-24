@@ -325,6 +325,14 @@ If browser missing: `A) Install and come back | B) Skip | C) Install now via apt
 If Chrome MCP missing: `A) Add to .mcp.json (recommended) | B) Already configured globally | C) Skip`.
 If dev_command missing: `A) Specify command | B) Skip | C) Auto-detect later`.
 
+**Desktop / native GUI (desktop_qa_supported):** Probe `uname -s`, `command -v Xvfb`,
+and `.mcp.json` for an `x11-mcp` entry before asking. v1 is Linux-only.
+
+If Linux + Xvfb + x11-mcp present: `A) Enable desktop QA (recommended) | B) Skip — tests only`.
+If Linux + Xvfb missing: `A) Install xvfb via sudo apt-get | B) Skip | C) I'll install manually`.
+If Linux + x11-mcp entry missing: `A) Add placeholder to .mcp.json (recommended) | B) Already configured globally | C) Skip`.
+If non-Linux host: inform that qa-desktop v1 is Linux-only and offer `A) Skip — tests only | B) Enable anyway (BLOCKED_ENV at runtime)`.
+
 **API project:** `A) Enable API QA (recommended) | B) Skip — tests only`. curl assumed present.
 
 **CLI/library:** `A) Enable CLI QA (recommended) | B) Skip — tests only`.

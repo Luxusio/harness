@@ -50,11 +50,15 @@ Read `doc/harness/manifest.yaml` for project type. Spawn appropriate QA agent(s)
 
 **Strategy selection:**
 - `browser_qa_supported: true` → qa-browser
+- `desktop_qa_supported: true` → qa-desktop
 - `type: api` or diff contains route/endpoint files → qa-api
 - `type: cli` or `type: library` → qa-cli
 - Multiple types match (fullstack) → spawn relevant agents **in parallel**
 
-Agent spawn template (substitute `<lens>` ∈ {browser, api, cli}):
+Order matters: the desktop branch is evaluated before the `type: cli` / `type: library`
+fallback so a desktop app declared as `type: cli` still routes to qa-desktop.
+
+Agent spawn template (substitute `<lens>` ∈ {browser, desktop, api, cli}):
 
 ```
 Agent(

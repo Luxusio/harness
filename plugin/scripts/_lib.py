@@ -561,6 +561,7 @@ def provenance_from_artifacts(task_dir):
             "qa-browser": "CRITIC__qa.md",
             "qa-api": "CRITIC__qa.md",
             "qa-cli": "CRITIC__qa.md",
+            "qa-desktop": "CRITIC__qa.md",
         }.items()
     }
 
