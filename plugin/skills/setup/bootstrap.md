@@ -23,6 +23,7 @@ project: {project_name}
 project_type: {detected_or_chosen}
 harness_version: 2
 browser_qa_supported: {true|false}
+desktop_qa_supported: {true|false}   # true for native GUI apps (Qt/GTK/Tauri/Electron-headless). Linux-only in v1.
 build_command: {cmd}
 test_command: {cmd}
 dev_command: {cmd or omit}       # browser: dev server start command
@@ -119,6 +120,65 @@ else
 MCPJSON
 fi
 ```
+
+Skip MCP config if user selected "already configured globally".
+
+### x11-mcp prereq check (when desktop_qa_supported: true)
+
+v1 is Linux-only. The x11-mcp server itself is NOT shipped by harness — the user
+installs it separately and registers it in `.mcp.json`. Setup writes a placeholder
+block so the developer knows what to fill in.
+
+```bash
+# Platform gate — warn on non-Linux
+_OS=$(uname -s 2>/dev/null || echo unknown)
+if [ "$_OS" != "Linux" ]; then
+  echo "WARN: desktop_qa_supported=true on $_OS — qa-desktop v1 is Linux-only."
+  echo "      macOS (XQuartz) / Windows (WSLg) are deferred to v2."
+fi
+
+# Xvfb availability (for headless CI / WSL without WSLg)
+command -v Xvfb >/dev/null 2>&1 || {
+  echo "MISSING: Xvfb — install with: sudo apt-get install -y xvfb"
+  echo "        The qa-desktop agent can also install it on-demand via sudo -n apt-get,"
+  echo "        but pre-installing avoids BLOCKED_ENV on first run."
+}
+
+# .mcp.json placeholder — user fills in the actual x11-mcp server command
+if [ -f .mcp.json ]; then
+  python3 -c "
+import json
+with open('.mcp.json') as f:
+    config = json.load(f)
+config.setdefault('mcpServers', {}).setdefault('x11-mcp', {
+    'command': '{install-your-x11-mcp-server}',
+    'args': []
+})
+with open('.mcp.json', 'w') as f:
+    json.dump(config, f, indent=2)
+print('x11-mcp placeholder added to .mcp.json — replace {install-your-x11-mcp-server}')
+" 2>/dev/null || echo "FAILED: could not update .mcp.json"
+else
+  cat > .mcp.json << 'MCPJSON'
+{
+  "mcpServers": {
+    "harness": {
+      "command": "python3",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/harness_server.py"]
+    },
+    "x11-mcp": {
+      "command": "{install-your-x11-mcp-server}",
+      "args": []
+    }
+  }
+}
+MCPJSON
+fi
+```
+
+If your x11-mcp server publishes tools under a different MCP name (e.g.
+`mcp__x11-mcp__*`, `mcp__xdotool__*`), update the `tools:` list in
+`${CLAUDE_PLUGIN_ROOT}/agents/qa-desktop.md` frontmatter to match.
 
 Skip MCP config if user selected "already configured globally".
 

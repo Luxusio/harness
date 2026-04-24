@@ -58,7 +58,7 @@ Short approvals only authorize the last explicit transition proposed.
 | PLAN.md | plan-skill |
 | CHECKS.yaml | plan-skill (create) + update_checks.py CLI (develop/qa updates) |
 | source + HANDOFF.md + DOC_SYNC.md + distilled change doc | developer |
-| CRITIC__qa.md | qa-browser / qa-api / qa-cli |
+| CRITIC__qa.md | qa-browser / qa-api / qa-cli / qa-desktop |
 
 Do not write another role's artifact. Prewrite gate enforces this.
 
