@@ -15,6 +15,7 @@ import os
 import shutil
 import subprocess
 import sys
+import uuid
 
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -82,11 +83,19 @@ def scratch_task_in_real_repo(
     task_dir = os.path.join(tasks_dir, task_id)
     os.makedirs(task_dir, exist_ok=True)
 
+    # Save the real .active out of the way via atomic os.rename to a unique
+    # sidecar path. In-memory save (the previous approach) was lost whenever an
+    # exception fired between capture and restore — corrupting the harness's
+    # canonical focus marker. If the process is SIGKILLed mid-fixture, the
+    # sidecar `.active.fixture-backup.<pid>.<uuid>` survives and can be
+    # restored manually with `mv`.
     active_marker = os.path.join(tasks_dir, ".active")
-    prev_active = None
-    if os.path.isfile(active_marker):
-        with open(active_marker, "r", encoding="utf-8") as f:
-            prev_active = f.read()
+    backup_marker = (
+        f"{active_marker}.fixture-backup.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    )
+    had_existing = os.path.isfile(active_marker)
+    if had_existing:
+        os.rename(active_marker, backup_marker)
 
     try:
         if plan:
@@ -102,14 +111,67 @@ def scratch_task_in_real_repo(
         yield task_dir
     finally:
         shutil.rmtree(task_dir, ignore_errors=True)
-        if prev_active is not None:
-            with open(active_marker, "w", encoding="utf-8") as f:
-                f.write(prev_active)
-        else:
-            try:
-                os.unlink(active_marker)
-            except OSError:
-                pass
+        try:
+            os.unlink(active_marker)
+        except OSError:
+            pass
+        if had_existing and os.path.isfile(backup_marker):
+            os.rename(backup_marker, active_marker)
+
+
+_SESSION_ACTIVE_BACKUP: str | None = None
+
+
+def pytest_sessionstart(session):
+    """Snapshot the real repo's `.active` marker at session start via atomic
+    rename to a sidecar path. Restored in `pytest_sessionfinish`.
+
+    This is a safety net for test paths that mutate `.active` outside the
+    `scratch_task_in_real_repo` fixture — notably `test_harness_mcp_server.py`,
+    which calls `task_close` against the real `find_repo_root()` and removes
+    the marker as a side effect of the close protocol.
+
+    The fixture-level save/restore (`scratch_task_in_real_repo`) remains the
+    primary line of defense for normal cases; this hook catches everything
+    else with a single move.
+    """
+    global _SESSION_ACTIVE_BACKUP
+    active_path = os.path.join(REPO_ROOT, "doc", "harness", "tasks", ".active")
+    if not os.path.isfile(active_path):
+        _SESSION_ACTIVE_BACKUP = None
+        return
+    backup = (
+        f"{active_path}.session-backup.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+    )
+    try:
+        os.rename(active_path, backup)
+        _SESSION_ACTIVE_BACKUP = backup
+    except OSError:
+        _SESSION_ACTIVE_BACKUP = None
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Restore the snapshotted `.active` from `pytest_sessionstart`.
+
+    Best-effort: if a test process was hard-killed mid-suite, the sidecar
+    file (`.active.session-backup.<pid>.<uuid>`) survives and the human can
+    `mv` it back manually.
+    """
+    global _SESSION_ACTIVE_BACKUP
+    backup = _SESSION_ACTIVE_BACKUP
+    _SESSION_ACTIVE_BACKUP = None
+    if not backup or not os.path.isfile(backup):
+        return
+    active_path = os.path.join(REPO_ROOT, "doc", "harness", "tasks", ".active")
+    # Clear any in-flight scratch marker first so rename can succeed.
+    try:
+        os.unlink(active_path)
+    except OSError:
+        pass
+    try:
+        os.rename(backup, active_path)
+    except OSError:
+        pass
 
 
 __all__ = [
