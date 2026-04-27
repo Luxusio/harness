@@ -1,12 +1,13 @@
 ---
 title: mcp_bash_guard — block Bash-layer mutations of gated paths
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/scripts/mcp_bash_guard.py
   - plugin/scripts/prewrite_gate.py
   - plugin/scripts/_lib.py
   - plugin/hooks/hooks.json
 tier: 2
+freshness_updated: 2026-04-26T14:50:21Z
 ---
 
 # mcp_bash_guard

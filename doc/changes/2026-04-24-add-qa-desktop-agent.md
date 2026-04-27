@@ -1,7 +1,7 @@
 ---
 task: TASK__add-qa-desktop-agent
 date: 2026-04-24
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/agents/qa-desktop.md
   - plugin/skills/run/SKILL.md
@@ -11,6 +11,7 @@ invalidated_by_paths:
   - plugin/skills/plan/write-artifacts.md
   - plugin/skills/setup/bootstrap.md
   - plugin/skills/setup/SKILL.md
+freshness_updated: 2026-04-26T14:50:20Z
 ---
 
 # Add qa-desktop agent (x11-mcp desktop QA lens)

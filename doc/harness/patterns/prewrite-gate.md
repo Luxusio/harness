@@ -1,11 +1,12 @@
 ---
 title: prewrite_gate — plan-first + protected artifacts + scope lock
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/scripts/prewrite_gate.py
   - plugin/scripts/_lib.py
   - plugin/hooks/hooks.json
 tier: 2
+freshness_updated: 2026-04-26T14:50:21Z
 ---
 
 # prewrite_gate
