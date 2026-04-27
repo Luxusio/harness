@@ -1,38 +1,51 @@
 #!/usr/bin/env python3
-"""Stop hook — remind about open tasks on session end."""
+"""Stop hook — block Claude from stopping while an active harness task is open.
 
+Signals via stdout JSON ({"decision":"block","reason":...}) which is the
+authoritative Stop-hook contract; exit codes are masked by the `|| true`
+wrapper in plugin/hooks/hooks.json (see _lib.py:32-36).
+"""
+
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import find_repo_root, read_state, TASK_DIR
+from _lib import TASK_DIR, find_repo_root, read_hook_input
+
+
+def _active_task_id(active_path):
+    try:
+        with open(active_path, "r", encoding="utf-8") as f:
+            first = (f.read().strip().splitlines() or [""])[0]
+    except Exception:
+        return "(unknown)"
+    if not first:
+        return "(unknown)"
+    # .active may hold either a bare task_id or the full task_dir path
+    # (plugin/mcp/harness_server.py:264 writes the path). Collapse to basename.
+    return os.path.basename(first.rstrip("/"))[:120]
 
 
 def main():
-    repo_root = find_repo_root()
-    tasks_dir = os.path.join(repo_root, TASK_DIR)
-    if not os.path.isdir(tasks_dir):
-        sys.exit(0)
-
-    open_tasks = []
-    for entry in os.scandir(tasks_dir):
-        if not entry.is_dir() or not entry.name.startswith("TASK__"):
-            continue
-        st = read_state(entry.path)
-        status = (st.get("status") or "").lower()
-        if status not in ("closed", "archived", "stale", ""):
-            open_tasks.append((entry.name, status))
-
-    if open_tasks:
-        print(f"BLOCKED: {len(open_tasks)} open task(s) — complete the canonical loop before stopping.", file=sys.stderr)
-        for name, status in open_tasks[:3]:
-            print(f"  - {name} [{status}] → run Skill(harness:develop) or Skill(harness:run) to continue", file=sys.stderr)
-        if len(open_tasks) > 3:
-            print(f"  ... and {len(open_tasks) - 3} more", file=sys.stderr)
-        sys.exit(2)
-
-    sys.exit(0)
+    try:
+        read_hook_input()  # drain stdin so the hook pipe closes cleanly
+        repo_root = find_repo_root()
+        active_path = os.path.join(repo_root, TASK_DIR, ".active")
+        if not os.path.isfile(active_path):
+            return 0
+        task_id = _active_task_id(active_path)
+        reason = (
+            f"Active harness task {task_id} is open. Do not stop — finish the "
+            "plan -> develop -> verify -> close loop. Legitimate exits: "
+            "(1) run task_verify until runtime_verdict=PASS, then call task_close; "
+            "or (2) explicitly ask the user to cancel the task."
+        )
+        json.dump({"decision": "block", "reason": reason}, sys.stdout)
+        return 0
+    except Exception:
+        return 0  # fail-open — never trap Claude in a bad gate
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
