@@ -39,7 +39,9 @@ def main():
             f"Active harness task {task_id} is open. Do not stop — finish the "
             "plan -> develop -> verify -> close loop. Legitimate exits: "
             "(1) run task_verify until runtime_verdict=PASS, then call task_close; "
-            "or (2) explicitly ask the user to cancel the task."
+            "or (2) call the AskUserQuestion tool to ask the user whether to "
+            "cancel the task — invoke the tool, do not just emit a free-text "
+            "question, so the user gets a clean choice."
         )
         json.dump({"decision": "block", "reason": reason}, sys.stdout)
         return 0
