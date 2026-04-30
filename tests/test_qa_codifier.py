@@ -176,8 +176,8 @@ class TestCodifierPipeline(unittest.TestCase):
                 self.assertGreater(len(files), 0,
                                    "Expected >=1 .py file in target_dir (moved > 0)")
                 for fname in files:
-                    self.assertTrue(fname.startswith("ac_"),
-                                    f"File {fname} does not start with ac_")
+                    self.assertTrue(fname.startswith("test_ac_"),
+                                    f"File {fname} does not start with test_ac_")
 
     def test_collision_appends_suffix(self):
         """Behavior name collision should append _2, _3."""
@@ -445,7 +445,7 @@ class TestCodifierAcIdFiltering(unittest.TestCase):
                 self.assertNotIn("missing-ac_id", log)
 
     def test_scalar_ac_id_filename_prefix(self):
-        """ac_id: AC-001 produces filename starting with ac_001__."""
+        """ac_id: AC-001 produces filename starting with test_ac_001__ (pytest-discoverable)."""
         with tempfile.TemporaryDirectory() as fake_root:
             _make_fake_root_with_manifest(fake_root)
             result, target_dir, _ = self._run_codify(
@@ -453,11 +453,11 @@ class TestCodifierAcIdFiltering(unittest.TestCase):
             self.assertEqual(result, 0)
             files = os.listdir(target_dir) if os.path.isdir(target_dir) else []
             py_files = [f for f in files if f.endswith(".py")]
-            self.assertTrue(any(f.startswith("ac_001__") for f in py_files),
-                            f"No ac_001__ file found: {py_files}")
+            self.assertTrue(any(f.startswith("test_ac_001__") for f in py_files),
+                            f"No test_ac_001__ file found: {py_files}")
 
     def test_list_ac_id_filename_uses_first(self):
-        """ac_id: [AC-002, AC-001] uses first id => ac_002__ prefix."""
+        """ac_id: [AC-002, AC-001] uses first id => test_ac_002__ prefix (pytest-discoverable)."""
         txt = """codifiable:
   - behavior: list_ac_test
     ac_id: [AC-002, AC-001]
@@ -472,8 +472,30 @@ class TestCodifierAcIdFiltering(unittest.TestCase):
             self.assertEqual(result, 0)
             files = os.listdir(target_dir) if os.path.isdir(target_dir) else []
             py_files = [f for f in files if f.endswith(".py")]
-            self.assertTrue(any(f.startswith("ac_002__") for f in py_files),
-                            f"No ac_002__ file found: {py_files}")
+            self.assertTrue(any(f.startswith("test_ac_002__") for f in py_files),
+                            f"No test_ac_002__ file found: {py_files}")
+
+    def test_pytest_discovery_compatible_naming(self):
+        """All rendered files start with test_ so pytest auto-discovery works.
+
+        Regression for AC-006 of TASK__test-workflow-gaps. Codified tests must land
+        in tests/regression/<sanitized>/ AND be named test_*.py — without the
+        prefix, pytest skips them silently and the codifier's output rots.
+        """
+        with tempfile.TemporaryDirectory() as fake_root:
+            _make_fake_root_with_manifest(fake_root)
+            result, target_dir, _ = self._run_codify(
+                FIXTURE_TRANSCRIPT_WITH_AC_ID, fake_root)
+            self.assertEqual(result, 0)
+            files = os.listdir(target_dir) if os.path.isdir(target_dir) else []
+            py_files = [f for f in files if f.endswith(".py")]
+            self.assertTrue(py_files, "Expected at least one .py file emitted")
+            for f in py_files:
+                self.assertTrue(
+                    f.startswith("test_"),
+                    f"Codified test file {f!r} lacks 'test_' prefix; pytest "
+                    f"will not auto-discover it.",
+                )
 
 
 class TestTrivialCommandFilter(unittest.TestCase):
