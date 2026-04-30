@@ -123,10 +123,15 @@ to `failed` (auto-incrementing `reopen_count`). Only `passed` or
 Writes go through `scripts/update_checks.py` only. Never edit CHECKS.yaml by
 hand — the prewrite gate rejects direct writes.
 
-## 9. Iron Law (bugfix ACs)
+## 9. Iron Law
 
-`kind: bugfix` ACs in CHECKS.yaml cannot be promoted to `implemented_candidate`
-or `passed` unless `root_cause` is set. Enforced by `update_checks.py`:
+The Iron Law has two parallel clauses, both enforced by `update_checks.py`. ACs
+cannot be promoted to `implemented_candidate` or `passed` until the artefact
+appropriate to the AC's kind is supplied.
+
+### 9a. Bugfix ACs require `root_cause`
+
+`kind: bugfix` ACs cannot be promoted unless `root_cause` is set:
 
 ```bash
 python3 scripts/update_checks.py --task-dir TASK_DIR --ac AC-001 \
@@ -135,6 +140,37 @@ python3 scripts/update_checks.py --task-dir TASK_DIR --ac AC-001 \
 
 Without `--root-cause`, the command exits 1 with an Iron Law violation message.
 Once set, `root_cause` persists across subsequent transitions.
+
+### 9b. Feature / functional ACs require test evidence
+
+`kind in {feature, functional}` ACs cannot be promoted unless `--test-evidence`
+points to a real regression test file. The path is validated at gate time:
+must exist, must not be a symlink, must resolve inside `repo_root`.
+
+```bash
+python3 scripts/update_checks.py --task-dir TASK_DIR --ac AC-001 \
+  --status implemented_candidate \
+  --test-evidence tests/regression/task_xx/test_ac_001__behavior.py
+```
+
+Bypass with a documented reason (logged to `doc/harness/learnings.jsonl` as
+`type=test-evidence-bypass`; reason capped at 400 chars):
+
+```bash
+python3 scripts/update_checks.py --task-dir TASK_DIR --ac AC-007 \
+  --status implemented_candidate \
+  --no-test-required "narration-only AC, no behavior to test"
+```
+
+**Skip allowlist:** `kind in {bugfix, doc, verification}` skip the
+test-evidence rule. Bugfix has its own gate (9a); doc / verification produce
+no functional code. ACs whose `kind:` field is missing default to `unknown`
+and skip the gate (preserves backward-compat with legacy CHECKS.yaml that
+pre-dates this rule).
+
+The error message includes a `Suggested:` line when exactly one file under
+`tests/` matches the AC id (e.g. `test_ac_001__*.py`) — turning the gate
+from a bare rejection into a helpful nudge.
 
 ## 10. Quality scripts
 
