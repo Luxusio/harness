@@ -154,12 +154,31 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_checkpoint.py \
 Runs continuously during Phase 3.
 
 - **3.4 Test framework bootstrap** — if project has no framework and no `doc/harness/.no-test-bootstrap` opt-out marker, offer minimal setup (JS/TS: vitest or bun:test; Python: pytest; Go/Rust: built-in). Log bootstrap to `learnings.jsonl` type `test-bootstrap`. If user declines, create opt-out marker.
-- **3.5 Regression rule** — if the diff modifies existing behavior and no test covers the changed path, write a regression test immediately. Commit separately: `test: regression test for <what>`.
-  After Phase 7 PASS and before Phase 8 HANDOFF, run the QA codifier to capture structured regression tests from CRITIC__qa.md:
+- **3.5 Regression rule + Test-Evidence Gate** — two related rules.
+
+  *Regression rule:* if the diff modifies existing behavior and no test covers the changed path, write a regression test immediately. Commit separately: `test: regression test for <what>`.
+
+  *Test-Evidence Gate (since v2.3):* `update_checks.py` rejects promotion of `kind in {feature, functional}` ACs to `implemented_candidate` / `passed` unless `--test-evidence <path>` resolves to a real file inside the repo (no symlinks, no traversal). Use the bypass with a documented reason for ACs that genuinely have no test surface (configs, narration, migrations):
+  ```bash
+  # Promote with evidence:
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
+    --task-dir doc/harness/tasks/<task_id>/ --ac AC-001 \
+    --status implemented_candidate \
+    --test-evidence tests/regression/task_xx/test_ac_001__behavior.py
+
+  # Bypass with reason (logged to learnings.jsonl):
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
+    --task-dir doc/harness/tasks/<task_id>/ --ac AC-007 \
+    --status implemented_candidate \
+    --no-test-required "narration-only AC, no behavior to test"
+  ```
+  Allowlist (no evidence required): `kind in {bugfix, doc, verification}`. Bugfix is gated separately by Iron Law (`--root-cause`). Missing `kind:` field defaults to `unknown` and skips the gate (backward-compat).
+
+  *QA codifier* (after Phase 7 PASS, before Phase 8 HANDOFF) captures structured regression tests from CRITIC__qa.md:
   ```bash
   python3 ${CLAUDE_PLUGIN_ROOT}/scripts/qa_codifier.py --task-dir <task_dir> 2>/dev/null || true
   ```
-  The codifier parses `codifiable:` YAML blocks emitted by qa-cli/qa-api agents and stages validated tests to `tests/regression/<sanitized-task-id>/`. Never blocks task close.
+  The codifier parses `codifiable:` YAML blocks emitted by qa-cli/qa-api agents and stages validated tests to `tests/regression/<sanitized-task-id>/`. Output filenames are prefixed `test_<ac_NNN>__<behavior>.{ext}` so pytest's default discovery picks them up automatically — no project-side conftest changes required. Never blocks task close.
 - **3.6 Fix-first pattern** — see `fix-first-pattern.md`. Classify AUTO-FIX (dead code, magic numbers, stale comments, missing guards) and ASK (API design, architecture, security, DRY extractions). Auto-fix immediately; flag ASK in HANDOFF "Judgment Items". The **3-attempt escalation rule** also lives in this sub-file and applies to every fix loop (per-AC, Phase 7, browser debug).
 
 ### Phase 3.7–3.9: Post-implementation health
