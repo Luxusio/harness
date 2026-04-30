@@ -381,7 +381,10 @@ def codify(task_dir: str, transcript_path: str | None = None, target_root: str |
             # Build filename prefix: ac_001__ from first ac_id
             ac_num = re.search(r"\d+", str(first_ac))
             ac_prefix = f"ac_{int(ac_num.group()):03d}__" if ac_num else "ac_000__"
-            prefixed_behavior = ac_prefix + behavior
+            # Prefix with 'test_' so pytest auto-discovers under tests/regression/<task>/.
+            # Without this prefix, files land in the right directory but the runner
+            # skips them because pytest only globs test_*.py / *_test.py by default.
+            prefixed_behavior = "test_" + ac_prefix + behavior
 
             # AC-004: reject trivial commands — skip + log
             if _is_trivial_command(command):
