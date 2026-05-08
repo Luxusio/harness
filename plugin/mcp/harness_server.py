@@ -346,11 +346,9 @@ def handle_task_close(args: dict) -> dict:
             "task_dir": td, "blocking_acs": blocking,
         })
     if checks_status == "absent":
-        _log_gate_warn(
-            ti,
-            "checks-missing-at-close",
-            "CHECKS.yaml absent at close; pre-PR2 task compatibility path.",
-        )
+        # CHECKS.yaml absent → proceed silently for pre-PR2 task compatibility.
+        # Do not pollute learnings.jsonl — runtime alerts are not learnings.
+        pass
 
     st = read_state(td)
     st["status"] = "closed"

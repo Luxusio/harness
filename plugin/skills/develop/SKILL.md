@@ -350,39 +350,27 @@ score = (ac_completion × 0.40) + (test_coverage × 0.30)
 
 **Cleanup:** PROGRESS.md persists beyond Phase 8 — it is the scope-lock contract for any post-HANDOFF edits. Do NOT delete it. HANDOFF.md is the narrative permanent record; PROGRESS.md is the machine-readable scope boundary.
 
-### Phase 8.5: Reflect and Log
+### Phase 8.5: Reflect and Log (capture-when-fresh, no quota)
 
-Not the signals table — open-ended friction reflection. Ask:
-1. What took longer than expected?
-2. What surprised you?
-3. What would you do differently?
-4. Were prior learnings helpful? Stale? Missing?
-5. **Operational friction sweep (5-minute-save test):** scan for operational surprises that would save 5+ minutes in a future task if known upfront. Log at least one `operational` learning per session if any apply:
-   - command failed or had non-obvious flag
-   - tool had to run in specific order
-   - undocumented env var / port
-   - framework quirk that wasted a cycle
-   Log each as `type:"operational"` with a concrete one-line instruction for the next session.
+When you discover something genuinely useful during develop — a real bug whose fix is non-obvious, a build/test/tool gotcha that wasted a cycle, a workaround that's worth knowing next time — log it the moment you find it, **while it's fresh**. Do NOT save reflections for the end of the phase. Do NOT log entries to fill a quota. **If nothing was actually learned, write nothing.** A signal-free entry is worse than no entry.
 
-6. **Calibration metrics** — compare Phase 4.6 confidence scores vs Phase 7 actual results:
+A good entry names a concrete fact + a concrete fix, both groundable in files / commands / test output. Examples that pass the bar:
 
-   ```
-   File | Rated | Actual | Verdict | Lesson
-   billing.ts | 5/10 | FAIL | overconfident | N+1 hidden by mock
-   report.ts | 4/10 | PASS | underconfident | async looked risky, was sequential
-   ```
+- `pytest tests/regression/<task>/` requires `test_` prefix on filenames; the harness QA codifier auto-prefixes for this reason (file:`plugin/scripts/qa_codifier.py`).
+- `git diff --name-only HEAD~1` returns paths only — to filter by AC-targeted source, mirror-grep the import graph rather than relying on filename prefixes.
+- The `task_close` MCP no longer auto-writes gate-warn entries to learnings.jsonl (changed 2026-05-08); previous logs are noise, not learnings.
 
-   Log each event as `type:"confidence-calibration"`. Summary as `type:"calibration-summary"` with `overconfidence_rate` / `underconfidence_rate` (targets: <20% / <30%).
+Examples that do NOT pass the bar:
+- "What took longer than expected" / "What surprised me" — open-ended self-prompts produce vague entries. If a real friction point exists, it'll surface concretely; if not, leave it.
+- Confidence-calibration tables when AC count is small — statistical noise, not durable knowledge.
 
-Log each insight to `doc/harness/learnings.jsonl`:
+Schema:
 
 ```bash
-echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"pattern|pitfall|architecture|tool|operational","source":"develop-reflect","key":"FRICTION_KEY","insight":"<one-line>","confidence":N,"files":["<path>"],"task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"operational|pitfall|eureka|feedback","source":"develop","key":"SHORT_KEY","insight":"FACT + FIX","files":["<path>"],"task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
-Include `files` so staleness can be detected if those files are later deleted.
-
-**Learning quality feedback:** verify loaded learnings. File existence (`test -f` referenced paths); contradiction (same `key` with different `insight` — newer wins); recency (>30 days old referencing version-specific flags — flag suspect). Log as `key:"learning-audit"`.
+`type=operational` for tooling/syntax/path facts. `type=pitfall` for traps to avoid. `type=eureka` for first-principles discoveries. `type=feedback` for user-stated preferences. `files` enables staleness detection if a referenced path is later deleted. Silent-fail on write error. Never blocks.
 
 ### Phase 8.6: DOC_SYNC
 

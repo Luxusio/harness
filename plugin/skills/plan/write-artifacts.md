@@ -126,27 +126,32 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact checks \
   --input /tmp/checks_content.yaml
 ```
 
-## 6.8 Learnings write-back (non-blocking)
+## 6.8 Learnings write-back (capture-when-fresh, non-blocking)
 
-Reflect on session. Log operational discoveries that would save 5+ minutes in a future session. Good candidates: build quirks, ordering constraints, env var requirements, path assumptions, concurrency issues from Phase 3, project-specific patterns that differ from defaults.
+When you discover something genuinely useful during the task — a real bug, a workaround that saved time, a pattern that surprised you, a tooling gotcha — log it the moment you find it, **while it's fresh**. Do NOT save up "reflections" for the end of the task. Do NOT log entries to fill a quota. **If nothing was actually learned, write nothing.**
 
-**Plan-time tooling friction** is exactly this kind of signal — log it. Examples worth capturing:
-- `write_plan_artifact.py --artifact plan` requires `--input` not `--content-file`; non-obvious from `--help`.
-- PLAN_SESSION.json `phase` field expects `"write"` not `"6"` for `write_plan_artifact.py` to accept writes.
-- `update_checks.py` only mutates existing ACs; CHECKS.yaml additions go through `write_plan_artifact.py --artifact checks`.
-- `HARNESS_SKIP_PREWRITE=1` is one-shot; chain with the actual `Write` or rewrite the script invocation.
+A good entry names a concrete fact + a concrete fix, both groundable in files / commands / outputs. Examples of what passes the bar:
 
-Skip obvious facts and transient errors.
+- `/plugin marketplace add` does NOT expand bash subshell `$(pwd)` — `/plugin` is a Claude Code slash command, not a shell command. Use `./` or a literal path.
+- `update_checks.py` `_set_field` previously appended missing fields at 2-space indent (list-item level), corrupting CHECKS.yaml YAML structure. Fixed at script:99 — derive indent from existing fields.
+- `write_plan_artifact.py --artifact plan` requires `--input`, not `--content-file`; not obvious from `--help`.
+- `PLAN_SESSION.json` `phase` expects `"write"`, not `"6"`, for the artifact CLI to accept writes.
+
+Examples that do NOT pass the bar (do not log these):
+- "I completed Phase 3" — narration, not learning.
+- "The plan was clear" — vague reflection, not a durable fact.
+- "I used the Edit tool" — tool usage is not insight.
+
+Schema (one JSON line per entry, append to `doc/harness/learnings.jsonl`):
 
 ```bash
 _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 mkdir -p doc/harness 2>/dev/null || true
-# One JSON line per learning:
-# echo '{"ts":"'"$_TS"'","type":"operational","skill":"plan","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"DESCRIPTION","source":"observed"}' >> doc/harness/learnings.jsonl
+# echo '{"ts":"'"$_TS"'","type":"operational|pitfall|eureka|feedback","skill":"plan","branch":"'"$_BRANCH"'","key":"SHORT_KEY","insight":"FACT + FIX","source":"observed"}' >> doc/harness/learnings.jsonl
 ```
 
-Creates file if absent. Silent-fail on write error. Never blocks.
+`type=operational` for tooling/syntax/path facts. `type=pitfall` for traps to avoid. `type=eureka` for first-principles discoveries that contradict conventional wisdom. `type=feedback` for user-stated preferences that should shape future behavior. Creates file if absent. Silent-fail on write error. Never blocks task close.
 
 ## 6.9 Close session
 

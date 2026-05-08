@@ -102,13 +102,18 @@ def _set_field(block: str, field: str, value: str) -> str:
     new_block, n = re.subn(pattern, replacement, block, count=1, flags=re.MULTILINE)
     if n:
         return new_block
-    # Field missing — append with 2-space indent before the block's trailing newline.
+    # Field missing — append using the indent of an existing field line in this
+    # block. Falls back to 4 spaces (canonical AC-item field indent) if no
+    # field line exists. Hardcoded 2 spaces was wrong: it matched list-item
+    # indent (- id:), not nested-field indent, producing invalid YAML.
+    indent_match = re.search(r"^(\s+)\w+:", block, flags=re.MULTILINE)
+    indent = indent_match.group(1) if indent_match else "    "
     trailing = ""
     body = block
     if body.endswith("\n"):
         trailing = "\n"
         body = body[:-1]
-    return f"{body}\n  {field}: {value}{trailing}"
+    return f"{body}\n{indent}{field}: {value}{trailing}"
 
 
 def _yaml_quote(s: str) -> str:
