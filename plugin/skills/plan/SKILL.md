@@ -161,47 +161,44 @@ If missing after 2 retries, proceed to 5.1 with warning block:
 Missing: <list>
 ```
 
-### 5.1 Rich plan review summary
+### 5.1 Plan approval summary (user-facing)
+
+The user only needs two things at the gate: **what this plan will do** and **what is explicitly out of scope**. Internal review state (decision counts, voice consensus tallies, taste classifications, cross-phase themes) is logged to `AUDIT_TRAIL.md` by §5.2 and §5.2.5 — never rendered here.
 
 ```
-## Plan Review Complete
+## Plan Approval
 
-### Plan Summary: [1-3 sentences describing what this plan does]
-### Decisions Made: [N] total ([M] auto-decided, [K] taste, [J] user challenges)
+### What this plan will do
+[2-3 sentences in plain outcome language. Concrete: which files change, which behavior changes, what the user has at the end. No process counters. No phase-by-phase voice scores. No internal classification tallies.]
 
-### Per-Phase Review Scores
-- Phase 1 CEO: [summary], Voice consensus [X/6 confirmed, Y disagree]
-- Phase 2 Design: [summary or "skipped, no UI scope"], consensus [X/Y]
-- Phase 3 Eng: [summary], Voice consensus [X/6 confirmed, Y disagree]
-- Phase 4 DX: [summary or "skipped, no DX scope"], consensus [X/6]
-
-### Cross-Phase Themes: [from 5.2.5, or "none"]
-### Deferred Items: [count and summary from deferred-scope.md, or "none"]
-### Deferred to TODOS.md
-[Items added to TODOS.md during Phases 1-4. Format: "- <item> (Phase <N>, <principle>)".
- If none: "none"]
+### Out of scope
+[Bulleted list pulled from PLAN.md "NOT in scope". The work direction the user needs to know.]
 ```
+
+That is the entire user-facing summary. Anything more belongs in PLAN.md or AUDIT_TRAIL.md, not here.
 
 ### 5.1.1 Collect all decisions
 
 From consensus tables across Phases 1-4: Mechanical (silently applied), Taste, User Challenge.
 
-### 5.2 Surface Taste decisions (informational only)
+### 5.2 Log Taste decisions to AUDIT_TRAIL (no gate render)
 
-Cognitive load rules:
-- **0 taste:** skip section entirely.
-- **1-7 taste:** flat list.
-- **8+ taste:** group by phase with warning: `⚠ High ambiguity (<N> taste decisions). Grouped by phase.`
+Taste decisions are written to AUDIT_TRAIL only. Do NOT surface them at the user-facing gate (§5.1) — that contradicts the outcome-focused gate design. Auditability is preserved through AUDIT_TRAIL.md; the user does not need to read every taste classification to approve a plan.
 
-Format:
+Cognitive load rules still apply for the AUDIT_TRAIL row format:
+- **0 taste:** no rows written.
+- **1-7 taste:** one row per decision, flat.
+- **8+ taste:** one row per decision, with `phase_group` field set so the row is queryable post-task.
+
+AUDIT_TRAIL row format (this is the on-disk format, not gate output):
 ```
 Auto-decided (Taste):
 - [item]: chose [option] over [option] because [principle applied]
 ```
 
-### 5.2.5 Cross-Phase Themes
+### 5.2.5 Log Cross-Phase Themes to AUDIT_TRAIL (no gate render)
 
-Scan each phase consensus table; normalise topics (lowercase, trim); group. Any topic in ≥2 phases is a Cross-Phase Theme (high-confidence signal).
+Cross-phase theme detection still runs — scan each phase consensus table; normalise topics (lowercase, trim); group; any topic in ≥2 phases is a high-confidence signal. The output goes to AUDIT_TRAIL.md and PLAN.md `Cross-phase themes` section. AUDIT_TRAIL only — do NOT render at the user-facing gate (§5.1).
 
 ```
 Cross-Phase Themes (recurring in 2+ phases):
@@ -209,7 +206,7 @@ Cross-Phase Themes (recurring in 2+ phases):
 (none — no topics recurred across phases)
 ```
 
-Note in PLAN.md `Cross-phase themes` section.
+The reader of this output is the post-task auditor or the next plan-skill resume, not the user at the approval gate.
 
 ### 5.3 User Challenge gate
 
@@ -247,28 +244,27 @@ If 5.3 responses changed scope, confirm updated scope before Phase 6.
 
 ### 5.4.1 Gate response options
 
-Invoke `AskUserQuestion` with the 5.1 rich plan review summary as context (the summary must already be visible in the preceding agent message) and the following gate question. Four options — interrogate and user-challenge overrides collapse into the built-in `Other` free-text mechanism.
+Invoke `AskUserQuestion` with the §5.1 summary visible in the preceding agent message and the following gate question. Binary options — modify and interrogate collapse into the built-in `Other` free-text mechanism.
 
 `question` (use verbatim):
 ```
-Plan review complete. Approve as-is, approve with overrides, revise a phase, or reject? (Or ask a question first via Other — Interrogate.)
+Approve plan?
 ```
 
-The `Other` free-text is the Interrogate escape hatch. If the user wants to ask a clarifying question before choosing, they type it into `Other`; the handler below treats it as Interrogate and re-presents the gate after answering.
+Options (2 — keep this order so the Recommended label sticks to Approve):
 
-Options (4 — keep this order so the Recommended label sticks to Approve):
+1. **Approve — proceed to develop (Recommended)** — accept the plan as-is. Move to Phase 6 artefact write, then develop skill.
+2. **Reject — discard and reset to Phase 0** — clear all phase state, abandon the plan.
 
-1. **Approve as-is (Recommended)** — accept every taste decision and proceed to Phase 6.
-2. **Approve with overrides** — specify which taste decisions to flip or which user-challenge responses to apply (use `Other` to list the overrides).
-3. **Revise — re-run a phase** — pick one phase to re-run (Scope → Phase 1; Design → Phase 2; Test/architecture → Phase 3; DX → Phase 4). If the user picks this, follow up with a second `AskUserQuestion` asking which phase to re-run.
-4. **Reject** — start over from Phase 0 (clears all phase state).
+`Other` is treated as **Modify**: the user types whatever they want changed (taste-decision overrides, scope adjustments, "re-run Phase 3 with X premise", clarifying questions). The handler below interprets the free-text and either revises the plan or answers the question, then re-offers the gate.
 
 **Handling:**
-- **Approve as-is:** proceed to Phase 6.
-- **Approve with overrides:** apply overrides (parse the `Other` free-text or the notes field); re-present the 5.1 summary with changes noted; re-offer the gate.
-- **Other (no option picked, free-text only):** treat as Interrogate — answer the user's question fully, then re-present the 5.1 summary and re-offer the gate.
-- **Revise:** ask the follow-up phase-selection question, re-run affected phases with updated scope; increment cycle counter; after 3 cycles proceed to Phase 6 with a warning block at the top of PLAN.md.
+- **Approve:** proceed to Phase 6.
 - **Reject:** clear all phase-level state and reset to Phase 0.
+- **Other → Modify:** parse the user's free-text. Three sub-cases:
+  - *Pure question (no change request):* treat as Interrogate — answer fully, re-present the §5.1 summary, re-offer the gate.
+  - *Scope override or taste-decision flip:* apply, re-present the §5.1 summary with changes noted, re-offer the gate.
+  - *Phase re-run request (e.g. "re-run Phase 3 with X"):* re-run affected phases with updated scope; increment cycle counter; after 3 cycles proceed to Phase 6 with a warning block at the top of PLAN.md.
 
 ---
 
