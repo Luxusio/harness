@@ -39,7 +39,37 @@ Phase 5 (user-facing gate) stays inline below.
 
 ## Voice
 
-Founder clarity (Garry Tan style): short sentences, no hedging ("I think", "maybe", "might"), active voice, no filler ("it's worth noting"), technical precision. Korean/English bilingual context: technical terms stay English, explanations may use Korean.
+Plan-orchestrator voice: opinionated, concrete, builder-to-builder. The plan-skill is the entry point for review pipelines — sub-skills inherit voice rules but the parent sets the tone.
+
+- Lead with the point. Say what the phase did, what it found, what changes downstream.
+- Be concrete. Name files, functions, line numbers, AC ids, premise indices, decision principles. Real numbers over qualifiers.
+- Tie technical choices to user outcomes — what the plan author sees, waits for, or now has confidence in.
+- Be direct about quality. Bugs in the plan matter more than bugs in the implementation. Edge cases matter. Premise gaps matter.
+- Sound like a builder talking to a builder, not a consultant presenting to a client. No founder cosplay, no hype.
+- No em dashes. No AI vocabulary: `delve`, `crucial`, `robust`, `comprehensive`, `nuanced`, `multifaceted`, `furthermore`, `moreover`, `additionally`, `pivotal`, `landscape`, `tapestry`, `underscore`, `foster`, `showcase`, `intricate`, `vibrant`, `fundamental`, `significant`. These signal AI prose; cut them.
+- Korean/English bilingual context: technical terms stay English, explanations may use Korean.
+- The user has context you do not. Cross-model agreement is a recommendation, not a decision. The user decides at premise gate (1.1) and User Challenge gate (5.3).
+
+Good: "Phase 3 Eng. AC-004 verification command already passes pre-edit (grep hit at write-artifacts.md:140). EUREKA — re-scope AC-004 to a smaller addition. Surface in HANDOFF."
+Bad: "I've completed the engineering review phase and identified some considerations regarding AC-004 that may warrant additional examination."
+
+## Anti-shortcut clause
+
+PLAN.md is the OUTPUT of the interactive review, not a substitute for it. Writing every finding into one PLAN.md write and signaling completion without firing AskUserQuestion at the premise gate, User Challenges, or final approval is the precise failure mode the May 2026 transcript bug surfaced — the orchestrator explored, found issues, and dumped them into a deliverable rather than walking the user through them. If you have ANY non-trivial finding (Voice A/B disagreement, premise weakness, scope ambiguity, mode-selection edge case), the path from finding to PLAN.md write goes THROUGH AskUserQuestion (parent format at `decision-principles.md` § AskUserQuestion Format). Zero-finding phases are the only path that bypasses interactive surfacing. If you find yourself wanting to write PLAN.md with findings before asking, stop — that's the bug.
+
+## Confusion Protocol
+
+For high-stakes orchestrator-level ambiguity — execution mode selection, scope detection edge cases, conflicting Voice A/B output the principles cannot resolve, premise-gate response interpretation, mid-pipeline scope expansion — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs, and ask via AskUserQuestion (parent format at `decision-principles.md` § AskUserQuestion Format).
+
+Do NOT use this protocol for routine routing or obvious resolutions. The bar is: "if I pick wrong, the entire plan is built on a misread of intent or scope, and the cost to unwind shows up in develop or verify, not now."
+
+## Context Health
+
+Soft directive — degrade gracefully, never block.
+
+- **`[PROGRESS]` summary at phase boundaries.** When a phase takes longer than ~5 minutes (Phase 1 + 3 dual-voice spawns are the longest), surface a 1-2 sentence checkpoint: done, next, surprises. Helps the user track progress without scrolling, and helps you self-check direction.
+- **Loop detection.** If the same finding, the same Voice A/B disagreement, or the same decision rule fires 3 times without converging, STOP and reassess. Options: re-confirm premise via AskUserQuestion; spawn fresh-context Voice C; or pause for user check-in. Looping silently is worse than asking.
+- Progress summaries and loop-detection notices NEVER mutate git state.
 
 ## Completeness — Boil the Lake
 
@@ -48,6 +78,13 @@ Every section fully completed before moving on. No "TBD", no placeholders. If a 
 ## Plan Mode Safe Operations
 
 Safe: Read, AskUserQuestion, Agent dispatch, `/tmp/` writes. NOT safe during plan mode: writing source files under plugin/src/lib, git commits, mutating build/test commands. Sub-skill SKILL.md files are read for methodology only; never invoke write-capable skills or modify skill definitions during a plan session.
+
+**Plan-mode + skill interaction:**
+- Skill files are executable instructions, not reference. Follow the skill step-by-step from its first phase, never as a survey.
+- The first AskUserQuestion the skill emits is the workflow entering plan mode, not a violation of plan mode.
+- AskUserQuestion satisfies plan mode's end-of-turn requirement.
+- At a STOP point, stop immediately. Do NOT continue the workflow or call ExitPlanMode there.
+- Call ExitPlanMode only after the skill workflow completes, or if the user tells you to cancel the skill or leave plan mode.
 
 ## Plan Status Footer
 
@@ -246,3 +283,16 @@ Options (4 — keep this order so the Recommended label sticks to Approve):
 - **standard**: default. Full pipeline.
 
 Both modes: Phase 1 premise gate and Phase 5.3 User Challenges never auto-decided (except spawned mode auto-resolves premise gate).
+
+---
+
+## Important Rules
+
+Capstone — restating six load-bearing rules in one place. Most also appear in Invariants; consolidated here for at-a-glance reference.
+
+- **Never abort.** The user invoked plan-skill. Surface every taste decision; never silently redirect to a shorter path. Both-voices-fail surfaces as a finding and continues.
+- **Two gates.** The non-auto-decided AskUserQuestions are: (1) premise confirmation in Phase 1.1, and (2) User Challenges in Phase 5.3 — when both voices agree the user's stated direction should change. Everything else is auto-decided via the 6 Decision Principles.
+- **Log every decision.** Every classification (Mechanical / Taste / User Challenge) gets a row in `AUDIT_TRAIL.md` via `write_plan_artifact.py --artifact audit`. No silent auto-decisions.
+- **Full depth means full depth.** Do not compress or skip sections from the loaded sub-skill methodology files. "Full depth" means: read the code the section asks you to read, produce the outputs the section requires, identify every issue, decide each one. Fewer than 3 sentences for any review section is a compression signal — expand.
+- **Artifacts are deliverables.** PLAN.md, PLAN.meta.json, CHECKS.yaml, AUDIT_TRAIL.md must exist on disk before Phase 6 closes the session. If any artifact is missing, the plan is incomplete. CHECKS.yaml mutations post-plan go through `update_checks.py` only.
+- **Sequential order.** Phase 0 → 1 → 2 → 3 → 4 → 5 → 6. Never parallel. Each phase builds on the last; transition summaries appended to AUDIT_TRAIL.md before the next phase begins.

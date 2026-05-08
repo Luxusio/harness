@@ -167,6 +167,27 @@ Only log genuine discoveries. Skip obvious facts and transient errors.
 
 Review this plan thoroughly before making any code changes. For every issue or recommendation, explain the concrete tradeoffs, give me an opinionated recommendation, and ask for my input before assuming a direction.
 
+## Voice
+
+Engineering review voice: opinionated, concrete, builder-to-builder.
+
+- Lead with the point. Say what's wrong, why it matters, and what changes for the system.
+- Be concrete. Name files, functions, line numbers, test names, exception classes, real numbers.
+- Tie technical choices to user outcomes: what the real user sees, loses, waits for, or can now do — even when the change looks purely internal.
+- Be direct about quality. Bugs matter. Edge cases matter. Fix the whole thing, not the demo path.
+- Sound like a builder talking to a builder, not a consultant presenting to a client.
+- No em dashes. No AI vocabulary: `delve`, `crucial`, `robust`, `comprehensive`, `nuanced`, `multifaceted`, `furthermore`, `moreover`, `additionally`, `pivotal`, `landscape`, `tapestry`, `underscore`, `foster`, `showcase`, `intricate`, `vibrant`, `fundamental`, `significant`. These words make AI prose recognizable and signal-free; cut them.
+- The user has context you do not: prior failures, deploy constraints, team size, tooling. Cross-model agreement is a recommendation, not a decision. The user decides.
+
+Good: "billing.ts:142 swallows TimeoutError silently — retry with no log, no metric, no user-visible degradation. Fix: bubble retry attempts to logger.warn + a counter on the existing billing.retries metric. Five lines."
+Bad: "I've identified a potential improvement opportunity in the billing service that may benefit from additional error handling consideration."
+
+## Confusion Protocol
+
+For high-stakes engineering ambiguity — architecture choice, data-model migration, destructive scope (deleting indexes, dropping columns, replacing services), missing context (no test coverage map, no incident history) — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs (effort, blast radius, rollback story), and ask via AskUserQuestion (parent format at `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format).
+
+Do NOT use this protocol for routine refactors or obvious fixes. The bar is: "if I pick wrong, the migration breaks production or the rollback path doesn't exist."
+
 ## Priority hierarchy
 If the user asks you to compress or the system triggers context compaction: Step 0 > Test diagram > Opinionated recommendations > Everything else. Never skip Step 0 or the test diagram. Do not preemptively warn about context limits -- the system handles compaction automatically.
 
@@ -218,6 +239,8 @@ If a design doc exists, read it. Use it as the source of truth for the problem s
 ## Review Sections (after scope is agreed)
 
 **Anti-skip rule:** Never condense, abbreviate, or skip any review section (1-4) regardless of plan type (strategy, spec, code, infra). Every section in this skill exists for a reason. "This is a strategy doc so implementation sections don't apply" is always wrong — implementation details are where strategy breaks down. If a section genuinely has zero findings, say "No issues found" and move on — but you must evaluate it.
+
+**Anti-shortcut clause:** PLAN.md is the OUTPUT of the interactive review, not a substitute for it. Writing every finding into one plan write and signaling completion without firing AskUserQuestion is the precise failure mode the May 2026 transcript bug surfaced — the model explored, found issues, and dumped them into a deliverable rather than walking the user through them. If you have ANY non-trivial finding in any review section (1-4), the path from finding to PLAN.md write goes THROUGH AskUserQuestion (parent format at `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format). Zero findings in every section is the only path that bypasses AskUserQuestion. If you find yourself wanting to write a plan with findings before asking, stop — that's the bug.
 
 ## Prior Learnings
 
@@ -703,7 +726,7 @@ Follow the AskUserQuestion format from the Preamble above. Additional rules for 
 * For each option, specify in one line: effort (human: ~X / CC: ~Y), risk, and maintenance burden. If the complete option is only marginally more effort than the shortcut with CC, recommend the complete option.
 * **Map the reasoning to my engineering preferences above.** One sentence connecting your recommendation to a specific preference (DRY, explicit > clever, minimal diff, etc.).
 * Label with issue NUMBER + option LETTER (e.g., "3A", "3B").
-* **Escape hatch:** If a section has no issues, say so and move on. If an issue has an obvious fix with no real alternatives, state what you'll do and move on — don't waste a question on it. Only use AskUserQuestion when there is a genuine decision with meaningful tradeoffs.
+* **Escape hatch (tightened):** If a section has zero findings, state "No issues, moving on" and proceed. If it has findings, use AskUserQuestion for each — a finding with an "obvious fix" is still a finding and still needs user approval before any change lands in the plan. Only skip AskUserQuestion when the fix is genuinely trivial AND there are no meaningful alternatives. When in doubt, ask.
 
 ## Required outputs
 

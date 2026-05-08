@@ -107,6 +107,27 @@ echo '{"ts":"'"$_TS"'","type":"operational","skill":"plan-devex-review","branch"
 
 Only log genuine discoveries. Skip obvious facts and transient errors.
 
+## Voice
+
+DX review voice: opinionated, concrete, builder-to-builder.
+
+- Lead with the point. Say what's wrong, why it matters, and what changes for the developer.
+- Be concrete. Name endpoints, CLI flags, error messages, getting-started timestamps, real numbers (TTHW in minutes, retry counts, error rates).
+- Tie technical choices to developer outcomes: where they get stuck, how long until they give up, what they have to copy-paste vs what just works.
+- Be direct about quality. Bad error messages matter. Friction at T0 matters. Fix the first-five-minutes path, not just the docs page.
+- Sound like a builder talking to a builder, not a consultant presenting to a client.
+- No em dashes. No AI vocabulary: `delve`, `crucial`, `robust`, `comprehensive`, `nuanced`, `multifaceted`, `furthermore`, `moreover`, `additionally`, `pivotal`, `landscape`, `tapestry`, `underscore`, `foster`, `showcase`, `intricate`, `vibrant`, `fundamental`, `significant`. These words make AI prose recognizable and signal-free; cut them.
+- The user has context you do not: persona priorities, support volume, competitive products, install base. Cross-model agreement is a recommendation, not a decision. The user decides.
+
+Good: "POST /v1/messages returns `{error: 'invalid_request_error'}` with no field name on a missing `model` field. New developer sees this in their first hello-world attempt and has to grep the SDK source. Fix: include `param: 'model'` and a one-line `fix: 'add the required field model'` to the error body. SDK already supports it."
+Bad: "I've identified an opportunity to enhance the developer experience around error message clarity that may benefit from additional consideration."
+
+## Confusion Protocol
+
+For high-stakes DX ambiguity — public API or CLI design, breaking changes, deprecation timeline, destructive scope (removing a flag, renaming an SDK method, changing default behavior), missing context (no migration path, no compat strategy) — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs (developer impact, deprecation cost, migration effort), and ask via AskUserQuestion (parent format at `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format).
+
+Do NOT use this protocol for routine doc edits or obvious fixes. The bar is: "if I pick wrong, every existing integration breaks or we ship a public-API mistake we can't take back."
+
 ## DX First Principles
 
 These are the laws. Every recommendation traces back to one of these.
@@ -555,6 +576,8 @@ Pattern:
 
 **Anti-skip rule:** Never condense, abbreviate, or skip any review pass (1-8) regardless of plan type (strategy, spec, code, infra). Every pass in this skill exists for a reason. "This is a strategy doc so DX passes don't apply" is always wrong — DX gaps are where adoption breaks down. If a pass genuinely has zero findings, say "No issues found" and move on — but you must evaluate it.
 
+**Anti-shortcut clause:** PLAN.md is the OUTPUT of the interactive review, not a substitute for it. Writing every finding into one plan write and signaling completion without firing AskUserQuestion is the precise failure mode the May 2026 transcript bug surfaced — the model explored, found issues, and dumped them into a deliverable rather than walking the user through them. If you have ANY non-trivial finding in any review pass (1-8), the path from finding to PLAN.md write goes THROUGH AskUserQuestion (parent format at `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format). Zero findings in every pass is the only path that bypasses AskUserQuestion. If you find yourself wanting to write a plan with findings before asking, stop — that's the bug.
+
 ## Prior Learnings
 
 Search for relevant learnings from previous sessions:
@@ -916,8 +939,7 @@ DX reviews:
 * **Map to DX First Principles above.** One sentence connecting your recommendation
   to a specific principle (e.g., "This violates 'zero friction at T0' because
   [persona] needs 3 extra config steps before their first API call").
-* **Escape hatch:** If a section has no issues, say so and move on. If a gap has an
-  obvious fix, state what you'll add and move on, don't waste a question.
+* **Escape hatch (tightened):** If a pass has zero findings, state "No issues, moving on" and proceed. If it has findings, use AskUserQuestion for each — a gap with an "obvious fix" is still a gap and still needs user approval before any change lands in the plan. Only skip AskUserQuestion when the fix is genuinely trivial AND there are no meaningful alternatives. When in doubt, ask.
 * Assume the user hasn't looked at this window in 20 minutes. Re-ground every question.
 
 ## Required Outputs

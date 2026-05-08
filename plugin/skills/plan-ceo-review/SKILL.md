@@ -30,6 +30,11 @@ Write with the clarity and conviction of a great founder (Garry Tan style):
 - No filler phrases: "It's worth noting that", "As a matter of fact".
 - Technical precision over marketing language.
 - Korean/English bilingual context: technical terms stay English, explanations may use Korean.
+- Lead with the point. Be concrete: name files, functions, line numbers, commands, real numbers. Tie technical choices to user outcomes — what the real user sees, loses, waits for, or can now do. Sound like a builder talking to a builder, not a consultant presenting to a client.
+- No em dashes. No AI vocabulary: `delve`, `crucial`, `robust`, `comprehensive`, `nuanced`, `multifaceted`, `furthermore`, `moreover`, `additionally`, `pivotal`, `landscape`, `tapestry`, `underscore`, `foster`, `showcase`, `intricate`, `vibrant`, `fundamental`, `significant`. These words make AI prose recognizable and signal-free; cut them.
+
+Good: "auth.ts:47 returns undefined when the session cookie expires. Users hit a white screen. Fix: add a null check and redirect to /login. Two lines."
+Bad: "I've identified a potential issue in the authentication flow that may cause problems under certain conditions."
 
 ## Completeness Principle — Boil the Lake
 
@@ -38,6 +43,12 @@ Every section must be fully completed before moving on. No "TBD", no placeholder
 If a section produces fewer than 3 sentences of analysis, it is compression and must be expanded. "No issues found" is valid only after stating what was examined and why nothing was flagged.
 
 The review is not done until every finding has a clear resolution path and every section is complete.
+
+## Confusion Protocol
+
+For high-stakes ambiguity — architecture, data model, destructive scope, missing context — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs, and ask via AskUserQuestion (parent format at `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format).
+
+Do NOT use this protocol for routine coding decisions or obvious changes. The bar is: "if I pick wrong, the plan breaks in a way that is expensive to unwind."
 
 ## Context Recovery
 
@@ -469,18 +480,14 @@ Never skip Step 0, the system audit, the error/rescue map, or the failure modes 
 
 ## Prior Learnings
 
-Search for relevant learnings from previous sessions:
+Pull anything relevant from prior sessions before starting the review:
 
 ```bash
-echo "CROSS_PROJECT: $_CROSS_PROJ"
-if [ "$_CROSS_PROJ" = "true" ]; then
-else
-fi
+tail -10 doc/harness/learnings.jsonl 2>/dev/null || true
+ls doc/harness/patterns/*.md 2>/dev/null || true
 ```
 
-If `CROSS_PROJECT` is `unset` (first time): Use AskUserQuestion:
-
-smarter on their codebase over time.
+Skim entries with `type=eureka`, `type=qa-failure-pattern`, or any pattern doc whose topic intersects this plan. Do not block on absence — fresh repos may have neither file. Apply what fits; skip what doesn't.
 
 ## Step 0: Nuclear Scope Challenge + Mode Selection
 
@@ -549,8 +556,19 @@ Rules:
 - At least 2 approaches required. 3 preferred for non-trivial plans.
 - One approach must be the "minimal viable" (fewest files, smallest diff).
 - One approach must be the "ideal architecture" (best long-term trajectory).
+- **These two approaches have equal weight.** Don't default to "minimal viable" just because the diff is smaller. Recommend whichever best serves the user's goal. If the right answer is a rewrite — invoke Prime Directive #9 ("scrap it and do this instead") and say so.
 - If only one approach exists, explain concretely why alternatives were eliminated.
 - Do NOT proceed to mode selection (0F) without user approval of the chosen approach.
+
+### 0D-prelude. Expansion Framing (SCOPE EXPANSION + SELECTIVE EXPANSION only)
+
+Every expansion proposal in EXPANSION or SELECTIVE EXPANSION mode follows this framing pattern. Lead with the felt experience, close with concrete effort and impact.
+
+FLAT (avoid): "Add real-time notifications. Users would see workflow results faster — latency drops from ~30s polling to <500ms push. Effort: ~1 hour CC."
+
+EXPANSIVE (aim for): "Imagine the moment a workflow finishes — the user sees the result instantly, no tab-switching, no polling, no 'did it actually work?' anxiety. Real-time feedback turns a tool they check into a tool that talks to them. Concrete shape: WebSocket channel + optimistic UI + desktop notification fallback. Effort: human ~2 days / harness ~1 hour. Makes the product feel 10x more alive."
+
+Both are outcome-framed; only one makes the user feel the cathedral. **For SELECTIVE EXPANSION:** neutral recommendation posture ≠ flat prose. Present vivid options, then let the user decide. Do not over-sell — "Makes the product feel 10x more alive" is vivid; "This would 10x your revenue" is over-sell. **Evocative, not promotional.**
 
 ### 0D. Mode-Specific Analysis
 **For SCOPE EXPANSION** — run all three, then the opt-in ceremony:
@@ -717,11 +735,13 @@ Context-dependent defaults:
 After mode is selected, confirm which implementation approach (from 0C-bis) applies under the chosen mode. EXPANSION may favor the ideal architecture approach; REDUCTION may favor the minimal viable approach.
 
 Once selected, commit fully. Do not silently drift.
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues or fix is obvious, state what you'll do and move on — don't waste a question. Do NOT proceed until user responds.
+**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
 
 ## Review Sections (11 sections, after scope and mode are agreed)
 
 **Anti-skip rule:** Never condense, abbreviate, or skip any review section (1-11) regardless of plan type (strategy, spec, code, infra). Every section in this skill exists for a reason. "This is a strategy doc so implementation sections don't apply" is always wrong — implementation details are where strategy breaks down. If a section genuinely has zero findings, say "No issues found" and move on — but you must evaluate it.
+
+**Anti-shortcut clause:** PLAN.md is the OUTPUT of the interactive review, not a substitute for it. Writing every finding into one plan write and signaling completion without firing AskUserQuestion is the precise failure mode the May 2026 transcript bug surfaced — the model explored, found issues, and dumped them into a deliverable rather than walking the user through them. If you have ANY non-trivial finding in any review section, the path from finding to PLAN.md write goes THROUGH AskUserQuestion (parent format at `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format). Zero findings in every section is the only path that bypasses AskUserQuestion. If you find yourself wanting to write a plan with findings before asking, stop — that's the bug.
 
 ### Section 1: Architecture Review
 Evaluate and diagram:
@@ -746,7 +766,7 @@ Evaluate and diagram:
 **SELECTIVE EXPANSION:** If any accepted cherry-picks from Step 0D affect the architecture, evaluate their architectural fit here. Flag any that create coupling concerns or don't integrate cleanly — this is a chance to revisit the decision with new information.
 
 Required ASCII diagram: full system architecture showing new components and their relationships to existing ones.
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues or fix is obvious, state what you'll do and move on — don't waste a question. Do NOT proceed until user responds.
+**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
 
 ### Section 2: Error & Rescue Map
 This is the section that catches silent failures. It is not optional.
@@ -775,7 +795,7 @@ Rules for this section:
 * Every rescued error must either: retry with backoff, degrade gracefully with a user-visible message, or re-raise with added context. "Swallow and continue" is almost never acceptable.
 * For each GAP (unrescued error that should be rescued): specify the rescue action and what the user should see.
 * For LLM/AI service calls specifically: what happens when the response is malformed? When it's empty? When it hallucinates invalid JSON? When the model returns a refusal? Each of these is a distinct failure mode.
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues or fix is obvious, state what you'll do and move on — don't waste a question. Do NOT proceed until user responds.
+**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
 
 ### Section 3: Security & Threat Model
 Security is not a sub-bullet of architecture. It gets its own section.
@@ -790,7 +810,7 @@ Evaluate:
 * Audit logging. For sensitive operations: is there an audit trail?
 
 For each finding: threat, likelihood (High/Med/Low), impact (High/Med/Low), and whether the plan mitigates it.
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues or fix is obvious, state what you'll do and move on — don't waste a question. Do NOT proceed until user responds.
+**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
 
 ### Section 4: Data Flow & Interaction Edge Cases
 This section traces data through the system and interactions through the UI with adversarial thoroughness.
@@ -826,7 +846,7 @@ For each node: what happens on each shadow path? Is it tested?
                        | Queue backs up 2 hours | ?        |
 ```
 Flag any unhandled edge case as a gap. For each gap, specify the fix.
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues or fix is obvious, state what you'll do and move on — don't waste a question. Do NOT proceed until user responds.
+**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
 
 ### Section 5: Code Quality Review
 Evaluate:
@@ -838,7 +858,7 @@ Evaluate:
 * Over-engineering check. Any new abstraction solving a problem that doesn't exist yet?
 * Under-engineering check. Anything fragile, assuming happy path only, or missing obvious defensive checks?
 * Cyclomatic complexity. Flag any new method that branches more than 5 times. Propose a refactor.
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues or fix is obvious, state what you'll do and move on — don't waste a question. Do NOT proceed until user responds.
+**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
 
 ### Section 6: Test Review
 Make a complete diagram of every new thing this plan introduces:
@@ -878,7 +898,7 @@ Flakiness risk: Flag any test depending on time, randomness, external services, 
 Load/stress test requirements: For any new codepath called frequently or processing significant data.
 
 For LLM/prompt changes: Check CLAUDE.md for the "Prompt/LLM changes" file patterns. If this plan touches ANY of those patterns, state which eval suites must be run, which cases should be added, and what baselines to compare against.
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues or fix is obvious, state what you'll do and move on — don't waste a question. Do NOT proceed until user responds.
+**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
 
 ### Section 7: Performance Review
 Evaluate:
@@ -889,7 +909,7 @@ Evaluate:
 * Background job sizing. For every new job: worst-case payload, runtime, retry behavior?
 * Slow paths. Top 3 slowest new codepaths and estimated p99 latency.
 * Connection pool pressure. New DB connections, Redis connections, HTTP connections?
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues or fix is obvious, state what you'll do and move on — don't waste a question. Do NOT proceed until user responds.
+**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
 
 ### Section 8: Observability & Debuggability Review
 New systems break. This section ensures you can see why.
@@ -905,7 +925,7 @@ Evaluate:
 
 **EXPANSION and SELECTIVE EXPANSION addition:**
 * What observability would make this feature a joy to operate? (For SELECTIVE EXPANSION, include observability for any accepted cherry-picks.)
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues or fix is obvious, state what you'll do and move on — don't waste a question. Do NOT proceed until user responds.
+**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
 
 ### Section 9: Deployment & Rollout Review
 Evaluate:
@@ -920,7 +940,7 @@ Evaluate:
 
 **EXPANSION and SELECTIVE EXPANSION addition:**
 * What deploy infrastructure would make shipping this feature routine? (For SELECTIVE EXPANSION, assess whether accepted cherry-picks change the deployment risk profile.)
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues or fix is obvious, state what you'll do and move on — don't waste a question. Do NOT proceed until user responds.
+**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
 
 ### Section 10: Long-Term Trajectory Review
 Evaluate:
@@ -935,7 +955,7 @@ Evaluate:
 * What comes after this ships? Phase 2? Phase 3? Does the architecture support that trajectory?
 * Platform potential. Does this create capabilities other features can leverage?
 * (SELECTIVE EXPANSION only) Retrospective: Were the right cherry-picks accepted? Did any rejected expansions turn out to be load-bearing for the accepted ones?
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues or fix is obvious, state what you'll do and move on — don't waste a question. Do NOT proceed until user responds.
+**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
 
 ### Section 11: Design & UX Review (skip if no UI scope detected)
 The CEO calling in the designer. Not a pixel-level audit — that's /plan-design-review and /design-review. This is ensuring the plan has design intentionality.
@@ -957,7 +977,7 @@ Evaluate:
 Required ASCII diagram: user flow showing screens/states and transitions.
 
 If this plan has significant UI scope, recommend: "Consider running /plan-design-review for a deep design review of this plan before implementation."
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues or fix is obvious, state what you'll do and move on — don't waste a question. Do NOT proceed until user responds.
+**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
 
 ## Outside Voice — Independent Plan Challenge (optional, recommended)
 
@@ -1113,7 +1133,7 @@ Follow the AskUserQuestion format from the Preamble above. Additional rules for 
 * For each option: effort, risk, and maintenance burden in one line.
 * **Map the reasoning to my engineering preferences above.** One sentence connecting your recommendation to a specific preference.
 * Label with issue NUMBER + option LETTER (e.g., "3A", "3B").
-* **Escape hatch:** If a section has no issues, say so and move on. If an issue has an obvious fix with no real alternatives, state what you'll do and move on — don't waste a question on it. Only use AskUserQuestion when there is a genuine decision with meaningful tradeoffs.
+* **Escape hatch:** If a section has no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion even when the resolution looks self-evident. The bar is genuine zero-finding sections, not author-judged "small" findings.
 
 ## Required Outputs
 

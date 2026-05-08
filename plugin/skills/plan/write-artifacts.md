@@ -130,6 +130,12 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact checks \
 
 Reflect on session. Log operational discoveries that would save 5+ minutes in a future session. Good candidates: build quirks, ordering constraints, env var requirements, path assumptions, concurrency issues from Phase 3, project-specific patterns that differ from defaults.
 
+**Plan-time tooling friction** is exactly this kind of signal — log it. Examples worth capturing:
+- `write_plan_artifact.py --artifact plan` requires `--input` not `--content-file`; non-obvious from `--help`.
+- PLAN_SESSION.json `phase` field expects `"write"` not `"6"` for `write_plan_artifact.py` to accept writes.
+- `update_checks.py` only mutates existing ACs; CHECKS.yaml additions go through `write_plan_artifact.py --artifact checks`.
+- `HARNESS_SKIP_PREWRITE=1` is one-shot; chain with the actual `Write` or rewrite the script invocation.
+
 Skip obvious facts and transient errors.
 
 ```bash
