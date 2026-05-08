@@ -14,35 +14,7 @@ Run these commands in Claude Code:
 /plugin install harness
 ```
 
-### Local development (symlink)
-
-```bash
-# Clone the repo
-git clone https://github.com/Luxusio/harness harness-plugin
-cd harness-plugin
-
-# Symlink into Claude Code plugins directory
-ln -s "$(pwd)/plugin" ~/.claude/plugins/harness
-
-# Verify
-claude plugin validate ~/.claude/plugins/harness
-```
-
-Then in Claude Code:
-
-```
-/plugin install harness
-```
-
-### Uninstall
-
-```bash
-# Marketplace install
-/plugin uninstall harness
-
-# Symlink install
-rm ~/.claude/plugins/harness
-```
+Contributors / local development → see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Setup
 
@@ -237,10 +209,4 @@ python3 plugin/scripts/search_learnings.py "test"
 
 ## Self-dogfooding
 
-This repo uses harness on itself. After symlinking:
-
-```bash
-ln -s "$(pwd)/plugin" ~/.claude/plugins/harness
-```
-
-Start a new Claude Code session. The harness SessionStart hooks will activate. Use `/harness:setup` to repair/upgrade if needed. The `MAINTENANCE` marker in a task dir bypasses plan-first for urgent fixes.
+This repo uses harness on itself. After installing locally (see [CONTRIBUTING.md](CONTRIBUTING.md)), start a new Claude Code session — the harness SessionStart hooks activate automatically. Use `/harness:setup` to repair or upgrade if needed. The `MAINTENANCE` marker in a task dir bypasses plan-first for urgent fixes.
