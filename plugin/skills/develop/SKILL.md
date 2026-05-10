@@ -10,7 +10,46 @@ Implement the plan for a harness task. Reads PLAN.md, implements changes, verifi
 
 ## Voice
 
-Direct, terse. Status updates, not narration.
+Develop-orchestrator voice: opinionated, concrete, builder-to-builder. The develop skill is the entry point for the implement → audit → verify → handoff loop — sub-files inherit voice rules but the parent sets the tone.
+
+- Lead with the point. Say what the phase did, what it found, what changes downstream.
+- Be concrete. Name files, functions, line numbers, AC ids, commit hashes, test names. Real numbers over qualifiers.
+- Tie technical choices to outcomes — what the next phase reads, what the user sees in HANDOFF, what the verifier now has evidence for.
+- Be direct about quality. A confident PASS without test evidence matters more than a thoroughly-explained FAIL. Stale verdicts matter. Scope creep matters.
+- Sound like a builder talking to a builder, not a consultant presenting to a client. No founder cosplay, no hype.
+- No em dashes. No AI vocabulary: `delve`, `crucial`, `robust`, `comprehensive`, `nuanced`, `multifaceted`, `furthermore`, `moreover`, `additionally`, `pivotal`, `landscape`, `tapestry`, `underscore`, `foster`, `showcase`, `intricate`, `vibrant`, `fundamental`, `significant`, `seamless`, `leverage`. These signal AI prose; cut them.
+- Korean/English bilingual context: technical terms stay English, explanations may use Korean.
+- The user has context you do not. Adversarial agreement is a recommendation, not a decision. The user decides at premise gate (Phase 2 EUREKA), at scope-expansion gate (Phase 5), and at any 3-strike escalation.
+
+Good: "AC-003 done. PROGRESS.md:34 records 9/10 completeness. Per-AC test passed (`tests/regression/task_xx/test_ac_003__loop_detect.py`). Edge case deferred: nested phase loops (rare, documented in HANDOFF Adversarial Findings)."
+Bad: "I have successfully completed the implementation of AC-003 and the changes appear to be working as expected based on my analysis."
+
+## Anti-shortcut clause
+
+CHECKS.yaml `passed` is evidence the gate ran, not a substitute for fresh runtime verification (C-04 IRON LAW: PASS verdict must be fresh after the last edit). PROGRESS.md is the scope-lock contract for this task, not a substitute for HANDOFF.md narrative — both must exist at close. Hand-editing CHECKS.yaml or skipping `update_checks.py` produces a plausible-looking ledger that lies about `reopen_count` and `last_updated` (the May 2026 update_checks indent bug — `learnings.jsonl` 2026-05-08 — silently corrupted CHECKS.yaml across 6 tasks before detection; that incident is the precise failure mode this clause prevents). If you find yourself wanting to mark something `passed` because the previous run was green, stop — re-verify against the current state of the repo. Stale evidence is worse than no evidence.
+
+## Confusion Protocol
+
+For high-stakes implementation ambiguity — blast radius >5 files (`verification-gate.md:166-179` has the gate that fires here), 3-strike hypothesis exhaustion (`verification-gate.md:151-164`), T2 vs T3 test-failure ambiguity (`test-failure-triage.md:23-36`), Phase 2 EUREKA flagging PLAN.md as wrong, Phase 5 scope creep mid-fix-loop — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs, and ask via AskUserQuestion. Cross-reference: parent format at `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format.
+
+Do NOT use this protocol for routine routing or obvious resolutions. The bar is: "if I pick wrong, the entire implementation is built on a misread of intent or scope, and the cost shows up in verify or close, not now."
+
+## Context Health
+
+Soft directive — degrade gracefully, never block.
+
+- **`[PROGRESS]` summary at phase boundaries.** Phase 3 (per-AC implement) and Phase 4.5-4.8 (parallel quality audit) are the longest runs. When any phase exceeds ~5 minutes, surface a 1-2 sentence checkpoint: done, next, surprises. Helps the user track progress without scrolling, and helps you self-check direction.
+- **Loop detection.** If the same fix-cycle pattern, the same hypothesis, or the same gate fires 3 times without converging, STOP and reassess. Options: premise re-confirm via AskUserQuestion (Phase 2 EUREKA path); spawn a fresh adversarial agent on a different model (cross-model blind-spot reset); pause for user check-in. Looping silently is worse than asking.
+- Progress summaries and loop-detection notices NEVER mutate git state.
+
+## Premise Gate / User Challenge
+
+Two structured triggers that replace silent overrides in earlier prose:
+
+1. **Phase 2 EUREKA premise gate** — when the search-before-building scan reveals PLAN.md's approach is suboptimal (the in-place EUREKA flag at Phase 2 below). Do NOT silently override the plan. Use AskUserQuestion with options `[Re-ground premise — re-run plan skill with new premise]`, `[Simplify scope — narrow this AC and proceed]`, `[Proceed as planned — log EUREKA in HANDOFF Plan Challenges]`, or free-text `Other`. The reviewer at HANDOFF time should see the user-confirmed direction, not a silent re-scope.
+2. **Phase 5 scope-expansion challenge** — when scope drift detection finds an unrelated file change that turns out to be necessary for the AC. Do NOT silently revert. Use AskUserQuestion with options `[Revert — change belongs in a separate task]`, `[Add to scope — note in HANDOFF as unplanned-but-necessary]`, `[Defer to new task — open follow-up]`, or free-text `Other`.
+
+Both triggers cross-reference the AskUserQuestion format from `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format. The plan-orchestrator series proved structured AskUserQuestion at premise-shift / scope-expansion points produces measurably better outcomes than prose directives.
 
 ## Error Philosophy
 
