@@ -2,23 +2,42 @@
 
 This file documents local development setup. For end-user install see [README.md](README.md).
 
-## Local development install
+## Install / update
 
-Clone the repo and register it as a local marketplace, then install:
+Both first install and subsequent updates use the same sync mechanism:
+copy the cloned source into a stable path under `~/.claude/`, then point the
+local marketplace at that copy.
 
 ```bash
-# 1. Clone
+# 1. Clone (first time) or pull (already cloned)
 git clone https://github.com/Luxusio/harness harness-plugin
-cd harness-plugin
+# or, if you already have a clone:
+#   cd harness-plugin && git pull
 
-# 2. Register the local checkout as a marketplace (run inside Claude Code from the repo root)
-/plugin marketplace add ./
+# 2. Sync the source into ~/.claude/harness-dev (works for first install AND updates)
+rm -rf ~/.claude/harness-dev
+cp -r harness-plugin ~/.claude/harness-dev
 
-# 3. Install
+# 3a. First install — register the marketplace and install the plugin
+/plugin marketplace add /home/<your-user>/.claude/harness-dev
 /plugin install harness
+
+# 3b. Subsequent updates — refresh the marketplace
+/plugin marketplace update harness
 ```
 
-`/plugin marketplace add` accepts a directory path (relative or absolute) — `./` works when Claude Code's cwd is the cloned repo. The cloned directory becomes a local marketplace, and `/plugin install harness` then resolves the plugin from it. No symlinks, no manual copies into `~/.claude/plugins/`. Note: `/plugin` is a Claude Code slash command, so shell substitution (e.g. `"$(pwd)"`) is NOT expanded — pass the path literally.
+Two reasons for the `rm -rf` + `cp -r` pair: `cp -r` alone does not propagate
+upstream deletions (orphan files linger), and `cp -r src dest` copies INTO
+`dest` if `dest` already exists — nuking first guarantees a clean tree every
+time.
+
+`/plugin marketplace add` accepts a literal directory path. Pass an absolute
+path (e.g. `/home/<your-user>/.claude/harness-dev`) — `/plugin` is a Claude
+Code slash command, so shell substitution and tilde expansion (`$(pwd)`,
+`~`) are NOT performed. The destination `~/.claude/harness-dev/` is
+deliberately distinct from `~/.claude/plugins/harness/`, which is where
+Claude Code drops the *installed* plugin and which must not collide with
+the source.
 
 ## Validating the install
 
@@ -27,19 +46,6 @@ claude plugin validate ~/.claude/plugins/harness
 ```
 
 Confirms the plugin manifest, hooks, skills, and MCP servers are well-formed.
-
-## Updating during development
-
-After pulling new commits or making local changes:
-
-```bash
-# Pick up the new revision from the local marketplace
-/plugin marketplace update harness
-
-# Or reinstall from scratch
-/plugin uninstall harness
-/plugin install harness
-```
 
 ## Uninstall
 

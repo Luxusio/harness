@@ -54,3 +54,16 @@ Key routing rules:
 - Architecture review → invoke plan-eng-review
 - Save progress, checkpoint, resume → invoke checkpoint
 - Code quality, health check → invoke health
+
+## Memory
+
+Project-applicable lessons live here as one-line bullets so contributors share the same context.
+
+**Routing rule** — ask: "Does another contributor need this to avoid the same mistake?"
+- Yes (project-applicable) → add a one-line bullet here.
+- No (personal-only) → keep it in `~/.claude` auto-memory (private to user).
+
+**Lazy-overflow rule** — when a topic accumulates 3+ related bullets, OR any single entry would exceed ~5 lines, split it out to `doc/memory/<topic>.md` and leave a one-line pointer here.
+
+<!-- bullets accumulate below; section starts empty -->
+
