@@ -406,10 +406,56 @@ def _write_artifact(args: dict, filename: str, verdict_field: str | None = None,
     return _ok(result)
 
 
+_QA_SEVERITY = {"PENDING": 0, "PASS": 1, "BLOCKED_ENV": 2, "FAIL": 3}
+
+
+def _worst_verdict(current: str, new: str) -> str:
+    """Severity ordering: PENDING < PASS < BLOCKED_ENV < FAIL. Returns the worst of the two."""
+    return new if _QA_SEVERITY.get(new, 0) > _QA_SEVERITY.get(current, 0) else current
+
+
+def _lens_merge_critic_qa(td: str, lens: str, verdict: str,
+                          summary: str, transcript: str) -> dict:
+    """Lens-aware merge for CRITIC__qa.md. Worst-wins runtime_verdict.
+
+    First lens writer creates the file with a global header and one section.
+    Subsequent lens writers append a new section (no truncation).
+    runtime_verdict downgrades only when the new verdict is worse.
+    """
+    os.makedirs(td, exist_ok=True)
+    path = os.path.join(td, "CRITIC__qa.md")
+    section = (
+        f"\n## qa-{lens} verdict: {verdict}\n\n"
+        f"### summary\n{summary}\n\n"
+        f"### transcript\n{transcript}\n"
+    )
+    if not os.path.exists(path):
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"# CRITIC — qa\n{section}")
+    else:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(section)
+    current = read_state(td).get("runtime_verdict", "PENDING")
+    final = _worst_verdict(current, verdict)
+    set_state_field(td, "runtime_verdict", final)
+    return _ok({"artifact": "CRITIC__qa.md", "task_dir": td,
+                "lens": lens, "verdict": final, "merged": True})
+
+
 def handle_write_critic_qa(args: dict) -> dict:
     verdict = _req(args, "verdict")
     if verdict not in ("PASS", "FAIL", "BLOCKED_ENV"):
         return _err(f"invalid verdict '{verdict}' — must be PASS, FAIL, or BLOCKED_ENV")
+    lens = _opt(args, "lens")
+    if lens:
+        td = _opt(args, "task_dir")
+        ti = _opt(args, "task_id") or (os.path.basename(td.rstrip("/")) if td else None)
+        if not ti:
+            return _err("task_id or task_dir required")
+        td = td or canonical_task_dir(task_id=ti)
+        summary = _opt(args, "summary") or ""
+        transcript = _opt(args, "transcript") or ""
+        return _lens_merge_critic_qa(td, lens, verdict, summary, transcript)
     return _write_artifact(args, "CRITIC__qa.md", "runtime_verdict", verdict_value=verdict)
 
 
@@ -450,11 +496,12 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id"], "additionalProperties": False},
      "handler": handle_task_close},
     {"name": "write_critic_qa", "title": "Write runtime verdict — QA agents only",
-     "description": "Write CRITIC__qa.md and set runtime_verdict. Called by qa-browser, qa-api, or qa-cli.",
+     "description": "Write CRITIC__qa.md and set runtime_verdict. Called by qa-browser, qa-api, qa-cli, or qa-desktop. Pass `lens` (e.g. \"cli\", \"browser\") when multiple QA agents run in parallel — the handler appends a per-lens section and computes worst-wins runtime_verdict. Without `lens`, legacy full-overwrite behavior is preserved.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"},
          "verdict": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED_ENV"]},
-         "summary": {"type": "string"}, "transcript": {"type": "string"}},
+         "summary": {"type": "string"}, "transcript": {"type": "string"},
+         "lens": {"type": "string", "description": "Optional QA lens identifier (cli, api, browser, desktop). When set, enables append-mode + worst-wins merge."}},
          "required": ["task_id", "verdict", "summary", "transcript"],
          "additionalProperties": False},
      "handler": handle_write_critic_qa},

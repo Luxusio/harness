@@ -70,7 +70,7 @@ Route work to the cheapest sufficient model. Inline below; full rationale in sub
 
 Phases run in strict order; each phase must complete before the next. Sub-files are lazy-loaded — do NOT pre-read them, load each only in the phase that needs it. Every phase is idempotent on re-run; check PROGRESS.md + `audit/` to resume instead of restarting from Phase 0.
 
-**Timeline logging:** append phase transitions to `<task_dir>/timeline.jsonl` as append-only JSON lines with keys `ts, phase, event, detail`. Events: `phase_start, phase_end, ac_start, ac_done, agent_spawn, agent_done, fix_cycle, blocked, resumed, finding`.
+**Timeline logging:** append phase transitions to `<task_dir>/timeline.jsonl` as append-only JSON lines with keys `ts, phase, event, detail`. Events: `phase_start, phase_end, ac_start, ac_done, agent_spawn, agent_done, fix_cycle, blocked, resumed, finding, parallel-fallback`.
 
 **Graceful degradation:** missing tool or phase prerequisite → skip cleanly, log reason, do NOT install missing tools. Skipped-phase table:
 
@@ -117,7 +117,32 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 ### Phase 3.0: AC Dependency Analysis
 
-Classify ACs as SEQUENTIAL (shared files or data dependency) or PARALLEL (disjoint). Build a dependency matrix. For parallel batches, spawn executor agents concurrently; collect results before proceeding to dependent ACs. If all sequential: skip parallelization.
+Classify ACs as SEQUENTIAL (shared files or data dependency) or PARALLEL (disjoint). Build a dependency matrix from each AC's `**Files:**` declaration in PLAN.md. Two ACs share a file → that pair is SEQUENTIAL.
+
+**Enforcement (N>=3 disjoint ACs):** when the matrix yields three or more ACs whose target files are pairwise disjoint, the orchestrator MUST issue N parallel Agent calls in a single assistant message. N<3 stays sequential — the spawn cost (~1-2s/agent) is not amortized.
+
+Inline spawn template (copyable; one block per AC, ALL in one assistant turn):
+
+```
+Agent(name="<task_id>:AC-NNN", subagent_type="oh-my-claudecode:executor",
+      prompt="Implement AC-NNN per PLAN.md target files <list>. Write to PROGRESS.md when done.")
+```
+
+See `plugin/skills/develop/parallel-fanout.md` for the full Parallel Fanout Convention and Stage Agent Routing matrix.
+
+**Rollback protocol** — on ANY sibling Agent failure during a parallel batch:
+
+```bash
+for _AC in <list of siblings that had already promoted>; do
+  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
+    --task-dir <task_dir> --ac "$_AC" --status open --note parallel-fallback
+done
+# Then log the rollback as a timeline event and sequential-retry the failed batch.
+echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","phase":"3.0","event":"parallel-fallback","detail":"<reason>"}' \
+  >> <task_dir>/timeline.jsonl
+```
+
+After rollback, retry the failed batch sequentially. Do NOT re-fanout the same batch — that masks the underlying failure mode.
 
 ### Phase 3.1: Scope Lock
 
@@ -341,7 +366,31 @@ The dogfooder does NOT gate task completion. Its output is:
 Skip conditions:
 - `runtime_verdict` is not PASS (QA must pass first).
 - Task is maintenance-only (no user-facing change).
-- PLAN.md has no user-facing ACs (pure infra/refactor).
+- `git diff --name-only` against the **user-facing globs** below produces an empty intersection (pure infra/refactor).
+
+**User-facing globs** (used by the diff intersection check):
+
+```
+**/*.{tsx,jsx,vue,svelte,html,css,scss}
+plugin/agents/**
+plugin/skills/**
+**/routes/**
+**/api/**
+bin/**
+cli/**
+README.md
+doc/changes/**
+```
+
+Exact shell predicate:
+```bash
+_USER_FACING=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -E \
+  '^(.*\.(tsx|jsx|vue|svelte|html|css|scss)|plugin/agents/|plugin/skills/|.*/routes/|.*/api/|bin/|cli/|README\.md|doc/changes/)' \
+  | head -1)
+[ -z "$_USER_FACING" ] && echo "SKIP_DOGFOOD" || echo "RUN_DOGFOOD"
+```
+
+`SKIP_DOGFOOD` short-circuits the spawn; `RUN_DOGFOOD` proceeds to the Agent call above. The predicate intentionally errs toward running the dogfooder when the intersection is non-empty even by one file — a false positive is cheaper than a missed user-facing regression.
 
 ### Phase 8: Write HANDOFF
 

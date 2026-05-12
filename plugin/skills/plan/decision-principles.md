@@ -131,7 +131,9 @@ Every AskUserQuestion from this skill MUST begin with a one-line orientation hea
 Task: TASK__<id> | Phase: <current> | Step: <name>
 ```
 
-Applies to: premise gate (1.1), prerequisite offer (0.4.5), User Challenge (5.3), gate options (5.4.1).
+Applies to: premise gate (1.1), prerequisite offer (0.4.5), User Challenge (5.3).
+
+**Exception — Phase 5 final approval gate (§5.4.1):** uses the §5.1 outcome-only template, not the 4-rule body. The gate intentionally hides internal review state (decision counts, taste tallies, cross-phase themes); applying the 4-rule body here would re-leak that state.
 
 **4-rule question structure:** every AskUserQuestion body MUST follow this four-part shape:
 

@@ -177,6 +177,8 @@ The user only needs two things at the gate: **what this plan will do** and **wha
 
 That is the entire user-facing summary. Anything more belongs in PLAN.md or AUDIT_TRAIL.md, not here.
 
+**Hard guard.** Never render at this gate: the 4-rule body (`[Re-ground]/[Simplify]/[Recommend]/[Options]`), decision counts, taste tallies, voice consensus tallies, cross-phase summaries. Those belong in PLAN.md / AUDIT_TRAIL.md only. `decision-principles.md` § AskUserQuestion Format exempts §5.4.1 from the 4-rule body by design.
+
 ### 5.1.1 Collect all decisions
 
 From consensus tables across Phases 1-4: Mechanical (silently applied), Taste, User Challenge.

@@ -60,6 +60,8 @@ fallback so a desktop app declared as `type: cli` still routes to qa-desktop.
 
 Agent spawn template (substitute `<lens>` ∈ {browser, desktop, api, cli}):
 
+**Single lens** (one type matches) — legacy path, omit `lens=`:
+
 ```
 Agent(
   name="<task_id>:qa-<lens>",
@@ -71,6 +73,26 @@ Follow it exactly — all four roles (operation, intent, UX/design, runtime).
 Call mcp__plugin_harness_harness__write_critic_qa with verdict, summary, and full transcript."
 )
 ```
+
+**Multi-lens fullstack** (two or more types match) — spawn ALL agents in a single assistant message AND pass `lens="<lens>"` to `write_critic_qa` so the MCP handler merges per-lens sections + computes worst-wins runtime_verdict:
+
+```
+# Issue these N Agent calls in ONE assistant message
+Agent(
+  name="<task_id>:qa-cli",
+  subagent_type="oh-my-claudecode:executor",
+  prompt="You are the cli QA agent for <task_id>. ... Call write_critic_qa with verdict, summary, transcript, AND lens=\"cli\"."
+)
+Agent(
+  name="<task_id>:qa-browser",
+  subagent_type="oh-my-claudecode:executor",
+  prompt="You are the browser QA agent for <task_id>. ... Call write_critic_qa with verdict, summary, transcript, AND lens=\"browser\"."
+)
+```
+
+When `lens` is set, the handler appends a per-lens section to `CRITIC__qa.md` (no truncation) and updates `runtime_verdict` via worst-wins (severity: `PENDING < PASS < BLOCKED_ENV < FAIL`). Without `lens`, the legacy full-overwrite path is taken — keep single-lens calls unchanged.
+
+> **Note (MCP reload).** MCP server changes activate on the next session restart per the 2026-05-08 learning. Until the next restart, the new `lens` argument lands but the handler still runs the old code; concurrent calls without lens-routing still race. After restart, multi-lens spawns become safe to issue in parallel. See `plugin/skills/develop/parallel-fanout.md` for the spawn-all-in-one-message convention.
 
 After completion, check runtime_verdict:
 - **PASS**: proceed to Phase 5.

@@ -4,40 +4,41 @@ This file documents local development setup. For end-user install see [README.md
 
 ## Install / update
 
-Both first install and subsequent updates use the same sync mechanism:
-copy the cloned source into a stable path under `~/.claude/`, then point the
-local marketplace at that copy.
-
 ```bash
 # 1. Clone (first time) or pull (already cloned)
-git clone https://github.com/Luxusio/harness harness-plugin
+git clone https://github.com/Luxusio/harness
 # or, if you already have a clone:
 #   cd harness-plugin && git pull
 
-# 2. Sync the source into ~/.claude/harness-dev (works for first install AND updates)
-rm -rf ~/.claude/harness-dev
-cp -r harness-plugin ~/.claude/harness-dev
-
-# 3a. First install — register the marketplace and install the plugin
-/plugin marketplace add /home/<your-user>/.claude/harness-dev
-/plugin install harness
-
-# 3b. Subsequent updates — refresh the marketplace
-/plugin marketplace update harness
+# 2. Install or update (idempotent — first run installs, subsequent runs refresh)
+cd harness && ./scripts/install.sh
 ```
 
-Two reasons for the `rm -rf` + `cp -r` pair: `cp -r` alone does not propagate
-upstream deletions (orphan files linger), and `cp -r src dest` copies INTO
-`dest` if `dest` already exists — nuking first guarantees a clean tree every
-time.
+`scripts/install.sh` does three things:
 
-`/plugin marketplace add` accepts a literal directory path. Pass an absolute
-path (e.g. `/home/<your-user>/.claude/harness-dev`) — `/plugin` is a Claude
-Code slash command, so shell substitution and tilde expansion (`$(pwd)`,
-`~`) are NOT performed. The destination `~/.claude/harness-dev/` is
-deliberately distinct from `~/.claude/plugins/harness/`, which is where
-Claude Code drops the *installed* plugin and which must not collide with
-the source.
+1. `rm -rf ~/.claude/harness-dev` followed by a `tar` pipe into the same path,
+   excluding `./.git`. The destination is a runtime mirror, not a working repo,
+   so the `.git` directory adds copy time without buying anything. The tar pipe
+   batches syscalls through a single stream, much faster than `cp -r` on a tree
+   with many small files.
+2. Detects whether the `harness` marketplace is already registered.
+3. First install → `claude plugin marketplace add` + `claude plugin install
+   harness@harness`. Update → `claude plugin marketplace update harness`.
+
+Override the destination with `HARNESS_DEST=/some/other/path ./scripts/install.sh`.
+
+The script uses the `claude plugin` CLI (`marketplace add`, `install`,
+`marketplace update`); these map one-to-one to the in-session `/plugin
+marketplace add` / `/plugin install` / `/plugin marketplace update` slash
+commands.
+
+The destination `~/.claude/harness-dev/` is deliberately distinct from
+`~/.claude/plugins/harness/`, which is where Claude Code drops the
+*installed* plugin and which must not collide with the source. If you
+register the marketplace via the slash command instead of the script,
+pass an absolute path (`/home/<your-user>/.claude/harness-dev`) — `/plugin`
+is a Claude Code slash command, so shell substitution and tilde expansion
+(`$(pwd)`, `~`) are NOT performed.
 
 ## Validating the install
 
@@ -50,12 +51,12 @@ Confirms the plugin manifest, hooks, skills, and MCP servers are well-formed.
 ## Uninstall
 
 ```bash
-# Remove the plugin
-/plugin uninstall harness
-
-# Remove the local marketplace registration
-/plugin marketplace remove harness
+claude plugin uninstall harness
+claude plugin marketplace remove harness
 ```
+
+The slash-command equivalents (`/plugin uninstall harness`,
+`/plugin marketplace remove harness`) work too.
 
 ## Repo layout
 
