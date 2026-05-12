@@ -49,7 +49,7 @@ The develop skill reads PLAN.md, implements changes, runs plan completion audit,
 Read `doc/harness/manifest.yaml` for project type. Spawn appropriate QA agent(s).
 
 **Strategy selection:**
-- `browser_qa_supported: true` → qa-browser
+- **MUST spawn qa-browser when** `manifest.qa.browser_qa_supported: true` AND the diff contains any frontend file (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). Skipping is **blocked by task_close** (see `plugin/scripts/_lib.py:emit_compact_context` — `"qa-browser evidence in CRITIC__qa.md"` lands in `missing_for_close` and task_close refuses).
 - `desktop_qa_supported: true` → qa-desktop
 - `type: api` or diff contains route/endpoint files → qa-api
 - `type: cli` or `type: library` → qa-cli

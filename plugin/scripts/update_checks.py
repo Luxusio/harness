@@ -41,10 +41,18 @@ VALID_STATUS = {"open", "implemented_candidate", "passed", "failed", "deferred"}
 # separate Iron Law (root_cause); doc / verification produce no functional code so
 # they skip the evidence requirement. Missing kind defaults to 'unknown' and skips
 # (preserves backward-compat with legacy CHECKS.yaml that pre-dates the kind field).
-TEST_EVIDENCE_KINDS = {"feature", "functional"}
+TEST_EVIDENCE_KINDS = {"feature", "functional", "browser_interaction"}
 TEST_EVIDENCE_GATED_STATUSES = {"implemented_candidate", "passed"}
 NO_TEST_REQUIRED_REASON_MAX = 400
 LEARNINGS_REL = "doc/harness/learnings.jsonl"
+
+# AC-004: browser_interaction kind (2026-05-12 retro).
+# Promotion to passed requires owner=qa-browser so the AC ledger cannot mark a
+# UI-bearing AC done without browser-lens verification. The test_evidence path
+# may point to a regression test file (standard rule) or to CRITIC__qa.md when
+# it contains a qa-browser section (special-case below in update_check).
+BROWSER_INTERACTION_KIND = "browser_interaction"
+BROWSER_INTERACTION_OWNER = "qa-browser"
 
 
 def now_iso() -> str:
@@ -282,6 +290,22 @@ def update_check(
                 f'"<one-line confirmed cause>".'
             )
 
+    # AC-004: browser_interaction kind requires owner=qa-browser before passed
+    if kind == BROWSER_INTERACTION_KIND and status == "passed":
+        existing_owner = (_field_value(block, "owner") or "").strip().strip('"').strip("'")
+        if existing_owner != BROWSER_INTERACTION_OWNER:
+            raise ValueError(
+                f"Gate violation: AC '{ac_id}' has kind=browser_interaction but "
+                f"owner='{existing_owner}'. Only AC owners equal to "
+                f"'{BROWSER_INTERACTION_OWNER}' may promote a browser_interaction AC "
+                f"to 'passed'. Update the AC's owner field in CHECKS.yaml via the "
+                f"plan-skill, or use a different kind.\n"
+                f"  next_action: Run qa-browser subagent and have it write "
+                f"CRITIC__qa.md via mcp__plugin_harness_harness__write_critic_qa "
+                f"with lens='browser', then promote with --test-evidence pointing "
+                f"to the CRITIC__qa.md."
+            )
+
     # Test-Evidence Gate: feature / functional ACs require evidence (or explicit bypass)
     # before promotion to implemented_candidate / passed. Mirrors Iron Law shape.
     if kind in TEST_EVIDENCE_KINDS and status in TEST_EVIDENCE_GATED_STATUSES:
@@ -313,6 +337,29 @@ def update_check(
             evidence = f"BYPASS: {bypass_reason}"
         elif incoming_ev:
             resolved = _validate_test_evidence_path(incoming_ev, repo_root)
+            # AC-004: browser_interaction accepts CRITIC__qa.md as evidence when
+            # the file contains a qa-browser header (the canonical
+            # browser-verification artifact).
+            if kind == BROWSER_INTERACTION_KIND and os.path.basename(resolved) == "CRITIC__qa.md":
+                try:
+                    with open(resolved, "r", encoding="utf-8") as _ef:
+                        _critic_body = _ef.read()
+                except OSError as _ex:
+                    raise ValueError(
+                        f"--test-evidence points to CRITIC__qa.md but the file is "
+                        f"unreadable: {_ex}"
+                    )
+                if not any(
+                    ln.lstrip().startswith(("## qa-browser", "### qa-browser"))
+                    for ln in _critic_body.splitlines()
+                ):
+                    raise ValueError(
+                        f"Gate violation: --test-evidence points to CRITIC__qa.md "
+                        f"but the file does not contain a qa-browser section. "
+                        f"For kind=browser_interaction, the CRITIC must include a "
+                        f"`## qa-browser` (or `### qa-browser`) header authored by "
+                        f"the qa-browser subagent.\n  Path: {resolved}"
+                    )
             evidence = os.path.relpath(resolved, repo_root)
         elif not existing_ev:
             suggestion = _suggest_test_evidence(repo_root, ac_id)

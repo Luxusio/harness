@@ -265,10 +265,55 @@ def _tail(rule_id, file_path, owner, repo_root):
     )
 
 
+_RULE_NEXT_ACTION = {
+    "C-02-plan-first": ("Skill('harness:plan', '<task_id>')",
+                        "plan-skill",
+                        "plugin/CLAUDE.md § 4 Plan-first rule"),
+    "invalid-active": ("Skill('harness:run', '<slug>') to create a new task",
+                       "harness:run",
+                       "plugin/CLAUDE.md § 6 Auto-routing"),
+    "C-05-protected-artifact": ("",  # populated dynamically by callers via owner
+                                "",
+                                "CONTRACTS.md § C-05"),
+    "C-09-scope-lock": ("Add the file to PROGRESS.md allowed_paths or revert the write",
+                        "developer",
+                        "doc/harness/patterns/prewrite-gate.md § scope-lock"),
+}
+
+
+def _owner_to_next_action(owner: str) -> str:
+    """Map a protected-artifact owner string to a concrete next_action_command."""
+    if not owner:
+        return ""
+    o = owner.lower()
+    if "plan-skill" in o and "update_checks" in o:
+        return ("Skill('harness:plan', ...) for initial create or "
+                "python3 plugin/scripts/update_checks.py for AC updates")
+    if "plan-skill" in o:
+        return "Skill('harness:plan', '<task_id>')"
+    if "qa-agent" in o:
+        return ("Spawn Agent(subagent_type='harness:qa-browser' | 'harness:qa-api' | "
+                "'harness:qa-cli' | 'harness:qa-desktop', ...) and call "
+                "mcp__plugin_harness_harness__write_critic_qa")
+    if "developer" in o:
+        return ("Spawn Agent(subagent_type='harness:developer', ...) and call "
+                "mcp__plugin_harness_harness__write_handoff or write_doc_sync")
+    return ""
+
+
 def _deny(rule_id, file_path, owner, human_text, repo_root):
     tail = _tail(rule_id, file_path, owner, repo_root)
     hint = _escape_hint(GATE_NAME)
-    emit_permission_decision("deny", f"{tail} {human_text}\n{hint}")
+    mapped = _RULE_NEXT_ACTION.get(rule_id, ("", "", ""))
+    next_action = mapped[0] or _owner_to_next_action(owner)
+    owner_skill = mapped[1] or owner
+    docs = mapped[2]
+    emit_permission_decision(
+        "deny", f"{tail} {human_text}\n{hint}",
+        next_action_command=next_action,
+        owner_skill=owner_skill,
+        docs=docs,
+    )
 
 
 # ── Scope-lock enforcement ─────────────────────────────────────────────────
@@ -478,7 +523,11 @@ def main():
             file_path, active_dir, repo_root, task_id,
         )
         if should_block:
-            emit_permission_decision("deny", reason_text)
+            _sc = _RULE_NEXT_ACTION.get("C-09-scope-lock", ("", "", ""))
+            emit_permission_decision(
+                "deny", reason_text,
+                next_action_command=_sc[0], owner_skill=_sc[1], docs=_sc[2],
+            )
             return 0
     except Exception as exc:
         _log_gate_parse_fail(repo_root, f"scope-lock enforcement error: {exc}")

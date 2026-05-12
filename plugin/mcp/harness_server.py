@@ -372,7 +372,14 @@ def handle_task_close(args: dict) -> dict:
 
 def _write_artifact(args: dict, filename: str, verdict_field: str | None = None,
                     verdict_value: str | None = None) -> dict:
-    """Common artifact write: create file, optionally update verdict. Atomic."""
+    """Common artifact write: create file, optionally update verdict. Atomic.
+
+    AC-006 (2026-05-12 retro): when called for CRITIC__qa.md, append a
+    `## Manual UX verification` section after the standard content. The section
+    content is taken from ``args["manual_ux_verification"]``; an empty value
+    renders a `_NOT SUPPLIED_` placeholder (handled by handle_write_critic_qa
+    so the placeholder text is lens-aware).
+    """
     td = _opt(args, "task_dir")
     ti = _opt(args, "task_id") or (os.path.basename(td.rstrip("/")) if td else None)
     if not ti:
@@ -383,6 +390,9 @@ def _write_artifact(args: dict, filename: str, verdict_field: str | None = None,
         val = _opt(args, key)
         if val:
             content_parts.append(f"\n## {key.title()}\n{val}\n")
+    manual_ux = args.get("_rendered_manual_ux_section")
+    if manual_ux and filename == "CRITIC__qa.md":
+        content_parts.append(manual_ux)
     path = os.path.join(td, filename)
     os.makedirs(td, exist_ok=True)
     import tempfile
@@ -410,24 +420,67 @@ _QA_SEVERITY = {"PENDING": 0, "PASS": 1, "BLOCKED_ENV": 2, "FAIL": 3}
 
 
 def _worst_verdict(current: str, new: str) -> str:
-    """Severity ordering: PENDING < PASS < BLOCKED_ENV < FAIL. Returns the worst of the two."""
-    return new if _QA_SEVERITY.get(new, 0) > _QA_SEVERITY.get(current, 0) else current
+    """Severity ordering: PENDING < PASS < BLOCKED_ENV < FAIL. Returns the worst.
+
+    Both inputs are normalized to uppercase canonical form before comparison;
+    the returned value is also uppercase. The state file may previously have
+    stored ``pending`` lowercase — we normalize on read to avoid same-severity
+    case-only differences being treated as "no change".
+    """
+    cur_up = (current or "PENDING").upper()
+    new_up = (new or "PENDING").upper()
+    return new_up if _QA_SEVERITY.get(new_up, 0) >= _QA_SEVERITY.get(cur_up, 0) else cur_up
+
+
+def _render_manual_ux_section(lens: str, manual_ux: str) -> tuple[str, str]:
+    """Compute (section_markdown, effective_verdict_override).
+
+    AC-006 (2026-05-12 retro): the CRITIC__qa.md template always includes a
+    `## Manual UX verification` section. Behavior depends on lens + arg presence:
+
+      - arg provided + non-empty → render content verbatim. No verdict override.
+      - lens == 'browser' + arg empty → render placeholder + force PENDING.
+      - lens != 'browser' + arg empty → render `_n/a — non-browser lens_`.
+        No verdict override.
+
+    Returns the section markdown (including the heading and trailing newline)
+    and the effective verdict override ('' = no override; 'PENDING' = downgrade).
+    """
+    body = (manual_ux or "").strip()
+    if body:
+        return (f"\n## Manual UX verification\n{body}\n", "")
+    if lens == "browser":
+        return (
+            "\n## Manual UX verification\n"
+            "_NOT SUPPLIED — agent must supply manual_ux_verification arg. "
+            "runtime_verdict downgraded to PENDING until provided._\n",
+            "PENDING",
+        )
+    return ("\n## Manual UX verification\n_n/a — non-browser lens_\n", "")
 
 
 def _lens_merge_critic_qa(td: str, lens: str, verdict: str,
-                          summary: str, transcript: str) -> dict:
+                          summary: str, transcript: str,
+                          manual_ux: str = "") -> dict:
     """Lens-aware merge for CRITIC__qa.md. Worst-wins runtime_verdict.
 
     First lens writer creates the file with a global header and one section.
     Subsequent lens writers append a new section (no truncation).
     runtime_verdict downgrades only when the new verdict is worse.
+
+    AC-006: the Manual UX verification section is rendered per-lens; the
+    browser lens with empty manual_ux forces PENDING (worst-wins still applies).
     """
     os.makedirs(td, exist_ok=True)
     path = os.path.join(td, "CRITIC__qa.md")
+    manual_ux_md, verdict_override = _render_manual_ux_section(lens, manual_ux)
+    if verdict_override:
+        verdict = verdict_override
     section = (
         f"\n## qa-{lens} verdict: {verdict}\n\n"
         f"### summary\n{summary}\n\n"
         f"### transcript\n{transcript}\n"
+        f"{manual_ux_md}"
     )
     if not os.path.exists(path):
         with open(path, "w", encoding="utf-8") as f:
@@ -447,6 +500,7 @@ def handle_write_critic_qa(args: dict) -> dict:
     if verdict not in ("PASS", "FAIL", "BLOCKED_ENV"):
         return _err(f"invalid verdict '{verdict}' — must be PASS, FAIL, or BLOCKED_ENV")
     lens = _opt(args, "lens")
+    manual_ux = _opt(args, "manual_ux_verification") or ""
     if lens:
         td = _opt(args, "task_dir")
         ti = _opt(args, "task_id") or (os.path.basename(td.rstrip("/")) if td else None)
@@ -455,7 +509,15 @@ def handle_write_critic_qa(args: dict) -> dict:
         td = td or canonical_task_dir(task_id=ti)
         summary = _opt(args, "summary") or ""
         transcript = _opt(args, "transcript") or ""
-        return _lens_merge_critic_qa(td, lens, verdict, summary, transcript)
+        return _lens_merge_critic_qa(td, lens, verdict, summary, transcript, manual_ux)
+    # Legacy single-lens (no lens arg). Treat as non-browser by default for the
+    # Manual UX rendering — the agent's lens identity is unknown, so we err on
+    # the side of not forcing PENDING.
+    manual_ux_md, verdict_override = _render_manual_ux_section("", manual_ux)
+    if verdict_override:
+        verdict = verdict_override
+    args = dict(args)  # don't mutate caller's dict
+    args["_rendered_manual_ux_section"] = manual_ux_md
     return _write_artifact(args, "CRITIC__qa.md", "runtime_verdict", verdict_value=verdict)
 
 
@@ -496,12 +558,13 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id"], "additionalProperties": False},
      "handler": handle_task_close},
     {"name": "write_critic_qa", "title": "Write runtime verdict — QA agents only",
-     "description": "Write CRITIC__qa.md and set runtime_verdict. Called by qa-browser, qa-api, qa-cli, or qa-desktop. Pass `lens` (e.g. \"cli\", \"browser\") when multiple QA agents run in parallel — the handler appends a per-lens section and computes worst-wins runtime_verdict. Without `lens`, legacy full-overwrite behavior is preserved.",
+     "description": "Write CRITIC__qa.md and set runtime_verdict. Called by qa-browser, qa-api, qa-cli, or qa-desktop. Pass `lens` (e.g. \"cli\", \"browser\") when multiple QA agents run in parallel — the handler appends a per-lens section and computes worst-wins runtime_verdict. Without `lens`, legacy full-overwrite behavior is preserved. Pass `manual_ux_verification` with a non-empty description of the manual UX verification performed; when lens='browser' and this field is empty, runtime_verdict is forced to PENDING (AC-006).",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"},
          "verdict": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED_ENV"]},
          "summary": {"type": "string"}, "transcript": {"type": "string"},
-         "lens": {"type": "string", "description": "Optional QA lens identifier (cli, api, browser, desktop). When set, enables append-mode + worst-wins merge."}},
+         "lens": {"type": "string", "description": "Optional QA lens identifier (cli, api, browser, desktop). When set, enables append-mode + worst-wins merge."},
+         "manual_ux_verification": {"type": "string", "description": "Optional. Description of manual UX checks performed (browser lens). Empty + lens=browser → verdict forced to PENDING (AC-006)."}},
          "required": ["task_id", "verdict", "summary", "transcript"],
          "additionalProperties": False},
      "handler": handle_write_critic_qa},

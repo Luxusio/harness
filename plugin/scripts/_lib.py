@@ -61,23 +61,39 @@ def read_hook_input():
         return {}
 
 
-def emit_permission_decision(decision, reason=""):
+def emit_permission_decision(decision, reason="", *, next_action_command="",
+                             owner_skill="", docs=""):
     """Emit a Claude Code PreToolUse permission decision on stdout.
 
     ``decision="deny"`` writes the hookSpecificOutput envelope and returns.
     Any other value (``"allow"``) is silent — silence is the trust signal for
     allowed calls (Phase 4 DX consensus). Never raises.
 
+    The optional ``next_action_command`` / ``owner_skill`` / ``docs`` fields are
+    appended to the permissionDecisionReason as an arrow-prefixed tail so the
+    PreToolUse envelope stays shape-stable while the orchestrator gets the
+    actionable next step inline (2026-05-12 gate-friction retro).
+
     Caller is responsible for exiting 0 after this returns; the hook's ``|| true``
     wrapper guarantees the shell exit code is 0 regardless.
     """
     if decision != "deny":
         return
+    full_reason = str(reason)
+    tail_lines = []
+    if next_action_command:
+        tail_lines.append(f"↳ next action: {next_action_command}")
+    if owner_skill:
+        tail_lines.append(f"↳ owner: {owner_skill}")
+    if docs:
+        tail_lines.append(f"↳ docs: {docs}")
+    if tail_lines:
+        full_reason = full_reason + "\n\n" + "\n".join(tail_lines)
     envelope = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": str(reason)[:2000],
+            "permissionDecisionReason": full_reason[:2000],
         }
     }
     try:
@@ -418,6 +434,81 @@ def read_manifest_field(field, repo_root=None):
     return yaml_field(field, os.path.join(repo_root, MANIFEST_PATH))
 
 
+# AC-002: browser-QA close gate helpers (2026-05-12 retro)
+_FRONTEND_EXT = (".tsx", ".jsx", ".vue", ".svelte", ".html", ".css", ".scss")
+_FRONTEND_PATH_FRAGMENTS = ("/components/", "/pages/", "/views/", "/routes/")
+
+
+def _read_nested_manifest_field(repo_root, *keys):
+    """Two-level YAML lookup for nested manifest blocks like ``qa.browser_qa_supported``.
+
+    Stdlib only — scans the manifest line-by-line, tracking the current top-level
+    block. Returns the raw value string for the second-level key under the
+    given top-level key, or None if not found.
+    """
+    if not keys or len(keys) != 2:
+        return None
+    top, sub = keys
+    path = os.path.join(repo_root, MANIFEST_PATH)
+    if not os.path.isfile(path):
+        return None
+    in_block = False
+    top_prefix = top + ":"
+    sub_prefix = "  " + sub + ":"  # 2-space indent under block
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.rstrip("\n")
+                if stripped.startswith(top_prefix):
+                    in_block = True
+                    continue
+                if in_block:
+                    if stripped and not stripped.startswith(" ") and not stripped.startswith("#"):
+                        in_block = False
+                        continue
+                    if stripped.startswith(sub_prefix):
+                        val = stripped[len(sub_prefix):].strip()
+                        if val in ("null", "~", "", "[]"):
+                            return None
+                        return val.strip('"').strip("'")
+    except Exception:
+        return None
+    return None
+
+
+def _frontend_touched(touched_paths):
+    """Return True if any touched path looks like a user-facing frontend file."""
+    for p in touched_paths or []:
+        if not isinstance(p, str):
+            continue
+        lp = p.lower()
+        if any(lp.endswith(ext) for ext in _FRONTEND_EXT):
+            return True
+        if any(frag in lp for frag in _FRONTEND_PATH_FRAGMENTS):
+            return True
+    return False
+
+
+def _has_qa_browser_section(task_dir):
+    """Return True if CRITIC__qa.md has a qa-browser header.
+
+    Anchors on ``## qa-browser`` or ``### qa-browser`` at the start of a line
+    so prose mentions of ``qa-browser`` in transcripts do not match.
+    """
+    path = os.path.join(task_dir, "CRITIC__qa.md")
+    if not os.path.isfile(path):
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.lstrip()
+                if s.startswith("## qa-browser") or s.startswith("### qa-browser"):
+                    return True
+    except Exception:
+        return False
+    return False
+
+
 def is_maintenance_task(task_dir, repo_root=None):
     if os.path.isfile(os.path.join(task_dir, "MAINTENANCE")):
         return True
@@ -467,10 +558,28 @@ def emit_compact_context(task_dir):
     if runtime_verdict != "PASS":
         missing_for_close.append("runtime_verdict PASS")
 
+    # AC-002: browser-QA close gate (2026-05-12 retro).
+    # When manifest declares browser_qa_supported and touched paths include
+    # frontend files, refuse to close until CRITIC__qa.md has a qa-browser
+    # section. Prevents qa-api-only PASS verdicts on UI-bearing diffs.
+    repo_root = find_repo_root()
+    try:
+        browser_supported = (_read_nested_manifest_field(
+            repo_root, "qa", "browser_qa_supported") or "").lower() == "true"
+    except Exception:
+        browser_supported = False
+    if browser_supported and _frontend_touched(touched):
+        critic_path = os.path.join(task_dir, "CRITIC__qa.md")
+        if os.path.isfile(critic_path) and not _has_qa_browser_section(task_dir):
+            missing_for_close.append("qa-browser evidence in CRITIC__qa.md")
+
     if not has_plan:
         next_action = "Create PLAN.md via plan skill before source writes."
     elif runtime_verdict != "PASS":
         next_action = "Run task_verify to check runtime verification."
+    elif "qa-browser evidence in CRITIC__qa.md" in missing_for_close:
+        next_action = ("Spawn Agent(subagent_type='harness:qa-browser', ...) "
+                       "and call write_critic_qa with lens='browser'.")
     else:
         next_action = "Runtime verdict PASS — run task_close."
 

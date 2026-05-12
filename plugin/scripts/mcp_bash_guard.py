@@ -269,7 +269,28 @@ def _deny(target, command):
         f" Command: {trimmed_cmd}"
     )
     hint = _escape_hint(GATE_NAME)
-    emit_permission_decision("deny", f"{tail} {human}\n{hint}")
+    # 2026-05-12 gate-friction retro: include next_action_command so the
+    # orchestrator gets an actionable resolution path inline.
+    base = os.path.basename(rel)
+    _NEXT = {
+        "PLAN.md": "Skill('harness:plan', '<task_id>')",
+        "PLAN.meta.json": "Skill('harness:plan', '<task_id>')",
+        "CHECKS.yaml": "python3 plugin/scripts/update_checks.py --task-dir <td> --ac <id> --status <s>",
+        "AUDIT_TRAIL.md": "python3 plugin/scripts/write_plan_artifact.py --artifact audit --append --task-dir <td> --input <file>",
+        "CRITIC__qa.md": "Spawn Agent(subagent_type='harness:qa-*', ...) + write_critic_qa MCP",
+        "HANDOFF.md": "Spawn Agent(subagent_type='harness:developer', ...) + write_handoff MCP",
+        "DOC_SYNC.md": "Spawn Agent(subagent_type='harness:developer', ...) + write_doc_sync MCP",
+    }
+    next_action = _NEXT.get(base, "")
+    if not next_action and category == "workflow-control-surface":
+        next_action = ("Create doc/harness/tasks/<active-task>/MAINTENANCE marker "
+                       "and run Skill('harness:maintain') or developer agent")
+    emit_permission_decision(
+        "deny", f"{tail} {human}\n{hint}",
+        next_action_command=next_action,
+        owner_skill=owner,
+        docs=docs,
+    )
 
 
 # ── Main ───────────────────────────────────────────────────────────────────

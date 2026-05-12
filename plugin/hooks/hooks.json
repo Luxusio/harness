@@ -32,6 +32,12 @@
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_scan.py --apply-safe || true",
             "timeout": 10,
             "statusMessage": "Auto-hygiene check"
+          },
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verification_gap_check.py || true",
+            "timeout": 5,
+            "statusMessage": "Checking verification gaps"
           }
         ]
       }

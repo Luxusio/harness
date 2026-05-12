@@ -79,7 +79,12 @@ class TestLensMergeCriticQA(unittest.TestCase):
 
     def test_second_lens_appends_section(self):
         mod._lens_merge_critic_qa(self.td, "cli", "PASS", "s1", "t1")
-        mod._lens_merge_critic_qa(self.td, "browser", "FAIL", "s2", "t2")
+        # AC-006 (2026-05-12 retro): browser lens with empty manual_ux forces
+        # PENDING; supply manual_ux to preserve the FAIL verdict under test.
+        mod._lens_merge_critic_qa(
+            self.td, "browser", "FAIL", "s2", "t2",
+            manual_ux="manual UX verified",
+        )
         path = os.path.join(self.td, "CRITIC__qa.md")
         content = Path(path).read_text(encoding="utf-8")
         # Both sections present
@@ -98,7 +103,12 @@ class TestLensMergeCriticQA(unittest.TestCase):
 
     def test_three_lens_merge_blocked_env(self):
         mod._lens_merge_critic_qa(self.td, "cli", "PASS", "s1", "t1")
-        mod._lens_merge_critic_qa(self.td, "browser", "BLOCKED_ENV", "s2", "t2")
+        # AC-006: supply manual_ux for browser lens to preserve the test's
+        # BLOCKED_ENV verdict (empty manual_ux would force PENDING).
+        mod._lens_merge_critic_qa(
+            self.td, "browser", "BLOCKED_ENV", "s2", "t2",
+            manual_ux="manual UX verified",
+        )
         mod._lens_merge_critic_qa(self.td, "api", "PASS", "s3", "t3")
         content = Path(os.path.join(self.td, "CRITIC__qa.md")).read_text(encoding="utf-8")
         for lens in ("cli", "browser", "api"):
