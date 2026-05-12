@@ -33,6 +33,8 @@ Applied to every contested item between Voice A and Voice B. First applicable wi
 
 **User Challenge** — Both voices independently recommend changing a user-stated direction. **Never auto-decided.** Surface at Phase 5.3 with full framing (user direction / dual-model recommendation / reasoning / blind spots / downside cost).
 
+**Scope decisions** (split / combine / defer / do-a-subset) — Mechanical by default. Auto-decide via **P1 (Choose completeness)** unless the user has explicitly stated a scope preference that contradicts it. Never surface as User Challenge — "do more vs do less" is not the kind of decision that benefits from user re-confirmation when the original request already named the scope.
+
 If voices disagree on classification, escalate to higher tier (Taste vs. User Challenge → User Challenge).
 
 **Adversarial** — Rows from fresh-context reviewers at the approval gate. Surface at Phase 5 for informational review; never auto-applied.

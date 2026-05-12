@@ -55,6 +55,8 @@ Both triggers cross-reference the AskUserQuestion format from `plugin/skills/pla
 
 MCP does not tolerate mid-task stops. **Never halt with a bare BLOCKED.** Use `AskUserQuestion` with options; user decides. Errors are consumed by the running agent, not humans.
 
+**No mid-task scope cuts.** Do NOT fire AskUserQuestion to ask the user whether to drop ACs, split the task, or defer items mid-Phase. The plan was approved at Phase 5 of plan-skill; develop executes it. If a genuine blocker prevents completion of an AC, escalate via the existing BLOCKED → AskUserQuestion path with the concrete blocker, not a meta scope question.
+
 ## Model Routing
 
 Route work to the cheapest sufficient model. Inline below; full rationale in sub-files.

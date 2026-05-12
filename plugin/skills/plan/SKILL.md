@@ -63,6 +63,8 @@ For high-stakes orchestrator-level ambiguity — execution mode selection, scope
 
 Do NOT use this protocol for routine routing or obvious resolutions. The bar is: "if I pick wrong, the entire plan is built on a misread of intent or scope, and the cost to unwind shows up in develop or verify, not now."
 
+**Not a trigger.** Scope-partition decisions (split into smaller tasks, combine items, defer to follow-up, do a subset) are NEVER Confusion Protocol triggers — auto-decide via Principle P1 (Choose completeness). The cost of "do more" is more work, not unwound work; that does not meet the protocol's bar.
+
 ## Context Health
 
 Soft directive — degrade gracefully, never block.
