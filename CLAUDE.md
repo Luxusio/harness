@@ -9,9 +9,15 @@ updated: 2026-04-15
 
 ## Harness routing
 <!-- harness:routing-injected -->
-- Run the full cycle (plan → develop → verify → close) → `Skill(harness:run)`
-- Plan only → `Skill(harness:plan)`
-- Implement an approved PLAN.md → `Skill(harness:develop)`
+
+**Default = `Skill(harness:run)`.** Never AskUserQuestion to choose between
+plan / run / develop flows — narrower flows fire only when the user explicitly
+names them in their own prompt. The full cycle (plan → develop → verify → close)
+is the canonical answer for any repo-mutating intent.
+
+- Any repo-mutating intent (new feature, fix, refactor, behavior change) → `Skill(harness:run)`
+- User explicitly says "plan only" / "just plan" → `Skill(harness:plan)`
+- User explicitly says "implement PLAN.md" / "develop only" → `Skill(harness:develop)`
 - Bootstrap harness in a new project / repair existing → `Skill(harness:setup)`
 - Contract drift / post-upgrade cleanup → `Skill(harness:maintain)`
 - Read-only question or explanation → answer directly, no skill

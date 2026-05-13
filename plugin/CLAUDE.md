@@ -82,12 +82,18 @@ Do not write another role's artifact. Prewrite gate enforces this.
 
 ## 6. Auto-routing
 
+**Default for repo-mutating intent: `Skill(harness:run)`.** Never AskUserQuestion
+to choose between plan / run / develop flows — narrower flows fire only when
+the user explicitly names them in their own prompt.
+
 | Intent | Route to |
 |--------|----------|
 | Set up harness | `Skill(setup)` |
 | Pre-planning / scope-sharpening (product framing before a task) | `Skill(harness:setup)` (fills the office-hours role; no separate office-hours skill) |
-| New feature / build something | `Skill(harness:plan)` |
-| Run full cycle | `Skill(harness:run)` |
+| Any repo-mutating intent — new feature, fix, refactor, behavior change (default) | `Skill(harness:run)` |
+| User explicitly says "plan only" / "just plan" | `Skill(harness:plan)` |
+| User explicitly says "implement PLAN.md" / "develop only" | `Skill(harness:develop)` |
+| Multi-component or API↔frontend change in one task | `Skill(harness:run)` (develop Phase 3.0 auto-fanout) |
 | CEO review | `Skill(plan-ceo-review)` |
 | Architecture review | `Skill(plan-eng-review)` |
 | Design review | `Skill(plan-design-review)` |

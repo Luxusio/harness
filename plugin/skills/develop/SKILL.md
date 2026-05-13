@@ -119,9 +119,18 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 ### Phase 3.0: AC Dependency Analysis
 
-Classify ACs as SEQUENTIAL (shared files or data dependency) or PARALLEL (disjoint). Build a dependency matrix from each AC's `**Files:**` declaration in PLAN.md. Two ACs share a file → that pair is SEQUENTIAL.
+Classify ACs as SEQUENTIAL (shared files or data dependency) or PARALLEL (component-independent). Build a dependency matrix from each AC's `**Files:**` declaration in PLAN.md. **PLAN.md AC dependency matrix is the single source of truth** — `git diff --name-only` is a secondary signal, never a sole trigger.
 
-**Enforcement (N>=3 disjoint ACs):** when the matrix yields three or more ACs whose target files are pairwise disjoint, the orchestrator MUST issue N parallel Agent calls in a single assistant message. N<3 stays sequential — the spawn cost (~1-2s/agent) is not amortized.
+**Component-independent (definition for this phase):** two ACs are component-independent iff (a) their PLAN target file sets are disjoint, OR (b) shared files are factored into a dedicated helper-extract AC that runs first (sequential prelude → parallel consumers).
+
+**Enforcement (N>=2 component-independent ACs):** when the matrix yields two or more ACs that are pairwise component-independent, the orchestrator MUST issue N parallel Agent calls in a single assistant message. Explicit additional triggers (always fanout, even at N=2):
+
+- **API↔frontend split** — PLAN AC matrix declares both backend/API files (`*api*`, `*routes/*`, `*endpoint*`, `*graphql*`) and frontend files (`*.tsx/.jsx/.vue/.svelte/.html/.css/.scss`). Contract-first → parallel consumers.
+- **Helper-extract-first** — PLAN explicitly contains a helper-extraction AC. Run that extract AC sequentially first, then parallel-fanout the consumer ACs.
+
+**Helper-extract-first guard.** The extract trigger fires ONLY when the extract is already a declared AC in PLAN.md. Mid-task "extract while I'm here" is scope creep blocked by Phase 5. If a fanout decision *would* require extracting a helper from shared files but no such AC exists, the trigger does not fire — run sequentially and surface the missing AC as a Plan Challenge in HANDOFF for the next plan cycle.
+
+**Small-task edge case.** N=2 ACs where total edit volume is trivial (e.g., ~30s total work, <20 lines combined) — sequential is acceptable. Log as `parallel-trigger-skipped` to `learnings.jsonl` with the small-task reason. Default is still parallel; sequential is the opt-out, not the default.
 
 Inline spawn template (copyable; one block per AC, ALL in one assistant turn):
 
@@ -130,7 +139,7 @@ Agent(name="<task_id>:AC-NNN", subagent_type="oh-my-claudecode:executor",
       prompt="Implement AC-NNN per PLAN.md target files <list>. Write to PROGRESS.md when done.")
 ```
 
-See `plugin/skills/develop/parallel-fanout.md` for the full Parallel Fanout Convention and Stage Agent Routing matrix.
+See `plugin/skills/develop/parallel-fanout.md` for the full Parallelization Triggers table, Spawn-all-in-one-message rule, Stage Agent Routing matrix, and the Audit hook (the rule's 6-month value is re-verified via `learnings.jsonl type:parallel-trigger` log).
 
 **Rollback protocol** — on ANY sibling Agent failure during a parallel batch:
 
@@ -320,6 +329,8 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 
 Read `verification-gate.md` in full. Runs test commands from PLAN.md, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit with investigate-skill escalation on cycle 3.
 
+**Multi-lens QA spawns follow `parallel-fanout.md` Parallelization Triggers — when two or more QA lenses apply (e.g., `qa-browser` + `qa-api` for a fullstack diff), issue ALL agent calls in a single assistant message with `lens="<lens>"` so `write_critic_qa` performs lens-aware merge and worst-wins `runtime_verdict`.
+
 **Also implements:**
 - **Transience filter** — a failure must reproduce on 2 consecutive runs to count as `failed`. Single-run failures are logged as `transient` in `learnings.jsonl` and not counted toward the 3-cycle limit.
 - **Severity × confidence close gate** — after synthesis, block close on:
@@ -351,6 +362,8 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/health.py > "<task_dir>/audit/health-after
 After the verification gate passes, spawn the dogfooder agent to use the product
 as a power user. The dogfooder finds friction, gaps, and missing workflows — things
 QA doesn't catch because they aren't bugs.
+
+**Dogfooder spawn batches with Phase 7's final-PASS-cycle QA spawn — issue both in a single assistant message when Phase 7 is on its terminal PASS pass. FAIL cycles skip dogfooder (its work would be discarded). See `parallel-fanout.md` Parallelization Triggers row "Multi-lens QA / dogfooder".
 
 ```
 Agent({
