@@ -1,0 +1,1 @@
+Setup interview now bundles independent objective questions into single modal calls (interview 6→4, Phase 2 4→3, onboarding 3→2). Free-text and branching questions stay solo to keep answers from going shallow.

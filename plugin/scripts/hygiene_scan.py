@@ -269,6 +269,68 @@ def _log_observe(msg: str, repo_root: str) -> None:
         pass
 
 
+# ── Stale .git/index.lock cleanup ────────────────────────────────────────
+
+def _cleanup_stale_index_lock(repo_root: str, max_age_secs: int = 60) -> bool:
+    """Remove a stale .git/index.lock if all three guards pass.
+
+    Guards (ALL must hold):
+      1. File exists at <repo_root>/.git/index.lock.
+      2. Size is exactly 0 bytes (a live git write would have written bytes).
+      3. mtime >= max_age_secs ago.
+      4. fcntl.flock(LOCK_EX | LOCK_NB) succeeds (no process holds it).
+
+    Returns True if a stale lock was removed; False otherwise. Never raises —
+    all errors degrade to no-op so hygiene scan can still proceed.
+    """
+    lock_path = os.path.join(repo_root, ".git", "index.lock")
+    try:
+        st = os.stat(lock_path)
+    except (FileNotFoundError, OSError):
+        return False
+
+    if st.st_size != 0:
+        return False
+
+    age = time.time() - st.st_mtime
+    if age < max_age_secs:
+        return False
+
+    # Try to acquire an exclusive non-blocking lock on the file. If it succeeds,
+    # no other process holds it, so the lock is orphaned.
+    fd = None
+    try:
+        fd = os.open(lock_path, os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, IOError):
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        return False
+
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except (OSError, IOError):
+        pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+
+    try:
+        os.unlink(lock_path)
+    except OSError:
+        return False
+
+    print(
+        f"[hygiene-lock-cleanup] removed stale .git/index.lock (age={int(age)}s)",
+        file=sys.stderr,
+    )
+    return True
+
+
 # ── Main ─────────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -288,6 +350,13 @@ def main() -> int:
     if not cfg["enabled"]:
         # silently exit when disabled
         return 0
+
+    # Best-effort cleanup of a stale .git/index.lock left by a SIGKILL'd
+    # subprocess (e.g. an earlier session's hygiene git op that got killed
+    # by the SessionStart timeout). Guarded by three conditions — never
+    # touches an active lock. See plugin/scripts/hygiene_scan.py
+    # _cleanup_stale_index_lock for the safety contract.
+    _cleanup_stale_index_lock(repo_root)
 
     # AC-004: self-detect missing C-16 (bootstrap guard)
     if not _c16_present(repo_root):

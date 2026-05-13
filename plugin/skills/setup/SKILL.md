@@ -133,27 +133,53 @@ If `LAKE_INTRO=no`:
 
 Then: `touch "$_MARKER_DIR/lake-intro-seen"`.
 
-### Proactive Toggle (once)
+### Proactive Toggle + Routing Injection
 
-If `PROACTIVE_PROMPTED=no` AND `LAKE_INTRO=yes`:
+Both are independent objective questions. Bundle them into one
+`AskUserQuestion` call when neither marker has fired yet. Fall back to a
+single call when only one is still pending.
+
+**Branching:**
+
+- Both pending (`PROACTIVE_PROMPTED=no` AND `ROUTING_INJECTED=no` AND
+  `ROUTING_DECLINED=false` AND `LAKE_INTRO=yes`): one call, two `questions`.
+- Only Proactive pending (`PROACTIVE_PROMPTED=no` AND
+  `ROUTING_INJECTED=yes`): single Proactive question.
+- Only Routing pending (`PROACTIVE_PROMPTED=yes` AND `ROUTING_INJECTED=no`
+  AND `ROUTING_DECLINED=false`): single Routing question.
+- Neither pending: skip.
+
+**Bundled call (both pending):**
+
 ```
 AskUserQuestion:
-  "harness can proactively figure out when to invoke setup. Recommended: keep on."
-  A) Keep proactive on → _harness_config_set proactive true
-  B) Turn off → _harness_config_set proactive false
-```
-Then: `touch "$_MARKER_DIR/proactive-prompted"`.
+  questions:
+    - header: "Proactive"
+      Question: "harness can proactively figure out when to invoke setup. Recommended: keep on."
+      Options:
+        - A) Keep proactive on → _harness_config_set proactive true
+        - B) Turn off → _harness_config_set proactive false
 
-### Routing Injection (once)
+    - header: "Routing"
+      Question: "harness works best when CLAUDE.md includes skill routing rules. ~5 lines."
+      Options:
+        - A) Add routing rules to CLAUDE.md (recommended)
+        - B) No thanks
+```
 
-If `ROUTING_INJECTED=no` AND `ROUTING_DECLINED=false` AND `PROACTIVE_PROMPTED=yes`:
-```
-AskUserQuestion:
-  "harness works best when CLAUDE.md includes skill routing rules. ~5 lines."
-  A) Add routing rules to CLAUDE.md (recommended)
-  B) No thanks
-```
-A → emit the idempotent routing block from `bootstrap.md` Section 3.4 (marker: `harness:routing-injected`) into CLAUDE.md; `touch "$_MARKER_DIR/routing-injected"`. B → `_harness_config_set routing_declined true`. Before injection, run the legacy cleanup from §3.4 to strip any stale `Default agent is harness` line.
+After the call, apply per-question:
+
+- Proactive A/B: `_harness_config_set proactive true|false`, then
+  `touch "$_MARKER_DIR/proactive-prompted"`.
+- Routing A: emit the idempotent routing block from `bootstrap.md`
+  Section 3.4 (marker: `harness:routing-injected`) into CLAUDE.md, then
+  `touch "$_MARKER_DIR/routing-injected"`. Before injection, run the
+  legacy cleanup from §3.4 to strip any stale `Default agent is harness`
+  line.
+- Routing B: `_harness_config_set routing_declined true`.
+
+Lake Intro stays a standalone information-only message above — never
+bundle it here, it is not a question.
 
 ---
 
@@ -287,6 +313,18 @@ the interview later when drift is suspected.
 
 Interview output narrows Q1-Q3 below — check `doc/harness/.interview-answers.json` before asking each remaining question.
 
+**Q1 + Q4 bundling rule.** Q1 (Project Type Confirmation) and Q4 (Quality
+Tooling) are independent objective multiple-choice questions, so they
+ride one `AskUserQuestion` call when both are ask-able. Q2 and Q3 stay
+solo (Q2 branches into free-text on B; Q3 branches by Q1's answer).
+
+- Both ask-able (Q1 not census-decided AND Q4 not previously answered):
+  one call with `questions: [Q1, Q4]`. Apply Q1 first (it gates Q3's
+  branch), then ask Q2 and Q3, then apply Q4.
+- Q1 census-decided (detected type is unambiguous): single Q4 call.
+- Q4 already configured: single Q1 call.
+- Both decided: skip Q1 + Q4 entirely.
+
 ### Q1: Project Type Confirmation
 
 Skip if census determined type clearly.
@@ -299,6 +337,9 @@ AskUserQuestion:
   C) API / backend — server-side only
   D) CLI / library — no server, no UI
 ```
+
+When bundled with Q4 above, this block becomes the first entry in the
+shared `questions` array; Q4's block becomes the second.
 
 ### Q2: Key Commands
 

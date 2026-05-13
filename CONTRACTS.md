@@ -231,6 +231,13 @@ indefinitely. Institutional memory erodes when the signal-to-noise ratio drops.
 - `[SOFT]` additive (Tier B): auto-applied if action is matrix-row addition or contract heading addition only. Modifications/deletions deferred.
 - `[HARD]` (Tier C): deferred. Entry written to `.maintain-pending.json`; user confirms via `Skill(maintain)`.
 
+**Commit timing:** `doc_hygiene.py` stages archive moves at SessionStart but
+does NOT commit. Batch commits happen only via `Skill(maintain)` user
+invocation (see `plugin/skills/maintain/SKILL.md` Phase 2.5). Rationale:
+a SessionStart hook running `git commit` without an internal timeout can
+be SIGKILL'd by the outer hook timeout mid-write, leaving a stale
+`.git/index.lock`.
+
 **KEEP-on-doubt rule:** absence of `superseded_by` or `distilled_to` frontmatter
 fields NEVER alone classifies a doc as REMOVE. Cold-start docs (no new frontmatter)
 always classify as KEEP or REVIEW.

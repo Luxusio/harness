@@ -336,11 +336,11 @@ def _git_sha7(repo_root: str) -> str:
     try:
         r = subprocess.run(
             ["git", "rev-parse", "--short=7", "HEAD"],
-            capture_output=True, text=True, cwd=repo_root,
+            capture_output=True, text=True, cwd=repo_root, timeout=3,
         )
         if r.returncode == 0:
             return r.stdout.strip()
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired):
         pass
     return "unknown"
 
@@ -351,10 +351,10 @@ def _is_dirty(abs_path: str, repo_root: str) -> bool:
         rel = os.path.relpath(abs_path, repo_root)
         r = subprocess.run(
             ["git", "status", "--porcelain", rel],
-            capture_output=True, text=True, cwd=repo_root,
+            capture_output=True, text=True, cwd=repo_root, timeout=3,
         )
         return bool(r.stdout.strip())
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired):
         return False
 
 
@@ -402,31 +402,20 @@ def archive_file(abs_path: str, rel_path: str, repo_root: str) -> bool:
     try:
         r = subprocess.run(
             ["git", "mv", rel_src, rel_dest],
-            capture_output=True, text=True, cwd=repo_root,
+            capture_output=True, text=True, cwd=repo_root, timeout=5,
         )
         if r.returncode != 0:
             print(f"[doc_hygiene] INFO: git mv failed for {rel_path}: {r.stderr.strip()}")
             return False
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired) as exc:
         print(f"[doc_hygiene] INFO: git mv exception for {rel_path}: {exc}")
         return False
 
-    # Restore command embedded in commit message (AC-008)
+    # Archive is staged (git mv leaves rename in the index). Commit happens
+    # only via Skill(maintain) — see plugin/skills/maintain/SKILL.md and C-16.
     restore_cmd = f"python3 plugin/scripts/maintain_restore.py {rel_dest}"
-    commit_msg = (
-        f"hygiene: archive {rel_src}\n\n"
-        f"Auto-archived by doc_hygiene.py (content-signal classification: REMOVE).\n"
-        f"Restore: {restore_cmd}"
-    )
-    try:
-        subprocess.run(
-            ["git", "commit", "-m", commit_msg],
-            capture_output=True, text=True, cwd=repo_root,
-        )
-    except (OSError, subprocess.SubprocessError):
-        pass
 
-    print(f"[doc_hygiene] archived: {rel_src} -> {rel_dest}")
+    print(f"[doc_hygiene] archived (staged): {rel_src} -> {rel_dest}")
     print(f"[doc_hygiene] restore:  {restore_cmd}")
     return True
 

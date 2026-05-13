@@ -69,6 +69,36 @@ On C: remove entry from `.maintain-pending.json` (atomic write).
 
 Never batch multiple Tier C items into one AskUserQuestion.
 
+### Phase 2.5: Staged hygiene archives (batch commit)
+
+`doc_hygiene.py` stages archive moves at SessionStart but does NOT commit
+(see C-16 "Commit timing"). Commit accumulates here, on user demand.
+
+Detect staged archive renames:
+
+```bash
+_STAGED=$(git status --porcelain | awk '/^R/ && / -> .*\/_archive\// {print}')
+_N=$(echo -n "$_STAGED" | grep -c .)
+```
+
+If `_N == 0`: skip this phase.
+
+If `_N >= 1`:
+
+```
+AskUserQuestion:
+  Question: "Hygiene has staged N archive move(s). Commit them in one batch?"
+  Options:
+    - A) Commit batch — single commit "hygiene: batch archive (N files)"
+    - B) Skip — keep staged for later
+```
+
+On A: list each staged rename in the commit body, then
+`git commit -m "hygiene: batch archive (<N> files)" -m "<body>"`.
+Body lists each `src -> dest` and the maintain_restore.py command.
+
+On B: no-op. The renames stay staged.
+
 ### Phase 3: Update pending file
 
 After processing all items, rewrite `.maintain-pending.json` with remaining
@@ -80,6 +110,7 @@ entries only (atomic write via python3 json.dump + tempfile).
 Maintain report
   REVIEW items displayed: N
   Tier C applied: X  deferred: Y  skipped: Z
+  Hygiene archives committed: K (or "skipped: K staged")
   Pending remaining: M
 ```
 

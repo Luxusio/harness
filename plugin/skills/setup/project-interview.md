@@ -14,9 +14,18 @@ the project character has drifted (re-anchor).
 
 ## Voice
 
-Direct, conversational. One question at a time via `AskUserQuestion` —
-never bundle all six (bundling gets shallow answers). Record each answer
-before asking the next.
+Direct, conversational. Bundling rule:
+
+- Free-text questions (Q1 purpose, Q6 failure-to-avoid) stay solo — they
+  need the user's full attention to produce a useful answer.
+- Branching questions (Q5 verification today, where option A pulls in a
+  free-text command list) stay solo.
+- Objective multiple-choice questions with no dependency between them
+  (Q2 audience, Q3 status quo, Q4 wedge) can be bundled into one
+  `AskUserQuestion` call — `questions` array supports up to 4. Record each
+  answer separately before applying.
+- Absolute rule: never bundle all six. Free-text and branching items
+  drown in a batch and answers go shallow.
 
 ## Questions
 
@@ -38,54 +47,53 @@ AskUserQuestion:
 **Maps to:** `doc/common/CLAUDE.md` frontmatter `summary:` field.
 Also seeds `doc/common/REQ__project__primary-goals.md` first paragraph.
 
-### Q2 — Audience
+### Q2–Q4 — Audience, status quo, wedge (bundled)
+
+These three questions are independent objective multiple-choice, so they
+ride one `AskUserQuestion` call with three entries in `questions`. Answers
+are applied independently to their target files (see **Maps to** per
+question). If the user skips any one, record `null` for that one only and
+apply nothing for it.
 
 ```
 AskUserQuestion:
-  Question: "이 프로젝트를 쓰는 사람/시스템과 이 repo를 만지는 사람은?"
-  Context: "쓰는 사람 (end-user)과 개발자가 다르면 둘 다 적어주세요."
-  Options:
-    - A) End-user + developer 구분해서 입력
-    - B) 개인 프로젝트 (내가 쓰고 내가 고침)
-    - C) 내부 도구 (팀만 사용)
-    - D) 공개 라이브러리/SaaS
-```
+  questions:
+    - header: "Audience"
+      Question: "이 프로젝트를 쓰는 사람/시스템과 이 repo를 만지는 사람은?"
+      Context: "쓰는 사람 (end-user)과 개발자가 다르면 둘 다 적어주세요."
+      Options:
+        - A) End-user + developer 구분해서 입력
+        - B) 개인 프로젝트 (내가 쓰고 내가 고침)
+        - C) 내부 도구 (팀만 사용)
+        - D) 공개 라이브러리/SaaS
 
-**Maps to:** `doc/harness/manifest.yaml` `audience:` (신규 필드).
-Design-review 스킬의 default persona 판단에 사용.
+    - header: "Status quo"
+      Question: "하네스 없이 지금까지 변경은 어떻게 진행됐나요?"
+      Options:
+        - A) 단독 작업, 작은 변경 바로 커밋 (light)
+        - B) 플랜 문서 쓰고, 리뷰 받고, 머지 (standard)
+        - C) 크로스 루트 영향 큰 변경이 잦음 (sprinted)
+        - D) 기타 — free text
 
-### Q3 — Status quo workflow
-
-```
-AskUserQuestion:
-  Question: "하네스 없이 지금까지 변경은 어떻게 진행됐나요?"
-  Options:
-    - A) 단독 작업, 작은 변경 바로 커밋 (light)
-    - B) 플랜 문서 쓰고, 리뷰 받고, 머지 (standard)
-    - C) 크로스 루트 영향 큰 변경이 잦음 (sprinted)
-    - D) 기타 — free text
-```
-
-**Maps to:** `doc/harness/manifest.yaml` `execution_mode_default:`.
-light → 기본 maintenance 많음. sprinted → 리뷰 강제 많음.
-
-### Q4 — Narrowest wedge
-
-```
-AskUserQuestion:
-  Question: "이번에 하네스를 받아서 당장 도움받고 싶은 가장 작은 범위는?"
-  Context: "전부 다 받을 필요 없습니다. 작게 시작해서 확장 가능."
-  Options:
-    - A) 태스크 트래킹만 (TASK_STATE, 훅 최소)
-    - B) 태스크 + 플랜 강제 (plan-first rule 적용)
-    - C) 풀 루프 (plan→develop→verify→close + 자동 리뷰)
-    - D) 유지보수 모드 (maintenance_default: true — 가벼운 가드만)
+    - header: "Wedge"
+      Question: "이번에 하네스를 받아서 당장 도움받고 싶은 가장 작은 범위는?"
+      Context: "전부 다 받을 필요 없습니다. 작게 시작해서 확장 가능."
+      Options:
+        - A) 태스크 트래킹만 (TASK_STATE, 훅 최소)
+        - B) 태스크 + 플랜 강제 (plan-first rule 적용)
+        - C) 풀 루프 (plan→develop→verify→close + 자동 리뷰)
+        - D) 유지보수 모드 (maintenance_default: true — 가벼운 가드만)
 ```
 
 **Maps to:**
-- `manifest.yaml` `maintenance_default:`
-- `CONTRACTS.local.md` C-101 — "이 프로젝트에서 활성화된 하네스 범위" 선언
-- 훅 스파서시티(hooks.json 항목 수) 설정에 힌트
+- Q2 (Audience) → `doc/harness/manifest.yaml` `audience:` (신규 필드).
+  Design-review 스킬의 default persona 판단에 사용.
+- Q3 (Status quo) → `doc/harness/manifest.yaml` `execution_mode_default:`.
+  light → 기본 maintenance 많음. sprinted → 리뷰 강제 많음.
+- Q4 (Wedge) →
+  - `manifest.yaml` `maintenance_default:`
+  - `CONTRACTS.local.md` C-101 — "이 프로젝트에서 활성화된 하네스 범위" 선언
+  - 훅 스파서시티(hooks.json 항목 수) 설정에 힌트
 
 ### Q5 — Verification today
 
