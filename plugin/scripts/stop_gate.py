@@ -51,8 +51,10 @@ def _next_action_for_missing(missing_item: str) -> tuple[str, str]:
                 "harness:qa-browser")
     if "runtime_verdict" in item or "pass" in item:
         return ("mcp__plugin_harness_harness__task_verify { task_id: '<task_id>' } "
-                "after running QA",
-                "harness:qa-*")
+                "after running QA, or spawn Agent(subagent_type='harness:stop-judge') "
+                "to assess legitimate pause-with-blocker (transitions runtime_verdict "
+                "to BLOCKED_ENV via write_critic_qa(lens='stop-judge'))",
+                "harness:qa-* or harness:stop-judge")
     return "", ""
 
 
@@ -79,30 +81,49 @@ def main():
         task_id = _active_task_id(active_path)
         td = _resolve_active_task_dir(repo_root, active_path)
 
-        next_action = ""
-        owner_skill = ""
+        # AC-002: BLOCKED_ENV runtime_verdict allows legitimate paused-with-blocker
+        # stop. The stop-judge agent (plugin/agents/stop-judge.md) is the authorized
+        # writer of this transition via write_critic_qa(lens='stop-judge'). Task
+        # remains open (status != closed); next session resumes from BLOCKED_ENV
+        # state and stop-judge re-assesses once the blocker condition changes.
+        ctx = None
         if td and os.path.isdir(td):
             try:
                 ctx = emit_compact_context(td)
-                missing = (ctx or {}).get("missing_for_close") or []
-                if missing:
-                    next_action, owner_skill = _next_action_for_missing(missing[0])
+                verdict = (ctx or {}).get("runtime_verdict", "")
+                if verdict == "BLOCKED_ENV":
+                    return 0  # silent allow — stop-judge confirmed genuine blocker
             except Exception:
-                pass
+                ctx = None
 
+        next_action = ""
+        owner_skill = ""
+        if ctx is not None:
+            missing = (ctx or {}).get("missing_for_close") or []
+            if missing:
+                next_action, owner_skill = _next_action_for_missing(missing[0])
+
+        # AC-001: Cancel-push escape removed. The stop-judge agent is the only
+        # legitimate non-PASS escape path — it transitions runtime_verdict to
+        # BLOCKED_ENV via write_critic_qa(lens='stop-judge'), which the BLOCKED_ENV
+        # branch above then permits. Never suggest cancel options to the user.
         reason = (
             f"Active harness task {task_id} is open. Do not stop — finish the "
             "plan -> develop -> verify -> close loop. Legitimate exits: "
             "(1) run task_verify until runtime_verdict=PASS, then call task_close; "
-            "or (2) call the AskUserQuestion tool to ask the user whether to "
-            "cancel the task — invoke the tool, do not just emit a free-text "
-            "question, so the user gets a clean choice."
+            "or (2) spawn Agent(subagent_type='harness:stop-judge') to assess "
+            "whether the current state is a genuine pause-with-blocker. Stop-judge "
+            "reads CHECKS+transcript+work and emits VERDICT_OK_DONE / "
+            "VERDICT_OK_BLOCKED / VERDICT_NO_CONTINUE. On VERDICT_OK_BLOCKED it "
+            "transitions runtime_verdict=BLOCKED_ENV via "
+            "write_critic_qa(lens='stop-judge'), which this hook then permits as "
+            "legitimate stop."
         )
         payload = gate_block(
             reason=reason,
             next_action_command=next_action,
             owner_skill=owner_skill,
-            docs="plugin/CLAUDE.md § Canonical Loop",
+            docs="plugin/CLAUDE.md § 4a Turn-end rule",
         )
         json.dump(payload, sys.stdout)
         return 0

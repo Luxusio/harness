@@ -43,6 +43,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 | `CLAUDE.md` 편집 필요 | [C-10](#c-10), [C-11](#c-11), [C-15](#c-15) | hard |
 | Maintenance 태스크 (MAINTENANCE 마커) | C-01 완화, [C-05](#c-05) 유지 | — |
 | `doc/changes/` 또는 `doc/common/` 자동 정리 | [C-16](#c-16) | auto |
+| Task in_progress 동안 turn 종결 시점 | [C-17](#c-17) | hard |
 
 Levels:
 - **hard** — gate blocks or MCP refuses. Violation is impossible by default.
@@ -254,6 +255,14 @@ Archive commit message always embeds the copy-pasteable restore command.
   AND `reference_count == 0`, classify REMOVE.
 - `distilled_to: <path>` — key content promoted to `<path>`; if target exists
   AND `reference_count == 0`, classify REMOVE.
+
+### C-17
+
+**Title:** Task in_progress 동안 turn 종결 사유는 verified runtime_verdict 또는 사용자 명시 cancel 뿐.
+**When:** Stop event with `.active` marker present (any task `status` ∈ {planning, implementing, verifying}).
+**Enforced by:** `plugin/scripts/stop_gate.py` (gate-blocks unless `runtime_verdict ∈ {PASS, BLOCKED_ENV}`); `plugin/agents/stop-judge.md` (the only authorized writer of the BLOCKED_ENV transition, via `write_critic_qa(lens='stop-judge')`); MCP `write_critic_qa` (verdict enum gate, worst-wins severity merge) + MCP `task_close` (PASS-only gate, unchanged).
+**On violation:** hard-block (Stop hook refuses turn-end). Claude must call `task_verify`/`task_close` for PASS or spawn `Agent(subagent_type='harness:stop-judge')` for BLOCKED_ENV. Cancel options must never be surfaced to the user inside AskUserQuestion; cancel is recognized only as an explicit user word.
+**Why:** 회고 #1 silent-scope-kill — `stop_gate.py:97-99` 의 "AskUserQuestion 으로 cancel 묻기" 안내가 모호한 종결 지시를 task cancel 로 변환시키던 메커니즘 제거. Stop-judge 의 의미 판단이 runtime_verdict machine gate 의 input — prose-only 룰의 commentary 화 위험 (§0) 회피. 모델 회귀로 인한 조기 종결 시도도 runtime_verdict gate 가 무력화.
 
 <!-- harness:managed-end -->
 

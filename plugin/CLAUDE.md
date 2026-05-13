@@ -51,6 +51,24 @@ Routing is computed on-the-fly from manifest + artifacts. Never stored in TASK_S
 Do not mutate source before PLAN.md exists.
 Short approvals only authorize the last explicit transition proposed.
 
+## 4a. Turn-end rule (P1 strict)
+
+Task in_progress (`.active` marker exists) 동안:
+
+- Default = 계속 진행.
+- 모호한 종결 발화는 무시 — 사용자의 "여기까지", "오늘 그만", "내일", "다음에", "later" 등은 task 종결 사유가 아니다. Session 자연 종료(터미널 닫힘 등)는 task 상태를 건드리지 않으며, 다음 SessionStart 가 resume 한다.
+- AskUserQuestion 옵션 라벨에 "중단/취소/일시정지/나중에/cancel/stop/pause/defer/skip" 류 제시 금지.
+- Cancel 은 사용자가 명시 단어("취소", "cancel", "/cancel") 로 표명할 때만.
+- 자가 판단으로 turn 종결 금지.
+
+Turn 종결 정당 사유 (runtime_verdict 기반):
+
+1. **PASS** — 모든 AC 가 `passed`/`deferred` → `task_close`.
+2. **BLOCKED_ENV** — `stop-judge` agent (plugin/agents/stop-judge.md) 가 진짜 blocker 확인 → `write_critic_qa(lens="stop-judge", verdict="BLOCKED_ENV")` → Stop hook 통과.
+3. 사용자 명시 cancel 단어 → 별도 cancel flow.
+
+멈추려면 `Agent(subagent_type='harness:stop-judge')` 호출. Stop-judge 가 CHECKS+transcript+work 보고 OK/NO 의미 판단을 내림. Tool 호출 카운트, prompt rule 단독, 텍스트 키워드 검사 같은 mechanical/prose-only 게이트는 사용 안 함 — stop-judge 의 의미 판단이 유일한 권한자. PASS 경로는 기존 task_verify+task_close.
+
 ## 5. Artifact ownership
 
 | Artifact | Owner |
