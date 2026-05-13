@@ -397,15 +397,27 @@ README.md
 doc/changes/**
 ```
 
-Exact shell predicate:
+Exact shell predicate. **Source of truth: `TASK_STATE.yaml touched_paths`** (refreshed every `task_verify` call). The previous `git diff --name-only HEAD~1 HEAD` reading was unreliable — it returned the last single commit only, missing uncommitted task changes and earlier commits in multi-commit batches, so Phase 7.7 routinely read the previous task's files.
+
 ```bash
-_USER_FACING=$(git diff --name-only HEAD~1 HEAD 2>/dev/null | grep -E \
-  '^(.*\.(tsx|jsx|vue|svelte|html|css|scss)|plugin/agents/|plugin/skills/|.*/routes/|.*/api/|bin/|cli/|README\.md|doc/changes/)' \
-  | head -1)
+_USER_FACING=$(python3 - <<'PY' 2>/dev/null || echo ""
+import yaml, sys, re, pathlib
+state_path = pathlib.Path("<task_dir>/TASK_STATE.yaml")
+if not state_path.exists():
+    sys.exit(0)
+state = yaml.safe_load(state_path.read_text()) or {}
+paths = state.get("touched_paths") or []
+pat = re.compile(r"(\.tsx|\.jsx|\.vue|\.svelte|\.html|\.css|\.scss)$|^(plugin/agents/|plugin/skills/|.*/routes/|.*/api/|bin/|cli/|README\.md|doc/changes/)")
+for p in paths:
+    if pat.search(p):
+        print(p)
+        break
+PY
+)
 [ -z "$_USER_FACING" ] && echo "SKIP_DOGFOOD" || echo "RUN_DOGFOOD"
 ```
 
-`SKIP_DOGFOOD` short-circuits the spawn; `RUN_DOGFOOD` proceeds to the Agent call above. The predicate intentionally errs toward running the dogfooder when the intersection is non-empty even by one file — a false positive is cheaper than a missed user-facing regression.
+`SKIP_DOGFOOD` short-circuits the spawn; `RUN_DOGFOOD` proceeds to the Agent call above. The predicate intentionally errs toward running the dogfooder when the intersection is non-empty even by one file — a false positive is cheaper than a missed user-facing regression. On TASK_STATE.yaml missing or parse error, the predicate emits empty → SKIP_DOGFOOD (safe default; a dogfooder skip is recoverable, a wrong-files dogfood run is noise).
 
 ### Phase 8: Write HANDOFF
 
