@@ -147,6 +147,43 @@ to `failed` (auto-incrementing `reopen_count`). Only `passed` or
 Writes go through `scripts/update_checks.py` only. Never edit CHECKS.yaml by
 hand — the prewrite gate rejects direct writes.
 
+## 8c. Verification delegation
+
+Main session NEVER calls browser MCP tools (`mcp__chrome-devtools__*`)
+inline. Browser-driving calls (`take_snapshot`, `take_screenshot`,
+`evaluate_script`, `navigate_page`, `click`, `fill`, ...) MUST be
+delegated to the `harness:qa-browser` subagent. The browser MCP surface
+is the actual context-bloat source — DOM snapshots, screenshots, and
+evaluate output add thousands of structured tokens per call.
+
+Why: qa-browser runs browser verification in an isolated context and
+writes structured findings to `CRITIC__qa.md`; the orchestrator reads
+only the verdict (`PASS` / `FAIL` / `BLOCKED_ENV`).
+
+Allowed inline:
+- **Bash test runners** (`pytest`, `npm test`, `pnpm test`, `yarn test`, `bun test`, `vitest`, `jest`, `mocha`, `cargo test`, `go test`, `mvn test`, `gradle test`, `rspec`, `phpunit`, `rake test`) — single PASS/FAIL lines do not bloat context; inline use is legitimate. For heavy full-suite runs, spawning `harness:qa-cli` (or `qa-api` / `qa-desktop` per project) keeps the main lane clean as a convention, not a gate.
+- Lint / format / typecheck (`tsc --noEmit`, `mypy`, `ruff`, `eslint`, `prettier`)
+- Build / compile (`npm run build`, `cargo build`, `go build`)
+- Read-only inspection (`grep`, `find`, `git status`, `git diff`)
+- Ad-hoc HTTP / DB probes (`curl`, `wget`, `httpie`, `psql -c`, `mysql -e`, `alembic`) — too many legitimate uses (API exploration, schema inspection, debugging) for the gate to block
+
+Enforced by: `plugin/scripts/qa_delegation_gate.py` (PreToolUse, no
+matcher — the script self-filters by `tool_name` prefix). v1 emits a
+deny envelope whose reason surfaces in system-reminder so the model
+self-redirects to spawn `harness:qa-browser`. v2 will refine once
+reliable subagent detection is available. Bypass:
+`HARNESS_SKIP_QA_DELEGATION=1` one-shot.
+
+Known v1 caveat: qa-browser's own `mcp__chrome-devtools__*` calls hit
+the same gate (no subagent detection yet). Set the bypass env var when
+spawning qa-browser if the gate surfaces friction.
+
+History: prior to 2026-05-14 the gate also blocked Bash test runners.
+User feedback narrowed it to MCP-only after false-positive blocks on
+legitimate inline `pytest` / `vitest` / `pnpm test` use. The Bash test
+runner block was the wrong knob — Bash test output is bounded, browser
+MCP output is unbounded.
+
 ## 9. Iron Law
 
 The Iron Law has two parallel clauses, both enforced by `update_checks.py`. ACs

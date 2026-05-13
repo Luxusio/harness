@@ -44,6 +44,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 | Maintenance 태스크 (MAINTENANCE 마커) | C-01 완화, [C-05](#c-05) 유지 | — |
 | `doc/changes/` 또는 `doc/common/` 자동 정리 | [C-16](#c-16) | auto |
 | Task in_progress 동안 turn 종결 시점 | [C-17](#c-17) | hard |
+| 메인 세션이 브라우저 MCP 도구 (`mcp__chrome-devtools__*`) 호출 시도 | [C-18](#c-18) | soft |
 
 Levels:
 - **hard** — gate blocks or MCP refuses. Violation is impossible by default.
@@ -263,6 +264,14 @@ Archive commit message always embeds the copy-pasteable restore command.
 **Enforced by:** `plugin/scripts/stop_gate.py` (gate-blocks unless `runtime_verdict ∈ {PASS, BLOCKED_ENV}`); `plugin/agents/stop-judge.md` (the only authorized writer of the BLOCKED_ENV transition, via `write_critic_qa(lens='stop-judge')`); MCP `write_critic_qa` (verdict enum gate, worst-wins severity merge) + MCP `task_close` (PASS-only gate, unchanged).
 **On violation:** hard-block (Stop hook refuses turn-end). Claude must call `task_verify`/`task_close` for PASS or spawn `Agent(subagent_type='harness:stop-judge')` for BLOCKED_ENV. Cancel options must never be surfaced to the user inside AskUserQuestion; cancel is recognized only as an explicit user word.
 **Why:** 회고 #1 silent-scope-kill — `stop_gate.py:97-99` 의 "AskUserQuestion 으로 cancel 묻기" 안내가 모호한 종결 지시를 task cancel 로 변환시키던 메커니즘 제거. Stop-judge 의 의미 판단이 runtime_verdict machine gate 의 input — prose-only 룰의 commentary 화 위험 (§0) 회피. 모델 회귀로 인한 조기 종결 시도도 runtime_verdict gate 가 무력화.
+
+### C-18
+
+**Title:** Verification delegation — main session never drives browser MCP tools inline.
+**When:** Any `mcp__chrome-devtools__*` tool invocation from the main (orchestrator) session (e.g. `take_snapshot`, `take_screenshot`, `evaluate_script`, `navigate_page`, `click`, `fill`).
+**Enforced by:** `plugin/scripts/qa_delegation_gate.py` (PreToolUse, no matcher — script self-filters by `tool_name` prefix `mcp__chrome-devtools__`). v1 emits a deny envelope whose `permissionDecisionReason` surfaces as a system-reminder so the model self-redirects to `Agent(subagent_type='harness:qa-browser')`. v2 will refine once reliable subagent detection lands. Bypass: `HARNESS_SKIP_QA_DELEGATION=1` one-shot. Bash test runners (`pytest`, `npm test`, `vitest`, `pnpm test`, `cargo test`, `go test`, `jest`, `mocha`, `rspec`, `phpunit`, …) are intentionally NOT blocked — single PASS/FAIL lines are legitimate inline use; the previous Bash regex matcher fired false-positives and was narrowed 2026-05-14. Network probes (`curl`, `wget`, `httpie`) and DB probes (`psql -c`, `mysql -e`, `alembic`) also remain unblocked.
+**On violation:** soft-warn. WARN logs to `learnings.jsonl` `type=qa-delegation-warn` each fire; weekly retro reads frequency to decide v2 escalation. Known caveat: qa-browser's own chrome-devtools calls hit the same gate (v1 subagent-detection limitation); use the bypass env var if it surfaces friction.
+**Why:** Browser MCP payloads (DOM snapshots, screenshots, evaluate output) bloat main context with thousands of structured tokens per call. qa-browser isolates browser verification and writes structured findings to `CRITIC__qa.md` — the orchestrator reads only the verdict. Evidence: 2026-05-13 user-observed catchy-secrets session where main agent ran `chrome-devtools` inline and stalled mid-task; user feedback 2026-05-14 narrowed scope to MCP-only after the Bash matcher fired on legitimate `pytest`/`vitest` use.
 
 <!-- harness:managed-end -->
 

@@ -210,6 +210,8 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
 
 **Per-AC test run:** `git diff --name-only HEAD~1` → for each changed source, find test files that import/reference it (mirror path or import search) → run only those. If no tests exist for changed module, write one (Phase 3.5 rule). If PLAN.md specifies per-AC verify commands, prefer those.
 
+**Delegation rule (C-18 / Verification delegation).** Browser MCP tools (`mcp__chrome-devtools__*`) MUST be delegated to `harness:qa-browser` — the gate blocks main-session calls. Bash test runners (`pytest`, `npm test`, `pnpm test`, `vitest`, `cargo test`, `go test`, …) are allowed inline for small per-AC runs (since 2026-05-14 narrowing); spawn `harness:qa-cli` (or `qa-api` / `qa-desktop` per project type) for full-suite verification to keep main context clean as a convention. Read the verdict from `CRITIC__qa.md`. See `plugin/CLAUDE.md` § 8c.
+
 Per-AC test failures → fix immediately. These are free; only Phase 7 full-suite failures count toward the 3-cycle limit.
 
 **Per-AC visual verification** (browser projects only): see `browser-verification.md` → "Per-AC Visual Verification" and "Per-AC Interaction Testing".
@@ -262,7 +264,7 @@ After all ACs done. Each runs only if prerequisite exists.
 
 - **3.7 Lint & Format** — run linter and formatter on `git diff --name-only` only. `--fix` where safe. Re-run per-AC tests after. Skip if none configured.
 - **3.8 Build check** — compile / typecheck the diff (or full project). Build failures are always T1 (our code). Fix immediately.
-- **3.9 Runtime smoke** — see `runtime-smoke.md`. Project-type-specific (browser / API / CLI).
+- **3.9 Runtime smoke** — see `runtime-smoke.md`. Project-type-specific (browser / API / CLI). Smoke commands run inside the qa-* agent (Verification delegation, C-18). Main only spawns + reads results.
 
 ### Phase 4: Plan Completion Audit (haiku)
 
@@ -328,6 +330,8 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 ### Phase 7: Verification Gate
 
 Read `verification-gate.md` in full. Runs test commands from PLAN.md, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit with investigate-skill escalation on cycle 3.
+
+**Main session SHOULD spawn the appropriate qa-* lens for full-suite verification (Verification delegation, C-18).** The gate hard-enforces this only for `mcp__chrome-devtools__*` browser MCP calls (since the 2026-05-14 narrowing); Bash test runners are advisory — small inline runs are fine, but heavy full-suite execution and background process state corrupt the orchestrator context. Let the qa-* lens execute in its isolated context and consume the verdict via `task_verify` / `CRITIC__qa.md`.
 
 **Multi-lens QA spawns follow `parallel-fanout.md` Parallelization Triggers — when two or more QA lenses apply (e.g., `qa-browser` + `qa-api` for a fullstack diff), issue ALL agent calls in a single assistant message with `lens="<lens>"` so `write_critic_qa` performs lens-aware merge and worst-wins `runtime_verdict`.
 
