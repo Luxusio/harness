@@ -1,0 +1,20 @@
+{
+  "_captured_at": "20260514T031326Z",
+  "_event_inferred": "PreToolUse",
+  "_keys_at_top_level": [
+    "cwd",
+    "hook_event_name",
+    "session_id",
+    "tool_input",
+    "tool_name"
+  ],
+  "envelope": {
+    "cwd": ".",
+    "hook_event_name": "PreToolUse",
+    "session_id": "test",
+    "tool_input": {
+      "command": "ls"
+    },
+    "tool_name": "shell"
+  }
+}
