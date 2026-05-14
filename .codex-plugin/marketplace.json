@@ -1,0 +1,23 @@
+{
+  "name": "harness",
+  "description": "Execution harness for AI-assisted repository work — Codex CLI runtime. Mirrors plugin/ (Claude tree); both consume the same MCP server and Python scripts under MCP-only-sharing architecture (see doc/harness/spike-report.md §3.6).",
+  "owner": {
+    "name": "Luxus",
+    "email": "rw051713@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "harness",
+      "source": "./plugin-codex",
+      "category": "productivity",
+      "version": "2.3.0-codex",
+      "tags": [
+        "execution-harness",
+        "completion-gate",
+        "plan-develop-verify-close",
+        "mcp",
+        "codex"
+      ]
+    }
+  ]
+}
