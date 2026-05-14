@@ -11,9 +11,27 @@ The earlier v1.5 trajectory (canonical YAML → dual-emitted SKILL.md) was rever
 
 ## Quickstart
 
-- **Install + first-run**: see [`README.codex.md`](../README.codex.md) at repo root.
-- **Capability matrix** (Codex vs. Claude): see [`doc/harness/runtime-matrix.md`](../doc/harness/runtime-matrix.md).
-- **Troubleshooting** (Codex version pin, hook trust, config.toml merge): see [`doc/harness/codex-troubleshooting.md`](../doc/harness/codex-troubleshooting.md).
+```bash
+# Install on every detected CLI (codex + claude in parallel)
+python3 install.py
+
+# Or pick one
+python3 install.py --codex-only
+python3 install.py --claude-only
+
+# Preview without mutating anything
+python3 install.py --dry-run
+```
+
+`install.py` lives at the repo root. It detects which CLIs you have installed, then in parallel:
+
+- **Codex**: verifies `codex --version` against `.codex-version` pin → `codex plugin marketplace add <repo>` → merges `[mcp_servers.harness]` + `[hooks.*]` + trust-state placeholders into `~/.codex/config.toml` with a timestamped `.bak` backup. After install, run `codex` once and accept the hook trust prompts.
+- **Claude**: `claude plugin marketplace add <repo>` → `claude plugin install harness@harness` (resolves hooks from `plugin.json`) → `claude mcp add harness ...` with the harness MCP server.
+
+Further references:
+- **Capability matrix** (Codex vs. Claude): [`doc/harness/runtime-matrix.md`](../doc/harness/runtime-matrix.md).
+- **Manual install** (for users who want to run each step by hand): [`README.codex.md`](../README.codex.md) at repo root.
+- **Troubleshooting** (Codex version pin, hook trust, config.toml merge): [`doc/harness/codex-troubleshooting.md`](../doc/harness/codex-troubleshooting.md).
 
 ## What lives here
 
