@@ -25,6 +25,54 @@ SCHEMA_FIELDS = (
 )
 
 
+# ── Plugin-root env var (AC-006 of TASK__dual-runtime-plugin-claude-codex) ─
+#
+# Runtime-private env var rename: `CLAUDE_PLUGIN_ROOT` (Claude Code injects)
+# → `HARNESS_PLUGIN_ROOT` (runtime-agnostic; works on Codex too). v2.3.0
+# ships dual-name fallback. v2.5.0 will drop `CLAUDE_PLUGIN_ROOT` per
+# CHANGELOG deprecation window.
+#
+# External config (`plugin/hooks/hooks.json`, `plugin/.mcp.json`) intentionally
+# stays on `${CLAUDE_PLUGIN_ROOT}` for v2.3.0 because Claude Code injects that
+# variable. The flip is a v2.4/v2.5 task once Codex side has been validated
+# and a parallel injection mechanism is wired.
+
+
+def plugin_root_env(default: str | None = None) -> str | None:
+    """Read the plugin-root env var with dual-name fallback.
+
+    Returns the value of `HARNESS_PLUGIN_ROOT` if set (preferred name).
+    Otherwise returns the value of `CLAUDE_PLUGIN_ROOT` (deprecated but
+    still supported during the v2.3 → v2.5 overlap window). Returns
+    ``default`` (or ``None``) when neither is set.
+
+    Callers reading the env var SHOULD prefer this helper over direct
+    ``os.environ.get`` so the rename rolls out consistently. Subprocess
+    spawners that set the env for child processes SHOULD set BOTH names
+    until v2.5 — see :func:`plugin_root_env_pair` below.
+    """
+    new = os.environ.get("HARNESS_PLUGIN_ROOT")
+    if new:
+        return new
+    old = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if old:
+        return old
+    return default
+
+
+def plugin_root_env_pair(value: str) -> dict[str, str]:
+    """Return a dict with both env-var names set to ``value``.
+
+    For subprocess env mappings during the deprecation window. Once v2.5
+    drops `CLAUDE_PLUGIN_ROOT`, change this to return ``{"HARNESS_PLUGIN_ROOT": value}``
+    only — callsites become a single-key dict assignment automatically.
+    """
+    return {
+        "HARNESS_PLUGIN_ROOT": value,
+        "CLAUDE_PLUGIN_ROOT": value,  # deprecated; drop in v2.5
+    }
+
+
 def now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -41,24 +89,48 @@ import sys as _sys    # noqa: E402
 
 _STDIN_CAP_BYTES = 1 << 16  # 64 KiB read cap for hook payload
 
+# Module-level cache of the most-recent parsed hook input, populated by
+# read_hook_input() on first call. AC-007 of TASK__dual-runtime-plugin-claude-codex
+# uses last_hook_input() in gate scripts' outer except so log_gate_crash can
+# capture payload keys + tool_name even when main() raises before returning.
+_LAST_HOOK_INPUT: dict = {}
+
 
 def read_hook_input():
     """Read stdin payload from Claude Code hook (capped at 64 KiB).
 
     Returns parsed JSON dict, or empty dict on any failure. Never raises —
     callers on the hot path must not block when stdin is malformed or absent.
+    Also stashes the parsed dict in module-level cache so :func:`last_hook_input`
+    can retrieve it from an outer except where the local was lost.
     """
+    global _LAST_HOOK_INPUT
     try:
         raw = _sys.stdin.read(_STDIN_CAP_BYTES)
     except Exception:
+        _LAST_HOOK_INPUT = {}
         return {}
     if not raw:
+        _LAST_HOOK_INPUT = {}
         return {}
     try:
         data = _json.loads(raw)
-        return data if isinstance(data, dict) else {}
+        out = data if isinstance(data, dict) else {}
+        _LAST_HOOK_INPUT = out
+        return out
     except Exception:
+        _LAST_HOOK_INPUT = {}
         return {}
+
+
+def last_hook_input() -> dict:
+    """Return the most recent parsed hook input, or empty dict.
+
+    Populated by :func:`read_hook_input`. Used by gate scripts' top-level
+    except wrappers to thread the original payload into :func:`log_gate_crash`
+    without having to refactor every gate's main() signature.
+    """
+    return _LAST_HOOK_INPUT
 
 
 def emit_permission_decision(decision, reason="", *, next_action_command="",
@@ -142,6 +214,50 @@ def _log_gate_error(exc, source):
         })
         with open(learn_path, "a", encoding="utf-8") as f:
             f.write(entry + "\n")
+    except Exception:
+        pass
+
+
+def log_gate_crash(exc, script, hook_input=None):
+    """Structured gate-crash log (AC-007 of TASK__dual-runtime-plugin-claude-codex).
+
+    Payload-aware upgrade over :func:`_log_gate_error`. Records the script
+    name, tool name, payload keys, and exception. Used by gate scripts'
+    top-level except so a `|| true` swallowed crash leaves a diagnostic
+    breadcrumb. Critical for detecting Codex vs Claude payload key drift
+    (e.g. `tool_input` vs `input`, `tool_name` vs `tool`) — when a gate
+    crashes silently, this is the only post-hoc signal.
+
+    Schema (one JSON line in `doc/harness/learnings.jsonl`):
+      ts            ISO timestamp
+      type          "gate-crash" (versus _log_gate_error's "gate-error" for legacy callers)
+      script        the gate name (e.g. "prewrite_gate", "stop_gate")
+      tool_name     hook_input["tool_name"] if present, truncated to 120 chars
+      payload_keys  sorted top-level keys of hook_input (for drift detection)
+      error         "<ExceptionName>: <message>" capped at 400 chars
+
+    Best-effort; never raises. Safe in `|| true` outer wrapper.
+    """
+    try:
+        repo_root = find_repo_root()
+        learn_path = os.path.join(repo_root, "doc", "harness", "learnings.jsonl")
+        os.makedirs(os.path.dirname(learn_path), exist_ok=True)
+        record = {
+            "ts": now_iso(),
+            "type": "gate-crash",
+            "script": str(script or "gate"),
+            "error": f"{type(exc).__name__}: {str(exc)[:400]}",
+        }
+        if isinstance(hook_input, dict):
+            tn = hook_input.get("tool_name")
+            if tn:
+                record["tool_name"] = str(tn)[:120]
+            try:
+                record["payload_keys"] = sorted(hook_input.keys())
+            except Exception:
+                pass
+        with open(learn_path, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(record) + "\n")
     except Exception:
         pass
 
@@ -534,8 +650,83 @@ def compile_routing(task_dir, repo_root=None):
 # ── Task context ─────────────────────────────────────────────────────────
 
 
+# ── Runtime-verdict staleness check ─────────────────────────────────────
+#
+# A frozen `runtime_verdict` (PASS / BLOCKED_ENV) must NOT permit close or
+# stop if any tracked file has been modified after the verdict was written
+# to `CRITIC__qa.md`. PR2 introduced this gate for `task_close`; AC-001
+# of TASK__stop-gate-stale-blocked-env-fix extends it to the Stop hook.
+#
+# Skip lists below cover churn that doesn't reflect a real code change
+# (Python caches, OS metadata, editor swap files). Without the skip,
+# `__pycache__/*.pyc` touches would falsely stale every verdict.
+
+_STALE_CHECK_SKIP_SUFFIXES = (
+    ".pyc", ".pyo", ".pyd",
+)
+_STALE_CHECK_SKIP_FRAGMENTS = (
+    "__pycache__/", "/.DS_Store", ".swp", ".swo",
+)
+_STALE_CHECK_PATH_CAP = 1000  # bound mtime scan in pathological cases
+
+
+def _stale_skip(relpath: str) -> bool:
+    if not relpath:
+        return True
+    for suf in _STALE_CHECK_SKIP_SUFFIXES:
+        if relpath.endswith(suf):
+            return True
+    for frag in _STALE_CHECK_SKIP_FRAGMENTS:
+        if frag in relpath or relpath.endswith(frag.strip("/")):
+            return True
+    return False
+
+
+def runtime_is_stale(task_dir: str) -> tuple[bool, str]:
+    """Return ``(stale, offending_path)``.
+
+    Stale when any file in ``touched_paths`` has ``mtime > mtime(CRITIC__qa.md)``.
+    Skips Python caches / OS metadata per ``_STALE_CHECK_SKIP_*``. If
+    ``CRITIC__qa.md`` is absent the caller is expected to be blocked by the
+    ``runtime_verdict PASS`` / ``BLOCKED_ENV`` precondition; return
+    ``(False, "")`` so this helper does not double-fire.
+    """
+    critic_path = os.path.join(task_dir, "CRITIC__qa.md")
+    if not os.path.isfile(critic_path):
+        return False, ""
+    try:
+        critic_mtime = os.path.getmtime(critic_path)
+    except OSError:
+        return False, ""
+
+    st = read_state(task_dir)
+    touched = st.get("touched_paths") or []
+    if not touched:
+        return False, ""
+
+    repo_root = find_repo_root()
+    for rel in touched[:_STALE_CHECK_PATH_CAP]:
+        if _stale_skip(rel):
+            continue
+        abs_path = rel if os.path.isabs(rel) else os.path.join(repo_root, rel)
+        try:
+            m = os.path.getmtime(abs_path)
+        except OSError:
+            # File deleted / renamed since last sync — treat as stale so the
+            # next verify cycle re-syncs and prunes the entry.
+            return True, rel
+        if m > critic_mtime:
+            return True, rel
+    return False, ""
+
+
 def emit_compact_context(task_dir):
-    """Build the canonical task pack with on-the-fly routing."""
+    """Build the canonical task pack with on-the-fly routing.
+
+    Always populates ``stale`` and ``stale_path`` keys via :func:`runtime_is_stale`
+    so callers (stop_gate, task_close gate, MCP task_verify) can refuse to
+    permit transitions on stale frozen verdicts without re-computing.
+    """
     st = read_state(task_dir)
     if not st:
         return {"error": "no TASK_STATE.yaml", "task_dir": task_dir}
@@ -583,6 +774,8 @@ def emit_compact_context(task_dir):
     else:
         next_action = "Runtime verdict PASS — run task_close."
 
+    stale, stale_path = runtime_is_stale(task_dir)
+
     return {
         "task_id": st.get("task_id") or os.path.basename(task_dir),
         "status": st.get("status") or "unknown",
@@ -596,6 +789,8 @@ def emit_compact_context(task_dir):
         "missing_for_close": missing_for_close,
         "next_action": next_action,
         "effective_close_gate": "standard",
+        "stale": stale,
+        "stale_path": stale_path,
     }
 
 
