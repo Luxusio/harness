@@ -1,0 +1,89 @@
+# Codex CLI config block for the harness plugin.
+#
+# This file is an example — DO NOT load it directly. The setup skill
+# (Skill(harness:setup) with --include-codex) performs an additive merge into
+# your real `~/.codex/config.toml`, backing up the original to
+# `~/.codex/config.toml.bak.<timestamp>` first.
+#
+# Manual merge: copy the [mcp_servers.harness] and [hooks] sections below
+# into your `~/.codex/config.toml`. Do not overwrite existing keys — pick
+# the keys you don't already have. If you DO already have `[mcp_servers.harness]`
+# resolve manually (the setup skill refuses to clobber it).
+
+# ----------------------------------------------------------------------------
+# MCP server registration
+# ----------------------------------------------------------------------------
+# Codex consumes the harness MCP server via standard MCP wire protocol.
+# Same `harness_server.py` serves both Claude Code and Codex.
+
+[mcp_servers.harness]
+command = "python3"
+args = ["${HARNESS_PLUGIN_ROOT}/mcp/harness_server.py"]
+env = { HARNESS_PLUGIN_ROOT = "/absolute/path/to/this/repo/plugin" }
+startup_timeout_sec = 10
+tool_timeout_sec = 60
+enabled = true
+required = false   # set true to fail-fast in `codex exec` if harness is unreachable
+# enabled_tools = [...]   # optional filter; default = all 7 task lifecycle tools
+
+# ----------------------------------------------------------------------------
+# Hook wiring
+# ----------------------------------------------------------------------------
+# Codex hook event names match Claude Code (ClaudeHooksEngine in codex source).
+# Scripts are SHARED with Claude — same `plugin/scripts/*.py` files.
+# The trust-state block immediately below is REQUIRED — without it Codex
+# refuses to fire the hook even when registered. The setup skill computes
+# the trusted_hash for each entry; this example uses a placeholder.
+
+[hooks]
+
+[[hooks.PreToolUse]]
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 ${HARNESS_PLUGIN_ROOT}/scripts/prewrite_gate.py"
+timeout = 3
+
+[[hooks.PreToolUse]]
+matcher = "Bash"
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "python3 ${HARNESS_PLUGIN_ROOT}/scripts/mcp_bash_guard.py"
+timeout = 3
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "python3 ${HARNESS_PLUGIN_ROOT}/scripts/stop_gate.py"
+timeout = 10
+
+[[hooks.SessionStart]]
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "python3 ${HARNESS_PLUGIN_ROOT}/scripts/note_freshness.py --from-git 1 --quiet"
+timeout = 5
+
+# Hook trust state — REQUIRED for Codex to actually fire registered hooks.
+# Format: [hooks.state."<key>"] with trusted_hash matching the hook entry.
+# Setup skill auto-computes these. Example placeholders below:
+
+[hooks.state."preToolUse:0"]
+trusted_hash = "REPLACE_WITH_setup_SKILL_OUTPUT"
+
+[hooks.state."preToolUse:1"]
+trusted_hash = "REPLACE_WITH_setup_SKILL_OUTPUT"
+
+[hooks.state."stop:0"]
+trusted_hash = "REPLACE_WITH_setup_SKILL_OUTPUT"
+
+[hooks.state."sessionStart:0"]
+trusted_hash = "REPLACE_WITH_setup_SKILL_OUTPUT"
+
+# ----------------------------------------------------------------------------
+# Optional: load CLAUDE.md as fallback project doc
+# ----------------------------------------------------------------------------
+# Codex's project_doc_fallback_filenames lets it read your project's CLAUDE.md
+# directly without you having to maintain a parallel AGENTS.md. Useful during
+# migration; production setups should emit a real AGENTS.md via the sync engine.
+
+project_doc_fallback_filenames = ["CLAUDE.md", "AGENTS.md"]
+project_doc_max_bytes = 32768

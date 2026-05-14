@@ -1,5 +1,11 @@
 {
   "name": "harness",
-  "version": "2.2.0",
-  "description": "Execution harness for AI-assisted repository work. Enforces plan-develop-verify-close loops with acceptance ledgers, Iron Law debugging, and tiered learning."
+  "version": "2.3.0",
+  "description": "Execution harness for AI-assisted repository work. Enforces plan-develop-verify-close loops with acceptance ledgers, Iron Law debugging, and tiered learning.",
+  "features": {
+    "codex_enabled": false,
+    "codex_tree_path": "../../plugin-codex",
+    "codex_marketplace_separate": true,
+    "_doc": "v1 dual-runtime opt-in model: plugin-codex/ lives outside this marketplace source path (root .claude-plugin/marketplace.json points at './plugin' only, not './'), so 'claude plugin marketplace update harness' will NOT surprise Claude users with a sibling tree. Codex users opt in explicitly via 'codex plugin marketplace add plugin-codex/' (see README.codex.md). The codex_enabled flag is reserved for future config-driven activation; in v1 the structural separation IS the opt-out."
+  }
 }

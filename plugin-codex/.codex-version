@@ -1,0 +1,20 @@
+# Minimum Codex CLI version harness v1 is tested against.
+# Format: semver string on first non-comment line.
+# Setup skill compares `codex --version` output to this pin and refuses
+# registration with a structured error (see doc/harness/codex-troubleshooting.md
+# "Codex 1.x.y required, found 1.a.b") when the installed CLI is older.
+#
+# Why the pin: Codex tool naming has churned in pre-1.0 (issue #2235
+# apply_patch vs shell). Bounding the test matrix to a known-good version
+# prevents silent semantic drift between this codebase's assumptions and
+# the user's CLI. Bump the pin only after the AC-002 apply_patch matrix
+# and AC-001 hook payload schema have been re-validated against the new
+# Codex version.
+#
+# Bump procedure (codified for future maintainers):
+#   1. Update this file to the new minimum version.
+#   2. Re-run AC-001 + AC-002 verification against the new Codex.
+#   3. Update doc/harness/codex-payload-deltas.md if schemas changed.
+#   4. Note the bump in CHANGELOG.md.
+
+0.130.0
