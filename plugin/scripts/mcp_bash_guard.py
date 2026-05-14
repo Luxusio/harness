@@ -331,8 +331,13 @@ if __name__ == "__main__":
     try:
         sys.exit(main() or 0)
     except Exception as exc:
+        # AC-007: payload-aware crash log (gate-crash).
         try:
-            _log_gate_error(exc, "mcp_bash_guard")
+            from _lib import log_gate_crash, last_hook_input
+            log_gate_crash(exc, "mcp_bash_guard", last_hook_input())
         except Exception:
-            pass
+            try:
+                _log_gate_error(exc, "mcp_bash_guard")
+            except Exception:
+                pass
         sys.exit(0)

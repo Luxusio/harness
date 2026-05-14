@@ -30,6 +30,8 @@ try:
         read_hook_input,
         emit_permission_decision,
         _log_gate_error,
+        log_gate_crash,
+        last_hook_input,
         _escape_hint,
         log_gate_bypass,
         find_repo_root,
@@ -539,8 +541,11 @@ if __name__ == "__main__":
     try:
         sys.exit(main() or 0)
     except Exception as exc:
+        # AC-007: payload-aware crash log (gate-crash). last_hook_input() returns
+        # the dict that main()'s read_hook_input() cached; survives the except
+        # boundary without threading hook_input through main's signature.
         try:
-            _log_gate_error(exc, "prewrite_gate")
+            log_gate_crash(exc, "prewrite_gate", last_hook_input())
         except Exception:
             pass
         sys.exit(0)

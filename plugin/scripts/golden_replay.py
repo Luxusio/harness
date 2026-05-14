@@ -203,7 +203,9 @@ def _invoke_hook(script_path: str, payload: dict) -> subprocess.CompletedProcess
     import json
     repo = _repo_root()
     env = os.environ.copy()
-    env["CLAUDE_PLUGIN_ROOT"] = ROOT  # ROOT is plugin/
+    # Dual-name during v2.3 -> v2.5 deprecation window (AC-006 of dual-runtime v1).
+    env["HARNESS_PLUGIN_ROOT"] = ROOT
+    env["CLAUDE_PLUGIN_ROOT"] = ROOT  # deprecated; drop in v2.5
     return subprocess.run(
         ["python3", script_path],
         input=json.dumps(payload),
@@ -442,6 +444,8 @@ def test_prompt_memory_emits_context_block() -> TestResult:
             f.write(task_dir)
 
         env = _os.environ.copy()
+        # Dual-name env (AC-006). Drop CLAUDE_PLUGIN_ROOT in v2.5 per CHANGELOG.
+        env["HARNESS_PLUGIN_ROOT"] = _os.path.join(ROOT, "plugin")
         env["CLAUDE_PLUGIN_ROOT"] = _os.path.join(ROOT, "plugin")
         r = subprocess.run(
             ["python3", prompt],
@@ -515,6 +519,8 @@ def test_tool_routing_suggests_test_command() -> TestResult:
             "tool_response": {"stderr": "bash: pytest: command not found"},
         }
         env = _os.environ.copy()
+        # Dual-name env (AC-006). Drop CLAUDE_PLUGIN_ROOT in v2.5 per CHANGELOG.
+        env["HARNESS_PLUGIN_ROOT"] = _os.path.join(ROOT, "plugin")
         env["CLAUDE_PLUGIN_ROOT"] = _os.path.join(ROOT, "plugin")
         r = subprocess.run(
             ["python3", routing], input=_json.dumps(payload),

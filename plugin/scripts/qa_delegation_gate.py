@@ -38,6 +38,8 @@ try:
         read_hook_input,
         emit_permission_decision,
         log_gate_bypass,
+        log_gate_crash,
+        last_hook_input,
         find_repo_root,
     )
 except Exception:
@@ -110,5 +112,10 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except Exception:
+    except Exception as exc:
+        # AC-007: payload-aware crash log (gate-crash).
+        try:
+            log_gate_crash(exc, "qa_delegation_gate", last_hook_input())
+        except Exception:
+            pass
         sys.exit(0)

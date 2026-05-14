@@ -15,7 +15,10 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _lib import TASK_DIR, find_repo_root, read_hook_input, emit_compact_context  # type: ignore
+from _lib import (  # type: ignore
+    TASK_DIR, find_repo_root, read_hook_input, emit_compact_context,
+    log_gate_crash, last_hook_input,
+)
 from _gate_response import block as gate_block  # type: ignore
 
 
@@ -81,18 +84,24 @@ def main():
         task_id = _active_task_id(active_path)
         td = _resolve_active_task_dir(repo_root, active_path)
 
-        # AC-002: BLOCKED_ENV runtime_verdict allows legitimate paused-with-blocker
-        # stop. The stop-judge agent (plugin/agents/stop-judge.md) is the authorized
-        # writer of this transition via write_critic_qa(lens='stop-judge'). Task
-        # remains open (status != closed); next session resumes from BLOCKED_ENV
-        # state and stop-judge re-assesses once the blocker condition changes.
+        # BLOCKED_ENV runtime_verdict permits a legitimate paused-with-blocker
+        # stop ONLY when fresh. The stop-judge agent
+        # (plugin/agents/stop-judge.md) is the authorized writer of this
+        # transition via write_critic_qa(lens='stop-judge').
+        #
+        # Staleness check (AC-001 of TASK__stop-gate-stale-blocked-env-fix):
+        # if any touched_paths file has mtime > CRITIC__qa.md mtime, the
+        # BLOCKED_ENV verdict is historical, not current. Activity continued
+        # after the env blocker was recorded — fall through to the block
+        # payload so the orchestrator must re-verify (via task_verify ->
+        # spawn stop-judge again, or task_close on PASS) before stopping.
         ctx = None
         if td and os.path.isdir(td):
             try:
                 ctx = emit_compact_context(td)
                 verdict = (ctx or {}).get("runtime_verdict", "")
-                if verdict == "BLOCKED_ENV":
-                    return 0  # silent allow — stop-judge confirmed genuine blocker
+                if verdict == "BLOCKED_ENV" and not ctx.get("stale", False):
+                    return 0  # silent allow — fresh BLOCKED_ENV from stop-judge
             except Exception:
                 ctx = None
 
@@ -103,10 +112,24 @@ def main():
             if missing:
                 next_action, owner_skill = _next_action_for_missing(missing[0])
 
-        # AC-001: Cancel-push escape removed. The stop-judge agent is the only
+        # Cancel-push escape removed. The stop-judge agent is the only
         # legitimate non-PASS escape path — it transitions runtime_verdict to
-        # BLOCKED_ENV via write_critic_qa(lens='stop-judge'), which the BLOCKED_ENV
-        # branch above then permits. Never suggest cancel options to the user.
+        # BLOCKED_ENV via write_critic_qa(lens='stop-judge'), which the
+        # BLOCKED_ENV branch above then permits ONLY when fresh.
+        #
+        # If we reach here with verdict == "BLOCKED_ENV" the verdict is stale
+        # (touched_paths activity post-dates CRITIC__qa.md). Surface that in
+        # the reason so the orchestrator routes to a fresh stop-judge spawn.
+        stale = bool(ctx and ctx.get("stale"))
+        stale_path = (ctx or {}).get("stale_path", "")
+        stale_note = ""
+        if stale and (ctx or {}).get("runtime_verdict") == "BLOCKED_ENV":
+            stale_note = (
+                " Note: the existing BLOCKED_ENV verdict is STALE — activity"
+                f" on {stale_path or '<touched path>'} post-dates CRITIC__qa.md."
+                " Spawn stop-judge again to re-assess current state, or run"
+                " task_verify after QA to transition toward PASS."
+            )
         reason = (
             f"Active harness task {task_id} is open. Do not stop — finish the "
             "plan -> develop -> verify -> close loop. Legitimate exits: "
@@ -117,7 +140,7 @@ def main():
             "VERDICT_OK_BLOCKED / VERDICT_NO_CONTINUE. On VERDICT_OK_BLOCKED it "
             "transitions runtime_verdict=BLOCKED_ENV via "
             "write_critic_qa(lens='stop-judge'), which this hook then permits as "
-            "legitimate stop."
+            "legitimate stop." + stale_note
         )
         payload = gate_block(
             reason=reason,
@@ -127,7 +150,13 @@ def main():
         )
         json.dump(payload, sys.stdout)
         return 0
-    except Exception:
+    except Exception as exc:
+        # AC-007: even fail-open should leave a diagnostic crash record so
+        # Codex-side payload drift doesn't decay into an invisible dead gate.
+        try:
+            log_gate_crash(exc, "stop_gate", last_hook_input())
+        except Exception:
+            pass
         return 0  # fail-open — never trap Claude in a bad gate
 
 

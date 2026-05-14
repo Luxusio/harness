@@ -198,8 +198,16 @@ def main() -> int:
                    help="Suppress output on OK; still exits non-zero on hard drift")
     p.add_argument("--check-weight", action="store_true",
                    help=f"Also enforce C-13: SKILL.md <= {SKILL_WEIGHT_LIMIT} lines")
-    p.add_argument("--plugin-root", default=os.environ.get("CLAUDE_PLUGIN_ROOT", "plugin"),
-                   help="Plugin root for --check-weight (default: $CLAUDE_PLUGIN_ROOT or ./plugin)")
+    # Dual-name env read: HARNESS_PLUGIN_ROOT (preferred) then CLAUDE_PLUGIN_ROOT
+    # (deprecated; v2.5.0 drops support per CHANGELOG). Repo-root run without
+    # env set falls back to ./plugin for ergonomics.
+    _plugin_root_default = (
+        os.environ.get("HARNESS_PLUGIN_ROOT")
+        or os.environ.get("CLAUDE_PLUGIN_ROOT")
+        or "plugin"
+    )
+    p.add_argument("--plugin-root", default=_plugin_root_default,
+                   help="Plugin root for --check-weight (default: $HARNESS_PLUGIN_ROOT or $CLAUDE_PLUGIN_ROOT or ./plugin)")
     args = p.parse_args()
 
     if not os.path.isabs(args.path):
