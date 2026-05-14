@@ -199,6 +199,42 @@ def _do_install(snippet: str, config_path: Path, force_merge: bool) -> tuple[boo
         return True, f"Wrote fresh {config_path}"
 
 
+def emit_and_install(plugin_root: str, config_path: str | Path | None = None,
+                     force: bool = False) -> dict:
+    """Library entry point — emit Codex config snippet and install it.
+
+    Returns a dict with keys:
+      - ok: bool — True on success
+      - message: str — human-readable summary
+      - snippet: str — the TOML block (always populated)
+      - config_path: str — the path that was (or would be) written
+      - backup_path: str | None — timestamped .bak if a pre-existing config was backed up
+      - blocks_added: list[str] — names of TOML blocks merged in
+
+    Used by repo-root install.py to compose the Codex half of a unified install
+    without shelling out to this script's CLI.
+    """
+    cfg = Path(config_path) if config_path else DEFAULT_CONFIG_PATH
+    pr = Path(plugin_root).resolve()
+    if not pr.is_dir():
+        return {"ok": False, "message": f"plugin root not a directory: {pr}",
+                "snippet": "", "config_path": str(cfg), "backup_path": None,
+                "blocks_added": []}
+    snippet = emit(str(pr))
+    pre_existing = cfg.exists() and "[mcp_servers.harness]" in cfg.read_text()
+    ok, msg = _do_install(snippet, cfg, force)
+    backup = None
+    if ok and cfg.exists() and pre_existing:
+        # _do_install wrote a .bak; find the most recent matching one
+        candidates = sorted(cfg.parent.glob(f"{cfg.name}.bak.*"))
+        if candidates:
+            backup = str(candidates[-1])
+    blocks = ["[mcp_servers.harness]", "[hooks.SessionStart]", "[hooks.Stop]",
+              "[hooks.PreToolUse]", "[hooks.UserPromptSubmit]", "[hooks.state.*]"]
+    return {"ok": ok, "message": msg, "snippet": snippet, "config_path": str(cfg),
+            "backup_path": backup, "blocks_added": blocks if ok else []}
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Emit ~/.codex/config.toml block for harness Codex install.")
     p.add_argument("--plugin-root", required=True, help="Absolute path to plugin/ directory")
