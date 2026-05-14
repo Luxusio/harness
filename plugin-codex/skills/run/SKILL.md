@@ -45,11 +45,9 @@ On Codex side the plan skill ships in degraded form — single-voice (no Voice A
 
 ### Phase 3: Develop
 
-Read `plugin-codex/skills/develop/SKILL.md` (NOT YET PORTED in v1.5 — develop skill remains Claude-only until v2 because its core flow is Agent fan-out for parallel qa-* + dogfooder). On Codex side for v1.5, if the user invokes `$harness:run` and the task needs develop phase, surface this gap:
+Read `plugin-codex/skills/develop/SKILL.md` and execute its phases inline, passing `task_id`. The develop skill on Codex is a hand-port of the Claude source (`plugin/skills/develop/SKILL.md`) under the MCP-only-sharing policy (spike-report §3.6) — same canonical-loop methodology, with `Agent` fan-out collapsed to sequential execution, `Skill()` chains rendered as inline-read sub-skill references, and `AskUserQuestion` gates rendered as conversational prose asks. Phase 0 through Phase 8.7 parity is preserved. Develop writes HANDOFF.md + DOC_SYNC.md to the task_dir. On BLOCKED: stop and report.
 
-> "develop phase is currently Claude-only on harness v1.5. Switch to Claude for the develop stage, or ask the orchestrator to run a sequential degraded develop variant inline (slower, no parallel QA fan-out)."
-
-Sequential degraded variant: orchestrator reads `plugin/skills/develop/SKILL.md` (Claude source) and executes each phase sequentially, treating `Agent(subagent_type="...")` calls as instructional rather than literal — instead of spawning, the orchestrator does that role's work inline. Single-lens QA only. Tracks against the same CHECKS.yaml. Slower but functional.
+Multi-lens parallel QA (qa-browser + qa-api in one batch) is the one piece still deferred to v2 — pick the dominant lens for the diff. Browser MCP verification is also deferred until Codex Playwright MCP lands. Both deferrals are documented in the develop SKILL.md runtime-notes block.
 
 On completion: HANDOFF.md and DOC_SYNC.md exist in task_dir. If BLOCKED: stop, report, ask user.
 
