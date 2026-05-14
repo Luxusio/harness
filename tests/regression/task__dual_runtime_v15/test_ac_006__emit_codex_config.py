@@ -21,7 +21,7 @@ except ImportError:
     import tomli as tomllib  # type: ignore
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-SCRIPT = REPO_ROOT / "plugin" / "runtime-sync" / "emit_codex_config.py"
+SCRIPT = REPO_ROOT / "plugin-codex" / "install" / "emit_codex_config.py"
 PLUGIN_ROOT = REPO_ROOT / "plugin"
 
 

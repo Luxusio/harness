@@ -18,9 +18,9 @@ v1.5 scope (AC-006 of TASK__dual-runtime-v1.5-spike-and-sync):
     HookListEntry.current_hash`; algorithm not documented as public API).
 
 Usage:
-  python3 plugin/runtime-sync/emit_codex_config.py --plugin-root /path/to/plugin
-  python3 plugin/runtime-sync/emit_codex_config.py --plugin-root ... --install
-  python3 plugin/runtime-sync/emit_codex_config.py --plugin-root ... --force-merge
+  python3 plugin-codex/install/emit_codex_config.py --plugin-root /path/to/plugin
+  python3 plugin-codex/install/emit_codex_config.py --plugin-root ... --install
+  python3 plugin-codex/install/emit_codex_config.py --plugin-root ... --force-merge
 """
 from __future__ import annotations
 
@@ -161,7 +161,7 @@ def emit(plugin_root: str) -> str:
     pr = str(Path(plugin_root).resolve())
     header = (
         "# ───────────────────────────────────────────────────────────────────\n"
-        f"# harness v2.3.0 — emitted by plugin/runtime-sync/emit_codex_config.py\n"
+        f"# harness v2.3.0 — emitted by plugin-codex/install/emit_codex_config.py\n"
         f"# Plugin root: {pr}\n"
         f"# Generated: {_dt.datetime.now(_dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}\n"
         "# ───────────────────────────────────────────────────────────────────\n"

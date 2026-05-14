@@ -118,7 +118,7 @@ Reversed 2026-05-14 in TASK__codex-develop-port-and-parity-check after user chal
 - `plugin/hooks/hooks.json` payload schema — already byte-identical (Codex `ClaudeHooksEngine` is an explicit Claude port)
 - `plugin/scripts/*.py` — `prewrite_gate`, `mcp_bash_guard`, `stop_gate`, `qa_delegation_gate`, `update_checks`, `_lib`, etc.
 - Contract artifacts on disk — PLAN.md, CHECKS.yaml, HANDOFF.md, DOC_SYNC.md, CRITIC__qa.md
-- `plugin/runtime-sync/emit_codex_config.py` — emits Codex `~/.codex/config.toml` MCP+hook snippet. The single surviving bridge from the shared substrate to the Codex runtime.
+- `plugin-codex/install/emit_codex_config.py` — emits Codex `~/.codex/config.toml` MCP+hook snippet. The single surviving bridge from the shared substrate to the Codex runtime. (Moved from `plugin/runtime-sync/emit_codex_config.py` 2026-05-14 in TASK__move-emit-codex-config-to-plugin-codex — `plugin/runtime-sync/` was the v1.5 sync-engine dir, deleted along with its other contents per the §3.6 reversal.)
 
 **What was reverted (would have been infra for YAML canonical):**
 - `plugin/runtime-sync/canonical_schema.py` — DELETED
