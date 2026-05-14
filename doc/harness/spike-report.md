@@ -105,6 +105,44 @@ The sync engine ships:
 
 The remaining 6 skills (develop, maintain, plan-ceo-review, plan-eng-review, plan-design-review, plan-devex-review) get YAML rewrites in subsequent v1.5 sub-tasks or v2.0.
 
+> **Superseded by §3.6** — see policy reversal below. The YAML/JSON canonical form was abandoned after the v1.5 spike measurements proved the ROI was negative. This section is preserved as historical record of the path attempted.
+
+### 3.6 Policy reversal — abandon YAML canonical, adopt MCP-only sharing
+
+Reversed 2026-05-14 in TASK__codex-develop-port-and-parity-check after user challenged the §3.5 binding during plan-skill premise gate. The reversal is driven by the same measurements that motivated §3.5, read with one more piece of evidence: how much infrastructure cost the 60% sharing actually carries.
+
+**Decision:** the dual-runtime plugin shares **only the protocol-portable substrate** — MCP server (`plugin/mcp/harness_server.py`), hook payload schemas, gate scripts (`plugin/scripts/*.py`), and contract artifacts (PLAN.md, CHECKS.yaml, HANDOFF.md, DOC_SYNC.md, CRITIC__qa.md). SKILL.md trees are **independent per runtime**, hand-authored in each runtime's native idiom. Future authoring is two trees, not one canonical source.
+
+**What stays shared (protocol-portable, unchanged):**
+- `plugin/mcp/harness_server.py` — 7 MCP tools, runtime-agnostic
+- `plugin/hooks/hooks.json` payload schema — already byte-identical (Codex `ClaudeHooksEngine` is an explicit Claude port)
+- `plugin/scripts/*.py` — `prewrite_gate`, `mcp_bash_guard`, `stop_gate`, `qa_delegation_gate`, `update_checks`, `_lib`, etc.
+- Contract artifacts on disk — PLAN.md, CHECKS.yaml, HANDOFF.md, DOC_SYNC.md, CRITIC__qa.md
+- `plugin/runtime-sync/emit_codex_config.py` — emits Codex `~/.codex/config.toml` MCP+hook snippet. The single surviving bridge from the shared substrate to the Codex runtime.
+
+**What was reverted (would have been infra for YAML canonical):**
+- `plugin/runtime-sync/canonical_schema.py` — DELETED
+- `plugin/runtime-sync/transform_skill.py` — DELETED
+- `tests/runtime-sync/corpus/` — DELETED
+- `tests/regression/task__dual_runtime_v15/test_ac_005__transform_skill.py` — DELETED
+- `plugin/runtime-sync/parity_check.py` — NEVER WRITTEN (was the v1.5 follow-up; deferred indefinitely)
+
+**Why §3.5 was wrong despite §3.1–§3.4 being right:**
+- §3.1 correctly identified that pure AST text-substitution breaks on control-flow primitives.
+- §3.2 correctly identified that dual hand-maintained without lint will drift.
+- §3.3 derived "therefore: YAML/JSON intermediate that captures structure".
+- §3.4 rejected MCP-only sharing on the grounds it would "defeat the dual-runtime plugin goal".
+
+The error was in §3.4's framing. MCP-only sharing does **not** defeat the dual-runtime goal — it just shifts the unit of sharing from "skill content" to "skill substrate". The user-visible artifact (a working Codex experience for the canonical loop) is delivered by hand-authoring SKILL.md trees that consume the shared MCP + hook + gate substrate. The §1 measurements (60% weighted-mean, 100% restructure on control-flow primitives) prove that the *interesting* parts of any skill — Skill chain, AskUserQuestion, Agent fan-out, dual-voice — are exactly where canonical-form sharing fails. Authoring a YAML canonical for the 60% that *is* portable, then adding per-runtime overrides for the 40% that isn't, ends up with two trees of complexity (canonical + per-runtime overrides) instead of one (two independent trees consuming a shared substrate).
+
+**Why the §3.1 / §3.2 problems don't re-emerge:**
+- Drift between trees is acceptable because the trees are not promised equivalent. They're promised to consume the same substrate. A bug fix in Claude's `develop` skill is a candidate port to Codex's `develop` skill, not a forced sync. The MCP and gate scripts catch contract-level drift; SKILL.md drift is editorial.
+- Control-flow primitives stop being a porting problem because each tree writes them natively. No restructure budget needed.
+
+**De-risking effect:** future authoring is two independent trees, both consuming the same MCP + hook + gate substrate. Editing a Claude skill no longer requires thinking about Codex equivalents. The Codex tree grows on its own cadence, hand-shaped to Codex's primitives (sequential execution, conversational asks, multi_agent when ergonomic). The shared substrate is what makes both trees produce equivalent *behavior* — PLAN.md / CHECKS.yaml / HANDOFF.md / CRITIC__qa.md don't care which runtime wrote them.
+
+**Cost paid:** v1.5 sync-engine infra (~600 LOC: canonical_schema + transform_skill + corpus + AC-005 tests) is sunk cost. The spike measurements that produced this decision could not have been written without doing the spike first; the data justifies the price.
+
 ---
 
 ## 4. AC-005 + AC-006 scope after decision
