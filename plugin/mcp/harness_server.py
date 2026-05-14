@@ -25,7 +25,7 @@ from _lib import (  # type: ignore
     now_iso, read_state, write_state, set_state_field,
     ensure_task_scaffold, emit_compact_context, sync_from_git_diff,
     artifact_exists, canonical_task_dir, canonical_task_id,
-    find_repo_root,
+    find_repo_root, runtime_is_stale as _runtime_is_stale,
 )
 try:
     from environment_snapshot import snapshot as _env_snapshot  # type: ignore
@@ -65,69 +65,11 @@ def _task_artifact_rel(td: str, fn: str) -> str:
 
 
 # ── PR2 close-gate helpers ──────────────────────────────────────────────
-
-
-# Extensions / path fragments skipped during runtime-stale mtime scan.
-# These churn without reflecting a real code change (Python caches, macOS
-# metadata, editor swap files). Including them would produce false-positive
-# stale verdicts.
-_STALE_CHECK_SKIP_SUFFIXES = (
-    ".pyc", ".pyo", ".pyd",
-)
-_STALE_CHECK_SKIP_FRAGMENTS = (
-    "__pycache__/", "/.DS_Store", ".swp", ".swo",
-)
-_STALE_CHECK_PATH_CAP = 1000  # bound mtime scan in pathological cases
-
-
-def _stale_skip(relpath: str) -> bool:
-    if not relpath:
-        return True
-    for suf in _STALE_CHECK_SKIP_SUFFIXES:
-        if relpath.endswith(suf):
-            return True
-    for frag in _STALE_CHECK_SKIP_FRAGMENTS:
-        if frag in relpath or relpath.endswith(frag.strip("/")):
-            return True
-    return False
-
-
-def _runtime_is_stale(td: str) -> tuple[bool, str]:
-    """Return (stale, offending_path).
-
-    Stale when any file in ``touched_paths`` has ``mtime > mtime(CRITIC__qa.md)``.
-    Skips Python caches / OS metadata per ``_STALE_CHECK_SKIP_*`` so generated
-    churn doesn't invalidate a legitimate PASS. If ``CRITIC__qa.md`` is
-    absent the caller should already be blocked by the ``runtime_verdict PASS``
-    gate; return ``(False, "")`` here so we don't double-fire.
-    """
-    critic_path = os.path.join(td, "CRITIC__qa.md")
-    if not os.path.isfile(critic_path):
-        return False, ""
-    try:
-        critic_mtime = os.path.getmtime(critic_path)
-    except OSError:
-        return False, ""
-
-    st = read_state(td)
-    touched = st.get("touched_paths") or []
-    if not touched:
-        return False, ""
-
-    repo_root = find_repo_root()
-    for rel in touched[:_STALE_CHECK_PATH_CAP]:
-        if _stale_skip(rel):
-            continue
-        abs_path = rel if os.path.isabs(rel) else os.path.join(repo_root, rel)
-        try:
-            m = os.path.getmtime(abs_path)
-        except OSError:
-            # File was deleted / renamed since last sync. Treat as stale;
-            # the next task_verify will re-sync and prune the entry.
-            return True, rel
-        if m > critic_mtime:
-            return True, rel
-    return False, ""
+#
+# `_runtime_is_stale` lives in `_lib.runtime_is_stale` so both the MCP
+# server (close + verify) and `stop_gate.py` can reach it without
+# cross-import from `mcp/` into `scripts/`. Imported at the top of this
+# file. See `_lib.py` for the full helper + skip-list constants.
 
 
 def _parse_checks_yaml(td: str) -> list[dict] | None:
@@ -489,7 +431,19 @@ def _lens_merge_critic_qa(td: str, lens: str, verdict: str,
         with open(path, "a", encoding="utf-8") as f:
             f.write(section)
     current = read_state(td).get("runtime_verdict", "PENDING")
-    final = _worst_verdict(current, verdict)
+    # AC-007 of TASK__dual-runtime-plugin-claude-codex: stop-judge lens has
+    # OVERRIDE authority — it is the only authorized writer of blocker
+    # transitions per CONTRACTS § C-17, which means it must also be able to
+    # CLEAR a prior BLOCKED_ENV when the blocker condition resolves. Without
+    # this exemption, a stale stop-judge BLOCKED_ENV from an earlier session
+    # phase permanently traps the task at BLOCKED_ENV via worst-wins merge,
+    # blocking task_close even after the situation that produced the verdict
+    # has resolved. The Stop hook got a staleness check on 2026-05-14; this
+    # mirrors that fix at the lens-merge layer for the task_close gate.
+    if lens == "stop-judge":
+        final = (verdict or "PENDING").upper()
+    else:
+        final = _worst_verdict(current, verdict)
     set_state_field(td, "runtime_verdict", final)
     return _ok({"artifact": "CRITIC__qa.md", "task_dir": td,
                 "lens": lens, "verdict": final, "merged": True})
