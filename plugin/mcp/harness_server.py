@@ -563,16 +563,47 @@ class McpServer:
     def __init__(self) -> None:
         self.initialized = False
         self.protocol_version = SUPPORTED_PROTOCOLS[0]
+        self.framed_stdio = False
 
     def _read(self) -> dict | None:
-        line = sys.stdin.buffer.readline()
-        if not line or not line.strip():
+        """Read either MCP stdio frames or newline-delimited JSON.
+
+        Codex speaks the standard MCP stdio transport, where every JSON-RPC
+        message is framed with HTTP-like headers, most importantly
+        ``Content-Length``. Older harness smoke tests used one JSON object per
+        line, so this reader accepts both forms.
+        """
+        first = sys.stdin.buffer.readline()
+        if not first:
             return None
-        return json.loads(line.strip().decode())
+        if first.strip().startswith(b"{"):
+            self.framed_stdio = False
+            return json.loads(first.strip().decode())
+
+        self.framed_stdio = True
+        headers: dict[str, str] = {}
+        line = first
+        while line and line.strip():
+            key, sep, value = line.decode(errors="replace").partition(":")
+            if sep:
+                headers[key.strip().lower()] = value.strip()
+            line = sys.stdin.buffer.readline()
+
+        length_raw = headers.get("content-length")
+        if not length_raw:
+            return None
+        body = sys.stdin.buffer.read(int(length_raw))
+        if not body:
+            return None
+        return json.loads(body.decode())
 
     def _write(self, payload: dict) -> None:
-        data = (json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n").encode()
-        sys.stdout.buffer.write(data)
+        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
+        if self.framed_stdio:
+            header = f"Content-Length: {len(body)}\r\n\r\n".encode()
+            sys.stdout.buffer.write(header + body)
+        else:
+            sys.stdout.buffer.write(body + b"\n")
         sys.stdout.buffer.flush()
 
     def _reply(self, msg_id: Any, result: Any) -> None:

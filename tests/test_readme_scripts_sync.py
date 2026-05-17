@@ -55,6 +55,7 @@ def test_every_readme_script_mention_exists():
         _scripts_on_disk()
         | INTERNAL_EXCLUDES
         | {p.name for p in MCP_DIR.glob("*.py")}
+        | {"install.py"}  # repo-root installer, not a plugin/scripts helper
     )
     readme_names = _py_names_mentioned_in_readme()
     # README may mention scripts from other paths (e.g., "get-pip.py" in prose). Only flag

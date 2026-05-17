@@ -62,7 +62,7 @@ def test_silent_when_no_active(tmp_path):
 
 
 def test_reason_contains_task_id_and_exits(tmp_path):
-    """AC-003: reason names the active task_id and both legitimate exits."""
+    """AC-003: reason names the active task_id and legitimate stop exits."""
     repo = _fake_repo(tmp_path, active_contents="TASK__alpha-beta-gamma\n")
     result = _run(repo)
 
@@ -70,10 +70,11 @@ def test_reason_contains_task_id_and_exits(tmp_path):
     reason = payload["reason"]
     assert "TASK__alpha-beta-gamma" in reason, reason
     assert "task_close" in reason, reason
-    assert "cancel" in reason.lower(), reason
-    # AC-001: cancel-path exit must explicitly name AskUserQuestion so Claude
-    # invokes the tool instead of emitting a free-text question.
-    assert "AskUserQuestion" in reason, reason
+    assert "runtime_verdict=PASS" in reason, reason
+    assert "harness:stop-judge" in reason, reason
+    assert "BLOCKED_ENV" in reason, reason
+    assert "cancel the task" not in reason, reason
+    assert "AskUserQuestion" not in reason, reason
 
 
 def test_reason_handles_full_path_active(tmp_path):

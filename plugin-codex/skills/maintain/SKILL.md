@@ -1,8 +1,3 @@
-# HAND-PORTED — Codex variant of plugin/skills/maintain/SKILL.md (123L source).
-# Authored 2026-05-14 in TASK__codex-maintain-port-and-run-stale-fix under the
-# MCP-only-sharing policy (spike-report §3.6). Sub-files (if any) fall back to
-# plugin/skills/maintain/<name>.md — methodology parity preserved by reference.
-
 ---
 name: maintain
 description: |
@@ -14,6 +9,12 @@ description: |
   Trigger keywords: "maintain", "contract drift", "CLAUDE.md 정리",
   "규약 정비", "contracts 꼬임", "harness upgrade cleanup".
 ---
+
+# HAND-PORTED — Codex variant of plugin/skills/maintain/SKILL.md (123L source).
+# Authored 2026-05-14 in TASK__codex-maintain-port-and-run-stale-fix under the
+# MCP-only-sharing policy (spike-report §3.6). Sub-files (if any) fall back to
+# plugin/skills/maintain/<name>.md — methodology parity preserved by reference.
+
 
 > **Codex runtime notes** (delta from Claude maintain):
 > - **No `AskUserQuestion` structured tool.** Where Claude emits an AskUserQuestion at Tier C drift confirmation (Phase 2) and at the hygiene batch-commit gate (Phase 2.5), Codex emits the question + numbered options as plain prose and reads the user's reply on the next turn.

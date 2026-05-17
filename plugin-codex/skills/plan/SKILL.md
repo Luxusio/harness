@@ -1,11 +1,12 @@
-# GENERATED-CANDIDATE — hand-ported v1.5 spike from plugin/skills/plan/SKILL.md (298L source).
-# Source canonical at plugin/skills/plan/SKILL.md. Sync engine output for AC-005 will replace.
-# Lives here only to measure porting friction for AC-003 of TASK__dual-runtime-v1.5-spike-and-sync.
-
 ---
 name: plan
 description: Harness 7-phase review pipeline that writes PLAN.md and related task contract artefacts via the CLI. Codex variant runs single-voice (Claude-only dual-voice fan-out deferred to v2).
 ---
+
+# GENERATED-CANDIDATE — hand-ported v1.5 spike from plugin/skills/plan/SKILL.md (298L source).
+# Source canonical at plugin/skills/plan/SKILL.md. Sync engine output for AC-005 will replace.
+# Lives here only to measure porting friction for AC-003 of TASK__dual-runtime-v1.5-spike-and-sync.
+
 
 Codex-variant 7-phase review pipeline. Runs structured review across CEO, Engineering, and DX lenses (Design lens optional); single-voice on Codex (dual-voice Agent fan-out remains Claude-only); classifies every decision; surfaces only contested items to the user; writes the final task contract through the protected-artifact CLI.
 

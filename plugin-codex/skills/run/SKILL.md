@@ -1,12 +1,13 @@
+---
+name: run
+description: Orchestrate full development cycle — plan -> develop -> verify -> close.
+---
+
 # GENERATED-CANDIDATE — hand-ported v1.5 spike from plugin/skills/run/SKILL.md (171L source).
 # Source canonical at plugin/skills/run/SKILL.md. v1.5 AC-005 sync engine will replace this
 # hand-port with mechanical emission. Lives here only to measure porting friction for
 # AC-002 of TASK__dual-runtime-v1.5-spike-and-sync.
 
----
-name: run
-description: Orchestrate full development cycle — plan -> develop -> verify -> close.
----
 
 Orchestrate the full harness development cycle for a task.
 

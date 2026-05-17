@@ -1,9 +1,3 @@
-# HAND-PORTED — Codex variant of plugin/skills/plan-devex-review/SKILL.md (1022L source).
-# Authored 2026-05-14 in TASK__codex-plan-devex-review-port under the MCP-only-sharing
-# policy. See doc/harness/spike-report.md §3.6 for the rationale; this file is the
-# plan-devex-review port under that policy. Sub-file (dx-hall-of-fame.md) falls back
-# to plugin/skills/plan-devex-review/dx-hall-of-fame.md (Claude tree).
-
 ---
 name: plan-devex-review
 description: |
@@ -17,6 +11,13 @@ description: |
   (APIs, CLIs, SDKs, libraries, platforms, docs).
   Voice triggers (speech-to-text aliases): "dx review", "developer experience review", "devex review", "devex audit", "API design review", "onboarding review".
 ---
+
+# HAND-PORTED — Codex variant of plugin/skills/plan-devex-review/SKILL.md (1022L source).
+# Authored 2026-05-14 in TASK__codex-plan-devex-review-port under the MCP-only-sharing
+# policy. See doc/harness/spike-report.md §3.6 for the rationale; this file is the
+# plan-devex-review port under that policy. Sub-file (dx-hall-of-fame.md) falls back
+# to plugin/skills/plan-devex-review/dx-hall-of-fame.md (Claude tree).
+
 
 > **Codex runtime notes** (delta from Claude plan-devex-review skill — read these first):
 > - **No `AskUserQuestion` structured tool.** Where the Claude skill emits an AskUserQuestion with labeled options, Codex emits the question + options as plain prose and reads the user's reply on the next turn. Options stay numbered/lettered so the user can pick them by short response (e.g. "A", "B", "1", "2"). Every call site that says "use AskUserQuestion" or "call AskUserQuestion" is replaced with a conversational prose ask in this port.

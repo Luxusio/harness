@@ -219,14 +219,16 @@ break it immediately.
 
 ### C-16
 
-**Title:** Auto-hygiene — content-signal doc classification + contract drift auto-apply.
-**When:** SessionStart (automatic) and whenever `Skill(maintain)` is invoked.
+**Title:** Auto-hygiene — observer-mode content-signal doc classification + contract drift auto-apply.
+**When:** SessionStart (automatic, gated by `observer_until_session`) and whenever `Skill(maintain)` is invoked.
 **Enforced by:** `plugin/scripts/hygiene_scan.py` (SessionStart hook, after
 `contract_lint --quick`); `plugin/scripts/doc_hygiene.py` (called by
 hygiene_scan); `doc/harness/hygiene.yaml` (config + canonical disable path).
 **On violation:** auto — hygiene is advisory; failure degrades to no-op.
 **Why:** Without automatic cleanup, `doc/changes/` and `doc/common/` accumulate
 indefinitely. Institutional memory erodes when the signal-to-noise ratio drops.
+Frontmatter signals: `superseded_by` and `distilled_to`; observer mode is
+controlled by `observer_until_session`.
 
 **Tier A/B/C mapping (contract drift):**
 - `[INFO]` (Tier A): auto-applied as additive Edit within managed-block markers. No deletions.

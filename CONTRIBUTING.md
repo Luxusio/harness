@@ -11,21 +11,24 @@ git clone https://github.com/Luxusio/harness
 #   cd harness-plugin && git pull
 
 # 2. Install or update (idempotent — first run installs, subsequent runs refresh)
-cd harness && ./scripts/install.sh
+cd harness && python3 install.py --claude-only --force
 ```
 
-`scripts/install.sh` does three things:
+`install.py --claude-only --force` does four things:
 
-1. `rm -rf ~/.claude/harness-dev` followed by a `tar` pipe into the same path,
-   excluding `./.git`. The destination is a runtime mirror, not a working repo,
-   so the `.git` directory adds copy time without buying anything. The tar pipe
-   batches syscalls through a single stream, much faster than `cp -r` on a tree
-   with many small files.
+1. Copies the runtime plugin payload from `plugin/` into
+   `~/.claude/harness-dev/plugin`, excluding transient caches, and copies the
+   single canonical root marketplace manifest into
+   `~/.claude/harness-dev/.claude-plugin/marketplace.json`.
 2. Detects whether the `harness` marketplace is already registered.
-3. First install → `claude plugin marketplace add` + `claude plugin install
-   harness@harness`. Update → `claude plugin marketplace update harness`.
+3. If the registered source is stale, removes it, then registers
+   `~/.claude/harness-dev` as the marketplace source. The marketplace manifest
+   points at `./plugin`.
+4. First install → `claude plugin install harness@harness`; every run refreshes
+   the MCP server path to `~/.claude/harness-dev/plugin/mcp/harness_server.py`.
 
-Override the destination with `HARNESS_DEST=/some/other/path ./scripts/install.sh`.
+Override the destination with
+`HARNESS_DEST=/some/other/path python3 install.py --claude-only --force`.
 
 The script uses the `claude plugin` CLI (`marketplace add`, `install`,
 `marketplace update`); these map one-to-one to the in-session `/plugin
@@ -35,10 +38,11 @@ commands.
 The destination `~/.claude/harness-dev/` is deliberately distinct from
 `~/.claude/plugins/harness/`, which is where Claude Code drops the
 *installed* plugin and which must not collide with the source. If you
-register the marketplace via the slash command instead of the script,
-pass an absolute path (`/home/<your-user>/.claude/harness-dev`) — `/plugin`
-is a Claude Code slash command, so shell substitution and tilde expansion
-(`$(pwd)`, `~`) are NOT performed.
+register a local checkout via slash command instead of `install.py`, either
+register the repo root (it contains `.claude-plugin/marketplace.json` pointing
+at `./plugin`) or register the installed mirror root
+(`/home/<user>/.claude/harness-dev`). `/plugin` is a Claude Code slash command,
+so shell substitution and tilde expansion (`$(pwd)`, `~`) are NOT performed.
 
 ## Validating the install
 

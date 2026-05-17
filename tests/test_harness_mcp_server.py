@@ -1,9 +1,12 @@
 """Tests for the plugin-local harness MCP server (7-tool minimal surface)."""
 
 import importlib.util
+import io
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SERVER_PATH = REPO_ROOT / "plugin" / "mcp" / "harness_server.py"
@@ -67,6 +70,174 @@ class HarnessMcpServerTests(unittest.TestCase):
         result = harness_server.call_tool("does_not_exist", {})
         self.assertTrue(result.get("isError"))
         self.assertIn("Unknown tool", result["structuredContent"]["error"])
+
+    def test_stdio_transport_accepts_content_length_frames(self):
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-11-25"},
+        }
+        body = json.dumps(request).encode()
+        stdin = io.TextIOWrapper(
+            io.BytesIO(b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body),
+            encoding="utf-8",
+        )
+        stdout_bytes = io.BytesIO()
+        stdout = io.TextIOWrapper(stdout_bytes, encoding="utf-8")
+
+        server = harness_server.McpServer()
+        with mock.patch.object(harness_server.sys, "stdin", stdin), mock.patch.object(harness_server.sys, "stdout", stdout):
+            server.handle_request(server._read())
+            stdout.flush()
+
+        raw = stdout_bytes.getvalue()
+        self.assertTrue(raw.startswith(b"Content-Length: "), raw)
+        response_body = raw.split(b"\r\n\r\n", 1)[1]
+        response = json.loads(response_body.decode())
+        self.assertEqual(response["id"], 1)
+        self.assertEqual(response["result"]["serverInfo"]["name"], "harness")
+
+    def test_stdio_transport_accepts_lowercase_content_length_with_extra_headers(self):
+        request = {
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "ping",
+            "params": {},
+        }
+        body = json.dumps(request).encode()
+        frame = (
+            b"content-length: "
+            + str(len(body)).encode()
+            + b"\r\nx-test-header: ignored\r\n\r\n"
+            + body
+        )
+        stdin = io.TextIOWrapper(io.BytesIO(frame), encoding="utf-8")
+        stdout_bytes = io.BytesIO()
+        stdout = io.TextIOWrapper(stdout_bytes, encoding="utf-8")
+
+        server = harness_server.McpServer()
+        with mock.patch.object(harness_server.sys, "stdin", stdin), mock.patch.object(harness_server.sys, "stdout", stdout):
+            server.handle_request(server._read())
+            stdout.flush()
+
+        raw = stdout_bytes.getvalue()
+        self.assertTrue(raw.startswith(b"Content-Length: "), raw)
+        response = json.loads(raw.split(b"\r\n\r\n", 1)[1].decode())
+        self.assertEqual(response, {"jsonrpc": "2.0", "id": 7, "result": {}})
+
+    def test_stdio_transport_reads_multiple_content_length_frames_from_one_stream(self):
+        initialize = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-11-25"},
+        }
+        tools_list = {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/list",
+            "params": {},
+        }
+
+        def frame(payload: dict) -> bytes:
+            body = json.dumps(payload).encode()
+            return b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body
+
+        stdin = io.TextIOWrapper(io.BytesIO(frame(initialize) + frame(tools_list)), encoding="utf-8")
+        stdout_bytes = io.BytesIO()
+        stdout = io.TextIOWrapper(stdout_bytes, encoding="utf-8")
+
+        server = harness_server.McpServer()
+        with mock.patch.object(harness_server.sys, "stdin", stdin), mock.patch.object(harness_server.sys, "stdout", stdout):
+            first = server._read()
+            second = server._read()
+            server.handle_request(first)
+            server.handle_request(second)
+            stdout.flush()
+
+        raw = stdout_bytes.getvalue()
+        parts = raw.split(b"Content-Length: ")
+        self.assertEqual(len(parts), 3, raw)
+        responses = []
+        for part in parts[1:]:
+            _, body = part.split(b"\r\n\r\n", 1)
+            responses.append(json.loads(body.decode()))
+        self.assertEqual([response["id"] for response in responses], [1, 2])
+        tool_names = {tool["name"] for tool in responses[1]["result"]["tools"]}
+        self.assertEqual(tool_names, EXPECTED_TOOLS)
+
+    def test_stdio_transport_keeps_json_line_responses_for_json_line_requests(self):
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-11-25"},
+        }
+        stdin = io.TextIOWrapper(io.BytesIO(json.dumps(request).encode() + b"\n"), encoding="utf-8")
+        stdout_bytes = io.BytesIO()
+        stdout = io.TextIOWrapper(stdout_bytes, encoding="utf-8")
+
+        server = harness_server.McpServer()
+        with mock.patch.object(harness_server.sys, "stdin", stdin), mock.patch.object(harness_server.sys, "stdout", stdout):
+            server.handle_request(server._read())
+            stdout.flush()
+
+        raw = stdout_bytes.getvalue()
+        self.assertFalse(raw.startswith(b"Content-Length:"), raw)
+        response = json.loads(raw.decode())
+        self.assertEqual(response["id"], 1)
+        self.assertEqual(response["result"]["serverInfo"]["name"], "harness")
+
+    def test_stdio_transport_returns_none_for_header_without_content_length(self):
+        stdin = io.TextIOWrapper(io.BytesIO(b"X-Test: ignored\r\n\r\n{}"), encoding="utf-8")
+
+        server = harness_server.McpServer()
+        with mock.patch.object(harness_server.sys, "stdin", stdin):
+            self.assertIsNone(server._read())
+        self.assertTrue(server.framed_stdio)
+
+    def test_initialized_notification_sets_state_without_response(self):
+        stdout_bytes = io.BytesIO()
+        stdout = io.TextIOWrapper(stdout_bytes, encoding="utf-8")
+        server = harness_server.McpServer()
+
+        with mock.patch.object(harness_server.sys, "stdout", stdout):
+            server.handle_request({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            stdout.flush()
+
+        self.assertTrue(server.initialized)
+        self.assertEqual(stdout_bytes.getvalue(), b"")
+
+    def test_tools_call_requires_string_name(self):
+        stdout_bytes = io.BytesIO()
+        stdout = io.TextIOWrapper(stdout_bytes, encoding="utf-8")
+        server = harness_server.McpServer()
+        server.framed_stdio = False
+
+        with mock.patch.object(harness_server.sys, "stdout", stdout):
+            server.handle_request({"jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": {"name": 123}})
+            stdout.flush()
+
+        response = json.loads(stdout_bytes.getvalue().decode())
+        self.assertEqual(response["id"], 9)
+        self.assertEqual(response["error"]["code"], -32602)
+        self.assertIn("Tool name must be a string", response["error"]["message"])
+
+    def test_unknown_method_returns_jsonrpc_method_not_found(self):
+        stdout_bytes = io.BytesIO()
+        stdout = io.TextIOWrapper(stdout_bytes, encoding="utf-8")
+        server = harness_server.McpServer()
+        server.framed_stdio = False
+
+        with mock.patch.object(harness_server.sys, "stdout", stdout):
+            server.handle_request({"jsonrpc": "2.0", "id": 10, "method": "unknown/method"})
+            stdout.flush()
+
+        response = json.loads(stdout_bytes.getvalue().decode())
+        self.assertEqual(response["id"], 10)
+        self.assertEqual(response["error"]["code"], -32601)
+        self.assertIn("Method not found", response["error"]["message"])
 
     def test_task_context_returns_structured_content(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -252,6 +423,22 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         # pyc skip path — should close cleanly (not stale)
         self.assertNotIn("isError", result,
                          f"__pycache__ pyc path should be skipped, not treated as stale: {result}")
+
+    def test_stale_check_ignores_deleted_touched_path(self):
+        """Deleted files in touched_paths must not stale a fresh QA verdict forever."""
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__pr2-006c",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                touched_paths=["plugin/scripts/deleted_install_helper.py"],
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool("task_close", {"task_id": "TASK__pr2-006c"})
+            finally:
+                self._unpatch()
+        self.assertNotIn("isError", result,
+                         f"deleted touched path should not be permanently stale: {result}")
 
 
 if __name__ == "__main__":

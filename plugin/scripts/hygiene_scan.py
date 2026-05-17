@@ -325,7 +325,7 @@ def _cleanup_stale_index_lock(repo_root: str, max_age_secs: int = 60) -> bool:
         return False
 
     print(
-        f"[hygiene-lock-cleanup] removed stale .git/index.lock (age={int(age)}s)",
+        f"[hygiene-skip] removed stale .git/index.lock (age={int(age)}s)",
         file=sys.stderr,
     )
     return True

@@ -1,6 +1,6 @@
 {
   "name": "harness",
-  "version": "2.3.0-codex",
+  "version": "2.3.0",
   "description": "Execution harness for AI-assisted repository work — Codex CLI runtime. Mirrors plugin/ for Claude Code; both consume the same MCP server and Python scripts.",
   "author": {
     "name": "Luxus",
@@ -18,6 +18,7 @@
   ],
   "skills": "./skills/",
   "hooks": "./hooks.json",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "harness",
     "shortDescription": "plan -> develop -> verify -> close loop for AI-assisted repo work",

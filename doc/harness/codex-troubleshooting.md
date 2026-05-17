@@ -27,13 +27,13 @@ If `codex upgrade` is unavailable on your platform, follow OpenAI's manual insta
 
 ### "Existing key 'mcp_servers.harness' in ~/.codex/config.toml"
 
-**What you see:** Setup skill stops mid-install with "Backup at ~/.codex/config.toml.bak.<ts>. Resolve manually or run: `Skill(setup) --force-merge`".
+**What you see:** Setup stops mid-install with "Backup at ~/.codex/config.toml.bak.<ts>. Resolve manually or run with `--force`".
 
 **Cause:** You already have a `[mcp_servers.harness]` block (manual install, prior harness version, or unrelated MCP server with the same name). Setup refuses to overwrite user config per contract C-15 (never overwrite user-authored files).
 
 **Fix:** Pick one:
 - **Manual**: open `~/.codex/config.toml`, compare your existing block to [`plugin-codex/config.toml.example`](../../plugin-codex/config.toml.example), reconcile differences.
-- **Force**: `Skill(harness:setup) --force-merge` (replaces existing block, keeps timestamped `.bak` for rollback).
+- **Force**: `python3 install.py --codex-only --force` (replaces existing block, keeps timestamped `.bak` for rollback).
 
 ---
 
@@ -41,14 +41,14 @@ If `codex upgrade` is unavailable on your platform, follow OpenAI's manual insta
 
 **What you see:** No error printed, but `codex mcp test harness` returns "server not found".
 
-**Cause:** Codex `plugin marketplace add` requires a marketplace manifest, not a raw directory path. The plugin needs a `.codex-plugin/plugin.json` (already present at [`plugin-codex/.codex-plugin/plugin.json`](../../plugin-codex/.codex-plugin/plugin.json)).
+**Cause:** Codex `plugin marketplace add` requires a marketplace manifest, not a raw `plugin/` directory. The installer writes `.agents/plugins/marketplace.json`, copies the Codex plugin under `plugins/harness/`, copies the shared runtime under `plugin/`, then registers that installed directory.
 
 **Fix:**
 ```bash
 # Verify the manifest is readable:
-cat plugin-codex/.codex-plugin/plugin.json
-# If you cloned but didn't run setup, the manifest may have placeholder paths.
-codex exec '$harness:setup --include-codex' < /dev/null
+cat ~/.codex/harness/.agents/plugins/marketplace.json
+# If it is missing, re-run the installer:
+python3 install.py --codex-only
 ```
 
 ---
@@ -59,7 +59,7 @@ codex exec '$harness:setup --include-codex' < /dev/null
 
 **What you see:** `task_start` fails with "MCP server harness not reachable. Verify config.toml [mcp_servers.harness] command path; run: `codex mcp test harness`".
 
-**Cause:** Three possibilities — (a) `command =` path in your config.toml is wrong, (b) `HARNESS_PLUGIN_ROOT` env var not set in the `[mcp_servers.harness].env` block, (c) `python3` not on PATH where Codex spawns subprocesses.
+**Cause:** Three possibilities — (a) `command =` path in your config.toml is wrong, (b) `HARNESS_PLUGIN_ROOT` env var not set in the `[mcp_servers.harness].env` block, (c) `python3` not on PATH where Codex spawns subprocesses. In a normal install, the path should point at `~/.codex/harness/plugin`, not the original project checkout.
 
 **Fix:**
 ```bash
@@ -90,19 +90,16 @@ If the same issue persists after regeneration, sync engine drift — file a bug 
 
 ---
 
-### Hook trust state missing — hooks don't fire
+### Plugin hooks stale — hooks don't fire
 
-**What you see:** `prewrite_gate.py` doesn't block writes to `PLAN.md`, `stop_gate.py` doesn't fire on Stop events, no hook output appears in `codex exec`.
+**What you see:** `prewrite_gate.py` doesn't block writes to `PLAN.md`, `UserPromptSubmit` context is absent, or no hook output appears in `codex exec`.
 
-**Cause:** Codex 0.130.0+ requires explicit per-hook trust state at `[hooks.state.<key>].trusted_hash`. Without it, hooks are loaded but UNTRUSTED → silently skipped at runtime. See [`doc/harness/codex-payload-deltas.md`](codex-payload-deltas.md) "Hook trust" row.
+**Cause:** Harness hooks are plugin-local on Codex. A stale install may still have old global `[hooks]` / `[hooks.state]` entries in `~/.codex/config.toml`, or the cached plugin may not include the generated `hooks.json`. Codex intentionally does not install a Stop hook for Ralph/loop control; that flow is prompt-controlled.
 
 **Fix:**
 ```bash
-# Setup auto-computes and writes the trust state:
-codex exec '$harness:setup --trust-hooks' < /dev/null
-# Manual workaround (NOT recommended for production):
-codex exec --dangerously-bypass-hook-trust "..." < /dev/null
-# (flag may be gated behind a feature flag in some builds)
+# Rebuild plugin-local hooks.json, refresh the cache, and remove old global hooks:
+python3 install.py --codex-only --force
 ```
 
 ---

@@ -92,7 +92,7 @@ def _runtime_is_stale(task_dir: str, touched: list, repo_root: str) -> bool:
             if os.path.getmtime(abs_path) > critic_mtime:
                 return True
         except OSError:
-            return True  # disappeared → treat as stale
+            continue  # deleted paths can be part of a verified diff
     return False
 
 

@@ -1,8 +1,3 @@
-# GENERATED-CANDIDATE — hand-ported v1.5 spike from plugin/skills/setup/SKILL.md (469L source).
-# Source is canonical at plugin/skills/setup/SKILL.md. v1.5 AC-005 sync engine will replace this
-# hand-port with mechanical emission. Hand-port lives here ONLY to measure the porting friction
-# for AC-001 of TASK__dual-runtime-v1.5-spike-and-sync.
-
 ---
 name: setup
 description: |
@@ -11,6 +6,12 @@ description: |
   generation. Use when asked "set up harness", "bootstrap", "initialize
   harness", or on first run in a new project.
 ---
+
+# GENERATED-CANDIDATE — hand-ported v1.5 spike from plugin/skills/setup/SKILL.md (469L source).
+# Source is canonical at plugin/skills/setup/SKILL.md. v1.5 AC-005 sync engine will replace this
+# hand-port with mechanical emission. Hand-port lives here ONLY to measure the porting friction
+# for AC-001 of TASK__dual-runtime-v1.5-spike-and-sync.
+
 
 > **Codex runtime notes** (delta from Claude Code):
 > - This skill calls for "ask the user" interactions at decision points. Codex CLI does not have

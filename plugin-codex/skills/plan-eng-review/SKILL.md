@@ -1,9 +1,3 @@
-# HAND-PORTED — Codex variant of plugin/skills/plan-eng-review/SKILL.md (846L source).
-# Authored 2026-05-14 in TASK__codex-plan-eng-review-port under the MCP-only-sharing
-# policy. See doc/harness/spike-report.md §3.6 for the rationale; this file is the
-# plan-eng-review port under that policy. Sub-file (rubrics-threat-rollback.md) falls
-# back to plugin/skills/plan-eng-review/rubrics-threat-rollback.md (Claude tree).
-
 ---
 name: plan-eng-review
 description: |
@@ -15,6 +9,13 @@ description: |
   start coding — to catch architecture issues before implementation.
   Voice triggers (speech-to-text aliases): "tech review", "technical review", "plan engineering review".
 ---
+
+# HAND-PORTED — Codex variant of plugin/skills/plan-eng-review/SKILL.md (846L source).
+# Authored 2026-05-14 in TASK__codex-plan-eng-review-port under the MCP-only-sharing
+# policy. See doc/harness/spike-report.md §3.6 for the rationale; this file is the
+# plan-eng-review port under that policy. Sub-file (rubrics-threat-rollback.md) falls
+# back to plugin/skills/plan-eng-review/rubrics-threat-rollback.md (Claude tree).
+
 
 > **Codex runtime notes** (delta from Claude plan-eng-review skill — read these first):
 > - **No `AskUserQuestion` structured tool.** Where the Claude skill emits an AskUserQuestion with labeled options, Codex emits the question + options as plain prose and reads the user's reply on the next turn. Options stay numbered/lettered so the user can pick them by short response (e.g. "A", "B", "1", "2"). Every call site that says "use AskUserQuestion" or "call AskUserQuestion" is replaced with a conversational prose ask in this port.

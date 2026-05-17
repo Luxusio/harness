@@ -14,6 +14,12 @@ Run these commands in Claude Code:
 /plugin install harness
 ```
 
+The GitHub install path registers this repo's root marketplace manifest
+(`.claude-plugin/marketplace.json`), which points Claude Code at `./plugin`.
+For local development installs, use `python3 install.py --claude-only`; it
+copies the same root marketplace manifest plus the plugin payload into
+`~/.claude/harness-dev/`, then registers that installed mirror root.
+
 Contributors / local development → see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Setup
@@ -123,6 +129,9 @@ All under `plugin/scripts/`. Stdlib only.
 | `hygiene_scan.py` | SessionStart auto-hygiene: Tier A/B auto-apply + doc archive pass | `doc/harness/.maintain-pending.json` |
 | `doc_hygiene.py` | Content-signal KEEP/REMOVE/REVIEW classifier; archives stale docs via `git mv` | `doc/harness/.maintain-pending.json` |
 | `maintain_restore.py` | Restore an archived file back to original location via `git mv` | — |
+| `_gate_response.py` | Shared hook deny/allow response helper | — |
+| `qa_delegation_gate.py` | Browser QA delegation guard for protected MCP calls | — |
+| `verification_gap_check.py` | Resume-time warning for missing verification evidence | — |
 
 Activated via optional manifest keys: `health_components`, `benchmark_components`, `audit_categories`. Health falls back to `test_command` when no components declared.
 
@@ -145,9 +154,14 @@ The post-close self-improvement pass (`/harness:run`) auto-promotes keys with 2+
 | SessionStart | `contract_lint.py` | Detect CONTRACTS.md drift |
 | Stop | `stop_gate.py` | Warn if open tasks remain |
 | PreToolUse | `prewrite_gate.py` | Artifact ownership + plan-first rule |
+| PreToolUse | `hook_pre_tool_use.py` | Codex plugin wrapper for PreToolUse gates |
 | PreToolUse (Bash) | `mcp_bash_guard.py` | Block Bash-layer mutations of source / protected / workflow-control paths |
 | UserPromptSubmit | `prompt_memory.py` | Inject `[harness-context]` block on each prompt (active task + verdict + open ACs + suspect notes) |
+| UserPromptSubmit | `hook_user_prompt_submit.py` | Codex plugin wrapper for prompt memory |
 | PostToolUse (Bash) | `tool_routing.py` | Emit `[harness-hint]` on known failures (wrong test command, missing script) |
+| PostToolUse (Bash) | `hook_post_tool_use.py` | Codex plugin wrapper for tool routing |
+| SessionStart | `hook_session_start.py` | Codex plugin wrapper for startup context |
+| Stop | `hook_stop.py` | Codex plugin wrapper for stop gating |
 | (task_start) | `environment_snapshot.py` | One-shot probe invoked from `task_start`; writes `ENVIRONMENT_SNAPSHOT.md` into the task dir |
 
 All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook degrades gracefully; it never blocks the session. Gates signal decisions via stdout JSON (`hookSpecificOutput.permissionDecision`), so blocking survives the `|| true` wrapper while a script crash still exits 0.

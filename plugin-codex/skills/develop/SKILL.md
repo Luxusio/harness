@@ -1,13 +1,14 @@
+---
+name: develop
+description: Implement PLAN.md on Codex. Reads PLAN.md, implements changes, runs sequential per-AC quality checks, verification, and HANDOFF.
+---
+
 # HAND-PORTED — Codex variant of plugin/skills/develop/SKILL.md (500L source).
 # Authored 2026-05-14 in TASK__codex-develop-port-and-parity-check after the v1.5 spike
 # concluded that AST/YAML canonical sharing is ROI-negative for control-flow-heavy skills.
 # See doc/harness/spike-report.md §3.6 (policy reversal) for the rationale; this file is
 # the first develop-tree port under the MCP-only-sharing policy.
 
----
-name: develop
-description: Implement PLAN.md on Codex. Reads PLAN.md, implements changes, runs sequential per-AC quality checks, verification, and HANDOFF.
----
 
 Implement the plan for a harness task. Reads PLAN.md, implements changes, verifies completeness, writes HANDOFF.md.
 

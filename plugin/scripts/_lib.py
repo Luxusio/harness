@@ -712,9 +712,9 @@ def runtime_is_stale(task_dir: str) -> tuple[bool, str]:
         try:
             m = os.path.getmtime(abs_path)
         except OSError:
-            # File deleted / renamed since last sync — treat as stale so the
-            # next verify cycle re-syncs and prunes the entry.
-            return True, rel
+            # Deleted paths can be part of a verified diff. There is no mtime
+            # to compare, so they must not make a fresh QA verdict stale forever.
+            continue
         if m > critic_mtime:
             return True, rel
     return False, ""

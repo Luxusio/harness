@@ -1,7 +1,3 @@
-# HAND-PORTED — Codex variant of plugin/skills/plan-design-review/SKILL.md (853L source).
-# Authored 2026-05-14 under the MCP-only-sharing policy. See doc/harness/spike-report.md
-# §3.6 for the rationale. No sub-files in the source skill; no Codex-native sub-files needed.
-
 ---
 name: plan-design-review
 description: |
@@ -13,6 +9,11 @@ description: |
   Proactively suggest when the user has a plan with UI/UX components that
   should be reviewed before implementation.
 ---
+
+# HAND-PORTED — Codex variant of plugin/skills/plan-design-review/SKILL.md (853L source).
+# Authored 2026-05-14 under the MCP-only-sharing policy. See doc/harness/spike-report.md
+# §3.6 for the rationale. No sub-files in the source skill; no Codex-native sub-files needed.
+
 
 > **Codex runtime notes** (delta from Claude plan-design-review skill — read these first):
 > - **No `AskUserQuestion` structured tool.** Where the Claude skill emits an AskUserQuestion with labeled options, Codex emits the question + options as plain prose and reads the user's reply on the next turn. Options stay lettered so the user can pick by short response (e.g. "A", "B"). Every call site that says "use AskUserQuestion" or "call AskUserQuestion" is replaced with a conversational prose ask in this port.

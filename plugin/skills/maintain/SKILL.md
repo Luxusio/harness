@@ -19,9 +19,7 @@ No subagent spawn. No oh-my-claudecode:writer dependency.
 
 ## When to run
 
-- User says "maintain" or SessionStart emitted [hygiene-review].
-- Tier C drift (HARD) is pending in `.maintain-pending.json`.
-- User wants to inspect the REVIEW queue.
+- User says "maintain", SessionStart emitted [hygiene-review], Tier C drift is pending, or user wants the REVIEW queue.
 
 ## Flow
 
@@ -101,8 +99,7 @@ On B: no-op. The renames stay staged.
 
 ### Phase 3: Update pending file
 
-After processing all items, rewrite `.maintain-pending.json` with remaining
-entries only (atomic write via python3 json.dump + tempfile).
+Rewrite `.maintain-pending.json` with remaining entries only (atomic write via python3 json.dump + tempfile).
 
 ### Phase 4: Report
 
@@ -119,5 +116,4 @@ Maintain report
 - Never bulk-rewrite CONTRACTS.md — Edit managed block only.
 - Never touch CONTRACTS.local.md.
 - Never spawn subagents.
-- REVIEW display is read-only — no automated edits to doc files.
-- Tier C: one AskUserQuestion per item, never batched.
+- REVIEW display is read-only; Tier C asks one AskUserQuestion per item, never batched.
