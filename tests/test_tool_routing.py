@@ -62,6 +62,19 @@ class TestToolRoutingHints(unittest.TestCase):
         self.assertIn("[harness-hint]", r.stdout)
         self.assertIn("bun test", r.stdout)
 
+    def test_top_level_error_text_is_supported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            (base / ".git").mkdir()
+            _mk_manifest(base, ".venv/bin/pytest -q")
+            r = _invoke({
+                "tool_name": "Bash",
+                "stderr": "/bin/bash: line 1: pytest: command not found",
+            }, cwd=str(base))
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("[harness-hint]", r.stdout)
+        self.assertIn(".venv/bin/pytest -q", r.stdout)
+
     def test_no_such_file_on_plugin_scripts_suggests_neighbor(self):
         r = _invoke({
             "tool_name": "Bash",

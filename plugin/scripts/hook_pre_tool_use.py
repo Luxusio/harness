@@ -10,6 +10,15 @@ import sys
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
+def _payload_cwd(payload: bytes) -> str | None:
+    try:
+        data = json.loads(payload.decode("utf-8") or "{}")
+    except Exception:
+        return None
+    cwd = data.get("cwd")
+    return cwd if isinstance(cwd, str) and os.path.isdir(cwd) else None
+
+
 def _tool_name(payload: bytes) -> str:
     try:
         data = json.loads(payload.decode("utf-8") or "{}")
@@ -26,6 +35,7 @@ def _run(script: str, payload: bytes) -> bytes:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=3,
+            cwd=_payload_cwd(payload),
         )
         return proc.stdout or b""
     except Exception:

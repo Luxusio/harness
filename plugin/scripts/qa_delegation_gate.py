@@ -3,10 +3,11 @@
 browser MCP tool (`mcp__chrome-devtools__*`) inline. Implements CONTRACTS.md
 C-18 "Verification delegation".
 
-v1 behaviour:
+Behaviour:
   - Detect any `mcp__chrome-devtools__*` tool invocation by tool_name prefix.
+  - Allow the delegated `harness:qa-browser` agent to drive those tools.
   - Emit a ``permissionDecision: "deny"`` envelope whose
-    ``permissionDecisionReason`` redirects the model to spawn
+    ``permissionDecisionReason`` redirects non-delegated callers to spawn
     ``harness:qa-browser``.
   - Silent-log to ``doc/harness/learnings.jsonl`` (``type=qa-delegation-warn``).
   - Escape hatch: ``HARNESS_SKIP_QA_DELEGATION=1`` one-shot allow + log
@@ -19,10 +20,9 @@ Scope (narrowed 2026-05-14):
     use; user feedback narrowed C-18 to the MCP surface only.
   - curl / wget / httpie / psql / mysql / alembic — ad-hoc HTTP and DB probes
     have too many legitimate inline uses to block.
-  - Subagent detection — Claude Code's PreToolUse payload does not expose a
-    reliable main-vs-subagent flag today, so the gate fires for any caller.
-    qa-browser's own chrome-devtools calls hit the same gate; use the bypass
-    env var when needed. A future v2 will refine.
+  - Subagent detection — prefer explicit payload fields when runtimes expose
+    them; otherwise fall back to a capped read of ``transcript_path`` and match
+    the qa-browser agent prompt markers. Unknown callers are treated as main.
 
 Fail-open by design. Any unexpected exception is swallowed; the gate must
 never block the main session because of its own bug.
@@ -48,6 +48,19 @@ except Exception:
 
 GATE_NAME = "qa_delegation_gate"
 _BLOCKED_TOOL_PREFIX = "mcp__chrome-devtools__"
+_TRANSCRIPT_HEAD_BYTES = 1 << 16
+
+_QA_BROWSER_FIELD_VALUES = {
+    "qa-browser",
+    "harness:qa-browser",
+}
+
+_QA_BROWSER_TRANSCRIPT_MARKERS = (
+    "name: qa-browser",
+    "harness browser QA agent",
+    "You are a senior QA engineer specializing in web application testing",
+    "PRIMARY DUTY: Prove every claim in PLAN.md",
+)
 
 
 def _log_warn(tool_name: str) -> None:
@@ -72,6 +85,64 @@ def _log_warn(tool_name: str) -> None:
         pass
 
 
+def _value_names_qa_browser(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return normalized in _QA_BROWSER_FIELD_VALUES
+
+
+def _payload_names_qa_browser(payload: dict) -> bool:
+    """Return True when hook payload explicitly identifies qa-browser."""
+    for key in (
+        "subagent_type",
+        "agent_type",
+        "agent_name",
+        "agent",
+        "name",
+        "role",
+        "subagent",
+    ):
+        if _value_names_qa_browser(payload.get(key)):
+            return True
+
+    meta = payload.get("metadata")
+    if isinstance(meta, dict):
+        for key in ("subagent_type", "agent_type", "agent_name", "agent", "name", "role"):
+            if _value_names_qa_browser(meta.get(key)):
+                return True
+    return False
+
+
+def _transcript_names_qa_browser(transcript_path: object) -> bool:
+    """Best-effort qa-browser detection from the transcript prologue.
+
+    Claude Code does not currently provide a stable main-vs-subagent flag in
+    PreToolUse payloads, but subagent transcripts include the agent prompt near
+    the beginning. Read only a small prefix and require multiple qa-browser
+    markers so ordinary prose mentions do not bypass the gate.
+    """
+    if not isinstance(transcript_path, str) or not transcript_path:
+        return False
+    try:
+        with open(transcript_path, "rb") as fh:
+            raw = fh.read(_TRANSCRIPT_HEAD_BYTES)
+    except Exception:
+        return False
+    try:
+        text = raw.decode("utf-8", errors="ignore")
+    except Exception:
+        return False
+    hits = sum(1 for marker in _QA_BROWSER_TRANSCRIPT_MARKERS if marker in text)
+    return hits >= 2
+
+
+def _caller_is_qa_browser(payload: dict) -> bool:
+    if _payload_names_qa_browser(payload):
+        return True
+    return _transcript_names_qa_browser(payload.get("transcript_path"))
+
+
 def main() -> int:
     payload = read_hook_input()
     tool_name = payload.get("tool_name") or ""
@@ -83,6 +154,9 @@ def main() -> int:
             log_gate_bypass(GATE_NAME, tool_name)
         except Exception:
             pass
+        return 0
+
+    if _caller_is_qa_browser(payload):
         return 0
 
     _log_warn(tool_name)

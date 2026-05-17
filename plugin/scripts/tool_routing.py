@@ -104,6 +104,10 @@ def _extract_error_text(data: dict) -> str:
         val = tr.get(key) if isinstance(tr, dict) else None
         if isinstance(val, str) and val:
             parts.append(val)
+    for key in ("stderr", "stdout", "output", "error"):
+        val = data.get(key)
+        if isinstance(val, str) and val:
+            parts.append(val)
     # Fallback: some hook shapes put the result as plain string
     if not parts:
         val = data.get("tool_response")

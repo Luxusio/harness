@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _payload_cwd(payload: bytes) -> str | None:
+    try:
+        data = json.loads(payload.decode("utf-8") or "{}")
+    except Exception:
+        return None
+    cwd = data.get("cwd")
+    return cwd if isinstance(cwd, str) and os.path.isdir(cwd) else None
 
 
 def main() -> int:
@@ -21,6 +31,7 @@ def main() -> int:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=8,
+            cwd=_payload_cwd(payload),
         )
         _ = proc
     except Exception:

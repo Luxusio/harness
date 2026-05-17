@@ -93,6 +93,28 @@ class TestReadHookInput(unittest.TestCase):
         r = self._run_subprocess('["list","not","dict"]')
         self.assertEqual(r.stdout.strip(), "{}")
 
+    def test_find_repo_root_prefers_hook_payload_cwd(self):
+        script = (
+            "import io, json, os, sys, tempfile; "
+            f"sys.path.insert(0, r'{SCRIPTS}'); "
+            "import _lib; "
+            "repo=tempfile.mkdtemp(); "
+            "plugin=tempfile.mkdtemp(); "
+            "os.makedirs(os.path.join(repo, '.git')); "
+            "os.chdir(plugin); "
+            "sys.stdin=io.StringIO(json.dumps({'cwd': repo})); "
+            "_lib.read_hook_input(); "
+            "print(json.dumps({'repo': repo, 'root': _lib.find_repo_root()}))"
+        )
+        import subprocess
+        r = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True, text=True, timeout=5,
+        )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        data = json.loads(r.stdout)
+        self.assertEqual(data["root"], data["repo"])
+
 
 class TestLogGateError(unittest.TestCase):
     def test_writes_gate_error_line(self):

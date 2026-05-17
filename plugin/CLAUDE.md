@@ -168,15 +168,13 @@ Allowed inline:
 - Ad-hoc HTTP / DB probes (`curl`, `wget`, `httpie`, `psql -c`, `mysql -e`, `alembic`) — too many legitimate uses (API exploration, schema inspection, debugging) for the gate to block
 
 Enforced by: `plugin/scripts/qa_delegation_gate.py` (PreToolUse, no
-matcher — the script self-filters by `tool_name` prefix). v1 emits a
-deny envelope whose reason surfaces in system-reminder so the model
-self-redirects to spawn `harness:qa-browser`. v2 will refine once
-reliable subagent detection is available. Bypass:
-`HARNESS_SKIP_QA_DELEGATION=1` one-shot.
-
-Known v1 caveat: qa-browser's own `mcp__chrome-devtools__*` calls hit
-the same gate (no subagent detection yet). Set the bypass env var when
-spawning qa-browser if the gate surfaces friction.
+matcher — the script self-filters by `tool_name` prefix). The gate
+allows delegated `harness:qa-browser` calls, then emits a deny envelope
+for non-delegated callers whose reason surfaces in system-reminder so
+the model self-redirects to spawn `harness:qa-browser`. Detection
+prefers explicit agent fields when the runtime exposes them and falls
+back to a capped `transcript_path` prologue check for the qa-browser
+agent prompt. Bypass: `HARNESS_SKIP_QA_DELEGATION=1` one-shot.
 
 History: prior to 2026-05-14 the gate also blocked Bash test runners.
 User feedback narrowed it to MCP-only after false-positive blocks on

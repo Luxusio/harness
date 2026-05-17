@@ -133,6 +133,14 @@ def last_hook_input() -> dict:
     return _LAST_HOOK_INPUT
 
 
+def _hook_payload_cwd():
+    """Return Codex/Claude hook payload cwd when it is present and usable."""
+    cwd = _LAST_HOOK_INPUT.get("cwd")
+    if isinstance(cwd, str) and cwd:
+        return cwd
+    return None
+
+
 def emit_permission_decision(decision, reason="", *, next_action_command="",
                              owner_skill="", docs=""):
     """Emit a Claude Code PreToolUse permission decision on stdout.
@@ -472,7 +480,10 @@ def set_state_field(task_dir, field, value):
 
 def find_repo_root(start_dir=None):
     """Find git repo root."""
-    d = os.path.abspath(start_dir or os.getcwd())
+    # Codex plugin-local hooks may execute from the installed plugin directory
+    # while the hook payload still carries the project cwd. Prefer that payload
+    # cwd so gates read the user's repo, not ~/.codex/harness/plugins/harness.
+    d = os.path.abspath(start_dir or _hook_payload_cwd() or os.getcwd())
     while d != "/":
         if os.path.isdir(os.path.join(d, ".git")):
             return d
