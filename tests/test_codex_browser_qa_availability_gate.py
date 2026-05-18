@@ -26,7 +26,7 @@ def test_codex_run_browser_qa_is_availability_gated():
     assert "browser tools are available" in body
     assert 'lens: "browser"' in body
     assert "manual_ux_verification" in body
-    assert "Do not downgrade the task to qa-cli only" in body
+    assert "Keep browser-required close evidence on the browser lens" in body
 
 
 def test_codex_develop_browser_visual_phases_are_not_blanket_deferred():

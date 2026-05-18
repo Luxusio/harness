@@ -157,7 +157,7 @@ On any agent timeout or crash:
 2. Check state via `task_context`
 3. Ask user: retry / skip / abort
 
-Never silently continue past a failure.
+Stop on phase failures, report the failure, check task state, and ask how to proceed.
 
 ## Self-Improvement (post-close)
 

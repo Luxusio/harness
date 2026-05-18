@@ -69,7 +69,7 @@ PLAN.md is the OUTPUT of the interactive review, not a substitute for it. Writin
 
 For high-stakes orchestrator-level ambiguity — execution mode selection, scope detection edge cases, premise-gate response interpretation, mid-pipeline scope expansion — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs, and ask.
 
-**Not a trigger.** Scope-partition decisions (split / combine / defer / do-a-subset) are NEVER Confusion Protocol triggers — auto-decide via Principle P1 (Choose completeness).
+Auto-decide scope-partition choices (split / combine / defer / do-a-subset) via Principle P1 (Choose completeness).
 
 ## Context Health
 
@@ -79,7 +79,7 @@ For high-stakes orchestrator-level ambiguity — execution mode selection, scope
 
 ## Completeness — Boil the Lake
 
-Every section fully completed before moving on. No "TBD", no placeholders. If a section produces fewer than 3 sentences, expand. "No issues found" is valid only after stating what was examined.
+Complete every section before moving on. Use concrete content in each required section. If a section produces fewer than 3 sentences, expand. "No issues found" is valid only after stating what was examined.
 
 ---
 
@@ -258,7 +258,7 @@ Both modes: Phase 1 premise gate and Phase 5.3 User Challenges never auto-decide
 - **Never abort.** Surface every decision; never silently redirect to a shorter path.
 - **Two gates.** The non-auto-decided asks are: (1) premise confirmation in Phase 1.1, and (2) User Challenges in Phase 5.3.
 - **Log every decision.** Every classification (Mechanical / Taste / User Challenge) gets a row in `AUDIT_TRAIL.md` via `write_plan_artifact.py --artifact audit`.
-- **Full depth means full depth.** Do not compress or skip sections.
+- **Full depth means full depth.** Complete every loaded methodology section with its required evidence and decisions.
 - **Artifacts are deliverables.** PLAN.md, PLAN.meta.json, CHECKS.yaml, AUDIT_TRAIL.md must exist on disk before Phase 6 closes the session.
 - **Sequential order.** Phase 0 → 1 → 2 → 3 → 4 → 5 → 6.
 

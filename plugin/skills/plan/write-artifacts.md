@@ -128,7 +128,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact checks \
 
 ## 6.8 Learnings write-back (capture-when-fresh, non-blocking)
 
-When you discover something genuinely useful during the task — a real bug, a workaround that saved time, a pattern that surprised you, a tooling gotcha — log it the moment you find it, **while it's fresh**. Do NOT save up "reflections" for the end of the task. Do NOT log entries to fill a quota. **If nothing was actually learned, write nothing.**
+When you discover something genuinely useful during the task — a real bug, a workaround that saved time, a pattern that surprised you, a tooling gotcha — log it the moment you find it, **while it's fresh**. Log only concrete, reusable facts at discovery time; leave the log untouched when there is no durable learning.
 
 A good entry names a concrete fact + a concrete fix, both groundable in files / commands / outputs. Examples of what passes the bar:
 

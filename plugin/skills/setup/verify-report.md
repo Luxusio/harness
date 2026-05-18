@@ -81,7 +81,7 @@ QA INFRASTRUCTURE ISSUES:
     FIX: Add "dev_command: npm run dev" to doc/harness/manifest.yaml
 ```
 
-Never silently continue. Offer auto-fix via AskUserQuestion when possible (MCP config, manifest fields).
+Stop on verification failures, report the failed check, and offer auto-fix via AskUserQuestion when possible (MCP config, manifest fields).
 
 ## 4.3 Completion report
 

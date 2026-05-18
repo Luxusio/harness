@@ -17,9 +17,16 @@ codifier crashed: [Errno 18] Invalid cross-device link: '/tmp/tmpgl57filq/audit/
 
 **Promoted from learnings:** 9 occurrences
 | gate-parse-fail | 2026-04-17 | run-auto-promote |
+| feedback-derived-rule-writing | 2026-05-18 | TASK__codex-run-subagent-capability-routing |
 
 ## gate-parse-fail
 
 PROGRESS.md forbidden_paths entry is absolute path (skipped): /absolute/path/billing.py
 
 **Promoted from learnings:** 14 occurrences
+
+## Feedback-Derived Rule Writing
+
+When documenting user corrections, write only the reusable conditional behavior rule in readable prose.
+
+Verify by using the form "When <trigger>, <action>. Verify by <observable check>." and by rejecting blame narratives, raw YAML/JSON candidate structures, and task-local preferences.

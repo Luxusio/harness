@@ -32,7 +32,7 @@ CHECKS.yaml `passed` is evidence the gate ran, not a substitute for fresh runtim
 
 For high-stakes implementation ambiguity — blast radius >5 files (`verification-gate.md:166-179` has the gate that fires here), 3-strike hypothesis exhaustion (`verification-gate.md:151-164`), T2 vs T3 test-failure ambiguity (`test-failure-triage.md:23-36`), Phase 2 EUREKA flagging PLAN.md as wrong, Phase 5 scope creep mid-fix-loop — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs, and ask via AskUserQuestion. Cross-reference: parent format at `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format.
 
-Do NOT use this protocol for routine routing or obvious resolutions. The bar is: "if I pick wrong, the entire implementation is built on a misread of intent or scope, and the cost shows up in verify or close, not now."
+Reserve this protocol for high-stakes ambiguity where the wrong choice changes scope, architecture, or verification outcome. The bar is: "if I pick wrong, the entire implementation is built on a misread of intent or scope, and the cost shows up in verify or close, not now."
 
 ## Context Health
 
@@ -46,8 +46,8 @@ Soft directive — degrade gracefully, never block.
 
 Two structured triggers that replace silent overrides in earlier prose:
 
-1. **Phase 2 EUREKA premise gate** — when the search-before-building scan reveals PLAN.md's approach is suboptimal (the in-place EUREKA flag at Phase 2 below). Do NOT silently override the plan. Use AskUserQuestion with options `[Re-ground premise — re-run plan skill with new premise]`, `[Simplify scope — narrow this AC and proceed]`, `[Proceed as planned — log EUREKA in HANDOFF Plan Challenges]`, or free-text `Other`. The reviewer at HANDOFF time should see the user-confirmed direction, not a silent re-scope.
-2. **Phase 5 scope-expansion challenge** — when scope drift detection finds an unrelated file change that turns out to be necessary for the AC. Do NOT silently revert. Use AskUserQuestion with options `[Revert — change belongs in a separate task]`, `[Add to scope — note in HANDOFF as unplanned-but-necessary]`, `[Defer to new task — open follow-up]`, or free-text `Other`.
+1. **Phase 2 EUREKA premise gate** — when the search-before-building scan reveals PLAN.md's approach is suboptimal (the in-place EUREKA flag at Phase 2 below). Surface the discovery through AskUserQuestion with options `[Re-ground premise — re-run plan skill with new premise]`, `[Simplify scope — narrow this AC and proceed]`, `[Proceed as planned — log EUREKA in HANDOFF Plan Challenges]`, or free-text `Other`. The reviewer at HANDOFF time should see the user-confirmed direction.
+2. **Phase 5 scope-expansion challenge** — when scope drift detection finds an unrelated file change that turns out to be necessary for the AC. Surface the scope change through AskUserQuestion with options `[Revert — change belongs in a separate task]`, `[Add to scope — note in HANDOFF as unplanned-but-necessary]`, `[Defer to new task — open follow-up]`, or free-text `Other`.
 
 Both triggers cross-reference the AskUserQuestion format from `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format. The plan-orchestrator series proved structured AskUserQuestion at premise-shift / scope-expansion points produces measurably better outcomes than prose directives.
 
@@ -113,7 +113,7 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 3. Follow existing codebase conventions, not invented ones.
 4. Only build new when nothing fits — extend over duplicate.
 
-**Eureka check:** if search reveals PLAN.md's approach is suboptimal (reinventing, wrong assumption), flag as `EUREKA: AC-NNN — <discovery>` in HANDOFF under "Plan Challenges". Do NOT silently override. Persist as `type:"eureka"` in `learnings.jsonl`.
+**Eureka check:** if search reveals PLAN.md's approach is suboptimal (reinventing, wrong assumption), flag as `EUREKA: AC-NNN — <discovery>` in HANDOFF under "Plan Challenges". Ask for the user-confirmed direction before changing course. Persist as `type:"eureka"` in `learnings.jsonl`.
 
 **Baseline screenshot (browser projects):** see `browser-verification.md` → "Phase 2: Baseline Screenshot".
 
@@ -468,11 +468,11 @@ score = (ac_completion × 0.40) + (test_coverage × 0.30)
 - `adversarial_clean` = max(0, 10 - (crit × 3 + high × 1.5 + med × 0.5)). Fixed at 0.25 weight.
 - `scope_discipline` = 10 / 7 / 4 / 0 (none / auto-added / justified / unjustified).
 
-**Cleanup:** PROGRESS.md persists beyond Phase 8 — it is the scope-lock contract for any post-HANDOFF edits. Do NOT delete it. HANDOFF.md is the narrative permanent record; PROGRESS.md is the machine-readable scope boundary.
+**Cleanup:** PROGRESS.md persists beyond Phase 8 as the scope-lock contract for any post-HANDOFF edits. Keep PROGRESS.md in place; HANDOFF.md is the narrative permanent record and PROGRESS.md is the machine-readable scope boundary.
 
 ### Phase 8.5: Reflect and Log (capture-when-fresh, no quota)
 
-When you discover something genuinely useful during develop — a real bug whose fix is non-obvious, a build/test/tool gotcha that wasted a cycle, a workaround that's worth knowing next time — log it the moment you find it, **while it's fresh**. Do NOT save reflections for the end of the phase. Do NOT log entries to fill a quota. **If nothing was actually learned, write nothing.** A signal-free entry is worse than no entry.
+When you discover something genuinely useful during develop — a real bug whose fix is non-obvious, a build/test/tool gotcha that wasted a cycle, a workaround that's worth knowing next time — log it the moment you find it, **while it's fresh**. Log only concrete, reusable facts at discovery time; leave the log untouched when there is no durable learning. A signal-free entry is worse than no entry.
 
 A good entry names a concrete fact + a concrete fix, both groundable in files / commands / test output. Examples that pass the bar:
 
@@ -494,7 +494,7 @@ echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"operational|pitfall|eur
 
 ### Phase 8.5.1: Feedback-Derived Rules (judgment required, capture optional)
 
-Review user corrective feedback from the task. The goal is not to document the mistake. The goal is to extract a reusable conditional behavior rule only when the feedback can be reduced to a readable "When X, do Y. Verify by Z." instruction.
+Review user corrective feedback from the task. Convert corrective feedback into a reusable conditional behavior rule only when it can be reduced to a readable "When X, do Y. Verify by Z." instruction.
 
 Classify the task as exactly one:
 - `none` — no user feedback implies a future behavior rule.
@@ -506,7 +506,7 @@ Capture only rules that have all three parts:
 - Action: what the agent should do.
 - Verification: how HANDOFF, tests, or review can prove the rule was followed.
 
-Reject entries that are blame narratives, task-local preferences, vague style opinions, or one-off urgency requests. Never write "the agent forgot..." into Tier 2 docs. Convert the lesson into behavior or reject it.
+Reject entries that are blame narratives, task-local preferences, vague style opinions, or one-off urgency requests. Write behavior rules for Tier 2 docs; convert incident-shaped lessons into behavior or reject them.
 
 When captured, the HANDOFF text must be readable prose, for example:
 

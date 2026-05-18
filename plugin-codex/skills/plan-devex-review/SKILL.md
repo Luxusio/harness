@@ -43,7 +43,7 @@ description: |
 This sub-skill shares common sections with the main plan skill (`plugin/skills/plan/SKILL.md`). Refer there for full details on:
 
 - **Voice/Tone** — Garry Tan style: short sentences, no hedging, active voice, technical precision.
-- **Completeness Principle (Boil the Lake)** — Every section must be fully completed. No TBD, no placeholders. If a section produces fewer than 3 sentences, expand it.
+- **Completeness Principle (Boil the Lake)** — Every section must be fully completed with concrete content. If a section produces fewer than 3 sentences, expand it.
 - **Conversational Ask Format** — Task/Phase/Step header required. Completeness scoring (X/10) per option. Effort reference table included. (On Codex: rendered as prose with numbered/lettered options; no AskUserQuestion tool call.)
 - **Search Before Building** — 3-layer knowledge hierarchy (tried-and-true → new-and-popular → first-principles). Prize first-principles above all.
 - **Context Recovery** — Check AUDIT_TRAIL.md for prior session state. Resume from last completed phase.
@@ -140,7 +140,7 @@ Reply A / B / C, or describe a different direction.
 
 Wait for the user's next turn before proceeding.
 
-Do NOT use this protocol for routine doc edits or obvious fixes. The bar is: "if I pick wrong, every existing integration breaks or we ship a public-API mistake we can't take back."
+Reserve this protocol for high-stakes developer-experience choices where the wrong call breaks existing integrations or ships a public API mistake we can't take back.
 
 ## DX First Principles
 

@@ -52,7 +52,7 @@ The review is not done until every finding has a clear resolution path and every
 
 For high-stakes ambiguity — architecture, data model, destructive scope, missing context — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs, and ask via conversational prose (see Conversational Ask Format below).
 
-Do NOT use this protocol for routine coding decisions or obvious changes. The bar is: "if I pick wrong, the plan breaks in a way that is expensive to unwind."
+Reserve this protocol for high-stakes planning choices where the wrong call breaks the plan in a way that is expensive to unwind.
 
 ## Context Recovery
 
@@ -436,7 +436,7 @@ Only log genuine discoveries that would save time in a future session.
 This sub-skill shares common sections with the main plan skill (`plugin/skills/plan/SKILL.md`). Refer there for full details on:
 
 - **Voice/Tone** — Garry Tan style: short sentences, no hedging, active voice, technical precision.
-- **Completeness Principle (Boil the Lake)** — Every section must be fully completed. No TBD, no placeholders. If a section produces fewer than 3 sentences, expand it.
+- **Completeness Principle (Boil the Lake)** — Every section must be fully completed with concrete content. If a section produces fewer than 3 sentences, expand it.
 - **Conversational Ask Format** — Task/Phase/Step header required. Completeness scoring (X/10) per option. Effort reference table included. (On Codex: rendered as prose with lettered options; no AskUserQuestion tool call.)
 - **Search Before Building** — 3-layer knowledge hierarchy (tried-and-true → new-and-popular → first-principles). Prize first-principles above all.
 - **Context Recovery** — Check AUDIT_TRAIL.md for prior session state. Resume from last completed phase.

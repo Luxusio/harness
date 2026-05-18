@@ -39,7 +39,7 @@ allowed-tools:
 This sub-skill shares common sections with the main plan skill (`plugin/skills/plan/SKILL.md`). Refer there for full details on:
 
 - **Voice/Tone** — Garry Tan style: short sentences, no hedging, active voice, technical precision.
-- **Completeness Principle (Boil the Lake)** — Every section must be fully completed. No TBD, no placeholders. If a section produces fewer than 3 sentences, expand it.
+- **Completeness Principle (Boil the Lake)** — Every section must be fully completed with concrete content. If a section produces fewer than 3 sentences, expand it.
 - **AskUserQuestion Format** — Task/Phase/Step header required. Completeness scoring (X/10) per option. Effort reference table included.
 - **Search Before Building** — 3-layer knowledge hierarchy (tried-and-true → new-and-popular → first-principles). Prize first-principles above all.
 - **Context Recovery** — Check AUDIT_TRAIL.md for prior session state. Resume from last completed phase.
@@ -126,7 +126,7 @@ Bad: "I've identified an opportunity to enhance the developer experience around 
 
 For high-stakes DX ambiguity — public API or CLI design, breaking changes, deprecation timeline, destructive scope (removing a flag, renaming an SDK method, changing default behavior), missing context (no migration path, no compat strategy) — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs (developer impact, deprecation cost, migration effort), and ask via AskUserQuestion (parent format at `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format).
 
-Do NOT use this protocol for routine doc edits or obvious fixes. The bar is: "if I pick wrong, every existing integration breaks or we ship a public-API mistake we can't take back."
+Reserve this protocol for high-stakes developer-experience choices where the wrong call breaks existing integrations or ships a public API mistake we can't take back.
 
 ## DX First Principles
 

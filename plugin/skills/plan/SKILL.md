@@ -61,9 +61,9 @@ PLAN.md is the OUTPUT of the interactive review, not a substitute for it. Writin
 
 For high-stakes orchestrator-level ambiguity — execution mode selection, scope detection edge cases, conflicting Voice A/B output the principles cannot resolve, premise-gate response interpretation, mid-pipeline scope expansion — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs, and ask via AskUserQuestion (parent format at `decision-principles.md` § AskUserQuestion Format).
 
-Do NOT use this protocol for routine routing or obvious resolutions. The bar is: "if I pick wrong, the entire plan is built on a misread of intent or scope, and the cost to unwind shows up in develop or verify, not now."
+Reserve this protocol for high-stakes planning ambiguity where the wrong choice changes intent, scope, or verification outcome. The bar is: "if I pick wrong, the entire plan is built on a misread of intent or scope, and the cost to unwind shows up in develop or verify, not now."
 
-**Not a trigger.** Scope-partition decisions (split into smaller tasks, combine items, defer to follow-up, do a subset) are NEVER Confusion Protocol triggers — auto-decide via Principle P1 (Choose completeness). The cost of "do more" is more work, not unwound work; that does not meet the protocol's bar.
+Auto-decide scope-partition choices (split into smaller tasks, combine items, defer to follow-up, do a subset) via Principle P1 (Choose completeness). The cost of "do more" is more work, not unwound work; that does not meet the protocol's bar.
 
 ## Context Health
 
@@ -293,6 +293,6 @@ Capstone — restating six load-bearing rules in one place. Most also appear in 
 - **Never abort.** The user invoked plan-skill. Surface every taste decision; never silently redirect to a shorter path. Both-voices-fail surfaces as a finding and continues.
 - **Two gates.** The non-auto-decided AskUserQuestions are: (1) premise confirmation in Phase 1.1, and (2) User Challenges in Phase 5.3 — when both voices agree the user's stated direction should change. Everything else is auto-decided via the 6 Decision Principles.
 - **Log every decision.** Every classification (Mechanical / Taste / User Challenge) gets a row in `AUDIT_TRAIL.md` via `write_plan_artifact.py --artifact audit`. No silent auto-decisions.
-- **Full depth means full depth.** Do not compress or skip sections from the loaded sub-skill methodology files. "Full depth" means: read the code the section asks you to read, produce the outputs the section requires, identify every issue, decide each one. Fewer than 3 sentences for any review section is a compression signal — expand.
+- **Full depth means full depth.** Complete every loaded sub-skill methodology section with its required evidence and decisions. "Full depth" means: read the code the section asks you to read, produce the outputs the section requires, identify every issue, decide each one. Fewer than 3 sentences for any review section is a compression signal — expand.
 - **Artifacts are deliverables.** PLAN.md, PLAN.meta.json, CHECKS.yaml, AUDIT_TRAIL.md must exist on disk before Phase 6 closes the session. If any artifact is missing, the plan is incomplete. CHECKS.yaml mutations post-plan go through `update_checks.py` only.
 - **Sequential order.** Phase 0 → 1 → 2 → 3 → 4 → 5 → 6. Never parallel. Each phase builds on the last; transition summaries appended to AUDIT_TRAIL.md before the next phase begins.

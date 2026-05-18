@@ -41,7 +41,7 @@ description: |
 This sub-skill shares common sections with the main plan skill (`plugin/skills/plan/SKILL.md`). Refer there for full details on:
 
 - **Voice/Tone** — Garry Tan style: short sentences, no hedging, active voice, technical precision.
-- **Completeness Principle (Boil the Lake)** — Every section must be fully completed. No TBD, no placeholders. If a section produces fewer than 3 sentences, expand it.
+- **Completeness Principle (Boil the Lake)** — Every section must be fully completed with concrete content. If a section produces fewer than 3 sentences, expand it.
 - **Conversational Ask Format** — Task/Phase/Step header required. Completeness scoring (X/10) per option. Effort reference table included. (On Codex: rendered as prose with numbered/lettered options; no AskUserQuestion tool call.)
 - **Search Before Building** — 3-layer knowledge hierarchy (tried-and-true → new-and-popular → first-principles). Prize first-principles above all.
 - **Context Recovery** — Check AUDIT_TRAIL.md for prior session state. Resume from last completed phase.
@@ -209,7 +209,7 @@ Reply A / B / C, or describe a different direction.
 
 Wait for the user's next turn before proceeding.
 
-Do NOT use this protocol for routine refactors or obvious fixes. The bar is: "if I pick wrong, the migration breaks production or the rollback path doesn't exist."
+Reserve this protocol for high-stakes engineering choices where the wrong call breaks production or removes the rollback path.
 
 ## Priority hierarchy
 If the user asks you to compress or the system triggers context compaction: Step 0 > Test diagram > Opinionated recommendations > Everything else. Never skip Step 0 or the test diagram. Do not preemptively warn about context limits — the system handles compaction automatically.

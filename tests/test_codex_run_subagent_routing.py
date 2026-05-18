@@ -1,0 +1,96 @@
+from pathlib import Path
+
+
+REPO = Path(__file__).resolve().parents[1]
+CODEX_RUN = REPO / "plugin-codex" / "skills" / "run" / "SKILL.md"
+CODEX_DEVELOP = REPO / "plugin-codex" / "skills" / "develop" / "SKILL.md"
+GENERAL_PATTERNS = REPO / "doc" / "harness" / "patterns" / "general.md"
+
+
+def _text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+def test_codex_run_uses_capability_first_subagent_routing():
+    body = _text(CODEX_RUN)
+
+    assert "Codex Subagent Routing" in body
+    assert "Route from the current session tools." in body
+    assert "spawn_agent {" in body
+    assert 'agent_type: "default"' in body
+    assert 'agent_type: "worker"' in body
+    assert 'agent_type: "explorer"' in body
+    assert "Use inline execution as the fallback" in body
+
+
+def test_codex_run_documents_qa_subagent_call_shape():
+    body = _text(CODEX_RUN)
+
+    assert "QA subagent pattern on Codex" in body
+    assert "Verify (QA — capability-routed on Codex)" in body
+    assert "You are the qa-<lens> lens for <task_id>" in body
+    assert "plugin-codex/agents/qa-<lens>.md" in body
+    assert "write_critic_qa with lens='<lens>'" in body
+    assert "Runtime Fallbacks" in body
+    assert "Agent` fan-out routed through `spawn_agent` when available" in body
+
+
+def test_codex_develop_no_longer_says_agent_absence_is_absolute():
+    body = _text(CODEX_DEVELOP)
+
+    forbidden = [
+        "No `Agent(subagent_type=...)` fan-out in v1.5",
+        "Codex has no parallel `Agent(subagent_type=...)` primitive",
+        "On Codex v1.5 there is no agent primitive",
+        "Multi-lens concurrent spawning (qa-browser + qa-api combined in one batch) is deferred to v2",
+        "absence of an `Agent` fan-out primitive",
+        "sequential inline passes",
+        "Phase 4 Agent() -> \"inline on Codex\"",
+        "both nonexistent on Codex",
+        "Sequential degradation",
+        "codex has no fan-out in v1.5",
+        "Codex just always picks \"sequential\"",
+        "On Codex v1.5 it's an inline pass",
+        "On Codex v1.5 it runs sequentially",
+        "not parallel agents",
+        "same-context pass",
+        "no Voice A / Voice B Agent fan-out",
+        "complex dual-voice review remains Claude-only",
+        "Claude-only in v1.5",
+        "Develop phase is Claude-only in v1.5",
+        "no parallel agent fan-out to amortize",
+        "Claude-only concept",
+        "sequential is always the schedule",
+    ]
+    combined = _text(CODEX_RUN) + "\n" + body
+    for phrase in forbidden:
+        assert phrase not in combined
+
+    assert "Agent fan-out is capability-gated" in body
+    assert "spawn_agent {" in body
+    assert "Runtime Fallbacks" in body
+
+
+def test_runtime_fallback_notes_are_exception_only():
+    combined = _text(CODEX_RUN) + "\n" + _text(CODEX_DEVELOP)
+
+    assert "keep routine work free of runtime routing notes" in combined
+    assert "Add a short `Runtime Fallbacks` section when" in combined
+    noisy_phrases = [
+        "always log routing",
+        "runtime routing log",
+        "capability-routing timeline event",
+    ]
+    for phrase in noisy_phrases:
+        assert phrase not in combined
+
+
+def test_feedback_pattern_records_writing_guidance_only():
+    body = _text(GENERAL_PATTERNS)
+    section = body.split("## Feedback-Derived Rule Writing", 1)[1]
+
+    assert "When documenting user corrections" in section
+    assert "readable prose" in section
+    assert "Verify by using the form" in section
+    assert "spawn_agent" not in section
+    assert "subagent" not in section.lower()

@@ -30,7 +30,7 @@ Before auto-fixing, report:
 ```
 Harness improvement: <what was wrong> → <what was fixed>
 ```
-If fix is ambiguous or risky, log the signal only. Do NOT modify manifest without clear evidence.
+If fix is ambiguous or risky, log the signal only. Modify the manifest only with clear evidence.
 
 Signals feed back: plan skill reads `learnings.jsonl` at Phase 0.1.5; setup reads it in repair mode. Improvements compound across tasks.
 
@@ -48,7 +48,7 @@ doc/harness/patterns/
 └── architecture.md     # module boundaries, dependency patterns, gotchas
 ```
 
-**Rule: write a doc immediately when you discover something.** Don't wait for repetition.
+**Rule: write a doc immediately when you discover something.** Capture useful discoveries while they are fresh.
 
 Each doc starts with a summary table, then concrete details:
 
@@ -67,13 +67,13 @@ Each doc starts with a summary table, then concrete details:
 **How to apply:** <what to do differently>
 ```
 
-Append if doc exists — never overwrite.
+Append to existing docs and preserve their current content.
 
 **When to write:** any discovery that saves 5+ min in a future session (build quirks, env vars, ordering, ports, framework specifics). Check after every task close.
 
 ## Feedback-derived rules (user correction → readable behavior)
 
-When a user correction points at an agent mistake, do not preserve the incident narrative. Extract only a reusable conditional behavior rule:
+When a user correction points at an agent mistake, extract only a reusable conditional behavior rule:
 
 ```markdown
 ## <Short Rule Name>
@@ -93,7 +93,7 @@ When changing runtime-specific harness plugin behavior, review both the canonica
 Verify by explaining in `HANDOFF.md` which side changed and why any other side was left unchanged.
 ```
 
-Reject feedback-derived entries when they lack a trigger, action, or verification step; when they only describe blame ("the agent forgot..."); or when they are task-local preferences. The close-time requirement is judgment, not forced documentation: HANDOFF records `none`, `captured`, or `rejected`.
+Reject feedback-derived entries when they lack a trigger, action, or verification step; when they only describe blame; or when they are task-local preferences. The close-time requirement is judgment, not forced documentation: HANDOFF records `none`, `captured`, or `rejected`.
 
 ---
 

@@ -14,9 +14,9 @@ Implement the plan for a harness task. Reads PLAN.md, implements changes, verifi
 
 > **Codex runtime notes** (delta from Claude develop skill — read these first):
 > - **No `Skill()` chain.** Where Claude invokes `Skill("harness:plan", task_id)` etc., Codex orchestrator reads the relevant SKILL.md inline and executes its phases as part of the same conversation. The plan / verify / close transitions still happen — they're just prose flow, not tool calls.
-> - **No `Agent(subagent_type=...)` fan-out in v1.5.** Where Claude spawns `oh-my-claudecode:executor` (per-AC parallel implementation), `harness:qa-*` (verification), `harness:dogfooder` (post-PASS dogfooding), or haiku sub-agents (test-coverage trace, adversarial review, edge-case scan), Codex runs the equivalent work inline in the orchestrator's own context. Multi-AC implementation is sequential. Multi-lens QA (qa-browser + qa-api combined in one concurrent batch) is deferred to v2; individual browser QA runs inline when the current Codex session exposes browser tools. Adversarial review degrades to single-pass.
+> - **Agent fan-out is capability-gated.** Where Claude spawns `oh-my-claudecode:executor` (per-AC parallel implementation), `harness:qa-*` (verification), `harness:dogfooder` (post-PASS dogfooding), or haiku sub-agents (test-coverage trace, adversarial review, edge-case scan), Codex should use `spawn_agent` when the current session exposes it. If `spawn_agent` is unavailable, run the equivalent role methodology inline in the orchestrator's own context and record a short `Runtime Fallbacks` note only when that fallback replaces expected independent QA/review. Multi-AC implementation can remain sequential for small tasks; preserve independent QA/review by routing from current session capability.
 > - **No `AskUserQuestion` structured tool.** Where Claude emits an AskUserQuestion with labeled options, Codex emits the question + options as plain prose and reads the user's reply on the next turn. Options stay numbered/lettered so the user can pick them by short response (e.g. "A", "B", "1", "2").
-> - **Browser tools are availability-gated on Codex.** The Claude `qa_delegation_gate.py` blocks main-session `mcp__chrome-devtools__*` calls and redirects them to `harness:qa-browser`; Codex has no Agent primitive in this skill, so the orchestrator runs `plugin-codex/agents/qa-browser.md` inline when the current session exposes browser tools such as `chrome_devtools` or a future Playwright MCP. If browser verification is required and tools or a reachable app are missing, write `write_critic_qa(lens="browser", verdict="BLOCKED_ENV", ...)` with the blocker. Do not silently replace required browser QA with CLI-only checks.
+> - **Browser tools are availability-gated on Codex.** The Claude `qa_delegation_gate.py` blocks main-session `mcp__chrome-devtools__*` calls and redirects them to `harness:qa-browser`; Codex routes by available tools. Use `spawn_agent` for the qa-browser lens when available, or run `plugin-codex/agents/qa-browser.md` inline when browser tools are present but no subagent path exists. If browser verification is required and tools or a reachable app are missing, write `write_critic_qa(lens="browser", verdict="BLOCKED_ENV", ...)` with the blocker. Preserve browser-required tasks with browser-lens evidence.
 > - **MCP tool names are bare** on Codex (`task_start`, `task_verify`, `task_close`, `write_critic_qa`, `write_handoff`, `write_doc_sync`, `update_checks`). The Claude long-form (`mcp__plugin_harness_harness__*`) does not apply.
 > - **Env var is `HARNESS_PLUGIN_ROOT`**, not `CLAUDE_PLUGIN_ROOT`. The Codex plugin install sets it; Bash blocks below use this variant.
 > - **Sub-file fallback.** This SKILL.md does NOT ship Codex-native sub-files in v1.5 (browser-verification.md, fix-first-pattern.md, parallel-fanout.md, quality-audit-pipeline.md, runtime-smoke.md, test-failure-triage.md, verification-gate.md). Where the Claude flow loads a sub-file, the Codex flow reads the same sub-file at `plugin/skills/develop/<name>.md` (Claude tree) and applies the sub-file's methodology with the runtime-substitution rules above. Codex-native sub-files are a v2 ergonomics improvement; v1.5 ships methodology parity by reference.
@@ -43,15 +43,15 @@ CHECKS.yaml `passed` is evidence the gate ran, not a substitute for fresh runtim
 
 ## Confusion Protocol
 
-For high-stakes implementation ambiguity — blast radius >5 files, 3-strike hypothesis exhaustion, T2 vs T3 test-failure ambiguity, Phase 2 EUREKA flagging PLAN.md as wrong, Phase 5 scope creep mid-fix-loop — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs, and ask the user via conversational prose with numbered options. Read the reply on the next turn. Do not silently override.
+For high-stakes implementation ambiguity — blast radius >5 files, 3-strike hypothesis exhaustion, T2 vs T3 test-failure ambiguity, Phase 2 EUREKA flagging PLAN.md as wrong, Phase 5 scope creep mid-fix-loop — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs, and ask the user via conversational prose with numbered options. Read the reply on the next turn and proceed from the user-confirmed direction.
 
-Do NOT use this protocol for routine routing or obvious resolutions. The bar is: "if I pick wrong, the entire implementation is built on a misread of intent or scope, and the cost shows up in verify or close, not now."
+Reserve this protocol for high-stakes ambiguity where the wrong choice changes scope, architecture, or verification outcome. The bar is: "if I pick wrong, the entire implementation is built on a misread of intent or scope, and the cost shows up in verify or close, not now."
 
 ## Context Health
 
 Soft directive — degrade gracefully, never block.
 
-- **`[PROGRESS]` summary at phase boundaries.** Phase 3 (per-AC implement) and Phase 4 (sequential quality audit) are the longest runs on Codex (no parallel agent fan-out to amortize). When any phase exceeds ~5 minutes, surface a 1-2 sentence checkpoint: done, next, surprises.
+- **`[PROGRESS]` summary at phase boundaries.** Phase 3 (per-AC implement) and Phase 4 (quality audit) are the longest runs. Use `spawn_agent` for independent work when available; when phases still exceed ~5 minutes, surface a 1-2 sentence checkpoint: done, next, surprises.
 - **Loop detection.** If the same fix-cycle pattern, the same hypothesis, or the same gate fires 3 times without converging, STOP and reassess. Options: premise re-confirm (Phase 2 EUREKA path) via conversational ask; switch the implementation approach; pause for user check-in. Looping silently is worse than asking.
 - Progress summaries and loop-detection notices NEVER mutate git state.
 
@@ -59,7 +59,7 @@ Soft directive — degrade gracefully, never block.
 
 Two structured triggers that replace silent overrides in earlier prose. On Codex both render as conversational asks:
 
-1. **Phase 2 EUREKA premise gate** — when the search-before-building scan reveals PLAN.md's approach is suboptimal. Do NOT silently override the plan. Ask the user (prose, with numbered options):
+1. **Phase 2 EUREKA premise gate** — when the search-before-building scan reveals PLAN.md's approach is suboptimal. Surface the discovery through the EUREKA path and ask the user (prose, with numbered options):
    ```
    EUREKA at AC-NNN — PLAN.md's approach looks wrong because <reason>.
    A) Re-ground premise — re-run plan skill with the new premise.
@@ -82,7 +82,7 @@ Two structured triggers that replace silent overrides in earlier prose. On Codex
 
 The harness MCP does not tolerate mid-task stops. **Never halt with a bare BLOCKED.** Emit a conversational ask with concrete options; user decides. Errors are consumed by the running agent, not by humans.
 
-**No mid-task scope cuts.** Do NOT ask the user whether to drop ACs, split the task, or defer items mid-Phase. The plan was approved at Phase 5 of plan-skill; develop executes it. If a genuine blocker prevents completion of an AC, escalate with the concrete blocker via the BLOCKED -> conversational-ask path, not a meta scope question.
+**Scope continuity.** Execute the approved PLAN through develop. If a genuine blocker prevents completion of an AC, escalate with the concrete blocker via the BLOCKED -> conversational-ask path rather than a mid-phase meta scope question.
 
 ## Model Routing
 
@@ -93,6 +93,8 @@ On Claude, develop routes mechanical work to haiku and adversarial review cross-
 Phases run in strict order; each phase must complete before the next. Sub-files are lazy-loaded — do NOT pre-read them, load each only in the phase that needs it. Every phase is idempotent on re-run; check PROGRESS.md and `audit/` to resume instead of restarting from Phase 0.
 
 **Timeline logging:** append phase transitions to `<task_dir>/timeline.jsonl` as append-only JSON lines with keys `ts, phase, event, detail`. Events: `phase_start, phase_end, ac_start, ac_done, sequential-pass, fix_cycle, blocked, resumed, finding`.
+
+**Runtime Fallbacks:** keep routine work free of runtime routing notes. Add `Runtime Fallbacks` to HANDOFF when an expected independent QA/review path was replaced by inline verification, a required browser/desktop tool was unavailable, or a high-risk policy/skill change had no independent review lens. Keep it short: reason, risk, compensating check.
 
 **Graceful degradation:** missing tool or phase prerequisite -> skip cleanly, log reason, do NOT install missing tools. Skipped-phase table:
 
@@ -135,21 +137,29 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 **Eureka check:** if search reveals PLAN.md's approach is suboptimal (reinventing, wrong assumption), flag as `EUREKA: AC-NNN — <discovery>` in HANDOFF under "Plan Challenges". Fire the Premise Gate conversational ask (see above) before overriding. Persist as `type:"eureka"` in `learnings.jsonl`.
 
-**Baseline screenshot (browser projects):** if browser tools are available in the current Codex session, capture it inline using the qa-browser methodology. If browser QA is required but unavailable, record the blocker for the browser lens; do not treat the missing screenshot as a silent skip.
+**Baseline screenshot (browser projects):** if browser tools are available in the current Codex session, capture it inline using the qa-browser methodology. If browser QA is required but unavailable, record the blocker for the browser lens.
 
 ### Phase 3.0: AC Dependency Analysis (sequential on Codex)
 
-Codex has no parallel `Agent(subagent_type=...)` primitive within this skill's scope in v1.5. All ACs run sequentially in the orchestrator's own context, in PLAN.md declaration order. The Claude-side fanout matrix (component-independent ACs spawned in one assistant message, helper-extract-first ordering, API↔frontend split, rollback protocol) collapses to a single ordered list on Codex.
+Codex AC implementation is capability-gated. For small tasks, run ACs sequentially in the orchestrator's own context. When `spawn_agent` is available and the PLAN has genuinely independent ACs or bounded side work, use a worker subagent with explicit file ownership:
 
-Trade-off: longer wall-clock per task, lower context-bloat per AC (the orchestrator never juggles N parallel implementations). For typical 3-5 AC tasks this is acceptable; large fanout tasks (10+ ACs) should be split into smaller plans on Codex side.
+```text
+spawn_agent {
+  agent_type: "worker",
+  message: "Implement AC-00X only. Ownership: <paths>. You are not alone in the codebase; do not revert edits made by others. Edit files directly and list changed paths in your final answer.",
+  fork_context: true
+}
+```
+
+Trade-off: sequential is simpler and often right for typical 3-5 AC tasks; worker subagents improve independence and wall-clock when ownership boundaries are clear.
 
 Log the sequential pass as a single `sequential-pass` event in `timeline.jsonl`:
 ```bash
-echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","phase":"3.0","event":"sequential-pass","detail":"<N> ACs in declared order; codex has no fan-out in v1.5"}' \
+echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","phase":"3.0","event":"sequential-pass","detail":"<N> ACs in declared order; sequential chosen for task shape or spawn_agent unavailable"}' \
   >> <task_dir>/timeline.jsonl
 ```
 
-If PLAN.md declares a helper-extract AC, run it first, then the consumer ACs in order. The dependency matrix from PLAN.md is still the single source of truth — Codex just always picks "sequential" as the schedule.
+If PLAN.md declares a helper-extract AC, run it first, then the consumer ACs in order. The dependency matrix from PLAN.md is still the single source of truth.
 
 ### Phase 3.1: Scope Lock
 
@@ -196,7 +206,7 @@ updated: <ISO timestamp>
 
 Any AC scoring <=7 MUST list `deferred_edges`. <=5 requires explicit justification in HANDOFF (MVP scope, user-deferred, etc.).
 
-**Acceptance Ledger update (after each AC):** once the AC's code is in and per-AC tests pass, mark it `implemented_candidate` in CHECKS.yaml. Only Phase 7 promotes to `passed`. Never hand-edit CHECKS.yaml.
+**Acceptance Ledger update (after each AC):** once the AC's code is in and per-AC tests pass, mark it `implemented_candidate` in CHECKS.yaml. Only Phase 7 promotes to `passed`. Update CHECKS.yaml only through `update_checks.py`.
 
 ```bash
 python3 ${HARNESS_PLUGIN_ROOT}/scripts/update_checks.py \
@@ -207,7 +217,7 @@ python3 ${HARNESS_PLUGIN_ROOT}/scripts/update_checks.py \
 
 **Per-AC test run:** `git diff --name-only HEAD~1` -> for each changed source, find test files that import/reference it -> run only those. If no tests exist for changed module, write one (Phase 3.5 rule). If PLAN.md specifies per-AC verify commands, prefer those.
 
-**Delegation rule (C-18 / Verification delegation).** On Claude, browser MCP tools (`mcp__chrome-devtools__*`) MUST be delegated to `harness:qa-browser`; the pre-tool gate enforces that. On Codex, there is no Agent target for that delegation, so use actual tool availability: run the qa-browser methodology inline when browser tools are present, and write browser-lens `BLOCKED_ENV` when required browser verification cannot run. Bash test runners (`pytest`, `npm test`, `pnpm test`, `vitest`, `cargo test`, `go test`, ...) are allowed inline as on Claude. Heavy full-suite execution is still better handled as a downstream verification step than mixed into implementation work.
+**Delegation rule (C-18 / Verification delegation).** On Claude, browser MCP tools (`mcp__chrome-devtools__*`) MUST be delegated to `harness:qa-browser`; the pre-tool gate enforces that. On Codex, use actual tool availability: spawn the qa-browser lens when `spawn_agent` is available, run the qa-browser methodology inline only when no subagent path exists, and write browser-lens `BLOCKED_ENV` when required browser verification cannot run. Bash test runners (`pytest`, `npm test`, `pnpm test`, `vitest`, `cargo test`, `go test`, ...) are allowed inline as on Claude. Heavy full-suite execution is still better handled as a downstream verification step than mixed into implementation work.
 
 Per-AC test failures -> fix immediately. These are free; only Phase 7 full-suite failures count toward the 3-cycle limit.
 
@@ -263,19 +273,19 @@ After all ACs done. Each runs only if prerequisite exists.
 - **3.8 Build check** — compile / typecheck the diff (or full project). Build failures are always T1 (our code). Fix immediately.
 - **3.9 Runtime smoke** — read `plugin/skills/develop/runtime-smoke.md` (Claude tree fallback). Project-type-specific (browser / API / CLI). Browser smoke runs when browser tools are available; otherwise required browser smoke becomes browser-lens `BLOCKED_ENV`.
 
-### Phase 4: Plan Completion Audit (inline)
+### Phase 4: Plan Completion Audit
 
-On Claude this is a haiku sub-agent. On Codex v1.5 it's an inline pass by the orchestrator: cross-reference every AC against `git diff --stat` and classify each as DONE / PARTIAL / NOT DONE / CHANGED + category (CODE / TEST / MIGRATION / CONFIG / DOCS). Be conservative with DONE (file touched != AC done); be generous with CHANGED (goal met by different means).
+On Claude this is a haiku sub-agent. On Codex, use `spawn_agent` when available for an independent completion audit; otherwise run the same pass inline as fallback. Cross-reference every AC against `git diff --stat` and classify each as DONE / PARTIAL / NOT DONE / CHANGED + category (CODE / TEST / MIGRATION / CONFIG / DOCS). Be conservative with DONE (file touched != AC done); be generous with CHANGED (goal met by different means).
 
 For PARTIAL / NOT DONE, classify cause: scope-cut / context-exhaustion / misunderstood / blocked / forgotten / evolved. Fix forgotten and misunderstood immediately; log scope-cut + blocked; mark evolved as CHANGED with new approach in HANDOFF.
 
-### Phase 4.5-4.8: Sequential Quality Audit
+### Phase 4.5-4.8: Quality Audit
 
-Read `plugin/skills/develop/quality-audit-pipeline.md` (Claude tree fallback) for the full methodology. On Codex v1.5 it runs sequentially in the orchestrator's context, not parallel agents:
+Read `plugin/skills/develop/quality-audit-pipeline.md` (Claude tree fallback) for the full methodology. On Codex, dispatch independent audit lenses with `spawn_agent` when available; otherwise run the same checks sequentially in the orchestrator context and record `Runtime Fallbacks` if expected independence was lost:
 
 1. **Test-coverage trace** — for each changed source, identify which test path exercises it; flag uncovered branches.
 2. **Confidence ratings** — per-AC confidence 0-10 (different axis than completeness — covers "does it work" not "did we cover the surface"). Highlight any AC <=6.
-3. **Adversarial review (single-pass)** — read the diff with a fresh adversarial framing: what would break this? What edge case did we miss? What contract did we silently change? On Claude this is a cross-model spawn (Opus -> Sonnet, Sonnet -> Haiku); on Codex v1.5 it's a same-context pass with explicit re-read. Trade-off acknowledged: lower blind-spot reset than cross-model.
+3. **Adversarial review** — read the diff with a fresh adversarial framing: what would break this? What edge case did we miss? What contract did we silently change? Prefer a subagent for independence when available; inline adversarial re-read is fallback.
 4. **Visual-smoke** — browser-only; run with available browser tools or record browser-lens `BLOCKED_ENV` when required and unavailable.
 
 **Diff scope detection** (routes specialists):
@@ -290,7 +300,7 @@ git diff --name-only | while read f; do
 done | sort -u
 ```
 
-**Specialists** (sequential inline passes on Codex):
+**Specialists** (use `spawn_agent` when available; otherwise run in sequence):
 - Security review for SCOPE_AUTH or SCOPE_API. Never gated.
 - Migration safety for SCOPE_MIGRATIONS. Never gated.
 - Performance for SCOPE_API or large diffs. Gated (skip after 3+ dispatches with 0 findings).
@@ -337,7 +347,17 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 
 Read `plugin/skills/develop/verification-gate.md` (Claude tree fallback) for the full gate methodology. Runs test commands from PLAN.md, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit.
 
-**On Codex v1.5:** the orchestrator runs verification inline. Pick the required lens for the diff (qa-cli for libraries, qa-api for endpoints, qa-desktop for native GUI, qa-browser for frontend/browser work when `browser_qa_supported: true`). Run the lens's methodology in-conversation, then call `write_critic_qa` with `verdict`, `summary`, `transcript`, and optionally `lens="<lens>"`:
+**On Codex:** pick the required lens for the diff (qa-cli for libraries, qa-api for endpoints, qa-desktop for native GUI, qa-browser for frontend/browser work when `browser_qa_supported: true`). Use `spawn_agent` for independent QA when available:
+
+```text
+spawn_agent {
+  agent_type: "default",
+  message: "You are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, HANDOFF.md, CHECKS.yaml, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence. If you can write the verdict, call write_critic_qa with lens='<lens>'; otherwise return the transcript for the orchestrator to write.",
+  fork_context: true
+}
+```
+
+If no subagent path exists, run the lens's methodology in-conversation, then call `write_critic_qa` with `verdict`, `summary`, `transcript`, and optionally `lens="<lens>"`:
 
 ```
 write_critic_qa {
@@ -350,7 +370,7 @@ write_critic_qa {
 }
 ```
 
-Multi-lens concurrent spawning (qa-browser + qa-api combined in one batch) is deferred to v2 because Codex 0.130.0 has no `multi_agent` ergonomic story in this skill scope. That defers concurrency, not browser QA itself. If browser QA is required, run it inline as its own lens or record browser-lens `BLOCKED_ENV`; do not close on CLI/API evidence alone.
+Multi-lens concurrency uses `spawn_agent` when available; otherwise run required lenses sequentially. If browser QA is required, close with browser-lens PASS evidence or browser-lens `BLOCKED_ENV`.
 
 **Also implements:**
 - **Transience filter** — a failure must reproduce on 2 consecutive runs to count as `failed`. Single-run failures logged as `transient` in `learnings.jsonl`, not counted toward the 3-cycle limit.
@@ -376,7 +396,7 @@ python3 ${HARNESS_PLUGIN_ROOT}/scripts/health.py > "<task_dir>/audit/health-afte
 
 ### Phase 7.7: Dogfood (post-QA, pre-HANDOFF)
 
-On Claude this is a `harness:dogfooder` agent spawn. On Codex v1.5 there is no agent primitive — the dogfooder methodology runs inline in the orchestrator's context after Phase 7 PASS.
+On Claude this is a `harness:dogfooder` agent spawn. On Codex, use `spawn_agent` when available; otherwise the dogfooder methodology runs inline in the orchestrator's context after Phase 7 PASS.
 
 **Skip conditions (Codex):**
 - `runtime_verdict` is not PASS (QA must pass first).
@@ -463,11 +483,11 @@ score = (ac_completion × 0.40) + (test_coverage × 0.30)
 - `adversarial_clean` = max(0, 10 - (crit × 3 + high × 1.5 + med × 0.5)).
 - `scope_discipline` = 10 / 7 / 4 / 0 (none / auto-added / justified / unjustified).
 
-**Cleanup:** PROGRESS.md persists beyond Phase 8 — it is the scope-lock contract for any post-HANDOFF edits. Do NOT delete it. HANDOFF.md is the narrative permanent record.
+**Cleanup:** PROGRESS.md persists beyond Phase 8 as the scope-lock contract for any post-HANDOFF edits. Keep PROGRESS.md in place; HANDOFF.md is the narrative permanent record.
 
 ### Phase 8.5: Reflect and Log (capture-when-fresh, no quota)
 
-When you discover something genuinely useful during develop — a real bug whose fix is non-obvious, a build/test/tool gotcha, a workaround worth knowing next time — log it the moment you find it. Do NOT save reflections for the end. Do NOT log entries to fill a quota. **If nothing was actually learned, write nothing.**
+When you discover something genuinely useful during develop — a real bug whose fix is non-obvious, a build/test/tool gotcha, a workaround worth knowing next time — log it the moment you find it. Log only concrete, reusable facts at discovery time; leave the log untouched when there is no durable learning.
 
 ```bash
 echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"operational|pitfall|eureka|feedback","source":"develop","key":"SHORT_KEY","insight":"FACT + FIX","files":["<path>"],"task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
@@ -475,14 +495,14 @@ echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"operational|pitfall|eur
 
 ### Phase 8.5.1: Feedback-Derived Rules (judgment required, capture optional)
 
-Review user corrective feedback from the task. Do not document the mistake itself. Extract a reusable conditional behavior rule only when the feedback can be reduced to a readable "When X, do Y. Verify by Z." instruction.
+Review user corrective feedback from the task. Convert corrective feedback into a reusable conditional behavior rule only when it can be reduced to a readable "When X, do Y. Verify by Z." instruction.
 
 Classify the task as exactly one:
 - `none` — no user feedback implies a future behavior rule.
 - `captured` — feedback produced a reusable conditional rule and it was recorded in HANDOFF. If durable beyond this task, append a `type:"feedback-rule"` learning for Tier 2 promotion.
 - `rejected` — feedback looked like a preference or complaint but should not become a rule. Record the reason in HANDOFF.
 
-Capture only rules with all three parts: trigger, action, and verification. Reject blame narratives, task-local preferences, vague style opinions, and one-off urgency requests. Never write "the agent forgot..." into Tier 2 docs; convert the lesson into behavior or reject it.
+Capture only rules with all three parts: trigger, action, and verification. Reject blame narratives, task-local preferences, vague style opinions, and one-off urgency requests. Write behavior rules for Tier 2 docs; convert incident-shaped lessons into behavior or reject them.
 
 When captured, the HANDOFF text must be readable prose:
 
@@ -520,13 +540,13 @@ Empirical port measurement of `plugin/skills/develop/SKILL.md` (500 lines source
 |-------|---|----------|
 | As-is (no edit) | 48 | Voice block, Anti-shortcut clause, Phase 5 scope-drift, Phase 6 commit ordering, Phase 8 HANDOFF schema, Phase 8.5/8.7 prose, AC completeness rubric, Iron Law (9a/9b) phrasing, fix-first taxonomy. |
 | Trivial substitution | 12 | `${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}` (15+ sites); `Edit`/`Write`/`MultiEdit` → `apply_patch` callouts; `mcp__plugin_harness_harness__*` → bare names; tool token mapping in code blocks. |
-| Restructure | 30 | Phase 3.0 fan-out → sequential pass; Phase 4.5-4.8 parallel agent pipeline → sequential inline passes; Phase 7 multi-lens QA → sequential inline lenses when needed + multi-lens concurrency deferred; Phase 7.7 dogfooder spawn → inline methodology; AskUserQuestion call sites (3) → conversational asks with numbered options; Confusion Protocol from AskUserQuestion gate to prose ask; Premise Gate / User Challenge structured options → prose; Model Routing table → one-paragraph degradation note. |
+| Restructure | 30 | Phase 3.0 fan-out → capability-gated worker subagents or sequential pass; Phase 4.5-4.8 parallel agent pipeline → `spawn_agent` when available or sequential inline fallback; Phase 7 multi-lens QA → `spawn_agent` lenses when available or sequential inline fallback; Phase 7.7 dogfooder spawn → `spawn_agent` when available or inline methodology; AskUserQuestion call sites (3) → conversational asks with numbered options; Confusion Protocol from AskUserQuestion gate to prose ask; Premise Gate / User Challenge structured options → prose; Model Routing table → capability-gated note. |
 | Drop | 6 | Big `allowed-tools` frontmatter list (Codex ignores); Claude-only `mcp__chrome-devtools__*` C-18 delegation enforcement details; `argument-hint` / `user-invocable` frontmatter keys; "haiku routing" rationale text in Phase 4. |
-| Codex-additive | 4 | Top-of-file "Codex runtime notes" block (6 bullets); sub-file fallback declaration; browser-tool availability gate; v2 deferral notes for multi_agent and cross-model adversarial; `apply_patch` envelope guidance in Phase 3. |
+| Codex-additive | 4 | Top-of-file "Codex runtime notes" block (6 bullets); sub-file fallback declaration; browser-tool availability gate; `spawn_agent` call shapes; exception-only Runtime Fallbacks; `apply_patch` envelope guidance in Phase 3. |
 
 **Dominant deltas:**
-- Phase 3.0 + Phase 4 are the heaviest restructures (combined ~22% of total). Both center on the absence of an `Agent` fan-out primitive in Codex 0.130.0. v2 should re-port these phases if Codex `multi_agent` ergonomics improve.
-- Phase 7.7 dogfooder is the cleanest "would have been parallel" → "now sequential" port — methodology unchanged, harness changed.
+- Phase 3.0 + Phase 4 are the heaviest restructures (combined ~22% of total). Both now route by current capability: use `spawn_agent` when available, otherwise sequential inline fallback.
+- Phase 7.7 dogfooder is the cleanest capability-routed port — methodology unchanged, transport depends on available tools.
 - AskUserQuestion → prose is mechanically 3 call sites (Confusion Protocol, EUREKA gate, scope-expansion gate) but each carries semantic load (the structured option list provides discoverability the prose version loses). Future iteration: a Codex helper that renders numbered-option prose with a consistent shape.
 
 **Numbers reconcile with v1.5 spike (60% weighted-mean mechanical).** Develop is heavier on restructure than setup/run because it has the most fan-out surface (per-AC parallel + quality-audit parallel + multi-lens QA + dogfooder all converge here).
@@ -534,7 +554,7 @@ Empirical port measurement of `plugin/skills/develop/SKILL.md` (500 lines source
 **Sub-files NOT ported in v1.5 (deferred to v2):**
 - `browser-verification.md` — falls back to Claude tree; run the methodology inline when Codex browser tools are available
 - `fix-first-pattern.md` — methodology is runtime-agnostic; falls back to Claude tree
-- `parallel-fanout.md` — Claude-only concept; on Codex degraded to "sequential is always the schedule"
+- `parallel-fanout.md` — Claude source reference; on Codex, apply the ownership/dependency methodology with `spawn_agent` when available and sequential fallback when not
 - `quality-audit-pipeline.md` — falls back to Claude tree, methodology applied inline
 - `runtime-smoke.md` — falls back to Claude tree, runtime-portable
 - `test-failure-triage.md` — falls back to Claude tree, runtime-portable

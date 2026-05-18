@@ -13,10 +13,46 @@ Orchestrate the full harness development cycle for a task.
 
 > **Codex runtime notes** (delta from Claude):
 > - Claude's `Skill("harness:plan", task_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. Effect is identical (plan -> develop -> verify -> close), but the chain is sequential prose, not tool calls.
-> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` multi-spawn for QA has no Codex equivalent in v1.5. Codex side runs QA inline (the orchestrator itself does the verification, calls `write_critic_qa` MCP tool, reads the verdict). Parallel multi-lens QA (browser + api in one concurrent batch) is deferred to v2; browser QA itself is not deferred when browser tools are available in the current Codex session.
+> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks. If `spawn_agent` is unavailable, run the role methodology inline, call the same MCP artifact writer, and record a short `Runtime Fallbacks` note only when that fallback replaces an expected independent QA/review path.
 > - MCP tool names on Codex use bare form (`task_start`, `task_verify`, `task_close`, `write_critic_qa`) — NOT the Claude `mcp__plugin_harness_harness__*` prefix form. Where this skill mentions a prefixed name, read it as the bare form.
 > - `${CLAUDE_PLUGIN_ROOT}` is not injected on Codex. Use `${HARNESS_PLUGIN_ROOT}` (set by the Codex plugin install).
 > - AskUserQuestion (Phase 4 FAIL retry) is conversational prose on Codex — emit the question + options, read the reply from the next user turn.
+
+## Codex Subagent Routing
+
+Route from the current session tools.
+
+When `spawn_agent` is available, prefer it for independent review/QA and bounded side work. Use concrete Codex calls like:
+
+```text
+spawn_agent {
+  agent_type: "default",
+  message: "You are the qa-cli lens for <task_id>. Read <task_dir>/PLAN.md, HANDOFF.md, CHECKS.yaml, and changed files. Run focused verification. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence. If you can call write_critic_qa, write lens='cli'; otherwise return the exact verdict transcript for the orchestrator to write.",
+  fork_context: true
+}
+```
+
+For bounded code-change side work:
+
+```text
+spawn_agent {
+  agent_type: "worker",
+  message: "Implement AC-00X only. Ownership: <paths>. You are not alone in the codebase; do not revert edits made by others. Edit files directly and list changed paths in your final answer.",
+  fork_context: true
+}
+```
+
+For read-only codebase questions:
+
+```text
+spawn_agent {
+  agent_type: "explorer",
+  message: "Inspect <specific files/area> and answer <specific question>. Do not modify files.",
+  fork_context: false
+}
+```
+
+Use inline execution as the fallback for roles that normally benefit from independence. Add a short `Runtime Fallbacks` section when an expected independent QA/review path was replaced by inline verification or a required tool was unavailable. Keep it to: reason, risk, compensating check.
 
 ## Sub-file
 
@@ -42,22 +78,22 @@ task_start { slug: "<ARGUMENTS>" }
 
 Read `plugin-codex/skills/plan/SKILL.md` (the v1.5 hand-port; AC-003 spike target) and execute its phases inline, passing `task_id`. The plan skill writes PLAN.md to the task_dir. On BLOCKED: stop and report.
 
-On Codex side the plan skill ships in degraded form — single-voice (no Voice A / Voice B Agent fan-out). The premise gate becomes a conversational ask. Plan output is functionally equivalent for v1.5 simple-scope tasks; complex dual-voice review remains Claude-only and the user should run `claude $/harness:plan <task>` for those.
+On Codex side the plan skill uses the available runtime surface. When `spawn_agent` or external model routes are available, use them for independent review voices; otherwise run the review methodology inline and record `Runtime Fallbacks` if expected independence was lost. The premise gate becomes a conversational ask.
 
 ### Phase 3: Develop
 
-Read `plugin-codex/skills/develop/SKILL.md` and execute its phases inline, passing `task_id`. The develop skill on Codex is a hand-port of the Claude source (`plugin/skills/develop/SKILL.md`) under the MCP-only-sharing policy (spike-report §3.6) — same canonical-loop methodology, with `Agent` fan-out collapsed to sequential execution, `Skill()` chains rendered as inline-read sub-skill references, and `AskUserQuestion` gates rendered as conversational prose asks. Phase 0 through Phase 8.7 parity is preserved. Develop writes HANDOFF.md + DOC_SYNC.md to the task_dir. On BLOCKED: stop and report.
+Read `plugin-codex/skills/develop/SKILL.md` and execute its phases, passing `task_id`. The develop skill on Codex is a hand-port of the Claude source (`plugin/skills/develop/SKILL.md`) under the MCP-only-sharing policy (spike-report §3.6) — same canonical-loop methodology, with `Agent` fan-out routed through `spawn_agent` when available, `Skill()` chains rendered as inline-read sub-skill references, and `AskUserQuestion` gates rendered as conversational prose asks. Phase 0 through Phase 8.7 parity is preserved. Develop writes HANDOFF.md + DOC_SYNC.md to the task_dir. On BLOCKED: stop and report.
 
-Multi-lens parallel QA (qa-browser + qa-api in one batch) is the one piece still deferred to v2. Browser MCP verification is availability-gated: if the current Codex session exposes browser tools (for example `chrome_devtools` or a future Playwright MCP), run the qa-browser methodology inline; if browser verification is required but no browser tool or reachable app exists, write a browser-lens `BLOCKED_ENV` verdict instead of silently falling back to CLI-only QA.
+Multi-lens parallel QA (qa-browser + qa-api in one batch) should use `spawn_agent` when available. Browser MCP verification is availability-gated: if the current Codex session exposes browser tools (for example `chrome_devtools` or a future Playwright MCP), run the qa-browser methodology via subagent when possible or inline when no subagent path exists; if browser verification is required but no browser tool or reachable app exists, write a browser-lens `BLOCKED_ENV` verdict instead of silently falling back to CLI-only QA.
 
 On completion: HANDOFF.md and DOC_SYNC.md exist in task_dir. If BLOCKED: stop, report, ask user.
 
-### Phase 4: Verify (QA — inline on Codex)
+### Phase 4: Verify (QA — capability-routed on Codex)
 
-Read `doc/harness/manifest.yaml` for project type. On Codex v1.5, run the appropriate QA inline (no Agent fan-out).
+Read `doc/harness/manifest.yaml` for project type. On Codex, choose the appropriate QA lens and route it by current capability: `spawn_agent` when available, inline methodology only as fallback.
 
 **Strategy selection:**
-- **qa-browser** — required when `manifest.qa.browser_qa_supported: true` AND the diff contains frontend files (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). On Codex, check the actual session tool surface first. If browser tools are available, read `plugin-codex/agents/qa-browser.md` and run that methodology inline, including real page navigation/interactions/screenshots where the tools support it. Call:
+- **qa-browser** — required when `manifest.qa.browser_qa_supported: true` AND the diff contains frontend files (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). On Codex, check the actual session tool surface first. If browser tools are available, route the qa-browser lens through `spawn_agent` when available; otherwise read `plugin-codex/agents/qa-browser.md` and run that methodology inline, including real page navigation/interactions/screenshots where the tools support it. Call:
   ```
   write_critic_qa {
     task_id: "<task_id>",
@@ -68,14 +104,24 @@ Read `doc/harness/manifest.yaml` for project type. On Codex v1.5, run the approp
     manual_ux_verification: "<non-empty description of the pages, viewports, and interactions actually checked>"
   }
   ```
-  If browser QA is required but no browser tool is available, the dev server cannot be reached, or a required browser setup is impossible, call the same browser lens with `verdict: "BLOCKED_ENV"` and a transcript naming the exact missing condition. Do not downgrade the task to qa-cli only.
-- `desktop_qa_supported: true` → also Claude-only in v1.5. Same BLOCKED_ENV path.
-- `type: api` or diff contains route/endpoint files → qa-api inline (orchestrator does the API verification using shell/curl).
-- `type: cli` or `type: library` → qa-cli inline (orchestrator runs test suite + lint via shell tool).
+  If browser QA is required but no browser tool is available, the dev server cannot be reached, or a required browser setup is impossible, call the same browser lens with `verdict: "BLOCKED_ENV"` and a transcript naming the exact missing condition. Keep browser-required close evidence on the browser lens.
+- `desktop_qa_supported: true` → qa-desktop via `spawn_agent` when available; otherwise run the methodology inline only if desktop tools are available, or write `BLOCKED_ENV` with the missing tool/display condition.
+- `type: api` or diff contains route/endpoint files → qa-api via `spawn_agent` when available; otherwise inline fallback.
+- `type: cli` or `type: library` → qa-cli via `spawn_agent` when available; otherwise inline fallback.
 
-Order: desktop branch before `type: cli` fallback so a desktop app declared as `type: cli` still routes to qa-desktop (and thus the v1.5 BLOCKED_ENV path).
+Order: desktop branch before `type: cli` fallback so a desktop app declared as `type: cli` still routes to qa-desktop.
 
-QA inline pattern on Codex:
+QA subagent pattern on Codex:
+
+```text
+spawn_agent {
+  agent_type: "default",
+  message: "You are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, HANDOFF.md, CHECKS.yaml, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with command/browser evidence. If you can write the verdict, call write_critic_qa with lens='<lens>'; otherwise return the transcript for the orchestrator to write.",
+  fork_context: true
+}
+```
+
+QA inline fallback pattern on Codex:
 
 ```
 # Read qa-browser, qa-cli, or qa-api agent prompt from the Codex plugin tree
@@ -85,6 +131,8 @@ cat ${HARNESS_PLUGIN_ROOT}/agents/qa-cli.md   # or qa-api.md / qa-browser.md
 # Call:
 write_critic_qa { lens: "cli|api|browser", verdict: "PASS" | "FAIL" | "BLOCKED_ENV", summary, transcript, manual_ux_verification? }
 ```
+
+When inline fallback replaces expected independent QA, add `Runtime Fallbacks` to HANDOFF with reason, risk, and compensating check.
 
 After write_critic_qa, check the returned merged `runtime_verdict`:
 - **PASS**: proceed to Phase 5.
@@ -149,7 +197,7 @@ On any phase error or MCP timeout:
 2. Check state via `task_context`
 3. Ask user: retry / skip / abort
 
-Never silently continue past a failure.
+Stop on phase failures, report the failure, check task state, and ask how to proceed.
 
 ## Self-Improvement (post-close)
 
@@ -170,17 +218,17 @@ Pipeline is housekeeping, not a gate. On failure: log warning and continue.
 |---|---|---|---|
 | As-is portable (voice rules, completion report shape, retry/error narration, health snapshot, self-improvement bullets, telemetry) | ~70 | reused verbatim | 41% |
 | Trivial rewrite (`${CLAUDE_PLUGIN_ROOT}` -> `${HARNESS_PLUGIN_ROOT}`, MCP tool name de-prefix, frontmatter prune from 7 to 3 lines, JSONL `runtime` field, AGENTS.md alongside CLAUDE.md) | ~25 | line-for-line rewrite | 15% |
-| Significant restructure (Phase 2 Skill() -> "read sub-skill SKILL.md and execute inline"; Phase 3 develop gap-surface; Phase 4 Agent() -> "inline on Codex"; QA strategy reduced to qa-cli/qa-api only) | ~50 | semantically equivalent but structurally different | 29% |
-| Dropped (Phase 4 multi-lens parallel Agent spawn block + MCP-reload note; Phase 4 chrome-devtools/desktop QA branches collapsed to BLOCKED_ENV) | ~25 | not represented or replaced with v1.5 gap-prose | 15% |
-| Codex-additive (runtime notes header, sequential-degraded develop fallback prose, "inline on Codex" QA pattern, BLOCKED_ENV gap prose for browser/desktop) | ~35 | new content | 20% |
+| Significant restructure (Phase 2 Skill() -> "read sub-skill SKILL.md and execute inline"; Phase 3 develop gap-surface; Phase 4 Agent() -> capability-routed `spawn_agent` when available with inline fallback) | ~50 | semantically equivalent but structurally different | 29% |
+| Dropped (Claude-specific MCP-reload note and prefixed tool names) | ~25 | replaced with Codex capability routing and bare MCP tool names | 15% |
+| Codex-additive (runtime notes header, `spawn_agent` call shapes, exception-only Runtime Fallbacks, browser availability gate, BLOCKED_ENV gap prose for browser/desktop) | ~35 | new content | 20% |
 | Total source | 171 | ~200 emitted | — |
 
 Key port observations:
 - **3 `Skill()` call sites** are the load-bearing porting friction. Codex has no Skill() tool. Resolution: prose direction "read and execute inline" — works but expands wordcount. The model's natural read+follow capability covers the gap.
-- **1 `Agent()` multi-spawn block** at Phase 4 (QA fan-out) — explicitly degraded to inline on Codex. Acceptable for v1.5 because qa-cli/qa-api are text-only roles the model can fulfill itself.
-- **Frontmatter `allowed-tools` list** included `Agent` + `Skill` — both nonexistent on Codex. Stripped entirely (Codex ignores allowed-tools).
+- **1 `Agent()` multi-spawn block** at Phase 4 (QA fan-out) — maps to `spawn_agent` when that tool exists in the current Codex session. Inline role execution is fallback only.
+- **Frontmatter `allowed-tools` list** included Claude `Agent` + `Skill`. Codex ignores that frontmatter; runtime routing is documented in prose with concrete `spawn_agent` call shapes.
 - **MCP tool names** changed from `mcp__harness__task_*` to bare `task_*`. Could be automated by a regex pass in the sync engine.
-- **Sequential degradation** of multi-lens QA: cost is wall-clock (no parallelism) and structural (one verdict at a time). Functional but slower.
-- **Develop phase is Claude-only in v1.5** — surfaced as a gap, not silently dropped.
+- **Multi-lens QA routing:** use `spawn_agent` for independent lenses when available; otherwise run required lenses sequentially and record `Runtime Fallbacks` only when expected independence was lost.
+- **Develop phase transport:** capability-routed on Codex. Use `spawn_agent` for independent work when available; inline execution is fallback.
 
-Conclusion for AC-004: run port is **56% reuse (as-is + trivial), 29% restructure, 15% drop**. Higher restructure% than setup because of Skill()/Agent() control-flow primitives. Argues for **YAML/JSON intermediate** canonical form with declarative `chain:` and `qa_lenses:` fields that the sync engine renders as Claude-Skill-calls vs Codex-inline-prose. Pure AST text substitution would NOT handle this cleanly (Voice B of Phase 3 v1 Eng review was right).
+Conclusion for AC-004: run port is **56% reuse (as-is + trivial), 29% restructure, 15% drop**. Higher restructure% than setup because of Skill()/Agent() control-flow primitives. Argues for a capability-aware intermediate form with declarative `chain:` and `qa_lenses:` fields that renders Claude `Skill()`/`Agent()` calls vs Codex `spawn_agent`/inline fallback. Pure AST text substitution would NOT handle this cleanly (Voice B of Phase 3 v1 Eng review was right).
