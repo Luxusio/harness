@@ -15,4 +15,4 @@ updated: 2026-03-30
 - [REQ process browser-required-enforcement](REQ__process__browser-required-enforcement.md) — browser_required: true in TASK_STATE.yaml enforces browser verification across critic-runtime, plan skill, and setup template
 - [INF harness spec-exists](INF__harness__spec-exists.md) — harness architecture spec at doc/harness/ (SPEC.md, IMPORT_LIST.md, AUTO_ROUTING.md)
 - [REQ process plan-skill-review-pipeline](REQ__process__plan-skill-review-pipeline.md) — plan skill must run 7-phase dual-voice pipeline; old linear procedure retired (2026-04-10)
-- [REQ process product-requirement-capture](REQ__process__product-requirement-capture.md) — observable UI/API behavior requirements use `doc/<area>/REQ__<name>.md`
+- [GUIDE document taxonomy](GUIDE__document-taxonomy.md) — durable project knowledge uses typed documents under `doc/<area>/`

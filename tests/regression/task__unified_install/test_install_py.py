@@ -445,7 +445,7 @@ def test_codex_install_with_fake_cli_recovers_duplicate_mcp_config(tmp_path, mon
     assert parsed["mcp_servers"]["chrome-devtools"]["command"] == "new-chrome"
     assert parsed["mcp_servers"]["x11-display"]["command"] == "new-x11"
     assert parsed["mcp_servers"]["harness"]["args"] == [
-        str(tmp_path / ".codex" / "plugins" / "cache" / "harness" / "harness" / "2.3.0" / "mcp" / "harness_server.py")
+        str(codex_install_root / "plugins" / "harness" / "mcp" / "harness_server.py")
     ]
 
 
@@ -488,7 +488,7 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
     assert parsed["plugins"]["harness@harness"]["enabled"] is True
     assert parsed["marketplaces"]["harness"]["source"] == str(codex_install_root)
     assert parsed["mcp_servers"]["harness"]["args"] == [
-        str(cached / "mcp" / "harness_server.py")
+        str(codex_install_root / "plugins" / "harness" / "mcp" / "harness_server.py")
     ]
     assert parsed["hooks"]["state"]["harness@harness:hooks.json:pre_tool_use:0:0"][
         "trusted_hash"

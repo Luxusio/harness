@@ -287,7 +287,7 @@ Runs continuously during Phase 3.
   ```
   Parses `codifiable:` YAML blocks emitted by the QA pass and stages validated tests to `tests/regression/<sanitized-task-id>/`. Same script as Claude side; runtime-agnostic.
 	- **3.6 Fix-first pattern** — read `plugin/skills/develop/fix-first-pattern.md` (Claude tree fallback). Classify AUTO-FIX (dead code, magic numbers, stale comments, missing guards) and ASK (API design, architecture, security, DRY extractions). Auto-fix immediately; flag ASK in HANDOFF "Judgment Items". The **3-attempt escalation rule** in that sub-file applies to every fix loop (per-AC, Phase 7, debug).
-	- **3.6.1 Requirement docs (UI/API intent)** — read PLAN.md `Requirement Decision` before implementation. When a task changes user-visible screens, flows, states, localization, or interactions, create or update a short REQ doc under `doc/<area>/REQ__<name>.md`; use DDD-style areas or bounded contexts such as `ui`, `api`, `auth`, `billing`, `catalog`, or `common`. Existing-screen state changes count: filters, search, sorting, loading, empty/error states, visibility, labels, and click/input behavior. Observable bugfixes count because the user-visible behavior changes from wrong to intended. When a task changes externally consumed APIs, webhooks, SDK-facing behavior, request/response schemas, status codes, auth/session behavior, validation, or compatibility expectations, create or update the matching `doc/<area>/REQ__<name>.md`. Write readable prose that states intended observable behavior and verification cues. Link each updated REQ doc from HANDOFF. For internal-only refactors, tests, or tooling changes, record `Requirement docs: not needed — <reason>` in HANDOFF; the reason must say no UI state, user flow, API contract, or observable runtime behavior changed.
+	- **3.6.1 Durable docs (REQ/GUIDE/ADR/POLICY)** — read PLAN.md `Durable Docs Decision` before implementation. Create or update each selected `doc/<area>/<TYPE>__<name>.md` file. Use DDD-style areas or bounded contexts such as `ui`, `api`, `auth`, `billing`, `catalog`, `runtime`, `verification`, or `common`. Use `REQ` for user-visible behavior, externally consumed API contracts, constraints, and observable bugfixes; write intended observable behavior plus verification cues. Existing-screen state changes count: filters, search, sorting, loading, empty/error states, visibility, labels, and click/input behavior. Use `GUIDE` for reusable coding, design, testing, or implementation guidance. Use `ADR` for significant technical choices with alternatives, reasons, consequences, and tradeoffs. Use `POLICY` only for external security, legal, data-handling, approval, licensing, or organizational constraints that harness cannot fully enforce by itself; keep harness-internal execution rules in skills, agents, scripts, and tests. Link each updated durable doc from HANDOFF. For internal-only refactors, one-off tests, or non-observable maintenance, record `Durable docs: not needed — <reason>` in HANDOFF; the reason must say which durable knowledge surfaces remain unchanged.
 
 ### Phase 3.7-3.9: Post-implementation health
 
@@ -396,7 +396,7 @@ write_critic_qa {
 
 Multi-lens concurrency uses `spawn_agent` when available; otherwise run required lenses sequentially. If browser QA is required, close with browser-lens PASS evidence or browser-lens `BLOCKED_ENV`.
 
-When REQ docs are linked in HANDOFF or changed under `doc/<area>/REQ__*.md`, pass those paths to the QA lens as intent evidence. QA verifies implementation against the requirement's observable behavior and verification cues.
+When durable docs are linked in HANDOFF or changed under `doc/<area>/<TYPE>__*.md`, pass those paths to the QA lens as intent evidence. QA uses `REQ` as behavior/contract verification criteria, `GUIDE` as implementation quality and consistency criteria, `ADR` as architecture intent and tradeoff criteria, and `POLICY` as external constraint criteria.
 
 **Also implements:**
 - **Transience filter** — a failure must reproduce on 2 consecutive runs to count as `failed`. Single-run failures logged as `transient` in `learnings.jsonl`, not counted toward the 3-cycle limit.
@@ -481,7 +481,7 @@ Call `write_handoff` MCP with:
 2. Files changed (every file + one-line description)
 3. Verification results per AC
 4. Scope notes (out-of-plan changes with justification)
-5. Requirement docs: links to `doc/<area>/REQ__*.md` docs updated for user-visible screens, existing-screen state/interaction changes, observable bugfixes, or externally consumed APIs; or `not needed — <reason>` where the reason proves no UI state, user flow, API contract, or observable runtime behavior changed
+5. Durable docs: links to `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or `POLICY__*.md` docs updated for behavior/contracts, reusable guidance, decisions, or external constraints; or `not needed — <reason>` where the reason proves the durable knowledge surfaces are unchanged
 6. Do Not Regress (caveats, fragile patterns)
 7. Feedback-Derived Rules (status: none / captured / rejected; readable rule text if captured)
 8. Confidence Ratings table from Phase 4.6 (highlight <=6)

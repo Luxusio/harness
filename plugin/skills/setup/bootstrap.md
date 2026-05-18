@@ -14,7 +14,7 @@ doc/harness/critics/
   plan.md
   runtime.md
   document.md
-doc/<area>/REQ__<name>.md        # durable requirements by area / bounded context
+doc/<area>/<TYPE>__<name>.md     # durable knowledge by area / bounded context
 ```
 
 ## 3.2 manifest.yaml
@@ -200,10 +200,14 @@ mkdir -p doc/common
 touch doc/harness/.gitkeep
 ```
 
-Durable product intent uses the existing REQ format:
-`doc/<area>/REQ__<name>.md`. Treat `area` as a DDD-style area or bounded
-context: `ui`, `api`, `auth`, `billing`, `catalog`, or `common`. Use
-`doc/common/` for cross-cutting or repository-wide requirements.
+Durable project knowledge uses typed docs:
+`doc/<area>/<TYPE>__<name>.md`. Treat `area` as a DDD-style area or bounded
+context: `ui`, `api`, `auth`, `billing`, `catalog`, `runtime`,
+`verification`, or `common`. Use `REQ` for behavior/contracts that QA must
+verify, `GUIDE` for reusable coding/design/test guidance, `ADR` for technical
+decisions and tradeoffs, `POLICY` for external security/legal/data/approval
+constraints, and `OBS`/`INF` for facts and inferences. Keep harness-internal
+execution rules in skills, agents, scripts, and tests.
 
 Append harness operational paths to `.gitignore` (idempotent — skips lines already present):
 

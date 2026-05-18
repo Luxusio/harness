@@ -734,15 +734,16 @@ def install_codex(*, dry_run: bool, force: bool,
         _run(["codex", "plugin", "marketplace", "remove", "harness"], dry_run)
 
     # Step 5: TOML merge via library API
+    config_plugin_root = source_plugin_root if not dry_run else CODEX_INSTALL_ROOT / "plugins" / CODEX_PLUGIN_NAME
     if dry_run:
-        snippet_preview = emit_codex_config(str(cached_plugin_root), config_path).splitlines()[:5]
+        snippet_preview = emit_codex_config(str(config_plugin_root), config_path).splitlines()[:5]
         steps.append("would merge [plugins.\"harness@harness\"] + [mcp_servers.harness] "
                      f"into {config_path or '~/.codex/config.toml'}")
         steps.append("  preview: " + " | ".join(snippet_preview))
         return InstallResult("codex", True,
                              "dry-run — would install Codex (steps above)", steps)
     result = emit_and_install_codex_config(
-        str(cached_plugin_root),
+        str(config_plugin_root),
         config_path=config_path,
         force=force,
     )

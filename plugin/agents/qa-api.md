@@ -118,12 +118,15 @@ blocked because OAuth seed token is unavailable`.
 3. Read PLAN.md for acceptance criteria and objective
 4. Read HANDOFF.md for what was implemented
 5. Read REQUEST.md if it exists (original user request — for intent check)
-6. Read PLAN.md `Requirement Decision` and linked
-   `doc/<area>/REQ__*.md` requirement docs. If the task changes externally consumed
+6. Read PLAN.md `Durable Docs Decision` and linked durable docs under
+   `doc/<area>/<TYPE>__*.md`. Use `REQ` as behavior/contract verification criteria.
+   Use `GUIDE` as implementation quality and consistency criteria.
+   Use `ADR` as architecture intent and tradeoff criteria.
+   Use `POLICY` as external constraint criteria. If the task changes externally consumed
    request/response shape, status codes, auth/session behavior, validation, or
-   compatibility and no requirement doc path is provided, report a Requirement gap.
-   If a REQ doc exists, verify the API against its intended observable behavior
-   and its verification cues.
+   compatibility and no REQ path is provided, report a Durable Docs gap. If
+   linked docs exist, verify the API against their intended observable behavior
+   and verification cues.
 
 If QA_KNOWLEDGE.yaml doesn't exist yet: create it from the template at
 `doc/harness/qa/QA_KNOWLEDGE.yaml` with this project's services filled in.

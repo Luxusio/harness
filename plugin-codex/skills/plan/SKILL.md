@@ -256,19 +256,19 @@ Both modes: Phase 1 premise gate and Phase 5.3 User Challenges never auto-decide
 ## Important Rules
 
 - **Never abort.** Surface every decision; never silently redirect to a shorter path.
-- **Requirement Decision.** Every PLAN.md includes:
-  `Observable behavior changes: yes | no`, `Surface: ui | api | both | none`,
-  `Requirement doc: doc/<area>/REQ__<name>.md | n/a`,
-  and `Reason: <one sentence>`. Use `yes` for existing-screen state,
-  filters/search/sorting, loading/empty/error states, localization/copy,
-  click/input interactions, API contract/auth/session/validation changes, and
-  Observable bugfixes because visible behavior changes from wrong to intended.
-  Write requirement docs under a DDD-style area folder such as
-  `doc/ui/REQ__filter-bar.md`, `doc/api/REQ__oauth-login.md`, or
-  `doc/auth/REQ__session-policy.md`; use `doc/common/` for cross-cutting
-  requirements.
-  Use `no` only when UI state, user flow, API contract, and
-  observable runtime behavior remain unchanged.
+- **Durable Docs Decision.** Every PLAN.md includes:
+  `REQ: doc/<area>/REQ__<name>.md | n/a`,
+  `GUIDE: doc/<area>/GUIDE__<name>.md | n/a`,
+  `ADR: doc/<area>/ADR__<name>.md | n/a`,
+  `POLICY: doc/<area>/POLICY__<name>.md | n/a`,
+  and `Reason: <one sentence>`. Use `REQ` for observable behavior or contracts
+  that implementation and QA must satisfy, `GUIDE` for reusable coding/design/
+  testing guidance, `ADR` for significant technical choices with alternatives
+  or tradeoffs, and `POLICY` only for external security/legal/data/approval
+  constraints that harness cannot fully enforce by itself. Write docs under a
+  DDD-style area folder such as `doc/ui/REQ__filter-bar.md`,
+  `doc/api/REQ__oauth-login.md`, `doc/auth/ADR__token-storage.md`, or
+  `doc/common/GUIDE__coding-style.md`.
 - **Two gates.** The non-auto-decided asks are: (1) premise confirmation in Phase 1.1, and (2) User Challenges in Phase 5.3.
 - **Log every decision.** Every classification (Mechanical / Taste / User Challenge) gets a row in `AUDIT_TRAIL.md` via `write_plan_artifact.py --artifact audit`.
 - **Full depth means full depth.** Complete every loaded methodology section with its required evidence and decisions.

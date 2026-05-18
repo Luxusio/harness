@@ -11,8 +11,14 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable
+
+try:
+    import fcntl
+except Exception:  # pragma: no cover - non-POSIX fallback
+    fcntl = None
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
@@ -62,6 +68,51 @@ def _opt(args: dict, k: str) -> str | None:
 
 def _task_artifact_rel(td: str, fn: str) -> str:
     return f"doc/harness/tasks/{os.path.basename(td)}/{fn}" if artifact_exists(td, fn) else ""
+
+
+def _cleanup_orphan_index_lock(repo_root: str, max_age_secs: int = 0) -> bool:
+    """Remove an orphan .git/index.lock left around task_start.
+
+    The cleanup is intentionally narrow: only a 0-byte lock file is eligible,
+    and on POSIX we also require a non-blocking exclusive flock to succeed.
+    Non-empty locks are treated as active git state and left alone.
+    """
+    lock_path = os.path.join(repo_root, ".git", "index.lock")
+    try:
+        st = os.stat(lock_path)
+    except (FileNotFoundError, OSError):
+        return False
+    if st.st_size != 0:
+        return False
+    if time.time() - st.st_mtime < max_age_secs:
+        return False
+    fd = None
+    try:
+        fd = os.open(lock_path, os.O_RDWR)
+        if fcntl is not None:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, IOError):
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        return False
+    try:
+        if fcntl is not None and fd is not None:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    except (OSError, IOError):
+        pass
+    try:
+        if fd is not None:
+            os.close(fd)
+    except OSError:
+        pass
+    try:
+        os.unlink(lock_path)
+    except OSError:
+        return False
+    return True
 
 
 # ── PR2 close-gate helpers ──────────────────────────────────────────────
@@ -184,6 +235,7 @@ def handle_task_start(args: dict) -> dict:
         raise ValueError("task_start requires task_dir, task_id, or slug")
 
     repo_root = find_repo_root()
+    _cleanup_orphan_index_lock(repo_root)
     task_dir = td or canonical_task_dir(task_id=ti, slug=sl, repo_root=repo_root)
     tid = canonical_task_id(task_id=ti, slug=sl, task_dir=task_dir)
 
@@ -214,6 +266,7 @@ def handle_task_start(args: dict) -> dict:
             snapshot_path = ""
 
     ctx = emit_compact_context(task_dir)
+    _cleanup_orphan_index_lock(repo_root)
     if "error" in ctx:
         return _err("task_start failed", data={"task_dir": task_dir})
     return _ok({

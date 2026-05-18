@@ -122,11 +122,14 @@ such in the summary.
 3. Read PLAN.md for acceptance criteria and objective
 4. Read HANDOFF.md for what was implemented
 5. Read REQUEST.md if it exists (original user request — for intent check)
-6. Read PLAN.md `Requirement Decision` and linked
-   `doc/<area>/REQ__*.md` requirement docs. If the task changes visible screen state,
+6. Read PLAN.md `Durable Docs Decision` and linked durable docs under
+   `doc/<area>/<TYPE>__*.md`. Use `REQ` as behavior/contract verification criteria.
+   Use `GUIDE` as implementation quality and consistency criteria.
+   Use `ADR` as architecture intent and tradeoff criteria.
+   Use `POLICY` as external constraint criteria. If the task changes visible screen state,
    filters/search/sorting, loading/empty/error states, labels, or interactions
-   and no requirement doc path is provided, report a Requirement gap. If a REQ
-   doc exists, verify the UI against its intended observable behavior and its
+   and no REQ path is provided, report a Durable Docs gap. If linked docs
+   exist, verify the UI against their intended observable behavior and
    verification cues.
 
 If QA_KNOWLEDGE.yaml doesn't exist yet: create it from the template at
