@@ -155,11 +155,12 @@ def test_sync_codex_payload_copies_runtime_under_codex_root(tmp_path):
     module = _load_install_module()
     plugin_root = module.sync_codex_payload(tmp_path / "codex" / "harness")
 
-    assert plugin_root == tmp_path / "codex" / "harness" / "plugin"
+    assert plugin_root == tmp_path / "codex" / "harness" / "plugins" / "harness"
     assert (plugin_root / "mcp" / "harness_server.py").is_file()
     assert (plugin_root / "scripts" / "stop_gate.py").is_file()
     assert not (plugin_root / ".claude-plugin").exists()
-    manifest_path = tmp_path / "codex" / "harness" / "plugins" / "harness" / ".codex-plugin" / "plugin.json"
+    assert not (tmp_path / "codex" / "harness" / "plugin").exists()
+    manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
     assert manifest_path.is_file()
     assert (tmp_path / "codex" / "harness" / ".agents" / "plugins" / "marketplace.json").is_file()
     manifest = json.loads(manifest_path.read_text())
@@ -169,11 +170,9 @@ def test_sync_codex_payload_copies_runtime_under_codex_root(tmp_path):
     assert hooks_path.is_file()
     hooks = json.loads(hooks_path.read_text())["hooks"]
     assert set(hooks) == {"SessionStart", "PreToolUse", "UserPromptSubmit", "PostToolUse"}
-    assert "./scripts/hook_session_start.sh" in hooks_path.read_text()
-    wrapper_path = tmp_path / "codex" / "harness" / "plugins" / "harness" / "scripts" / "hook_session_start.sh"
-    assert wrapper_path.is_file()
-    assert os.access(wrapper_path, os.X_OK)
-    assert str(plugin_root / "scripts" / "hook_session_start.py") in wrapper_path.read_text()
+    assert "hook_session_start.py" in hooks_path.read_text()
+    assert "hook_session_start.sh" not in hooks_path.read_text()
+    assert str(plugin_root / "scripts" / "hook_session_start.py") in hooks_path.read_text()
     mcp_path = tmp_path / "codex" / "harness" / "plugins" / "harness" / ".mcp.json"
     assert mcp_path.is_file()
     mcp = json.loads(mcp_path.read_text())["mcpServers"]["harness"]
@@ -222,12 +221,9 @@ def test_sync_codex_payload_produces_complete_plugin_bundle(tmp_path):
     assert str(REPO_ROOT) not in hooks_text
     assert str(REPO_ROOT) not in mcp_text
     assert str(plugin_root) in mcp_text
-    for wrapper in sorted((codex_plugin / "scripts").glob("hook_*.sh")):
-        text = wrapper.read_text()
-        assert str(REPO_ROOT) not in text
-        assert str(plugin_root) in text
-        assert f"exec '{module._python_cmd()}'" in text
-        assert "exec 'python3'" not in text
+    assert (codex_plugin / "scripts" / "hook_pre_tool_use.py").is_file()
+    assert (codex_plugin / "mcp" / "harness_server.py").is_file()
+    assert not list((codex_plugin / "scripts").glob("hook_*.sh"))
 
 
 def test_codex_marketplace_points_at_installed_plugin_tree(tmp_path):
@@ -249,27 +245,76 @@ def test_codex_marketplace_points_at_installed_plugin_tree(tmp_path):
     ]
 
 
-def test_codex_hooks_config_is_plugin_relative_and_reviews_all_events(tmp_path):
+def test_codex_hooks_config_uses_absolute_cache_python_and_reviews_all_events(tmp_path):
     module = _load_install_module()
-    plugin_root = tmp_path / ".codex" / "harness" / "plugin"
+    plugin_root = tmp_path / ".codex" / "plugins" / "cache" / "harness" / "harness" / "2.3.0"
 
     hooks = module._codex_hooks_config(plugin_root)["hooks"]
 
     assert set(hooks) == {"SessionStart", "PreToolUse", "UserPromptSubmit", "PostToolUse"}
     expected_commands = {
-        "SessionStart": "./scripts/hook_session_start.sh",
-        "PreToolUse": "./scripts/hook_pre_tool_use.sh",
-        "UserPromptSubmit": "./scripts/hook_user_prompt_submit.sh",
-        "PostToolUse": "./scripts/hook_post_tool_use.sh",
+        "SessionStart": str(plugin_root / "scripts" / "hook_session_start.py"),
+        "PreToolUse": str(plugin_root / "scripts" / "hook_pre_tool_use.py"),
+        "UserPromptSubmit": str(plugin_root / "scripts" / "hook_user_prompt_submit.py"),
+        "PostToolUse": str(plugin_root / "scripts" / "hook_post_tool_use.py"),
     }
     for event, command in expected_commands.items():
         hook = hooks[event][0]["hooks"][0]
         assert hook["type"] == "command"
-        assert hook["command"] == command
-        assert not hook["command"].startswith("/")
+        assert hook["command"] == f"{module._python_cmd()} {command}"
+        assert hook["command"].startswith("/")
         assert hook["timeout"] > 0
         assert hook["statusMessage"]
     assert hooks["PostToolUse"][0]["matcher"] == "Bash"
+
+
+def test_codex_hook_trust_state_matches_normalized_codex_identity(tmp_path):
+    module = _load_install_module()
+    plugin_root = tmp_path / ".codex" / "plugins" / "cache" / "harness" / "harness" / "2.3.0"
+    hooks_config = module._codex_hooks_config(plugin_root)
+
+    state = module._codex_hook_trust_state("harness@harness", hooks_config)
+
+    assert set(state) == {
+        "harness@harness:hooks.json:session_start:0:0",
+        "harness@harness:hooks.json:pre_tool_use:0:0",
+        "harness@harness:hooks.json:user_prompt_submit:0:0",
+        "harness@harness:hooks.json:post_tool_use:0:0",
+    }
+    assert all(value.startswith("sha256:") for value in state.values())
+    assert len({value for value in state.values()}) == 4
+
+
+def test_install_codex_hook_trust_state_preserves_user_state_and_enabled_flag(tmp_path):
+    module = _load_install_module()
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        "[hooks.state]\n"
+        "\n"
+        '[hooks.state."harness@harness:hooks.json:pre_tool_use:0:0"]\n'
+        "enabled = false\n"
+        'trusted_hash = "sha256:old"\n'
+        "\n"
+        '[hooks.state."custom:/hooks.json:stop:0:0"]\n'
+        'trusted_hash = "sha256:user"\n'
+    )
+    plugin_root = tmp_path / ".codex" / "plugins" / "cache" / "harness" / "harness" / "2.3.0"
+    hooks_config = module._codex_hooks_config(plugin_root)
+
+    result = module.install_codex_hook_trust_state(cfg, hooks_config)
+
+    assert result["ok"] is True
+    content = cfg.read_text()
+    assert 'trusted_hash = "sha256:old"' not in content
+    assert '[hooks.state."custom:/hooks.json:stop:0:0"]' in content
+    assert 'trusted_hash = "sha256:user"' in content
+    assert '[hooks.state."harness@harness:hooks.json:pre_tool_use:0:0"]' in content
+    assert content.count("[hooks.state]") == 1
+    assert "enabled = false" in content
+    parsed = tomllib.loads(content)
+    harness_state = parsed["hooks"]["state"]["harness@harness:hooks.json:pre_tool_use:0:0"]
+    assert harness_state["enabled"] is False
+    assert harness_state["trusted_hash"].startswith("sha256:")
 
 
 def test_codex_mcp_config_uses_absolute_python_and_installed_plugin_root(tmp_path):
@@ -305,6 +350,10 @@ def test_install_codex_plugin_cache_uses_manifest_version_not_codex_suffix(tmp_p
     assert not stale_suffix.exists()
     assert (cached / "hooks.json").is_file()
     assert (cached / ".mcp.json").is_file()
+    assert (cached / "scripts" / "hook_pre_tool_use.py").is_file()
+    assert (cached / "mcp" / "harness_server.py").is_file()
+    assert str(cached / "scripts" / "hook_pre_tool_use.py") in (cached / "hooks.json").read_text()
+    assert str(cached / "mcp" / "harness_server.py") in (cached / ".mcp.json").read_text()
 
 
 def test_emit_codex_config_rehomes_everything_to_installed_codex_root(tmp_path):
@@ -342,7 +391,6 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
     monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
     monkeypatch.setenv("CODEX_LOG", str(log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
-    monkeypatch.setattr(module, "CODEX_INSTALLED_PLUGIN_ROOT", codex_install_root / "plugin")
 
     result = module.install_codex(dry_run=False, force=True, config_path=str(config_path))
 
@@ -358,12 +406,20 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
     assert (cached / "hooks.json").is_file()
     assert (cached / ".mcp.json").is_file()
     assert (cached / "skills" / "run" / "SKILL.md").is_file()
+    assert (cached / "scripts" / "hook_pre_tool_use.py").is_file()
+    assert (cached / "mcp" / "harness_server.py").is_file()
     parsed = tomllib.loads(config_path.read_text())
     assert parsed["plugins"]["harness@harness"]["enabled"] is True
     assert parsed["marketplaces"]["harness"]["source"] == str(codex_install_root)
     assert parsed["mcp_servers"]["harness"]["args"] == [
-        str(codex_install_root / "plugin" / "mcp" / "harness_server.py")
+        str(cached / "mcp" / "harness_server.py")
     ]
+    assert parsed["hooks"]["state"]["harness@harness:hooks.json:pre_tool_use:0:0"][
+        "trusted_hash"
+    ].startswith("sha256:")
+    assert parsed["hooks"]["state"]["harness@harness:hooks.json:post_tool_use:0:0"][
+        "trusted_hash"
+    ].startswith("sha256:")
 
 
 def test_codex_install_rejects_version_below_pin_before_mutating_payload(tmp_path, monkeypatch):
@@ -379,7 +435,6 @@ def test_codex_install_rejects_version_below_pin_before_mutating_payload(tmp_pat
     monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
     monkeypatch.setattr(module, "CODEX_VERSION_PIN_FILE", pin)
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
-    monkeypatch.setattr(module, "CODEX_INSTALLED_PLUGIN_ROOT", codex_install_root / "plugin")
 
     result = module.install_codex(dry_run=False, force=True, config_path=str(tmp_path / ".codex" / "config.toml"))
 
@@ -406,7 +461,6 @@ def test_codex_install_fails_if_plugin_hooks_feature_cannot_be_enabled(tmp_path,
     monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
     monkeypatch.setenv("CODEX_LOG", str(log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
-    monkeypatch.setattr(module, "CODEX_INSTALLED_PLUGIN_ROOT", codex_install_root / "plugin")
 
     result = module.install_codex(dry_run=False, force=True, config_path=str(tmp_path / ".codex" / "config.toml"))
 
@@ -435,7 +489,6 @@ def test_codex_install_fails_if_marketplace_add_fails_after_plugin_hooks(tmp_pat
     monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
     monkeypatch.setenv("CODEX_LOG", str(log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
-    monkeypatch.setattr(module, "CODEX_INSTALLED_PLUGIN_ROOT", codex_install_root / "plugin")
 
     result = module.install_codex(dry_run=False, force=True, config_path=str(tmp_path / ".codex" / "config.toml"))
 
@@ -460,7 +513,6 @@ def test_codex_install_treats_existing_marketplace_as_success(tmp_path, monkeypa
     codex_install_root = tmp_path / ".codex" / "harness"
     monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
-    monkeypatch.setattr(module, "CODEX_INSTALLED_PLUGIN_ROOT", codex_install_root / "plugin")
 
     result = module.install_codex(dry_run=False, force=True, config_path=str(tmp_path / ".codex" / "config.toml"))
 
@@ -488,7 +540,6 @@ def test_codex_install_without_force_stops_before_feature_enable_when_config_exi
     monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
     monkeypatch.setenv("CODEX_LOG", str(log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
-    monkeypatch.setattr(module, "CODEX_INSTALLED_PLUGIN_ROOT", codex_install_root / "plugin")
 
     result = module.install_codex(dry_run=False, force=False, config_path=str(config_path))
 
@@ -828,7 +879,6 @@ def test_main_attempts_both_runtimes_and_reports_partial_failure(tmp_path, monke
     monkeypatch.setenv("CODEX_LOG", str(codex_log))
     monkeypatch.setenv("CLAUDE_LOG", str(claude_log))
     monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
-    monkeypatch.setattr(module, "CODEX_INSTALLED_PLUGIN_ROOT", codex_install_root / "plugin")
     monkeypatch.setattr(sys, "argv", [str(INSTALL_PY), "--config-path", str(cfg), "--force"])
 
     rc = module.main()

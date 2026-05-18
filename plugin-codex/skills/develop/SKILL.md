@@ -14,9 +14,9 @@ Implement the plan for a harness task. Reads PLAN.md, implements changes, verifi
 
 > **Codex runtime notes** (delta from Claude develop skill — read these first):
 > - **No `Skill()` chain.** Where Claude invokes `Skill("harness:plan", task_id)` etc., Codex orchestrator reads the relevant SKILL.md inline and executes its phases as part of the same conversation. The plan / verify / close transitions still happen — they're just prose flow, not tool calls.
-> - **No `Agent(subagent_type=...)` fan-out in v1.5.** Where Claude spawns `oh-my-claudecode:executor` (per-AC parallel implementation), `harness:qa-*` (verification), `harness:dogfooder` (post-PASS dogfooding), or haiku sub-agents (test-coverage trace, adversarial review, edge-case scan), Codex runs the equivalent work inline in the orchestrator's own context. Multi-AC implementation is sequential. Multi-lens QA (qa-browser + qa-api combined) is deferred to v2; v1.5 picks the dominant lens for the diff and runs it inline. Adversarial review degrades to single-pass.
+> - **No `Agent(subagent_type=...)` fan-out in v1.5.** Where Claude spawns `oh-my-claudecode:executor` (per-AC parallel implementation), `harness:qa-*` (verification), `harness:dogfooder` (post-PASS dogfooding), or haiku sub-agents (test-coverage trace, adversarial review, edge-case scan), Codex runs the equivalent work inline in the orchestrator's own context. Multi-AC implementation is sequential. Multi-lens QA (qa-browser + qa-api combined in one concurrent batch) is deferred to v2; individual browser QA runs inline when the current Codex session exposes browser tools. Adversarial review degrades to single-pass.
 > - **No `AskUserQuestion` structured tool.** Where Claude emits an AskUserQuestion with labeled options, Codex emits the question + options as plain prose and reads the user's reply on the next turn. Options stay numbered/lettered so the user can pick them by short response (e.g. "A", "B", "1", "2").
-> - **No `mcp__chrome-devtools__*` gate on Codex.** The `qa_delegation_gate.py` PreToolUse hook still fires on Codex but the browser-MCP block has no equivalent target — Codex's browser story is Playwright MCP, deferred to v2. Until then, browser-verification phases (3.9, 4 visual-smoke, 7 browser debug, 7.7 dogfooder visual) degrade to skip with a HANDOFF "Visual Evidence: deferred — Codex Playwright MCP not yet wired" entry.
+> - **Browser tools are availability-gated on Codex.** The Claude `qa_delegation_gate.py` blocks main-session `mcp__chrome-devtools__*` calls and redirects them to `harness:qa-browser`; Codex has no Agent primitive in this skill, so the orchestrator runs `plugin-codex/agents/qa-browser.md` inline when the current session exposes browser tools such as `chrome_devtools` or a future Playwright MCP. If browser verification is required and tools or a reachable app are missing, write `write_critic_qa(lens="browser", verdict="BLOCKED_ENV", ...)` with the blocker. Do not silently replace required browser QA with CLI-only checks.
 > - **MCP tool names are bare** on Codex (`task_start`, `task_verify`, `task_close`, `write_critic_qa`, `write_handoff`, `write_doc_sync`, `update_checks`). The Claude long-form (`mcp__plugin_harness_harness__*`) does not apply.
 > - **Env var is `HARNESS_PLUGIN_ROOT`**, not `CLAUDE_PLUGIN_ROOT`. The Codex plugin install sets it; Bash blocks below use this variant.
 > - **Sub-file fallback.** This SKILL.md does NOT ship Codex-native sub-files in v1.5 (browser-verification.md, fix-first-pattern.md, parallel-fanout.md, quality-audit-pipeline.md, runtime-smoke.md, test-failure-triage.md, verification-gate.md). Where the Claude flow loads a sub-file, the Codex flow reads the same sub-file at `plugin/skills/develop/<name>.md` (Claude tree) and applies the sub-file's methodology with the runtime-substitution rules above. Codex-native sub-files are a v2 ergonomics improvement; v1.5 ships methodology parity by reference.
@@ -99,7 +99,7 @@ Phases run in strict order; each phase must complete before the next. Sub-files 
 | Missing | Phases skipped |
 |---------|----------------|
 | Linter / build / test framework / coverage tool | 3.7 / 3.8 / 4 coverage / 4.9 |
-| Codex Playwright MCP (deferred v2) | 3 visual, 3.9, 4 visual-smoke, 7 browser debug, 7.7 dogfooder visual |
+| Browser tools missing or app unreachable when browser QA is required | 3 visual, 3.9 browser smoke, 4 visual-smoke, 7 browser debug, 7.7 dogfooder visual become browser-lens `BLOCKED_ENV` evidence |
 | Dev server unreachable | 3.9 |
 | No QA_KNOWLEDGE.yaml / learnings.jsonl | 0 / 1 (first run creates them) |
 
@@ -135,7 +135,7 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 **Eureka check:** if search reveals PLAN.md's approach is suboptimal (reinventing, wrong assumption), flag as `EUREKA: AC-NNN — <discovery>` in HANDOFF under "Plan Challenges". Fire the Premise Gate conversational ask (see above) before overriding. Persist as `type:"eureka"` in `learnings.jsonl`.
 
-**Baseline screenshot (browser projects):** deferred on Codex v1.5 — see runtime-notes block at top.
+**Baseline screenshot (browser projects):** if browser tools are available in the current Codex session, capture it inline using the qa-browser methodology. If browser QA is required but unavailable, record the blocker for the browser lens; do not treat the missing screenshot as a silent skip.
 
 ### Phase 3.0: AC Dependency Analysis (sequential on Codex)
 
@@ -207,11 +207,11 @@ python3 ${HARNESS_PLUGIN_ROOT}/scripts/update_checks.py \
 
 **Per-AC test run:** `git diff --name-only HEAD~1` -> for each changed source, find test files that import/reference it -> run only those. If no tests exist for changed module, write one (Phase 3.5 rule). If PLAN.md specifies per-AC verify commands, prefer those.
 
-**Delegation rule (C-18 / Verification delegation).** The `qa_delegation_gate.py` PreToolUse hook fires on Codex as on Claude, but the MCP-tool list it blocks (`mcp__chrome-devtools__*`) has no Codex equivalent in v1.5 — the gate effectively no-ops for browser verification until Playwright MCP lands. Bash test runners (`pytest`, `npm test`, `pnpm test`, `vitest`, `cargo test`, `go test`, ...) are allowed inline as on Claude. Heavy full-suite execution is still better delegated to a downstream test step than run inline in the orchestrator's context, but the gate does not enforce this on Codex.
+**Delegation rule (C-18 / Verification delegation).** On Claude, browser MCP tools (`mcp__chrome-devtools__*`) MUST be delegated to `harness:qa-browser`; the pre-tool gate enforces that. On Codex, there is no Agent target for that delegation, so use actual tool availability: run the qa-browser methodology inline when browser tools are present, and write browser-lens `BLOCKED_ENV` when required browser verification cannot run. Bash test runners (`pytest`, `npm test`, `pnpm test`, `vitest`, `cargo test`, `go test`, ...) are allowed inline as on Claude. Heavy full-suite execution is still better handled as a downstream verification step than mixed into implementation work.
 
 Per-AC test failures -> fix immediately. These are free; only Phase 7 full-suite failures count toward the 3-cycle limit.
 
-**Per-AC visual verification** (browser projects only): deferred on Codex v1.5.
+**Per-AC visual verification** (browser projects only): run inline with available browser tools. If browser verification is required and unavailable, record the affected ACs as browser-lens `BLOCKED_ENV` evidence.
 
 ### Phase 3.3: Auto-checkpoint (post all ACs)
 
@@ -261,7 +261,7 @@ After all ACs done. Each runs only if prerequisite exists.
 
 - **3.7 Lint & Format** — run linter and formatter on `git diff --name-only` only. `--fix` where safe. Re-run per-AC tests after. Skip if none configured.
 - **3.8 Build check** — compile / typecheck the diff (or full project). Build failures are always T1 (our code). Fix immediately.
-- **3.9 Runtime smoke** — read `plugin/skills/develop/runtime-smoke.md` (Claude tree fallback). Project-type-specific (API / CLI). Browser smoke deferred to v2 (Playwright MCP).
+- **3.9 Runtime smoke** — read `plugin/skills/develop/runtime-smoke.md` (Claude tree fallback). Project-type-specific (browser / API / CLI). Browser smoke runs when browser tools are available; otherwise required browser smoke becomes browser-lens `BLOCKED_ENV`.
 
 ### Phase 4: Plan Completion Audit (inline)
 
@@ -276,7 +276,7 @@ Read `plugin/skills/develop/quality-audit-pipeline.md` (Claude tree fallback) fo
 1. **Test-coverage trace** — for each changed source, identify which test path exercises it; flag uncovered branches.
 2. **Confidence ratings** — per-AC confidence 0-10 (different axis than completeness — covers "does it work" not "did we cover the surface"). Highlight any AC <=6.
 3. **Adversarial review (single-pass)** — read the diff with a fresh adversarial framing: what would break this? What edge case did we miss? What contract did we silently change? On Claude this is a cross-model spawn (Opus -> Sonnet, Sonnet -> Haiku); on Codex v1.5 it's a same-context pass with explicit re-read. Trade-off acknowledged: lower blind-spot reset than cross-model.
-4. **Visual-smoke (deferred)** — browser-only; deferred to v2.
+4. **Visual-smoke** — browser-only; run with available browser tools or record browser-lens `BLOCKED_ENV` when required and unavailable.
 
 **Diff scope detection** (routes specialists):
 ```bash
@@ -337,7 +337,7 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 
 Read `plugin/skills/develop/verification-gate.md` (Claude tree fallback) for the full gate methodology. Runs test commands from PLAN.md, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit.
 
-**On Codex v1.5:** the orchestrator runs verification inline. Pick the dominant lens for the diff (qa-cli for libraries, qa-api for endpoints, qa-desktop for native GUI, qa-browser deferred). Run the lens's methodology in-conversation, then call `write_critic_qa` with `verdict`, `summary`, `transcript`, and optionally `lens="<lens>"`:
+**On Codex v1.5:** the orchestrator runs verification inline. Pick the required lens for the diff (qa-cli for libraries, qa-api for endpoints, qa-desktop for native GUI, qa-browser for frontend/browser work when `browser_qa_supported: true`). Run the lens's methodology in-conversation, then call `write_critic_qa` with `verdict`, `summary`, `transcript`, and optionally `lens="<lens>"`:
 
 ```
 write_critic_qa {
@@ -345,11 +345,12 @@ write_critic_qa {
   verdict: "PASS" | "FAIL" | "BLOCKED_ENV",
   summary: "<one-line>",
   transcript: "<full evidence>",
-  lens: "cli"   # or "api" / "desktop"
+  lens: "cli"   # or "api" / "desktop" / "browser"
+  manual_ux_verification: "<required and non-empty when lens is browser>"
 }
 ```
 
-Multi-lens (qa-browser + qa-api combined) is deferred to v2 — Codex 0.130.0 has no `multi_agent` ergonomic story in this skill scope. Pick the dominant lens and note the deferred lens in HANDOFF.
+Multi-lens concurrent spawning (qa-browser + qa-api combined in one batch) is deferred to v2 because Codex 0.130.0 has no `multi_agent` ergonomic story in this skill scope. That defers concurrency, not browser QA itself. If browser QA is required, run it inline as its own lens or record browser-lens `BLOCKED_ENV`; do not close on CLI/API evidence alone.
 
 **Also implements:**
 - **Transience filter** — a failure must reproduce on 2 consecutive runs to count as `failed`. Single-run failures logged as `transient` in `learnings.jsonl`, not counted toward the 3-cycle limit.
@@ -418,7 +419,7 @@ PY
 
 `SKIP_DOGFOOD` short-circuits; `RUN_DOGFOOD` runs the inline dogfooder methodology: use the product as a power user, find friction / gaps / missing workflows that QA didn't catch (because they aren't bugs). Write findings to `<task_dir>/DOGFOOD.md`. The dogfooder does NOT gate task completion.
 
-Visual dogfooder (browser screenshots) deferred to v2.
+Visual dogfooder browser screenshots follow the same availability gate: capture them when browser tools are present; otherwise record the missing browser evidence in HANDOFF.
 
 ### Phase 8: Write HANDOFF
 
@@ -438,7 +439,7 @@ Call `write_handoff` MCP with:
 10. Test Results per AC + fix history
 11. Judgment Items (Phase 3.6 ASK-classified)
 12. Debugging Notes (Phase 7 debug reports — Symptom / Root cause / Fix / Evidence / Regression / Related / Status)
-13. Visual Evidence (Codex v1.5: "deferred — Playwright MCP not yet wired" if browser-relevant; otherwise N/A)
+13. Visual Evidence / Browser QA: `done` with pages, viewports, interactions, screenshots; `blocked` with the exact missing browser tool/app condition; or `not applicable`
 14. Execution Metrics (phase timing + fix loop counts)
 15. Quality Score (weighted)
 16. Dogfood Findings — from Phase 7.7 `DOGFOOD.md`. "No dogfood findings" if skipped or clean.
@@ -489,9 +490,9 @@ Empirical port measurement of `plugin/skills/develop/SKILL.md` (500 lines source
 |-------|---|----------|
 | As-is (no edit) | 48 | Voice block, Anti-shortcut clause, Phase 5 scope-drift, Phase 6 commit ordering, Phase 8 HANDOFF schema, Phase 8.5/8.7 prose, AC completeness rubric, Iron Law (9a/9b) phrasing, fix-first taxonomy. |
 | Trivial substitution | 12 | `${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}` (15+ sites); `Edit`/`Write`/`MultiEdit` → `apply_patch` callouts; `mcp__plugin_harness_harness__*` → bare names; tool token mapping in code blocks. |
-| Restructure | 30 | Phase 3.0 fan-out → sequential pass; Phase 4.5-4.8 parallel agent pipeline → sequential inline passes; Phase 7 multi-lens QA → dominant-lens-inline + multi-lens deferred; Phase 7.7 dogfooder spawn → inline methodology; AskUserQuestion call sites (3) → conversational asks with numbered options; Confusion Protocol from AskUserQuestion gate to prose ask; Premise Gate / User Challenge structured options → prose; Model Routing table → one-paragraph degradation note. |
-| Drop | 6 | Big `allowed-tools` frontmatter list (Codex ignores); `mcp__chrome-devtools__*` C-18 enforcement details (no Codex equivalent in v1.5); `argument-hint` / `user-invocable` frontmatter keys; "haiku routing" rationale text in Phase 4. |
-| Codex-additive | 4 | Top-of-file "Codex runtime notes" block (6 bullets); sub-file fallback declaration; v2 deferral notes (Playwright MCP, multi_agent, cross-model adversarial); `apply_patch` envelope guidance in Phase 3. |
+| Restructure | 30 | Phase 3.0 fan-out → sequential pass; Phase 4.5-4.8 parallel agent pipeline → sequential inline passes; Phase 7 multi-lens QA → sequential inline lenses when needed + multi-lens concurrency deferred; Phase 7.7 dogfooder spawn → inline methodology; AskUserQuestion call sites (3) → conversational asks with numbered options; Confusion Protocol from AskUserQuestion gate to prose ask; Premise Gate / User Challenge structured options → prose; Model Routing table → one-paragraph degradation note. |
+| Drop | 6 | Big `allowed-tools` frontmatter list (Codex ignores); Claude-only `mcp__chrome-devtools__*` C-18 delegation enforcement details; `argument-hint` / `user-invocable` frontmatter keys; "haiku routing" rationale text in Phase 4. |
+| Codex-additive | 4 | Top-of-file "Codex runtime notes" block (6 bullets); sub-file fallback declaration; browser-tool availability gate; v2 deferral notes for multi_agent and cross-model adversarial; `apply_patch` envelope guidance in Phase 3. |
 
 **Dominant deltas:**
 - Phase 3.0 + Phase 4 are the heaviest restructures (combined ~22% of total). Both center on the absence of an `Agent` fan-out primitive in Codex 0.130.0. v2 should re-port these phases if Codex `multi_agent` ergonomics improve.
@@ -501,7 +502,7 @@ Empirical port measurement of `plugin/skills/develop/SKILL.md` (500 lines source
 **Numbers reconcile with v1.5 spike (60% weighted-mean mechanical).** Develop is heavier on restructure than setup/run because it has the most fan-out surface (per-AC parallel + quality-audit parallel + multi-lens QA + dogfooder all converge here).
 
 **Sub-files NOT ported in v1.5 (deferred to v2):**
-- `browser-verification.md` — depends on Playwright MCP wiring
+- `browser-verification.md` — falls back to Claude tree; run the methodology inline when Codex browser tools are available
 - `fix-first-pattern.md` — methodology is runtime-agnostic; falls back to Claude tree
 - `parallel-fanout.md` — Claude-only concept; on Codex degraded to "sequential is always the schedule"
 - `quality-audit-pipeline.md` — falls back to Claude tree, methodology applied inline

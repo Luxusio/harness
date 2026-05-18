@@ -34,8 +34,10 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -47,7 +49,6 @@ REPO_ROOT = Path(__file__).resolve().parent
 PLUGIN_ROOT = REPO_ROOT / "plugin"
 PLUGIN_CODEX_ROOT = REPO_ROOT / "plugin-codex"
 CODEX_INSTALL_ROOT = Path.home() / ".codex" / "harness"
-CODEX_INSTALLED_PLUGIN_ROOT = CODEX_INSTALL_ROOT / "plugin"
 CODEX_PLUGIN_ID = "harness@harness"
 CODEX_PLUGIN_MARKETPLACE = "harness"
 CODEX_PLUGIN_NAME = "harness"
@@ -284,22 +285,15 @@ def _copytree_clean(src: Path, dst: Path) -> None:
     )
 
 
-def _copytree_clean_for_codex_runtime(src: Path, dst: Path) -> None:
-    if dst.exists():
-        shutil.rmtree(dst)
-    shutil.copytree(
-        src,
-        dst,
-        ignore=shutil.ignore_patterns(
-            ".claude-plugin",
-            "__pycache__",
-            "*.pyc",
-            ".pytest_cache",
-        ),
-    )
+def _codex_hooks_config(plugin_root: Path) -> dict:
+    root = plugin_root.resolve()
+    hooks = {
+        "SessionStart": root / "scripts" / "hook_session_start.py",
+        "PreToolUse": root / "scripts" / "hook_pre_tool_use.py",
+        "UserPromptSubmit": root / "scripts" / "hook_user_prompt_submit.py",
+        "PostToolUse": root / "scripts" / "hook_post_tool_use.py",
+    }
 
-
-def _codex_hooks_config(shared_plugin_root: Path) -> dict:
     return {
         "hooks": {
             "SessionStart": [
@@ -307,7 +301,7 @@ def _codex_hooks_config(shared_plugin_root: Path) -> dict:
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "./scripts/hook_session_start.sh",
+                            "command": f"{shlex.quote(_python_cmd())} {shlex.quote(str(hooks['SessionStart']))}",
                             "timeout": 20,
                             "statusMessage": "Loading harness context",
                         }
@@ -319,7 +313,7 @@ def _codex_hooks_config(shared_plugin_root: Path) -> dict:
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "./scripts/hook_pre_tool_use.sh",
+                            "command": f"{shlex.quote(_python_cmd())} {shlex.quote(str(hooks['PreToolUse']))}",
                             "timeout": 5,
                             "statusMessage": "Checking harness gates",
                         }
@@ -331,7 +325,7 @@ def _codex_hooks_config(shared_plugin_root: Path) -> dict:
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "./scripts/hook_user_prompt_submit.sh",
+                            "command": f"{shlex.quote(_python_cmd())} {shlex.quote(str(hooks['UserPromptSubmit']))}",
                             "timeout": 3,
                             "statusMessage": "Loading harness memory",
                         }
@@ -344,7 +338,7 @@ def _codex_hooks_config(shared_plugin_root: Path) -> dict:
                     "hooks": [
                         {
                             "type": "command",
-                            "command": "./scripts/hook_post_tool_use.sh",
+                            "command": f"{shlex.quote(_python_cmd())} {shlex.quote(str(hooks['PostToolUse']))}",
                             "timeout": 3,
                             "statusMessage": "Checking harness routing",
                         }
@@ -355,26 +349,167 @@ def _codex_hooks_config(shared_plugin_root: Path) -> dict:
     }
 
 
-def _write_codex_hook_wrappers(codex_plugin_root: Path, shared_plugin_root: Path) -> None:
-    wrapper_dir = codex_plugin_root / "scripts"
-    wrapper_dir.mkdir(parents=True, exist_ok=True)
-    py = _python_cmd()
-    plugin_root = str(shared_plugin_root.resolve())
-    mapping = {
-        "hook_session_start.sh": "hook_session_start.py",
-        "hook_pre_tool_use.sh": "hook_pre_tool_use.py",
-        "hook_user_prompt_submit.sh": "hook_user_prompt_submit.py",
-        "hook_post_tool_use.sh": "hook_post_tool_use.py",
+_CODEX_HOOK_EVENT_LABELS = {
+    "SessionStart": "session_start",
+    "PreToolUse": "pre_tool_use",
+    "UserPromptSubmit": "user_prompt_submit",
+    "PostToolUse": "post_tool_use",
+}
+
+
+def _canonical_json(value):
+    if isinstance(value, dict):
+        return {key: _canonical_json(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_canonical_json(item) for item in value]
+    return value
+
+
+def _codex_hook_trust_hash(event_name: str, entry: dict, hook: dict) -> str:
+    """Reproduce Codex's normalized command-hook trust hash.
+
+    Codex does not currently expose a public CLI for installers to trust hooks.
+    The TUI stores a hash of the normalized hook identity in config.toml; this
+    mirrors that identity for harness-owned plugin hooks only.
+    """
+    identity = {
+        "event_name": _CODEX_HOOK_EVENT_LABELS[event_name],
+        "hooks": [
+            {
+                "async": False,
+                "command": hook["command"],
+                "timeout": max(1, int(hook.get("timeout") or 600)),
+                "type": "command",
+            }
+        ],
     }
-    for wrapper_name, script_name in mapping.items():
-        wrapper = wrapper_dir / wrapper_name
-        wrapper.write_text(
-            "#!/bin/sh\n"
-            f"export HARNESS_PLUGIN_ROOT='{plugin_root}'\n"
-            f"export CLAUDE_PLUGIN_ROOT='{plugin_root}'\n"
-            f"exec '{py}' '{plugin_root}/scripts/{script_name}'\n"
-        )
-        wrapper.chmod(0o755)
+    if entry.get("matcher"):
+        identity["matcher"] = entry["matcher"]
+    if hook.get("statusMessage"):
+        identity["hooks"][0]["statusMessage"] = hook["statusMessage"]
+    serialized = json.dumps(_canonical_json(identity), separators=(",", ":"))
+    return "sha256:" + hashlib.sha256(serialized.encode()).hexdigest()
+
+
+def _codex_hook_trust_state(plugin_id: str, hooks_config: dict) -> dict[str, str]:
+    state: dict[str, str] = {}
+    hooks = hooks_config.get("hooks", {})
+    for event_name, entries in hooks.items():
+        if event_name not in _CODEX_HOOK_EVENT_LABELS:
+            continue
+        for group_index, entry in enumerate(entries):
+            for handler_index, hook in enumerate(entry.get("hooks", [])):
+                if hook.get("type") != "command":
+                    continue
+                key = (
+                    f"{plugin_id}:hooks.json:"
+                    f"{_CODEX_HOOK_EVENT_LABELS[event_name]}:"
+                    f"{group_index}:{handler_index}"
+                )
+                state[key] = _codex_hook_trust_hash(event_name, entry, hook)
+    return state
+
+
+def _toml_escape_basic(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _existing_hook_state_enabled_lines(content: str, keys: set[str]) -> dict[str, str]:
+    lines = content.splitlines()
+    enabled: dict[str, str] = {}
+    wanted_tables = {f'[hooks.state."{_toml_escape_basic(key)}"]': key for key in keys}
+    i = 0
+    while i < len(lines):
+        key = wanted_tables.get(lines[i].strip())
+        if not key:
+            i += 1
+            continue
+        i += 1
+        while i < len(lines) and not lines[i].strip().startswith("["):
+            stripped = lines[i].strip()
+            if stripped.startswith("enabled "):
+                enabled[key] = stripped
+            i += 1
+    return enabled
+
+
+def _strip_codex_hook_state_tables(content: str, keys: set[str]) -> str:
+    if not keys:
+        return content
+    target_tables = {f'[hooks.state."{_toml_escape_basic(key)}"]' for key in keys}
+    lines = content.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        if lines[i].strip() in target_tables:
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("["):
+                i += 1
+            continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out).rstrip("\n") + ("\n" if out else "")
+
+
+def _dedupe_hooks_state_parent_table(content: str) -> str:
+    """Keep at most one bare [hooks.state] parent table.
+
+    Codex itself may already have emitted the parent table. Re-emitting it makes
+    TOML parsing fail with a duplicate-key error, so installers must only keep
+    the first occurrence.
+    """
+    out: list[str] = []
+    seen = False
+    for line in content.splitlines():
+        if line.strip() == "[hooks.state]":
+            if seen:
+                continue
+            seen = True
+        out.append(line)
+    return "\n".join(out).rstrip("\n") + ("\n" if out else "")
+
+
+def _codex_hook_trust_block(state: dict[str, str], enabled_lines: dict[str, str] | None = None) -> str:
+    if not state:
+        return ""
+    enabled_lines = enabled_lines or {}
+    lines = [
+        "# harness-owned Codex hook trust state",
+        "# Recomputed by install.py so harness hook updates do not require manual /hooks review.",
+        "",
+    ]
+    for key, trusted_hash in sorted(state.items()):
+        lines.append(f'[hooks.state."{_toml_escape_basic(key)}"]')
+        if key in enabled_lines:
+            lines.append(enabled_lines[key])
+        lines.append(f'trusted_hash = "{_toml_escape_basic(trusted_hash)}"')
+        lines.append("")
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def install_codex_hook_trust_state(
+    config_path: str | Path,
+    hooks_config: dict,
+    plugin_id: str = CODEX_PLUGIN_ID,
+) -> dict:
+    cfg = Path(config_path)
+    if not cfg.exists():
+        return {"ok": False, "message": f"Codex config not found: {cfg}", "state": {}}
+    state = _codex_hook_trust_state(plugin_id, hooks_config)
+    if not state:
+        return {"ok": True, "message": "no Codex hook trust state to write", "state": state}
+    existing = cfg.read_text()
+    enabled_lines = _existing_hook_state_enabled_lines(existing, set(state))
+    stripped = _dedupe_hooks_state_parent_table(
+        _strip_codex_hook_state_tables(existing, set(state))
+    ).rstrip("\n")
+    block = _codex_hook_trust_block(state, enabled_lines)
+    cfg.write_text((stripped + "\n\n" + block).lstrip("\n"))
+    return {
+        "ok": True,
+        "message": f"trusted {len(state)} Codex harness hooks in {cfg}",
+        "state": state,
+    }
 
 
 def _codex_mcp_config(shared_plugin_root: Path) -> dict:
@@ -415,12 +550,13 @@ def sync_claude_payload(install_root: Path | None = None) -> Path:
 
 
 def sync_codex_payload(install_root: Path | None = None) -> Path:
-    """Copy the Codex runtime payload under ~/.codex and return plugin/ root."""
+    """Copy the Codex plugin source under ~/.codex and return its plugin root."""
     if install_root is None:
         install_root = CODEX_INSTALL_ROOT
     install_root.mkdir(parents=True, exist_ok=True)
     for legacy_path in (
         install_root / "plugin-codex",
+        install_root / "plugin",
         install_root / ".codex-plugin",
         install_root / "marketplace.json",
     ):
@@ -429,15 +565,15 @@ def sync_codex_payload(install_root: Path | None = None) -> Path:
                 shutil.rmtree(legacy_path)
             else:
                 legacy_path.unlink()
-    _copytree_clean_for_codex_runtime(PLUGIN_ROOT, install_root / "plugin")
     _copytree_clean(PLUGIN_CODEX_ROOT, install_root / "plugins" / "harness")
     codex_plugin_root = install_root / "plugins" / "harness"
-    _write_codex_hook_wrappers(codex_plugin_root, install_root / "plugin")
+    _copytree_clean(PLUGIN_ROOT / "scripts", codex_plugin_root / "scripts")
+    _copytree_clean(PLUGIN_ROOT / "mcp", codex_plugin_root / "mcp")
     (codex_plugin_root / "hooks.json").write_text(
-        json.dumps(_codex_hooks_config(install_root / "plugin"), indent=2) + "\n"
+        json.dumps(_codex_hooks_config(codex_plugin_root), indent=2) + "\n"
     )
     (codex_plugin_root / ".mcp.json").write_text(
-        json.dumps(_codex_mcp_config(install_root / "plugin"), indent=2) + "\n"
+        json.dumps(_codex_mcp_config(codex_plugin_root), indent=2) + "\n"
     )
     marketplace_dir = install_root / ".agents" / "plugins"
     marketplace_dir.mkdir(parents=True, exist_ok=True)
@@ -457,7 +593,7 @@ def sync_codex_payload(install_root: Path | None = None) -> Path:
         ],
     }
     (marketplace_dir / "marketplace.json").write_text(json.dumps(marketplace, indent=2) + "\n")
-    return install_root / "plugin"
+    return codex_plugin_root
 
 
 def _codex_home_for_config(config_path: str | Path | None) -> Path:
@@ -489,6 +625,12 @@ def install_codex_plugin_cache(source_root: Path, codex_home: Path) -> Path:
         shutil.rmtree(target.parent)
     target.parent.mkdir(parents=True, exist_ok=True)
     _copytree_clean(source_root, target)
+    (target / "hooks.json").write_text(
+        json.dumps(_codex_hooks_config(target), indent=2) + "\n"
+    )
+    (target / ".mcp.json").write_text(
+        json.dumps(_codex_mcp_config(target), indent=2) + "\n"
+    )
     return target
 
 
@@ -514,17 +656,26 @@ def install_codex(*, dry_run: bool, force: bool,
     # Step 2: copy runtime payload into Codex's home so config never points at
     # a transient project checkout.
     if dry_run:
-        installed_plugin_root = CODEX_INSTALLED_PLUGIN_ROOT
+        source_plugin_root = CODEX_INSTALL_ROOT / "plugins" / CODEX_PLUGIN_NAME
         steps.append(f"would sync plugin payload to {CODEX_INSTALL_ROOT}")
     else:
-        installed_plugin_root = sync_codex_payload()
+        source_plugin_root = sync_codex_payload()
         steps.append(f"synced plugin payload to {CODEX_INSTALL_ROOT}")
 
     codex_home = _codex_home_for_config(config_path)
     codex_plugin_source_root = CODEX_INSTALL_ROOT / "plugins" / CODEX_PLUGIN_NAME
+    cached_plugin_root = (
+        codex_home
+        / "plugins"
+        / "cache"
+        / CODEX_PLUGIN_MARKETPLACE
+        / CODEX_PLUGIN_NAME
+        / _codex_plugin_version(source_plugin_root if not dry_run else PLUGIN_CODEX_ROOT)
+    )
     if dry_run:
         steps.append(f"would install Codex plugin cache entry {CODEX_PLUGIN_ID}")
         steps.append("would install Codex plugin-local hooks.json")
+        steps.append("would refresh Codex hook trust state for harness plugin hooks")
     else:
         cached_plugin_root = install_codex_plugin_cache(codex_plugin_source_root, codex_home)
         steps.append(f"installed Codex plugin cache entry {CODEX_PLUGIN_ID} at {cached_plugin_root}")
@@ -545,14 +696,14 @@ def install_codex(*, dry_run: bool, force: bool,
 
     # Step 5: TOML merge via library API
     if dry_run:
-        snippet_preview = emit_codex_config(str(installed_plugin_root), config_path).splitlines()[:5]
+        snippet_preview = emit_codex_config(str(cached_plugin_root), config_path).splitlines()[:5]
         steps.append("would merge [plugins.\"harness@harness\"] + [mcp_servers.harness] "
                      f"into {config_path or '~/.codex/config.toml'}")
         steps.append("  preview: " + " | ".join(snippet_preview))
         return InstallResult("codex", True,
                              "dry-run — would install Codex (steps above)", steps)
     result = emit_and_install_codex_config(
-        str(installed_plugin_root),
+        str(cached_plugin_root),
         config_path=config_path,
         force=force,
     )
@@ -560,6 +711,14 @@ def install_codex(*, dry_run: bool, force: bool,
         return InstallResult("codex", False, result["message"], steps,
                              backup_path=result["backup_path"])
     steps.append(result["message"])
+    trust_result = install_codex_hook_trust_state(
+        config_path or DEFAULT_CODEX_CONFIG_PATH,
+        _codex_hooks_config(cached_plugin_root),
+    )
+    if not trust_result["ok"]:
+        return InstallResult("codex", False, trust_result["message"],
+                             steps, backup_path=result["backup_path"])
+    steps.append(trust_result["message"])
     rc, out, err = _run(["codex", "features", "enable", "plugin_hooks"], dry_run)
     if rc != 0:
         return InstallResult("codex", False,

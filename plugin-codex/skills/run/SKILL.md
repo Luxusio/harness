@@ -13,7 +13,7 @@ Orchestrate the full harness development cycle for a task.
 
 > **Codex runtime notes** (delta from Claude):
 > - Claude's `Skill("harness:plan", task_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. Effect is identical (plan -> develop -> verify -> close), but the chain is sequential prose, not tool calls.
-> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` multi-spawn for QA has no Codex equivalent in v1.5. Codex side runs QA inline (the orchestrator itself does the verification, calls `write_critic_qa` MCP tool, reads the verdict). Parallel multi-lens QA (browser + api) is deferred to v2.
+> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` multi-spawn for QA has no Codex equivalent in v1.5. Codex side runs QA inline (the orchestrator itself does the verification, calls `write_critic_qa` MCP tool, reads the verdict). Parallel multi-lens QA (browser + api in one concurrent batch) is deferred to v2; browser QA itself is not deferred when browser tools are available in the current Codex session.
 > - MCP tool names on Codex use bare form (`task_start`, `task_verify`, `task_close`, `write_critic_qa`) — NOT the Claude `mcp__plugin_harness_harness__*` prefix form. Where this skill mentions a prefixed name, read it as the bare form.
 > - `${CLAUDE_PLUGIN_ROOT}` is not injected on Codex. Use `${HARNESS_PLUGIN_ROOT}` (set by the Codex plugin install).
 > - AskUserQuestion (Phase 4 FAIL retry) is conversational prose on Codex — emit the question + options, read the reply from the next user turn.
@@ -48,7 +48,7 @@ On Codex side the plan skill ships in degraded form — single-voice (no Voice A
 
 Read `plugin-codex/skills/develop/SKILL.md` and execute its phases inline, passing `task_id`. The develop skill on Codex is a hand-port of the Claude source (`plugin/skills/develop/SKILL.md`) under the MCP-only-sharing policy (spike-report §3.6) — same canonical-loop methodology, with `Agent` fan-out collapsed to sequential execution, `Skill()` chains rendered as inline-read sub-skill references, and `AskUserQuestion` gates rendered as conversational prose asks. Phase 0 through Phase 8.7 parity is preserved. Develop writes HANDOFF.md + DOC_SYNC.md to the task_dir. On BLOCKED: stop and report.
 
-Multi-lens parallel QA (qa-browser + qa-api in one batch) is the one piece still deferred to v2 — pick the dominant lens for the diff. Browser MCP verification is also deferred until Codex Playwright MCP lands. Both deferrals are documented in the develop SKILL.md runtime-notes block.
+Multi-lens parallel QA (qa-browser + qa-api in one batch) is the one piece still deferred to v2. Browser MCP verification is availability-gated: if the current Codex session exposes browser tools (for example `chrome_devtools` or a future Playwright MCP), run the qa-browser methodology inline; if browser verification is required but no browser tool or reachable app exists, write a browser-lens `BLOCKED_ENV` verdict instead of silently falling back to CLI-only QA.
 
 On completion: HANDOFF.md and DOC_SYNC.md exist in task_dir. If BLOCKED: stop, report, ask user.
 
@@ -57,7 +57,18 @@ On completion: HANDOFF.md and DOC_SYNC.md exist in task_dir. If BLOCKED: stop, r
 Read `doc/harness/manifest.yaml` for project type. On Codex v1.5, run the appropriate QA inline (no Agent fan-out).
 
 **Strategy selection:**
-- **qa-browser** — NOT supported on Codex side in v1.5 (no chrome-devtools MCP via this plugin manifest; Playwright MCP path is v2). If manifest has `browser_qa_supported: true` AND diff contains frontend files, surface a BLOCKED_ENV: "Browser QA is Claude-only on v1.5. Run `claude $/harness:qa-browser <task>` or accept partial QA via qa-api / qa-cli only."
+- **qa-browser** — required when `manifest.qa.browser_qa_supported: true` AND the diff contains frontend files (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). On Codex, check the actual session tool surface first. If browser tools are available, read `plugin-codex/agents/qa-browser.md` and run that methodology inline, including real page navigation/interactions/screenshots where the tools support it. Call:
+  ```
+  write_critic_qa {
+    task_id: "<task_id>",
+    lens: "browser",
+    verdict: "PASS" | "FAIL" | "BLOCKED_ENV",
+    summary: "<one-line>",
+    transcript: "<browser evidence>",
+    manual_ux_verification: "<non-empty description of the pages, viewports, and interactions actually checked>"
+  }
+  ```
+  If browser QA is required but no browser tool is available, the dev server cannot be reached, or a required browser setup is impossible, call the same browser lens with `verdict: "BLOCKED_ENV"` and a transcript naming the exact missing condition. Do not downgrade the task to qa-cli only.
 - `desktop_qa_supported: true` → also Claude-only in v1.5. Same BLOCKED_ENV path.
 - `type: api` or diff contains route/endpoint files → qa-api inline (orchestrator does the API verification using shell/curl).
 - `type: cli` or `type: library` → qa-cli inline (orchestrator runs test suite + lint via shell tool).
@@ -67,12 +78,12 @@ Order: desktop branch before `type: cli` fallback so a desktop app declared as `
 QA inline pattern on Codex:
 
 ```
-# Read qa-cli or qa-api agent prompt from the Claude tree (sub-file ports are v2 scope)
-cat ${HARNESS_PLUGIN_ROOT}/agents/qa-cli.md   # or qa-api.md
+# Read qa-browser, qa-cli, or qa-api agent prompt from the Codex plugin tree
+cat ${HARNESS_PLUGIN_ROOT}/agents/qa-cli.md   # or qa-api.md / qa-browser.md
 # Follow the four-roles checklist inline (operation, intent, UX/design, runtime)
 # Run the verification commands the agent prompt prescribes
 # Call:
-write_critic_qa { lens: "cli", verdict: "PASS" | "FAIL" | "BLOCKED_ENV", summary, transcript }
+write_critic_qa { lens: "cli|api|browser", verdict: "PASS" | "FAIL" | "BLOCKED_ENV", summary, transcript, manual_ux_verification? }
 ```
 
 After write_critic_qa, check the returned merged `runtime_verdict`:

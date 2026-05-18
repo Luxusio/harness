@@ -55,7 +55,7 @@ def test_codex_plugin_manifest_points_at_plugin_local_hooks(tmp_path):
     install_root = tmp_path / "codex" / "harness"
     plugin_root = module.sync_codex_payload(install_root)
     hooks_path = install_root / "plugins" / "harness" / "hooks.json"
-    assert plugin_root == install_root / "plugin"
+    assert plugin_root == install_root / "plugins" / "harness"
     assert hooks_path.is_file()
     manifest = module.json.loads(
         (install_root / "plugins" / "harness" / ".codex-plugin" / "plugin.json").read_text()
@@ -64,10 +64,8 @@ def test_codex_plugin_manifest_points_at_plugin_local_hooks(tmp_path):
     assert manifest["mcpServers"] == "./.mcp.json"
     hooks = module.json.loads(hooks_path.read_text())["hooks"]
     assert set(hooks) == {"SessionStart", "PreToolUse", "UserPromptSubmit", "PostToolUse"}
-    assert "./scripts/hook_session_start.sh" in hooks_path.read_text()
-    wrapper = install_root / "plugins" / "harness" / "scripts" / "hook_session_start.sh"
-    assert wrapper.is_file()
-    assert str(plugin_root / "scripts" / "hook_session_start.py") in wrapper.read_text()
+    assert str(plugin_root / "scripts" / "hook_session_start.py") in hooks_path.read_text()
+    assert "hook_session_start.sh" not in hooks_path.read_text()
     mcp = module.json.loads((install_root / "plugins" / "harness" / ".mcp.json").read_text())
     assert mcp["mcpServers"]["harness"]["command"] == module._python_cmd()
     assert mcp["mcpServers"]["harness"]["args"] == [str(plugin_root / "mcp" / "harness_server.py")]

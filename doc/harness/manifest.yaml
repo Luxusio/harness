@@ -9,14 +9,14 @@ languages: [python, markdown]
 
 # --- Top-level runtime commands ---
 dev_command: ""
-test_command: "python3 -m pytest tests/ -x --tb=short"
+test_command: "uv run pytest tests/ -x --tb=short"
 build_command: ""
 smoke_command: ""
 healthcheck_command: ""
 
 # --- Verify commands (MCP task_verify is authoritative; these are CLI fallback) ---
 verify_commands:
-  - python3 -m pytest tests/
+  - uv run pytest tests/
 
 # --- QA ---
 qa:
