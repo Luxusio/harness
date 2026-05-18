@@ -7,7 +7,9 @@ dependencies = []
 [dependency-groups]
 dev = [
     "pytest>=9.0.0",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ["-n", "auto", "--dist", "worksteal"]

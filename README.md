@@ -124,6 +124,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `retro.py` | Weekly retrospective (git + learnings + health) | `doc/harness/retros/` |
 | `qa_codifier.py` | Parses QA transcripts → regression tests under `tests/regression/` | — |
 | `golden_replay.py` | Record/replay runtime smoke runs for deterministic regression | `doc/harness/replays/` |
+| `runtime_services.py` | Start/status/log helper for manifest-declared runtime services | task-local audit evidence |
 | `update_checks.py` | Atomic CHECKS.yaml AC status transitions (plan-first) | task-local |
 | `write_plan_artifact.py` | CLI writer for PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md | task-local |
 | `hygiene_scan.py` | SessionStart auto-hygiene: Tier A/B auto-apply + doc archive pass | `doc/harness/.maintain-pending.json` |

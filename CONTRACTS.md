@@ -16,9 +16,11 @@ Two pressures govern this harness — in this order:
    lighter — it is broken. Skipping the canonical loop, writing a protected
    artifact without its owner, closing with stale PASS, or bypassing the
    prewrite gate are hard failures regardless of task size.
-2. **Within that constraint, pick the lightest path.** Fewer phases, shorter
-   SKILL files, fewer parallel agents, fewer hooks — all preferred when they
-   don't break (1). Complexity requires justification; simplicity is default.
+2. **Within that constraint, pick the lightest path that preserves throughput.**
+   Fewer phases, shorter SKILL files, and fewer hooks are preferred when they
+   don't break (1). Parallel agents are preferred for independent implementation
+   and verification lanes because serialized work is the expensive path.
+   Complexity requires justification; simplicity is default.
 
 Resolving the tension:
 - If a rule feels too heavy, **fix the rule** (edit this file, the SKILL, the
@@ -185,12 +187,15 @@ hook. The harness must degrade gracefully.
 
 ### C-13
 
-**Title:** Weight budget — skills and agent spawns bounded.
+**Title:** Weight budget — skills bounded, agent fanout batched.
 **When:** Adding or editing a SKILL.md; spawning parallel agents in a phase.
 **Enforced by:** `plugin/scripts/contract_lint.py --check-weight` —
 scans `plugin/skills/*/SKILL.md`, soft-warns any file >500 lines.
-Limits: SKILL.md ≤ 500 lines; sub-files read once per phase; parallel
-agents = 1 by default, more only with explicit manifest/diff trigger.
+Limits: SKILL.md ≤ 500 lines; sub-files read once per phase. Develop fanout is
+parallel-first: Phase 3 independent ACs, Phase 4.5-4.8 quality agents, Phase 7
+QA lenses, and Phase 7.7 dogfooder follow `plugin/skills/develop/parallel-fanout.md`.
+Agent batches are capped there; do not replace a required fanout with a single
+coordinator lane to satisfy this weight budget.
 **On violation:** soft-warn.
 **Why:** Harness instability grows super-linearly with loop size. Every
 extra phase is a new failure point.
@@ -273,9 +278,9 @@ Staleness gate (2026-05-14) closes the second loophole: a verdict from an EARLIE
 
 ### C-18
 
-**Title:** Verification delegation — main session never drives browser MCP tools inline.
-**When:** Any `mcp__chrome-devtools__*` tool invocation from the main (orchestrator) session (e.g. `take_snapshot`, `take_screenshot`, `evaluate_script`, `navigate_page`, `click`, `fill`).
-**Enforced by:** `plugin/scripts/qa_delegation_gate.py` (PreToolUse, no matcher — script self-filters by `tool_name` prefix `mcp__chrome-devtools__`). The gate allows delegated `harness:qa-browser` calls, then emits a deny envelope whose `permissionDecisionReason` surfaces as a system-reminder so non-delegated callers self-redirect to `Agent(subagent_type='harness:qa-browser')`. qa-browser detection prefers explicit agent fields when the runtime exposes them and falls back to a capped `transcript_path` prologue check for the qa-browser agent prompt. Bypass: `HARNESS_SKIP_QA_DELEGATION=1` one-shot. Bash test runners (`pytest`, `npm test`, `vitest`, `pnpm test`, `cargo test`, `go test`, `jest`, `mocha`, `rspec`, `phpunit`, …) are intentionally NOT blocked — single PASS/FAIL lines are legitimate inline use; the previous Bash regex matcher fired false-positives and was narrowed 2026-05-14. Network probes (`curl`, `wget`, `httpie`) and DB probes (`psql -c`, `mysql -e`, `alembic`) also remain unblocked.
+**Title:** Verification delegation — main session never drives browser MCP or full-suite verification inline.
+**When:** Any `mcp__chrome-devtools__*` tool invocation from the main (orchestrator) session (e.g. `take_snapshot`, `take_screenshot`, `evaluate_script`, `navigate_page`, `click`, `fill`), or Phase 7 full-suite verification.
+**Enforced by:** `plugin/scripts/qa_delegation_gate.py` (PreToolUse, no matcher — script self-filters by `tool_name` prefix `mcp__chrome-devtools__`). The gate allows delegated `harness:qa-browser` calls, then emits a deny envelope whose `permissionDecisionReason` surfaces as a system-reminder so non-delegated callers self-redirect to `Agent(subagent_type='harness:qa-browser')`. qa-browser detection prefers explicit agent fields when the runtime exposes them and falls back to a capped `transcript_path` prologue check for the qa-browser agent prompt. Bypass: `HARNESS_SKIP_QA_DELEGATION=1` one-shot. Bash test runners (`pytest`, `npm test`, `vitest`, `pnpm test`, `cargo test`, `go test`, `jest`, `mocha`, `rspec`, `phpunit`, …) are not hook-blocked because targeted per-AC and debug reruns are legitimate inline use; Phase 7 full-suite runs MUST be delegated to qa-* lenses and spawned in parallel when multiple lenses apply. Network probes (`curl`, `wget`, `httpie`) and DB probes (`psql -c`, `mysql -e`, `alembic`) also remain unblocked for targeted diagnostics.
 **On violation:** soft-warn. WARN logs to `learnings.jsonl` `type=qa-delegation-warn` each fire; weekly retro reads frequency to decide v2 escalation.
 **Why:** Browser MCP payloads (DOM snapshots, screenshots, evaluate output) bloat main context with thousands of structured tokens per call. qa-browser isolates browser verification and writes structured findings to `CRITIC__qa.md` — the orchestrator reads only the verdict. Evidence: 2026-05-13 user-observed catchy-secrets session where main agent ran `chrome-devtools` inline and stalled mid-task; user feedback 2026-05-14 narrowed scope to MCP-only after the Bash matcher fired on legitimate `pytest`/`vitest` use.
 

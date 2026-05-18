@@ -1,6 +1,6 @@
 ---
 name: develop
-description: Implement PLAN.md. Orchestrates per-AC implementation, quality audit, verification gate, and HANDOFF generation. Uses parallel agents for quality phases and haiku for mechanical work. Detail lives in sub-files — this file is the orchestration layer.
+description: Implement PLAN.md. Orchestrates per-AC implementation, quality audit, verification gate, and HANDOFF generation. Uses aggressive parallel agents for implementation, quality, and verification phases. Detail lives in sub-files — this file is the orchestration layer.
 argument-hint: <task-id>
 user-invocable: true
 allowed-tools: Read, Glob, Grep, Bash, Edit, Write, Agent, Skill, AskUserQuestion, mcp__harness__task_start, mcp__harness__task_context, mcp__harness__write_handoff, mcp__harness__write_doc_sync, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__new_page, mcp__chrome-devtools__select_page, mcp__chrome-devtools__emulate, mcp__chrome-devtools__click, mcp__chrome-devtools__fill, mcp__chrome-devtools__press_key, mcp__chrome-devtools__type_text, mcp__chrome-devtools__hover, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__lighthouse_audit
@@ -134,9 +134,11 @@ or `sequential-small-task`. Fill the table before editing files. If the table ha
 two or more independent `Agent(...)` rows, spawn those executors in one assistant
 message before doing local implementation work.
 
+**Default posture: parallel-first.** Assume every AC, QA lens, quality audit, and verification command can run in a subagent unless the dependency matrix proves otherwise. The coordinator's job is to split work, spawn siblings together, keep shared ledgers serialized, and merge. Inline work is reserved for sequential preludes, dependency-bound followups, and tiny evidenced exceptions.
+
 **Component-independent (definition for this phase):** two ACs are component-independent iff (a) their PLAN target file sets are disjoint, OR (b) shared files are factored into a dedicated helper-extract AC that runs first (sequential prelude → parallel consumers).
 
-**Enforcement (N>=2 component-independent ACs):** when the matrix yields two or more ACs that are pairwise component-independent, the orchestrator MUST issue N parallel Agent calls in a single assistant message. Explicit additional triggers (always fanout, even at N=2):
+**Enforcement (N>=2 component-independent ACs):** when the matrix yields two or more ACs that are pairwise component-independent, the orchestrator MUST issue N parallel Agent calls in a single assistant message. Treat this as the normal path, not an optimization. Explicit additional triggers (always fanout, even at N=2):
 
 - **API↔frontend split** — PLAN AC matrix declares both backend/API files (`*api*`, `*routes/*`, `*endpoint*`, `*graphql*`) and frontend files (`*.tsx/.jsx/.vue/.svelte/.html/.css/.scss`). Contract-first → parallel consumers.
 - **Helper-extract-first** — PLAN explicitly contains a helper-extraction AC. Run that extract AC sequentially first, then parallel-fanout the consumer ACs.
@@ -144,20 +146,21 @@ message before doing local implementation work.
 **Helper-extract-first guard.** The extract trigger fires ONLY when the extract is already a declared AC in PLAN.md. Mid-task "extract while I'm here" is scope creep blocked by Phase 5. If a fanout decision *would* require extracting a helper from shared files but no such AC exists, the trigger does not fire — run sequentially and surface the missing AC as a Plan Challenge in HANDOFF for the next plan cycle.
 
 **Small-task edge case.** N=2 ACs where total edit volume is genuinely trivial
-(target estimate <20 changed lines combined and <30 seconds of editing) may use
+(target estimate <10 changed lines combined and <15 seconds of editing) may use
 `sequential-small-task`. Record the concrete estimate in the lane table and log
 `parallel-trigger-skipped` to `learnings.jsonl` with `reason:"small-task"`,
 `ac_count`, `estimated_lines`, and `estimated_seconds`. Default is parallel;
-sequential is the evidenced exception.
+sequential is the evidenced exception. User requests for speed or aggressive
+parallelism disable this edge case for the current task.
 
 Inline spawn template (copyable; one block per AC, ALL in one assistant turn):
 
 ```
-Agent(name="<task_id>:AC-NNN", subagent_type="oh-my-claudecode:executor",
+Agent(name="<task_id>:AC-NNN", subagent_type="harness:ac-worker",
       prompt="Implement AC-NNN per PLAN.md target files <list>. Write findings to <task_dir>/audit/AC-NNN.executor.md. Do not edit PROGRESS.md or CHECKS.yaml.")
-Agent(name="<task_id>:AC-001", subagent_type="oh-my-claudecode:executor",
+Agent(name="<task_id>:AC-001", subagent_type="harness:ac-worker",
       prompt="Implement AC-001 per PLAN.md target files <list>. Write findings to <task_dir>/audit/AC-001.executor.md. Do not edit PROGRESS.md or CHECKS.yaml.")
-Agent(name="<task_id>:AC-002", subagent_type="oh-my-claudecode:executor",
+Agent(name="<task_id>:AC-002", subagent_type="harness:ac-worker",
       prompt="Implement AC-002 per PLAN.md target files <list>. Write findings to <task_dir>/audit/AC-002.executor.md. Do not edit PROGRESS.md or CHECKS.yaml.")
 ```
 
@@ -236,9 +239,9 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
   --evidence "<file:line | test name>"
 ```
 
-**Per-AC test run:** `git diff --name-only HEAD~1` → for each changed source, find test files that import/reference it (mirror path or import search) → run only those. If no tests exist for changed module, write one (Phase 3.5 rule). If PLAN.md specifies per-AC verify commands, prefer those.
+**Per-AC test run:** each executor runs its own targeted tests for the AC it owns. `git diff --name-only HEAD~1` → for each changed source, find test files that import/reference it (mirror path or import search) → run only those. If no tests exist for changed module, write one (Phase 3.5 rule). If PLAN.md specifies per-AC verify commands, prefer those. For parallel AC batches, targeted tests run inside the sibling executor contexts before the coordinator touches PROGRESS.md or CHECKS.yaml.
 
-**Delegation rule (C-18 / Verification delegation).** Browser MCP tools (`mcp__chrome-devtools__*`) MUST be delegated to `harness:qa-browser` — the gate blocks main-session calls. Bash test runners (`pytest`, `npm test`, `pnpm test`, `vitest`, `cargo test`, `go test`, …) are allowed inline for small per-AC runs (since 2026-05-14 narrowing); spawn `harness:qa-cli` (or `qa-api` / `qa-desktop` per project type) for full-suite verification to keep main context clean as a convention. Read the verdict from `CRITIC__qa.md`. See `plugin/CLAUDE.md` § 8c.
+**Delegation rule (C-18 / Verification delegation).** Browser MCP tools (`mcp__chrome-devtools__*`) MUST be delegated to `harness:qa-browser` — the gate blocks main-session calls. Bash test runners (`pytest`, `npm test`, `pnpm test`, `vitest`, `cargo test`, `go test`, …) are allowed inline only for small targeted per-AC runs; full-suite verification MUST be delegated to qa-* agents. Spawn every applicable lens (`qa-cli`, `qa-api`, `qa-browser`, `qa-desktop`) in one assistant message and let each lens run its commands in its own context. Read the verdict from `CRITIC__qa.md`. See `plugin/CLAUDE.md` § 8c.
 
 Per-AC test failures → fix immediately. These are free; only Phase 7 full-suite failures count toward the 3-cycle limit.
 
@@ -358,9 +361,9 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 
 ### Phase 7: Verification Gate
 
-Read `verification-gate.md` in full. Runs test commands from PLAN.md, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit with investigate-skill escalation on cycle 3.
+Read `verification-gate.md` in full. Delegates full-suite test commands from PLAN.md to all applicable qa-* agents in parallel, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit with investigate-skill escalation on cycle 3.
 
-**Main session SHOULD spawn the appropriate qa-* lens for full-suite verification (Verification delegation, C-18).** The gate hard-enforces this only for `mcp__chrome-devtools__*` browser MCP calls (since the 2026-05-14 narrowing); Bash test runners are advisory — small inline runs are fine, but heavy full-suite execution and background process state corrupt the orchestrator context. Let the qa-* lens execute in its isolated context and consume the verdict via `task_verify` / `CRITIC__qa.md`.
+**Main session MUST spawn the appropriate qa-* lens for full-suite verification (Verification delegation, C-18).** The gate hard-enforces browser MCP calls and the develop contract hard-enforces full-suite delegation. Bash test runners remain allowed inline only for targeted per-AC runs and debug reruns. Heavy full-suite execution and background process state belong in qa-* isolated contexts. Let the qa-* lens execute and consume the verdict via `task_verify` / `CRITIC__qa.md`.
 
 When durable docs are linked in HANDOFF or changed under `doc/<area>/<TYPE>__*.md`, pass those paths to the QA lens as intent evidence. QA uses `REQ` as behavior/contract verification criteria, `GUIDE` as implementation quality and consistency criteria, `ADR` as architecture intent and tradeoff criteria, and `POLICY` as external constraint criteria.
 

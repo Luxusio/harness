@@ -8,8 +8,10 @@ This sub-file covers Phase 3.0 / Phase 4.5-4.8 / Phase 7 / Phase 7.7 parallel-Ag
 
 The orchestrator uses three Claude Code primitives. Pick the smallest primitive
 type that fits the work; do not reduce worker count for independent ACs.
+Parallel is the default posture. Sequential execution needs a declared
+dependency, unavailable Agent tool, or the narrow small-task exception below.
 
-1. `Agent(subagent_type="...", model="...", prompt="...")` — one-shot subagent with isolated context. Default for quality phases (4.5–4.8), per-AC executor fanout, multi-lens QA, and dogfooder.
+1. `Agent(subagent_type="...", model="...", prompt="...")` — one-shot subagent with isolated context. Default for quality phases (4.5–4.8), per-AC worker fanout, multi-lens QA, and dogfooder. Use `harness:ac-worker` for Phase 3 per-AC implementation.
 2. `TeamCreate({team_name, description})` — bounded multi-agent pipeline with shared task list, dependency tracking, and inter-agent `SendMessage`. Use when the work decomposes into 3+ stages with cross-stage handoffs.
 3. `Task({team_name, name, subagent_type, prompt})` — spawn a worker INTO an existing team. Worker reads `TaskList` to claim, calls `TaskUpdate` to complete, reports via `SendMessage` to `team-lead`.
 
@@ -37,15 +39,17 @@ Concretely:
 
 ```
 # Issue these N Agent calls in ONE assistant message
-Agent(name="<task_id>:AC-001", subagent_type="oh-my-claudecode:executor",
+Agent(name="<task_id>:AC-001", subagent_type="harness:ac-worker",
       prompt="Implement AC-001 per PLAN.md ...")
-Agent(name="<task_id>:AC-002", subagent_type="oh-my-claudecode:executor",
+Agent(name="<task_id>:AC-002", subagent_type="harness:ac-worker",
       prompt="Implement AC-002 per PLAN.md ...")
-Agent(name="<task_id>:AC-NNN", subagent_type="oh-my-claudecode:executor",
+Agent(name="<task_id>:AC-NNN", subagent_type="harness:ac-worker",
       prompt="Implement AC-NNN per PLAN.md ...")
 ```
 
 Cap parallel fanout at N=4 in a single batch. Past N=4, orchestrator-side merge cost (PROGRESS.md write contention, CHECKS.yaml update ordering) dominates the spawn-time savings. **The cap applies per batch, not per task** — broader trigger thresholds produce more batches, each still capped at 4.
+For N>4, spawn batches of up to 4 in successive assistant turns; do not
+collapse remaining independent ACs into coordinator work.
 Merge cost controls batch size only. It does not justify collapsing two or more
 independent ACs into one executor below the cap.
 
@@ -74,11 +78,12 @@ Component-independence is a property of the PLAN AC matrix, not of the diff. The
 
 ### Small-task edge case
 
-If the matrix says fanout but total edit volume is trivial (<20 lines combined,
-~30s total work), sequential is acceptable only with a concrete skip record:
+If the matrix says fanout but total edit volume is trivial (<10 lines combined,
+~15s total work), sequential is acceptable only with a concrete skip record:
 AC ids, estimated lines, estimated runtime, and `parallel-trigger-skipped` with
 `reason:"small-task"`. The default is still parallel — sequential is the
-evidenced opt-out, not the default.
+evidenced opt-out, not the default. If the user explicitly asks for aggressive
+subagent use or faster parallel execution, this opt-out is disabled.
 
 ### Lane table requirement
 
@@ -101,13 +106,13 @@ Harness phases map to specific agent types and model tiers. Models stay AS-DECLA
 
 | Phase | Agent type | Model source | Notes |
 |-------|------------|--------------|-------|
-| 3 (per-AC implement) | `oh-my-claudecode:executor` | inherit (sonnet) | One Agent per AC for parallel batches; one inline call for sequential ACs |
+| 3 (per-AC implement) | `harness:ac-worker` | inherit (sonnet) | One Agent per AC for parallel batches; one inline call for sequential ACs only when dependency-bound |
 | 4 (plan-completion audit) | `oh-my-claudecode:executor` | haiku | Mechanical AC vs `git diff --stat` cross-reference |
 | 4.5 (test coverage) | `oh-my-claudecode:executor` | haiku | Coverage diagram + anti-pattern scan |
 | 4.6 (confidence ratings) | `oh-my-claudecode:executor` | inherit | Per-change risk scoring |
 | 4.7 (adversarial review) | `oh-my-claudecode:executor` | cross-model (Opus→Sonnet, Sonnet→Haiku) | Different-model blind-spot reset |
 | 4.8 (edge-case scan) | `oh-my-claudecode:executor` | haiku | Pattern scan for null guards, async error paths |
-| 7 (verification gate) | `harness:qa-cli` / `qa-api` / `qa-browser` / `qa-desktop` | per agent frontmatter | One lens per task by default; multi-lens spawns batch in one message with `lens="<lens>"` for lens-aware merge |
+| 7 (verification gate) | `harness:qa-cli` / `qa-api` / `qa-browser` / `qa-desktop` | per agent frontmatter | Spawn every applicable lens in one message with `lens="<lens>"` for lens-aware merge |
 | 7 fix loop (type / build errors) | `oh-my-claudecode:debugger` | sonnet | Compilation + regression isolation |
 | 7.7 (dogfooder, post-PASS) | `harness:dogfooder` | per frontmatter | Skipped when no user-facing diff (see SKILL.md Phase 7.7). Batches with Phase 7 final-PASS QA spawn. User-facing detection reads `TASK_STATE.yaml touched_paths` (not `git diff HEAD~1 HEAD`) — `git diff` was unreliable when Phase 6 commits ran after Phase 7.7 or when develop emitted multiple bisectable commits |
 

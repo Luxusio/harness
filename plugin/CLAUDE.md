@@ -25,10 +25,10 @@ No step skipped. Smallest coherent diff per step.
 - `task_verify` — sync changed paths + check verification
 - `task_close` — gate: runtime verdict PASS → close
 
-**Artifact writes (subagent-only — coordinator must NOT call):**
-- `write_critic_qa` → CRITIC__qa.md + runtime_verdict
-- `write_handoff` → HANDOFF.md
-- `write_doc_sync` → DOC_SYNC.md
+**Artifact writes (role-owned):**
+- `write_critic_qa` → CRITIC__qa.md + runtime_verdict (qa-* / stop-judge agents)
+- `write_handoff` → HANDOFF.md (develop coordinator or dedicated developer role)
+- `write_doc_sync` → DOC_SYNC.md (develop coordinator)
 
 Provenance = artifact existence. No counters.
 

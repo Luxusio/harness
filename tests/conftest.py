@@ -10,6 +10,7 @@ Exports:
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import json
 import os
 import shutil
@@ -20,6 +21,21 @@ import uuid
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS_DIR = os.path.join(REPO_ROOT, "plugin", "scripts")
+
+
+@contextlib.contextmanager
+def active_marker_lock(repo_root: str | None = None):
+    """Serialize real-repo `.active` mutations across pytest-xdist workers."""
+    root = repo_root or REPO_ROOT
+    tasks_dir = os.path.join(root, "doc", "harness", "tasks")
+    os.makedirs(tasks_dir, exist_ok=True)
+    lock_path = os.path.join(tasks_dir, ".active.fixture.lock")
+    with open(lock_path, "w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def invoke_hook(
@@ -78,45 +94,46 @@ def scratch_task_in_real_repo(
     Also writes ``.active`` pointing at this task for the duration.
     """
     root = repo_root or REPO_ROOT
-    tasks_dir = os.path.join(root, "doc", "harness", "tasks")
-    task_id = f"TASK__{name}"
-    task_dir = os.path.join(tasks_dir, task_id)
-    os.makedirs(task_dir, exist_ok=True)
+    with active_marker_lock(root):
+        tasks_dir = os.path.join(root, "doc", "harness", "tasks")
+        task_id = f"TASK__{name}"
+        task_dir = os.path.join(tasks_dir, task_id)
+        os.makedirs(task_dir, exist_ok=True)
 
-    # Save the real .active out of the way via atomic os.rename to a unique
-    # sidecar path. In-memory save (the previous approach) was lost whenever an
-    # exception fired between capture and restore — corrupting the harness's
-    # canonical focus marker. If the process is SIGKILLed mid-fixture, the
-    # sidecar `.active.fixture-backup.<pid>.<uuid>` survives and can be
-    # restored manually with `mv`.
-    active_marker = os.path.join(tasks_dir, ".active")
-    backup_marker = (
-        f"{active_marker}.fixture-backup.{os.getpid()}.{uuid.uuid4().hex[:8]}"
-    )
-    had_existing = os.path.isfile(active_marker)
-    if had_existing:
-        os.rename(active_marker, backup_marker)
+        # Save the real .active out of the way via atomic os.rename to a unique
+        # sidecar path. In-memory save (the previous approach) was lost whenever an
+        # exception fired between capture and restore — corrupting the harness's
+        # canonical focus marker. If the process is SIGKILLed mid-fixture, the
+        # sidecar `.active.fixture-backup.<pid>.<uuid>` survives and can be
+        # restored manually with `mv`.
+        active_marker = os.path.join(tasks_dir, ".active")
+        backup_marker = (
+            f"{active_marker}.fixture-backup.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+        )
+        had_existing = os.path.isfile(active_marker)
+        if had_existing:
+            os.rename(active_marker, backup_marker)
 
-    try:
-        if plan:
-            with open(os.path.join(task_dir, "PLAN.md"), "w", encoding="utf-8") as f:
-                f.write("# Test plan\n")
-        if maintenance:
-            open(os.path.join(task_dir, "MAINTENANCE"), "w").close()
-        if progress is not None:
-            with open(os.path.join(task_dir, "PROGRESS.md"), "w", encoding="utf-8") as f:
-                f.write(progress)
-        with open(active_marker, "w", encoding="utf-8") as f:
-            f.write(task_dir)
-        yield task_dir
-    finally:
-        shutil.rmtree(task_dir, ignore_errors=True)
         try:
-            os.unlink(active_marker)
-        except OSError:
-            pass
-        if had_existing and os.path.isfile(backup_marker):
-            os.rename(backup_marker, active_marker)
+            if plan:
+                with open(os.path.join(task_dir, "PLAN.md"), "w", encoding="utf-8") as f:
+                    f.write("# Test plan\n")
+            if maintenance:
+                open(os.path.join(task_dir, "MAINTENANCE"), "w").close()
+            if progress is not None:
+                with open(os.path.join(task_dir, "PROGRESS.md"), "w", encoding="utf-8") as f:
+                    f.write(progress)
+            with open(active_marker, "w", encoding="utf-8") as f:
+                f.write(task_dir)
+            yield task_dir
+        finally:
+            shutil.rmtree(task_dir, ignore_errors=True)
+            try:
+                os.unlink(active_marker)
+            except OSError:
+                pass
+            if had_existing and os.path.isfile(backup_marker):
+                os.rename(backup_marker, active_marker)
 
 
 _SESSION_ACTIVE_BACKUP: str | None = None
@@ -136,18 +153,19 @@ def pytest_sessionstart(session):
     else with a single move.
     """
     global _SESSION_ACTIVE_BACKUP
-    active_path = os.path.join(REPO_ROOT, "doc", "harness", "tasks", ".active")
-    if not os.path.isfile(active_path):
-        _SESSION_ACTIVE_BACKUP = None
-        return
-    backup = (
-        f"{active_path}.session-backup.{os.getpid()}.{uuid.uuid4().hex[:8]}"
-    )
-    try:
-        os.rename(active_path, backup)
-        _SESSION_ACTIVE_BACKUP = backup
-    except OSError:
-        _SESSION_ACTIVE_BACKUP = None
+    with active_marker_lock(REPO_ROOT):
+        active_path = os.path.join(REPO_ROOT, "doc", "harness", "tasks", ".active")
+        if not os.path.isfile(active_path):
+            _SESSION_ACTIVE_BACKUP = None
+            return
+        backup = (
+            f"{active_path}.session-backup.{os.getpid()}.{uuid.uuid4().hex[:8]}"
+        )
+        try:
+            os.rename(active_path, backup)
+            _SESSION_ACTIVE_BACKUP = backup
+        except OSError:
+            _SESSION_ACTIVE_BACKUP = None
 
 
 def pytest_sessionfinish(session, exitstatus):
@@ -162,16 +180,17 @@ def pytest_sessionfinish(session, exitstatus):
     _SESSION_ACTIVE_BACKUP = None
     if not backup or not os.path.isfile(backup):
         return
-    active_path = os.path.join(REPO_ROOT, "doc", "harness", "tasks", ".active")
-    # Clear any in-flight scratch marker first so rename can succeed.
-    try:
-        os.unlink(active_path)
-    except OSError:
-        pass
-    try:
-        os.rename(backup, active_path)
-    except OSError:
-        pass
+    with active_marker_lock(REPO_ROOT):
+        active_path = os.path.join(REPO_ROOT, "doc", "harness", "tasks", ".active")
+        # Clear any in-flight scratch marker first so rename can succeed.
+        try:
+            os.unlink(active_path)
+        except OSError:
+            pass
+        try:
+            os.rename(backup, active_path)
+        except OSError:
+            pass
 
 
 __all__ = [
@@ -180,4 +199,5 @@ __all__ = [
     "invoke_hook",
     "parse_decision",
     "scratch_task_in_real_repo",
+    "active_marker_lock",
 ]

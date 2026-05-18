@@ -27,10 +27,10 @@ from conftest import REPO_ROOT, scratch_task_in_real_repo
 ACTIVE_PATH = os.path.join(REPO_ROOT, "doc", "harness", "tasks", ".active")
 
 
-def _read_active() -> str | None:
-    if not os.path.isfile(ACTIVE_PATH):
+def _read_active(path: str = ACTIVE_PATH) -> str | None:
+    if not os.path.isfile(path):
         return None
-    with open(ACTIVE_PATH, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return f.read()
 
 
@@ -48,90 +48,93 @@ class FixtureContractTests(unittest.TestCase):
             "old in-memory save pattern still present",
         )
 
+    def test_fixture_serializes_active_marker_for_xdist(self):
+        src = inspect.getsource(scratch_task_in_real_repo)
+        lock_src = inspect.getsource(conftest.active_marker_lock)
+        self.assertIn("active_marker_lock(root)", src)
+        self.assertIn("fcntl.flock", lock_src)
+
 
 class FixtureRoundTripTests(unittest.TestCase):
     """AC-002, AC-003, AC-004: live round-trip behavior."""
 
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="active-fixture-roundtrip-")
+        self.tasks_dir = os.path.join(self.tmp, "doc", "harness", "tasks")
+        os.makedirs(self.tasks_dir)
+        self.active_path = os.path.join(self.tasks_dir, ".active")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
     def test_restores_prior_content_on_success(self):
-        # The session-level hook (pytest_sessionstart) has already moved the
-        # real .active out of the way during the test session, so we
-        # synthesize one here to exercise the success-path round-trip.
         synthetic = "TASK__synthetic-prior-active\n"
-        had_existing = os.path.isfile(ACTIVE_PATH)
-        if not had_existing:
-            with open(ACTIVE_PATH, "w", encoding="utf-8") as f:
-                f.write(synthetic)
-        try:
-            before = _read_active()
-            self.assertEqual(before, synthetic if not had_existing else before)
+        with open(self.active_path, "w", encoding="utf-8") as f:
+            f.write(synthetic)
+        before = _read_active(self.active_path)
+        self.assertEqual(before, synthetic)
 
-            with scratch_task_in_real_repo("active-race-success") as task_dir:
-                self.assertEqual(_read_active(), task_dir)
+        with scratch_task_in_real_repo(
+            "active-race-success", repo_root=self.tmp
+        ) as task_dir:
+            self.assertEqual(_read_active(self.active_path), task_dir)
 
-            self.assertEqual(
-                _read_active(), before,
-                "prior .active content was not restored after success exit",
-            )
-        finally:
-            if not had_existing and os.path.isfile(ACTIVE_PATH):
-                if _read_active() == synthetic:
-                    os.unlink(ACTIVE_PATH)
+        self.assertEqual(
+            _read_active(self.active_path), before,
+            "prior .active content was not restored after success exit",
+        )
 
     def test_no_active_at_entry_means_no_active_at_exit(self):
-        real_backup = ACTIVE_PATH + ".test-empty-case-backup"
-        pre_existing = os.path.isfile(ACTIVE_PATH)
-        if pre_existing:
-            os.rename(ACTIVE_PATH, real_backup)
-        try:
-            self.assertFalse(os.path.isfile(ACTIVE_PATH))
+        self.assertFalse(os.path.isfile(self.active_path))
 
-            with scratch_task_in_real_repo("active-race-empty") as task_dir:
-                self.assertEqual(_read_active(), task_dir)
+        with scratch_task_in_real_repo(
+            "active-race-empty", repo_root=self.tmp
+        ) as task_dir:
+            self.assertEqual(_read_active(self.active_path), task_dir)
 
-            self.assertFalse(
-                os.path.isfile(ACTIVE_PATH),
-                "fixture left a stray .active when none existed at entry",
-            )
-        finally:
-            if pre_existing and os.path.isfile(real_backup):
-                os.rename(real_backup, ACTIVE_PATH)
+        self.assertFalse(
+            os.path.isfile(self.active_path),
+            "fixture left a stray .active when none existed at entry",
+        )
 
     def test_restores_on_body_exception(self):
-        before = _read_active()
+        before = _read_active(self.active_path)
 
         class _Boom(Exception):
             pass
 
         with self.assertRaises(_Boom):
-            with scratch_task_in_real_repo("active-race-raise") as task_dir:
-                self.assertEqual(_read_active(), task_dir)
+            with scratch_task_in_real_repo(
+                "active-race-raise", repo_root=self.tmp
+            ) as task_dir:
+                self.assertEqual(_read_active(self.active_path), task_dir)
                 raise _Boom("simulated fixture-body failure")
 
         self.assertEqual(
-            _read_active(), before,
+            _read_active(self.active_path), before,
             "fixture left .active corrupted after body raised",
         )
 
     def test_sequential_reentry_preserves_outer_active(self):
-        before = _read_active()
+        before = _read_active(self.active_path)
 
         for slug in ("active-race-seq-a", "active-race-seq-b", "active-race-seq-c"):
-            with scratch_task_in_real_repo(slug) as task_dir:
+            with scratch_task_in_real_repo(slug, repo_root=self.tmp) as task_dir:
                 self.assertEqual(
-                    _read_active(), task_dir,
+                    _read_active(self.active_path), task_dir,
                     f"during {slug}: .active should point at scratch",
                 )
 
         self.assertEqual(
-            _read_active(), before,
+            _read_active(self.active_path), before,
             "after sequential fixture entries, .active does not match starting state",
         )
 
     def test_no_stale_backup_files_after_success(self):
-        tasks_dir = os.path.dirname(ACTIVE_PATH)
+        tasks_dir = self.tasks_dir
         before = {p for p in os.listdir(tasks_dir) if ".fixture-backup." in p}
 
-        with scratch_task_in_real_repo("active-race-cleanup"):
+        with scratch_task_in_real_repo("active-race-cleanup", repo_root=self.tmp):
             pass
 
         after = {p for p in os.listdir(tasks_dir) if ".fixture-backup." in p}
