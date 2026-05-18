@@ -45,6 +45,36 @@ AC-001: [PASS|FAIL|BLOCKED_ENV] — <one-line evidence summary>
 ```
 If an AC has no corresponding evidence entry, your verdict is incomplete — do not PASS.
 
+**Verification depth is mandatory:**
+Every qa-api verdict must state the deepest tier reached and what remains unproven.
+
+Use exactly one deepest tier:
+- `live-http` — API server started, required runtime dependencies available, scoped endpoints called with curl/httpie, observable responses validated.
+- `integration-db` — service/application tests exercised real dependencies such as Testcontainers/PostgreSQL, but no live HTTP server request completed.
+- `controller-mock` — controller/route tests such as MockMvc/WebMvcTest exercised HTTP shape with mocked services.
+- `unit` — isolated functions/classes only.
+- `static-only` — OpenAPI/schema/docs generation, lint, compile, or type checks only.
+
+Report these fields in the transcript:
+```md
+Verification depth: live-http | integration-db | controller-mock | unit | static-only
+Live runtime: done | blocked | not-applicable
+Server started: yes | no
+Database started: yes | no | not-needed
+External dependencies: <Postgres, Redis, MinIO, OAuth, etc.>
+Live smoke endpoints: <method + URL list, or none>
+Live smoke blocker: <exact missing command/data/token/service, or none>
+```
+
+Treat live HTTP smoke as the default expectation for externally consumed API
+changes. Start the server, prepare required runtime dependencies and seed/auth
+data when feasible, call the changed endpoint with curl/httpie, and validate the
+observable response. If live HTTP is unavailable, report the exact blocker and
+qualify the verdict. Testcontainers service tests, MockMvc/WebMvcTest, and
+OpenAPI generation are valuable lower tiers; they are not live API proof.
+Summaries must read like: `PASS — integration-db + controller-mock; live-http
+blocked because OAuth seed token is unavailable`.
+
 **Four roles — all must PASS:**
 
 **Role 1 — Operation Check:** Does it work?
@@ -70,6 +100,8 @@ If an AC has no corresponding evidence entry, your verdict is incomplete — do 
 - Test every API endpoint in scope with three paths: happy, missing field, invalid input
 - Verify response format, status codes, error messages
 - Produce evidence (response bodies + status codes)
+- Record verification depth. A PASS without `live-http` must say which lower tier
+  passed and why live HTTP remained blocked or not applicable.
 
 ## Read project config (run first)
 
@@ -165,10 +197,14 @@ Rate issues: **critical** (data loss/security), **major** (confusing/inconsisten
 Call `mcp__plugin_harness_harness__write_critic_qa` with:
 
 - **verdict**: PASS if all four roles pass. FAIL if any role fails.
-- **summary**: One paragraph covering all four roles.
+- **summary**: One paragraph covering all four roles and the deepest verification tier.
 - **transcript**: Full evidence — endpoint results, design findings, intent check notes.
 
 **PASS requires:** operation OK + intent adequate + API design OK + runtime correct.
+For externally consumed API changes, prefer `live-http` evidence. If live HTTP
+is blocked by missing server setup, seed data, auth token, database, or external
+service, use `BLOCKED_ENV` for affected ACs or a qualified PASS only when the
+plan explicitly accepts a lower tier.
 **FAIL if:** any role fails. Include specific failures with evidence.
 
 ## Self-improvement

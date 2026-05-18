@@ -63,6 +63,34 @@ AC-001: [PASS|FAIL|BLOCKED_ENV] — <one-line evidence summary>
 ```
 If an AC has no corresponding evidence entry, your verdict is incomplete — do not PASS.
 
+**Desktop verification depth is mandatory:**
+Every qa-desktop verdict must state the deepest desktop tier reached and what
+remains unproven.
+
+Use exactly one deepest tier:
+- `interactive-desktop` — app launched on a real X11 display, target windows were inspected, scoped mouse/keyboard interactions were performed, screenshots captured, and observable GUI state validated.
+- `window-rendered` — app launched and windows/screenshots were inspected, but scoped user interactions were not completed.
+- `launch-only` — launch command or process checks succeeded, but no window interaction or screenshot evidence was completed.
+- `static-only` — build, lint, unit tests, source inspection, or generated artifacts only.
+- `blocked-env` — required display, x11 tool, app dependency, platform, credential, or fixture setup prevented GUI inspection.
+
+Report these fields in the transcript:
+```md
+Desktop verification depth: interactive-desktop | window-rendered | launch-only | static-only | blocked-env
+Display: <DISPLAY value, Xvfb, real display, or none>
+Windows inspected: <title/id list, or none>
+Interactions performed: <click/type/keypress/resize/focus list, or none>
+Screenshots: <paths, or redaction notes, or none>
+Keyboard path checked: yes | no | not-applicable
+Desktop blocker: <exact missing display/tool/command/data/token/platform, or none>
+```
+
+Treat `interactive-desktop` as the default expectation for desktop GUI changes.
+Launch the app, inspect the visible window, perform the user actions implied by
+the ACs, and validate the visible result. Build success, launch-only checks, and
+screenshots without interaction are lower tiers; label them as such in the
+summary.
+
 **Four roles — all must PASS:**
 
 **Role 1 — Operation Check:** Does it work?
@@ -97,6 +125,8 @@ If an AC has no corresponding evidence entry, your verdict is incomplete — do 
   click, type_text, press_key, wait_for).
 - Produce screenshot evidence for every AC.
 - Run a usability sweep on every window visited.
+- Record desktop verification depth. A PASS below `interactive-desktop` must say
+  which lower tier passed and why direct GUI interaction was blocked or not applicable.
 
 ## Read project config (run first)
 
@@ -238,7 +268,9 @@ For each UI-related AC:
    `mcp__x11__press_key` Alt-Tab).
 2. Take a snapshot + screenshot (before).
 3. Verify expected elements exist (`list_windows` + visual inspection).
-4. If interaction: perform it, wait for response, screenshot (after).
+4. Perform the user action implied by the AC when feasible: click controls, type
+   text, press shortcuts, resize the window, change focus, open/close dialogs,
+   and wait for the visible response.
 5. Record result with evidence.
 
 **SECURITY — screenshot redaction (non-negotiable):**
@@ -291,12 +323,18 @@ Call `write_critic_qa` with:
 
 - **verdict**: PASS if all four roles pass. FAIL if any role fails. BLOCKED_ENV if
   Step 0 gated.
-- **summary**: one paragraph covering all four roles.
+- **summary**: one paragraph covering all four roles and the deepest desktop
+  verification tier.
 - **transcript**: full evidence — AC results table, UX findings, intent check notes,
   screenshot paths (with redaction notes where applicable), x11-mcp tool calls log.
 
 **PASS requires:** operation OK + intent adequate + desktop UX acceptable + runtime
 correct. **FAIL if:** any role fails. Include specific failures with evidence.
+For desktop GUI changes, prefer `interactive-desktop` evidence. If GUI
+interaction is blocked by missing display setup, x11 tool, app launch command,
+fixture, credential, platform support, or external service, use `BLOCKED_ENV`
+for affected ACs or a qualified PASS only when the plan explicitly accepts a
+lower tier.
 
 ## Self-improvement
 

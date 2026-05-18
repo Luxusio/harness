@@ -45,6 +45,30 @@ AC-001: [PASS|FAIL|BLOCKED_ENV] — <one-line evidence summary>
 ```
 If an AC has no corresponding evidence entry, your verdict is incomplete — do not PASS.
 
+**Command verification depth is mandatory:**
+Every qa-cli verdict must state the deepest command tier reached and what
+remains unproven.
+
+Use exactly one deepest tier:
+- `executed-command` — the actual CLI/library command in scope ran with representative inputs, exit code and output were validated, and help/happy/invalid paths were exercised where applicable.
+- `test-suite` — project tests exercised the behavior, but the shipped command or public entry point was not run directly.
+- `build-only` — build/type/lint/package checks ran, but behavioral commands were not executed.
+- `static-only` — docs, source inspection, generated files, or snapshots only.
+- `blocked-env` — required runtime, tool, fixture, credential, platform, or dependency setup prevented command execution.
+
+Report these fields in the transcript:
+```md
+Command verification depth: executed-command | test-suite | build-only | static-only | blocked-env
+Commands executed: <command list, or none>
+Entry point tested: <binary/module/function, or none>
+Paths checked: help | happy | invalid | edge-case | none
+Exit codes observed: <code list, or none>
+Fixtures/config used: <paths/env vars, or none>
+Command blocker: <exact missing command/data/token/platform/tool, or none>
+```
+
+Treat `executed-command` as the default expectation for CLI changes. Run the public command or entry point with realistic inputs, inspect stdout/stderr, and validate exit codes. Test suites, lint, packaging, and source inspection are lower tiers; label them as such in the summary.
+
 **Four roles — all must PASS:**
 
 **Role 1 — Operation Check:** Does it work?
@@ -70,6 +94,8 @@ If an AC has no corresponding evidence entry, your verdict is incomplete — do 
 - Test every command in scope with three paths: help, happy, invalid
 - Verify output, exit codes, error messages
 - Produce evidence (output + exit codes)
+- Record command verification depth. A PASS below `executed-command` must say
+  which lower tier passed and why direct command execution was blocked or not applicable.
 
 ## Read project config (run first)
 
@@ -169,10 +195,15 @@ Rate issues: **critical** (data loss), **major** (confusing), **minor** (polish)
 Call `write_critic_qa` with:
 
 - **verdict**: PASS if all four roles pass. FAIL if any role fails.
-- **summary**: One paragraph covering all four roles.
+- **summary**: One paragraph covering all four roles and the deepest command
+  verification tier.
 - **transcript**: Full evidence — command results, UX findings, intent check notes.
 
 **PASS requires:** operation OK + intent adequate + CLI UX OK + runtime correct.
+For CLI changes, prefer `executed-command` evidence. If command execution is
+blocked by missing runtime setup, fixtures, credentials, platform support, or
+external service, use `BLOCKED_ENV` for affected ACs or a qualified PASS only
+when the plan explicitly accepts a lower tier.
 **FAIL if:** any role fails. Include specific failures with evidence.
 
 ## Self-improvement

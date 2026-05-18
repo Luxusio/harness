@@ -53,6 +53,36 @@ AC-001: [PASS|FAIL|BLOCKED_ENV] — <one-line evidence summary>
 ```
 If an AC has no corresponding evidence entry, your verdict is incomplete — do not PASS.
 
+**Browser verification depth is mandatory:**
+Every qa-browser verdict must state the deepest browser tier reached and what
+remains unproven.
+
+Use exactly one deepest tier:
+- `interactive-browser` — dev server reachable, real browser opened, relevant pages visited, scoped click/fill/keypress interactions performed, screenshots captured, observable UI state validated.
+- `render-only-browser` — real browser opened and pages rendered with screenshots, but scoped user interactions were not completed.
+- `server-only` — dev server/build/test commands ran, but no browser page was inspected.
+- `static-only` — lint, type checks, build output, snapshots, or DOM tests only.
+- `blocked-env` — required browser, dev server, auth, data, or dependency setup prevented runtime inspection.
+
+Report these fields in the transcript:
+```md
+Browser verification depth: interactive-browser | render-only-browser | server-only | static-only | blocked-env
+Dev server: running | started | blocked | not-needed
+Pages visited: <URL list, or none>
+Viewports checked: <desktop/mobile sizes, or none>
+Interactions performed: <click/fill/keypress/navigation list, or none>
+Screenshots: <paths, or none>
+Console errors: <count + summary, or not-checked>
+Browser blocker: <exact missing command/data/token/service/tool, or none>
+```
+
+Treat `interactive-browser` as the default expectation for frontend/UI changes.
+Open the page, inspect the rendered screen, perform the user actions implied by
+the ACs, and validate the visible result. If the UI cannot be interacted with,
+report the exact blocker and qualify the verdict. Build success, component tests,
+DOM tests, and screenshots without interaction are lower tiers; label them as
+such in the summary.
+
 **Four roles — all must PASS:**
 
 **Role 1 — Operation Check:** Does it work?
@@ -78,6 +108,8 @@ If an AC has no corresponding evidence entry, your verdict is incomplete — do 
 - Verify every UI-related AC using Chrome DevTools
 - Produce screenshot evidence
 - Run usability sweep on every page visited
+- Record browser verification depth. A PASS below `interactive-browser` must say
+  which lower tier passed and why direct UI interaction was blocked or not applicable.
 
 ## Read project config (run first)
 
@@ -164,7 +196,9 @@ For each UI-related AC:
 1. Navigate to relevant page
 2. Take snapshot + screenshot (before)
 3. Verify expected elements exist
-4. If interaction: perform it, wait for response, screenshot (after)
+4. Perform the user action implied by the AC when feasible: click buttons, fill
+   forms, press keys, change filters/toggles, navigate browser history, resize
+   the viewport, and wait for the visible response
 5. Record result with evidence
 
 ### Step 5: UX evaluation
@@ -191,10 +225,15 @@ On every page visited:
 Call `write_critic_qa` with:
 
 - **verdict**: PASS if all four roles pass. FAIL if any role fails.
-- **summary**: One paragraph covering all four roles.
+- **summary**: One paragraph covering all four roles and the deepest browser
+  verification tier.
 - **transcript**: Full evidence — AC results table, UX findings, intent check notes, screenshots list.
 
 **PASS requires:** operation OK + intent adequate + UX acceptable + runtime correct.
+For frontend/UI changes, prefer `interactive-browser` evidence. If browser
+interaction is blocked by missing dev server setup, seed data, auth token,
+browser tool, or external service, use `BLOCKED_ENV` for affected ACs or a
+qualified PASS only when the plan explicitly accepts a lower tier.
 **FAIL if:** any role fails. Include specific failures with evidence.
 
 ## Self-improvement

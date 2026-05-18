@@ -225,6 +225,20 @@ class TestCodifierPipeline(unittest.TestCase):
 class TestCodifiableContractInAgentDocs(unittest.TestCase):
     """AC-012: codifiable block contract documented in agent files."""
 
+    def _read_qa_api_docs(self):
+        paths = [
+            os.path.join(REPO_ROOT, "plugin", "agents", "qa-api.md"),
+            os.path.join(REPO_ROOT, "plugin-codex", "agents", "qa-api.md"),
+        ]
+        return [(path, open(path).read()) for path in paths]
+
+    def _read_qa_lens_docs(self, lens):
+        paths = [
+            os.path.join(REPO_ROOT, "plugin", "agents", f"qa-{lens}.md"),
+            os.path.join(REPO_ROOT, "plugin-codex", "agents", f"qa-{lens}.md"),
+        ]
+        return [(path, open(path).read()) for path in paths]
+
     def test_qa_cli_has_codifiable_section(self):
         path = os.path.join(REPO_ROOT, "plugin", "agents", "qa-cli.md")
         with open(path) as f:
@@ -261,6 +275,117 @@ class TestCodifiableContractInAgentDocs(unittest.TestCase):
             content = f.read()
         self.assertIn("ac_id", content)
         self.assertIn("echo hello", content)
+
+    def test_qa_api_docs_require_verification_depth_fields(self):
+        """QA API docs must report the runtime tier and live smoke state."""
+        required = [
+            "Verification depth is mandatory",
+            "Verification depth: live-http | integration-db | controller-mock | unit | static-only",
+            "Live runtime: done | blocked | not-applicable",
+            "Server started: yes | no",
+            "Database started: yes | no | not-needed",
+            "External dependencies: <Postgres, Redis, MinIO, OAuth, etc.>",
+            "Live smoke endpoints: <method + URL list, or none>",
+            "Live smoke blocker: <exact missing command/data/token/service, or none>",
+        ]
+        for path, content in self._read_qa_api_docs():
+            with self.subTest(path=path):
+                for needle in required:
+                    self.assertIn(needle, content)
+
+    def test_qa_api_docs_distinguish_lower_tiers_from_live_http(self):
+        """MockMvc/Testcontainers/OpenAPI must not be presented as live API proof."""
+        required = [
+            "Use exactly one deepest tier:",
+            "`live-http`",
+            "`integration-db`",
+            "`controller-mock`",
+            "`static-only`",
+            "Testcontainers service tests, MockMvc/WebMvcTest, and",
+            "OpenAPI generation are valuable lower tiers; they are not live API proof.",
+            "PASS — integration-db + controller-mock; live-http",
+        ]
+        for path, content in self._read_qa_api_docs():
+            with self.subTest(path=path):
+                for needle in required:
+                    self.assertIn(needle, content)
+
+    def test_qa_api_docs_require_live_http_or_blocker_for_external_api_changes(self):
+        """Externally consumed API changes need live smoke or an exact blocker."""
+        required = [
+            "Treat live HTTP smoke as the default expectation for externally consumed API",
+            "Start the server, prepare required runtime dependencies and seed/auth",
+            "data when feasible, call the changed endpoint with curl/httpie",
+            "A PASS without `live-http` must say which lower tier",
+            "use `BLOCKED_ENV` for affected ACs",
+            "qualified PASS only when the",
+            "plan explicitly accepts a lower tier",
+        ]
+        for path, content in self._read_qa_api_docs():
+            with self.subTest(path=path):
+                for needle in required:
+                    self.assertIn(needle, content)
+
+    def test_qa_browser_docs_require_interactive_browser_depth(self):
+        """Frontend QA must open the screen and interact when feasible."""
+        required = [
+            "Browser verification depth is mandatory",
+            "Browser verification depth: interactive-browser | render-only-browser | server-only | static-only | blocked-env",
+            "Pages visited: <URL list, or none>",
+            "Viewports checked: <desktop/mobile sizes, or none>",
+            "Interactions performed: <click/fill/keypress/navigation list, or none>",
+            "Screenshots: <paths, or none>",
+            "Treat `interactive-browser` as the default expectation for frontend/UI changes.",
+            "Open the page, inspect the rendered screen, perform the user actions implied by",
+            "Build success, component tests,",
+            "DOM tests, and screenshots without interaction are lower tiers",
+            "A PASS below `interactive-browser` must say",
+        ]
+        for path, content in self._read_qa_lens_docs("browser"):
+            with self.subTest(path=path):
+                for needle in required:
+                    self.assertIn(needle, content)
+
+    def test_qa_cli_docs_require_executed_command_depth(self):
+        """CLI QA must distinguish real command execution from lower-tier checks."""
+        required = [
+            "Command verification depth is mandatory",
+            "Command verification depth: executed-command | test-suite | build-only | static-only | blocked-env",
+            "Commands executed: <command list, or none>",
+            "Entry point tested: <binary/module/function, or none>",
+            "Paths checked: help | happy | invalid | edge-case | none",
+            "Exit codes observed: <code list, or none>",
+            "Treat `executed-command` as the default expectation for CLI changes.",
+            "Run the public command or entry point with realistic inputs",
+            "Test suites, lint, packaging, and source inspection are",
+            "lower tiers; label them as such in the summary.",
+            "A PASS below `executed-command` must say",
+        ]
+        for path, content in self._read_qa_lens_docs("cli"):
+            with self.subTest(path=path):
+                for needle in required:
+                    self.assertIn(needle, content)
+
+    def test_qa_desktop_docs_require_interactive_desktop_depth(self):
+        """Desktop QA must distinguish real GUI interaction from launch/static checks."""
+        required = [
+            "Desktop verification depth is mandatory",
+            "Desktop verification depth: interactive-desktop | window-rendered | launch-only | static-only | blocked-env",
+            "Display: <DISPLAY value, Xvfb, real display, or none>",
+            "Windows inspected: <title/id list, or none>",
+            "Interactions performed: <click/type/keypress/resize/focus list, or none>",
+            "Screenshots: <paths, or redaction notes, or none>",
+            "Keyboard path checked: yes | no | not-applicable",
+            "Treat `interactive-desktop` as the default expectation for desktop GUI changes.",
+            "Launch the app, inspect the visible window, perform the user actions implied by",
+            "Build success, launch-only checks, and",
+            "screenshots without interaction are lower tiers",
+            "A PASS below `interactive-desktop` must say",
+        ]
+        for path, content in self._read_qa_lens_docs("desktop"):
+            with self.subTest(path=path):
+                for needle in required:
+                    self.assertIn(needle, content)
 
 
 # Module-level fixture constants for new tests
