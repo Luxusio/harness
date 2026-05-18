@@ -71,6 +71,30 @@ Append if doc exists — never overwrite.
 
 **When to write:** any discovery that saves 5+ min in a future session (build quirks, env vars, ordering, ports, framework specifics). Check after every task close.
 
+## Feedback-derived rules (user correction → readable behavior)
+
+When a user correction points at an agent mistake, do not preserve the incident narrative. Extract only a reusable conditional behavior rule:
+
+```markdown
+## <Short Rule Name>
+
+When <trigger>, <action>.
+
+Verify by <observable check>.
+```
+
+Good Tier 2 entry:
+
+```markdown
+## Runtime-Specific Plugin Changes
+
+When changing runtime-specific harness plugin behavior, review both the canonical `plugin/` tree and the runtime-specific tree such as `plugin-codex/`.
+
+Verify by explaining in `HANDOFF.md` which side changed and why any other side was left unchanged.
+```
+
+Reject feedback-derived entries when they lack a trigger, action, or verification step; when they only describe blame ("the agent forgot..."); or when they are task-local preferences. The close-time requirement is judgment, not forced documentation: HANDOFF records `none`, `captured`, or `rejected`.
+
 ---
 
 ## Mandatory promotion + pruning (after every task close)

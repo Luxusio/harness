@@ -434,19 +434,20 @@ Call `mcp__harness__write_handoff` with:
 3. Verification results per AC
 4. Scope notes (out-of-plan changes with justification)
 5. Do Not Regress (caveats, fragile patterns)
-6. Confidence Ratings table from Phase 4.6 (highlight ≤6)
-7. Adversarial Findings table from Phase 4.7 (critical/high fixed, lower deferred)
-8. Near-Zero Cost check (Phase 4.8 fixed + deferred)
-9. Test Failure Triage (Phase 7)
-10. Test Results per AC + fix history
-11. Judgment Items (Phase 3.6 ASK-classified)
-12. Debugging Notes (Phase 7 debug reports — Symptom / Root cause / Fix / Evidence / Regression / Related / Status)
-13. Visual Evidence (AC → screenshot path → console errors → viewport)
-14. Execution Metrics (phase timing + fix loop counts)
-15. Quality Score (weighted)
-16. Dogfood Findings — from Phase 7.7 `DOGFOOD.md`: high-impact suggestions summary,
+6. Feedback-Derived Rules (status: none / captured / rejected; readable rule text if captured)
+7. Confidence Ratings table from Phase 4.6 (highlight ≤6)
+8. Adversarial Findings table from Phase 4.7 (critical/high fixed, lower deferred)
+9. Near-Zero Cost check (Phase 4.8 fixed + deferred)
+10. Test Failure Triage (Phase 7)
+11. Test Results per AC + fix history
+12. Judgment Items (Phase 3.6 ASK-classified)
+13. Debugging Notes (Phase 7 debug reports — Symptom / Root cause / Fix / Evidence / Regression / Related / Status)
+14. Visual Evidence (AC → screenshot path → console errors → viewport)
+15. Execution Metrics (phase timing + fix loop counts)
+16. Quality Score (weighted)
+17. Dogfood Findings — from Phase 7.7 `DOGFOOD.md`: high-impact suggestions summary,
     re-plan recommendation if any. "No dogfood findings" if skipped or clean.
-17. Health Delta — recompute metrics from Phase 0 baseline:
+18. Health Delta — recompute metrics from Phase 0 baseline:
 
     ```
     | Metric | Before | After | Δ |
@@ -490,6 +491,40 @@ echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"operational|pitfall|eur
 ```
 
 `type=operational` for tooling/syntax/path facts. `type=pitfall` for traps to avoid. `type=eureka` for first-principles discoveries. `type=feedback` for user-stated preferences. `files` enables staleness detection if a referenced path is later deleted. Silent-fail on write error. Never blocks.
+
+### Phase 8.5.1: Feedback-Derived Rules (judgment required, capture optional)
+
+Review user corrective feedback from the task. The goal is not to document the mistake. The goal is to extract a reusable conditional behavior rule only when the feedback can be reduced to a readable "When X, do Y. Verify by Z." instruction.
+
+Classify the task as exactly one:
+- `none` — no user feedback implies a future behavior rule.
+- `captured` — feedback produced a reusable conditional rule and it was recorded in HANDOFF. If durable beyond this task, append a `type:"feedback-rule"` learning for Tier 2 promotion.
+- `rejected` — feedback looked like a preference or complaint but should not become a rule. Record the reason in HANDOFF.
+
+Capture only rules that have all three parts:
+- Trigger: the situation where the rule applies.
+- Action: what the agent should do.
+- Verification: how HANDOFF, tests, or review can prove the rule was followed.
+
+Reject entries that are blame narratives, task-local preferences, vague style opinions, or one-off urgency requests. Never write "the agent forgot..." into Tier 2 docs. Convert the lesson into behavior or reject it.
+
+When captured, the HANDOFF text must be readable prose, for example:
+
+```markdown
+## Feedback-Derived Rules
+
+Status: captured
+
+When changing runtime-specific harness plugin behavior, review both the canonical `plugin/` tree and the runtime-specific tree such as `plugin-codex/`.
+
+Verify by explaining in `HANDOFF.md` which side changed and why any other side was left unchanged.
+```
+
+If the rule should enter Tier 2, log a structured learning so the promotion script can render readable Markdown:
+
+```bash
+echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"feedback-rule","source":"develop","key":"SHORT_RULE_NAME","trigger":"<situation>","action":"<behavior>","verification":"<how to prove it>","reason":"<why this prevents recurrence>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
+```
 
 ### Phase 8.6: DOC_SYNC
 

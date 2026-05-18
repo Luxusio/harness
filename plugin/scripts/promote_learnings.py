@@ -85,15 +85,40 @@ def _write_entries(path: str, entries: list[dict]) -> None:
             f.write(json.dumps(e, ensure_ascii=False) + "\n")
 
 
+def _feedback_rule_body(entry: dict, fallback_insight: str) -> str:
+    """Render feedback-derived rules as readable prose for Tier 2 docs."""
+    trigger = str(entry.get("trigger") or "").strip()
+    action = str(entry.get("action") or "").strip()
+    verification = str(entry.get("verification") or "").strip()
+    reason = str(entry.get("reason") or "").strip()
+
+    if not (trigger and action):
+        return fallback_insight
+
+    lines = [f"When {trigger}, {action}."]
+    if verification:
+        lines.append(f"Verify by {verification}.")
+    if reason:
+        lines.append(f"Why: {reason}.")
+    return "\n\n".join(lines)
+
+
+def _entry_detail(entry: dict, count: int) -> str:
+    insight = str(entry.get("insight", ""))
+    if entry.get("type") == "feedback-rule":
+        insight = _feedback_rule_body(entry, insight)
+    return (
+        f"\n## {entry.get('key', '')}\n\n{insight}\n\n"
+        f"**Promoted from learnings:** {count} occurrences\n"
+    )
+
+
 def _append_pattern(patterns_dir: str, topic: str, key: str,
-                    insight: str, count: int, dry_run: bool) -> str:
+                    entry: dict, count: int, dry_run: bool) -> str:
     path = os.path.join(patterns_dir, f"{topic}.md")
     header = f"# {topic.title()} Patterns\n\n| Pattern | Discovered | Source |\n|---------|------------|--------|\n"
     row = f"| {key} | {_now_iso()[:10]} | run-auto-promote |"
-    detail = (
-        f"\n## {key}\n\n{insight}\n\n"
-        f"**Promoted from learnings:** {count} occurrences\n"
-    )
+    detail = _entry_detail(entry, count)
 
     if dry_run:
         print(f"  [dry-run] would append to {path}: {key} ({count}x)")
@@ -104,9 +129,10 @@ def _append_pattern(patterns_dir: str, topic: str, key: str,
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
         if f"## {key}" in content:
+            body = detail.split(f"## {key}\n\n", 1)[1]
             content = re.sub(
                 rf"(## {re.escape(key)}\n\n).*?(\n\*\*Promoted.*?\n)",
-                rf"\g<1>{insight}\n\n**Promoted from learnings:** {count} occurrences\n",
+                rf"\g<1>{body}",
                 content, count=1, flags=re.DOTALL,
             )
             with open(path, "w", encoding="utf-8") as f:
@@ -241,12 +267,12 @@ def run(repo_root: str, threshold: int, dry_run: bool) -> int:
 
     # Step 1: Aggregate
     counts: Counter[str] = Counter()
-    latest_insight: dict[str, str] = {}
+    latest_entry: dict[str, dict] = {}
     for e in entries:
         k = e.get("key", "")
         if k:
             counts[k] += 1
-            latest_insight[k] = e.get("insight", "")
+            latest_entry[k] = e
 
     promotable = {k for k, c in counts.items() if c >= threshold}
     print(f"learnings: {len(entries)} entries, {len(counts)} unique keys, {len(promotable)} promotable (threshold={threshold})")
@@ -254,7 +280,7 @@ def run(repo_root: str, threshold: int, dry_run: bool) -> int:
     # Step 2: Promote
     for k in sorted(promotable):
         topic = _topic_for_key(k)
-        _append_pattern(patterns_dir, topic, k, latest_insight[k], counts[k], dry_run)
+        _append_pattern(patterns_dir, topic, k, latest_entry[k], counts[k], dry_run)
 
     # Step 3: Prune promoted
     if promotable and not dry_run:
