@@ -263,7 +263,8 @@ Runs continuously during Phase 3.
   python3 ${HARNESS_PLUGIN_ROOT}/scripts/qa_codifier.py --task-dir <task_dir> 2>/dev/null || true
   ```
   Parses `codifiable:` YAML blocks emitted by the QA pass and stages validated tests to `tests/regression/<sanitized-task-id>/`. Same script as Claude side; runtime-agnostic.
-- **3.6 Fix-first pattern** — read `plugin/skills/develop/fix-first-pattern.md` (Claude tree fallback). Classify AUTO-FIX (dead code, magic numbers, stale comments, missing guards) and ASK (API design, architecture, security, DRY extractions). Auto-fix immediately; flag ASK in HANDOFF "Judgment Items". The **3-attempt escalation rule** in that sub-file applies to every fix loop (per-AC, Phase 7, debug).
+	- **3.6 Fix-first pattern** — read `plugin/skills/develop/fix-first-pattern.md` (Claude tree fallback). Classify AUTO-FIX (dead code, magic numbers, stale comments, missing guards) and ASK (API design, architecture, security, DRY extractions). Auto-fix immediately; flag ASK in HANDOFF "Judgment Items". The **3-attempt escalation rule** in that sub-file applies to every fix loop (per-AC, Phase 7, debug).
+	- **3.6.1 Product Specs (UI/API intent)** — when a task changes user-visible screens, flows, states, localization, or interactions, create or update a short Product Spec under `doc/harness/product/ui/<screen-or-feature>.md`. When a task changes externally consumed APIs, webhooks, SDK-facing behavior, request/response schemas, status codes, validation, or compatibility expectations, create or update `doc/harness/product/api/<endpoint-or-integration>.md`. Write readable prose that states intended observable behavior and verification cues. Link each updated spec from HANDOFF. For internal-only refactors, tests, or tooling changes, record `Product Specs: not needed — <reason>` in HANDOFF.
 
 ### Phase 3.7-3.9: Post-implementation health
 
@@ -372,6 +373,8 @@ write_critic_qa {
 
 Multi-lens concurrency uses `spawn_agent` when available; otherwise run required lenses sequentially. If browser QA is required, close with browser-lens PASS evidence or browser-lens `BLOCKED_ENV`.
 
+When Product Specs are linked in HANDOFF or changed under `doc/harness/product/`, pass those paths to the QA lens as intent evidence. QA verifies implementation against the spec's observable behavior and verification cues.
+
 **Also implements:**
 - **Transience filter** — a failure must reproduce on 2 consecutive runs to count as `failed`. Single-run failures logged as `transient` in `learnings.jsonl`, not counted toward the 3-cycle limit.
 - **Severity × confidence close gate** — after synthesis, block close on:
@@ -451,20 +454,21 @@ Call `write_handoff` MCP with:
 2. Files changed (every file + one-line description)
 3. Verification results per AC
 4. Scope notes (out-of-plan changes with justification)
-5. Do Not Regress (caveats, fragile patterns)
-6. Feedback-Derived Rules (status: none / captured / rejected; readable rule text if captured)
-7. Confidence Ratings table from Phase 4.6 (highlight <=6)
-8. Adversarial Findings table from Phase 4.7 (critical/high fixed, lower deferred)
-9. Near-Zero Cost check (Phase 4.8 fixed + deferred)
-10. Test Failure Triage (Phase 7)
-11. Test Results per AC + fix history
-12. Judgment Items (Phase 3.6 ASK-classified)
-13. Debugging Notes (Phase 7 debug reports — Symptom / Root cause / Fix / Evidence / Regression / Related / Status)
-14. Visual Evidence / Browser QA: `done` with pages, viewports, interactions, screenshots; `blocked` with the exact missing browser tool/app condition; or `not applicable`
-15. Execution Metrics (phase timing + fix loop counts)
-16. Quality Score (weighted)
-17. Dogfood Findings — from Phase 7.7 `DOGFOOD.md`. "No dogfood findings" if skipped or clean.
-18. Health Delta — recompute metrics from Phase 0 baseline:
+5. Product Specs: links to `doc/harness/product/ui/` or `doc/harness/product/api/` specs updated for user-visible screens or externally consumed APIs; or `not needed — <reason>`
+6. Do Not Regress (caveats, fragile patterns)
+7. Feedback-Derived Rules (status: none / captured / rejected; readable rule text if captured)
+8. Confidence Ratings table from Phase 4.6 (highlight <=6)
+9. Adversarial Findings table from Phase 4.7 (critical/high fixed, lower deferred)
+10. Near-Zero Cost check (Phase 4.8 fixed + deferred)
+11. Test Failure Triage (Phase 7)
+12. Test Results per AC + fix history
+13. Judgment Items (Phase 3.6 ASK-classified)
+14. Debugging Notes (Phase 7 debug reports — Symptom / Root cause / Fix / Evidence / Regression / Related / Status)
+15. Visual Evidence / Browser QA: `done` with pages, viewports, interactions, screenshots; `blocked` with the exact missing browser tool/app condition; or `not applicable`
+16. Execution Metrics (phase timing + fix loop counts)
+17. Quality Score (weighted)
+18. Dogfood Findings — from Phase 7.7 `DOGFOOD.md`. "No dogfood findings" if skipped or clean.
+19. Health Delta — recompute metrics from Phase 0 baseline:
     ```
     | Metric | Before | After | Δ |
     | Tests | 42 | 46 | +4 ↑ |

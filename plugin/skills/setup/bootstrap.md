@@ -14,6 +14,9 @@ doc/harness/critics/
   plan.md
   runtime.md
   document.md
+doc/harness/product/
+  ui/                            # durable Product Specs for screens and UX behavior
+  api/                           # durable Product Specs for externally consumed APIs
 ```
 
 ## 3.2 manifest.yaml
@@ -195,9 +198,13 @@ Note: no `Default agent is X` line. The harness routes via skills, not agent swi
 ## 3.6 doc/harness/ directory
 
 ```bash
-mkdir -p doc/harness
+mkdir -p doc/harness/product/ui doc/harness/product/api
 touch doc/harness/.gitkeep
 ```
+
+`doc/harness/product/` stores durable Product Specs. Use `ui/` for user-visible
+screens, flows, states, and interactions. Use `api/` for externally consumed
+API contracts, schemas, errors, and compatibility expectations.
 
 Append harness operational paths to `.gitignore` (idempotent — skips lines already present):
 

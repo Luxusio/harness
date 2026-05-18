@@ -3,8 +3,8 @@
 
 Called from ``handle_task_start`` right after scaffolding so agents — post
 compaction, on resume, or at first-time task orientation — have a compact
-file of the repo/toolchain state without re-running ``pwd``, ``git status``,
-and ``cat manifest.yaml`` by hand.
+file of the repo/toolchain state without re-running ``pwd`` and
+``cat manifest.yaml`` by hand.
 
 Pure probe: no network, stdlib only, read-only. ``snapshot()`` swallows its
 own exceptions and returns ``""`` on failure so the MCP server's task_start
@@ -58,23 +58,6 @@ def _run(cmd: list[str], cwd: str) -> str:
 
 def _git_branch(repo_root: str) -> str:
     return _run(["git", "branch", "--show-current"], repo_root) or "unknown"
-
-
-def _git_dirty(repo_root: str) -> bool:
-    """True when working tree has any uncommitted change (staged or unstaged).
-
-    Best-effort: errors render as clean (``False``).
-    """
-    try:
-        r = subprocess.run(
-            ["git", "status", "--porcelain"],
-            capture_output=True, text=True, cwd=repo_root, timeout=3,
-        )
-    except Exception:
-        return False
-    if r.returncode != 0:
-        return False
-    return bool(r.stdout.strip())
 
 
 def _manifest_fields(repo_root: str) -> dict[str, str]:
@@ -146,7 +129,6 @@ def _render(ctx: dict[str, Any]) -> str:
     lines.append("## Repo")
     lines.append(f"- root: `{repo.get('root', '')}`")
     lines.append(f"- branch: `{repo.get('branch', '')}`")
-    lines.append(f"- dirty: {repo.get('dirty', False)}")
     lines.append("")
 
     lines.append("## Manifest")
@@ -189,7 +171,6 @@ def snapshot(task_dir: str, repo_root: str | None = None) -> str:
             "repo": {
                 "root": repo_root,
                 "branch": _git_branch(repo_root),
-                "dirty": _git_dirty(repo_root),
             },
             "manifest": _manifest_fields(repo_root),
             "tooling": _tooling_block(repo_root),

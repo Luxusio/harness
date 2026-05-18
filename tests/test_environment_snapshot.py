@@ -1,6 +1,6 @@
 """AC-001: environment_snapshot.py writes ENVIRONMENT_SNAPSHOT.md.
 
-Covers required fields, dirty-bit reporting, no-manifest fallback, and
+Covers required fields, git-status avoidance, no-manifest fallback, and
 raise-swallowed behaviour.
 """
 from __future__ import annotations
@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -25,9 +26,8 @@ spec.loader.exec_module(env_snapshot_mod)
 
 def _mk_git_repo(base: Path) -> None:
     (base / ".git").mkdir()
-    # Shim: environment_snapshot calls `git branch --show-current` and
-    # `git status --porcelain` via subprocess. Actually init a real git repo
-    # so these commands succeed.
+    # Shim: environment_snapshot calls `git branch --show-current` via
+    # subprocess. Actually init a real git repo so this command succeeds.
     subprocess.run(["git", "init", "-q"], cwd=base, check=True)
     subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=a",
                     "commit", "--allow-empty", "-qm", "init"], cwd=base, check=True)
@@ -79,16 +79,28 @@ class TestEnvironmentSnapshot(unittest.TestCase):
         self.assertIn("ast_grep_ready: true", body)
         self.assertIn("project_shape: `library`", body)
 
-    def test_dirty_bit_reflects_porcelain_output(self):
+    def test_snapshot_does_not_call_git_status_or_render_dirty_bit(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             _mk_git_repo(base)
             (base / "new.txt").write_text("uncommitted\n")
             task_dir = base / "task"
             task_dir.mkdir()
-            path = env_snapshot_mod.snapshot(str(task_dir), str(base))
+
+            calls: list[list[str]] = []
+            real_run = subprocess.run
+
+            def guarded_run(cmd, *args, **kwargs):
+                calls.append(list(cmd))
+                self.assertNotEqual(list(cmd)[:2], ["git", "status"])
+                return real_run(cmd, *args, **kwargs)
+
+            with mock.patch.object(env_snapshot_mod.subprocess, "run", side_effect=guarded_run):
+                path = env_snapshot_mod.snapshot(str(task_dir), str(base))
+
             body = Path(path).read_text(encoding="utf-8")
-        self.assertIn("dirty: True", body)
+        self.assertNotIn("dirty:", body)
+        self.assertIn(["git", "branch", "--show-current"], calls)
 
     def test_no_manifest_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
