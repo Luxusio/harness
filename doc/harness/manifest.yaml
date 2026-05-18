@@ -14,6 +14,23 @@ build_command: ""
 smoke_command: ""
 healthcheck_command: ""
 
+# --- Runtime services (optional) ---
+# Used by plugin/scripts/runtime_services.py and QA live-smoke flows.
+# Declare background services that must be up before live HTTP/browser checks.
+# Start declared services with: python3 plugin/scripts/runtime_services.py start
+#
+# runtime:
+#   services:
+#     - name: api
+#       command: ./gradlew bootRun
+#       cwd: services/api
+#       healthcheck: curl -fsS http://localhost:8080/actuator/health
+#       ready_timeout_sec: 60
+#       stop: interrupt
+#       self_heal:
+#         - ./gradlew --stop
+#         - ./gradlew clean assemble
+
 # --- Verify commands (MCP task_verify is authoritative; these are CLI fallback) ---
 verify_commands:
   - uv run pytest tests/

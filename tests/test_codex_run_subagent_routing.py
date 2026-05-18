@@ -61,6 +61,9 @@ def test_codex_develop_no_longer_says_agent_absence_is_absolute():
         "no parallel agent fan-out to amortize",
         "Claude-only concept",
         "sequential is always the schedule",
+        "AC Dependency Analysis (sequential on Codex)",
+        "RUN_DOGFOOD runs the inline",
+        "Codex runs it as a second adversarial pass in the same context",
     ]
     combined = _text(CODEX_RUN) + "\n" + body
     for phrase in forbidden:

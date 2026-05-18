@@ -22,7 +22,36 @@ Materialise plan content from in-memory review state into `/tmp/plan_content.md`
 ```
 Omit if no restore point.
 
-**Required sections:** objective, scope in, scope out, `NOT in scope`, `What already exists`, target files/surfaces, acceptance criteria (stable IDs AC-001+), verification contract, `Error & Rescue Registry`, `Failure Modes Registry`, `Dream state delta`, `Cross-phase themes`, doc-sync expectation, risk/rollback (if `risk_level: high`), next implementation step.
+**Required sections:** objective, scope in, scope out, `NOT in scope`, `What already exists`, target files/surfaces, acceptance criteria (stable IDs AC-001+), verification contract, `Requirement Decision`, `Error & Rescue Registry`, `Failure Modes Registry`, `Dream state delta`, `Cross-phase themes`, doc-sync expectation, risk/rollback (if `risk_level: high`), next implementation step.
+
+### Requirement Decision
+
+Every PLAN.md must classify whether the task changes observable product
+behavior before develop starts:
+
+```md
+## Requirement Decision
+Observable behavior changes: yes | no
+Surface: ui | api | both | none
+Requirement doc: doc/<area>/REQ__<name>.md | n/a
+Reason: <one sentence>
+```
+
+Use `yes` when the task changes anything a user, integrator, or QA lens can
+observe: existing screen state, filters, search, sorting, loading, empty/error
+states, localization/copy/visibility, click/input interactions, API request or
+response shape, status codes, auth/session behavior, validation, compatibility,
+or externally consumed side effects. Observable bugfixes default to `yes`
+because the visible behavior changes from wrong to intended.
+
+Write REQ docs under the DDD-style area or bounded-context folder, for example
+`doc/ui/REQ__filter-bar.md`, `doc/api/REQ__oauth-login.md`, or
+`doc/auth/REQ__session-policy.md`. Use `doc/common/` for cross-cutting or
+repository-wide requirements.
+
+Use `no` only for internal-only refactors, tests, harness tooling, or
+non-observable maintenance. The reason must say which observable surfaces are
+unchanged.
 
 ### Review Status table (end of PLAN.md)
 

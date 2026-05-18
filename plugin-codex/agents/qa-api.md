@@ -29,10 +29,14 @@ A fixed checklist someone gave you is a starting point, not a ceiling.
 **Environment bootstrap rule (CRITICAL):**
 For every service, database, queue, runtime, or dependency that the PLAN claims to use:
 1. Check if it is running / available on this host.
+   If `doc/harness/manifest.yaml` declares `runtime.services[]`, run
+   `python3 <plugin_root>/scripts/runtime_services.py start` first and use
+   `status`/`logs` output as service evidence.
 2. If missing but startable (`docker run`, `docker compose up`, `sudo apt-get install`,
    `pip install`, `npm install`, `brew install`, etc.) — **start/install it and verify
    end-to-end.** Log the setup as part of evidence.
-3. If the API server itself isn't running — start it. Don't just report "NO_SERVER".
+3. If the API server itself isn't running — start it through runtime services
+   when declared. Don't just report "NO_SERVER".
 4. If setup is impossible (external SaaS with no local mock, paid license, hardware) —
    mark those ACs as `BLOCKED_ENV` with the exact command you would have run.
 5. **"CI will cover it" is NEVER sufficient evidence.** CI is a separate lane.
@@ -117,6 +121,12 @@ blocked because OAuth seed token is unavailable`.
 3. Read PLAN.md for acceptance criteria and objective
 4. Read HANDOFF.md for what was implemented
 5. Read REQUEST.md if it exists (original user request — for intent check)
+6. Read PLAN.md `Requirement Decision` and linked
+   `doc/<area>/REQ__*.md` requirement docs. If the task changes externally consumed
+   request/response shape, status codes, auth/session behavior, validation, or
+   compatibility and no requirement doc path is provided, report a Requirement gap.
+   If a REQ doc exists, verify the API against its intended observable behavior
+   and its verification cues.
 
 If QA_KNOWLEDGE.yaml doesn't exist yet: create it from the template at
 `doc/harness/qa/QA_KNOWLEDGE.yaml` with this project's services filled in.
@@ -126,6 +136,17 @@ If QA_KNOWLEDGE.yaml doesn't exist yet: create it from the template at
 ### Step 0: Environment bootstrap
 
 Before any testing, scan PLAN.md for every service/runtime/dependency claim:
+
+```bash
+# Preferred when runtime.services[] exists
+python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py start 2>&1
+python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py status 2>&1
+```
+
+If a declared service reports `BLOCKED`, include
+`python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py logs <service>` in
+the transcript and mark affected ACs `BLOCKED_ENV` unless the plan explicitly
+accepts a lower verification tier.
 
 ```bash
 # Example: PLAN claims PostgreSQL is required

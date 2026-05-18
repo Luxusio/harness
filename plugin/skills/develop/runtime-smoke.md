@@ -3,6 +3,22 @@
 Verify the app actually works before the expensive quality audit pipeline.
 Each project type has its own smoke test. All projects run this phase.
 
+## Runtime Services Prelude
+
+Before browser or API smoke, start declared background services:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runtime_services.py start
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runtime_services.py status
+```
+
+The script reads `doc/harness/manifest.yaml` `runtime.services[]`, writes state
+to `doc/harness/runtime/services.json`, writes logs under
+`doc/harness/runtime/logs/`, waits for healthchecks, and runs bounded
+self-healing commands when configured. If a required service remains blocked,
+record the exact service and health detail in the QA transcript instead of
+silently downgrading live smoke.
+
 **Browser projects (`browser_qa_supported: true`):**
 
 ```bash
@@ -10,7 +26,9 @@ Each project type has its own smoke test. All projects run this phase.
 curl -s -o /dev/null -w '%{http_code}' <entry_url> 2>/dev/null || echo "NO_SERVER"
 ```
 
-If NO_SERVER: start `dev_command` (background), wait up to 15s.
+If NO_SERVER: prefer `runtime_services.py start <service>` for the frontend
+service declared in `runtime.services[]`. Fall back to `dev_command`
+(background, wait up to 15s) only when no runtime service is declared.
 
 Steps:
 1. Navigate to entry_url. Verify page loads (HTTP 200).
@@ -75,7 +93,9 @@ _API_URL=$(grep "^api_base_url:" doc/harness/manifest.yaml 2>/dev/null | awk '{p
 curl -s -o /dev/null -w '%{http_code}' "$_API_URL" 2>/dev/null || echo "NO_SERVER"
 ```
 
-If NO_SERVER: start the API server (background), wait up to 15s.
+If NO_SERVER: prefer `runtime_services.py start <service>` for the API service
+declared in `runtime.services[]`. Fall back to the legacy API start command
+only when no runtime service is declared.
 
 Steps:
 1. **Health check:** Hit a known endpoint (e.g., `/health`, `/api/status`, `/`).

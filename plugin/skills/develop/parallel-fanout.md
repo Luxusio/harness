@@ -6,7 +6,8 @@ This sub-file covers Phase 3.0 / Phase 4.5-4.8 / Phase 7 / Phase 7.7 parallel-Ag
 
 ## Parallel Fanout Convention
 
-The orchestrator uses three Claude Code primitives. Pick the smallest that fits the work; do not escalate without reason.
+The orchestrator uses three Claude Code primitives. Pick the smallest primitive
+type that fits the work; do not reduce worker count for independent ACs.
 
 1. `Agent(subagent_type="...", model="...", prompt="...")` — one-shot subagent with isolated context. Default for quality phases (4.5–4.8), per-AC executor fanout, multi-lens QA, and dogfooder.
 2. `TeamCreate({team_name, description})` — bounded multi-agent pipeline with shared task list, dependency tracking, and inter-agent `SendMessage`. Use when the work decomposes into 3+ stages with cross-stage handoffs.
@@ -28,6 +29,8 @@ Whenever two or more verification, judgment, or executor calls have no dependenc
 Concretely:
 - Issue every parallel `Agent(...)` call as a separate tool-use block in one assistant turn.
 - Collect every return value before mutating shared state (PROGRESS.md, CHECKS.yaml).
+  Executors write per-AC result files under `<task_dir>/audit/`; the coordinator
+  is the only writer to PROGRESS.md and CHECKS.yaml.
 - A `TeamCreate` + N `Task` worker spawns: emit `TeamCreate` in turn 1; emit all N `Task` calls in turn 2 — never split worker spawns across multiple turns.
 
 **Inline spawn template** (copyable):
@@ -43,6 +46,8 @@ Agent(name="<task_id>:AC-NNN", subagent_type="oh-my-claudecode:executor",
 ```
 
 Cap parallel fanout at N=4 in a single batch. Past N=4, orchestrator-side merge cost (PROGRESS.md write contention, CHECKS.yaml update ordering) dominates the spawn-time savings. **The cap applies per batch, not per task** — broader trigger thresholds produce more batches, each still capped at 4.
+Merge cost controls batch size only. It does not justify collapsing two or more
+independent ACs into one executor below the cap.
 
 ---
 
@@ -65,11 +70,28 @@ Two ACs are **component-independent** iff one of the following holds:
 1. Their PLAN target file sets are disjoint (no shared file path).
 2. Any shared file is factored into a dedicated helper-extract AC that runs first (sequential prelude → parallel consumers).
 
-Component-independence is a property of the PLAN AC matrix, not of the diff. The orchestrator computes it from `**Files:**` declarations in PLAN.md, not from `git diff --name-only`. If the matrix is ambiguous, run sequentially and flag the ambiguity as a Plan Challenge for the next plan cycle — do not infer parallelism from file paths.
+Component-independence is a property of the PLAN AC matrix, not of the diff. The orchestrator computes it from `**Files:**` declarations in PLAN.md, not from `git diff --name-only`. If the matrix is ambiguous, write an explicit dependency matrix artifact and flag the ambiguity as a Plan Challenge for the next plan cycle. Then run sequentially by declared dependency. Do not assign multiple possibly-independent ACs to one executor as a silent fallback.
 
 ### Small-task edge case
 
-If the matrix says fanout but total edit volume is trivial (<20 lines combined, ~30s total work), sequential is acceptable. Log `parallel-trigger-skipped` to `learnings.jsonl` with the small-task reason. The default is still parallel — sequential is the opt-out, not the default.
+If the matrix says fanout but total edit volume is trivial (<20 lines combined,
+~30s total work), sequential is acceptable only with a concrete skip record:
+AC ids, estimated lines, estimated runtime, and `parallel-trigger-skipped` with
+`reason:"small-task"`. The default is still parallel — sequential is the
+evidenced opt-out, not the default.
+
+### Lane table requirement
+
+Before implementation, emit this table and use it as the routing contract:
+
+| AC | Files | Depends on | Lane | Route | Reason |
+|----|-------|------------|------|-------|--------|
+
+`Route` is `Agent(...)`, `sequential-prelude`, `sequential-dependent`, or
+`sequential-small-task`. Two or more independent `Agent(...)` rows trigger one
+parallel spawn batch. `sequential-small-task` requires logged evidence:
+`parallel-trigger-skipped` with `reason:"small-task"`, `estimated_lines`, and
+`estimated_seconds`.
 
 ---
 

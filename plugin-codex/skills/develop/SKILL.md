@@ -1,6 +1,6 @@
 ---
 name: develop
-description: Implement PLAN.md on Codex. Reads PLAN.md, implements changes, runs sequential per-AC quality checks, verification, and HANDOFF.
+description: Implement PLAN.md on Codex. Reads PLAN.md, implements changes, routes independent ACs by current subagent capability, verifies, and writes HANDOFF.
 ---
 
 # HAND-PORTED — Codex variant of plugin/skills/develop/SKILL.md (500L source).
@@ -139,9 +139,18 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 **Baseline screenshot (browser projects):** if browser tools are available in the current Codex session, capture it inline using the qa-browser methodology. If browser QA is required but unavailable, record the blocker for the browser lens.
 
-### Phase 3.0: AC Dependency Analysis (sequential on Codex)
+### Phase 3.0: AC Dependency Analysis
 
-Codex AC implementation is capability-gated. For small tasks, run ACs sequentially in the orchestrator's own context. When `spawn_agent` is available and the PLAN has genuinely independent ACs or bounded side work, use a worker subagent with explicit file ownership:
+Codex AC implementation is capability-gated. Build the same lane table as the
+Claude develop skill before editing files:
+
+| AC | Files | Depends on | Lane | Route | Reason |
+|----|-------|------------|------|-------|--------|
+
+`Route` is `spawn_agent(worker)`, `sequential-prelude`,
+`sequential-dependent`, or `sequential-small-task`. When the table has two or
+more independent AC rows and `spawn_agent` is available, spawn one worker per
+independent AC in one assistant message. Use explicit file ownership:
 
 ```text
 spawn_agent {
@@ -151,15 +160,27 @@ spawn_agent {
 }
 ```
 
-Trade-off: sequential is simpler and often right for typical 3-5 AC tasks; worker subagents improve independence and wall-clock when ownership boundaries are clear.
+Use one worker per independent AC. Do not assign multiple independent ACs to one
+worker. Workers list changed paths and write any per-AC notes to
+`<task_dir>/audit/AC-NNN.worker.md`; the orchestrator merges PROGRESS.md and
+CHECKS.yaml after all siblings return.
 
-Log the sequential pass as a single `sequential-pass` event in `timeline.jsonl`:
+Use `sequential-small-task` only for genuinely trivial N=2 work (estimated <20
+changed lines combined and <30 seconds of editing). Record AC ids,
+estimated_lines, estimated_seconds, and reason in `parallel-trigger-skipped`.
+When `spawn_agent` is unavailable for otherwise independent ACs, record
+`Runtime Fallbacks` in HANDOFF.
+
+Log the selected routing as `parallel-trigger` or `parallel-trigger-skipped`.
+For sequential fallback, also log a `sequential-pass` event in `timeline.jsonl`:
 ```bash
 echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","phase":"3.0","event":"sequential-pass","detail":"<N> ACs in declared order; sequential chosen for task shape or spawn_agent unavailable"}' \
   >> <task_dir>/timeline.jsonl
 ```
 
-If PLAN.md declares a helper-extract AC, run it first, then the consumer ACs in order. The dependency matrix from PLAN.md is still the single source of truth.
+If PLAN.md declares a helper-extract AC, run it first, then route the consumer
+ACs from the lane table. The dependency matrix from PLAN.md is still the single
+source of truth.
 
 ### Phase 3.1: Scope Lock
 
@@ -168,7 +189,9 @@ Declare allowed / test / forbidden paths in PROGRESS.md. Before each file edit:
 
 ### Phase 3: Implement
 
-1. **One AC at a time**, in order. Skip ACs in `completed_acs`.
+1. For sequential batches, work **one AC at a time**, in order. For parallel
+   batches, wait for all sibling worker results, then merge progress once. Skip
+   ACs in `completed_acs`.
 2. **Follow existing patterns.** Smallest coherent diff. No speculative features.
 3. **Codex tool surface:** use `read_file` for reads, `apply_patch` for edits/writes (Codex envelope-oriented), `shell` for Bash commands. Multi-edit is one `apply_patch` envelope per file. Where the Claude flow says `Edit`/`Write`/`MultiEdit`, read it as `apply_patch`.
 
@@ -264,7 +287,7 @@ Runs continuously during Phase 3.
   ```
   Parses `codifiable:` YAML blocks emitted by the QA pass and stages validated tests to `tests/regression/<sanitized-task-id>/`. Same script as Claude side; runtime-agnostic.
 	- **3.6 Fix-first pattern** — read `plugin/skills/develop/fix-first-pattern.md` (Claude tree fallback). Classify AUTO-FIX (dead code, magic numbers, stale comments, missing guards) and ASK (API design, architecture, security, DRY extractions). Auto-fix immediately; flag ASK in HANDOFF "Judgment Items". The **3-attempt escalation rule** in that sub-file applies to every fix loop (per-AC, Phase 7, debug).
-	- **3.6.1 Product Specs (UI/API intent)** — when a task changes user-visible screens, flows, states, localization, or interactions, create or update a short Product Spec under `doc/harness/product/ui/<screen-or-feature>.md`. When a task changes externally consumed APIs, webhooks, SDK-facing behavior, request/response schemas, status codes, validation, or compatibility expectations, create or update `doc/harness/product/api/<endpoint-or-integration>.md`. Write readable prose that states intended observable behavior and verification cues. Link each updated spec from HANDOFF. For internal-only refactors, tests, or tooling changes, record `Product Specs: not needed — <reason>` in HANDOFF.
+	- **3.6.1 Requirement docs (UI/API intent)** — read PLAN.md `Requirement Decision` before implementation. When a task changes user-visible screens, flows, states, localization, or interactions, create or update a short REQ doc under `doc/<area>/REQ__<name>.md`; use DDD-style areas or bounded contexts such as `ui`, `api`, `auth`, `billing`, `catalog`, or `common`. Existing-screen state changes count: filters, search, sorting, loading, empty/error states, visibility, labels, and click/input behavior. Observable bugfixes count because the user-visible behavior changes from wrong to intended. When a task changes externally consumed APIs, webhooks, SDK-facing behavior, request/response schemas, status codes, auth/session behavior, validation, or compatibility expectations, create or update the matching `doc/<area>/REQ__<name>.md`. Write readable prose that states intended observable behavior and verification cues. Link each updated REQ doc from HANDOFF. For internal-only refactors, tests, or tooling changes, record `Requirement docs: not needed — <reason>` in HANDOFF; the reason must say no UI state, user flow, API contract, or observable runtime behavior changed.
 
 ### Phase 3.7-3.9: Post-implementation health
 
@@ -307,7 +330,7 @@ done | sort -u
 - Performance for SCOPE_API or large diffs. Gated (skip after 3+ dispatches with 0 findings).
 - LLM-trust review for SKILL.md or agent.md changes.
 
-**Red Team (conditional):** when diff >= 200 lines OR any specialist reported critical. Job: find what the first pass MISSED. Codex runs it as a second adversarial pass in the same context after a deliberate re-frame.
+**Red Team (conditional):** when diff >= 200 lines OR any specialist reported critical. Job: find what the first pass MISSED. Prefer `spawn_agent` for an independent adversarial pass when available; inline re-frame is fallback.
 
 **Phase 4.85 Test Plan Artifact** — write the coverage diagram from audit into `doc/harness/test-plans/<task_id>-test-plan.md`. Mechanical.
 
@@ -373,7 +396,7 @@ write_critic_qa {
 
 Multi-lens concurrency uses `spawn_agent` when available; otherwise run required lenses sequentially. If browser QA is required, close with browser-lens PASS evidence or browser-lens `BLOCKED_ENV`.
 
-When Product Specs are linked in HANDOFF or changed under `doc/harness/product/`, pass those paths to the QA lens as intent evidence. QA verifies implementation against the spec's observable behavior and verification cues.
+When REQ docs are linked in HANDOFF or changed under `doc/<area>/REQ__*.md`, pass those paths to the QA lens as intent evidence. QA verifies implementation against the requirement's observable behavior and verification cues.
 
 **Also implements:**
 - **Transience filter** — a failure must reproduce on 2 consecutive runs to count as `failed`. Single-run failures logged as `transient` in `learnings.jsonl`, not counted toward the 3-cycle limit.
@@ -440,7 +463,11 @@ PY
 [ -z "$_USER_FACING" ] && echo "SKIP_DOGFOOD" || echo "RUN_DOGFOOD"
 ```
 
-`SKIP_DOGFOOD` short-circuits; `RUN_DOGFOOD` runs the inline dogfooder methodology: use the product as a power user, find friction / gaps / missing workflows that QA didn't catch (because they aren't bugs). Write findings to `<task_dir>/DOGFOOD.md`. The dogfooder does NOT gate task completion.
+`SKIP_DOGFOOD` short-circuits; `RUN_DOGFOOD` uses `spawn_agent` for the
+dogfooder when available, or runs the same methodology inline as fallback: use
+the product as a power user, find friction / gaps / missing workflows that QA
+didn't catch (because they aren't bugs). Write findings to
+`<task_dir>/DOGFOOD.md`. The dogfooder does NOT gate task completion.
 
 Visual dogfooder browser screenshots follow the same availability gate: capture them when browser tools are present; otherwise record the missing browser evidence in HANDOFF.
 
@@ -454,7 +481,7 @@ Call `write_handoff` MCP with:
 2. Files changed (every file + one-line description)
 3. Verification results per AC
 4. Scope notes (out-of-plan changes with justification)
-5. Product Specs: links to `doc/harness/product/ui/` or `doc/harness/product/api/` specs updated for user-visible screens or externally consumed APIs; or `not needed — <reason>`
+5. Requirement docs: links to `doc/<area>/REQ__*.md` docs updated for user-visible screens, existing-screen state/interaction changes, observable bugfixes, or externally consumed APIs; or `not needed — <reason>` where the reason proves no UI state, user flow, API contract, or observable runtime behavior changed
 6. Do Not Regress (caveats, fragile patterns)
 7. Feedback-Derived Rules (status: none / captured / rejected; readable rule text if captured)
 8. Confidence Ratings table from Phase 4.6 (highlight <=6)

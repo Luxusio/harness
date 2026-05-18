@@ -169,14 +169,20 @@ def _do_codex_config_install(snippet: str, config_path: Path, force_merge: bool)
         backup = config_path.with_suffix(config_path.suffix + f".bak.{timestamp}")
         shutil.copy2(config_path, backup)
         if force_merge:
-            stripped = _strip_codex_harness_sections(existing)
+            stripped = _dedupe_codex_toml_tables(
+                _strip_codex_harness_sections(existing),
+                ("[mcp_servers.",),
+            )
             if stripped.strip():
                 new_content = stripped.rstrip("\n") + "\n\n" + snippet
             else:
                 new_content = snippet
         else:
             new_content = existing.rstrip("\n") + "\n\n" + snippet
-        new_content = _dedupe_codex_marketplace_block(new_content)
+        new_content = _dedupe_codex_toml_tables(
+            _dedupe_codex_marketplace_block(new_content),
+            ("[mcp_servers.",),
+        )
         config_path.write_text(new_content)
         return True, f"Merged into {config_path}; backup at {backup}"
     config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -232,6 +238,39 @@ def _dedupe_codex_marketplace_block(content: str) -> str:
         out.append(lines[i])
         i += 1
     return "\n".join(out).rstrip("\n") + "\n"
+
+
+def _dedupe_codex_toml_tables(content: str, prefixes: tuple[str, ...]) -> str:
+    """Keep the newest occurrence of duplicate TOML tables for selected prefixes."""
+    lines = content.splitlines()
+    spans: list[tuple[int, int, str]] = []
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            table = stripped
+            if any(table.startswith(prefix) for prefix in prefixes):
+                start = i
+                i += 1
+                while i < len(lines):
+                    next_stripped = lines[i].strip()
+                    if next_stripped.startswith("[") and next_stripped.endswith("]"):
+                        break
+                    i += 1
+                spans.append((start, i, table))
+                continue
+        i += 1
+
+    last_span_index = {table: index for index, (_, _, table) in enumerate(spans)}
+    remove: set[int] = set()
+    for index, (start, end, table) in enumerate(spans):
+        if last_span_index[table] != index:
+            remove.update(range(start, end))
+    if not remove:
+        return content.rstrip("\n") + ("\n" if content else "")
+
+    out = [line for index, line in enumerate(lines) if index not in remove]
+    return "\n".join(out).rstrip("\n") + ("\n" if out else "")
 
 
 def emit_and_install_codex_config(

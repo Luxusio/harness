@@ -373,6 +373,82 @@ def test_emit_codex_config_rehomes_everything_to_installed_codex_root(tmp_path):
     assert str(REPO_ROOT) not in json.dumps(parsed)
 
 
+def test_codex_force_merge_dedupes_duplicate_user_mcp_tables(tmp_path):
+    module = _load_install_module()
+    cfg = tmp_path / "config.toml"
+    plugin_root = tmp_path / ".codex" / "plugins" / "cache" / "harness" / "harness" / "2.3.0"
+    plugin_root.mkdir(parents=True)
+    cfg.write_text(
+        '[mcp_servers.chrome-devtools]\n'
+        'command = "old-chrome"\n'
+        "\n"
+        '[mcp_servers.x11-display]\n'
+        'command = "old-x11"\n'
+        "\n"
+        '[mcp_servers.chrome-devtools]\n'
+        'command = "new-chrome"\n'
+        'args = ["latest"]\n'
+        "\n"
+        '[mcp_servers.x11-display]\n'
+        'command = "new-x11"\n'
+        'args = ["latest"]\n'
+    )
+
+    result = module.emit_and_install_codex_config(str(plugin_root), config_path=cfg, force=True)
+
+    assert result["ok"] is True
+    content = cfg.read_text()
+    assert content.count("[mcp_servers.chrome-devtools]") == 1
+    assert content.count("[mcp_servers.x11-display]") == 1
+    assert 'command = "old-chrome"' not in content
+    assert 'command = "old-x11"' not in content
+    parsed = tomllib.loads(content)
+    assert parsed["mcp_servers"]["chrome-devtools"]["command"] == "new-chrome"
+    assert parsed["mcp_servers"]["x11-display"]["command"] == "new-x11"
+    assert parsed["mcp_servers"]["harness"]["enabled"] is True
+
+
+def test_codex_install_with_fake_cli_recovers_duplicate_mcp_config(tmp_path, monkeypatch):
+    module = _load_install_module()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"--version\" ]; then echo 'codex 0.130.0'; exit 0; fi\n"
+        "exit 0\n"
+    )
+    fake_codex.chmod(0o755)
+    config_path = tmp_path / ".codex" / "config.toml"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        '[mcp_servers.chrome-devtools]\n'
+        'command = "old-chrome"\n'
+        "\n"
+        '[mcp_servers.chrome-devtools]\n'
+        'command = "new-chrome"\n'
+        "\n"
+        '[mcp_servers.x11-display]\n'
+        'command = "old-x11"\n'
+        "\n"
+        '[mcp_servers.x11-display]\n'
+        'command = "new-x11"\n'
+    )
+    codex_install_root = tmp_path / ".codex" / "harness"
+    monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")
+    monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", codex_install_root)
+
+    result = module.install_codex(dry_run=False, force=True, config_path=str(config_path))
+
+    assert result.ok is True, result.summary
+    parsed = tomllib.loads(config_path.read_text())
+    assert parsed["mcp_servers"]["chrome-devtools"]["command"] == "new-chrome"
+    assert parsed["mcp_servers"]["x11-display"]["command"] == "new-x11"
+    assert parsed["mcp_servers"]["harness"]["args"] == [
+        str(tmp_path / ".codex" / "plugins" / "cache" / "harness" / "harness" / "2.3.0" / "mcp" / "harness_server.py")
+    ]
+
+
 def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_path, monkeypatch):
     module = _load_install_module()
     fake_bin = tmp_path / "bin"

@@ -31,6 +31,9 @@ based on the ACs. A fixed checklist someone gave you is a starting point, not a 
 **Environment bootstrap rule (CRITICAL):**
 For every runtime, service, browser feature, or dependency that the PLAN claims to use:
 1. Check if it is available on this host.
+   If `doc/harness/manifest.yaml` declares `runtime.services[]`, run
+   `python3 <plugin_root>/scripts/runtime_services.py start` first and use
+   `status`/`logs` output as service evidence.
 2. If missing but installable/startable — **install/start it and verify end-to-end.**
    - Dev server not running → start it (don't just report NO_SERVER).
    - Node/npm missing → install via nvm or apt.
@@ -123,6 +126,12 @@ such in the summary.
 3. Read PLAN.md for acceptance criteria and objective
 4. Read HANDOFF.md for what was implemented
 5. Read REQUEST.md if it exists (original user request — for intent check)
+6. Read PLAN.md `Requirement Decision` and linked
+   `doc/<area>/REQ__*.md` requirement docs. If the task changes visible screen state,
+   filters/search/sorting, loading/empty/error states, labels, or interactions
+   and no requirement doc path is provided, report a Requirement gap. If a REQ
+   doc exists, verify the UI against its intended observable behavior and its
+   verification cues.
 
 If QA_KNOWLEDGE.yaml doesn't exist yet: create it from the template at
 `doc/harness/qa/QA_KNOWLEDGE.yaml` with this project's services filled in.
@@ -132,6 +141,17 @@ If QA_KNOWLEDGE.yaml doesn't exist yet: create it from the template at
 ### Step 0: Environment bootstrap
 
 Before any testing, scan PLAN.md for every runtime/service/dependency claim:
+
+```bash
+# Preferred when runtime.services[] exists
+python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py start 2>&1
+python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py status 2>&1
+```
+
+If a declared service reports `BLOCKED`, include
+`python3 ${HARNESS_PLUGIN_ROOT}/scripts/runtime_services.py logs <service>` in
+the transcript and mark affected ACs `BLOCKED_ENV` unless the plan explicitly
+accepts a lower browser tier.
 
 ```bash
 # 1. Package dependencies

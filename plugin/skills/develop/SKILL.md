@@ -121,6 +121,19 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 Classify ACs as SEQUENTIAL (shared files or data dependency) or PARALLEL (component-independent). Build a dependency matrix from each AC's `**Files:**` declaration in PLAN.md. **PLAN.md AC dependency matrix is the single source of truth** — `git diff --name-only` is a secondary signal, never a sole trigger.
 
+Before Phase 3 implementation starts, write a visible lane table to the conversation
+and timeline. This is the routing contract the user can audit:
+
+| AC | Files | Depends on | Lane | Route | Reason |
+|----|-------|------------|------|-------|--------|
+| AC-001 | `<paths>` | none | A | `Agent(...)` | independent files |
+| AC-002 | `<paths>` | AC-001 | A | sequential | declared dependency |
+
+`Route` must be one of: `Agent(...)`, `sequential-prelude`, `sequential-dependent`,
+or `sequential-small-task`. Fill the table before editing files. If the table has
+two or more independent `Agent(...)` rows, spawn those executors in one assistant
+message before doing local implementation work.
+
 **Component-independent (definition for this phase):** two ACs are component-independent iff (a) their PLAN target file sets are disjoint, OR (b) shared files are factored into a dedicated helper-extract AC that runs first (sequential prelude → parallel consumers).
 
 **Enforcement (N>=2 component-independent ACs):** when the matrix yields two or more ACs that are pairwise component-independent, the orchestrator MUST issue N parallel Agent calls in a single assistant message. Explicit additional triggers (always fanout, even at N=2):
@@ -130,14 +143,27 @@ Classify ACs as SEQUENTIAL (shared files or data dependency) or PARALLEL (compon
 
 **Helper-extract-first guard.** The extract trigger fires ONLY when the extract is already a declared AC in PLAN.md. Mid-task "extract while I'm here" is scope creep blocked by Phase 5. If a fanout decision *would* require extracting a helper from shared files but no such AC exists, the trigger does not fire — run sequentially and surface the missing AC as a Plan Challenge in HANDOFF for the next plan cycle.
 
-**Small-task edge case.** N=2 ACs where total edit volume is trivial (e.g., ~30s total work, <20 lines combined) — sequential is acceptable. Log as `parallel-trigger-skipped` to `learnings.jsonl` with the small-task reason. Default is still parallel; sequential is the opt-out, not the default.
+**Small-task edge case.** N=2 ACs where total edit volume is genuinely trivial
+(target estimate <20 changed lines combined and <30 seconds of editing) may use
+`sequential-small-task`. Record the concrete estimate in the lane table and log
+`parallel-trigger-skipped` to `learnings.jsonl` with `reason:"small-task"`,
+`ac_count`, `estimated_lines`, and `estimated_seconds`. Default is parallel;
+sequential is the evidenced exception.
 
 Inline spawn template (copyable; one block per AC, ALL in one assistant turn):
 
 ```
 Agent(name="<task_id>:AC-NNN", subagent_type="oh-my-claudecode:executor",
-      prompt="Implement AC-NNN per PLAN.md target files <list>. Write to PROGRESS.md when done.")
+      prompt="Implement AC-NNN per PLAN.md target files <list>. Write findings to <task_dir>/audit/AC-NNN.executor.md. Do not edit PROGRESS.md or CHECKS.yaml.")
+Agent(name="<task_id>:AC-001", subagent_type="oh-my-claudecode:executor",
+      prompt="Implement AC-001 per PLAN.md target files <list>. Write findings to <task_dir>/audit/AC-001.executor.md. Do not edit PROGRESS.md or CHECKS.yaml.")
+Agent(name="<task_id>:AC-002", subagent_type="oh-my-claudecode:executor",
+      prompt="Implement AC-002 per PLAN.md target files <list>. Write findings to <task_dir>/audit/AC-002.executor.md. Do not edit PROGRESS.md or CHECKS.yaml.")
 ```
+
+Use one Agent per independent AC. Do not assign multiple independent ACs to one
+executor. The coordinator merges executor result files into PROGRESS.md and
+CHECKS.yaml after all siblings return.
 
 See `plugin/skills/develop/parallel-fanout.md` for the full Parallelization Triggers table, Spawn-all-in-one-message rule, Stage Agent Routing matrix, and the Audit hook (the rule's 6-month value is re-verified via `learnings.jsonl type:parallel-trigger` log).
 
@@ -162,7 +188,9 @@ Declare allowed / test / forbidden paths in PROGRESS.md. Before each file edit:
 
 ### Phase 3: Implement
 
-1. **One AC at a time**, in order. Skip ACs in `completed_acs`.
+1. For sequential batches, work **one AC at a time**, in order. For parallel
+   batches, wait for all sibling executor result files, then merge progress once.
+   Skip ACs in `completed_acs`.
 2. **Follow existing patterns.** Smallest coherent diff. No speculative features.
 
 **PROGRESS.md after each AC:**
@@ -257,7 +285,7 @@ Runs continuously during Phase 3.
   ```
   The codifier parses `codifiable:` YAML blocks emitted by qa-cli/qa-api agents and stages validated tests to `tests/regression/<sanitized-task-id>/`. Output filenames are prefixed `test_<ac_NNN>__<behavior>.{ext}` so pytest's default discovery picks them up automatically — no project-side conftest changes required. Never blocks task close.
 	- **3.6 Fix-first pattern** — see `fix-first-pattern.md`. Classify AUTO-FIX (dead code, magic numbers, stale comments, missing guards) and ASK (API design, architecture, security, DRY extractions). Auto-fix immediately; flag ASK in HANDOFF "Judgment Items". The **3-attempt escalation rule** also lives in this sub-file and applies to every fix loop (per-AC, Phase 7, browser debug).
-	- **3.6.1 Product Specs (UI/API intent)** — when a task changes user-visible screens, flows, states, localization, or interactions, create or update a short Product Spec under `doc/harness/product/ui/<screen-or-feature>.md`. When a task changes externally consumed APIs, webhooks, SDK-facing behavior, request/response schemas, status codes, validation, or compatibility expectations, create or update `doc/harness/product/api/<endpoint-or-integration>.md`. Write readable prose that states intended observable behavior and verification cues. Link each updated spec from HANDOFF. For internal-only refactors, tests, or tooling changes, record `Product Specs: not needed — <reason>` in HANDOFF.
+	- **3.6.1 Requirement docs (UI/API intent)** — read PLAN.md `Requirement Decision` before implementation. When a task changes user-visible screens, flows, states, localization, or interactions, create or update a short REQ doc under `doc/<area>/REQ__<name>.md`; use DDD-style areas or bounded contexts such as `ui`, `api`, `auth`, `billing`, `catalog`, or `common`. Existing-screen state changes count: filters, search, sorting, loading, empty/error states, visibility, labels, and click/input behavior. Observable bugfixes count because the user-visible behavior changes from wrong to intended. When a task changes externally consumed APIs, webhooks, SDK-facing behavior, request/response schemas, status codes, auth/session behavior, validation, or compatibility expectations, create or update the matching `doc/<area>/REQ__<name>.md`. Write readable prose that states intended observable behavior and verification cues. Link each updated REQ doc from HANDOFF. For internal-only refactors, tests, or tooling changes, record `Requirement docs: not needed — <reason>` in HANDOFF; the reason must say no UI state, user flow, API contract, or observable runtime behavior changed.
 
 ### Phase 3.7–3.9: Post-implementation health
 
@@ -334,7 +362,7 @@ Read `verification-gate.md` in full. Runs test commands from PLAN.md, classifies
 
 **Main session SHOULD spawn the appropriate qa-* lens for full-suite verification (Verification delegation, C-18).** The gate hard-enforces this only for `mcp__chrome-devtools__*` browser MCP calls (since the 2026-05-14 narrowing); Bash test runners are advisory — small inline runs are fine, but heavy full-suite execution and background process state corrupt the orchestrator context. Let the qa-* lens execute in its isolated context and consume the verdict via `task_verify` / `CRITIC__qa.md`.
 
-When Product Specs are linked in HANDOFF or changed under `doc/harness/product/`, pass those paths to the QA lens as intent evidence. QA verifies implementation against the spec's observable behavior and verification cues.
+When REQ docs are linked in HANDOFF or changed under `doc/<area>/REQ__*.md`, pass those paths to the QA lens as intent evidence. QA verifies implementation against the requirement's observable behavior and verification cues.
 
 **Multi-lens QA spawns follow `parallel-fanout.md` Parallelization Triggers — when two or more QA lenses apply (e.g., `qa-browser` + `qa-api` for a fullstack diff), issue ALL agent calls in a single assistant message with `lens="<lens>"` so `write_critic_qa` performs lens-aware merge and worst-wins `runtime_verdict`.
 
@@ -436,7 +464,7 @@ Call `mcp__harness__write_handoff` with:
 2. Files changed (every file + one-line description)
 3. Verification results per AC
 4. Scope notes (out-of-plan changes with justification)
-5. Product Specs: links to `doc/harness/product/ui/` or `doc/harness/product/api/` specs updated for user-visible screens or externally consumed APIs; or `not needed — <reason>`
+5. Requirement docs: links to `doc/<area>/REQ__*.md` docs updated for user-visible screens, existing-screen state/interaction changes, observable bugfixes, or externally consumed APIs; or `not needed — <reason>` where the reason proves no UI state, user flow, API contract, or observable runtime behavior changed
 6. Do Not Regress (caveats, fragile patterns)
 7. Feedback-Derived Rules (status: none / captured / rejected; readable rule text if captured)
 8. Confidence Ratings table from Phase 4.6 (highlight ≤6)
