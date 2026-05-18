@@ -87,47 +87,18 @@ Use census-detected `dev_command` if present; otherwise ask the user.
 
 ### Chrome DevTools MCP config (when browser_qa_supported: true)
 
-```bash
-if [ -f .mcp.json ]; then
-  python3 -c "
-import json
-with open('.mcp.json') as f:
-    config = json.load(f)
-if 'mcpServers' not in config:
-    config['mcpServers'] = {}
-config['mcpServers']['chrome-devtools'] = {
-    'command': 'npx',
-    'args': ['@anthropic-ai/chrome-devtools-mcp@latest']
-}
-with open('.mcp.json', 'w') as f:
-    json.dump(config, f, indent=2)
-print('Chrome DevTools MCP added to .mcp.json')
-" 2>/dev/null || echo "FAILED: could not update .mcp.json"
-else
-  cat > .mcp.json << 'MCPJSON'
-{
-  "mcpServers": {
-    "harness": {
-      "command": "python3",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/harness_server.py"]
-    },
-    "chrome-devtools": {
-      "command": "npx",
-      "args": ["@anthropic-ai/chrome-devtools-mcp@latest"]
-    }
-  }
-}
-MCPJSON
-fi
-```
-
-Skip MCP config if user selected "already configured globally".
+Setup reports whether Chrome DevTools MCP appears to be available from current
+session tools or global runtime config. Treat project-root `.mcp.json` as
+user-owned configuration. If browser QA is desired, enable it when the browser
+MCP surface is available; otherwise record the missing dependency and set
+`browser_qa_supported: false` until the user configures it outside setup.
 
 ### x11-mcp prereq check (when desktop_qa_supported: true)
 
-v1 is Linux-only. The x11-mcp server itself is NOT shipped by harness — the user
-installs it separately and registers it in `.mcp.json`. Setup writes a placeholder
-block so the developer knows what to fill in.
+v1 is Linux-only. The x11-mcp server itself is NOT shipped by harness. The user
+installs and registers it through their runtime/global MCP configuration outside
+setup. Setup reports the missing dependency and keeps `desktop_qa_supported:
+false` until the server is available.
 
 ```bash
 # Platform gate — warn on non-Linux
@@ -144,43 +115,11 @@ command -v Xvfb >/dev/null 2>&1 || {
   echo "        but pre-installing avoids BLOCKED_ENV on first run."
 }
 
-# .mcp.json placeholder — user fills in the actual x11-mcp server command
-if [ -f .mcp.json ]; then
-  python3 -c "
-import json
-with open('.mcp.json') as f:
-    config = json.load(f)
-config.setdefault('mcpServers', {}).setdefault('x11-mcp', {
-    'command': '{install-your-x11-mcp-server}',
-    'args': []
-})
-with open('.mcp.json', 'w') as f:
-    json.dump(config, f, indent=2)
-print('x11-mcp placeholder added to .mcp.json — replace {install-your-x11-mcp-server}')
-" 2>/dev/null || echo "FAILED: could not update .mcp.json"
-else
-  cat > .mcp.json << 'MCPJSON'
-{
-  "mcpServers": {
-    "harness": {
-      "command": "python3",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/harness_server.py"]
-    },
-    "x11-mcp": {
-      "command": "{install-your-x11-mcp-server}",
-      "args": []
-    }
-  }
-}
-MCPJSON
-fi
 ```
 
 If your x11-mcp server publishes tools under a different MCP name (e.g.
 `mcp__x11-mcp__*`, `mcp__xdotool__*`), update the `tools:` list in
 `${CLAUDE_PLUGIN_ROOT}/agents/qa-desktop.md` frontmatter to match.
-
-Skip MCP config if user selected "already configured globally".
 
 ## 3.3 Smart defaults
 

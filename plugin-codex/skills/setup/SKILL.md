@@ -23,6 +23,8 @@ description: |
 > - Browser-QA prerequisite probes (Chrome DevTools MCP) — Codex CAN register Playwright/chrome-
 >   devtools MCP servers, but the qa-browser agent prompt is Claude-coupled in v1. Treat
 >   `browser_qa_supported: false` as the v1 default on Codex side; v2 will lift this.
+>   Setup reads MCP availability from current session tools or Codex/global runtime
+>   config. Project-root `.mcp.json` remains user-owned configuration.
 > - `Skill()` chaining and `Agent()` fan-out have no Codex equivalent. setup contains zero such
 >   call sites today (port was clean), so this caveat is informational only.
 
@@ -349,15 +351,15 @@ If B: follow up with two free-text asks (build, test) in subsequent turns.
 
 Branch by project type. Check prerequisites before asking. If all met, auto-enable and inform.
 
-**Web frontend (browser_qa_supported):** On Codex side, browser MCP integration is v2 — qa-browser is Claude-only in v1.5. For Codex users, default to `browser_qa_supported: false` in manifest and inform: "Browser QA is currently Claude-only; use the qa-cli/qa-api lenses on Codex side. See `doc/harness/runtime-matrix.md`."
+**Web frontend (browser_qa_supported):** On Codex side, route MCP availability from current session tools or Codex/global runtime config. Keep project `.mcp.json` as user-owned configuration. Default to `browser_qa_supported: false` in manifest unless browser tools are already available and the user explicitly wants browser QA.
 
-**Desktop / native GUI (desktop_qa_supported):** Same v2 deferral on Codex side. Default to `desktop_qa_supported: false`.
+**Desktop / native GUI (desktop_qa_supported):** Same config ownership on Codex side: setup reports missing desktop MCP tools and preserves project `.mcp.json` as user-owned configuration. Default to `desktop_qa_supported: false` unless the required desktop tools are already available and the user explicitly wants desktop QA.
 
 **API project:** Ask `A) Enable API QA (recommended). B) Skip — tests only`. curl/httpie assumed present.
 
 **CLI/library:** Ask `A) Enable CLI QA (recommended). B) Skip — tests only`.
 
-**Fullstack (frontend + API):** Codex v1.5 ships qa-api only (qa-browser deferred). Ask `A) Enable API QA (recommended for backend). B) Skip — tests only`.
+**Fullstack (frontend + API):** Enable qa-api for backend by default. Enable browser QA only when current session tools or Codex/global runtime config already provide the browser MCP surface and the user explicitly wants browser QA.
 
 ### Q4: Quality Tooling
 
@@ -413,7 +415,7 @@ If user accepts (or HARNESS_SPAWNED=1): write `health_components:` block to mani
 
 ## Phase 3: Bootstrap Core Structure
 
-See `bootstrap.md` — directory creation, manifest.yaml (with smart-defaults table and MCP config), AGENTS.md (or CLAUDE.md fallback via `project_doc_fallback_filenames` in `~/.codex/config.toml`), critic playbooks, doc/harness/ directory + gitignore, non-destructive contracts installation (CONTRACTS.md + CONTRACTS.local.md + @import line + lint check).
+See `bootstrap.md` — directory creation, manifest.yaml (with smart-defaults table and setup-time MCP reporting), AGENTS.md (or CLAUDE.md fallback via `project_doc_fallback_filenames` in `~/.codex/config.toml`), critic playbooks, doc/harness/ directory + gitignore, non-destructive contracts installation (CONTRACTS.md + CONTRACTS.local.md + @import line + lint check). On Codex, project setup preserves project-root `.mcp.json` as user-owned configuration.
 
 Codex-specific bootstrap steps (delta from Claude):
 - Emit `[mcp_servers.harness]` block into `~/.codex/config.toml` via `plugin-codex/config.toml.example` (additive merge with timestamped backup).

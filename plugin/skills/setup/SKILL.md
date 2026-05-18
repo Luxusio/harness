@@ -114,7 +114,7 @@ A/B: skip to Phase 3 preserving existing manifest values; first re-run Phase 4.2
 
 | Issue | Auto-fix? | Action |
 |-------|-----------|--------|
-| Chrome DevTools MCP missing from .mcp.json | Yes | Append to .mcp.json |
+| Chrome DevTools MCP missing | No | Report global/session setup requirement; preserve project `.mcp.json` as user-owned configuration |
 | dev_command missing from manifest | Yes | Detect from package.json, add |
 | entry_url missing from manifest | Yes | Default from framework port table |
 | Browser binary not installed | No | "Install Chromium — apt/brew" |
@@ -363,7 +363,7 @@ B) Skip — tests only
 ```
 
 If browser missing: `A) Install and come back | B) Skip | C) Install now via apt/brew`.
-If Chrome MCP missing: `A) Add to .mcp.json (recommended) | B) Already configured globally | C) Skip`.
+If Chrome MCP missing: `A) Already configured globally/session tools available | B) I'll configure it outside setup | C) Skip browser QA`.
 If dev_command missing: `A) Specify command | B) Skip | C) Auto-detect later`.
 
 **Desktop / native GUI (desktop_qa_supported):** Probe `uname -s`, `command -v Xvfb`,
@@ -371,7 +371,7 @@ and `.mcp.json` for an `x11-mcp` entry before asking. v1 is Linux-only.
 
 If Linux + Xvfb + x11-mcp present: `A) Enable desktop QA (recommended) | B) Skip — tests only`.
 If Linux + Xvfb missing: `A) Install xvfb via sudo apt-get | B) Skip | C) I'll install manually`.
-If Linux + x11-mcp entry missing: `A) Add placeholder to .mcp.json (recommended) | B) Already configured globally | C) Skip`.
+If Linux + x11-mcp entry missing: `A) Already configured globally/session tools available | B) I'll configure it outside setup | C) Skip desktop QA`.
 If non-Linux host: inform that qa-desktop v1 is Linux-only and offer `A) Skip — tests only | B) Enable anyway (BLOCKED_ENV at runtime)`.
 
 **API project:** `A) Enable API QA (recommended) | B) Skip — tests only`. curl assumed present.

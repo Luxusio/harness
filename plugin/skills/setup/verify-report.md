@@ -48,10 +48,10 @@ if [ "$_BROWSER_QA" = "true" ]; then
   _BROWSER_BIN=$(which chromium 2>/dev/null || which google-chrome 2>/dev/null || which chromium-browser 2>/dev/null)
   [ -n "$_BROWSER_BIN" ] && echo "  Browser: OK ($_BROWSER_BIN)" || echo "  Browser: MISSING — install Chromium or Chrome"
 
-  if grep -q "chrome-devtools" .mcp.json 2>/dev/null; then
-    echo "  Chrome MCP: OK (.mcp.json)"
-  elif [ -f ~/.claude/mcp.json ] && grep -q "chrome-devtools" ~/.claude/mcp.json 2>/dev/null; then
+  if [ -f ~/.claude/mcp.json ] && grep -q "chrome-devtools" ~/.claude/mcp.json 2>/dev/null; then
     echo "  Chrome MCP: OK (global)"
+  elif [ -f .mcp.json ] && grep -q "chrome-devtools" .mcp.json 2>/dev/null; then
+    echo "  Chrome MCP: OK (existing project config; setup leaves it unchanged)"
   else
     echo "  Chrome MCP: MISSING"
   fi
@@ -76,7 +76,7 @@ QA INFRASTRUCTURE ISSUES:
   - Browser binary: MISSING
     FIX: sudo apt install chromium-browser  /  brew install chromium
   - Chrome MCP: MISSING
-    FIX: Re-run setup and select "Add Chrome DevTools MCP to .mcp.json"
+    FIX: Configure Chrome DevTools MCP in your global/runtime MCP settings, then re-run setup
   - Dev command: MISSING
     FIX: Add "dev_command: npm run dev" to doc/harness/manifest.yaml
 ```
@@ -85,12 +85,13 @@ Stop on verification failures, report the failed check, and offer auto-fix via A
 
 ## 4.3 Completion report
 
-**MCP change notice (always surface when .mcp.json was modified):**
+**MCP config notice:**
 ```
-I updated .mcp.json. You need to restart Claude Code for the Chrome DevTools
-MCP server to load. Run /exit and start a new session.
+Setup reads MCP availability from global/runtime settings and preserves
+project-root .mcp.json as user-owned configuration. If you changed global or
+runtime MCP settings yourself, restart the client so the server loads.
 ```
-Do NOT skip. Without restart, browser QA silently fails.
+Surface this notice when browser or desktop QA depends on a newly configured MCP server.
 
 ### Report format
 
@@ -104,7 +105,6 @@ Created:
   - doc/harness/critics/ — plan, runtime, document playbooks
   - doc/harness/ — harness state directory
   - CLAUDE.md — {created|updated} with harness section
-  {If MCP was added: "  - .mcp.json — Chrome DevTools MCP configured"}
 
 QA Strategy: {browser|api|cli|tests_only}
   {browser: "Browser QA enabled. Dev server: {dev_command} → {entry_url}"}
@@ -122,7 +122,7 @@ All checks passed:
 You're ready. Try: "I want to build [feature]" or "there's a bug in [area]".
 ```
 
-MCP config changed:
+MCP config changed outside setup:
 ```
 ACTION REQUIRED: Restart Claude Code.
   1. /exit
