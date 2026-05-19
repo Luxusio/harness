@@ -10,12 +10,6 @@ description: |
   "규약 정비", "contracts 꼬임", "harness upgrade cleanup".
 ---
 
-# HAND-PORTED — Codex variant of plugin/skills/maintain/SKILL.md (123L source).
-# Authored 2026-05-14 in TASK__codex-maintain-port-and-run-stale-fix under the
-# MCP-only-sharing policy (spike-report §3.6). Sub-files (if any) fall back to
-# plugin/skills/maintain/<name>.md — methodology parity preserved by reference.
-
-
 > **Codex runtime notes** (delta from Claude maintain):
 > - **No `AskUserQuestion` structured tool.** Where Claude emits an AskUserQuestion at Tier C drift confirmation (Phase 2) and at the hygiene batch-commit gate (Phase 2.5), Codex emits the question + numbered options as plain prose and reads the user's reply on the next turn.
 > - **MCP tool names are bare** on Codex; this skill calls no MCP write tools, so the rename is informational only.
@@ -136,22 +130,3 @@ Maintain report
 
 ---
 
-## Codex port measurement
-
-Empirical port measurement of `plugin/skills/maintain/SKILL.md` (123 lines source) → `plugin-codex/skills/maintain/SKILL.md` (~120 lines target).
-
-| Class | % | Examples |
-|-------|---|----------|
-| As-is (no edit) | 72 | Voice block, Phase 0 pending-state shell, Phase 1 read-only REVIEW inspection, Phase 2.5 git-rename detection bash, Phase 3 atomic write semantics, Phase 4 report shape, Safety invariants. |
-| Trivial substitution | 6 | `Edit` → `apply_patch` callouts; `${CLAUDE_PLUGIN_ROOT}` (not present in source; preserved as N/A). |
-| Restructure | 16 | Two `AskUserQuestion` blocks (Tier C drift gate, batch-commit gate) → conversational prose asks with numbered options. Frontmatter `allowed-tools` list dropped; `user-invocable: true` dropped. |
-| Drop | 2 | `allowed-tools: Read, Bash, Edit, AskUserQuestion` (Codex ignores frontmatter tool lists). |
-| Codex-additive | 4 | Top-of-file Codex runtime notes block (5 bullets); reference to spike-report §3.6 architecture in header comment. |
-
-**Dominant deltas:**
-- Both restructure sites are AskUserQuestion → prose. Same pattern as develop port; codifiable into a v2 helper that renders numbered-option prose consistently.
-- 72% as-is is the highest portability ratio of any skill ported so far (setup 71%, run 56%, plan 45%, develop 48%). Reason: maintain is mostly bash + read-only display + one Edit site — no control-flow primitives (Skill chain, Agent fan-out) at all.
-
-**Sub-files NOT ported in v1.5:** maintain has no sub-files; no fallback applies.
-
-**No methodology loss.** Both AskUserQuestion → prose conversions preserve the per-item sequential semantics (Phase 2 never-batched, Phase 2.5 single-batch-commit). The numbered options give the user the same discoverability the structured tool provides.

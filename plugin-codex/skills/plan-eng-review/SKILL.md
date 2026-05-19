@@ -10,13 +10,6 @@ description: |
   Voice triggers (speech-to-text aliases): "tech review", "technical review", "plan engineering review".
 ---
 
-# HAND-PORTED — Codex variant of plugin/skills/plan-eng-review/SKILL.md (846L source).
-# Authored 2026-05-14 in TASK__codex-plan-eng-review-port under the MCP-only-sharing
-# policy. See doc/harness/spike-report.md §3.6 for the rationale; this file is the
-# plan-eng-review port under that policy. Sub-file (rubrics-threat-rollback.md) falls
-# back to plugin/skills/plan-eng-review/rubrics-threat-rollback.md (Claude tree).
-
-
 > **Codex runtime notes** (delta from Claude plan-eng-review skill — read these first):
 > - **No `AskUserQuestion` structured tool.** Where the Claude skill emits an AskUserQuestion with labeled options, Codex emits the question + options as plain prose and reads the user's reply on the next turn. Options stay numbered/lettered so the user can pick them by short response (e.g. "A", "B", "1", "2"). Every call site that says "use AskUserQuestion" or "call AskUserQuestion" is replaced with a conversational prose ask in this port.
 > - **No `Agent(subagent_type=...)` Voice A/B fan-out.** The source skill's "Outside Voice" section can dispatch a Claude adversarial subagent when Codex is unavailable. On Codex v1.5 there is no `Agent` primitive in this skill's scope. Source declares dual-voice via Agent fan-out; Codex v1.5 has no Agent primitive in this skill's scope, so this lens runs single-voice in the orchestrator's context. v2 will re-evaluate when multi_agent ergonomics improve.
@@ -891,23 +884,3 @@ Skip obvious facts, transient errors, and duplicate-entry risk. If the session s
 
 ---
 
-## Codex port measurement
-
-Empirical port measurement of `plugin/skills/plan-eng-review/SKILL.md` (846 lines source) → `plugin-codex/skills/plan-eng-review/SKILL.md` (~800 lines target).
-
-| Class | % | Examples |
-|-------|---|----------|
-| As-is (no edit) | 55 | Voice block, Cognitive Patterns (all 15 items), Confidence Calibration table, Step 0 (all 7 checks), Review Log, Readiness Dashboard, Review Report table, Anti-skip/Anti-shortcut rules, Test Diagram format + companion table, E2E Decision Matrix, Regression Rule, Failure Modes Registry template, Worktree parallelization strategy, Test Plan Artifact template, Completion summary template, Retrospective learning, Operational Self-Improvement, Rich Learnings Capture, Bash detection blocks, ASCII dependency graph template, Formatting rules, TODOS.md field descriptions. |
-| Trivial substitution | 8 | `${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}` (0 literal occurrences in source — informational only); `Edit`/`Write` → `apply_patch` at Test Plan Artifact write step; `mcp__plugin_harness_harness__*` → bare names (not present in this skill; informational); "ran (codex/claude)" → "ran (codex/inline)" in Completion summary; "Outside voice unavailable" → inline-adversarial-pass fallback; SOURCE="claude" → SOURCE="inline". |
-| Restructure | 28 | All AskUserQuestion call sites (7 sites) → conversational prose asks with lettered options: (1) Next Steps Review Chaining recommendation, (2) Prior Learnings cross-project gate, (3) Section 1 per-issue stop, (4) Section 2 per-issue stop, (5) Section 3 per-issue stop + LLM eval confirm, (6) Section 4 per-issue stop, (7) Outside Voice offer, (8) Outside Voice tension-point asks, (9) TODOS.md per-item asks. Agent(subagent_type) Claude adversarial subagent fallback → single-voice inline adversarial pass with explicit degradation note. "Shared Preamble" AskUserQuestion Format reference → "Conversational Ask Format" with Codex clarification. |
-| Drop | 5 | `allowed-tools` frontmatter list (Codex ignores); `preamble-tier`, `version`, `argument-hint`, `user-invocable` frontmatter keys; "smarter on their codebase over time." orphan sentence fragment (dangling from source after cross-ref trimming); `%%REVIEW_REPORT%%` comment marker line. |
-| Codex-additive | 4 | Top-of-file header comment (provenance + spike-report §3.6 reference); Codex runtime notes block (7 bullets covering all runtime deltas); sub-file fallback declaration inline at rubrics-threat-rollback.md reference site; Outside Voice section note clarifying Codex-is-available path applies here. |
-
-**Dominant deltas:**
-
-- **AskUserQuestion → prose** is the heaviest restructure surface (9 call sites across the skill). Each carries semantic load — the structured option list provides discoverability that the prose version reduces. This is the same pattern as develop/maintain ports; a Codex helper rendering numbered-option prose consistently is the v2 ergonomics improvement.
-- **Agent adversarial subagent fallback** is the other major restructure: the "CODEX_NOT_AVAILABLE" path in Outside Voice originally spawns a Claude adversarial subagent via `Agent(subagent_type=...)`. On Codex v1.5, this degrades to a single-voice inline adversarial pass. Blind-spot reset is lower than cross-model, but the methodology — re-read with explicit adversarial framing — is preserved.
-- **Shared Preamble cross-ref** needed expansion: the source references "AskUserQuestion Format" at `plugin/skills/plan/decision-principles.md`. On Codex the equivalent is "Conversational Ask Format" — this is a semantic rename, not a mechanical substitution, hence classified as Restructure.
-
-**Sub-files NOT ported in v1.5 (falls back to Claude tree):**
-- `plugin/skills/plan-eng-review/rubrics-threat-rollback.md` — methodology is runtime-agnostic (6 security + 4 rollback questions). Codex reads directly from the Claude tree. DO NOT create a Codex-native copy — the sub-file fallback architecture (spike-report §3.6) exists precisely to avoid duplicating methodology-only content that has no runtime primitives to adapt.

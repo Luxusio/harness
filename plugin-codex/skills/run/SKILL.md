@@ -212,23 +212,3 @@ Pipeline is housekeeping, not a gate. On failure: log warning and continue.
 
 ---
 
-# v1.5 spike measurements (this port — captured during hand-port for spike-report.md)
-
-| Category | Source lines | Result | % |
-|---|---|---|---|
-| As-is portable (voice rules, completion report shape, retry/error narration, health snapshot, self-improvement bullets, telemetry) | ~70 | reused verbatim | 41% |
-| Trivial rewrite (`${CLAUDE_PLUGIN_ROOT}` -> `${HARNESS_PLUGIN_ROOT}`, MCP tool name de-prefix, frontmatter prune from 7 to 3 lines, JSONL `runtime` field, AGENTS.md alongside CLAUDE.md) | ~25 | line-for-line rewrite | 15% |
-| Significant restructure (Phase 2 Skill() -> "read sub-skill SKILL.md and execute inline"; Phase 3 develop gap-surface; Phase 4 Agent() -> capability-routed `spawn_agent` when available with inline fallback) | ~50 | semantically equivalent but structurally different | 29% |
-| Dropped (Claude-specific MCP-reload note and prefixed tool names) | ~25 | replaced with Codex capability routing and bare MCP tool names | 15% |
-| Codex-additive (runtime notes header, `spawn_agent` call shapes, exception-only Runtime Fallbacks, browser availability gate, BLOCKED_ENV gap prose for browser/desktop) | ~35 | new content | 20% |
-| Total source | 171 | ~200 emitted | — |
-
-Key port observations:
-- **3 `Skill()` call sites** are the load-bearing porting friction. Codex has no Skill() tool. Resolution: prose direction "read and execute inline" — works but expands wordcount. The model's natural read+follow capability covers the gap.
-- **1 `Agent()` multi-spawn block** at Phase 4 (QA fan-out) — maps to `spawn_agent` when that tool exists in the current Codex session. Inline role execution is fallback only.
-- **Frontmatter `allowed-tools` list** included Claude `Agent` + `Skill`. Codex ignores that frontmatter; runtime routing is documented in prose with concrete `spawn_agent` call shapes.
-- **MCP tool names** changed from `mcp__harness__task_*` to bare `task_*`. Could be automated by a regex pass in the sync engine.
-- **Multi-lens QA routing:** use `spawn_agent` for independent lenses when available; otherwise run required lenses sequentially and record `Runtime Fallbacks` only when expected independence was lost.
-- **Develop phase transport:** capability-routed on Codex. Use `spawn_agent` for independent work when available; inline execution is fallback.
-
-Conclusion for AC-004: run port is **56% reuse (as-is + trivial), 29% restructure, 15% drop**. Higher restructure% than setup because of Skill()/Agent() control-flow primitives. Argues for a capability-aware intermediate form with declarative `chain:` and `qa_lenses:` fields that renders Claude `Skill()`/`Agent()` calls vs Codex `spawn_agent`/inline fallback. Pure AST text substitution would NOT handle this cleanly (Voice B of Phase 3 v1 Eng review was right).

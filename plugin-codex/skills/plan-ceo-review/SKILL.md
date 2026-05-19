@@ -11,12 +11,6 @@ description: |
   or when the plan feels like it could be thinking bigger.
 ---
 
-# HAND-PORTED — Codex variant of plugin/skills/plan-ceo-review/SKILL.md (1293L source).
-# Authored 2026-05-14 under the MCP-only-sharing policy.
-# See doc/harness/spike-report.md §3.6 for the rationale.
-# Sub-files: none in source — no sub-file porting needed.
-
-
 > **Codex runtime notes** (delta from Claude plan-ceo-review skill — read these first):
 > - **No `AskUserQuestion` structured tool.** Where the Claude skill emits an AskUserQuestion with labeled options, Codex emits the question + options as plain prose and reads the user's reply on the next turn. Options stay lettered/numbered so the user can pick by short response (e.g. "A", "B", "1"). Every call site that says "use AskUserQuestion" or "call AskUserQuestion" or "surface via AskUserQuestion" is replaced with a conversational prose ask in this port.
 > - **No `Agent(subagent_type=...)` Voice fan-out for spec review loop.** The source skill dispatches an independent reviewer subagent via the Agent tool. Source declares dual-voice via Agent fan-out; Codex v1.5 has no Agent primitive in this skill's scope, so the spec review loop runs single-voice in the orchestrator's context. v2 will re-evaluate when multi_agent ergonomics improve.
@@ -1314,23 +1308,3 @@ If any conversational ask goes unanswered, note it here. Never silently default.
 
 ---
 
-## Codex port measurement
-
-Empirical port measurement of `plugin/skills/plan-ceo-review/SKILL.md` (1293 lines source) → `plugin-codex/skills/plan-ceo-review/SKILL.md` (this file).
-
-| Class | % | Examples |
-|-------|---|----------|
-| As-is (no edit) | 52 | Voice block, Completeness Principle, Confusion Protocol (prose only), Context Recovery bash block, Eureka Logging bash block, Completion Status Protocol, Operational Self-Improvement bash block, PRE-REVIEW SYSTEM AUDIT commands, Landscape Check, Taste Calibration, CEO Plan persistence format, Handoff Notes format, Cross-project Learnings bash block, Review Readiness Dashboard, Plan File Review Report, docs/designs Promotion, Capture Learnings bash block, Mode Quick Reference ASCII table, REVIEW REPORT table, Shared Preamble, Philosophy, Prime Directives (all 9), Engineering Preferences (all 10), Cognitive Patterns (all 18), Priority Hierarchy, Prior Learnings bash block, Step 0A Premise Challenge table, Step 0B Leverage Map table, Step 0C Dream State ASCII, Step 0C-bis Implementation Alternatives table, Step 0D-prelude Expansion Framing, Step 0D mode-specific analysis content (HOLD/REDUCTION), Step 0E Temporal Interrogation, Sections 1-11 full evaluation bullets, Outside Voice prompt construction and Codex path, Cross-model tension format, Required Outputs tables and rules (NOT in scope, What already exists, Dream state delta, Error & Rescue Registry, Failure Modes Registry), Completion Summary ASCII box, Diagrams list. |
-| Trivial substitution | 5 | `${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}` (informational); `Edit`/`Write` → `apply_patch` at CEO plan write step and docs/designs promotion step; `mcp__plugin_harness_harness__*` → bare names (informational); SOURCE="claude" → SOURCE="inline" in persist-result block; "ran (codex/claude)" → "ran (codex/inline)" in Completion Summary. |
-| Restructure | 37 | All AskUserQuestion call sites (14 sites) → conversational prose asks with lettered/numbered options: (1) Confusion Protocol, (2) mid-session scope-sharpening detection, (3) docs/designs Promotion offer, (4) EXPANSION opt-in ceremony per-proposal, (5) SELECTIVE EXPANSION cherry-pick ceremony per-proposal, (6) Mode Selection 0F, (7) eleven per-section STOP asks (Sections 1-11), (8) Outside Voice offer, (9) outside voice cross-model tension asks, (10) TODOS.md per-item asks, (11) Dream state delta "Away from ideal" gate. Spec Review Loop Agent(subagent_type) → single-voice adversarial pass with explicit degradation note. "Shared Preamble" AskUserQuestion Format reference → "Conversational Ask Format" with Codex clarification. Philosophy and CRITICAL RULE references to AskUserQuestion → conversational prose ask. Outside Voice "Outside voice unavailable" → inline adversarial pass fallback. |
-| Drop | 3 | `allowed-tools` frontmatter list; `preamble-tier`, `version`, `argument-hint`, `user-invocable` frontmatter keys; `%%REVIEW_REPORT%%` comment marker; `<!-- Regenerate: bun run gen-skill-docs -->` comment. |
-| Codex-additive | 3 | Top-of-file header comment (provenance + spike-report §3.6 reference); Codex runtime notes block (6 bullets covering all runtime deltas); Outside Voice CODEX_NOT_AVAILABLE note clarifying single-voice adversarial pass applies here. |
-
-**Dominant deltas:**
-
-- **AskUserQuestion → prose** is the heaviest restructure surface (14 call sites across the skill, counting per-section STOP asks). The CEO review has more interactive decision points than plan-eng-review because every mode transition, every expansion proposal, and every scope cherry-pick is an explicit opt-in via structured ask. Prose asks with lettered options preserve discoverability but lose the structured-tool enforcement. A Codex helper rendering numbered-option prose consistently is the v2 ergonomics improvement.
-- **Spec Review Loop Agent fan-out** is the second major restructure: the source dispatches an independent reviewer subagent via `Agent(subagent_type=...)` for adversarial quality review of the CEO plan document. On Codex v1.5, this degrades to a single-voice adversarial pass re-reading the document with explicit adversarial framing. Cross-agent independence is lost; quality-dimension coverage (Completeness, Consistency, Clarity, Scope, Feasibility) is preserved as a single-voice checklist.
-- **Outside Voice fallback path** changed: the source falls back to a Claude adversarial subagent when Codex is unavailable. On Codex v1.5, the fallback is a single-voice inline adversarial pass using the same prompt. The `OUTSIDE VOICE (Claude subagent):` header becomes `OUTSIDE VOICE (single-voice adversarial pass):` to reflect the degraded path accurately.
-
-**Sub-files NOT ported in v1.5 (none in source):**
-The plan-ceo-review source has no sub-files. References to `plugin/skills/plan/decision-principles.md` and `.claude/skills/review/TODOS-format.md` are cross-skill references, not sub-files — they remain as-is and are read from the Claude tree at runtime.

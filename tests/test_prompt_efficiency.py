@@ -14,6 +14,18 @@ QA_PROMPTS = [
     REPO / "plugin-codex" / "agents" / "qa-desktop.md",
 ]
 
+CODEX_SKILL_PROMPTS = [
+    REPO / "plugin-codex" / "skills" / "setup" / "SKILL.md",
+    REPO / "plugin-codex" / "skills" / "run" / "SKILL.md",
+    REPO / "plugin-codex" / "skills" / "plan" / "SKILL.md",
+    REPO / "plugin-codex" / "skills" / "develop" / "SKILL.md",
+    REPO / "plugin-codex" / "skills" / "maintain" / "SKILL.md",
+    REPO / "plugin-codex" / "skills" / "plan-ceo-review" / "SKILL.md",
+    REPO / "plugin-codex" / "skills" / "plan-eng-review" / "SKILL.md",
+    REPO / "plugin-codex" / "skills" / "plan-design-review" / "SKILL.md",
+    REPO / "plugin-codex" / "skills" / "plan-devex-review" / "SKILL.md",
+]
+
 QA_WORD_BUDGETS = {
     "qa-api.md": 1450,
     "qa-browser.md": 1450,
@@ -75,3 +87,18 @@ def test_codex_qa_prompts_keep_runtime_delta():
         else:
             assert "tools:" in body
             assert "mcp__plugin_harness_harness__write_critic_qa" in body
+
+
+def test_codex_skill_prompts_omit_port_measurement_history():
+    banned = [
+        "Codex port measurement",
+        "v1.5 spike measurements",
+        "Empirical port measurement",
+        "Dominant deltas:",
+        "HAND-PORTED",
+        "spike-report.md §3.6",
+    ]
+    for path in CODEX_SKILL_PROMPTS:
+        body = _text(path)
+        for phrase in banned:
+            assert phrase not in body, f"{path} still carries port history: {phrase}"

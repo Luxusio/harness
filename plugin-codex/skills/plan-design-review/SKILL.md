@@ -10,11 +10,6 @@ description: |
   should be reviewed before implementation.
 ---
 
-# HAND-PORTED — Codex variant of plugin/skills/plan-design-review/SKILL.md (853L source).
-# Authored 2026-05-14 under the MCP-only-sharing policy. See doc/harness/spike-report.md
-# §3.6 for the rationale. No sub-files in the source skill; no Codex-native sub-files needed.
-
-
 > **Codex runtime notes** (delta from Claude plan-design-review skill — read these first):
 > - **No `AskUserQuestion` structured tool.** Where the Claude skill emits an AskUserQuestion with labeled options, Codex emits the question + options as plain prose and reads the user's reply on the next turn. Options stay lettered so the user can pick by short response (e.g. "A", "B"). Every call site that says "use AskUserQuestion" or "call AskUserQuestion" is replaced with a conversational prose ask in this port.
 > - **No `Agent(subagent_type=...)` Voice A/B/C fan-out.** The source skill's "Design Outside Voices" section can dispatch a Claude design subagent. On Codex v1.5 there is no `Agent` primitive in this skill's scope. Source declares dual-voice via Agent fan-out; Codex v1.5 has no Agent primitive in this skill's scope, so the Claude subagent lens runs single-voice in the orchestrator's context. v2 will re-evaluate when multi_agent ergonomics improve.
@@ -892,20 +887,3 @@ Below the table, add these lines (omit any that are empty/not applicable):
 
 ---
 
-## Codex port measurement
-
-Empirical port measurement of `plugin/skills/plan-design-review/SKILL.md` (853 lines source) → `plugin-codex/skills/plan-design-review/SKILL.md`.
-
-| Class | % | Examples |
-|-------|---|----------|
-| As-is (no edit) | 56 | Design Philosophy, Voice block, Cognitive Patterns (all 12 items), UX Principles (Three Laws, Billboard Design, Navigation as Wayfinding, Goodwill Reservoir, Mobile), Design Principles (all 9), Fix-to-10 Loop structural/taste classification, Loop procedure steps 1-3 + 5-6, Litmus Scorecard table format + fill rules, Review Sections Anti-skip rule + Anti-shortcut clause, Pass 2/3/5/6 core rubrics, Design Hard Rules full classifier + all rule sets + AI Slop blacklist (all 11 patterns), 0-10 Rating Method pattern, Review Readiness Dashboard, Plan File Review Report, Capture Learnings bash block, Prior Learnings bash blocks + cross-project toggle + callout format, Required Outputs field descriptions, Completion Summary box, REVIEW REPORT table + below-table lines, Next Steps chaining logic, Shared Preamble cross-refs, CRITICAL PATH RULE, PRE-REVIEW SYSTEM AUDIT both checks (bash blocks + logic). |
-| Trivial substitution | 6 | `${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}` (informational, 0 literal occurrences in source); `Edit`/`Write`/`MultiEdit` → `apply_patch` at Fix-to-10 Act step + Approved Mockups write step; "CODEX SAYS" header (retained); SOURCE="codex+subagent" → "codex+inline"; BROWSE_NOT_AVAILABLE note expanded with Codex v1.5 clarification; "BROWSE_READY" path description updated; log SOURCE field values updated. |
-| Restructure | 30 | All AskUserQuestion call sites (8 sites) → conversational prose asks with lettered options: (1) Step 0D Focus Areas ask, (2) Design Outside Voices offer, (3) Fix-to-10 Stuck condition gate, (4) Pass 1 per-issue stop, (5) Pass 2 per-issue stop, (6) Pass 3 per-issue stop, (7) Pass 4 per-issue stop, (8) Pass 5 per-issue stop, (9) Pass 6 per-issue stop, (10) Pass 7 decision asks, (11) Post-Pass mockup regeneration ask, (12) TODOS.md per-item asks, (13) Next Steps chaining ask. Agent(subagent_type) Claude design subagent → single-voice adversarial inline pass with explicit degradation note. "Shared Preamble" AskUserQuestion Format reference → "Conversational Ask Format" with Codex clarification. Design binary / BROWSE_READY path → ASCII/markdown wireframes in all cases. Litmus scorecard column header "Claude" → "Primary". |
-| Drop | 4 | `allowed-tools` frontmatter list (Codex ignores); `preamble-tier`, `version`, `argument-hint`, `user-invocable` frontmatter keys; `<!-- Regenerate: bun run gen:skill-docs -->` comment; "parent format at `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format" cross-ref links (replaced with Shared Preamble note). |
-| Codex-additive | 4 | Top-of-file header comment (provenance + spike-report §3.6 reference); Codex runtime notes block (7 bullets covering all runtime deltas); Design Outside Voices single-voice adversarial path clarification note; BROWSE_NOT_AVAILABLE Codex v1.5 clarification inline at DESIGN SETUP. |
-
-**Dominant deltas:**
-
-- **AskUserQuestion → prose** is the heaviest restructure surface (13 call sites across the skill, including per-pass stops, Fix-to-10 stuck condition gate, TODOS.md per-item asks, and Next Steps chaining). Each carries semantic load — the structured option list provides discoverability that the prose version reduces. This is the same pattern as the plan-eng-review port; a Codex helper rendering numbered-option prose consistently is the v2 ergonomics improvement.
-- **Agent(subagent_type) Claude design subagent** is the other major restructure: the "Design Outside Voices" section originally dispatches a Claude design completeness subagent via `Agent(subagent_type=...)`. On Codex v1.5, this degrades to a single-voice inline adversarial pass with explicit adversarial framing ("You have NOT seen any prior review"). Independence guarantee is lower than cross-model, but the methodology — evaluate information hierarchy, missing states, user journey, specificity, and ambiguity — is fully preserved.
-- **Browser / design binary path** is the third delta: the source references a design binary for visual mockup generation and `$B goto` for opening comparison boards. On Codex v1.5, Playwright MCP is deferred; all mockups use ASCII/markdown wireframes and all comparison boards use `open file://...`. Methodology parity (generate mockups before passes, offer regeneration after, track approved mockups) is preserved.

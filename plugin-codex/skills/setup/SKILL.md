@@ -452,22 +452,3 @@ Replace `OUTCOME` with success/error/abort.
 
 ---
 
-# v1.5 spike measurements (this port — captured during hand-port for spike-report.md)
-
-| Category | Source lines | Result | % |
-|---|---|---|---|
-| As-is portable (prose, voice rules, completion protocol, telemetry, bash blocks unchanged) | ~280 | reused verbatim | 60% |
-| Trivial rewrite (frontmatter normalize, AGENTS.md substitution for CLAUDE.md, runtime field added to JSONL entries, version bump 2.2.0 → 2.3.0) | ~50 | rewritten line-for-line | 11% |
-| Significant rewrite (14 AskUserQuestion sites → conversational asks; Q3 QA strategy branches restructured for Codex v1.5 capability gaps) | ~90 | restructured, semantically equivalent | 19% |
-| Dropped (Plan Mode Safe Operations section, Chrome DevTools MCP tools in frontmatter, repair-matrix row "Chrome DevTools MCP missing") | ~25 | not represented on Codex | 5% |
-| Codex-additive (runtime notes header, Codex-specific bootstrap deltas, codex mcp test verify step) | ~25 | new content not in source | 5% |
-| Total | ~469 | ~474 emitted | — |
-
-Key port observations:
-- Zero `Agent(...)` and `Skill(...)` call sites in setup. Easiest possible port for control-flow primitives.
-- 14 AskUserQuestion sites → all converted to "Ask the user: [prose]" form. Codex's natural conversational mode handles them; no structured-options envelope needed.
-- The biggest semantic delta is Q3 (QA Strategy) — Chrome DevTools MCP branches become "Browser QA is Claude-only in v1.5" prose. This is a capability gap, not a porting failure.
-- Frontmatter shrunk from 13 lines (with allowed-tools list including 5 chrome-devtools MCP tools) to 6 lines (name + description only). Codex ignores allowed-tools entirely.
-- bash blocks reused verbatim except `_HARNESS_VERSION` bumped 2.2.0 → 2.3.0 and JSONL `runtime` field added.
-
-Conclusion for AC-004 (canonical-form decision): setup port produced **74% as-is + trivial-rewrite reuse**, only **5% drop** — supports YAML/JSON intermediate canonical form (most content is straight prose with declarative variation points). Confirm against run + plan ports before committing.

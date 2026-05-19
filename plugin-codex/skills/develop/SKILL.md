@@ -3,13 +3,6 @@ name: develop
 description: Implement PLAN.md on Codex. Reads PLAN.md, implements changes, routes independent ACs by current subagent capability, verifies, and writes HANDOFF.
 ---
 
-# HAND-PORTED — Codex variant of plugin/skills/develop/SKILL.md (500L source).
-# Authored 2026-05-14 in TASK__codex-develop-port-and-parity-check after the v1.5 spike
-# concluded that AST/YAML canonical sharing is ROI-negative for control-flow-heavy skills.
-# See doc/harness/spike-report.md §3.6 (policy reversal) for the rationale; this file is
-# the first develop-tree port under the MCP-only-sharing policy.
-
-
 Implement the plan for a harness task. Reads PLAN.md, implements changes, verifies completeness, writes HANDOFF.md.
 
 > **Codex runtime notes** (delta from Claude develop skill — read these first):
@@ -569,32 +562,3 @@ One-paragraph summary of the task's user-visible behavior change. Lives at `doc/
 
 ---
 
-## Codex port measurement
-
-Empirical port measurement of `plugin/skills/develop/SKILL.md` (500 lines source) → `plugin-codex/skills/develop/SKILL.md` (~410 lines target).
-
-| Class | % | Examples |
-|-------|---|----------|
-| As-is (no edit) | 48 | Voice block, Anti-shortcut clause, Phase 5 scope-drift, Phase 6 commit ordering, Phase 8 HANDOFF schema, Phase 8.5/8.7 prose, AC completeness rubric, Iron Law (9a/9b) phrasing, fix-first taxonomy. |
-| Trivial substitution | 12 | `${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}` (15+ sites); `Edit`/`Write`/`MultiEdit` → `apply_patch` callouts; `mcp__plugin_harness_harness__*` → bare names; tool token mapping in code blocks. |
-| Restructure | 30 | Phase 3.0 fan-out → capability-gated worker subagents or sequential pass; Phase 4.5-4.8 parallel agent pipeline → `spawn_agent` when available or sequential inline fallback; Phase 7 multi-lens QA → `spawn_agent` lenses when available or sequential inline fallback; Phase 7.7 dogfooder spawn → `spawn_agent` when available or inline methodology; AskUserQuestion call sites (3) → conversational asks with numbered options; Confusion Protocol from AskUserQuestion gate to prose ask; Premise Gate / User Challenge structured options → prose; Model Routing table → capability-gated note. |
-| Drop | 6 | Big `allowed-tools` frontmatter list (Codex ignores); Claude-only `mcp__chrome-devtools__*` C-18 delegation enforcement details; `argument-hint` / `user-invocable` frontmatter keys; "haiku routing" rationale text in Phase 4. |
-| Codex-additive | 4 | Top-of-file "Codex runtime notes" block (6 bullets); sub-file fallback declaration; browser-tool availability gate; `spawn_agent` call shapes; exception-only Runtime Fallbacks; `apply_patch` envelope guidance in Phase 3. |
-
-**Dominant deltas:**
-- Phase 3.0 + Phase 4 are the heaviest restructures (combined ~22% of total). Both now route by current capability: use `spawn_agent` when available, otherwise sequential inline fallback.
-- Phase 7.7 dogfooder is the cleanest capability-routed port — methodology unchanged, transport depends on available tools.
-- AskUserQuestion → prose is mechanically 3 call sites (Confusion Protocol, EUREKA gate, scope-expansion gate) but each carries semantic load (the structured option list provides discoverability the prose version loses). Future iteration: a Codex helper that renders numbered-option prose with a consistent shape.
-
-**Numbers reconcile with v1.5 spike (60% weighted-mean mechanical).** Develop is heavier on restructure than setup/run because it has the most fan-out surface (per-AC parallel + quality-audit parallel + multi-lens QA + dogfooder all converge here).
-
-**Sub-files NOT ported in v1.5 (deferred to v2):**
-- `browser-verification.md` — falls back to Claude tree; run the methodology inline when Codex browser tools are available
-- `fix-first-pattern.md` — methodology is runtime-agnostic; falls back to Claude tree
-- `parallel-fanout.md` — Claude source reference; on Codex, apply the ownership/dependency methodology with `spawn_agent` when available and sequential fallback when not
-- `quality-audit-pipeline.md` — falls back to Claude tree, methodology applied inline
-- `runtime-smoke.md` — falls back to Claude tree, runtime-portable
-- `test-failure-triage.md` — falls back to Claude tree, runtime-portable
-- `verification-gate.md` — falls back to Claude tree, runtime-portable
-
-The fallback is intentional, not slop. Methodology parity is preserved by reference; Codex-native re-authoring is a v2 ergonomics task that needs empirical evidence of friction first.

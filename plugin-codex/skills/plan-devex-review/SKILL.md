@@ -12,13 +12,6 @@ description: |
   Voice triggers (speech-to-text aliases): "dx review", "developer experience review", "devex review", "devex audit", "API design review", "onboarding review".
 ---
 
-# HAND-PORTED — Codex variant of plugin/skills/plan-devex-review/SKILL.md (1022L source).
-# Authored 2026-05-14 in TASK__codex-plan-devex-review-port under the MCP-only-sharing
-# policy. See doc/harness/spike-report.md §3.6 for the rationale; this file is the
-# plan-devex-review port under that policy. Sub-file (dx-hall-of-fame.md) falls back
-# to plugin/skills/plan-devex-review/dx-hall-of-fame.md (Claude tree).
-
-
 > **Codex runtime notes** (delta from Claude plan-devex-review skill — read these first):
 > - **No `AskUserQuestion` structured tool.** Where the Claude skill emits an AskUserQuestion with labeled options, Codex emits the question + options as plain prose and reads the user's reply on the next turn. Options stay numbered/lettered so the user can pick them by short response (e.g. "A", "B", "1", "2"). Every call site that says "use AskUserQuestion" or "call AskUserQuestion" is replaced with a conversational prose ask in this port.
 > - **No `Agent(subagent_type=...)` Voice A/B/C fan-out.** The source skill's "Outside Voice" section can dispatch a Claude adversarial subagent when Codex is unavailable. On Codex v1.5 there is no `Agent` primitive in this skill's scope. Source declares dual-voice via Agent fan-out; Codex v1.5 has no Agent primitive in this skill's scope, so this lens runs single-voice in the orchestrator's context. v2 will re-evaluate when multi_agent ergonomics improve.
@@ -1084,23 +1077,3 @@ If any conversational ask goes unanswered, note here. Never silently default.
 
 ---
 
-## Codex port measurement
-
-Empirical port measurement of `plugin/skills/plan-devex-review/SKILL.md` (1022 lines source) → `plugin-codex/skills/plan-devex-review/SKILL.md` (~980 lines target).
-
-| Class | % | Examples |
-|-------|---|----------|
-| As-is (no edit) | 52 | Voice block, DX First Principles (all 8 laws), Seven DX Characteristics table, Cognitive Patterns (all 10 items), DX Scoring Rubric, TTHW Benchmarks table, Auto-Detect Product Type gate, PRE-REVIEW SYSTEM AUDIT (both checks + bash blocks), Step 0 core principle statement, Persona card template, Empathy Narrative instructions, Competitive benchmark table format, Journey map table format, First-Time Developer Report format, 0-10 Rating Method pattern (steps 1-8), Anti-skip rule, Anti-shortcut clause, all 8 pass evaluation checklists (Passes 1-8), Appendix Claude Code Skill checklist logic, DX Implementation Checklist, Outside Voice codex exec bash block + error handling, Cross-model tension format, User Sovereignty rule, Capture Learnings bash block, Review Readiness Dashboard, Plan File Review Report template, Priority Hierarchy. |
-| Trivial substitution | 6 | `${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}` (informational, no literal occurrences); `Edit`/`Write` → `apply_patch` (not present in this skill); `mcp__plugin_harness_harness__*` → bare names (informational); SOURCE="claude" → SOURCE="inline" in persist block; "Outside voice unavailable. Continuing to outputs." → inline-adversarial-pass fallback note; Hall of Fame reference lines updated to include "(Claude tree)" path qualifier. |
-| Restructure | 34 | All AskUserQuestion call sites (12 sites) → conversational prose asks with lettered options: (1) 0A persona interrogation, (2) 0B empathy narrative validation, (3) 0C TTHW benchmark tier selection, (4) 0D magical moment delivery vehicle, (5) 0E mode selection, (6) 0F per-friction-point asks, (7) 0G roleplay confusion report, (8) Prior Learnings cross-project gate, (9) Passes 1-8 per-issue STOPs, (10) Appendix design-decision asks, (11) Outside Voice offer, (12) Outside Voice tension-point asks, (13) TODOS.md per-item asks. Agent(subagent_type) Claude adversarial subagent fallback → single-voice inline adversarial pass with explicit degradation note. "Shared Preamble" AskUserQuestion Format reference → "Conversational Ask Format" with Codex clarification. Confusion Protocol block reformatted as prose template with Reply line. |
-| Drop | 4 | `allowed-tools` frontmatter list; `preamble-tier`, `version`, `argument-hint`, `user-invocable` frontmatter keys; `<!-- Regenerate: bun run gen:skill-docs -->` comment; orphan code block stubs (empty bash blocks with no content from source lines 588-601, 600-601, 912-913). |
-| Codex-additive | 4 | Top-of-file header comment (provenance + spike-report §3.6 reference); Codex runtime notes block (6 bullets covering all runtime deltas); sub-file fallback declarations inline at each dx-hall-of-fame.md reference site (8 locations); Outside Voice section note clarifying Codex-is-available path applies here; persist block filled with concrete bash (source had empty bash fences). |
-
-**Dominant deltas:**
-
-- **AskUserQuestion → prose** is the heaviest restructure surface (12+ call sites across the skill, more than any other harness skill port). Each site in this skill carries particular semantic weight because DX review questions are highly interactive — the persona interrogation, empathy narrative validation, and per-friction-point asks all require back-and-forth. The prose render preserves the option lettering so users can reply with a single letter, but the structured tool affordances (completeness scoring display, effort reference table) are degraded. This is the same pattern as the plan-eng-review port; a Codex helper rendering numbered-option prose consistently is the v2 ergonomics improvement.
-- **Agent adversarial subagent fallback** is the other major restructure: the "CODEX_NOT_AVAILABLE" path in Outside Voice originally spawns a Claude adversarial subagent via `Agent(subagent_type=...)`. On Codex v1.5, this degrades to a single-voice inline adversarial pass using the same adversarial prompt. Blind-spot reset is lower than cross-model, but the methodology is preserved.
-- **Sub-file references** required updating at 8 distinct locations (each pass loads its Hall of Fame section, plus the Required Outputs section references the template structures). All updated to include the `(Claude tree)` path qualifier and the fallback note. The dx-hall-of-fame.md sub-file is pure methodology — no runtime primitives to adapt — so the fallback architecture is correct and no Codex-native copy is needed.
-
-**Sub-files NOT ported in v1.5 (falls back to Claude tree):**
-- `plugin/skills/plan-devex-review/dx-hall-of-fame.md` — methodology is runtime-agnostic (pass-by-pass gold standard examples, empathy narrative template, journey map template, DX scorecard). Codex reads directly from the Claude tree. DO NOT create a Codex-native copy — the sub-file fallback architecture (spike-report §3.6) exists precisely to avoid duplicating methodology-only content that has no runtime primitives to adapt.
