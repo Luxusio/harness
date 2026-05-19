@@ -210,6 +210,18 @@ test/screenshot/log references, not a bare verdict.
 exists and is fresh (C-04).
 **Why:** A PASS without evidence is indistinguishable from hallucination.
 
+### C-14a
+
+**Title:** Highest available verification is part of the task.
+**When:** A task creates, unblocks, or documents a local verification path.
+**Enforced by:** `plugin/skills/develop/SKILL.md` and
+`plugin/skills/develop/verification-gate.md` — Phase 7 must run the highest
+available local tier instead of asking the user whether to verify.
+**On violation:** soft-warn, then run the verification or document the exact
+external/destructive blocker.
+**Why:** Asking whether to use the verification path treats task completion as
+optional extra work. It is not optional; the verifier reports the tier reached.
+
 ### C-15
 
 **Title:** Setup must not overwrite user-owned files.

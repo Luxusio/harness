@@ -23,6 +23,13 @@ This ensures test results accurately reflect the code state that will be merged.
 
 ## Step 1: Run test commands from PLAN.md
 
+Run the highest available verification tier without asking the user to opt in.
+If this task created or unblocked a live/API/browser/CLI verification path, use
+that path now. Local rebuilds, dev server restarts, local DB seeds, and dev-only
+tokens are normal verification work. Stop to ask only for destructive state changes,
+production resources, paid/external credentials, or a real product choice between
+valid approaches.
+
 ```bash
 # Run whatever PLAN.md specifies (from its verification contract section)
 <verification commands from PLAN.md>

@@ -27,6 +27,8 @@ def test_taxonomy_guide_defines_durable_doc_types():
     assert "`OBS__...` records observed facts" in body
     assert "`INF__...` records inference or hypotheses" in body
     assert "Keep harness-internal execution rules in skills, agents, scripts, and tests" in body
+    assert "New pages, admin/backoffice screens, routes, controllers, and endpoints require" in body
+    assert "PLAN.md acceptance criteria do not replace durable requirements" in body
 
 
 def test_setup_introduces_durable_doc_taxonomy():
@@ -53,6 +55,9 @@ def test_plan_requires_durable_docs_decision_for_claude_and_codex():
         assert "POLICY: doc/<area>/POLICY__<name>.md | n/a" in body
         assert "doc/auth/ADR__token-storage.md" in body
         assert "doc/common/GUIDE__coding-style.md" in body
+        assert "New pages, admin/backoffice screens, routes, controllers, and endpoints" in body
+        assert "REQ-required even when additive" in body
+        assert "PLAN.md acceptance criteria" in body
         assert "doc/product/" not in body
 
 
@@ -66,6 +71,9 @@ def test_develop_guidance_writes_selected_durable_docs():
         assert "Use `GUIDE` for reusable coding, design, testing" in body
         assert "Use `ADR` for significant technical choices" in body
         assert "Use `POLICY` only for external security, legal" in body
+        assert "New pages, admin/backoffice screens, routes, controllers, and endpoints require a REQ" in body
+        assert "Recheck the actual diff after implementation" in body
+        assert "record the correction in DOC_SYNC" in body
         assert "Durable docs: links to `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or `POLICY__*.md`" in body
         assert "doc/product/" not in body
 

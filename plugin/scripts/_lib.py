@@ -564,6 +564,12 @@ def read_manifest_field(field, repo_root=None):
 # AC-002: browser-QA close gate helpers (2026-05-12 retro)
 _FRONTEND_EXT = (".tsx", ".jsx", ".vue", ".svelte", ".html", ".css", ".scss")
 _FRONTEND_PATH_FRAGMENTS = ("/components/", "/pages/", "/views/", "/routes/")
+_API_EXT = (".py", ".rb", ".go", ".java", ".kt", ".ts", ".js", ".php", ".cs")
+_API_PATH_FRAGMENTS = (
+    "/api/", "/apis/", "/controllers/", "/controller/", "/routes/",
+    "/handlers/", "/handler/", "/endpoints/", "/endpoint/",
+)
+_REQ_REF_RE = re.compile(r"doc/[^)\]\s`'\"]+/REQ__[A-Za-z0-9_.-]+\.md")
 
 
 def _read_nested_manifest_field(repo_root, *keys):
@@ -613,6 +619,44 @@ def _frontend_touched(touched_paths):
             return True
         if any(frag in lp for frag in _FRONTEND_PATH_FRAGMENTS):
             return True
+    return False
+
+
+def _api_touched(touched_paths):
+    """Return True if any touched path looks like an externally consumed API file."""
+    for p in touched_paths or []:
+        if not isinstance(p, str):
+            continue
+        lp = p.lower()
+        if any(frag in lp for frag in _API_PATH_FRAGMENTS) and any(
+            lp.endswith(ext) for ext in _API_EXT
+        ):
+            return True
+    return False
+
+
+def _has_req_doc_reference(task_dir, touched_paths):
+    """Return True when task artifacts or touched docs reference a durable REQ."""
+    repo_root = find_repo_root(task_dir)
+    artifact_names = ("PLAN.md", "HANDOFF.md", "DOC_SYNC.md")
+    for name in artifact_names:
+        path = os.path.join(task_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                if _REQ_REF_RE.search(f.read()):
+                    return True
+        except OSError:
+            continue
+
+    for rel in touched_paths or []:
+        if not isinstance(rel, str):
+            continue
+        if _REQ_REF_RE.search(rel):
+            abs_path = rel if os.path.isabs(rel) else os.path.join(repo_root, rel)
+            if os.path.isfile(abs_path):
+                return True
     return False
 
 
@@ -770,15 +814,34 @@ def emit_compact_context(task_dir):
             repo_root, "qa", "browser_qa_supported") or "").lower() == "true"
     except Exception:
         browser_supported = False
-    if browser_supported and _frontend_touched(touched):
+    frontend_touched = _frontend_touched(touched)
+    api_touched = _api_touched(touched)
+    if browser_supported and frontend_touched:
         critic_path = os.path.join(task_dir, "CRITIC__qa.md")
         if os.path.isfile(critic_path) and not _has_qa_browser_section(task_dir):
             missing_for_close.append("qa-browser evidence in CRITIC__qa.md")
+
+    # Durable-doc close gate. PLAN's Durable Docs Decision is still required,
+    # but implementation can grow new visible/API surfaces after planning. The
+    # close gate rechecks the actual diff so `REQ: n/a` cannot silently pass for
+    # a new page, route, controller, endpoint, or comparable observable surface.
+    if (frontend_touched or api_touched) and not _has_req_doc_reference(task_dir, touched):
+        if frontend_touched and api_touched:
+            missing_for_close.append("REQ durable doc for UI/API observable behavior")
+        elif frontend_touched:
+            missing_for_close.append("REQ durable doc for UI observable behavior")
+        else:
+            missing_for_close.append("REQ durable doc for API observable behavior")
 
     if not has_plan:
         next_action = "Create PLAN.md via plan skill before source writes."
     elif runtime_verdict != "PASS":
         next_action = "Run task_verify to check runtime verification."
+    elif any(m.startswith("REQ durable doc") for m in missing_for_close):
+        next_action = (
+            "Create or update a doc/<area>/REQ__*.md for the observable "
+            "UI/API behavior, then link it from PLAN.md or HANDOFF.md."
+        )
     elif "qa-browser evidence in CRITIC__qa.md" in missing_for_close:
         next_action = ("Spawn Agent(subagent_type='harness:qa-browser', ...) "
                        "and call write_critic_qa with lens='browser'.")

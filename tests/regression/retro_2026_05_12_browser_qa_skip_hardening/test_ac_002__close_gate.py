@@ -145,6 +145,15 @@ class TestHelpers(unittest.TestCase):
         for p in ("plugin/scripts/foo.py", "docs/README.md", "build.gradle"):
             self.assertFalse(lib._frontend_touched([p]), f"{p} should NOT match")
 
+    def test_api_touched_path_fragments(self):
+        for p in ("app/api/characters.ts", "src/controllers/users.py",
+                  "service/endpoints/avatar.go", "server/routes/admin.rb"):
+            self.assertTrue(lib._api_touched([p]), f"{p} should match")
+
+    def test_api_touched_negative(self):
+        for p in ("docs/api/README.md", "src/models/user.py", "plugin/scripts/foo.py"):
+            self.assertFalse(lib._api_touched([p]), f"{p} should NOT match")
+
     def test_has_qa_browser_section_anchored(self):
         with tempfile.TemporaryDirectory() as td:
             _write(os.path.join(td, "CRITIC__qa.md"),
@@ -153,6 +162,63 @@ class TestHelpers(unittest.TestCase):
             _write(os.path.join(td, "CRITIC__qa.md"),
                    "# CRITIC\n\n## qa-browser verdict: PASS\n")
             self.assertTrue(lib._has_qa_browser_section(td))
+
+    def test_has_req_doc_reference_from_artifact_or_touched_doc(self):
+        with tempfile.TemporaryDirectory() as repo:
+            task_dir = os.path.join(repo, "doc", "harness", "tasks", "TASK__demo")
+            req_path = os.path.join(repo, "doc", "backoffice", "REQ__character-management.md")
+            os.makedirs(task_dir, exist_ok=True)
+            os.makedirs(os.path.dirname(req_path), exist_ok=True)
+            _write(req_path, "# REQ character management\n")
+            with mock.patch.object(lib, "find_repo_root", return_value=repo):
+                self.assertTrue(lib._has_req_doc_reference(
+                    task_dir, ["doc/backoffice/REQ__character-management.md"]))
+                _write(os.path.join(task_dir, "HANDOFF.md"),
+                       "Durable docs: doc/backoffice/REQ__character-management.md\n")
+                self.assertTrue(lib._has_req_doc_reference(task_dir, []))
+
+
+class TestCloseGateDurableReq(unittest.TestCase):
+    def setUp(self):
+        self.td_obj = tempfile.TemporaryDirectory()
+        self.repo = self.td_obj.name
+        self.task_dir = os.path.join(self.repo, "doc", "harness", "tasks", "TASK__demo")
+        os.makedirs(self.task_dir, exist_ok=True)
+        _write(os.path.join(self.task_dir, "PLAN.md"), "# PLAN\n\n## Durable Docs Decision\nREQ: n/a\n")
+        _write(os.path.join(self.task_dir, "HANDOFF.md"), "# HANDOFF\n")
+        _write(os.path.join(self.task_dir, "CRITIC__qa.md"), "# CRITIC\n\n## qa-browser verdict: PASS\n")
+        _write(os.path.join(self.repo, "doc", "harness", "manifest.yaml"),
+               "name: demo\nqa:\n  browser_qa_supported: true\n")
+
+    def tearDown(self):
+        self.td_obj.cleanup()
+
+    def _state(self, touched):
+        _write(os.path.join(self.task_dir, "TASK_STATE.yaml"), _state_yaml(touched))
+
+    def _run(self):
+        with mock.patch.object(lib, "find_repo_root", return_value=self.repo):
+            return lib.emit_compact_context(self.task_dir)
+
+    def test_blocks_frontend_surface_without_req_doc(self):
+        self._state(["src/pages/CharacterAdmin.tsx"])
+        ctx = self._run()
+        self.assertIn("REQ durable doc for UI observable behavior", ctx["missing_for_close"])
+        self.assertIn("doc/<area>/REQ__*.md", ctx["next_action"])
+
+    def test_blocks_api_surface_without_req_doc(self):
+        self._state(["src/api/characters.ts"])
+        ctx = self._run()
+        self.assertIn("REQ durable doc for API observable behavior", ctx["missing_for_close"])
+
+    def test_passes_surface_when_req_doc_is_linked(self):
+        _write(os.path.join(self.task_dir, "HANDOFF.md"),
+               "Durable docs: doc/backoffice/REQ__character-management.md\n")
+        _write(os.path.join(self.repo, "doc", "backoffice", "REQ__character-management.md"),
+               "# REQ character management\n")
+        self._state(["src/pages/CharacterAdmin.tsx"])
+        ctx = self._run()
+        self.assertNotIn("REQ durable doc for UI observable behavior", ctx["missing_for_close"])
 
 
 if __name__ == "__main__":

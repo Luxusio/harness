@@ -43,6 +43,7 @@ and QA must satisfy: existing screen state, filters, search, sorting, loading,
 empty/error states, localization/copy/visibility, click/input interactions,
 API request or response shape, status codes, auth/session behavior, validation,
 compatibility, externally consumed side effects, or observable bugfixes.
+New pages, admin/backoffice screens, routes, controllers, and endpoints are REQ-required even when additive. PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`. Do not write `REQ: n/a` when the plan creates or changes observable UI/API behavior; if uncertain, choose the REQ and let develop refine the exact path.
 
 Use `GUIDE` when the task establishes reusable coding, design, testing, or
 implementation guidance. Use `ADR` when it makes a significant technical
@@ -54,7 +55,9 @@ Write docs under the DDD-style area or bounded-context folder, for example
 `doc/ui/REQ__filter-bar.md`, `doc/api/REQ__oauth-login.md`,
 `doc/auth/ADR__token-storage.md`, or `doc/common/GUIDE__coding-style.md`.
 Use `n/a` when a type is not needed; the reason must say which durable
-knowledge surfaces are unchanged.
+knowledge surfaces are unchanged. Reasons like "additive change" or "covered
+by PLAN.md" are invalid because additive observable behavior still needs a
+durable contract.
 
 ### Review Status table (end of PLAN.md)
 

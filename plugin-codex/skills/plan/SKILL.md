@@ -268,7 +268,8 @@ Both modes: Phase 1 premise gate and Phase 5.3 User Challenges never auto-decide
   constraints that harness cannot fully enforce by itself. Write docs under a
   DDD-style area folder such as `doc/ui/REQ__filter-bar.md`,
   `doc/api/REQ__oauth-login.md`, `doc/auth/ADR__token-storage.md`, or
-  `doc/common/GUIDE__coding-style.md`.
+  `doc/common/GUIDE__coding-style.md`. New pages, admin/backoffice screens, routes, controllers, and endpoints are REQ-required even when additive.
+  PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`; `REQ: n/a` is invalid for observable UI/API behavior.
 - **Two gates.** The non-auto-decided asks are: (1) premise confirmation in Phase 1.1, and (2) User Challenges in Phase 5.3.
 - **Log every decision.** Every classification (Mechanical / Taste / User Challenge) gets a row in `AUDIT_TRAIL.md` via `write_plan_artifact.py --artifact audit`.
 - **Full depth means full depth.** Complete every loaded methodology section with its required evidence and decisions.

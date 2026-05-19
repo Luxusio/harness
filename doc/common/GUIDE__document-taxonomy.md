@@ -55,6 +55,8 @@ visibility, click/input interactions, externally consumed API request/response
 shape, status codes, auth/session behavior, validation, compatibility, side
 effects, or observable bugfixes.
 
+New pages, admin/backoffice screens, routes, controllers, and endpoints require a `REQ` even when the change is additive. PLAN.md acceptance criteria do not replace durable requirements.
+
 Create or update `GUIDE` when a task establishes a reusable coding, design,
 testing, or implementation pattern.
 
@@ -67,4 +69,6 @@ approval rules.
 
 For internal-only refactors, one-off tests, local tooling, or non-observable
 maintenance, record `Durable docs: not needed — <reason>` when the reason says
-which durable knowledge surfaces remain unchanged.
+which durable knowledge surfaces remain unchanged. "Additive change" and
+"covered by PLAN.md" are not valid reasons to skip a `REQ` for observable
+UI/API behavior.
