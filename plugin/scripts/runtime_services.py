@@ -8,7 +8,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -154,11 +156,13 @@ def _pid_alive(pid: int | None) -> bool:
         return False
 
 
-def _run_shell(command: str, cwd: str | None, timeout: int = 15) -> tuple[int, str]:
+def _run_shell(command: str, cwd: str | None, timeout: int = 15,
+               env: dict[str, str] | None = None) -> tuple[int, str]:
     proc = subprocess.run(
         command,
         shell=True,
         cwd=cwd or None,
+        env=env,
         text=True,
         capture_output=True,
         timeout=timeout,
@@ -167,12 +171,97 @@ def _run_shell(command: str, cwd: str | None, timeout: int = 15) -> tuple[int, s
     return proc.returncode, (proc.stdout + proc.stderr).strip()
 
 
+def _load_env_file(path: str | None, cwd: str | None) -> dict[str, str]:
+    if not path:
+        return {}
+    env_path = Path(path)
+    if not env_path.is_absolute() and cwd:
+        env_path = Path(cwd) / env_path
+    if not env_path.exists():
+        return {}
+    values: dict[str, str] = {}
+    for raw in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", key):
+            continue
+        values[key] = _strip_quotes(value.strip())
+    return values
+
+
+def _service_env(service: dict[str, Any]) -> dict[str, str]:
+    cwd = str(service.get("cwd") or "") or None
+    env = dict(os.environ)
+    env.update(_load_env_file(str(service.get("env_file") or ""), cwd))
+    return env
+
+
+def _required_env_missing(service: dict[str, Any]) -> list[str]:
+    raw = service.get("required_env") or service.get("env_required") or []
+    names = [str(item).strip() for item in raw] if isinstance(raw, list) else [str(raw).strip()]
+    env = _service_env(service)
+    return [name for name in names if name and not env.get(name)]
+
+
+def _port_open(host: str, port: int, timeout: float = 0.25) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _port_conflict(service: dict[str, Any]) -> tuple[bool, str]:
+    port = service.get("port")
+    if not port:
+        return False, ""
+    host = str(service.get("host") or "127.0.0.1")
+    try:
+        port_int = int(port)
+    except (TypeError, ValueError):
+        return False, f"invalid port: {port}"
+    if _port_open(host, port_int):
+        return True, f"{host}:{port_int} already accepts connections"
+    return False, ""
+
+
+_FAILURE_PATTERNS: list[tuple[str, str, str]] = [
+    ("missing_dependency", r"(command not found|module not found|cannot find module|no module named|gem not found)", "install dependencies or declare install_command/self_heal"),
+    ("port_conflict", r"(address already in use|eaddrinuse|port .* already|bind: address|already accepts connections)", "free the port or set kill_port_on_conflict/self_heal"),
+    ("missing_env", r"(missing .*env|environment variable .* required|keyerror: ['\"][A-Za-z_][A-Za-z0-9_]*|undefined variable)", "set required env or declare env_file/env_setup_command"),
+    ("migration_or_seed", r"(relation .* does not exist|no such table|migration|seed data|database .* empty)", "run migrations/seeds or declare seed_command"),
+]
+
+
+def _classify_failure(text: str) -> tuple[str, str]:
+    lower = (text or "").lower()
+    for label, pattern, action in _FAILURE_PATTERNS:
+        if re.search(pattern, lower):
+            return label, action
+    return "unknown", "inspect runtime logs and add a bounded self_heal command"
+
+
+def _log_excerpt(runtime_dir: Path, name: str, limit: int = 4000) -> str:
+    path = _service_log(runtime_dir, name)
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")[-limit:]
+
+
 def _health_ok(service: dict[str, Any], timeout: int = 10) -> tuple[bool, str]:
     healthcheck = str(service.get("healthcheck") or "").strip()
     if not healthcheck:
         return True, "no healthcheck configured"
     try:
-        rc, output = _run_shell(healthcheck, str(service.get("cwd") or "") or None, timeout)
+        rc, output = _run_shell(
+            healthcheck,
+            str(service.get("cwd") or "") or None,
+            timeout,
+            env=_service_env(service),
+        )
     except subprocess.TimeoutExpired:
         return False, f"healthcheck timed out after {timeout}s"
     return rc == 0, output or f"exit={rc}"
@@ -189,6 +278,7 @@ def _start_process(service: dict[str, Any], runtime_dir: Path) -> int:
         str(service["command"]),
         shell=True,
         cwd=cwd,
+        env=_service_env(service),
         stdout=log,
         stderr=subprocess.STDOUT,
         stdin=subprocess.DEVNULL,
@@ -221,10 +311,24 @@ def _heal_commands(service: dict[str, Any]) -> list[str]:
     raw = service.get("self_heal")
     if isinstance(raw, list):
         commands.extend(str(item) for item in raw if str(item).strip())
-    for key in ("install_command", "repair_command", "heal_command"):
+    for key in ("env_setup_command", "install_command", "repair_command", "seed_command", "heal_command"):
         if service.get(key):
             commands.append(str(service[key]))
     return commands
+
+
+def _record_failure(entry: dict[str, Any], runtime_dir: Path, name: str, detail: str) -> None:
+    excerpt = _log_excerpt(runtime_dir, name)
+    failure_class, action = _classify_failure("\n".join([detail, excerpt]))
+    entry.update({
+        "status": "blocked",
+        "health": "fail",
+        "health_detail": detail,
+        "failure_class": failure_class,
+        "recommended_action": action,
+        "last_log_excerpt": excerpt[-1000:],
+        "updated_at": _now(),
+    })
 
 
 def _wait_ready(service: dict[str, Any], runtime_dir: Path, state_entry: dict[str, Any]) -> bool:
@@ -243,9 +347,54 @@ def _wait_ready(service: dict[str, Any], runtime_dir: Path, state_entry: dict[st
             _append_log(runtime_dir, name, f"ready: {detail}")
             return True
         time.sleep(1)
-    state_entry.update({"status": "blocked", "health": "fail", "health_detail": last, "updated_at": _now()})
+    _record_failure(state_entry, runtime_dir, name, last)
     _append_log(runtime_dir, name, f"not ready: {last}")
     return False
+
+
+def _run_heal_command(service: dict[str, Any], runtime_dir: Path, entry: dict[str, Any], cmd: str, attempt_number: int) -> None:
+    name = str(service["name"])
+    _append_log(runtime_dir, name, f"self-heal attempt {attempt_number}: {cmd}")
+    try:
+        rc, output = _run_shell(
+            cmd,
+            str(service.get("cwd") or "") or None,
+            int(service.get("heal_timeout_sec") or 60),
+            env=_service_env(service),
+        )
+    except subprocess.TimeoutExpired:
+        rc, output = 124, "self-heal command timed out"
+    _append_log(runtime_dir, name, f"self-heal result rc={rc}: {output}")
+    entry.setdefault("self_heal_attempts", []).append({"ts": _now(), "command": cmd, "exit": rc, "output": output[-1000:]})
+
+
+def _preflight_service(service: dict[str, Any], runtime_dir: Path, entry: dict[str, Any]) -> bool:
+    name = str(service["name"])
+    missing_env = _required_env_missing(service)
+    if missing_env:
+        env_setup = str(service.get("env_setup_command") or "").strip()
+        if env_setup:
+            _run_heal_command(service, runtime_dir, entry, env_setup, 0)
+            missing_env = _required_env_missing(service)
+        if missing_env:
+            detail = f"missing required env: {', '.join(missing_env)}"
+            _record_failure(entry, runtime_dir, name, detail)
+            _append_log(runtime_dir, name, detail)
+            print(f"{name}: BLOCKED ({detail})")
+            return False
+
+    conflict, detail = _port_conflict(service)
+    if conflict:
+        if service.get("kill_port_on_conflict", False):
+            cmd = f"if command -v lsof >/dev/null 2>&1; then lsof -ti tcp:{int(service['port'])} | xargs -r kill; else exit 127; fi"
+            _run_heal_command(service, runtime_dir, entry, cmd, 0)
+            conflict, detail = _port_conflict(service)
+        if conflict:
+            _record_failure(entry, runtime_dir, name, detail)
+            _append_log(runtime_dir, name, f"port conflict: {detail}")
+            print(f"{name}: BLOCKED ({detail})")
+            return False
+    return True
 
 
 def _select_services(all_services: list[dict[str, Any]], names: list[str]) -> list[dict[str, Any]]:
@@ -280,19 +429,18 @@ def start_services(args: argparse.Namespace) -> int:
             _append_log(runtime_dir, name, f"existing pid unhealthy, restarting pid={pid}: {detail}")
             _stop_pid(pid)
 
+        if not _preflight_service(service, runtime_dir, entry):
+            exit_code = 1
+            _save_state(runtime_dir, state)
+            continue
+
         attempts = ["initial"] + [f"self-heal:{cmd}" for cmd in _heal_commands(service)]
         if not _heal_commands(service) and service.get("restart_on_fail", True):
             attempts.append("restart")
         for attempt_index, attempt in enumerate(attempts, start=1):
             if attempt.startswith("self-heal:"):
                 cmd = attempt.split(":", 1)[1]
-                _append_log(runtime_dir, name, f"self-heal attempt {attempt_index - 1}: {cmd}")
-                try:
-                    rc, output = _run_shell(cmd, str(service.get("cwd") or "") or None, int(service.get("heal_timeout_sec") or 60))
-                except subprocess.TimeoutExpired:
-                    rc, output = 124, "self-heal command timed out"
-                _append_log(runtime_dir, name, f"self-heal result rc={rc}: {output}")
-                entry.setdefault("self_heal_attempts", []).append({"ts": _now(), "command": cmd, "exit": rc, "output": output[-1000:]})
+                _run_heal_command(service, runtime_dir, entry, cmd, attempt_index - 1)
 
             pid = _start_process(service, runtime_dir)
             entry.update({

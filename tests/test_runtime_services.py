@@ -1,4 +1,5 @@
 import json
+import socket
 import subprocess
 import sys
 import time
@@ -28,6 +29,9 @@ def _write_service_script(tmp_path: Path) -> Path:
         "installed = pathlib.Path(sys.argv[3]) if len(sys.argv) > 3 else None\n"
         "if mode == 'needs-install' and (not installed or not installed.exists()):\n"
         "    sys.exit(7)\n"
+        "if mode == 'needs-env' and not __import__('os').environ.get('SERVICE_TOKEN'):\n"
+        "    print('missing env SERVICE_TOKEN', flush=True)\n"
+        "    sys.exit(8)\n"
         "ready.write_text('ready')\n"
         "running = True\n"
         "def stop(*_):\n"
@@ -37,6 +41,17 @@ def _write_service_script(tmp_path: Path) -> Path:
         "while running:\n"
         "    time.sleep(0.1)\n"
         "ready.unlink(missing_ok=True)\n",
+        encoding="utf-8",
+    )
+    return script
+
+
+def _write_failing_script(tmp_path: Path, message: str) -> Path:
+    script = tmp_path / "fail.py"
+    script.write_text(
+        "import sys\n"
+        f"print({message!r}, flush=True)\n"
+        "sys.exit(9)\n",
         encoding="utf-8",
     )
     return script
@@ -134,6 +149,136 @@ def test_self_heal_command_runs_then_service_becomes_ready(tmp_path):
     _run(tmp_path, "stop")
 
 
+def test_required_env_can_be_loaded_from_env_file(tmp_path):
+    service = _write_service_script(tmp_path)
+    ready = tmp_path / "ready.txt"
+    env_file = tmp_path / ".env.test"
+    env_file.write_text("SERVICE_TOKEN=dev-token\n", encoding="utf-8")
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "runtime:\n"
+        "  services:\n"
+        "    - name: api\n"
+        f"      command: {sys.executable} {service} {ready} needs-env\n"
+        f"      cwd: {tmp_path}\n"
+        "      env_file: .env.test\n"
+        "      required_env: [SERVICE_TOKEN]\n"
+        f"      healthcheck: test -f {ready}\n"
+        "      ready_timeout_sec: 2\n",
+        encoding="utf-8",
+    )
+
+    result = _run(tmp_path, "start")
+    assert result.returncode == 0, result.stderr + result.stdout
+    state = json.loads((tmp_path / "runtime" / "services.json").read_text())
+    assert state["services"]["api"]["health"] == "pass"
+    _run(tmp_path, "stop")
+
+
+def test_missing_required_env_blocks_before_start(tmp_path):
+    service = _write_service_script(tmp_path)
+    ready = tmp_path / "ready.txt"
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "runtime:\n"
+        "  services:\n"
+        "    - name: api\n"
+        f"      command: {sys.executable} {service} {ready} needs-env\n"
+        "      required_env: [SERVICE_TOKEN]\n"
+        f"      healthcheck: test -f {ready}\n"
+        "      ready_timeout_sec: 1\n",
+        encoding="utf-8",
+    )
+
+    result = _run(tmp_path, "start")
+    assert result.returncode == 1
+    assert "missing required env: SERVICE_TOKEN" in result.stdout
+    state = json.loads((tmp_path / "runtime" / "services.json").read_text())
+    assert state["services"]["api"]["failure_class"] == "missing_env"
+    assert "env_file" in state["services"]["api"]["recommended_action"]
+
+
+def test_env_setup_command_can_create_env_file_before_start(tmp_path):
+    service = _write_service_script(tmp_path)
+    ready = tmp_path / "ready.txt"
+    env_file = tmp_path / ".env.generated"
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "runtime:\n"
+        "  services:\n"
+        "    - name: api\n"
+        f"      command: {sys.executable} {service} {ready} needs-env\n"
+        f"      cwd: {tmp_path}\n"
+        "      env_file: .env.generated\n"
+        "      required_env: [SERVICE_TOKEN]\n"
+        f"      env_setup_command: printf 'SERVICE_TOKEN=generated\\n' > {env_file}\n"
+        f"      healthcheck: test -f {ready}\n"
+        "      ready_timeout_sec: 2\n",
+        encoding="utf-8",
+    )
+
+    result = _run(tmp_path, "start")
+    assert result.returncode == 0, result.stderr + result.stdout
+    state = json.loads((tmp_path / "runtime" / "services.json").read_text())
+    assert state["services"]["api"]["self_heal_attempts"][0]["command"].startswith("printf")
+    assert state["services"]["api"]["health"] == "pass"
+    _run(tmp_path, "stop")
+
+
+def test_declared_port_conflict_blocks_before_start(tmp_path):
+    service = _write_service_script(tmp_path)
+    ready = tmp_path / "ready.txt"
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(1)
+    port = sock.getsockname()[1]
+    try:
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text(
+            "runtime:\n"
+            "  services:\n"
+            "    - name: web\n"
+            f"      command: {sys.executable} {service} {ready}\n"
+            f"      port: {port}\n"
+            f"      healthcheck: test -f {ready}\n"
+            "      ready_timeout_sec: 1\n",
+            encoding="utf-8",
+        )
+
+        result = _run(tmp_path, "start")
+        assert result.returncode == 1
+        assert "already accepts connections" in result.stdout
+        state = json.loads((tmp_path / "runtime" / "services.json").read_text())
+        assert state["services"]["web"]["failure_class"] == "port_conflict"
+        assert "127.0.0.1" in state["services"]["web"]["health_detail"]
+    finally:
+        sock.close()
+
+
+def test_log_classifier_records_missing_dependency_failure(tmp_path):
+    service = _write_failing_script(tmp_path, "Error: Cannot find module express")
+    ready = tmp_path / "ready.txt"
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "runtime:\n"
+        "  services:\n"
+        "    - name: web\n"
+        f"      command: {sys.executable} {service}\n"
+        f"      healthcheck: test -f {ready}\n"
+        "      ready_timeout_sec: 1\n"
+        "      restart_on_fail: false\n",
+        encoding="utf-8",
+    )
+
+    result = _run(tmp_path, "start")
+    assert result.returncode == 1
+    state = json.loads((tmp_path / "runtime" / "services.json").read_text())
+    web = state["services"]["web"]
+    assert web["failure_class"] == "missing_dependency"
+    assert "install dependencies" in web["recommended_action"]
+    assert "Cannot find module" in web["last_log_excerpt"]
+
+
 def test_runtime_services_docs_and_qa_prompts_reference_live_startup():
     docs = (REPO / "doc" / "harness" / "runtime-services.md").read_text()
     manifest = (REPO / "doc" / "harness" / "manifest.yaml").read_text()
@@ -141,6 +286,8 @@ def test_runtime_services_docs_and_qa_prompts_reference_live_startup():
 
     assert "runtime.services" in docs
     assert "self_heal" in docs
+    assert "required_env" in docs
+    assert "failure_class" in docs
     assert "BLOCKED_ENV" in docs
     assert "runtime_services.py start" in manifest
     assert "Runtime Services Prelude" in runtime_smoke
@@ -156,3 +303,6 @@ def test_runtime_services_docs_and_qa_prompts_reference_live_startup():
         assert "runtime.services[]" in body
         assert "runtime_services.py start" in body
         assert "runtime_services.py logs <service>" in body
+        assert "failure_class" in body
+        assert "recommended_action" in body
+        assert "last_log_excerpt" in body

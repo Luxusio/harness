@@ -16,8 +16,10 @@ The script reads `doc/harness/manifest.yaml` `runtime.services[]`, writes state
 to `doc/harness/runtime/services.json`, writes logs under
 `doc/harness/runtime/logs/`, waits for healthchecks, and runs bounded
 self-healing commands when configured. If a required service remains blocked,
-record the exact service and health detail in the QA transcript instead of
-silently downgrading live smoke.
+record the exact service, `health_detail`, `failure_class`, `recommended_action`,
+and `last_log_excerpt` in the QA transcript instead of silently downgrading live
+smoke. Treat `missing_dependency`, `port_conflict`, `missing_env`, and
+`migration_or_seed` as actionable setup failures before deciding `BLOCKED_ENV`.
 
 **Browser projects (`browser_qa_supported: true`):**
 
