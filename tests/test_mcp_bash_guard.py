@@ -103,6 +103,15 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             self.assertEqual(decision, "deny")
             self.assertIn("rule=protected-artifact", reason)
 
+    def test_redirect_into_document_critic_denies_with_tool_hint(self):
+        with scratch_task_in_real_repo("doc-critic-prot") as task_dir:
+            critic = os.path.join(task_dir, "CRITIC__document.md")
+            r = _run_bash(f"echo x > {critic}")
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("rule=protected-artifact", reason)
+            self.assertIn("write_critic_document", reason)
+
 
 class TestEnvPrefixBypassFix(unittest.TestCase):
     """Legacy bug: `FOO=bar sed -i x file` treated cmd as FOO=bar not sed → undetected."""

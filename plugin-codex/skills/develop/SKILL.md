@@ -557,6 +557,12 @@ echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"feedback-rule","source"
 
 Mechanical. Read HANDOFF.md (changed file list) + `doc/CLAUDE.md` (registered roots). For each file, map to doc root. Call `write_doc_sync` MCP.
 
+When the task changes `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or
+`POLICY__*.md`, run the `critic-document` methodology after DOC_SYNC. It
+verifies both DOC_SYNC consistency and durable doc quality. The task cannot
+close until `CRITIC__document.md` has a fresh `PASS`; a changed REQ with vague
+or missing observable behavior is a FAIL, not a warning.
+
 ### Phase 8.7: Distilled Change Doc
 
 One-paragraph summary of the task's user-visible behavior change. Lives at `doc/changes/<date>-<slug>.md`. Optional if no user-visible change.

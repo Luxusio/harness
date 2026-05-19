@@ -2,8 +2,8 @@
 """harness MCP server — self-contained, 7-field TASK_STATE.
 
 No plugin-legacy dependency. All operations are direct file I/O.
-7 MCP tools: task_start, task_context, task_verify, task_close,
-             write_critic_qa,
+8 MCP tools: task_start, task_context, task_verify, task_close,
+             write_critic_qa, write_critic_document,
              write_handoff, write_doc_sync.
 """
 
@@ -528,6 +528,13 @@ def handle_write_critic_qa(args: dict) -> dict:
     return _write_artifact(args, "CRITIC__qa.md", "runtime_verdict", verdict_value=verdict)
 
 
+def handle_write_critic_document(args: dict) -> dict:
+    verdict = _req(args, "verdict")
+    if verdict not in ("PASS", "FAIL"):
+        return _err(f"invalid verdict '{verdict}' — must be PASS or FAIL")
+    return _write_artifact(args, "CRITIC__document.md")
+
+
 def handle_write_handoff(args: dict) -> dict:
     return _write_artifact(args, "HANDOFF.md")
 
@@ -575,6 +582,15 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id", "verdict", "summary", "transcript"],
          "additionalProperties": False},
      "handler": handle_write_critic_qa},
+    {"name": "write_critic_document", "title": "Write document critic verdict",
+     "description": "Write CRITIC__document.md after critic-document reviews DOC_SYNC and durable doc quality.",
+     "inputSchema": {"type": "object", "properties": {
+         "task_id": {"type": "string"}, "task_dir": {"type": "string"},
+         "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
+         "summary": {"type": "string"}, "transcript": {"type": "string"}},
+         "required": ["task_id", "verdict", "summary", "transcript"],
+         "additionalProperties": False},
+     "handler": handle_write_critic_document},
     {"name": "write_handoff", "title": "Write developer handoff — developer only",
      "description": "Write HANDOFF.md.",
      "inputSchema": {"type": "object", "properties": {

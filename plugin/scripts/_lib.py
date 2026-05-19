@@ -570,6 +570,8 @@ _API_PATH_FRAGMENTS = (
     "/handlers/", "/handler/", "/endpoints/", "/endpoint/",
 )
 _REQ_REF_RE = re.compile(r"doc/[^)\]\s`'\"]+/REQ__[A-Za-z0-9_.-]+\.md")
+_DURABLE_DOC_RE = re.compile(r"^doc/[^/]+/(?:REQ|GUIDE|ADR|POLICY)__[^/]+\.md$")
+_CRITIC_DOCUMENT_PASS_RE = re.compile(r"^\s*PASS\s*$", re.MULTILINE)
 
 
 def _read_nested_manifest_field(repo_root, *keys):
@@ -658,6 +660,48 @@ def _has_req_doc_reference(task_dir, touched_paths):
             if os.path.isfile(abs_path):
                 return True
     return False
+
+
+def _durable_docs_touched(touched_paths):
+    """Return durable doc paths changed by this task."""
+    paths = []
+    for p in touched_paths or []:
+        if not isinstance(p, str):
+            continue
+        rel = p.strip().lstrip("./")
+        if _DURABLE_DOC_RE.match(rel):
+            paths.append(rel)
+    return paths
+
+
+def _document_critic_status(task_dir, durable_doc_paths):
+    """Return (ok, reason) for CRITIC__document.md freshness and PASS verdict."""
+    if not durable_doc_paths:
+        return True, ""
+    path = os.path.join(task_dir, "CRITIC__document.md")
+    if not os.path.isfile(path):
+        return False, "CRITIC__document.md PASS for durable docs"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            body = f.read()
+    except OSError:
+        return False, "CRITIC__document.md PASS for durable docs"
+    if not _CRITIC_DOCUMENT_PASS_RE.search(body):
+        return False, "CRITIC__document.md PASS for durable docs"
+
+    repo_root = find_repo_root(task_dir)
+    try:
+        critic_mtime = os.path.getmtime(path)
+    except OSError:
+        return False, "fresh CRITIC__document.md PASS for durable docs"
+    for rel in durable_doc_paths:
+        abs_path = os.path.join(repo_root, rel)
+        try:
+            if os.path.getmtime(abs_path) > critic_mtime:
+                return False, "fresh CRITIC__document.md PASS for durable docs"
+        except OSError:
+            continue
+    return True, ""
 
 
 def _has_qa_browser_section(task_dir):
@@ -816,6 +860,7 @@ def emit_compact_context(task_dir):
         browser_supported = False
     frontend_touched = _frontend_touched(touched)
     api_touched = _api_touched(touched)
+    durable_doc_paths = _durable_docs_touched(touched)
     if browser_supported and frontend_touched:
         critic_path = os.path.join(task_dir, "CRITIC__qa.md")
         if os.path.isfile(critic_path) and not _has_qa_browser_section(task_dir):
@@ -833,6 +878,10 @@ def emit_compact_context(task_dir):
         else:
             missing_for_close.append("REQ durable doc for API observable behavior")
 
+    doc_critic_ok, doc_critic_reason = _document_critic_status(task_dir, durable_doc_paths)
+    if not doc_critic_ok:
+        missing_for_close.append(doc_critic_reason)
+
     if not has_plan:
         next_action = "Create PLAN.md via plan skill before source writes."
     elif runtime_verdict != "PASS":
@@ -841,6 +890,12 @@ def emit_compact_context(task_dir):
         next_action = (
             "Create or update a doc/<area>/REQ__*.md for the observable "
             "UI/API behavior, then link it from PLAN.md or HANDOFF.md."
+        )
+    elif any(m.startswith("CRITIC__document.md") or m.startswith("fresh CRITIC__document.md")
+             for m in missing_for_close):
+        next_action = (
+            "Run the critic-document agent on changed durable docs and write "
+            "CRITIC__document.md with write_critic_document."
         )
     elif "qa-browser evidence in CRITIC__qa.md" in missing_for_close:
         next_action = ("Spawn Agent(subagent_type='harness:qa-browser', ...) "

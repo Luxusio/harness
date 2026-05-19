@@ -169,7 +169,7 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 
 ## MCP tools
 
-7 tools via `plugin/mcp/harness_server.py`:
+8 tools via `plugin/mcp/harness_server.py`:
 
 | Tool | Purpose |
 |------|---------|
@@ -177,7 +177,8 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 | `task_context` | Refresh task state |
 | `task_verify` | Sync paths + check verification |
 | `task_close` | Gate: all verdicts PASS → close |
-| `write_critic_runtime` | QA agent writes verdict |
+| `write_critic_qa` | QA agent writes runtime verdict |
+| `write_critic_document` | Document critic writes DOC_SYNC + durable-doc quality verdict |
 | `write_handoff` | Developer writes HANDOFF.md |
 | `write_doc_sync` | Developer writes DOC_SYNC.md |
 
@@ -201,8 +202,8 @@ plugin/
   .mcp.json                     # MCP server config
   CLAUDE.md                     # runtime rules
   hooks/hooks.json              # hook config
-  mcp/harness_server.py         # 7-tool MCP server
-  agents/                       # 5 agents: developer, dogfooder, qa-{api,browser,cli}
+  mcp/harness_server.py         # 8-tool MCP server
+  agents/                       # developer, dogfooder, critic-document, qa-{api,browser,cli,desktop}
   skills/                       # 5 user-facing + 4 review sub-skills
   scripts/                      # _lib.py + 17 stdlib scripts
 ```

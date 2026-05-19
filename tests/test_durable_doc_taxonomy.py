@@ -9,6 +9,9 @@ CLAUDE_DEVELOP = REPO / "plugin" / "skills" / "develop" / "SKILL.md"
 CODEX_DEVELOP = REPO / "plugin-codex" / "skills" / "develop" / "SKILL.md"
 QA_BROWSER = REPO / "plugin" / "agents" / "qa-browser.md"
 QA_API = REPO / "plugin" / "agents" / "qa-api.md"
+CRITIC_DOCUMENT = REPO / "plugin" / "agents" / "critic-document.md"
+CODEX_CRITIC_DOCUMENT = REPO / "plugin-codex" / "agents" / "critic-document.md"
+DOCUMENT_CRITIC_PLAYBOOK = REPO / "doc" / "harness" / "critics" / "document.md"
 TAXONOMY = REPO / "doc" / "common" / "GUIDE__document-taxonomy.md"
 
 
@@ -92,6 +95,21 @@ def test_qa_agents_read_durable_docs_by_type():
         assert "doc/product/" not in body
 
 
+def test_document_critic_checks_req_quality():
+    playbook = _text(DOCUMENT_CRITIC_PLAYBOOK)
+    assert "Durable REQ quality bar" in playbook
+    assert "too vague for implementation or QA to verify" in playbook
+    assert "observable behavior exists only in task artifacts and not in the REQ" in playbook
+
+    for path in (CRITIC_DOCUMENT, CODEX_CRITIC_DOCUMENT):
+        body = _text(path)
+        assert "critic-document" in body
+        assert "write_critic_document" in body
+        assert "`REQ__*.md` that is too vague for future implementation or QA" in body
+        assert "Observable behavior introduced by the diff but missing from the REQ" in body
+        assert "Do not edit documentation yourself" in body
+
+
 def test_active_guidance_has_no_product_spec_taxonomy():
     paths = [
         BOOTSTRAP,
@@ -101,6 +119,9 @@ def test_active_guidance_has_no_product_spec_taxonomy():
         CODEX_DEVELOP,
         QA_BROWSER,
         QA_API,
+        CRITIC_DOCUMENT,
+        CODEX_CRITIC_DOCUMENT,
+        DOCUMENT_CRITIC_PLAYBOOK,
         TAXONOMY,
     ]
     combined = "\n".join(_text(path) for path in paths)

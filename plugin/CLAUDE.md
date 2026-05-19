@@ -27,6 +27,7 @@ No step skipped. Smallest coherent diff per step.
 
 **Artifact writes (role-owned):**
 - `write_critic_qa` → CRITIC__qa.md + runtime_verdict (qa-* / stop-judge agents)
+- `write_critic_document` → CRITIC__document.md (critic-document agent)
 - `write_handoff` → HANDOFF.md (develop coordinator or dedicated developer role)
 - `write_doc_sync` → DOC_SYNC.md (develop coordinator)
 

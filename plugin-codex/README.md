@@ -3,7 +3,7 @@
 This is the Codex-runtime tree for the harness plugin. **Opt-in.** It does NOT materialize automatically on existing Claude Code installs — set `harness.codex_enabled: true` in your `.claude-plugin/marketplace.json` or invoke `Skill(setup) --include-codex` to enable.
 
 Architecture lives in [`doc/harness/spike-report.md`](../doc/harness/spike-report.md) §3.6 — **MCP-only sharing**:
-- Shared across runtimes: MCP server, hook payload schemas, `plugin/scripts/` (gate scripts, helpers), contract artifacts (PLAN.md / CHECKS.yaml / HANDOFF.md / DOC_SYNC.md / CRITIC__qa.md).
+- Shared across runtimes: MCP server, hook payload schemas, `plugin/scripts/` (gate scripts, helpers), contract artifacts (PLAN.md / CHECKS.yaml / HANDOFF.md / DOC_SYNC.md / CRITIC__qa.md / CRITIC__document.md).
 - Single installer: repo-root `install.py` emits the `~/.codex/config.toml` MCP+hook block that wires the shared substrate into a Codex install.
 - Independent per runtime: SKILL.md trees, agent definitions. Hand-authored on each side, both consuming the same shared substrate.
 
@@ -65,6 +65,7 @@ Further references:
 - `qa-desktop.md` — native GUI / x11 QA lens.
 - `dogfooder.md` — post-PASS user-facing-experience pass.
 - `developer.md` — HANDOFF / DOC_SYNC / change-doc writer role.
+- `critic-document.md` — DOC_SYNC and durable-doc quality critic role.
 
 ## What's deferred to v2
 

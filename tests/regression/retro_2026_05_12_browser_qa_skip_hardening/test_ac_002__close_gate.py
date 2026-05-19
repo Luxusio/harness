@@ -177,6 +177,21 @@ class TestHelpers(unittest.TestCase):
                        "Durable docs: doc/backoffice/REQ__character-management.md\n")
                 self.assertTrue(lib._has_req_doc_reference(task_dir, []))
 
+    def test_durable_docs_touched_matches_typed_docs_only(self):
+        touched = [
+            "doc/backoffice/REQ__character-management.md",
+            "doc/api/GUIDE__pagination.md",
+            "doc/common/OBS__workspace-layout.md",
+            "doc/harness/tasks/TASK__demo/PLAN.md",
+        ]
+        self.assertEqual(
+            lib._durable_docs_touched(touched),
+            [
+                "doc/backoffice/REQ__character-management.md",
+                "doc/api/GUIDE__pagination.md",
+            ],
+        )
+
 
 class TestCloseGateDurableReq(unittest.TestCase):
     def setUp(self):
@@ -219,6 +234,40 @@ class TestCloseGateDurableReq(unittest.TestCase):
         self._state(["src/pages/CharacterAdmin.tsx"])
         ctx = self._run()
         self.assertNotIn("REQ durable doc for UI observable behavior", ctx["missing_for_close"])
+
+    def test_blocks_changed_durable_doc_without_document_critic(self):
+        _write(os.path.join(self.repo, "doc", "backoffice", "REQ__character-management.md"),
+               "# REQ character management\n")
+        _write(os.path.join(self.task_dir, "HANDOFF.md"),
+               "Durable docs: doc/backoffice/REQ__character-management.md\n")
+        self._state(["doc/backoffice/REQ__character-management.md"])
+        ctx = self._run()
+        self.assertIn("CRITIC__document.md PASS for durable docs", ctx["missing_for_close"])
+        self.assertIn("critic-document", ctx["next_action"])
+
+    def test_passes_changed_durable_doc_with_document_critic_pass(self):
+        _write(os.path.join(self.repo, "doc", "backoffice", "REQ__character-management.md"),
+               "# REQ character management\n")
+        _write(os.path.join(self.task_dir, "HANDOFF.md"),
+               "Durable docs: doc/backoffice/REQ__character-management.md\n")
+        _write(os.path.join(self.task_dir, "CRITIC__document.md"),
+               "# CRITIC - document\n\n## Verdict\nPASS\n")
+        self._state(["doc/backoffice/REQ__character-management.md"])
+        ctx = self._run()
+        self.assertNotIn("CRITIC__document.md PASS for durable docs", ctx["missing_for_close"])
+
+    def test_blocks_when_document_critic_is_stale(self):
+        doc_path = os.path.join(self.repo, "doc", "backoffice", "REQ__character-management.md")
+        _write(doc_path, "# REQ character management\n")
+        _write(os.path.join(self.task_dir, "HANDOFF.md"),
+               "Durable docs: doc/backoffice/REQ__character-management.md\n")
+        critic_path = os.path.join(self.task_dir, "CRITIC__document.md")
+        _write(critic_path, "# CRITIC - document\n\n## Verdict\nPASS\n")
+        os.utime(critic_path, (1, 1))
+        os.utime(doc_path, (2, 2))
+        self._state(["doc/backoffice/REQ__character-management.md"])
+        ctx = self._run()
+        self.assertIn("fresh CRITIC__document.md PASS for durable docs", ctx["missing_for_close"])
 
 
 if __name__ == "__main__":

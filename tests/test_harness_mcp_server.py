@@ -1,4 +1,4 @@
-"""Tests for the plugin-local harness MCP server (7-tool minimal surface)."""
+"""Tests for the plugin-local harness MCP server (8-tool minimal surface)."""
 
 import importlib.util
 import io
@@ -24,6 +24,7 @@ EXPECTED_TOOLS = {
     "task_verify",
     "task_close",
     "write_critic_qa",
+    "write_critic_document",
     "write_handoff",
     "write_doc_sync",
 }
@@ -55,7 +56,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertEqual(harness_server.SERVER_INFO["name"], "harness")
         self.assertEqual(harness_server.SERVER_INFO["title"], "harness Control Plane")
 
-    def test_tool_registry_matches_seven_tool_surface(self):
+    def test_tool_registry_matches_eight_tool_surface(self):
         tools = {tool["name"] for tool in harness_server.list_tools()}
         self.assertEqual(tools, EXPECTED_TOOLS)
 
@@ -251,6 +252,45 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertNotIn("isError", result)
             structured = result["structuredContent"]
             self.assertEqual(structured["task_context"]["task_id"], "TASK__mcp")
+
+    def test_write_critic_document_writes_artifact_without_runtime_verdict_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__doccritic")
+            original_ctd = harness_server.canonical_task_dir
+            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
+            try:
+                result = harness_server.call_tool(
+                    "write_critic_document",
+                    {
+                        "task_id": "TASK__doccritic",
+                        "verdict": "PASS",
+                        "summary": "REQ is specific and synced.",
+                        "transcript": "Checked DOC_SYNC and changed REQ.",
+                    },
+                )
+            finally:
+                harness_server.canonical_task_dir = original_ctd
+            self.assertNotIn("isError", result)
+            artifact = Path(task_dir) / "CRITIC__document.md"
+            self.assertTrue(artifact.is_file())
+            body = artifact.read_text(encoding="utf-8")
+            self.assertIn("## Verdict\nPASS", body)
+            self.assertIn("REQ is specific and synced.", body)
+            state = (Path(task_dir) / "TASK_STATE.yaml").read_text(encoding="utf-8")
+            self.assertIn("runtime_verdict: pending", state)
+
+    def test_write_critic_document_rejects_blocked_env(self):
+        result = harness_server.call_tool(
+            "write_critic_document",
+            {
+                "task_id": "TASK__doccritic",
+                "verdict": "BLOCKED_ENV",
+                "summary": "x",
+                "transcript": "x",
+            },
+        )
+        self.assertTrue(result.get("isError"))
+        self.assertIn("must be PASS or FAIL", result["structuredContent"]["error"])
 
 
 class HarnessMcpServerPR2CloseGate(unittest.TestCase):
