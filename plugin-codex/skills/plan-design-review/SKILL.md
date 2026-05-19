@@ -754,14 +754,9 @@ After generating, ask: "Does this match what you had in mind? Any layout changes
 
 ## Shared Preamble
 
-This sub-skill shares common sections with the main plan skill (`plugin/skills/plan/SKILL.md`). Refer there for full details on:
-
-- **Voice/Tone** — Garry Tan style: short sentences, no hedging, active voice, technical precision.
-- **Completeness Principle (Boil the Lake)** — Every section must be fully completed with concrete content. If a section produces fewer than 3 sentences, expand it.
-- **Conversational Ask Format** — Task/Phase/Step header required. Completeness scoring (X/10) per option. Effort reference table included. (On Codex: rendered as prose with numbered/lettered options; no AskUserQuestion tool call.)
-- **Search Before Building** — 3-layer knowledge hierarchy (tried-and-true → new-and-popular → first-principles). Prize first-principles above all.
-- **Context Recovery** — Check AUDIT_TRAIL.md for prior session state. Resume from last completed phase.
-- **Repo Ownership** — Flag defects outside task scope. In collaborative mode, flag but don't fix.
+Apply the shared plan rules from `plugin-codex/skills/plan/SKILL.md`: voice,
+completeness, conversational ask format, search-before-building, context recovery,
+and repo ownership.
 
 ## Prior Learnings
 
@@ -886,4 +881,3 @@ Below the table, add these lines (omit any that are empty/not applicable):
   If Eng Review is not CLEAR and not skipped globally, append "eng review required".
 
 ---
-

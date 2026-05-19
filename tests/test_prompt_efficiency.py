@@ -26,6 +26,17 @@ CODEX_SKILL_PROMPTS = [
     REPO / "plugin-codex" / "skills" / "plan-devex-review" / "SKILL.md",
 ]
 
+REVIEW_SKILL_PROMPTS = [
+    REPO / "plugin" / "skills" / "plan-ceo-review" / "SKILL.md",
+    REPO / "plugin" / "skills" / "plan-eng-review" / "SKILL.md",
+    REPO / "plugin" / "skills" / "plan-design-review" / "SKILL.md",
+    REPO / "plugin" / "skills" / "plan-devex-review" / "SKILL.md",
+    REPO / "plugin-codex" / "skills" / "plan-ceo-review" / "SKILL.md",
+    REPO / "plugin-codex" / "skills" / "plan-eng-review" / "SKILL.md",
+    REPO / "plugin-codex" / "skills" / "plan-design-review" / "SKILL.md",
+    REPO / "plugin-codex" / "skills" / "plan-devex-review" / "SKILL.md",
+]
+
 QA_WORD_BUDGETS = {
     "qa-api.md": 1450,
     "qa-browser.md": 1450,
@@ -102,3 +113,15 @@ def test_codex_skill_prompts_omit_port_measurement_history():
         body = _text(path)
         for phrase in banned:
             assert phrase not in body, f"{path} still carries port history: {phrase}"
+
+
+def test_review_skill_prompts_omit_default_status_boilerplate():
+    banned = [
+        "NO REVIEWS YET",
+        "This sub-skill shares common sections",
+        "Voice/Tone",
+    ]
+    for path in REVIEW_SKILL_PROMPTS:
+        body = _text(path)
+        for phrase in banned:
+            assert phrase not in body, f"{path} still carries repeated review boilerplate: {phrase}"

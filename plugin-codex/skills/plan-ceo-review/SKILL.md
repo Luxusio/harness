@@ -414,27 +414,11 @@ Only log genuine discoveries that would save time in a future session.
   └─────────────┴──────────────┴──────────────┴──────────────┴────────────────────┘
 ```
 
-## REVIEW REPORT
-
-| Review | Trigger | Why | Runs | Status | Findings |
-|--------|---------|-----|------|--------|----------|
-| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
-| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 0 | — | — |
-| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
-| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
-
-**VERDICT:** NO REVIEWS YET — run `harness:plan` for the full 7-phase review pipeline, or individual reviews above.
-
 ## Shared Preamble
 
-This sub-skill shares common sections with the main plan skill (`plugin/skills/plan/SKILL.md`). Refer there for full details on:
-
-- **Voice/Tone** — Garry Tan style: short sentences, no hedging, active voice, technical precision.
-- **Completeness Principle (Boil the Lake)** — Every section must be fully completed with concrete content. If a section produces fewer than 3 sentences, expand it.
-- **Conversational Ask Format** — Task/Phase/Step header required. Completeness scoring (X/10) per option. Effort reference table included. (On Codex: rendered as prose with lettered options; no AskUserQuestion tool call.)
-- **Search Before Building** — 3-layer knowledge hierarchy (tried-and-true → new-and-popular → first-principles). Prize first-principles above all.
-- **Context Recovery** — Check AUDIT_TRAIL.md for prior session state. Resume from last completed phase.
-- **Repo Ownership** — Flag defects outside task scope. In collaborative mode, flag but don't fix.
+Apply the shared plan rules from `plugin-codex/skills/plan/SKILL.md`: voice,
+completeness, conversational ask format, search-before-building, context recovery,
+and repo ownership.
 
 ## Philosophy
 
@@ -1307,4 +1291,3 @@ List every ASCII diagram in files this plan touches. Still accurate?
 If any conversational ask goes unanswered, note it here. Never silently default.
 
 ---
-
