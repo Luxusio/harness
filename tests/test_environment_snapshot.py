@@ -74,10 +74,13 @@ class TestEnvironmentSnapshot(unittest.TestCase):
         self.assertIn("## Repo", body)
         self.assertIn("## Manifest", body)
         self.assertIn("## Tooling", body)
+        self.assertIn("## Tool managers", body)
+        self.assertIn("## Tool versions", body)
         self.assertIn("## Root entries", body)
         self.assertIn("python3 -m pytest", body)
         self.assertIn("ast_grep_ready: true", body)
         self.assertIn("project_shape: `library`", body)
+        self.assertIn("- git: `git version", body)
 
     def test_snapshot_does_not_call_git_status_or_render_dirty_bit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -113,6 +116,35 @@ class TestEnvironmentSnapshot(unittest.TestCase):
         # Manifest fields render as empty strings, not crash
         self.assertIn("test_command: ``", body)
         self.assertIn("ast_grep_ready: unknown", body)
+        self.assertIn("## Tool versions", body)
+
+    def test_tool_version_probe_is_bounded_and_read_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            _mk_git_repo(base)
+            task_dir = base / "task"
+            task_dir.mkdir()
+
+            calls: list[list[str]] = []
+
+            def fake_run(cmd, *args, **kwargs):
+                calls.append(list(cmd))
+                self.assertLessEqual(kwargs.get("timeout", 99), 3)
+                class Result:
+                    returncode = 0
+                    stdout = "tool 1.2.3\n"
+                    stderr = ""
+                return Result()
+
+            with mock.patch.object(env_snapshot_mod.subprocess, "run", side_effect=fake_run):
+                with mock.patch.object(env_snapshot_mod.shutil, "which", return_value="/bin/tool"):
+                    path = env_snapshot_mod.snapshot(str(task_dir), str(base))
+
+            body = Path(path).read_text(encoding="utf-8")
+        flattened = [" ".join(c) for c in calls]
+        self.assertTrue(all("install" not in c and "update" not in c for c in flattened))
+        self.assertIn("activate:", body)
+        self.assertIn("tool 1.2.3", body)
 
     def test_raise_swallowed_returns_empty_string(self):
         # task_dir is a file, not a dir → os.makedirs inside snapshot raises

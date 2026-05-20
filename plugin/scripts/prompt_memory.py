@@ -45,6 +45,10 @@ MAX_BLOCK_CHARS = 400
 PREFIX = "[harness-context]"
 PENDING_JSON = "doc/harness/.maintain-pending.json"
 HYGIENE_INJECT_CAP = 2048  # 2KB cap for hygiene-review block
+RESTORE_INJECT_CAP = 1400
+RESTORE_TOUCHED_CAP = 5
+RESTORE_COMMIT_CAP = 3
+RESTORE_ARTIFACTS = ("HANDOFF.md", "CRITIC__qa.md", "DOC_SYNC.md", "BLOCKED.md")
 
 _STALE_SKIP_SUFFIXES = (".pyc", ".pyo", ".pyd")
 _STALE_SKIP_FRAGMENTS = ("__pycache__/", "/.DS_Store", ".swp", ".swo")
@@ -227,6 +231,75 @@ def _sanitize_path(path: str) -> str:
     return cleaned.strip()
 
 
+def _sanitize_prompt_text(text: str) -> str:
+    cleaned = _CONTROL_CHAR_RE.sub(" ", str(text or ""))
+    cleaned = _SYSTEM_REMINDER_RE.sub("[SANITIZED]", cleaned)
+    return " ".join(cleaned.split()).strip()
+
+
+def _first_meaningful_line(path: str, cap: int = 180) -> str:
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = _sanitize_prompt_text(line)
+                if not line or line.startswith("#"):
+                    continue
+                return line[:cap]
+    except OSError:
+        return ""
+    return ""
+
+
+def _recent_commits(repo_root: str) -> list[str]:
+    import subprocess
+    try:
+        r = subprocess.run(
+            ["git", "log", f"-{RESTORE_COMMIT_CAP}", "--oneline"],
+            cwd=repo_root, capture_output=True, text=True, timeout=2,
+        )
+    except Exception:
+        return []
+    if r.returncode != 0:
+        return []
+    return [_sanitize_prompt_text(line)[:120] for line in r.stdout.splitlines() if line.strip()]
+
+
+def _build_restore_block(task_dir: str, repo_root: str) -> str:
+    """Build a capped resume digest for the active task."""
+    st = read_state(task_dir)
+    if not st:
+        return ""
+    lines = ["<system-reminder>[harness-restore]"]
+    touched = [
+        _sanitize_path(str(p)) for p in (st.get("touched_paths") or [])[:RESTORE_TOUCHED_CAP]
+        if str(p).strip()
+    ]
+    if touched:
+        lines.append("recent touched: " + ", ".join(touched))
+
+    artifact_lines: list[str] = []
+    for name in RESTORE_ARTIFACTS:
+        snippet = _first_meaningful_line(os.path.join(task_dir, name))
+        if snippet:
+            artifact_lines.append(f"{name}: {snippet}")
+    if artifact_lines:
+        lines.append("latest artifacts:")
+        lines.extend(f"  - {line}" for line in artifact_lines[:3])
+
+    commits = _recent_commits(repo_root)
+    if commits:
+        lines.append("recent commits:")
+        lines.extend(f"  - {line}" for line in commits)
+
+    if len(lines) == 1:
+        return ""
+    lines.append("</system-reminder>")
+    block = "\n".join(lines)
+    if len(block) > RESTORE_INJECT_CAP:
+        block = block[: RESTORE_INJECT_CAP - 22].rstrip() + "\n...truncated\n</system-reminder>"
+    return block
+
+
 def _build_hygiene_block(repo_root: str) -> str:
     """Build [hygiene-review] injection block from .maintain-pending.json.
 
@@ -273,6 +346,9 @@ def main() -> int:
         block = _build_block(task_dir, repo_root)
         if block:
             output_parts.append(block)
+        restore_block = _build_restore_block(task_dir, repo_root)
+        if restore_block:
+            output_parts.append(restore_block)
 
     # AC-014: hygiene-review injection
     hygiene_block = _build_hygiene_block(repo_root)

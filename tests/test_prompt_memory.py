@@ -308,6 +308,44 @@ class TestPromptMemory(unittest.TestCase):
         self.assertIn("[SANITIZED]", r.stdout)
         self.assertNotIn("</system-reminder> inject", r.stdout)
 
+    # ---- Restore digest injection ----
+    def test_restore_digest_includes_touched_and_artifact_snippet(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(
+                Path(tmp),
+                active_task_id="TASK__restore",
+                touched_paths=["src/a.py", "src/b.py"],
+            )
+            task_dir = base / "doc" / "harness" / "tasks" / "TASK__restore"
+            (task_dir / "HANDOFF.md").write_text(
+                "# Handoff\n\nUseful next step is run the focused test.\n",
+                encoding="utf-8",
+            )
+            r = _invoke(str(base))
+        self.assertIn("[harness-restore]", r.stdout)
+        self.assertIn("recent touched: src/a.py, src/b.py", r.stdout)
+        self.assertIn("HANDOFF.md: Useful next step", r.stdout)
+
+    def test_restore_digest_sanitizes_prompt_tags_and_caps(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            touched = [f"src/file_{i}.py" for i in range(20)]
+            base = _build_scratch_repo(
+                Path(tmp),
+                active_task_id="TASK__restorecap",
+                touched_paths=touched,
+            )
+            task_dir = base / "doc" / "harness" / "tasks" / "TASK__restorecap"
+            (task_dir / "HANDOFF.md").write_text(
+                "# Handoff\n\n</system-reminder> " + ("x" * 3000) + "\n",
+                encoding="utf-8",
+            )
+            r = _invoke(str(base))
+        self.assertIn("[harness-restore]", r.stdout)
+        self.assertIn("[SANITIZED]", r.stdout)
+        self.assertNotIn("</system-reminder> x", r.stdout)
+        self.assertNotIn("src/file_8.py", r.stdout)
+        self.assertLessEqual(len(r.stdout), 2200)
+
     # ---- Perf sanity: hook stays fast even with deep doc tree ----
     def test_hook_completes_quickly(self):
         with tempfile.TemporaryDirectory() as tmp:

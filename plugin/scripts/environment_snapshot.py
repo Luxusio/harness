@@ -13,6 +13,7 @@ never blocks on a probe issue.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from typing import Any
@@ -37,6 +38,38 @@ _TOOLING_FIELDS = (
     "chrome_devtools_ready",
 )
 
+_TOOL_MANAGER_COMMANDS = {
+    "mise": {
+        "probe": ["mise", "--version"],
+        "activate": "eval \"$(mise activate bash)\"",
+    },
+    "asdf": {
+        "probe": ["asdf", "--version"],
+        "activate": ". \"$(asdf where asdf 2>/dev/null)/asdf.sh\"",
+    },
+    "volta": {
+        "probe": ["volta", "--version"],
+        "activate": "volta is shim-based; ensure ~/.volta/bin is on PATH",
+    },
+}
+
+_VERSION_COMMANDS = {
+    "python": ["python", "--version"],
+    "python3": ["python3", "--version"],
+    "uv": ["uv", "--version"],
+    "node": ["node", "--version"],
+    "npm": ["npm", "--version"],
+    "cargo": ["cargo", "--version"],
+    "java": ["java", "-version"],
+    "gradle": ["gradle", "--version"],
+    "docker": ["docker", "--version"],
+    "git": ["git", "--version"],
+    "gh": ["gh", "--version"],
+    "mise": ["mise", "--version"],
+    "asdf": ["asdf", "--version"],
+    "volta": ["volta", "--version"],
+}
+
 _MANIFEST_TOP_FIELDS = (
     "test_command",
     "build_command",
@@ -53,7 +86,16 @@ def _run(cmd: list[str], cwd: str) -> str:
         return ""
     if r.returncode != 0:
         return ""
-    return r.stdout.strip()
+    return (r.stdout.strip() or r.stderr.strip())
+
+
+def _short_version(raw: str) -> str:
+    if not raw:
+        return "missing"
+    first = raw.splitlines()[0].strip()
+    if len(first) > 120:
+        first = first[:117].rstrip() + "..."
+    return first or "missing"
 
 
 def _git_branch(repo_root: str) -> str:
@@ -114,6 +156,29 @@ def _tooling_block(repo_root: str) -> dict[str, str]:
     return out
 
 
+def _tool_managers(repo_root: str) -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {}
+    for name, spec in _TOOL_MANAGER_COMMANDS.items():
+        path = shutil.which(name)
+        version = _short_version(_run(spec["probe"], repo_root)) if path else "missing"
+        out[name] = {
+            "path": path or "missing",
+            "version": version,
+            "activate": spec["activate"] if path else "",
+        }
+    return out
+
+
+def _tool_versions(repo_root: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for name, cmd in _VERSION_COMMANDS.items():
+        if not shutil.which(cmd[0]):
+            out[name] = "missing"
+            continue
+        out[name] = _short_version(_run(cmd, repo_root))
+    return out
+
+
 def _root_entries(repo_root: str) -> list[str]:
     try:
         entries = sorted(os.listdir(repo_root))
@@ -145,6 +210,32 @@ def _render(ctx: dict[str, Any]) -> str:
         lines.append(f"- {field}: {tl.get(field, 'unknown')}")
     lines.append("")
 
+    lines.append("## Tool managers")
+    managers = ctx.get("tool_managers", {})
+    if managers:
+        for name in sorted(managers):
+            info = managers.get(name, {})
+            line = f"- {name}: `{info.get('version', 'missing')}`"
+            path = info.get("path", "missing")
+            if path and path != "missing":
+                line += f" at `{path}`"
+            activate = info.get("activate", "")
+            if activate:
+                line += f" | activate: `{activate}`"
+            lines.append(line)
+    else:
+        lines.append("- (none checked)")
+    lines.append("")
+
+    lines.append("## Tool versions")
+    versions = ctx.get("tool_versions", {})
+    if versions:
+        for name in sorted(versions):
+            lines.append(f"- {name}: `{versions.get(name, 'missing')}`")
+    else:
+        lines.append("- (none checked)")
+    lines.append("")
+
     lines.append("## Root entries")
     entries = ctx.get("root_entries", [])
     if entries:
@@ -174,6 +265,8 @@ def snapshot(task_dir: str, repo_root: str | None = None) -> str:
             },
             "manifest": _manifest_fields(repo_root),
             "tooling": _tooling_block(repo_root),
+            "tool_managers": _tool_managers(repo_root),
+            "tool_versions": _tool_versions(repo_root),
             "root_entries": _root_entries(repo_root),
         }
         path = os.path.join(task_dir, ARTIFACT_NAME)
