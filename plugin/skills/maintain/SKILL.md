@@ -2,9 +2,9 @@
 name: maintain
 description: |
   Inspection-only: display REVIEW pile + confirm Tier C contract drift.
-  Background hygiene (Tier A/B auto-apply, doc classification) runs
-  automatically at SessionStart via hygiene_scan.py. This skill handles
-  only what requires user judgment: Tier C drift and REVIEW-queue items.
+  Background hygiene runs at SessionStart via hygiene_scan.py. This skill
+  handles only user-judgment items: Tier C drift, REVIEW queue, runbook
+  candidates.
 
   Trigger keywords: "maintain", "contract drift", "CLAUDE.md 정리",
   "규약 정비", "contracts 꼬임", "harness upgrade cleanup".
@@ -19,24 +19,25 @@ No subagent spawn. No oh-my-claudecode:writer dependency.
 
 ## When to run
 
-- User says "maintain", SessionStart emitted [hygiene-review], Tier C drift is pending, or user wants the REVIEW queue.
+- User says "maintain", [hygiene-review] fired, Tier C drift is pending, or REVIEW queue is wanted.
+- User wants a discovered setup command remembered, or [harness-runbooks] reports pending candidates.
 
 ## Flow
 
 ### Phase 0: Load pending state
 
 ```bash
-_PENDING="doc/harness/.maintain-pending.json"
-[ -f "$_PENDING" ] && python3 -c "
-import json, sys
-data = json.load(open('$_PENDING'))
-print(f'Pending: {len(data)} item(s)')
-for e in data[:5]:
-    print(f'  [{e.get(\"kind\",\"?\")}] {e.get(\"path\",\"?\")}')
-" || echo "No pending items."
+python3 - <<'PY'
+import json, pathlib
+p=pathlib.Path("doc/harness/.maintain-pending.json")
+d=json.load(open(p)) if p.exists() else []
+print(f"Pending: {len(d)} item(s)")
+for e in d[:5]: print(f"  [{e.get('kind','?')}] {e.get('path','?')}")
+PY
+python3 plugin/scripts/runbook_memory.py list
 ```
 
-If no pending items: report clean state, exit.
+If no pending items and no runbook candidates: report clean state, exit.
 
 ### Phase 1: REVIEW queue inspection (read-only display)
 
@@ -45,8 +46,7 @@ For each entry with `kind == "review"` in `.maintain-pending.json`:
 - Display: path, freshness, reference_count, superseded_by/distilled_to signals.
 - DO NOT auto-edit or auto-remove. Display only.
 
-User can then manually act or add frontmatter fields (`superseded_by`,
-`distilled_to`) to influence next hygiene cycle classification.
+User may then add frontmatter fields (`superseded_by`, `distilled_to`).
 
 ### Phase 2: Tier C drift confirmation (one item at a time)
 
@@ -69,9 +69,6 @@ Never batch multiple Tier C items into one AskUserQuestion.
 
 ### Phase 2.5: Staged hygiene archives (batch commit)
 
-`doc_hygiene.py` stages archive moves at SessionStart but does NOT commit
-(see C-16 "Commit timing"). Commit accumulates here, on user demand.
-
 Detect staged archive renames:
 
 ```bash
@@ -79,9 +76,7 @@ _STAGED=$(git status --porcelain | awk '/^R/ && / -> .*\/_archive\// {print}')
 _N=$(echo -n "$_STAGED" | grep -c .)
 ```
 
-If `_N == 0`: skip this phase.
-
-If `_N >= 1`:
+If `_N == 0`: skip. If `_N >= 1`:
 
 ```
 AskUserQuestion:
@@ -91,15 +86,19 @@ AskUserQuestion:
     - B) Skip — keep staged for later
 ```
 
-On A: list each staged rename in the commit body, then
-`git commit -m "hygiene: batch archive (<N> files)" -m "<body>"`.
-Body lists each `src -> dest` and the maintain_restore.py command.
-
+On A: commit with body listing each `src -> dest` and restore command.
 On B: no-op. The renames stay staged.
+
+### Phase 2.6: Runbook candidates
+
+If `runbook_memory.py list` reports candidates, read
+`plugin/skills/maintain/runbook-candidates.md` and follow it exactly. Ask one
+candidate at a time; approve moves it to `doc/harness/runbooks.yaml`, defer
+leaves it pending, skip removes it.
 
 ### Phase 3: Update pending file
 
-Rewrite `.maintain-pending.json` with remaining entries only (atomic write via python3 json.dump + tempfile).
+Rewrite `.maintain-pending.json` with remaining entries only (atomic write).
 
 ### Phase 4: Report
 
@@ -108,6 +107,7 @@ Maintain report
   REVIEW items displayed: N
   Tier C applied: X  deferred: Y  skipped: Z
   Hygiene archives committed: K (or "skipped: K staged")
+  Runbook candidates approved: A  deferred: B  skipped: C
   Pending remaining: M
 ```
 

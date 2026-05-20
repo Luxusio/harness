@@ -35,6 +35,11 @@ try:
 except Exception:
     sys.exit(0)
 
+try:
+    from runbook_memory import render_prompt_block as _render_runbook_block  # type: ignore
+except Exception:
+    _render_runbook_block = None
+
 
 MAX_BLOCK_CHARS = 400
 PREFIX = "[harness-context]"
@@ -273,6 +278,13 @@ def main() -> int:
     hygiene_block = _build_hygiene_block(repo_root)
     if hygiene_block:
         output_parts.append(hygiene_block)
+
+    # Approved runbooks + pending candidates are repo-local execution memory.
+    # They are advisory and capped inside runbook_memory.py.
+    if _render_runbook_block is not None:
+        runbook_block = _render_runbook_block(repo_root)
+        if runbook_block:
+            output_parts.append(runbook_block)
 
     if output_parts:
         sys.stdout.write("\n".join(output_parts))

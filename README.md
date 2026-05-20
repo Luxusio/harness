@@ -127,6 +127,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `runtime_services.py` | Start/status/log helper for manifest-declared runtime services | task-local audit evidence |
 | `update_checks.py` | Atomic CHECKS.yaml AC status transitions (plan-first) | task-local |
 | `write_plan_artifact.py` | CLI writer for PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md | task-local |
+| `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
 | `hygiene_scan.py` | SessionStart auto-hygiene: Tier A/B auto-apply + doc archive pass | `doc/harness/.maintain-pending.json` |
 | `doc_hygiene.py` | Content-signal KEEP/REMOVE/REVIEW classifier; archives stale docs via `git mv` | `doc/harness/.maintain-pending.json` |
 | `maintain_restore.py` | Restore an archived file back to original location via `git mv` | — |

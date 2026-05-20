@@ -13,6 +13,7 @@ Minimal harness scripts. Self-contained — no plugin-legacy dependency.
 - `stop_gate.py` — Stop hook (open task reminder)
 - `golden_replay.py` — regression smoke tests for the scripts above (stdlib only)
 - `review-log` / `review-read` — standalone plan review tools
+- `runbook_memory.py` — manages `doc/harness/runbooks.yaml` and `doc/harness/runbook_candidates.yaml`; approved runbooks are surfaced by `prompt_memory.py`, candidates are reviewed through `harness:maintain`
 - `hygiene_scan.py` — SessionStart auto-hygiene: contract drift Tier A/B auto-apply + doc_hygiene invocation. State: `doc/harness/.maintain-last-run`, `doc/harness/.maintain-pending.json`, `doc/harness/.maintain-observe.log`
 - `doc_hygiene.py` — content-signal KEEP/REMOVE/REVIEW classifier for `doc/changes/` and `doc/common/`. Archives REMOVE files via `git mv` to `_archive/`. State: `doc/harness/.maintain-pending.json`
 - `maintain_restore.py` — restore a file previously archived by doc_hygiene.py via `git mv`. Usage: `python3 plugin/scripts/maintain_restore.py <archive-path>`
