@@ -72,6 +72,33 @@ def _task_artifact_rel(td: str, fn: str) -> str:
     return f"doc/harness/tasks/{os.path.basename(td)}/{fn}" if artifact_exists(td, fn) else ""
 
 
+AUDIT_HEADER = (
+    "| # | phase | decision | classification | principle | rationale | rejected_option |\n"
+    "|---|---|---|---|---|---|---|\n"
+)
+
+
+def _atomic_write_text(path: str, text: str) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    import tempfile
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".mcp.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def _cleanup_orphan_index_lock(repo_root: str, max_age_secs: int = 0) -> bool:
     """Remove an orphan .git/index.lock left around task_start.
 
@@ -582,6 +609,97 @@ def handle_task_blocked(args: dict) -> dict:
     })
 
 
+def _plan_meta_dict(td: str, artifact: str, meta: dict | None = None) -> dict:
+    out: dict[str, Any] = {
+        "artifact": artifact,
+        "task_id": os.path.basename(os.path.abspath(td)),
+        "author_role": "plan-skill",
+        "written_at": now_iso(),
+    }
+    if meta:
+        out["plan_meta"] = meta
+    return out
+
+
+def _coerce_meta(raw: Any) -> dict:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def handle_write_plan_artifact(args: dict) -> dict:
+    """MCP replacement for scripts/write_plan_artifact.py.
+
+    The MCP call is the ownership boundary, so it intentionally does not require
+    PLAN_SESSION.json token choreography.
+    """
+    artifact = _req(args, "artifact")
+    if artifact not in ("plan", "plan-meta", "checks", "audit"):
+        return _err("invalid artifact — must be plan, plan-meta, checks, or audit")
+    td = _resolve_td(args)
+    if not os.path.isfile(os.path.join(td, "TASK_STATE.yaml")):
+        return _err("write_plan_artifact failed: missing TASK_STATE.yaml", data={"task_dir": td})
+    raw_content = args.get("content")
+    content = raw_content if isinstance(raw_content, str) else ""
+    meta = _coerce_meta(args.get("meta"))
+    written: list[str] = []
+
+    if artifact == "plan":
+        _atomic_write_text(os.path.join(td, "PLAN.md"), content)
+        _atomic_write_text(
+            os.path.join(td, "PLAN.meta.json"),
+            json.dumps(_plan_meta_dict(td, "PLAN.md", meta), indent=2, ensure_ascii=False) + "\n",
+        )
+        written.extend(["PLAN.md", "PLAN.meta.json"])
+        checks_content = _opt(args, "checks_content")
+        if checks_content is not None:
+            _atomic_write_text(os.path.join(td, "CHECKS.yaml"), checks_content)
+            written.append("CHECKS.yaml")
+    elif artifact == "plan-meta":
+        content_meta = _coerce_meta(content)
+        content_meta.update(meta)
+        _atomic_write_text(
+            os.path.join(td, "PLAN.meta.json"),
+            json.dumps(_plan_meta_dict(td, "plan-meta", content_meta), indent=2, ensure_ascii=False) + "\n",
+        )
+        written.append("PLAN.meta.json")
+        checks_content = _opt(args, "checks_content")
+        if checks_content is not None:
+            _atomic_write_text(os.path.join(td, "CHECKS.yaml"), checks_content)
+            written.append("CHECKS.yaml")
+    elif artifact == "checks":
+        _atomic_write_text(os.path.join(td, "CHECKS.yaml"), content)
+        written.append("CHECKS.yaml")
+    elif artifact == "audit":
+        path = os.path.join(td, "AUDIT_TRAIL.md")
+        try:
+            existing = open(path, encoding="utf-8").read() if os.path.isfile(path) else ""
+        except OSError:
+            existing = ""
+        first_line = existing.lstrip("\n").split("\n")[0] if existing.strip() else ""
+        has_header = first_line.startswith("| # |")
+        if not existing.strip():
+            new_content = AUDIT_HEADER + content.rstrip("\n") + "\n"
+        elif has_header:
+            new_content = existing.rstrip("\n") + "\n" + content.rstrip("\n") + "\n"
+        else:
+            new_content = existing.rstrip("\n") + "\n\n" + AUDIT_HEADER + content.rstrip("\n") + "\n"
+        _atomic_write_text(path, new_content)
+        written.append("AUDIT_TRAIL.md")
+
+    return _ok({
+        "artifact": artifact,
+        "task_dir": td,
+        "written": written,
+    })
+
+
 # ── Tool definitions ─────────────────────────────────────────────────────
 
 TOOL_DEFS: list[dict[str, Any]] = [
@@ -630,6 +748,17 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id", "verdict", "summary", "transcript"],
          "additionalProperties": False},
      "handler": handle_write_critic_qa},
+    {"name": "write_plan_artifact", "title": "Write plan-owned artifacts",
+     "description": "Write PLAN.md, PLAN.meta.json, CHECKS.yaml, or AUDIT_TRAIL.md through MCP. Replaces scripts/write_plan_artifact.py and does not require PLAN_SESSION.json handshakes.",
+     "inputSchema": {"type": "object", "properties": {
+         "task_id": {"type": "string"}, "task_dir": {"type": "string"},
+         "artifact": {"type": "string", "enum": ["plan", "plan-meta", "checks", "audit"]},
+         "content": {"type": "string"},
+         "checks_content": {"type": "string"},
+         "meta": {"type": ["object", "string"]}},
+         "required": ["artifact"],
+         "additionalProperties": False},
+     "handler": handle_write_plan_artifact},
     {"name": "write_critic_document", "title": "Write document critic verdict",
      "description": "Write CRITIC__document.md after critic-document reviews DOC_SYNC and durable doc quality.",
      "inputSchema": {"type": "object", "properties": {

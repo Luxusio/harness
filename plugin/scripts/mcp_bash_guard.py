@@ -74,10 +74,10 @@ _ARTIFACT_TOOL_HINT = {
     "CRITIC__document.md": "mcp__plugin_harness_harness__write_critic_document",
     "HANDOFF.md": "mcp__plugin_harness_harness__write_handoff",
     "DOC_SYNC.md": "mcp__plugin_harness_harness__write_doc_sync",
-    "PLAN.md": "Skill(harness:plan)",
-    "PLAN.meta.json": "Skill(harness:plan)",
+    "PLAN.md": "mcp__plugin_harness_harness__write_plan_artifact",
+    "PLAN.meta.json": "mcp__plugin_harness_harness__write_plan_artifact",
     "CHECKS.yaml": "plan-skill + scripts/update_checks.py",
-    "AUDIT_TRAIL.md": "plan-skill",
+    "AUDIT_TRAIL.md": "mcp__plugin_harness_harness__write_plan_artifact",
 }
 
 RULE_DOCS = {
@@ -274,10 +274,10 @@ def _deny(target, command):
     # orchestrator gets an actionable resolution path inline.
     base = os.path.basename(rel)
     _NEXT = {
-        "PLAN.md": "Skill('harness:plan', '<task_id>')",
-        "PLAN.meta.json": "Skill('harness:plan', '<task_id>')",
+        "PLAN.md": "mcp__plugin_harness_harness__write_plan_artifact artifact=plan",
+        "PLAN.meta.json": "mcp__plugin_harness_harness__write_plan_artifact artifact=plan-meta",
         "CHECKS.yaml": "python3 plugin/scripts/update_checks.py --task-dir <td> --ac <id> --status <s>",
-        "AUDIT_TRAIL.md": "python3 plugin/scripts/write_plan_artifact.py --artifact audit --append --task-dir <td> --input <file>",
+        "AUDIT_TRAIL.md": "mcp__plugin_harness_harness__write_plan_artifact artifact=audit",
         "CRITIC__qa.md": "Spawn Agent(subagent_type='harness:qa-*', ...) + write_critic_qa MCP",
         "CRITIC__document.md": "Spawn Agent(subagent_type='harness:critic-document', ...) + write_critic_document MCP",
         "HANDOFF.md": "Spawn Agent(subagent_type='harness:developer', ...) + write_handoff MCP",

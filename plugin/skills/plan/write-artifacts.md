@@ -4,13 +4,11 @@ Sub-file for plan/SKILL.md Phase 6. Always runs.
 
 ---
 
-## 6.1 Transition session to write_open
+## 6.1 Artifact writer
 
-Update `PLAN_SESSION.json`:
-```json
-{"state": "write_open", "phase": "write", "source": "plan-skill"}
-```
-Set `plan_session_state: write_open` in TASK_STATE.yaml.
+PLAN.md, PLAN.meta.json, CHECKS.yaml, and AUDIT_TRAIL.md are written through
+the harness MCP `write_plan_artifact` tool. Do not use
+`scripts/write_plan_artifact.py`; it is a legacy compatibility shim.
 
 ## 6.2 Assemble PLAN.md content
 
@@ -103,12 +101,14 @@ If AUDIT_TRAIL.md absent/unreadable: placeholder table with all "—" and verdic
 
 No harness policy boilerplate. Keep concise and executable.
 
-## 6.3 Write PLAN.md via CLI
+## 6.3 Write PLAN.md via MCP
 
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact plan \
-  --task-dir doc/harness/tasks/TASK__<id>/ \
-  --input /tmp/plan_content.md
+```text
+write_plan_artifact {
+  task_id: "TASK__<id>",
+  artifact: "plan",
+  content: "<PLAN.md content>"
+}
 ```
 
 ## 6.4 Assemble PLAN.meta.json
@@ -124,12 +124,15 @@ Write `/tmp/plan_meta.json`:
 }
 ```
 
-## 6.5 Write PLAN.meta.json via CLI
+## 6.5 Write PLAN.meta.json via MCP
 
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact plan-meta \
-  --task-dir doc/harness/tasks/TASK__<id>/ \
-  --input /tmp/plan_meta.json
+```text
+write_plan_artifact {
+  task_id: "TASK__<id>",
+  artifact: "plan-meta",
+  content: "<PLAN.meta.json object as JSON>",
+  meta: { "execution_mode": "<light|standard>" }
+}
 ```
 
 ## 6.6 Assemble CHECKS.yaml content
@@ -153,12 +156,24 @@ Write `/tmp/checks_content.yaml` with all acceptance criteria from PLAN.md.
 
 All ACs start `status: open`, `reopen_count: 0`. Later skills (develop, qa) mutate via `${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py` — **never direct edit** (prewrite gate rejects).
 
-## 6.7 Write CHECKS.yaml via CLI
+## 6.7 Write CHECKS.yaml via MCP
 
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact checks \
-  --task-dir doc/harness/tasks/TASK__<id>/ \
-  --input /tmp/checks_content.yaml
+```text
+write_plan_artifact {
+  task_id: "TASK__<id>",
+  artifact: "checks",
+  content: "<CHECKS.yaml content>"
+}
+```
+
+Audit rows from earlier phases are also written through MCP:
+
+```text
+write_plan_artifact {
+  task_id: "TASK__<id>",
+  artifact: "audit",
+  content: "<AUDIT_TRAIL.md table row>"
+}
 ```
 
 ## 6.8 Learnings write-back (capture-when-fresh, non-blocking)
@@ -169,8 +184,7 @@ A good entry names a concrete fact + a concrete fix, both groundable in files / 
 
 - `/plugin marketplace add` does NOT expand bash subshell `$(pwd)` — `/plugin` is a Claude Code slash command, not a shell command. Use `./` or a literal path.
 - `update_checks.py` `_set_field` previously appended missing fields at 2-space indent (list-item level), corrupting CHECKS.yaml YAML structure. Fixed at script:99 — derive indent from existing fields.
-- `write_plan_artifact.py --artifact plan` requires `--input`, not `--content-file`; not obvious from `--help`.
-- `PLAN_SESSION.json` `phase` expects `"write"`, not `"6"`, for the artifact CLI to accept writes.
+- Plan artifacts are MCP-owned; direct Write/Edit and legacy CLI handshakes are not the canonical path.
 
 Examples that do NOT pass the bar (do not log these):
 - "I completed Phase 3" — narration, not learning.
@@ -190,9 +204,6 @@ mkdir -p doc/harness 2>/dev/null || true
 
 ## 6.9 Close session
 
-```json
-{"state": "closed", "phase": "closed", "source": "plan-skill"}
-```
 Set `plan_session_state: closed` in TASK_STATE.yaml. Task is now ready for implementation.
 
 ## 6.10 Completion report
@@ -236,4 +247,4 @@ Lake Score:        <avg>/10 (from <N> ACs)   ← from the computation above; emi
 ```
 
 - **DONE_WITH_CONCERNS** — any of: phase ran single-voice degraded; User Challenge unresolved; convergence guard issues.
-- **BLOCKED** — Phase 6 CLI write failed. (Review findings alone are never BLOCKED — use DONE_WITH_CONCERNS.)
+- **BLOCKED** — Phase 6 MCP artifact write failed. (Review findings alone are never BLOCKED — use DONE_WITH_CONCERNS.)

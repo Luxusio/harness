@@ -47,11 +47,12 @@ For each disagreement:
 3. Record consensus row
 
 Append rows immediately (incremental audit, not end-of-phase batch):
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact audit \
-  --task-dir doc/harness/tasks/TASK__<id>/ \
-  --input /tmp/<phase>_audit_rows.txt \
-  --append
+```text
+write_plan_artifact {
+  task_id: "TASK__<id>",
+  artifact: "audit",
+  content: "<phase audit rows>"
+}
 ```
 
 Audit row format (7 pipe-delimited columns):

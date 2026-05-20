@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Harness 7-phase review pipeline that writes PLAN.md and related task contract artefacts via the CLI. Codex variant runs single-voice (Claude-only dual-voice fan-out deferred to v2).
+description: Harness 7-phase review pipeline that writes PLAN.md and related task contract artefacts via MCP. Codex variant runs single-voice (Claude-only dual-voice fan-out deferred to v2).
 ---
 
 # GENERATED-CANDIDATE — hand-ported v1.5 spike from plugin/skills/plan/SKILL.md (298L source).
@@ -8,14 +8,14 @@ description: Harness 7-phase review pipeline that writes PLAN.md and related tas
 # Lives here only to measure porting friction for AC-003 of TASK__dual-runtime-v1.5-spike-and-sync.
 
 
-Codex-variant 7-phase review pipeline. Runs structured review across CEO, Engineering, and DX lenses (Design lens optional); single-voice on Codex (dual-voice Agent fan-out remains Claude-only); classifies every decision; surfaces only contested items to the user; writes the final task contract through the protected-artifact CLI.
+Codex-variant 7-phase review pipeline. Runs structured review across CEO, Engineering, and DX lenses (Design lens optional); single-voice on Codex (dual-voice Agent fan-out remains Claude-only); classifies every decision; surfaces only contested items to the user; writes the final task contract through the protected-artifact MCP.
 
 > **Codex runtime notes** (delta from Claude):
 > - **Dual Voice is degraded to single voice** on Codex v1.5. Claude's invariant "Phases 1-4 spawn Voice A and Voice B via Agent" cannot apply — Codex has no Agent fan-out tool. The orchestrator runs one critical-reviewer pass per phase instead of two independent voices. Cross-model adversariality is lost; flag this in PLAN.md's Review Status section. Use `claude $/harness:plan <task>` for dual-voice fidelity on high-stakes plans.
 > - **Sub-skills are inlined, not invoked.** Claude's `Skill("harness:plan-ceo-review", task_id)` chain has no Codex equivalent. The orchestrator reads each sub-skill's SKILL.md content inline and executes the methodology in the same conversation. Sub-skill ports are AC-005 sync-engine scope (v2 in v1.5 → uses Claude-side sub-skill files at `plugin/skills/plan-*-review/SKILL.md`).
 > - **AskUserQuestion = conversational ask.** Three mandatory user-gates remain: Phase 1.1 premise gate, Phase 5.3 User Challenge gate, Phase 5.4.1 final approval. Each becomes "ask the user X with options A/B/C; read the reply" prose. Same content, no structured envelope.
-> - **`${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}`** for all bash invocations of write_plan_artifact.py / update_checks.py.
-> - **MCP tool names** bare (`task_start`, `task_context`) — not Claude-prefixed form. Where the Claude source mentions a prefixed name, read it as bare.
+> - **`${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}`** for bash invocations that remain, such as update_checks.py. Plan artifact writes use MCP `write_plan_artifact`, not the legacy CLI.
+> - **MCP tool names** bare (`task_start`, `task_context`, `write_plan_artifact`) — not Claude-prefixed form. Where the Claude source mentions a prefixed name, read it as bare.
 
 ## Sub-files
 
@@ -26,7 +26,7 @@ This skill is split across four sub-files (Claude tree until AC-005 ports them):
 | `intake.md` | Phase 0 (spawned detection, session recovery, task pack read, git context, base branch, scope detection, execution-mode branch) |
 | `review-phases.md` | Phases 1-4 (review template + per-lens dimensions, checklists, degradation matrix) |
 | `decision-principles.md` | 6 Decision Principles, classification, auto-decide rules, completion status, repo ownership, ask format |
-| `write-artifacts.md` | Phase 6 (PLAN.md / PLAN.meta.json / CHECKS.yaml assembly + CLI writes, learnings, close) |
+| `write-artifacts.md` | Phase 6 (PLAN.md / PLAN.meta.json / CHECKS.yaml assembly + MCP writes, learnings, close) |
 
 Phase 5 (user-facing gate) stays inline below. Read sub-files from `plugin/skills/plan/<file>` in the Claude tree until v2 ports them.
 
@@ -37,7 +37,7 @@ Phase 5 (user-facing gate) stays inline below. Read sub-files from `plugin/skill
 - **Single Voice** by default on Codex v1.5. Where the Claude source says "Voice A + Voice B via Agent", the Codex orchestrator runs ONE critical-reviewer pass and notes the degradation in PLAN.md `Review Status`. The degradation matrix at `review-phases.md` § Degradation matrix has a `single-voice` row that's the default here.
 - **Premise gate mandatory.** Phase 1.1 emits one conversational ask before Phase 5. Premises are never auto-decided (except spawned mode).
 - **Never-auto decisions.** User Challenge items get their own ask at Phase 5.3.
-- **Write via CLI only.** PLAN.md, PLAN.meta.json, CHECKS.yaml, AUDIT_TRAIL.md go through `python3 ${HARNESS_PLUGIN_ROOT}/scripts/write_plan_artifact.py --artifact ...`. Never Write/Edit directly. CHECKS.yaml post-plan mutations use `update_checks.py` only.
+- **Write via MCP only.** PLAN.md, PLAN.meta.json, CHECKS.yaml, AUDIT_TRAIL.md go through `write_plan_artifact`. Never Write/Edit directly. CHECKS.yaml post-plan mutations use `update_checks.py` only.
 - **Workflow-lock awareness.** Trusts coordinator; no redundant check.
 - **Read actual code.** Review phases MUST read source files, diffs, and referenced code. Reasoning from plan text alone is insufficient.
 - **Never abort.** Single-voice surfaces findings as findings; never silently redirects. Blocked is terminal only for premise gate refusal.
@@ -103,8 +103,8 @@ Open at Phase 0; update through Phase 6. (Same as Claude — runtime-agnostic.)
 | State | Phase | Condition |
 |-------|-------|-----------|
 | `context_open` | 0-5 | Set at Phase 0 start |
-| `write_open` | 6 | At Phase 6 start before any CLI write |
-| `closed` | post-6 | After all CLI writes complete |
+| `write_open` | 6 | At Phase 6 start before MCP artifact writes |
+| `closed` | post-6 | After all MCP artifact writes complete |
 
 Required: `{"state": "...", "phase": "...", "source": "plan-skill"}`. Mirror `plan_session_state` in TASK_STATE.yaml.
 
@@ -271,7 +271,7 @@ Both modes: Phase 1 premise gate and Phase 5.3 User Challenges never auto-decide
   `doc/common/GUIDE__coding-style.md`. New pages, admin/backoffice screens, routes, controllers, and endpoints are REQ-required even when additive.
   PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`; `REQ: n/a` is invalid for observable UI/API behavior.
 - **Two gates.** The non-auto-decided asks are: (1) premise confirmation in Phase 1.1, and (2) User Challenges in Phase 5.3.
-- **Log every decision.** Every classification (Mechanical / Taste / User Challenge) gets a row in `AUDIT_TRAIL.md` via `write_plan_artifact.py --artifact audit`.
+- **Log every decision.** Every classification (Mechanical / Taste / User Challenge) gets a row in `AUDIT_TRAIL.md` via `write_plan_artifact { artifact: "audit" }`.
 - **Full depth means full depth.** Complete every loaded methodology section with its required evidence and decisions.
 - **Artifacts are deliverables.** PLAN.md, PLAN.meta.json, CHECKS.yaml, AUDIT_TRAIL.md must exist on disk before Phase 6 closes the session.
 - **Sequential order.** Phase 0 → 1 → 2 → 3 → 4 → 5 → 6.

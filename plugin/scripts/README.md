@@ -5,7 +5,7 @@ Minimal harness scripts. Self-contained — no plugin-legacy dependency.
 ## Files
 
 - `_lib.py` — core library (YAML helpers, scaffold, routing, context, path sync, frontmatter public API)
-- `write_plan_artifact.py` — plan artifact writer (PLAN.md, CHECKS.yaml, AUDIT_TRAIL.md)
+- `write_plan_artifact.py` — legacy compatibility shim; canonical plan artifact writes use MCP `write_plan_artifact`
 - `update_checks.py` — post-plan AC status updater (develop/qa use this, not Edit)
 - `note_freshness.py` — flips `freshness: current -> suspect` on invalidated notes
 - `contract_lint.py` — CONTRACTS.md managed-block lint; `--check-weight` enforces C-13 SKILL.md budget

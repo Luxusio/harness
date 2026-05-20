@@ -139,7 +139,7 @@ Emit one AskUserQuestion:
 - B) Skip → proceed to 0.5 with thin REQUEST.md (premise challenge will surface the gap)
 - C) Re-run setup first → user has unfinished project framing; `Skill(harness:setup)` owns pre-plan scope-sharpening in harness
 
-After setup (if chosen): `find doc/ -name "*design*.md" -newer TASK_STATE.yaml` — if found, read and append as `## Design Context` to task pack. Log discovery to AUDIT_TRAIL via `--artifact audit`.
+After setup (if chosen): `find doc/ -name "*design*.md" -newer TASK_STATE.yaml` — if found, read and append as `## Design Context` to task pack. Log discovery to AUDIT_TRAIL via `write_plan_artifact { artifact: "audit" }`.
 
 Skip cleanly if trigger not met. Never loop.
 

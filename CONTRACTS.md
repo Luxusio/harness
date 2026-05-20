@@ -83,7 +83,8 @@ diffs.
 **Title:** CHECKS.yaml updates go through `update_checks.py` only.
 **When:** Any AC status transition after plan close (develop, verify).
 **Enforced by:** `plugin/scripts/prewrite_gate.py` (direct Write/Edit of
-`CHECKS.yaml` is blocked); the CLI bypasses the gate via atomic rename.
+`CHECKS.yaml` is blocked); post-plan status updates use `update_checks.py`
+via atomic rename.
 **On violation:** hard-block.
 **Why:** `reopen_count`, `last_updated`, `evidence` stay consistent.
 Hand-edits break audit trail and close-gate accounting.
@@ -107,7 +108,9 @@ redirect, cp, mv, tee, python -c open(…,'w'), …) targeting the same basename
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`
 (Write/Edit/MultiEdit surface) + `plugin/scripts/mcp_bash_guard.py`
 (Bash surface; same helper classifiers).
-**On violation:** hard-block. Agent must route through the owning skill or CLI.
+**On violation:** hard-block. Agent must route through the owning MCP tool
+(`write_plan_artifact`, `write_handoff`, `write_doc_sync`,
+`write_critic_qa`, etc.) or the post-plan `update_checks.py` status updater.
 **Why:** Provenance is derived from artifact existence. Wrong writer = wrong
 provenance = broken audit chain. The Bash surface was added in PR1
 (`TASK__gate-reliability-pr1`) to close the `sed -i PLAN.md` / `echo >> CHECKS.yaml` bypass.

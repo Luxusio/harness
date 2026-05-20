@@ -296,10 +296,10 @@ def _owner_to_next_action(owner: str) -> str:
         return ""
     o = owner.lower()
     if "plan-skill" in o and "update_checks" in o:
-        return ("Skill('harness:plan', ...) for initial create or "
+        return ("write_plan_artifact { artifact='checks', content='...' } for initial create or "
                 "python3 plugin/scripts/update_checks.py for AC updates")
     if "plan-skill" in o:
-        return "Skill('harness:plan', '<task_id>')"
+        return _tool_hint("write_plan_artifact", _runtime_name())
     if "qa-agent" in o:
         tool = _tool_hint("write_critic_qa", runtime)
         return ("Spawn Agent(subagent_type='harness:qa-browser' | 'harness:qa-api' | "
@@ -326,6 +326,7 @@ def _tool_hint(tool: str, runtime: str | None = None) -> str:
         "write_handoff": "task_id=..., summary=..., verification=...",
         "write_doc_sync": "task_id=..., summary=...",
         "write_critic_qa": "task_id=..., verdict=..., summary=..., transcript=..., lens=...",
+        "write_plan_artifact": "task_id=..., artifact=plan|plan-meta|checks|audit, content=...",
     }.get(tool, "...")
     if runtime == "codex":
         return f"{tool} {{ {args} }}"
@@ -483,7 +484,7 @@ def main():
         owner_human = PROTECTED_ARTIFACT_HUMAN.get(basename, owner)
         human = (
             f"{basename} is owned by {owner_human}. Use the owning skill or MCP "
-            f"tool (e.g. Skill(harness:plan) for PLAN.md, update_checks.py for CHECKS.yaml)."
+            f"tool (e.g. write_plan_artifact for PLAN.md/CHECKS.yaml)."
         )
         _deny("C-05-protected-artifact", file_path, owner, human, repo_root)
         return 0

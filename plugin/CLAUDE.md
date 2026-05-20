@@ -27,6 +27,7 @@ No step skipped. Smallest coherent diff per step.
 - `task_blocked` — park unfinished work on a real environment blocker; writes BLOCKED.md and clears this session's active marker
 
 **Artifact writes (role-owned):**
+- `write_plan_artifact` → PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md (plan-skill)
 - `write_critic_qa` → CRITIC__qa.md + runtime_verdict (qa-* agents)
 - `write_critic_document` → CRITIC__document.md (critic-document agent)
 - `write_handoff` → HANDOFF.md (develop coordinator or dedicated developer role)
@@ -75,7 +76,7 @@ Turn 종결 정당 사유 (runtime_verdict 기반):
 
 | Artifact | Owner |
 |----------|-------|
-| PLAN.md | plan-skill |
+| PLAN.md / PLAN.meta.json / AUDIT_TRAIL.md | plan-skill via `write_plan_artifact` MCP |
 | CHECKS.yaml | plan-skill (create) + update_checks.py CLI (develop/qa updates) |
 | source + HANDOFF.md + DOC_SYNC.md + distilled change doc | developer |
 | CRITIC__qa.md | qa-browser / qa-api / qa-cli / qa-desktop |

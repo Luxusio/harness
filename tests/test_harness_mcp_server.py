@@ -27,6 +27,7 @@ EXPECTED_TOOLS = {
     "task_close",
     "task_blocked",
     "write_critic_qa",
+    "write_plan_artifact",
     "write_critic_document",
     "write_handoff",
     "write_doc_sync",
@@ -321,6 +322,44 @@ class HarnessMcpServerTests(unittest.TestCase):
             state = (Path(task_dir) / "TASK_STATE.yaml").read_text(encoding="utf-8")
             self.assertIn("status: blocked", state)
             self.assertIn("runtime_verdict: BLOCKED_ENV", state)
+
+    def test_write_plan_artifact_writes_plan_meta_and_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__planmcp")
+            result = harness_server.call_tool(
+                "write_plan_artifact",
+                {
+                    "task_dir": task_dir,
+                    "artifact": "plan",
+                    "content": "# MCP Plan\n",
+                    "checks_content": "- id: AC-001\n  title: x\n  status: open\n",
+                    "meta": {"routing": "light"},
+                },
+            )
+            self.assertNotIn("isError", result)
+            self.assertEqual(
+                result["structuredContent"]["written"],
+                ["PLAN.md", "PLAN.meta.json", "CHECKS.yaml"],
+            )
+            self.assertEqual((Path(task_dir) / "PLAN.md").read_text(encoding="utf-8"), "# MCP Plan\n")
+            meta = json.loads((Path(task_dir) / "PLAN.meta.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["author_role"], "plan-skill")
+            self.assertEqual(meta["plan_meta"]["routing"], "light")
+            self.assertIn("AC-001", (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8"))
+
+    def test_write_plan_artifact_appends_audit_header_once(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__auditmcp")
+            for row in ("| 1 | p | d | c | p | r | - |\n", "| 2 | p | d2 | c | p | r | - |\n"):
+                result = harness_server.call_tool(
+                    "write_plan_artifact",
+                    {"task_dir": task_dir, "artifact": "audit", "content": row},
+                )
+                self.assertNotIn("isError", result)
+            body = (Path(task_dir) / "AUDIT_TRAIL.md").read_text(encoding="utf-8")
+            self.assertEqual(body.count("| # | phase | decision | classification | principle | rationale | rejected_option |"), 1)
+            self.assertIn("| 1 |", body)
+            self.assertIn("| 2 |", body)
 
 
 class HarnessMcpServerPR2CloseGate(unittest.TestCase):
