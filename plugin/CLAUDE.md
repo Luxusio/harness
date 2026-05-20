@@ -24,9 +24,10 @@ No step skipped. Smallest coherent diff per step.
 - `task_context` — refresh task state (only when needed)
 - `task_verify` — sync changed paths + check verification
 - `task_close` — gate: runtime verdict PASS → close
+- `task_blocked` — park unfinished work on a real environment blocker; writes BLOCKED.md and clears this session's active marker
 
 **Artifact writes (role-owned):**
-- `write_critic_qa` → CRITIC__qa.md + runtime_verdict (qa-* / stop-judge agents)
+- `write_critic_qa` → CRITIC__qa.md + runtime_verdict (qa-* agents)
 - `write_critic_document` → CRITIC__document.md (critic-document agent)
 - `write_handoff` → HANDOFF.md (develop coordinator or dedicated developer role)
 - `write_doc_sync` → DOC_SYNC.md (develop coordinator)
@@ -37,7 +38,7 @@ Provenance = artifact existence. No counters.
 
 ```yaml
 task_id: TASK__xxx
-status: created|planning|implementing|verifying|closed
+status: created|planning|implementing|verifying|blocked|closed
 runtime_verdict: pending|PASS|FAIL|BLOCKED_ENV
 touched_paths: []
 plan_session_state: closed|context_open|write_open
@@ -65,7 +66,7 @@ Task in_progress (`.active` marker exists) 동안:
 Turn 종결 정당 사유 (runtime_verdict 기반):
 
 1. **PASS** — 모든 AC 가 `passed`/`deferred` → `task_close`.
-2. **BLOCKED_ENV** — `stop-judge` agent (plugin/agents/stop-judge.md) 가 진짜 blocker 확인 → `write_critic_qa(lens="stop-judge", verdict="BLOCKED_ENV")` → Stop hook 통과.
+2. **BLOCKED_ENV** — 진짜 blocker 확인 → `task_blocked(blocked_reason, unblock_condition)` 로 unfinished 상태를 기록하고 active marker 해제. PASS로 위장하지 않는다.
 3. 사용자 명시 cancel 단어 → 별도 cancel flow.
 
 멈추려면 `Agent(subagent_type='harness:stop-judge')` 호출. Stop-judge 가 CHECKS+transcript+work 보고 OK/NO 의미 판단을 내림. Tool 호출 카운트, prompt rule 단독, 텍스트 키워드 검사 같은 mechanical/prose-only 게이트는 사용 안 함 — stop-judge 의 의미 판단이 유일한 권한자. PASS 경로는 기존 task_verify+task_close.

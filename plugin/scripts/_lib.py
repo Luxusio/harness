@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import tempfile
+import json
 from datetime import datetime, timezone
 
 TASK_DIR = "doc/harness/tasks"
@@ -139,6 +140,29 @@ def _hook_payload_cwd():
     if isinstance(cwd, str) and cwd:
         return cwd
     return None
+
+
+def current_session_id(default="default"):
+    """Return the current hook/session id in a filesystem-safe form.
+
+    Codex hook payloads include ``session_id``. Claude-side availability varies,
+    so env vars are accepted as a fallback and ``default`` preserves legacy
+    behavior for MCP calls/tests that do not run inside a hook.
+    """
+    raw = (
+        _LAST_HOOK_INPUT.get("session_id")
+        or _LAST_HOOK_INPUT.get("sessionId")
+        or os.environ.get("HARNESS_SESSION_ID")
+        or os.environ.get("CODEX_SESSION_ID")
+        or os.environ.get("CLAUDE_SESSION_ID")
+        or default
+    )
+    return sanitize_session_id(raw or default, default=default)
+
+
+def sanitize_session_id(value, default="default"):
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or default)).strip("._")
+    return safe or default
 
 
 def emit_permission_decision(decision, reason="", *, next_action_command="",
@@ -519,6 +543,128 @@ def canonical_task_id(task_id=None, slug=None, task_dir=None,
     return _normalize_task_id(task_id, slug, task_dir) or ""
 
 
+# ── Active task markers ─────────────────────────────────────────────────
+
+
+ACTIVE_SESSIONS_DIRNAME = ".active_sessions"
+
+
+def _legacy_active_path(repo_root):
+    return os.path.join(repo_root, TASK_DIR, ".active")
+
+
+def _active_sessions_dir(repo_root):
+    return os.path.join(repo_root, TASK_DIR, ACTIVE_SESSIONS_DIRNAME)
+
+
+def _session_active_path(repo_root, session_id=None):
+    sid = current_session_id() if session_id is None else sanitize_session_id(session_id)
+    return os.path.join(_active_sessions_dir(repo_root), sid + ".json")
+
+
+def write_active_marker(repo_root, task_dir, session_id=None):
+    """Write the active task for the current session plus a legacy marker.
+
+    The session marker is authoritative for hooks that receive session_id. The
+    legacy ``.active`` file remains for older hooks/tests and single-session
+    installs.
+    """
+    tasks_dir = os.path.join(repo_root, TASK_DIR)
+    os.makedirs(tasks_dir, exist_ok=True)
+    os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
+    sid = current_session_id() if session_id is None else sanitize_session_id(session_id)
+    payload = {
+        "session_id": sid,
+        "task_dir": task_dir,
+        "task_id": os.path.basename(os.path.normpath(task_dir)),
+        "updated": now_iso(),
+    }
+    fd, tmp = tempfile.mkstemp(dir=_active_sessions_dir(repo_root), prefix=".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp, _session_active_path(repo_root, sid))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    with open(_legacy_active_path(repo_root), "w", encoding="utf-8") as f:
+        f.write(task_dir)
+
+
+def _read_legacy_active(repo_root):
+    path = _legacy_active_path(repo_root)
+    if not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            first = (f.read().strip().splitlines() or [""])[0]
+    except OSError:
+        return ""
+    if not first:
+        return ""
+    if os.path.isabs(first):
+        return first
+    return os.path.join(repo_root, TASK_DIR, first.rstrip("/"))
+
+
+def resolve_active_task_dir(repo_root=None, session_id=None):
+    """Resolve active task for this session, falling back to legacy ``.active``."""
+    repo_root = repo_root or find_repo_root()
+    path = _session_active_path(repo_root, session_id)
+    if os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            td = data.get("task_dir")
+            if isinstance(td, str) and td:
+                return td
+        except Exception:
+            pass
+    return _read_legacy_active(repo_root)
+
+
+def iter_active_task_dirs(repo_root=None):
+    """Yield unique active task dirs from session markers and legacy fallback."""
+    repo_root = repo_root or find_repo_root()
+    seen = set()
+    sessions = _active_sessions_dir(repo_root)
+    if os.path.isdir(sessions):
+        for name in os.listdir(sessions):
+            if not name.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(sessions, name), encoding="utf-8") as f:
+                    td = json.load(f).get("task_dir")
+            except Exception:
+                continue
+            if isinstance(td, str) and td and td not in seen:
+                seen.add(td)
+                yield td
+    legacy = _read_legacy_active(repo_root)
+    if legacy and legacy not in seen:
+        yield legacy
+
+
+def clear_active_marker(repo_root, task_dir=None, session_id=None):
+    """Clear this session's active marker and matching legacy marker."""
+    try:
+        os.unlink(_session_active_path(repo_root, session_id))
+    except OSError:
+        pass
+    legacy = _legacy_active_path(repo_root)
+    try:
+        if os.path.isfile(legacy):
+            current = _read_legacy_active(repo_root)
+            if task_dir is None or os.path.normpath(current) == os.path.normpath(task_dir):
+                os.unlink(legacy)
+    except OSError:
+        pass
+
+
 # ── Scaffold ─────────────────────────────────────────────────────────────
 
 
@@ -766,17 +912,40 @@ _STALE_CHECK_SKIP_SUFFIXES = (
 _STALE_CHECK_SKIP_FRAGMENTS = (
     "__pycache__/", "/.DS_Store", ".swp", ".swo",
 )
+_STALE_CHECK_SKIP_PREFIXES = (
+    "doc/harness/",
+    "doc/changes/",
+)
+_STALE_CHECK_SKIP_BASENAMES = {
+    "HANDOFF.md",
+    "DOC_SYNC.md",
+    "CRITIC__qa.md",
+    "CRITIC__document.md",
+    "TASK_STATE.yaml",
+    "PLAN.meta.json",
+    "PLAN_SESSION.json",
+    "PROGRESS.md",
+    "DOGFOOD.md",
+    "ENVIRONMENT_SNAPSHOT.md",
+}
 _STALE_CHECK_PATH_CAP = 1000  # bound mtime scan in pathological cases
 
 
 def _stale_skip(relpath: str) -> bool:
     if not relpath:
         return True
+    norm = relpath.replace("\\", "/").lstrip("./")
+    base = os.path.basename(norm)
+    if base in _STALE_CHECK_SKIP_BASENAMES:
+        return True
+    for prefix in _STALE_CHECK_SKIP_PREFIXES:
+        if norm.startswith(prefix):
+            return True
     for suf in _STALE_CHECK_SKIP_SUFFIXES:
-        if relpath.endswith(suf):
+        if norm.endswith(suf):
             return True
     for frag in _STALE_CHECK_SKIP_FRAGMENTS:
-        if frag in relpath or relpath.endswith(frag.strip("/")):
+        if frag in norm or norm.endswith(frag.strip("/")):
             return True
     return False
 
@@ -936,6 +1105,43 @@ def sync_touched_paths(task_dir, new_paths=None):
     return merged
 
 
+def _git_changed_paths(repo_root, prefix=""):
+    changed = set()
+    commands = (
+        ["git", "diff", "--name-only", "HEAD"],
+        ["git", "diff", "--cached", "--name-only", "HEAD"],
+        ["git", "ls-files", "--others", "--exclude-standard"],
+    )
+    for cmd in commands:
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=repo_root)
+        if r.returncode == 0:
+            for line in r.stdout.splitlines():
+                path = line.strip()
+                if path:
+                    changed.add((prefix + path).replace("\\", "/"))
+    return changed
+
+
+def _initialized_submodule_paths(repo_root):
+    r = subprocess.run(
+        ["git", "submodule", "status", "--recursive"],
+        capture_output=True, text=True, cwd=repo_root,
+    )
+    if r.returncode != 0:
+        return []
+    out = []
+    for line in r.stdout.splitlines():
+        # Leading '-' means registered but not initialized.
+        if not line or line[0] == "-":
+            continue
+        parts = line.strip().split()
+        if len(parts) >= 2:
+            path = parts[1].strip()
+            if path and not path.startswith("-"):
+                out.append(path.rstrip("/"))
+    return out
+
+
 def sync_from_git_diff(task_dir):
     """Sync touched paths from git state.
 
@@ -950,28 +1156,11 @@ def sync_from_git_diff(task_dir):
     stay excluded via ``--exclude-standard``.
     """
     repo_root = find_repo_root(task_dir)
-    changed = set()
-    # 1. Unstaged modifications
-    r1 = subprocess.run(
-        ["git", "diff", "--name-only", "HEAD"],
-        capture_output=True, text=True, cwd=repo_root,
-    )
-    if r1.returncode == 0:
-        changed.update(f.strip() for f in r1.stdout.splitlines() if f.strip())
-    # 2. Staged modifications (git add'd but not committed)
-    r2 = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "HEAD"],
-        capture_output=True, text=True, cwd=repo_root,
-    )
-    if r2.returncode == 0:
-        changed.update(f.strip() for f in r2.stdout.splitlines() if f.strip())
-    # 3. Untracked files (respects .gitignore via --exclude-standard)
-    r3 = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
-        capture_output=True, text=True, cwd=repo_root,
-    )
-    if r3.returncode == 0:
-        changed.update(f.strip() for f in r3.stdout.splitlines() if f.strip())
+    changed = _git_changed_paths(repo_root)
+    for sub_path in _initialized_submodule_paths(repo_root):
+        sub_root = os.path.join(repo_root, sub_path)
+        if os.path.isdir(sub_root):
+            changed.update(_git_changed_paths(sub_root, prefix=sub_path.rstrip("/") + "/"))
     if not changed:
         return []
     return sync_touched_paths(task_dir, changed)

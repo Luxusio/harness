@@ -17,7 +17,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (  # type: ignore
     TASK_DIR, find_repo_root, read_hook_input, emit_compact_context,
-    log_gate_crash, last_hook_input,
+    log_gate_crash, last_hook_input, resolve_active_task_dir,
 )
 from _gate_response import block as gate_block  # type: ignore
 
@@ -56,7 +56,7 @@ def _next_action_for_missing(missing_item: str) -> tuple[str, str]:
         return ("mcp__plugin_harness_harness__task_verify { task_id: '<task_id>' } "
                 "after running QA, or spawn Agent(subagent_type='harness:stop-judge') "
                 "to assess legitimate pause-with-blocker (transitions runtime_verdict "
-                "to BLOCKED_ENV via write_critic_qa(lens='stop-judge'))",
+                "to BLOCKED_ENV via task_blocked)",
                 "harness:qa-* or harness:stop-judge")
     return "", ""
 
@@ -76,18 +76,18 @@ def _resolve_active_task_dir(repo_root: str, active_path: str) -> str | None:
 
 def main():
     try:
-        read_hook_input()  # drain stdin so the hook pipe closes cleanly
+        read_hook_input()  # drain stdin and populate session id/cwd cache
         repo_root = find_repo_root()
         active_path = os.path.join(repo_root, TASK_DIR, ".active")
-        if not os.path.isfile(active_path):
+        td = resolve_active_task_dir(repo_root)
+        if not td:
             return 0
-        task_id = _active_task_id(active_path)
-        td = _resolve_active_task_dir(repo_root, active_path)
+        task_id = os.path.basename(td.rstrip("/"))[:120]
 
         # BLOCKED_ENV runtime_verdict permits a legitimate paused-with-blocker
         # stop ONLY when fresh. The stop-judge agent
-        # (plugin/agents/stop-judge.md) is the authorized writer of this
-        # transition via write_critic_qa(lens='stop-judge').
+        # (plugin/agents/stop-judge.md) records this transition through
+        # task_blocked.
         #
         # Staleness check (AC-001 of TASK__stop-gate-stale-blocked-env-fix):
         # if any touched_paths file has mtime > CRITIC__qa.md mtime, the
@@ -114,8 +114,8 @@ def main():
 
         # Cancel-push escape removed. The stop-judge agent is the only
         # legitimate non-PASS escape path — it transitions runtime_verdict to
-        # BLOCKED_ENV via write_critic_qa(lens='stop-judge'), which the
-        # BLOCKED_ENV branch above then permits ONLY when fresh.
+        # BLOCKED_ENV via task_blocked; older task states may still have a
+        # stop-judge CRITIC__qa.md section, so stale handling remains here.
         #
         # If we reach here with verdict == "BLOCKED_ENV" the verdict is stale
         # (touched_paths activity post-dates CRITIC__qa.md). Surface that in
@@ -138,9 +138,8 @@ def main():
             "whether the current state is a genuine pause-with-blocker. Stop-judge "
             "reads CHECKS+transcript+work and emits VERDICT_OK_DONE / "
             "VERDICT_OK_BLOCKED / VERDICT_NO_CONTINUE. On VERDICT_OK_BLOCKED it "
-            "transitions runtime_verdict=BLOCKED_ENV via "
-            "write_critic_qa(lens='stop-judge'), which this hook then permits as "
-            "legitimate stop." + stale_note
+            "calls task_blocked to record runtime_verdict=BLOCKED_ENV, write "
+            "BLOCKED.md, and clear this session's active marker." + stale_note
         )
         payload = gate_block(
             reason=reason,

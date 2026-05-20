@@ -38,6 +38,10 @@ try:
         yaml_array,
         now_iso,
         TASK_DIR,
+        resolve_active_task_dir,
+        iter_active_task_dirs,
+        read_state,
+        current_session_id,
     )
 except Exception:
     # _lib unavailable: fail-open. `|| true` would mask an ImportError exit
@@ -287,6 +291,7 @@ _RULE_NEXT_ACTION = {
 
 def _owner_to_next_action(owner: str) -> str:
     """Map a protected-artifact owner string to a concrete next_action_command."""
+    runtime = _runtime_name()
     if not owner:
         return ""
     o = owner.lower()
@@ -296,13 +301,35 @@ def _owner_to_next_action(owner: str) -> str:
     if "plan-skill" in o:
         return "Skill('harness:plan', '<task_id>')"
     if "qa-agent" in o:
+        tool = _tool_hint("write_critic_qa", runtime)
         return ("Spawn Agent(subagent_type='harness:qa-browser' | 'harness:qa-api' | "
-                "'harness:qa-cli' | 'harness:qa-desktop', ...) and call "
-                "mcp__plugin_harness_harness__write_critic_qa")
+                f"'harness:qa-cli' | 'harness:qa-desktop', ...) and call {tool}")
     if "developer" in o:
         return ("Spawn Agent(subagent_type='harness:developer', ...) and call "
-                "mcp__plugin_harness_harness__write_handoff or write_doc_sync")
+                f"{_tool_hint('write_handoff', runtime)} or {_tool_hint('write_doc_sync', runtime)}")
     return ""
+
+
+def _runtime_name() -> str:
+    env = (os.environ.get("HARNESS_RUNTIME") or "").lower()
+    if env in ("codex", "claude"):
+        return env
+    payload = last_hook_input()
+    if payload.get("session_id") or os.environ.get("CODEX_HOME"):
+        return "codex"
+    return "claude"
+
+
+def _tool_hint(tool: str, runtime: str | None = None) -> str:
+    runtime = runtime or _runtime_name()
+    args = {
+        "write_handoff": "task_id=..., summary=..., verification=...",
+        "write_doc_sync": "task_id=..., summary=...",
+        "write_critic_qa": "task_id=..., verdict=..., summary=..., transcript=..., lens=...",
+    }.get(tool, "...")
+    if runtime == "codex":
+        return f"{tool} {{ {args} }}"
+    return f"mcp__plugin_harness_harness__{tool}({args})"
 
 
 def _deny(rule_id, file_path, owner, human_text, repo_root):
@@ -404,7 +431,7 @@ def _has_open_tasks(tasks_dir: str) -> bool:
                     if line.startswith("status:"):
                         status = line.split(":", 1)[1].strip()
                         break
-            if status not in ("closed", "stale", "archived"):
+            if status not in ("closed", "stale", "archived", "blocked"):
                 return True
         except Exception:
             return True  # read error — conservative
@@ -439,6 +466,12 @@ def main():
     file_path = os.path.abspath(file_path)
     repo_root = find_repo_root()
     tasks_dir = os.path.join(repo_root, TASK_DIR)
+    try:
+        common = os.path.commonpath([repo_root, file_path])
+    except ValueError:
+        common = ""
+    if common != repo_root:
+        return 0
     inside_task_dir = (
         file_path == tasks_dir
         or file_path.startswith(tasks_dir + os.sep)
@@ -466,16 +499,10 @@ def main():
 
     # Workflow control surface: only permitted from a MAINTENANCE task.
     if _is_workflow_control_surface(file_path, repo_root=repo_root):
-        active_file = os.path.join(tasks_dir, ".active")
         maint = False
-        if os.path.isfile(active_file):
-            try:
-                with open(active_file) as f:
-                    active_dir = f.read().strip()
-                if active_dir and os.path.isdir(active_dir):
-                    maint = os.path.isfile(os.path.join(active_dir, "MAINTENANCE"))
-            except Exception:
-                maint = False
+        active_dir = resolve_active_task_dir(repo_root)
+        if active_dir and os.path.isdir(active_dir):
+            maint = os.path.isfile(os.path.join(active_dir, "MAINTENANCE"))
         if not maint:
             rel = _rel(file_path, repo_root)
             human = (
@@ -488,8 +515,11 @@ def main():
         return 0
 
     # Source files require an active task with PLAN.md.
-    active_file = os.path.join(tasks_dir, ".active")
-    if not os.path.isfile(active_file):
+    if not _is_source_file(file_path, repo_root=repo_root):
+        return 0
+
+    active_dir = resolve_active_task_dir(repo_root)
+    if not active_dir:
         # Dormant-repo guard: if no open tasks exist, the repo isn't mid-flow
         # (only harness residue) — fail-open rather than deny every source edit.
         if not _has_open_tasks(tasks_dir):
@@ -501,14 +531,6 @@ def main():
         _deny("no-active-task", file_path, "plan-skill", human, repo_root)
         return 0
 
-    try:
-        with open(active_file) as f:
-            active_dir = f.read().strip()
-    except Exception as exc:
-        human = f"Cannot read .active ({exc}). Run Skill(harness:run) to create a new task."
-        _deny("invalid-active", file_path, "plan-skill", human, repo_root)
-        return 0
-
     if not (active_dir and os.path.isdir(active_dir) and active_dir.startswith(tasks_dir)):
         human = "Active task points to invalid path. Run Skill(harness:run) to create a new task."
         _deny("invalid-active", file_path, "plan-skill", human, repo_root)
@@ -518,6 +540,21 @@ def main():
         if not os.path.isfile(os.path.join(active_dir, "MAINTENANCE")):
             human = "PLAN.md does not exist yet. Run Skill(harness:plan) first."
             _deny("C-02-plan-first", file_path, "plan-skill", human, repo_root)
+            return 0
+
+    rel = _rel(file_path, repo_root)
+    for other_dir in iter_active_task_dirs(repo_root):
+        if os.path.normpath(other_dir) == os.path.normpath(active_dir):
+            continue
+        st = read_state(other_dir)
+        if rel in (st.get("touched_paths") or []):
+            other_id = os.path.basename(other_dir.rstrip("/"))
+            human = (
+                f"{rel} is already touched by active task {other_id}. "
+                "Source-file conflicts between active tasks are blocked; finish "
+                "or block one task before editing the same file."
+            )
+            _deny("C-09-scope-lock", file_path, "developer", human, repo_root)
             return 0
 
     # Scope-lock enforcement as the last check: active task + PLAN.md confirmed.

@@ -101,6 +101,14 @@ class TestLensMergeCriticQA(unittest.TestCase):
         # FAIL stays FAIL even when subsequent lens is PASS
         self.assertEqual(self._read_state_field("runtime_verdict"), "FAIL")
 
+    def test_same_lens_latest_replaces_stale_failure(self):
+        mod._lens_merge_critic_qa(self.td, "cli", "FAIL", "old fail", "old transcript")
+        mod._lens_merge_critic_qa(self.td, "cli", "PASS", "new pass", "new transcript")
+        content = Path(os.path.join(self.td, "CRITIC__qa.md")).read_text(encoding="utf-8")
+        self.assertNotIn("old fail", content)
+        self.assertEqual(content.count("## qa-cli verdict:"), 1)
+        self.assertEqual(self._read_state_field("runtime_verdict"), "PASS")
+
     def test_three_lens_merge_blocked_env(self):
         mod._lens_merge_critic_qa(self.td, "cli", "PASS", "s1", "t1")
         # AC-006: supply manual_ux for browser lens to preserve the test's

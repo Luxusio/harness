@@ -29,6 +29,8 @@ try:
         TASK_DIR,
         _log_gate_error,
         read_json_state,
+        resolve_active_task_dir,
+        runtime_is_stale,
     )
 except Exception:
     sys.exit(0)
@@ -63,37 +65,12 @@ def _stale_skip(rel: str) -> bool:
 
 
 def _find_active_task_dir(repo_root: str) -> str:
-    active = os.path.join(repo_root, TASK_DIR, ".active")
-    if not os.path.isfile(active):
-        return ""
-    try:
-        with open(active, encoding="utf-8") as f:
-            td = f.read().strip()
-    except OSError:
-        return ""
-    if not td or not os.path.isdir(td):
-        return ""
-    return td
+    td = resolve_active_task_dir(repo_root)
+    return td if td and os.path.isdir(td) else ""
 
 
 def _runtime_is_stale(task_dir: str, touched: list, repo_root: str) -> bool:
-    critic = os.path.join(task_dir, "CRITIC__qa.md")
-    if not os.path.isfile(critic):
-        return False
-    try:
-        critic_mtime = os.path.getmtime(critic)
-    except OSError:
-        return False
-    for rel in touched[:_STALE_PATH_CAP]:
-        if _stale_skip(rel):
-            continue
-        abs_path = rel if os.path.isabs(rel) else os.path.join(repo_root, rel)
-        try:
-            if os.path.getmtime(abs_path) > critic_mtime:
-                return True
-        except OSError:
-            continue  # deleted paths can be part of a verified diff
-    return False
+    return runtime_is_stale(task_dir)[0]
 
 
 _CHECKS_ID_RE = re.compile(r"^-\s+id:\s*(\S+)", re.MULTILINE)

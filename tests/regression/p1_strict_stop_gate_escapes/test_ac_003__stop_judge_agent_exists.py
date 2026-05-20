@@ -20,9 +20,8 @@ def test_stop_judge_has_three_verdicts():
 def test_stop_judge_names_blocked_env_transition():
     body = open(AGENT_PATH).read()
     assert "BLOCKED_ENV" in body, "BLOCKED_ENV transition path missing"
-    assert "write_critic_qa" in body, "write_critic_qa MCP reference missing"
-    assert "lens=" in body or "lens =" in body, \
-        "lens parameter usage not specified"
+    assert "task_blocked" in body, "task_blocked MCP reference missing"
+    assert "unblock_condition" in body, "unblock condition usage not specified"
 
 
 def test_stop_judge_frontmatter_complete():

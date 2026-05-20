@@ -3,7 +3,7 @@ name: run
 description: Orchestrate full development cycle — plan → develop → verify → close.
 argument-hint: <task-slug-or-description>
 user-invocable: true
-allowed-tools: Read, Glob, Grep, Bash, Agent, Skill, AskUserQuestion, mcp__harness__task_start, mcp__harness__task_context, mcp__harness__task_verify, mcp__harness__task_close
+allowed-tools: Read, Glob, Grep, Bash, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context, mcp__plugin_harness_harness__task_verify, mcp__plugin_harness_harness__task_close
 ---
 
 Orchestrate the full harness development cycle for a task.
@@ -23,7 +23,7 @@ Execute phases in strict order. Each phase must complete before the next begins.
 ### Phase 1: Start task
 
 ```
-mcp__harness__task_start { slug: "<ARGUMENTS>" }
+mcp__plugin_harness_harness__task_start { slug: "<ARGUMENTS>" }
 ```
 
 Store the returned `task_dir` and `task_id` for all subsequent phases. Report: task created/resumed, task_dir path.
@@ -90,7 +90,7 @@ Agent(
 )
 ```
 
-When `lens` is set, the handler appends a per-lens section to `CRITIC__qa.md` (no truncation) and updates `runtime_verdict` via worst-wins (severity: `PENDING < PASS < BLOCKED_ENV < FAIL`). Without `lens`, the legacy full-overwrite path is taken — keep single-lens calls unchanged.
+When `lens` is set, the handler keeps the latest section for that lens in `CRITIC__qa.md` and updates `runtime_verdict` via worst-wins across current lens verdicts (severity: `PENDING < PASS < BLOCKED_ENV < FAIL`). Without `lens`, the legacy full-overwrite path is taken — keep single-lens calls unchanged.
 
 > **Note (MCP reload).** MCP server changes activate on the next session restart per the 2026-05-08 learning. Until the next restart, the new `lens` argument lands but the handler still runs the old code; concurrent calls without lens-routing still race. After restart, multi-lens spawns become safe to issue in parallel. See `plugin/skills/develop/parallel-fanout.md` for the spawn-all-in-one-message convention.
 
@@ -124,7 +124,7 @@ Store the printed score for inclusion in the completion report. The script auto-
 ### Phase 5: Close
 
 ```
-mcp__harness__task_close { task_id: "<task_id>" }
+mcp__plugin_harness_harness__task_close { task_id: "<task_id>" }
 ```
 
 If blocked: report `missing_for_close`, fix the stated gate, retry.

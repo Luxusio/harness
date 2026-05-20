@@ -54,7 +54,7 @@ Set `plan_session_state: context_open` in TASK_STATE.yaml.
 ## Phase 0.2: task_start
 
 ```
-mcp__harness__task_start { task_id: "<ARGUMENTS>" }
+mcp__plugin_harness_harness__task_start { task_id: "<ARGUMENTS>" }
 ```
 Extract: `risk_level`, `planning_mode`, `compat.execution_mode`, `workflow_locked`, `maintenance_task`, `ui_scope`, `dx_scope`, `must_read`.
 

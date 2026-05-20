@@ -43,6 +43,21 @@ def _invoke(tmpdir: str, file_path: str) -> subprocess.CompletedProcess:
     )
 
 
+def _invoke_payload(tmpdir: str, payload: dict) -> subprocess.CompletedProcess:
+    env = os.environ.copy()
+    env["CLAUDE_PLUGIN_ROOT"] = os.path.join(REPO_ROOT, "plugin")
+    env.pop("HARNESS_SKIP_PREWRITE", None)
+    return subprocess.run(
+        [sys.executable, GATE],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        cwd=tmpdir,
+        env=env,
+        timeout=10,
+    )
+
+
 def _parse_decision(stdout: str):
     """Return (decision, reason) or (None, None) from hook stdout."""
     if not stdout or not stdout.strip():
@@ -150,6 +165,36 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
                              f"Mixed tasks should deny. stdout={r.stdout!r}")
             self.assertIn("no-active-task", reason or "",
                           f"Expected no-active-task in reason: {reason!r}")
+
+    def test_repo_outside_tmp_write_is_out_of_scope(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks_dir = _scaffold(tmpdir)
+            _write_task_state(tasks_dir, "wip", "created")
+            outside = os.path.join(tempfile.gettempdir(), "harness-prewrite-outside.py")
+            r = _invoke(tmpdir, outside)
+            self.assertEqual(r.returncode, 0)
+            decision, reason = _parse_decision(r.stdout)
+            self.assertNotEqual(decision, "deny", reason)
+
+    def test_session_active_marker_allows_matching_session(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks_dir = _scaffold(tmpdir)
+            task_dir = _write_task_state(tasks_dir, "session", "created")
+            with open(os.path.join(task_dir, "PLAN.md"), "w", encoding="utf-8") as f:
+                f.write("# plan\n")
+            sessions = os.path.join(tasks_dir, ".active_sessions")
+            os.makedirs(sessions, exist_ok=True)
+            with open(os.path.join(sessions, "s1.json"), "w", encoding="utf-8") as f:
+                json.dump({"session_id": "s1", "task_dir": task_dir}, f)
+            target = os.path.join(tmpdir, "foo.py")
+            r = _invoke_payload(tmpdir, {
+                "tool_name": "Write",
+                "session_id": "s1",
+                "tool_input": {"file_path": target, "content": "x = 1\n"},
+            })
+            self.assertEqual(r.returncode, 0)
+            decision, reason = _parse_decision(r.stdout)
+            self.assertNotEqual(decision, "deny", reason)
 
 
 if __name__ == "__main__":

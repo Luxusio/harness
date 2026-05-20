@@ -14,7 +14,7 @@ Orchestrate the full harness development cycle for a task.
 > **Codex runtime notes** (delta from Claude):
 > - Claude's `Skill("harness:plan", task_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. Effect is identical (plan -> develop -> verify -> close), but the chain is sequential prose, not tool calls.
 > - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks. If `spawn_agent` is unavailable, run the role methodology inline, call the same MCP artifact writer, and record a short `Runtime Fallbacks` note only when that fallback replaces an expected independent QA/review path.
-> - MCP tool names on Codex use bare form (`task_start`, `task_verify`, `task_close`, `write_critic_qa`) — NOT the Claude `mcp__plugin_harness_harness__*` prefix form. Where this skill mentions a prefixed name, read it as the bare form.
+> - MCP tool names on Codex use bare form (`task_start`, `task_verify`, `task_close`, `write_critic_qa`) — not Claude-prefixed form. Where this skill mentions a prefixed name, read it as the bare form.
 > - `${CLAUDE_PLUGIN_ROOT}` is not injected on Codex. Use `${HARNESS_PLUGIN_ROOT}` (set by the Codex plugin install).
 > - AskUserQuestion (Phase 4 FAIL retry) is conversational prose on Codex — emit the question + options, read the reply from the next user turn.
 
@@ -72,7 +72,7 @@ Execute phases in strict order. Each phase must complete before the next begins.
 task_start { slug: "<ARGUMENTS>" }
 ```
 
-(On Codex MCP this is the bare tool name; Claude's prefix-form name is `mcp__plugin_harness_harness__task_start`.) Store the returned `task_dir` and `task_id` for all subsequent phases. Report: task created/resumed, task_dir path.
+(On Codex MCP this is the bare tool name; Claude uses a runtime-prefixed form.) Store the returned `task_dir` and `task_id` for all subsequent phases. Report: task created/resumed, task_dir path.
 
 ### Phase 2: Plan
 
@@ -211,4 +211,3 @@ After every task close, run the pipeline in `self-improvement.md` (Claude tree):
 Pipeline is housekeeping, not a gate. On failure: log warning and continue.
 
 ---
-

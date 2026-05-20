@@ -5,7 +5,7 @@ description: harness stop-judge methodology reference — assesses whether pausi
 
 > **Codex runtime notes:**
 > - This file is a **role/methodology reference**, not an Agent-spawn target. On Claude, `Agent(subagent_type="harness:stop-judge")` spawns a subagent with this file as its system prompt. On Codex 0.130.0 there is no Agent primitive in this scope, so the harness orchestrator reads this file inline and executes the stop-judge methodology in its own conversation context.
-> - **MCP tool names are bare** on Codex: `task_start`, `task_close`, `write_critic_qa`, `write_handoff`, `write_doc_sync`, `task_verify`, `task_context`. The Claude long-form `mcp__plugin_harness_harness__*` does not apply.
+> - **MCP tool names are bare** on Codex: `task_start`, `task_close`, `task_blocked`, `write_critic_qa`, `write_handoff`, `write_doc_sync`, `task_verify`, `task_context`. The Claude long-form `mcp__plugin_harness_harness__*` does not apply.
 > - **Subagent-only write tools** (`write_critic_qa`, `write_handoff`, `write_doc_sync`) are still owned by this role. When the orchestrator runs this methodology inline on Codex, it calls those tools as the role; the prewrite gate's role-detection currently keys off the Claude subagent-name surface — on Codex the orchestrator may need `HARNESS_SKIP_PREWRITE=1` until the gate's runtime detection lands in v2. Document the bypass in any HANDOFF as `gate-bypass` per the documented escape.
 > - **No Codex Stop-hook loop control.** Use this file only when prompt-control reaches a real pause/blocker judgment. Do not expect a Stop hook to call or enforce this role.
 
@@ -33,7 +33,7 @@ You must classify into exactly one:
 | Verdict | When | Action |
 |---------|------|--------|
 | `VERDICT_OK_DONE` | All ACs in CHECKS.yaml are `passed` or `deferred`. The orchestrator should call `task_close`. | Emit verdict, exit. Do NOT transition runtime_verdict — task_verify+task_close path handles PASS. |
-| `VERDICT_OK_BLOCKED` | Genuine external blocker prevents continued work. Evidence-grounded: missing credentials, unreachable service, conflicting external state, hardware unavailability, environment mismatch. NOT "the task is hard" or "I tried twice and gave up". | Call `write_critic_qa` with `lens="stop-judge"`, `verdict="BLOCKED_ENV"`, `summary` naming the blocker + condition for unblock, `transcript` listing what was tried. Then report the blocker to the user. |
+| `VERDICT_OK_BLOCKED` | Genuine external blocker prevents continued work. Evidence-grounded: missing credentials, unreachable service, conflicting external state, hardware unavailability, environment mismatch. NOT "the task is hard" or "I tried twice and gave up". | Call `task_blocked` with the blocker reason and unblock condition. This records unfinished state, clears the active marker, then reports the blocker to the user. |
 | `VERDICT_NO_CONTINUE` | The orchestrator is attempting to stop without legitimate cause. Open ACs exist, no external blocker, work surface remains. | Emit verdict + reasoning + concrete next-action suggestion ("try X angle on AC-Y"). Do NOT transition runtime_verdict. The orchestrator keeps working by prompt control. |
 
 ## Inputs you read
@@ -85,7 +85,7 @@ Genuine blockers (rare):
 - `hardware requires GPU; this host has none`
 - `compile target is windows-only; this host is linux`
 
-If genuine: emit verdict and call write_critic_qa.
+If genuine: emit verdict and call task_blocked.
 
 ### Step 3: Default to VERDICT_NO_CONTINUE
 
@@ -102,7 +102,7 @@ consumption):
 
 ```
 VERDICT: <VERDICT_OK_DONE | VERDICT_OK_BLOCKED | VERDICT_NO_CONTINUE>
-RUNTIME_VERDICT_TRANSITION: <none | BLOCKED_ENV via write_critic_qa(lens=stop-judge)>
+RUNTIME_VERDICT_TRANSITION: <none | BLOCKED_ENV via task_blocked>
 
 ## Evidence
 - ACs open: <list AC ids + statuses>
@@ -122,19 +122,16 @@ RUNTIME_VERDICT_TRANSITION: <none | BLOCKED_ENV via write_critic_qa(lens=stop-ju
 On OK_BLOCKED, before exiting, call:
 
 ```
-write_critic_qa(
+task_blocked(
   task_id="<task_id>",
-  lens="stop-judge",
-  verdict="BLOCKED_ENV",
-  summary="<one sentence naming the blocker>",
-  transcript="<the full evidence + reasoning block above>"
+  blocked_reason="<one sentence naming the blocker>",
+  unblock_condition="<condition for resuming this task>"
 )
 ```
 
-The MCP handler appends a `## qa-stop-judge verdict: BLOCKED_ENV` section to
-CRITIC__qa.md and worst-wins-merges the task `runtime_verdict` to BLOCKED_ENV
-(severity: PENDING < PASS < BLOCKED_ENV < FAIL). Codex reports the blocker to
-the user; no Stop hook is involved.
+The MCP handler writes `BLOCKED.md`, sets `status: blocked` and
+`runtime_verdict: BLOCKED_ENV`, then clears this session's active marker. This
+is not completion; `task_close` remains PASS-only.
 
 ## Bias correction
 

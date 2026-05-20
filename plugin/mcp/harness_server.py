@@ -2,14 +2,15 @@
 """harness MCP server — self-contained, 7-field TASK_STATE.
 
 No plugin-legacy dependency. All operations are direct file I/O.
-8 MCP tools: task_start, task_context, task_verify, task_close,
-             write_critic_qa, write_critic_document,
-             write_handoff, write_doc_sync.
+MCP tools: task_start, task_context, task_verify, task_close, task_blocked,
+           write_critic_qa, write_critic_document,
+           write_handoff, write_doc_sync.
 """
 
 from __future__ import annotations
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -32,6 +33,7 @@ from _lib import (  # type: ignore
     ensure_task_scaffold, emit_compact_context, sync_from_git_diff,
     artifact_exists, canonical_task_dir, canonical_task_id,
     find_repo_root, runtime_is_stale as _runtime_is_stale,
+    write_active_marker, clear_active_marker,
 )
 try:
     from environment_snapshot import snapshot as _env_snapshot  # type: ignore
@@ -251,11 +253,8 @@ def handle_task_start(args: dict) -> dict:
 
     ensure_task_scaffold(task_dir, tid, request_text=request_text)
 
-    # Write .active marker so prewrite_gate can enforce plan-first
-    active_file = os.path.join(repo_root, "doc", "harness", "tasks", ".active")
-    os.makedirs(os.path.dirname(active_file), exist_ok=True)
-    with open(active_file, "w", encoding="utf-8") as f:
-        f.write(task_dir)
+    # Write session-scoped active marker so multiple sessions can work in one repo.
+    write_active_marker(repo_root, task_dir)
 
     # Best-effort environment snapshot: probe failure must never block task_start.
     snapshot_path = ""
@@ -351,13 +350,7 @@ def handle_task_close(args: dict) -> dict:
     st["updated"] = now_iso()
     write_state(td, st)
 
-    # Clean up .active marker
-    active_file = os.path.join(find_repo_root(), "doc", "harness", "tasks", ".active")
-    try:
-        if os.path.isfile(active_file):
-            os.remove(active_file)
-    except OSError:
-        pass
+    clear_active_marker(find_repo_root(), td)
     st = read_state(td)
     return _ok({
         "task_dir": td, "closed": True, "status": st.get("status"),
@@ -460,8 +453,9 @@ def _lens_merge_critic_qa(td: str, lens: str, verdict: str,
     """Lens-aware merge for CRITIC__qa.md. Worst-wins runtime_verdict.
 
     First lens writer creates the file with a global header and one section.
-    Subsequent lens writers append a new section (no truncation).
-    runtime_verdict downgrades only when the new verdict is worse.
+    Subsequent writes replace that lens's previous section. runtime_verdict is
+    recomputed from the latest section per lens so stale FAILs cannot poison a
+    later PASS from the same verifier.
 
     AC-006: the Manual UX verification section is rendered per-lens; the
     browser lens with empty manual_ux forces PENDING (worst-wins still applies).
@@ -477,14 +471,29 @@ def _lens_merge_critic_qa(td: str, lens: str, verdict: str,
         f"### transcript\n{transcript}\n"
         f"{manual_ux_md}"
     )
-    if not os.path.exists(path):
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(f"# CRITIC — qa\n{section}")
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            existing = f.read()
+        pattern = (
+            rf"\n## qa-{re.escape(lens)} verdict: "
+            r"(?:PASS|FAIL|BLOCKED_ENV|PENDING)\n.*?(?=\n## qa-[^\n]+ verdict: |\Z)"
+        )
+        content = re.sub(pattern, "", existing, flags=re.DOTALL)
+        if not content.strip():
+            content = "# CRITIC — qa\n"
+        if "# CRITIC" not in content.splitlines()[0]:
+            content = "# CRITIC — qa\n" + content
+        content = content.rstrip() + section
     else:
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(section)
-    current = read_state(td).get("runtime_verdict", "PENDING")
-    # AC-007 of TASK__dual-runtime-plugin-claude-codex: stop-judge lens has
+        content = f"# CRITIC — qa\n{section}"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    verdicts = re.findall(r"^## qa-[^\n]+ verdict: (PASS|FAIL|BLOCKED_ENV|PENDING)\s*$",
+                          content, flags=re.MULTILINE)
+    current = "PENDING"
+    for v in verdicts:
+        current = _worst_verdict(current, v)
+    # Compatibility for older stop-judge prompts: stop-judge lens has
     # OVERRIDE authority — it is the only authorized writer of blocker
     # transitions per CONTRACTS § C-17, which means it must also be able to
     # CLEAR a prior BLOCKED_ENV when the blocker condition resolves. Without
@@ -496,7 +505,7 @@ def _lens_merge_critic_qa(td: str, lens: str, verdict: str,
     if lens == "stop-judge":
         final = (verdict or "PENDING").upper()
     else:
-        final = _worst_verdict(current, verdict)
+        final = current
     set_state_field(td, "runtime_verdict", final)
     return _ok({"artifact": "CRITIC__qa.md", "task_dir": td,
                 "lens": lens, "verdict": final, "merged": True})
@@ -543,6 +552,36 @@ def handle_write_doc_sync(args: dict) -> dict:
     return _write_artifact(args, "DOC_SYNC.md")
 
 
+def handle_task_blocked(args: dict) -> dict:
+    ti = _req(args, "task_id")
+    reason = _req(args, "blocked_reason")
+    unblock = _req(args, "unblock_condition")
+    td = canonical_task_dir(task_id=ti)
+    os.makedirs(td, exist_ok=True)
+    blocked_md = (
+        "# BLOCKED\n\n"
+        f"## Blocked Reason\n{reason}\n\n"
+        f"## Unblock Condition\n{unblock}\n\n"
+        f"## Blocked At\n{now_iso()}\n"
+    )
+    with open(os.path.join(td, "BLOCKED.md"), "w", encoding="utf-8") as f:
+        f.write(blocked_md)
+    st = read_state(td)
+    if not st:
+        return _err("task_blocked failed: missing TASK_STATE.yaml", data={"task_dir": td})
+    st["status"] = "blocked"
+    st["runtime_verdict"] = "BLOCKED_ENV"
+    st["updated"] = now_iso()
+    write_state(td, st)
+    clear_active_marker(find_repo_root(), td)
+    return _ok({
+        "task_dir": td,
+        "status": "blocked",
+        "runtime_verdict": "BLOCKED_ENV",
+        "blocked_artifact": _task_artifact_rel(td, "BLOCKED.md"),
+    })
+
+
 # ── Tool definitions ─────────────────────────────────────────────────────
 
 TOOL_DEFS: list[dict[str, Any]] = [
@@ -571,13 +610,22 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "task_id": {"type": "string"}},
          "required": ["task_id"], "additionalProperties": False},
      "handler": handle_task_close},
+    {"name": "task_blocked", "title": "Park a task on a real environment blocker",
+     "description": "Record BLOCKED_ENV, write BLOCKED.md, set status=blocked, and clear this session's active marker. This is not completion.",
+     "inputSchema": {"type": "object", "properties": {
+         "task_id": {"type": "string"},
+         "blocked_reason": {"type": "string"},
+         "unblock_condition": {"type": "string"}},
+         "required": ["task_id", "blocked_reason", "unblock_condition"],
+         "additionalProperties": False},
+     "handler": handle_task_blocked},
     {"name": "write_critic_qa", "title": "Write runtime verdict — QA agents only",
-     "description": "Write CRITIC__qa.md and set runtime_verdict. Called by qa-browser, qa-api, qa-cli, or qa-desktop. Pass `lens` (e.g. \"cli\", \"browser\") when multiple QA agents run in parallel — the handler appends a per-lens section and computes worst-wins runtime_verdict. Without `lens`, legacy full-overwrite behavior is preserved. Pass `manual_ux_verification` with a non-empty description of the manual UX verification performed; when lens='browser' and this field is empty, runtime_verdict is forced to PENDING (AC-006).",
+     "description": "Write CRITIC__qa.md and set runtime_verdict. Called by qa-browser, qa-api, qa-cli, or qa-desktop. Pass `lens` (e.g. \"cli\", \"browser\") when multiple QA agents run in parallel — the handler keeps the latest section per lens and computes worst-wins runtime_verdict across current lens verdicts. Without `lens`, legacy full-overwrite behavior is preserved. Pass `manual_ux_verification` with a non-empty description of the manual UX verification performed; when lens='browser' and this field is empty, runtime_verdict is forced to PENDING (AC-006).",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"},
          "verdict": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED_ENV"]},
          "summary": {"type": "string"}, "transcript": {"type": "string"},
-         "lens": {"type": "string", "description": "Optional QA lens identifier (cli, api, browser, desktop). When set, enables append-mode + worst-wins merge."},
+         "lens": {"type": "string", "description": "Optional QA lens identifier (cli, api, browser, desktop). When set, replaces that lens's prior section + worst-wins merges current lens verdicts."},
          "manual_ux_verification": {"type": "string", "description": "Optional. Description of manual UX checks performed (browser lens). Empty + lens=browser → verdict forced to PENDING (AC-006)."}},
          "required": ["task_id", "verdict", "summary", "transcript"],
          "additionalProperties": False},

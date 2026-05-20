@@ -72,8 +72,8 @@ _PY_PATTERNS = [
 _ARTIFACT_TOOL_HINT = {
     "CRITIC__qa.md": "mcp__plugin_harness_harness__write_critic_qa",
     "CRITIC__document.md": "mcp__plugin_harness_harness__write_critic_document",
-    "HANDOFF.md": "mcp__harness__write_handoff",
-    "DOC_SYNC.md": "mcp__harness__write_doc_sync",
+    "HANDOFF.md": "mcp__plugin_harness_harness__write_handoff",
+    "DOC_SYNC.md": "mcp__plugin_harness_harness__write_doc_sync",
     "PLAN.md": "Skill(harness:plan)",
     "PLAN.meta.json": "Skill(harness:plan)",
     "CHECKS.yaml": "plan-skill + scripts/update_checks.py",
@@ -254,7 +254,7 @@ def _deny(target, command):
     method = target.get("method", "bash mutation")
     owner = {
         "protected-artifact": _ARTIFACT_TOOL_HINT.get(
-            os.path.basename(rel), "mcp__harness__write_*"),
+            os.path.basename(rel), "mcp__plugin_harness_harness__write_*"),
         "workflow-control-surface": "maintain-skill",
         "source": "developer",
     }.get(category, "developer")

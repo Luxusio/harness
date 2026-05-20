@@ -1,9 +1,8 @@
 """AC-002 regression: stop_gate.py permits stop when runtime_verdict=BLOCKED_ENV.
 
-The stop-judge agent transitions runtime_verdict to BLOCKED_ENV via
-write_critic_qa(lens="stop-judge") to signal a legitimate paused-with-blocker
-state. The Stop hook must then permit the next stop event silently (no block
-payload on stdout).
+The stop-judge path records runtime_verdict=BLOCKED_ENV for a legitimate
+paused-with-blocker state. The Stop hook must then permit the next stop event
+silently (no block payload on stdout).
 """
 
 import io

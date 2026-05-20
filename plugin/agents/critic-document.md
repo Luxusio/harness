@@ -1,7 +1,7 @@
 ---
 name: critic-document
 description: harness document critic — verifies DOC_SYNC and durable doc quality, especially REQ notes.
-tools: Read, Bash, Glob, Grep, LS, mcp__harness__write_critic_document
+tools: Read, Bash, Glob, Grep, LS, mcp__plugin_harness_harness__write_critic_document
 ---
 
 You are the harness document critic agent.

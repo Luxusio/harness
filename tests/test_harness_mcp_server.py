@@ -1,8 +1,10 @@
-"""Tests for the plugin-local harness MCP server (8-tool minimal surface)."""
+"""Tests for the plugin-local harness MCP server."""
 
 import importlib.util
 import io
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,6 +25,7 @@ EXPECTED_TOOLS = {
     "task_context",
     "task_verify",
     "task_close",
+    "task_blocked",
     "write_critic_qa",
     "write_critic_document",
     "write_handoff",
@@ -56,7 +59,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertEqual(harness_server.SERVER_INFO["name"], "harness")
         self.assertEqual(harness_server.SERVER_INFO["title"], "harness Control Plane")
 
-    def test_tool_registry_matches_eight_tool_surface(self):
+    def test_tool_registry_matches_expected_tool_surface(self):
         tools = {tool["name"] for tool in harness_server.list_tools()}
         self.assertEqual(tools, EXPECTED_TOOLS)
 
@@ -292,6 +295,33 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertTrue(result.get("isError"))
         self.assertIn("must be PASS or FAIL", result["structuredContent"]["error"])
 
+    def test_task_blocked_records_pause_state_and_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__blocked")
+            original_ctd = harness_server.canonical_task_dir
+            original_root = harness_server.find_repo_root
+            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
+            harness_server.find_repo_root = lambda *a, **kw: tmp
+            try:
+                result = harness_server.call_tool(
+                    "task_blocked",
+                    {
+                        "task_id": "TASK__blocked",
+                        "blocked_reason": "CI service is unavailable on this host.",
+                        "unblock_condition": "Run CI where the service exists.",
+                    },
+                )
+            finally:
+                harness_server.canonical_task_dir = original_ctd
+                harness_server.find_repo_root = original_root
+            self.assertNotIn("isError", result)
+            self.assertEqual(result["structuredContent"]["status"], "blocked")
+            body = (Path(task_dir) / "BLOCKED.md").read_text(encoding="utf-8")
+            self.assertIn("CI service is unavailable", body)
+            state = (Path(task_dir) / "TASK_STATE.yaml").read_text(encoding="utf-8")
+            self.assertIn("status: blocked", state)
+            self.assertIn("runtime_verdict: BLOCKED_ENV", state)
+
 
 class HarnessMcpServerPR2CloseGate(unittest.TestCase):
     """AC-001..AC-006: CHECKS gate + runtime-stale gate in task_close / task_verify."""
@@ -464,6 +494,24 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         self.assertNotIn("isError", result,
                          f"__pycache__ pyc path should be skipped, not treated as stale: {result}")
 
+    def test_stale_check_ignores_task_artifacts_after_qa(self):
+        import os as _os
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__pr2-artifact",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                touched_paths=["doc/harness/tasks/TASK__pr2-artifact/HANDOFF.md"],
+            )
+            handoff = Path(td) / "HANDOFF.md"
+            handoff.write_text("# handoff after qa\n", encoding="utf-8")
+            _os.utime(Path(td) / "CRITIC__qa.md", (100, 100))
+            self._patch(td)
+            try:
+                result = harness_server.call_tool("task_close", {"task_id": "TASK__pr2-artifact"})
+            finally:
+                self._unpatch()
+        self.assertNotIn("isError", result)
+
     def test_stale_check_ignores_deleted_touched_path(self):
         """Deleted files in touched_paths must not stale a fresh QA verdict forever."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -479,6 +527,53 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 self._unpatch()
         self.assertNotIn("isError", result,
                          f"deleted touched path should not be permanently stale: {result}")
+
+
+class HarnessTouchedPathSubmoduleTests(unittest.TestCase):
+    def _git(self, cwd: str, *args: str):
+        return subprocess.run(
+            ["git", *args], cwd=cwd, check=True,
+            capture_output=True, text=True,
+        )
+
+    def test_sync_from_git_diff_includes_initialized_submodule_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sub_src = Path(tmp) / "sub-src"
+            parent = Path(tmp) / "parent"
+            sub_src.mkdir()
+            parent.mkdir()
+            self._git(str(sub_src), "init", "-q")
+            self._git(str(sub_src), "config", "user.email", "t@example.com")
+            self._git(str(sub_src), "config", "user.name", "T")
+            (sub_src / "api.py").write_text("v1\n", encoding="utf-8")
+            self._git(str(sub_src), "add", "api.py")
+            self._git(str(sub_src), "commit", "-qm", "init sub")
+
+            self._git(str(parent), "init", "-q")
+            self._git(str(parent), "config", "user.email", "t@example.com")
+            self._git(str(parent), "config", "user.name", "T")
+            self._git(
+                str(parent), "-c", "protocol.file.allow=always",
+                "submodule", "add", "-q", str(sub_src), "services/api",
+            )
+            self._git(str(parent), "commit", "-qm", "add submodule")
+
+            task_dir = parent / "doc" / "harness" / "tasks" / "TASK__submodule"
+            task_dir.mkdir(parents=True)
+            (task_dir / "TASK_STATE.yaml").write_text(
+                "task_id: TASK__submodule\n"
+                "status: created\n"
+                "runtime_verdict: pending\n"
+                "touched_paths: []\n"
+                "plan_session_state: closed\n"
+                "closed_at: null\n"
+                "updated: 2026-01-01T00:00:00Z\n",
+                encoding="utf-8",
+            )
+            (parent / "services" / "api" / "api.py").write_text("v2\n", encoding="utf-8")
+
+            touched = harness_server.sync_from_git_diff(str(task_dir))
+            self.assertIn("services/api/api.py", touched)
 
 
 if __name__ == "__main__":

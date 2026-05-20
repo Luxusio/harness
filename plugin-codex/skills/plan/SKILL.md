@@ -15,7 +15,7 @@ Codex-variant 7-phase review pipeline. Runs structured review across CEO, Engine
 > - **Sub-skills are inlined, not invoked.** Claude's `Skill("harness:plan-ceo-review", task_id)` chain has no Codex equivalent. The orchestrator reads each sub-skill's SKILL.md content inline and executes the methodology in the same conversation. Sub-skill ports are AC-005 sync-engine scope (v2 in v1.5 → uses Claude-side sub-skill files at `plugin/skills/plan-*-review/SKILL.md`).
 > - **AskUserQuestion = conversational ask.** Three mandatory user-gates remain: Phase 1.1 premise gate, Phase 5.3 User Challenge gate, Phase 5.4.1 final approval. Each becomes "ask the user X with options A/B/C; read the reply" prose. Same content, no structured envelope.
 > - **`${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}`** for all bash invocations of write_plan_artifact.py / update_checks.py.
-> - **MCP tool names** bare (`task_start`, `task_context`) — NOT prefixed `mcp__harness__*` form. Where the Claude source mentions a prefixed name, read it as bare.
+> - **MCP tool names** bare (`task_start`, `task_context`) — not Claude-prefixed form. Where the Claude source mentions a prefixed name, read it as bare.
 
 ## Sub-files
 
@@ -277,4 +277,3 @@ Both modes: Phase 1 premise gate and Phase 5.3 User Challenges never auto-decide
 - **Sequential order.** Phase 0 → 1 → 2 → 3 → 4 → 5 → 6.
 
 ---
-

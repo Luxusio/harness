@@ -38,7 +38,7 @@ def _scaffold_stale_task(tmp_path: Path) -> Path:
     task_dir.mkdir()
     # The touched file lives under repo root, NOT inside task_dir, so the
     # mtime comparison exercises the path-resolution branch in runtime_is_stale.
-    touched_file = repo / "doc" / "harness" / "some_doc.md"
+    touched_file = repo / "src" / "some_source.py"
     touched_file.parent.mkdir(parents=True, exist_ok=True)
     touched_file.write_text("# initial content\n")
 
@@ -55,7 +55,7 @@ def _scaffold_stale_task(tmp_path: Path) -> Path:
         "status: created\n"
         "runtime_verdict: BLOCKED_ENV\n"
         "touched_paths:\n"
-        "  - doc/harness/some_doc.md\n"
+        "  - src/some_source.py\n"
         "plan_session_state: closed\n"
         "closed_at: null\n"
         "updated: 2026-05-14T00:00:00Z\n"

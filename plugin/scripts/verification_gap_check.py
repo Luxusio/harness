@@ -32,7 +32,7 @@ def main() -> int:
         from _lib import (  # type: ignore
             TASK_DIR, find_repo_root,
             _read_nested_manifest_field, _frontend_touched, _has_qa_browser_section,
-            read_state,
+            read_state, resolve_active_task_dir,
         )
     except Exception:
         return 0
@@ -44,22 +44,7 @@ def main() -> int:
     if not repo_root:
         return 0
 
-    active_path = os.path.join(repo_root, TASK_DIR, ".active")
-    if not os.path.isfile(active_path):
-        return 0
-
-    try:
-        with open(active_path, "r", encoding="utf-8") as f:
-            first = (f.read().strip().splitlines() or [""])[0]
-    except Exception:
-        return 0
-    if not first:
-        return 0
-
-    if os.path.isabs(first):
-        task_dir = first
-    else:
-        task_dir = os.path.join(repo_root, TASK_DIR, first.rstrip("/"))
+    task_dir = resolve_active_task_dir(repo_root)
     if not os.path.isdir(task_dir):
         return 0
 

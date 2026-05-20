@@ -3,7 +3,7 @@ name: plan
 description: Harness-native 7-phase dual-voice review pipeline that writes PLAN.md and related task contract artefacts via the CLI.
 argument-hint: <task-slug>
 user-invocable: true
-allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, Agent, mcp__harness__task_start, mcp__harness__task_context
+allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, Agent, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context
 ---
 
 Harness-native 7-phase dual-voice review pipeline. Runs structured review across CEO, Design, Engineering, and DX lenses; builds adversarial consensus via two independent voices; classifies every decision; surfaces only contested items to the user; writes the final task contract through the protected-artifact CLI.
