@@ -14,10 +14,12 @@ import re
 import subprocess
 import tempfile
 import json
+import hashlib
 from datetime import datetime, timezone
 
 TASK_DIR = "doc/harness/tasks"
 MANIFEST_PATH = "doc/harness/manifest.yaml"
+TASK_BASELINE_NAME = "TASK_BASELINE.json"
 
 SCHEMA_FIELDS = (
     "task_id", "status", "runtime_verdict",
@@ -688,6 +690,7 @@ def ensure_task_scaffold(task_dir, task_id, request_text=""):
         "updated": now_iso(),
     }
     write_state(task_dir, fields)
+    capture_task_baseline(task_dir)
 
     created = [state_file(task_dir)]
     if request_text:
@@ -1105,8 +1108,30 @@ def sync_touched_paths(task_dir, new_paths=None):
     return merged
 
 
-def _git_changed_paths(repo_root, prefix=""):
-    changed = set()
+def _fingerprint_path(repo_root, relpath):
+    """Return a stable fingerprint for current path contents.
+
+    Missing paths use a sentinel so deleted-at-baseline files do not keep
+    reappearing as task-owned changes. Hash failures return ``None`` and are
+    treated as changed by the baseline filter.
+    """
+    path = os.path.join(repo_root, relpath)
+    if not os.path.exists(path):
+        return "missing"
+    if os.path.isdir(path):
+        return "dir"
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return "sha256:" + h.hexdigest()
+    except OSError:
+        return None
+
+
+def _git_changed_paths(repo_root, prefix="", with_fingerprints=False):
+    changed = {} if with_fingerprints else set()
     commands = (
         ["git", "diff", "--name-only", "HEAD"],
         ["git", "diff", "--cached", "--name-only", "HEAD"],
@@ -1118,8 +1143,91 @@ def _git_changed_paths(repo_root, prefix=""):
             for line in r.stdout.splitlines():
                 path = line.strip()
                 if path:
-                    changed.add((prefix + path).replace("\\", "/"))
+                    rel = (prefix + path).replace("\\", "/")
+                    if with_fingerprints:
+                        changed[rel] = _fingerprint_path(repo_root, path)
+                    else:
+                        changed.add(rel)
     return changed
+
+
+def _baseline_file(task_dir):
+    return os.path.join(task_dir, TASK_BASELINE_NAME)
+
+
+def _changed_path_fingerprints(repo_root):
+    changed = _git_changed_paths(repo_root, with_fingerprints=True)
+    for sub_path in _initialized_submodule_paths(repo_root):
+        sub_root = os.path.join(repo_root, sub_path)
+        if os.path.isdir(sub_root):
+            changed.update(_git_changed_paths(
+                sub_root,
+                prefix=sub_path.rstrip("/") + "/",
+                with_fingerprints=True,
+            ))
+    return changed
+
+
+def capture_task_baseline(task_dir, repo_root=None):
+    """Write task-start dirty-path fingerprints.
+
+    Existing baselines are preserved on resume. Failure is non-blocking:
+    tasks without a readable baseline fall back to historical touched-path
+    behavior in ``sync_from_git_diff``.
+    """
+    path = _baseline_file(task_dir)
+    if os.path.isfile(path):
+        return path
+    try:
+        repo_root = repo_root or find_repo_root(task_dir)
+        data = {
+            "version": 1,
+            "captured_at": now_iso(),
+            "repo_root": repo_root,
+            "dirty_paths": _changed_path_fingerprints(repo_root),
+        }
+        os.makedirs(task_dir, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=task_dir, prefix=".baseline.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, sort_keys=True)
+                f.write("\n")
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        return path
+    except Exception:
+        return ""
+
+
+def _read_task_baseline(task_dir):
+    try:
+        with open(_baseline_file(task_dir), encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    dirty = data.get("dirty_paths")
+    return dirty if isinstance(dirty, dict) else None
+
+
+def _filter_baseline_unchanged(task_dir, repo_root, changed):
+    baseline = _read_task_baseline(task_dir)
+    if baseline is None:
+        return changed
+    current = _changed_path_fingerprints(repo_root)
+    out = set()
+    for rel in changed:
+        if rel not in baseline:
+            out.add(rel)
+            continue
+        current_fp = current.get(rel)
+        if current_fp is None or current_fp != baseline.get(rel):
+            out.add(rel)
+    return out
 
 
 def _initialized_submodule_paths(repo_root):
@@ -1161,6 +1269,7 @@ def sync_from_git_diff(task_dir):
         sub_root = os.path.join(repo_root, sub_path)
         if os.path.isdir(sub_root):
             changed.update(_git_changed_paths(sub_root, prefix=sub_path.rstrip("/") + "/"))
+    changed = _filter_baseline_unchanged(task_dir, repo_root, changed)
     if not changed:
         return []
     return sync_touched_paths(task_dir, changed)

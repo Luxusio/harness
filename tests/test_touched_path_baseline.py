@@ -1,0 +1,93 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+LIB = REPO_ROOT / "plugin" / "scripts" / "_lib.py"
+
+spec = importlib.util.spec_from_file_location("harness_lib_for_baseline_tests", LIB)
+lib = importlib.util.module_from_spec(spec)
+sys.path.insert(0, str(REPO_ROOT / "plugin" / "scripts"))
+spec.loader.exec_module(lib)
+
+
+def _run(cmd: list[str], cwd: Path) -> None:
+    subprocess.run(cmd, cwd=cwd, check=True, capture_output=True, text=True)
+
+
+def _mk_repo(tmp: str) -> Path:
+    repo = Path(tmp)
+    _run(["git", "init", "-q"], repo)
+    _run(["git", "config", "user.email", "a@b"], repo)
+    _run(["git", "config", "user.name", "a"], repo)
+    (repo / ".gitignore").write_text("doc/harness/tasks/\n", encoding="utf-8")
+    (repo / "existing.txt").write_text("base\n", encoding="utf-8")
+    _run(["git", "add", ".gitignore", "existing.txt"], repo)
+    _run(["git", "commit", "-qm", "init"], repo)
+    return repo
+
+
+def _task_dir(repo: Path) -> Path:
+    return repo / "doc" / "harness" / "tasks" / "TASK__baseline"
+
+
+class TestTouchedPathBaseline(unittest.TestCase):
+    def test_task_start_records_baseline_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            (repo / "existing.txt").write_text("dirty before task\n", encoding="utf-8")
+            td = _task_dir(repo)
+            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+            baseline = td / "TASK_BASELINE.json"
+            data = json.loads(baseline.read_text(encoding="utf-8"))
+        self.assertEqual(data["version"], 1)
+        self.assertIn("existing.txt", data["dirty_paths"])
+
+    def test_unchanged_baseline_dirty_path_is_excluded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            (repo / "existing.txt").write_text("dirty before task\n", encoding="utf-8")
+            td = _task_dir(repo)
+            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+            touched = lib.sync_from_git_diff(str(td))
+        self.assertNotIn("existing.txt", touched)
+
+    def test_baseline_dirty_path_is_included_after_content_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            (repo / "existing.txt").write_text("dirty before task\n", encoding="utf-8")
+            td = _task_dir(repo)
+            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+            (repo / "existing.txt").write_text("changed during task\n", encoding="utf-8")
+            touched = lib.sync_from_git_diff(str(td))
+        self.assertIn("existing.txt", touched)
+
+    def test_new_post_baseline_path_is_included(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            td = _task_dir(repo)
+            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+            (repo / "new.txt").write_text("new during task\n", encoding="utf-8")
+            touched = lib.sync_from_git_diff(str(td))
+        self.assertIn("new.txt", touched)
+
+    def test_missing_or_corrupt_baseline_falls_back_to_current_behavior(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            (repo / "existing.txt").write_text("dirty before task\n", encoding="utf-8")
+            td = _task_dir(repo)
+            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+            (td / "TASK_BASELINE.json").write_text("{not json", encoding="utf-8")
+            touched = lib.sync_from_git_diff(str(td))
+        self.assertIn("existing.txt", touched)
+
+
+if __name__ == "__main__":
+    unittest.main()
