@@ -66,6 +66,23 @@ Direct, terse. Status updates, not narration. "Phase N done." not "I have comple
 
 Execute phases in strict order. Each phase must complete before the next begins. On any phase failure: stop, report, ask how to proceed.
 
+### Phase 0: Resume detection
+
+Before creating a new task, check whether this session already has an active
+harness task. If an active task exists, call `task_context` for that task and
+resume instead of creating a duplicate.
+
+Resume routing:
+- PLAN.md missing → Phase 2 Plan.
+- PLAN.md exists and HANDOFF.md missing → Phase 3 Develop.
+- HANDOFF.md exists and runtime_verdict is not PASS → Phase 4 Verify.
+- runtime_verdict is PASS and `missing_for_close` is empty → Phase 5 Close.
+- `missing_for_close` names specific artifacts or AC blockers → fix that gate
+  and then continue from the corresponding phase.
+
+Only call `task_start` when no active task can be resolved, or when the user
+explicitly asks for a new task.
+
 ### Phase 1: Start task
 
 ```
@@ -121,6 +138,12 @@ spawn_agent {
 }
 ```
 
+When the QA lens returns PASS for the task as a whole, call `write_critic_qa`
+with `auto_promote_open_acs: true` so open CHECKS.yaml items are promoted with
+CRITIC__qa.md evidence. The MCP handler only promotes `status: open` and only
+when the effective merged verdict is PASS; failed/deferred ACs still require
+explicit `update_checks.py` handling.
+
 QA inline fallback pattern on Codex:
 
 ```
@@ -129,7 +152,7 @@ cat ${HARNESS_PLUGIN_ROOT}/agents/qa-cli.md   # or qa-api.md / qa-browser.md
 # Follow the four-roles checklist inline (operation, intent, UX/design, runtime)
 # Run the verification commands the agent prompt prescribes
 # Call:
-write_critic_qa { lens: "cli|api|browser", verdict: "PASS" | "FAIL" | "BLOCKED_ENV", summary, transcript, manual_ux_verification? }
+write_critic_qa { lens: "cli|api|browser", verdict: "PASS" | "FAIL" | "BLOCKED_ENV", summary, transcript, manual_ux_verification?, auto_promote_open_acs: true when verdict=PASS }
 ```
 
 When inline fallback replaces expected independent QA, add `Runtime Fallbacks` to HANDOFF with reason, risk, and compensating check.

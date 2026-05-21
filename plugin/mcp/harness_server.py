@@ -202,6 +202,7 @@ def _parse_checks_yaml(td: str) -> list[dict] | None:
 
 
 _CHECKS_GATE_TERMINAL = {"passed", "deferred"}
+_AC_AUTO_PROMOTE_STATUSES = {"open"}
 
 
 def _checks_gate_status(td: str) -> tuple[str, list[dict]]:
@@ -219,6 +220,84 @@ def _checks_gate_status(td: str) -> tuple[str, list[dict]]:
         return "absent", []
     blocking = [ac for ac in items if ac["status"] not in _CHECKS_GATE_TERMINAL]
     return ("blocked" if blocking else "ok"), blocking
+
+
+def _truthy(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        return v.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return False
+
+
+def _set_block_field(block: str, field: str, value: str) -> str:
+    pattern = rf"^(\s+{re.escape(field)}:\s*).*$"
+    replacement = rf"\1{value}"
+    new, count = re.subn(pattern, replacement, block, count=1, flags=re.MULTILINE)
+    if count:
+        return new
+    suffix = "\n" if block.endswith("\n") else ""
+    return block.rstrip("\n") + f"\n  {field}: {value}" + suffix
+
+
+def _auto_promote_open_acs(td: str, evidence: str) -> list[str]:
+    """Promote open CHECKS.yaml ACs to passed after an explicit QA PASS.
+
+    Only ``status: open`` is eligible. Failed/deferred/in-progress statuses are
+    left for explicit update_checks calls so a broad QA PASS cannot erase known
+    exceptions or previous failures.
+    """
+    checks_path = os.path.join(td, "CHECKS.yaml")
+    if not os.path.isfile(checks_path):
+        return []
+    try:
+        with open(checks_path, encoding="utf-8") as f:
+            text = f.read()
+    except OSError:
+        return []
+    if not text.strip():
+        return []
+
+    blocks: list[str] = []
+    current: list[str] = []
+    prefix_lines: list[str] = []
+    for line in text.splitlines():
+        if re.match(r"^-\s+id:\s*", line):
+            if current:
+                blocks.append("\n".join(current))
+            current = [line]
+        elif current:
+            current.append(line)
+        else:
+            prefix_lines.append(line)
+    if current:
+        blocks.append("\n".join(current))
+    if not blocks:
+        return []
+
+    promoted: list[str] = []
+    new_blocks: list[str] = []
+    safe_evidence = (evidence or "CRITIC__qa.md").replace("\n", " ").strip()
+    if len(safe_evidence) > 240:
+        safe_evidence = safe_evidence[:237].rstrip() + "..."
+    for block in blocks:
+        m_id = re.match(r"^-\s+id:\s*(\S+)", block)
+        m_status = re.search(r"^\s+status:\s*(\S+)", block, re.MULTILINE)
+        status = (m_status.group(1) if m_status else "open").strip()
+        if m_id and status in _AC_AUTO_PROMOTE_STATUSES:
+            block = _set_block_field(block, "status", "passed")
+            block = _set_block_field(block, "last_updated", now_iso())
+            block = _set_block_field(block, "evidence", safe_evidence)
+            promoted.append(m_id.group(1))
+        new_blocks.append(block)
+    if not promoted:
+        return []
+    new_text = "\n".join([p for p in prefix_lines if p] + new_blocks) + "\n"
+    try:
+        _atomic_write_text(checks_path, new_text)
+    except OSError:
+        return []
+    return promoted
 
 
 def _log_gate_warn(task_id: str, key: str, insight: str) -> None:
@@ -476,7 +555,8 @@ def _render_manual_ux_section(lens: str, manual_ux: str) -> tuple[str, str]:
 
 def _lens_merge_critic_qa(td: str, lens: str, verdict: str,
                           summary: str, transcript: str,
-                          manual_ux: str = "") -> dict:
+                          manual_ux: str = "",
+                          auto_promote_open_acs: bool = False) -> dict:
     """Lens-aware merge for CRITIC__qa.md. Worst-wins runtime_verdict.
 
     First lens writer creates the file with a global header and one section.
@@ -534,8 +614,12 @@ def _lens_merge_critic_qa(td: str, lens: str, verdict: str,
     else:
         final = current
     set_state_field(td, "runtime_verdict", final)
+    promoted = []
+    if auto_promote_open_acs and final == "PASS":
+        promoted = _auto_promote_open_acs(td, f"CRITIC__qa.md qa-{lens} PASS")
     return _ok({"artifact": "CRITIC__qa.md", "task_dir": td,
-                "lens": lens, "verdict": final, "merged": True})
+                "lens": lens, "verdict": final, "merged": True,
+                "promoted_acs": promoted})
 
 
 def handle_write_critic_qa(args: dict) -> dict:
@@ -544,6 +628,7 @@ def handle_write_critic_qa(args: dict) -> dict:
         return _err(f"invalid verdict '{verdict}' — must be PASS, FAIL, or BLOCKED_ENV")
     lens = _opt(args, "lens")
     manual_ux = _opt(args, "manual_ux_verification") or ""
+    auto_promote = _truthy(args.get("auto_promote_open_acs"))
     if lens:
         td = _opt(args, "task_dir")
         ti = _opt(args, "task_id") or (os.path.basename(td.rstrip("/")) if td else None)
@@ -552,7 +637,10 @@ def handle_write_critic_qa(args: dict) -> dict:
         td = td or canonical_task_dir(task_id=ti)
         summary = _opt(args, "summary") or ""
         transcript = _opt(args, "transcript") or ""
-        return _lens_merge_critic_qa(td, lens, verdict, summary, transcript, manual_ux)
+        return _lens_merge_critic_qa(
+            td, lens, verdict, summary, transcript, manual_ux,
+            auto_promote_open_acs=auto_promote,
+        )
     # Legacy single-lens (no lens arg). Treat as non-browser by default for the
     # Manual UX rendering — the agent's lens identity is unknown, so we err on
     # the side of not forcing PENDING.
@@ -561,7 +649,21 @@ def handle_write_critic_qa(args: dict) -> dict:
         verdict = verdict_override
     args = dict(args)  # don't mutate caller's dict
     args["_rendered_manual_ux_section"] = manual_ux_md
-    return _write_artifact(args, "CRITIC__qa.md", "runtime_verdict", verdict_value=verdict)
+    result = _write_artifact(args, "CRITIC__qa.md", "runtime_verdict", verdict_value=verdict)
+    promoted = []
+    if auto_promote and verdict == "PASS":
+        td = _opt(args, "task_dir")
+        ti = _opt(args, "task_id") or (os.path.basename(td.rstrip("/")) if td else None)
+        if ti:
+            td = td or canonical_task_dir(task_id=ti)
+            promoted = _auto_promote_open_acs(td, "CRITIC__qa.md PASS")
+    if promoted and isinstance(result.get("structuredContent"), dict):
+        result["structuredContent"]["promoted_acs"] = promoted
+        try:
+            result["content"][0]["text"] = json.dumps(result["structuredContent"], indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+    return result
 
 
 def handle_write_critic_document(args: dict) -> dict:
@@ -744,7 +846,8 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "verdict": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED_ENV"]},
          "summary": {"type": "string"}, "transcript": {"type": "string"},
          "lens": {"type": "string", "description": "Optional QA lens identifier (cli, api, browser, desktop). When set, replaces that lens's prior section + worst-wins merges current lens verdicts."},
-         "manual_ux_verification": {"type": "string", "description": "Optional. Description of manual UX checks performed (browser lens). Empty + lens=browser → verdict forced to PENDING (AC-006)."}},
+         "manual_ux_verification": {"type": "string", "description": "Optional. Description of manual UX checks performed (browser lens). Empty + lens=browser → verdict forced to PENDING (AC-006)."},
+         "auto_promote_open_acs": {"type": "boolean", "description": "Optional. When true and the effective verdict is PASS, promote CHECKS.yaml ACs with status=open to passed using CRITIC__qa.md as evidence. Failed/deferred ACs are never promoted."}},
          "required": ["task_id", "verdict", "summary", "transcript"],
          "additionalProperties": False},
      "handler": handle_write_critic_qa},

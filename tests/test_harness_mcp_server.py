@@ -296,6 +296,73 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertTrue(result.get("isError"))
         self.assertIn("must be PASS or FAIL", result["structuredContent"]["error"])
 
+    def test_write_critic_qa_can_auto_promote_open_acs_on_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__qapromote")
+            (Path(task_dir) / "CHECKS.yaml").write_text(
+                '- id: AC-001\n  title: "one"\n  status: open\n  kind: functional\n'
+                '  last_updated: 2026-01-01T00:00:00Z\n  evidence: ""\n'
+                '- id: AC-002\n  title: "two"\n  status: open\n  kind: functional\n'
+                '  last_updated: 2026-01-01T00:00:00Z\n  evidence: ""\n',
+                encoding="utf-8",
+            )
+            original_ctd = harness_server.canonical_task_dir
+            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
+            try:
+                result = harness_server.call_tool(
+                    "write_critic_qa",
+                    {
+                        "task_id": "TASK__qapromote",
+                        "lens": "cli",
+                        "verdict": "PASS",
+                        "summary": "ok",
+                        "transcript": "focused tests passed",
+                        "auto_promote_open_acs": True,
+                    },
+                )
+            finally:
+                harness_server.canonical_task_dir = original_ctd
+            body = (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8")
+        self.assertNotIn("isError", result)
+        self.assertEqual(result["structuredContent"]["promoted_acs"], ["AC-001", "AC-002"])
+        self.assertEqual(body.count("status: passed"), 2)
+        self.assertIn("evidence: CRITIC__qa.md qa-cli PASS", body)
+
+    def test_write_critic_qa_auto_promote_skips_failed_deferred_and_non_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__qaskip")
+            (Path(task_dir) / "CHECKS.yaml").write_text(
+                '- id: AC-001\n  title: "open"\n  status: open\n  kind: functional\n'
+                '  last_updated: 2026-01-01T00:00:00Z\n  evidence: ""\n'
+                '- id: AC-002\n  title: "failed"\n  status: failed\n  kind: functional\n'
+                '  last_updated: 2026-01-01T00:00:00Z\n  evidence: ""\n'
+                '- id: AC-003\n  title: "deferred"\n  status: deferred\n  kind: functional\n'
+                '  last_updated: 2026-01-01T00:00:00Z\n  evidence: ""\n',
+                encoding="utf-8",
+            )
+            original_ctd = harness_server.canonical_task_dir
+            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
+            try:
+                result = harness_server.call_tool(
+                    "write_critic_qa",
+                    {
+                        "task_id": "TASK__qaskip",
+                        "lens": "cli",
+                        "verdict": "FAIL",
+                        "summary": "not ok",
+                        "transcript": "failure",
+                        "auto_promote_open_acs": True,
+                    },
+                )
+            finally:
+                harness_server.canonical_task_dir = original_ctd
+            body = (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8")
+        self.assertNotIn("isError", result)
+        self.assertEqual(result["structuredContent"]["promoted_acs"], [])
+        self.assertIn("status: open", body)
+        self.assertIn("status: failed", body)
+        self.assertIn("status: deferred", body)
+
     def test_task_blocked_records_pause_state_and_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__blocked")

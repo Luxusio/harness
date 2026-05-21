@@ -3,6 +3,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 CODEX_RUN = REPO / "plugin-codex" / "skills" / "run" / "SKILL.md"
+CLAUDE_RUN = REPO / "plugin" / "skills" / "run" / "SKILL.md"
 CODEX_DEVELOP = REPO / "plugin-codex" / "skills" / "develop" / "SKILL.md"
 GENERAL_PATTERNS = REPO / "doc" / "harness" / "patterns" / "general.md"
 
@@ -33,6 +34,18 @@ def test_codex_run_documents_qa_subagent_call_shape():
     assert "write_critic_qa with lens='<lens>'" in body
     assert "Runtime Fallbacks" in body
     assert "Agent` fan-out routed through `spawn_agent` when available" in body
+
+
+def test_run_skills_document_resume_detection_and_auto_promotion():
+    for path in (CODEX_RUN, CLAUDE_RUN):
+        body = _text(path)
+        assert "Phase 0: Resume detection" in body
+        assert "resume rather than creating a duplicate" in body or "resume instead of creating a duplicate" in body
+        assert "PLAN.md missing → Phase 2 Plan" in body
+        assert "HANDOFF.md missing → Phase 3 Develop" in body
+        assert "runtime_verdict is not PASS → Phase 4 Verify" in body
+        assert "auto_promote_open_acs" in body
+        assert "failed/deferred ACs still require" in body
 
 
 def test_codex_develop_no_longer_says_agent_absence_is_absolute():

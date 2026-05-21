@@ -20,6 +20,23 @@ Direct, terse. Status updates, not narration. "Phase N done." not "I have comple
 
 Execute phases in strict order. Each phase must complete before the next begins. On any phase failure: stop, report, ask how to proceed.
 
+### Phase 0: Resume detection
+
+Before creating a new task, check whether this session already has an active
+harness task. If one exists, call `mcp__plugin_harness_harness__task_context`
+and resume rather than creating a duplicate.
+
+Resume routing:
+- PLAN.md missing → Phase 2 Plan.
+- PLAN.md exists and HANDOFF.md missing → Phase 3 Develop.
+- HANDOFF.md exists and runtime_verdict is not PASS → Phase 4 Verify.
+- runtime_verdict is PASS and `missing_for_close` is empty → Phase 5 Close.
+- `missing_for_close` names specific artifacts or AC blockers → fix that gate
+  and then continue from the corresponding phase.
+
+Only call `task_start` when no active task can be resolved, or when the user
+explicitly asks for a new task.
+
 ### Phase 1: Start task
 
 ```
@@ -70,7 +87,7 @@ Agent(
 Task dir: <task_dir>
 Read ${CLAUDE_PLUGIN_ROOT}/agents/qa-<lens>.md for your full role definition.
 Follow it exactly — all four roles (operation, intent, UX/design, runtime).
-Call mcp__plugin_harness_harness__write_critic_qa with verdict, summary, and full transcript."
+Call mcp__plugin_harness_harness__write_critic_qa with verdict, summary, full transcript, and auto_promote_open_acs=true when verdict=PASS."
 )
 ```
 
@@ -89,6 +106,11 @@ Agent(
   prompt="You are the browser QA agent for <task_id>. ... Call write_critic_qa with verdict, summary, transcript, AND lens=\"browser\"."
 )
 ```
+
+When a QA agent records PASS for the task as a whole, pass
+`auto_promote_open_acs=true` to `write_critic_qa`. The MCP handler promotes only
+CHECKS.yaml entries with `status: open` and only when the effective verdict is
+PASS; failed/deferred ACs still require explicit `update_checks.py` handling.
 
 When `lens` is set, the handler keeps the latest section for that lens in `CRITIC__qa.md` and updates `runtime_verdict` via worst-wins across current lens verdicts (severity: `PENDING < PASS < BLOCKED_ENV < FAIL`). Without `lens`, the legacy full-overwrite path is taken — keep single-lens calls unchanged.
 
