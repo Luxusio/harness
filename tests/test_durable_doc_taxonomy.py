@@ -61,6 +61,9 @@ def test_plan_requires_durable_docs_decision_for_claude_and_codex():
         assert "New pages, admin/backoffice screens, routes, controllers, and endpoints" in body
         assert "REQ-required even when additive" in body
         assert "PLAN.md acceptance criteria" in body
+        assert "REQ path is required before develop starts" in body
+        assert "blocking plan defect" in body
+        assert "do not defer this to close" in body
         assert "doc/product/" not in body
 
 
@@ -69,6 +72,8 @@ def test_develop_guidance_writes_selected_durable_docs():
         body = _text(path)
 
         assert "Durable docs (REQ/GUIDE/ADR/POLICY)" in body
+        assert "Durable Docs Preflight" in body
+        assert "before source implementation" in body
         assert "doc/<area>/<TYPE>__<name>.md" in body
         assert "Use `REQ` for user-visible behavior" in body
         assert "Use `GUIDE` for reusable coding, design, testing" in body
@@ -77,7 +82,10 @@ def test_develop_guidance_writes_selected_durable_docs():
         assert "New pages, admin/backoffice screens, routes, controllers, and endpoints require a REQ" in body
         assert "Recheck the actual diff after implementation" in body
         assert "record the correction in DOC_SYNC" in body
-        assert "Durable docs: links to `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or `POLICY__*.md`" in body
+        assert "Durable docs: before calling `write_handoff`, include links to `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or `POLICY__*.md`" in body
+        assert "before calling `write_handoff`" in body
+        assert "specific non-observable reason" in body
+        assert "`not needed` is invalid for new or changed UI/API/backoffice/admin screens" in body
         assert "doc/product/" not in body
 
 

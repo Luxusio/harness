@@ -41,7 +41,7 @@ and QA must satisfy: existing screen state, filters, search, sorting, loading,
 empty/error states, localization/copy/visibility, click/input interactions,
 API request or response shape, status codes, auth/session behavior, validation,
 compatibility, externally consumed side effects, or observable bugfixes.
-New pages, admin/backoffice screens, routes, controllers, and endpoints are REQ-required even when additive. PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`. Do not write `REQ: n/a` when the plan creates or changes observable UI/API behavior; if uncertain, choose the REQ and let develop refine the exact path.
+New pages, admin/backoffice screens, routes, controllers, and endpoints are REQ-required even when additive. PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`. Do not write `REQ: n/a` when the plan creates or changes observable UI/API behavior; if uncertain, choose the REQ and let develop refine the exact path. A concrete REQ path is required before develop starts for observable UI/API/backoffice work. If target files or surfaces include observable UI, API, backoffice/admin screens, routes, controllers, or endpoints and the decision says `REQ: n/a`, treat that as a blocking plan defect: revise the PLAN before Phase 6 and do not defer this to close.
 
 Use `GUIDE` when the task establishes reusable coding, design, testing, or
 implementation guidance. Use `ADR` when it makes a significant technical
