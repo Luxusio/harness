@@ -103,6 +103,58 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertEqual(response["id"], 1)
         self.assertEqual(response["result"]["serverInfo"]["name"], "harness")
 
+    def test_initialize_instructions_match_current_codex_mcp_contract(self):
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-11-25", "clientInfo": {"name": "codex-cli"}},
+        }
+        stdin = io.TextIOWrapper(io.BytesIO(json.dumps(request).encode() + b"\n"), encoding="utf-8")
+        stdout_bytes = io.BytesIO()
+        stdout = io.TextIOWrapper(stdout_bytes, encoding="utf-8")
+
+        server = harness_server.McpServer()
+        with mock.patch.object(harness_server.sys, "stdin", stdin), mock.patch.object(harness_server.sys, "stdout", stdout):
+            server.handle_request(server._read())
+            stdout.flush()
+
+        response = json.loads(stdout_bytes.getvalue().decode())
+        instructions = response["result"]["instructions"]
+        self.assertIn("10 tools", instructions)
+        self.assertIn("bare tool names", instructions)
+        self.assertIn("Codex callers should use these bare tool names directly", instructions)
+        self.assertIn("write_plan_artifact", instructions)
+        self.assertNotIn("7 tools", instructions)
+        self.assertIn("mcp__plugin_harness_harness__", instructions)
+        self.assertIn("do not use Claude display prefixes", instructions)
+        self.assertNotIn("write_critic_runtime", instructions)
+
+    def test_initialize_instructions_match_current_claude_mcp_contract(self):
+        request = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-11-25", "clientInfo": {"name": "claude-code"}},
+        }
+        stdin = io.TextIOWrapper(io.BytesIO(json.dumps(request).encode() + b"\n"), encoding="utf-8")
+        stdout_bytes = io.BytesIO()
+        stdout = io.TextIOWrapper(stdout_bytes, encoding="utf-8")
+
+        server = harness_server.McpServer()
+        with mock.patch.object(harness_server.sys, "stdin", stdin), mock.patch.object(harness_server.sys, "stdout", stdout):
+            server.handle_request(server._read())
+            stdout.flush()
+
+        response = json.loads(stdout_bytes.getvalue().decode())
+        instructions = response["result"]["instructions"]
+        self.assertIn("10 tools", instructions)
+        self.assertIn("Protocol tool names are bare", instructions)
+        self.assertIn("Claude Code may display callable tools with a runtime prefix", instructions)
+        self.assertIn("mcp__plugin_harness_harness__write_critic_qa", instructions)
+        self.assertNotIn("7 tools", instructions)
+        self.assertNotIn("write_critic_runtime", instructions)
+
     def test_stdio_transport_accepts_lowercase_content_length_with_extra_headers(self):
         request = {
             "jsonrpc": "2.0",

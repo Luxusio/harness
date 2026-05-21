@@ -104,7 +104,7 @@ def _mcp_block(plugin_root: str) -> str:
         "[mcp_servers.harness]\n"
         f'command = "{_python_cmd()}"\n'
         f'args = ["{plugin_root}/mcp/harness_server.py"]\n'
-        f'env = {{ HARNESS_PLUGIN_ROOT = "{plugin_root}", CLAUDE_PLUGIN_ROOT = "{plugin_root}" }}\n'
+        f'env = {{ HARNESS_PLUGIN_ROOT = "{plugin_root}", CLAUDE_PLUGIN_ROOT = "{plugin_root}", HARNESS_RUNTIME = "codex" }}\n'
         "startup_timeout_sec = 10\n"
         "tool_timeout_sec = 60\n"
         "enabled = true\n"
@@ -857,12 +857,14 @@ def install_claude(*, dry_run: bool, force: bool) -> InstallResult:
     if dry_run:
         steps.append(f"would run: claude mcp add harness python3 -- {installed_mcp_server} "
                      f"(env: HARNESS_PLUGIN_ROOT={installed_plugin_root}, "
-                     f"CLAUDE_PLUGIN_ROOT={installed_plugin_root})")
+                     f"CLAUDE_PLUGIN_ROOT={installed_plugin_root}, "
+                     "HARNESS_RUNTIME=claude)")
         return InstallResult("claude", True,
                              "dry-run — would install Claude (steps above)", steps)
     env_args = [
         "-e", f"HARNESS_PLUGIN_ROOT={installed_plugin_root}",
         "-e", f"CLAUDE_PLUGIN_ROOT={installed_plugin_root}",
+        "-e", "HARNESS_RUNTIME=claude",
     ]
     if force:
         _run(["claude", "mcp", "remove", "harness"], dry_run)

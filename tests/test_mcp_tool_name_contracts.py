@@ -44,3 +44,15 @@ def test_codex_skills_use_bare_tool_names_not_claude_prefixes():
     assert "mcp__plugin_harness_harness__" not in body
     for name in ("task_start", "task_verify", "task_close", "write_critic_qa"):
         assert name in body
+
+
+def test_codex_qa_docs_do_not_suggest_claude_agent_subagent_type_call_shape():
+    run = (REPO_ROOT / "plugin-codex" / "skills" / "run" / "SKILL.md").read_text(encoding="utf-8")
+    assert "QA subagent pattern on Codex" in run
+    assert "spawn_agent {" in run
+    assert 'agent_type: "default"' in run
+    qa_section = run.split("QA subagent pattern on Codex:", 1)[1].split("When the QA lens returns", 1)[0]
+    assert "Agent(subagent_type=" not in qa_section
+    assert "harness:qa-browser" not in qa_section
+    assert "harness:qa-api" not in qa_section
+    assert "harness:qa-cli" not in qa_section

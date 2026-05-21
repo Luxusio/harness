@@ -106,7 +106,7 @@ All under `plugin/agents/`. Narrow tool surface — each agent gets only what it
 | `qa-api` | API runtime QA via curl / httpie |
 | `qa-cli` | CLI / library runtime QA |
 
-QA agents write the runtime verdict via `mcp__harness__write_critic_runtime`. They never hold `Edit`/`Write` on source files.
+QA agents write the runtime verdict via the harness MCP `write_critic_qa` tool. On Codex the MCP tool names are bare (`write_critic_qa`, `task_verify`); on Claude they may be displayed with a runtime prefix. QA agents never hold `Edit`/`Write` on source files.
 
 ## Quality scripts
 
@@ -126,7 +126,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `golden_replay.py` | Record/replay runtime smoke runs for deterministic regression | `doc/harness/replays/` |
 | `runtime_services.py` | Start/status/log helper for manifest-declared runtime services | task-local audit evidence |
 | `update_checks.py` | Atomic CHECKS.yaml AC status transitions (plan-first) | task-local |
-| `write_plan_artifact.py` | CLI writer for PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md | task-local |
+| `write_plan_artifact.py` | Legacy compatibility shim; prefer MCP `write_plan_artifact` for PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md | task-local |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
 | `hygiene_scan.py` | SessionStart auto-hygiene: Tier A/B auto-apply + doc archive pass | `doc/harness/.maintain-pending.json` |
 | `doc_hygiene.py` | Content-signal KEEP/REMOVE/REVIEW classifier; archives stale docs via `git mv` | `doc/harness/.maintain-pending.json` |
@@ -174,7 +174,7 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 
 ## MCP tools
 
-8 tools via `plugin/mcp/harness_server.py`:
+10 tools via `plugin/mcp/harness_server.py`:
 
 | Tool | Purpose |
 |------|---------|
@@ -182,7 +182,9 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 | `task_context` | Refresh task state |
 | `task_verify` | Sync paths + check verification |
 | `task_close` | Gate: all verdicts PASS → close |
+| `task_blocked` | Park a task on a genuine environment blocker |
 | `write_critic_qa` | QA agent writes runtime verdict |
+| `write_plan_artifact` | Plan skill writes PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md |
 | `write_critic_document` | Document critic writes DOC_SYNC + durable-doc quality verdict |
 | `write_handoff` | Developer writes HANDOFF.md |
 | `write_doc_sync` | Developer writes DOC_SYNC.md |

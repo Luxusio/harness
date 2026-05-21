@@ -25,7 +25,7 @@ python3 install.py --dry-run
 
 `install.py` lives at the repo root. It detects which CLIs you have installed, then in parallel:
 
-- **Codex**: verifies `codex --version` against `.codex-version` pin → syncs `plugin/`, `plugins/harness/`, and `.agents/plugins/marketplace.json` into `~/.codex/harness/` → writes plugin-local `hooks.json` under `plugins/harness/` → `codex plugin marketplace add ~/.codex/harness` → merges `[plugins."harness@harness"]` + `[mcp_servers.harness]` into `~/.codex/config.toml` with paths pointing at `~/.codex/harness/plugin`.
+- **Codex**: verifies `codex --version` against `.codex-version` pin → syncs `plugin/`, `plugins/harness/`, and `.agents/plugins/marketplace.json` into `~/.codex/harness/` → writes plugin-local `hooks.json` under `plugins/harness/` → `codex plugin marketplace add ~/.codex/harness` → merges `[plugins."harness@harness"]` + `[mcp_servers.harness]` into `~/.codex/config.toml` with paths pointing at `~/.codex/harness/plugins/harness`.
 - **Claude**: syncs the root marketplace manifest plus `plugin/` into `~/.claude/harness-dev/` → `claude plugin marketplace add ~/.claude/harness-dev` → `claude plugin install harness@harness` on first install → `claude mcp add harness ...` with the installed MCP server.
 
 Further references:
@@ -37,7 +37,7 @@ Further references:
 
 - `.codex-plugin/plugin.json` — Codex plugin manifest (mirror of Claude's `.claude-plugin/plugin.json`).
 - `.codex-version` — minimum Codex CLI version pin (0.130.0). Setup refuses registration if installed Codex is older.
-- `config.toml.example` — annotated snippet showing the `~/.codex/config.toml` block that Codex needs for harness to be discoverable. Setup's additive-merge appends a copy to your real config with a timestamped backup, using the installed copy under `~/.codex/harness/plugin`.
+- `config.toml.example` — annotated snippet showing the `~/.codex/config.toml` block that Codex needs for harness to be discoverable. Setup's additive-merge appends a copy to your real config with a timestamped backup, using the installed copy under `~/.codex/harness/plugins/harness`.
 - `skills/` — 9 hand-authored Codex SKILL.md variants of the harness user-facing skills. Each file keeps only runtime-relevant Codex deltas in the prompt; historical port notes live in task history, not in every runtime prompt.
 - `agents/` — 7 agent definitions as **methodology references**. On Claude these spawn via `Agent(subagent_type=...)`; on Codex 0.130.0 there is no Agent primitive in this scope, so the harness orchestrator reads them inline and executes the role's methodology in its own conversation context.
 - Codex hook config is emitted by `install.py` as plugin-local `hooks.json`. It intentionally omits Stop-loop control; Codex flow is prompt-controlled by the skills. Hook scripts provide prompt context and tool safety only.

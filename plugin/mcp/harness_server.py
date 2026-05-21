@@ -27,6 +27,48 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 SUPPORTED_PROTOCOLS = ("2025-11-25", "2025-06-18")
 SERVER_INFO = {"name": "harness", "title": "harness Control Plane", "version": "2.0.0"}
 
+
+def _runtime_from_initialize(params: dict) -> str:
+    env_runtime = str(os.environ.get("HARNESS_RUNTIME") or "").strip().lower()
+    if env_runtime in ("codex", "claude"):
+        return env_runtime
+    client = params.get("clientInfo") if isinstance(params, dict) else {}
+    name = str(client.get("name") or "").lower() if isinstance(client, dict) else ""
+    if "codex" in name:
+        return "codex"
+    if "claude" in name:
+        return "claude"
+    return "generic"
+
+
+def _initialize_instructions(runtime: str) -> str:
+    base = (
+        "harness MCP — 10 tools, 7-field TASK_STATE. "
+        "Protocol tool names are bare: task_start, task_verify, task_close, "
+        "task_blocked, write_plan_artifact, write_critic_qa, "
+        "write_critic_document, write_handoff, and write_doc_sync. "
+        "write_plan_artifact is the canonical PLAN/CHECKS/AUDIT writer and "
+        "replaces the legacy Python shim. "
+    )
+    if runtime == "codex":
+        return (
+            base
+            + "Codex callers should use these bare tool names directly; do not "
+            "use Claude display prefixes like mcp__plugin_harness_harness__*."
+        )
+    if runtime == "claude":
+        return (
+            base
+            + "Claude Code may display callable tools with a runtime prefix such "
+            "as mcp__plugin_harness_harness__write_critic_qa; that prefix is a "
+            "Claude UI naming convention over the same shared MCP server."
+        )
+    return (
+        base
+        + "Clients may display these tools with runtime-specific prefixes; follow "
+        "the active client's tool-call syntax while preserving the bare MCP names."
+    )
+
 sys.path.insert(0, str(SCRIPTS_DIR))
 from _lib import (  # type: ignore
     now_iso, read_state, write_state, set_state_field,
@@ -1006,11 +1048,12 @@ class McpServer:
         if method == "initialize":
             pv = params.get("protocolVersion")
             self.protocol_version = pv if isinstance(pv, str) and pv in SUPPORTED_PROTOCOLS else SUPPORTED_PROTOCOLS[0]
+            runtime = _runtime_from_initialize(params)
             self._reply(msg_id, {
                 "protocolVersion": self.protocol_version,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": SERVER_INFO,
-                "instructions": "harness MCP — 7 tools, 7-field TASK_STATE. write_* tools are subagent-only.",
+                "instructions": _initialize_instructions(runtime),
             })
         elif method == "notifications/initialized":
             self.initialized = True
