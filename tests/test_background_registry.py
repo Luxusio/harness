@@ -1,8 +1,10 @@
 """Tests for Claude subagent background registry helpers."""
 from __future__ import annotations
 
+import json
 import os
 import sys
+import threading
 
 from conftest import SCRIPTS_DIR
 
@@ -85,8 +87,12 @@ def test_missing_agent_id_does_not_create_false_active_record(tmp_path):
         task_dir=task_dir,
     )
 
-    assert record == {}
+    assert record["status"] == "ignored_start_missing_agent_id"
+    assert record["reason"]
     assert background_registry.active_records(repo, task_id="TASK__bg", session_id="sess-1") == []
+    with open(background_registry.registry_path(repo), encoding="utf-8") as f:
+        data = json.load(f)
+    assert data["records"][0]["status"] == "ignored_start_missing_agent_id"
 
 
 def test_session_filter_does_not_match_default_records_for_other_sessions(tmp_path):
@@ -108,7 +114,6 @@ def test_stale_active_record_is_marked_and_ignored(tmp_path):
         task_dir=task_dir,
     )
     path = background_registry.registry_path(repo)
-    import json
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     data["records"][0]["updated_ts"] = 1
@@ -151,7 +156,6 @@ def test_prune_marks_stale_and_caps_records(tmp_path):
             {"session_id": "sess-1", "agent_id": f"agent-{i}"},
             task_dir=task_dir,
         )
-    import json
     path = background_registry.registry_path(repo)
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
@@ -165,3 +169,57 @@ def test_prune_marks_stale_and_caps_records(tmp_path):
         pruned = json.load(f)
     assert len(pruned["records"]) == 3
     assert all("agent-" in r["id"] for r in pruned["records"])
+
+
+def test_unmatched_stop_records_nonblocking_diagnostic(tmp_path):
+    repo, _task_dir = _repo(tmp_path)
+    record = background_registry.mark_subagent_stop(
+        repo,
+        {
+            "session_id": "sess-1",
+            "agent_id": "agent-missing",
+            "agent_type": "general-purpose",
+            "agent_transcript_path": "/tmp/missing.jsonl",
+        },
+    )
+
+    assert record["status"] == "unmatched_stop"
+    assert record["agent_id"] == "agent-missing"
+    assert record["transcript_path"] == "/tmp/missing.jsonl"
+    assert background_registry.active_records(repo, task_id="TASK__bg", session_id="sess-1") == []
+
+
+def test_stop_without_agent_id_does_not_close_random_active_record(tmp_path):
+    repo, task_dir = _repo(tmp_path)
+    background_registry.register_subagent_start(
+        repo,
+        {"session_id": "sess-1", "agent_id": "agent-active"},
+        task_dir=task_dir,
+    )
+
+    record = background_registry.mark_subagent_stop(repo, {"session_id": "sess-1"})
+
+    assert record["status"] == "unmatched_stop"
+    active = background_registry.active_records(repo, task_id="TASK__bg", session_id="sess-1")
+    assert len(active) == 1
+    assert active[0]["id"] == "agent-active"
+
+
+def test_concurrent_starts_do_not_lose_records(tmp_path):
+    repo, task_dir = _repo(tmp_path)
+
+    def start(i: int) -> None:
+        background_registry.register_subagent_start(
+            repo,
+            {"session_id": "sess-1", "agent_id": f"agent-{i}"},
+            task_dir=task_dir,
+        )
+
+    threads = [threading.Thread(target=start, args=(i,)) for i in range(20)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    active = background_registry.active_records(repo, task_id="TASK__bg", session_id="sess-1")
+    assert {r["id"] for r in active} == {f"agent-{i}" for i in range(20)}

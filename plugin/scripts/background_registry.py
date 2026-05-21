@@ -10,8 +10,14 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 import time
 from typing import Any
+
+try:
+    import fcntl  # type: ignore
+except Exception:  # pragma: no cover - non-POSIX fallback
+    fcntl = None
 
 try:
     from _lib import TASK_DIR, current_session_id, now_iso, resolve_active_task_dir  # type: ignore
@@ -34,10 +40,15 @@ DEFAULT_STALE_SECS = 30 * 60
 DEFAULT_WAIT_SECS = 6.0
 POLL_SECS = 0.25
 MAX_RECORDS = 200
+_THREAD_LOCK = threading.Lock()
 
 
 def registry_path(repo_root: str) -> str:
     return os.path.join(repo_root, RUNTIME_DIR, REGISTRY_NAME)
+
+
+def _lock_path(repo_root: str) -> str:
+    return os.path.join(repo_root, RUNTIME_DIR, REGISTRY_NAME + ".lock")
 
 
 def _now() -> float:
@@ -73,6 +84,26 @@ def _write(repo_root: str, data: dict[str, Any]) -> None:
         except OSError:
             pass
         raise
+
+
+def _with_registry_lock(repo_root: str, mutator, *, write: bool = True):
+    """Serialize registry read-modify-write across concurrent hook processes."""
+    os.makedirs(os.path.join(repo_root, RUNTIME_DIR), exist_ok=True)
+    with _THREAD_LOCK:
+        with open(_lock_path(repo_root), "a+", encoding="utf-8") as lock:
+            if fcntl is not None:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                data = _read(repo_root)
+                result = mutator(data)
+                data["records"] = data.get("records", [])[-MAX_RECORDS:]
+                dirty = bool(data.pop("_dirty", False))
+                if write or dirty:
+                    _write(repo_root, data)
+                return result
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def _payload_value(payload: dict[str, Any], *keys: str) -> str:
@@ -117,19 +148,62 @@ def _event_name(payload: dict[str, Any]) -> str:
     return _payload_value(payload, "hook_event_name", "hookEventName", "event", "event_name")
 
 
+def _diagnostic_record(
+    payload: dict[str, Any],
+    *,
+    status: str,
+    reason: str,
+    task_dir: str = "",
+) -> dict[str, Any]:
+    ts = _now()
+    try:
+        keys = sorted(str(k) for k in payload.keys())[:40]
+    except Exception:
+        keys = []
+    record = {
+        "id": f"diag:{status}:{int(ts * 1000)}",
+        "kind": "subagent",
+        "status": status,
+        "reason": reason,
+        "session_id": _session_id(payload),
+        "task_id": _task_id_from_dir(task_dir),
+        "task_dir": task_dir,
+        "agent_id": _agent_id(payload),
+        "agent_type": _agent_type(payload),
+        "event": _event_name(payload),
+        "payload_keys": keys,
+        "updated_at": now_iso(),
+        "updated_ts": ts,
+    }
+    transcript = _payload_value(payload, "agent_transcript_path", "transcript_path")
+    if transcript:
+        record["transcript_path"] = transcript
+    return record
+
+
 def register_subagent_start(repo_root: str, payload: dict[str, Any], *, task_dir: str | None = None) -> dict[str, Any]:
     """Record an active subagent. Returns the record or {} on no active task."""
     task_dir = task_dir or resolve_active_task_dir(repo_root)
     if not task_dir:
         return {}
-    data = _read(repo_root)
     sid = _session_id(payload)
     aid = _agent_id(payload)
     if not aid:
         # Official Claude Code SubagentStart input includes agent_id. Without it,
         # any generated fallback id would be impossible for SubagentStop to match
         # reliably and would create a durable false-active record.
-        return {}
+        record = _diagnostic_record(
+            payload,
+            status="ignored_start_missing_agent_id",
+            reason="SubagentStart payload did not include official agent_id field.",
+            task_dir=task_dir,
+        )
+
+        def add_diag(data: dict[str, Any]):
+            data["records"].append(record)
+            return record
+
+        return _with_registry_lock(repo_root, add_diag)
     ts = _now()
     record = {
         "id": aid,
@@ -143,63 +217,77 @@ def register_subagent_start(repo_root: str, payload: dict[str, Any], *, task_dir
         "updated_at": now_iso(),
         "updated_ts": ts,
     }
-    records = [
-        r for r in data["records"]
-        if not (r.get("kind") == "subagent" and r.get("id") == aid and r.get("session_id") == sid)
-    ]
-    records.append(record)
-    data["records"] = records[-MAX_RECORDS:]
-    _write(repo_root, data)
-    return record
+
+    def upsert(data: dict[str, Any]):
+        records = [
+            r for r in data["records"]
+            if not (r.get("kind") == "subagent" and r.get("id") == aid and r.get("session_id") == sid)
+        ]
+        records.append(record)
+        data["records"] = records
+        return record
+
+    return _with_registry_lock(repo_root, upsert)
 
 
 def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Mark a subagent done. Matches by agent id, falling back to latest active record."""
-    data = _read(repo_root)
+    """Mark a subagent done by official agent_id/session_id fields."""
     sid = _session_id(payload)
     aid = _agent_id(payload)
-    candidates: list[dict[str, Any]] = []
-    for record in data["records"]:
-        if record.get("kind") != "subagent" or record.get("status") != "active":
-            continue
-        if aid and record.get("id") == aid:
-            candidates.append(record)
-        elif not aid and record.get("session_id") == sid:
-            candidates.append(record)
-    if not candidates:
-        return {}
-    target = sorted(candidates, key=lambda r: float(r.get("updated_ts") or 0))[-1]
-    target["status"] = "done"
-    target["updated_at"] = now_iso()
-    target["updated_ts"] = _now()
-    transcript = _payload_value(payload, "agent_transcript_path", "transcript_path")
-    if transcript:
-        target["transcript_path"] = transcript
-    last = _payload_value(payload, "last_assistant_message")
-    if last:
-        target["last_assistant_message"] = last[:500]
-    _write(repo_root, data)
-    return target
+    def mark(data: dict[str, Any]):
+        candidates: list[dict[str, Any]] = []
+        for record in data["records"]:
+            if record.get("kind") != "subagent" or record.get("status") != "active":
+                continue
+            if aid and record.get("id") == aid and record.get("session_id") == sid:
+                candidates.append(record)
+        if not candidates:
+            diag = _diagnostic_record(
+                payload,
+                status="unmatched_stop",
+                reason="SubagentStop did not match any active record by official agent_id/session_id fields.",
+            )
+            data["records"].append(diag)
+            return diag
+        target = sorted(candidates, key=lambda r: float(r.get("updated_ts") or 0))[-1]
+        target["status"] = "done"
+        target["updated_at"] = now_iso()
+        target["updated_ts"] = _now()
+        agent_type = _agent_type(payload)
+        if agent_type:
+            target["agent_type"] = agent_type
+        transcript = _payload_value(payload, "agent_transcript_path", "transcript_path")
+        if transcript:
+            target["transcript_path"] = transcript
+        last = _payload_value(payload, "last_assistant_message")
+        if last:
+            target["last_assistant_message"] = last[:500]
+        target["stop_hook_active"] = bool(payload.get("stop_hook_active"))
+        return target
+
+    return _with_registry_lock(repo_root, mark)
 
 
 def prune(repo_root: str, *, keep: int = MAX_RECORDS, stale_secs: float = DEFAULT_STALE_SECS) -> None:
     """Mark stale active records and keep the registry bounded."""
-    data = _read(repo_root)
-    now = _now()
-    records = data["records"]
-    for record in records:
-        if record.get("status") != "active":
-            continue
-        try:
-            age = now - float(record.get("updated_ts") or 0)
-        except Exception:
-            age = stale_secs + 1
-        if age > stale_secs:
-            record["status"] = "stale"
-            record["updated_at"] = now_iso()
-            record["updated_ts"] = now
-    data["records"] = records[-keep:]
-    _write(repo_root, data)
+    def do_prune(data: dict[str, Any]):
+        now = _now()
+        records = data["records"]
+        for record in records:
+            if record.get("status") != "active":
+                continue
+            try:
+                age = now - float(record.get("updated_ts") or 0)
+            except Exception:
+                age = stale_secs + 1
+            if age > stale_secs:
+                record["status"] = "stale"
+                record["updated_at"] = now_iso()
+                record["updated_ts"] = now
+        data["records"] = records[-keep:]
+        return None
+
+    _with_registry_lock(repo_root, do_prune)
 
 
 def handle_subagent_hook(repo_root: str, payload: dict[str, Any], *, forced_event: str = "") -> dict[str, Any]:
@@ -219,31 +307,30 @@ def active_records(
     stale_secs: float = DEFAULT_STALE_SECS,
 ) -> list[dict[str, Any]]:
     """Return active, non-stale records. Stale records are marked and ignored."""
-    data = _read(repo_root)
-    now = _now()
-    changed = False
-    active: list[dict[str, Any]] = []
-    for record in data["records"]:
-        if record.get("status") != "active":
-            continue
-        age = now - float(record.get("updated_ts") or 0)
-        if age > stale_secs:
-            record["status"] = "stale"
-            record["updated_at"] = now_iso()
-            record["updated_ts"] = now
-            changed = True
-            continue
-        if task_id and record.get("task_id") != task_id:
-            continue
-        if session_id and record.get("session_id") != session_id:
-            continue
-        active.append(dict(record))
-    if changed:
-        try:
-            _write(repo_root, data)
-        except Exception:
-            pass
-    return active
+    def collect(data: dict[str, Any]):
+        now = _now()
+        active: list[dict[str, Any]] = []
+        for record in data["records"]:
+            if record.get("status") != "active":
+                continue
+            try:
+                age = now - float(record.get("updated_ts") or 0)
+            except Exception:
+                age = stale_secs + 1
+            if age > stale_secs:
+                record["status"] = "stale"
+                record["updated_at"] = now_iso()
+                record["updated_ts"] = now
+                data["_dirty"] = True
+                continue
+            if task_id and record.get("task_id") != task_id:
+                continue
+            if session_id and record.get("session_id") != session_id:
+                continue
+            active.append(dict(record))
+        return active
+
+    return _with_registry_lock(repo_root, collect, write=False)
 
 
 def wait_for_clear(
