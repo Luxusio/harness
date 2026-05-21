@@ -33,6 +33,7 @@ REGISTRY_NAME = "background.json"
 DEFAULT_STALE_SECS = 30 * 60
 DEFAULT_WAIT_SECS = 6.0
 POLL_SECS = 0.25
+MAX_RECORDS = 200
 
 
 def registry_path(repo_root: str) -> str:
@@ -123,7 +124,12 @@ def register_subagent_start(repo_root: str, payload: dict[str, Any], *, task_dir
         return {}
     data = _read(repo_root)
     sid = _session_id(payload)
-    aid = _agent_id(payload) or f"{sid}:{int(_now() * 1000)}"
+    aid = _agent_id(payload)
+    if not aid:
+        # Official Claude Code SubagentStart input includes agent_id. Without it,
+        # any generated fallback id would be impossible for SubagentStop to match
+        # reliably and would create a durable false-active record.
+        return {}
     ts = _now()
     record = {
         "id": aid,
@@ -142,7 +148,7 @@ def register_subagent_start(repo_root: str, payload: dict[str, Any], *, task_dir
         if not (r.get("kind") == "subagent" and r.get("id") == aid and r.get("session_id") == sid)
     ]
     records.append(record)
-    data["records"] = records[-200:]
+    data["records"] = records[-MAX_RECORDS:]
     _write(repo_root, data)
     return record
 
@@ -174,6 +180,26 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
         target["last_assistant_message"] = last[:500]
     _write(repo_root, data)
     return target
+
+
+def prune(repo_root: str, *, keep: int = MAX_RECORDS, stale_secs: float = DEFAULT_STALE_SECS) -> None:
+    """Mark stale active records and keep the registry bounded."""
+    data = _read(repo_root)
+    now = _now()
+    records = data["records"]
+    for record in records:
+        if record.get("status") != "active":
+            continue
+        try:
+            age = now - float(record.get("updated_ts") or 0)
+        except Exception:
+            age = stale_secs + 1
+        if age > stale_secs:
+            record["status"] = "stale"
+            record["updated_at"] = now_iso()
+            record["updated_ts"] = now
+    data["records"] = records[-keep:]
+    _write(repo_root, data)
 
 
 def handle_subagent_hook(repo_root: str, payload: dict[str, Any], *, forced_event: str = "") -> dict[str, Any]:
@@ -209,7 +235,7 @@ def active_records(
             continue
         if task_id and record.get("task_id") != task_id:
             continue
-        if session_id and record.get("session_id") not in (session_id, "default"):
+        if session_id and record.get("session_id") != session_id:
             continue
         active.append(dict(record))
     if changed:

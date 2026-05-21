@@ -23,6 +23,7 @@ def main() -> int:
         payload = read_hook_input()
         repo_root = find_repo_root()
         background_registry.handle_subagent_hook(repo_root, payload, forced_event=args.event)
+        background_registry.prune(repo_root)
     except Exception as exc:
         try:
             log_gate_crash(exc, "background_hook", last_hook_input())

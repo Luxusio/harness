@@ -175,3 +175,33 @@ def test_stale_background_record_does_not_mask_normal_stop_gate(tmp_path):
     assert payload["decision"] == "block"
     assert "plan -> develop -> verify -> close" in payload["reason"]
     assert "background subagent work still running" not in payload["reason"]
+
+
+def test_stop_hook_active_skips_background_specific_block(tmp_path):
+    """Recursive Stop hook continuation should not re-block solely on background state."""
+    repo = _fake_repo(tmp_path, active_contents="TASK__recursive-bg\n")
+    runtime = tmp_path / "doc" / "harness" / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "background.json").write_text(json.dumps({
+        "version": 1,
+        "records": [{
+            "id": "agent-bg",
+            "kind": "subagent",
+            "status": "active",
+            "session_id": "sess-1",
+            "task_id": "TASK__recursive-bg",
+            "agent_type": "harness:qa-cli",
+            "updated_ts": time.time(),
+        }],
+    }), encoding="utf-8")
+
+    result = _run(
+        repo,
+        stdin=json.dumps({"session_id": "sess-1", "hook_event_name": "Stop", "stop_hook_active": True}),
+        env={"HARNESS_BACKGROUND_WAIT_SECS": "0"},
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "block"
+    assert "plan -> develop -> verify -> close" in payload["reason"]
+    assert "background subagent work still running" not in payload["reason"]

@@ -46,6 +46,60 @@ def test_subagent_start_and_stop_updates_registry(tmp_path):
     assert background_registry.active_records(repo, task_id="TASK__bg", session_id="sess-1") == []
 
 
+def test_official_subagent_stop_fields_are_preserved(tmp_path):
+    repo, task_dir = _repo(tmp_path)
+    background_registry.register_subagent_start(
+        repo,
+        {
+            "hook_event_name": "SubagentStart",
+            "session_id": "sess-1",
+            "agent_id": "agent-1",
+            "agent_type": "general-purpose",
+        },
+        task_dir=task_dir,
+    )
+    stopped = background_registry.mark_subagent_stop(
+        repo,
+        {
+            "hook_event_name": "SubagentStop",
+            "session_id": "sess-1",
+            "stop_hook_active": False,
+            "agent_id": "agent-1",
+            "agent_type": "general-purpose",
+            "agent_transcript_path": "/tmp/agent.jsonl",
+            "last_assistant_message": "done",
+        },
+    )
+
+    assert stopped["status"] == "done"
+    assert stopped["agent_type"] == "general-purpose"
+    assert stopped["transcript_path"] == "/tmp/agent.jsonl"
+    assert stopped["last_assistant_message"] == "done"
+
+
+def test_missing_agent_id_does_not_create_false_active_record(tmp_path):
+    repo, task_dir = _repo(tmp_path)
+    record = background_registry.register_subagent_start(
+        repo,
+        {"session_id": "sess-1", "agent_type": "general-purpose"},
+        task_dir=task_dir,
+    )
+
+    assert record == {}
+    assert background_registry.active_records(repo, task_id="TASK__bg", session_id="sess-1") == []
+
+
+def test_session_filter_does_not_match_default_records_for_other_sessions(tmp_path):
+    repo, task_dir = _repo(tmp_path)
+    background_registry.register_subagent_start(
+        repo,
+        {"session_id": "default", "agent_id": "agent-default"},
+        task_dir=task_dir,
+    )
+
+    assert background_registry.active_records(repo, task_id="TASK__bg", session_id="sess-real") == []
+
+
 def test_stale_active_record_is_marked_and_ignored(tmp_path):
     repo, task_dir = _repo(tmp_path)
     background_registry.register_subagent_start(
@@ -87,3 +141,27 @@ def test_wait_for_clear_returns_active_after_timeout(tmp_path):
     )
     assert result["cleared"] is False
     assert result["active"][0]["id"] == "agent-active"
+
+
+def test_prune_marks_stale_and_caps_records(tmp_path):
+    repo, task_dir = _repo(tmp_path)
+    for i in range(5):
+        background_registry.register_subagent_start(
+            repo,
+            {"session_id": "sess-1", "agent_id": f"agent-{i}"},
+            task_dir=task_dir,
+        )
+    import json
+    path = background_registry.registry_path(repo)
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+    data["records"][0]["updated_ts"] = 1
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+    background_registry.prune(repo, keep=3, stale_secs=1)
+
+    with open(path, encoding="utf-8") as f:
+        pruned = json.load(f)
+    assert len(pruned["records"]) == 3
+    assert all("agent-" in r["id"] for r in pruned["records"])

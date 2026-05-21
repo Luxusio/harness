@@ -111,7 +111,7 @@ def _resolve_active_task_dir(repo_root: str, active_path: str) -> str | None:
 
 def main():
     try:
-        read_hook_input()  # drain stdin and populate session id/cwd cache
+        hook_input = read_hook_input()  # drain stdin and populate session id/cwd cache
         repo_root = find_repo_root()
         active_path = os.path.join(repo_root, TASK_DIR, ".active")
         td = resolve_active_task_dir(repo_root)
@@ -119,21 +119,27 @@ def main():
             return 0
         task_id = os.path.basename(td.rstrip("/"))[:120]
 
-        wait_result = background_registry.wait_for_clear(
-            repo_root,
-            task_id=task_id,
-            session_id=current_session_id(),
-            timeout_secs=_background_wait_budget(),
-            stale_secs=_background_stale_secs(),
-        )
-        if not wait_result.get("cleared"):
-            payload = gate_block(
-                reason=_background_reason(task_id, wait_result.get("active") or []),
-                owner_skill="Claude SubagentStart/SubagentStop hooks",
-                docs="plugin/scripts/background_registry.py",
+        # Official Stop input includes stop_hook_active=true when Claude is
+        # already continuing due to a Stop hook. Do not emit another
+        # background-specific block in that recursive path; fall through to the
+        # canonical task close gate and let Claude Code's built-in 8-block cap
+        # remain the final guard.
+        if not bool(hook_input.get("stop_hook_active")):
+            wait_result = background_registry.wait_for_clear(
+                repo_root,
+                task_id=task_id,
+                session_id=current_session_id(),
+                timeout_secs=_background_wait_budget(),
+                stale_secs=_background_stale_secs(),
             )
-            json.dump(payload, sys.stdout)
-            return 0
+            if not wait_result.get("cleared"):
+                payload = gate_block(
+                    reason=_background_reason(task_id, wait_result.get("active") or []),
+                    owner_skill="Claude SubagentStart/SubagentStop hooks",
+                    docs="plugin/scripts/background_registry.py",
+                )
+                json.dump(payload, sys.stdout)
+                return 0
 
         # BLOCKED_ENV runtime_verdict permits a legitimate paused-with-blocker
         # stop ONLY when fresh. The stop-judge agent
