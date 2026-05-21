@@ -131,6 +131,8 @@ All under `plugin/scripts/`. Stdlib only.
 | `hygiene_scan.py` | SessionStart auto-hygiene: Tier A/B auto-apply + doc archive pass | `doc/harness/.maintain-pending.json` |
 | `doc_hygiene.py` | Content-signal KEEP/REMOVE/REVIEW classifier; archives stale docs via `git mv` | `doc/harness/.maintain-pending.json` |
 | `maintain_restore.py` | Restore an archived file back to original location via `git mv` | — |
+| `background_registry.py` | Shared registry for Claude subagent lifecycle records used by Stop hook auto-wait | `doc/harness/runtime/background.json` |
+| `background_hook.py` | SubagentStart/SubagentStop hook adapter for `background_registry.py` | `doc/harness/runtime/background.json` |
 | `_gate_response.py` | Shared hook deny/allow response helper | — |
 | `qa_delegation_gate.py` | Browser QA delegation guard for protected MCP calls | — |
 | `verification_gap_check.py` | Resume-time warning for missing verification evidence | — |
@@ -155,6 +157,8 @@ The post-close self-improvement pass (`/harness:run`) auto-promotes keys with 2+
 | SessionStart | `note_freshness.py` | Flip changed notes current → suspect |
 | SessionStart | `contract_lint.py` | Detect CONTRACTS.md drift |
 | Stop | `stop_gate.py` | Warn if open tasks remain |
+| SubagentStart | `background_hook.py` | Register active Claude subagent work for Stop hook auto-wait |
+| SubagentStop | `background_hook.py` | Mark Claude subagent work complete |
 | PreToolUse | `prewrite_gate.py` | Artifact ownership + plan-first rule |
 | PreToolUse | `hook_pre_tool_use.py` | Codex plugin wrapper for PreToolUse gates |
 | PreToolUse (Bash) | `mcp_bash_guard.py` | Block Bash-layer mutations of source / protected / workflow-control paths |

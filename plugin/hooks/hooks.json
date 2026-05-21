@@ -54,6 +54,30 @@
         ]
       }
     ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/background_hook.py --event start || true",
+            "timeout": 3,
+            "statusMessage": "Tracking background agent"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/background_hook.py --event stop || true",
+            "timeout": 3,
+            "statusMessage": "Tracking background agent completion"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "hooks": [

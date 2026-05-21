@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 from conftest import SCRIPTS_DIR
 
@@ -29,13 +30,16 @@ def _fake_repo(tmp_path, active_contents: str | None = None) -> str:
     return str(tmp_path)
 
 
-def _run(cwd: str, stdin: str = "{}") -> subprocess.CompletedProcess:
+def _run(cwd: str, stdin: str = "{}", env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    proc_env = os.environ.copy()
+    proc_env.update(env or {})
     return subprocess.run(
         [sys.executable, STOP_GATE],
         input=stdin,
         capture_output=True,
         text=True,
         cwd=cwd,
+        env=proc_env,
         timeout=5.0,
     )
 
@@ -116,3 +120,58 @@ def test_safe_on_error(tmp_path):
     if result2.stdout.strip():
         payload = json.loads(result2.stdout)
         assert payload["decision"] == "block"
+
+
+def test_blocks_for_active_background_subagent_without_manual_command(tmp_path):
+    """Background records cause Stop to auto-wait, then block without a manual wait command."""
+    repo = _fake_repo(tmp_path, active_contents="TASK__with-bg\n")
+    runtime = tmp_path / "doc" / "harness" / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "background.json").write_text(json.dumps({
+        "version": 1,
+        "records": [{
+            "id": "agent-bg",
+            "kind": "subagent",
+            "status": "active",
+            "session_id": "default",
+            "task_id": "TASK__with-bg",
+            "agent_type": "harness:qa-cli",
+            "updated_ts": time.time(),
+        }],
+    }), encoding="utf-8")
+
+    result = _run(repo, env={"HARNESS_BACKGROUND_WAIT_SECS": "0"})
+
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "block"
+    reason = payload["reason"]
+    assert "background subagent work still running" in reason
+    assert "agent-bg" in reason
+    assert "wait_background.py" not in reason
+    assert payload.get("next_action_command", "") == ""
+
+
+def test_stale_background_record_does_not_mask_normal_stop_gate(tmp_path):
+    """Stale records are ignored, so the existing open-task reason is emitted."""
+    repo = _fake_repo(tmp_path, active_contents="TASK__stale-bg\n")
+    runtime = tmp_path / "doc" / "harness" / "runtime"
+    runtime.mkdir(parents=True)
+    (runtime / "background.json").write_text(json.dumps({
+        "version": 1,
+        "records": [{
+            "id": "agent-stale",
+            "kind": "subagent",
+            "status": "active",
+            "session_id": "default",
+            "task_id": "TASK__stale-bg",
+            "agent_type": "harness:qa-cli",
+            "updated_ts": 1,
+        }],
+    }), encoding="utf-8")
+
+    result = _run(repo, env={"HARNESS_BACKGROUND_WAIT_SECS": "0", "HARNESS_BACKGROUND_STALE_SECS": "1"})
+
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "block"
+    assert "plan -> develop -> verify -> close" in payload["reason"]
+    assert "background subagent work still running" not in payload["reason"]

@@ -53,6 +53,19 @@ class TestHooksJson(unittest.TestCase):
         self.assertTrue(tr[0].rstrip().endswith("|| true"),
                         f"tool_routing must fail-safe with `|| true`: {tr[0]!r}")
 
+    def test_subagent_lifecycle_registers_background_hook(self):
+        for event, arg in (("SubagentStart", "--event start"), ("SubagentStop", "--event stop")):
+            entries = self.data["hooks"].get(event, [])
+            commands = [
+                h["command"]
+                for entry in entries
+                for h in entry.get("hooks", [])
+            ]
+            matches = [c for c in commands if "background_hook.py" in c and arg in c]
+            self.assertEqual(len(matches), 1, f"expected one {event} background hook, got {commands}")
+            self.assertTrue(matches[0].rstrip().endswith("|| true"),
+                            f"{event} background hook must fail-safe: {matches[0]!r}")
+
     def test_bash_guard_matcher_is_bash(self):
         entries = self.data["hooks"]["PreToolUse"]
         bash_entries = [e for e in entries

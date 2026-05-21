@@ -13,13 +13,48 @@ so the orchestrator can resolve the block without grepping for the helper.
 import json
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (  # type: ignore
     TASK_DIR, find_repo_root, read_hook_input, emit_compact_context,
-    log_gate_crash, last_hook_input, resolve_active_task_dir,
+    log_gate_crash, last_hook_input, resolve_active_task_dir, current_session_id,
 )
 from _gate_response import block as gate_block  # type: ignore
+import background_registry  # type: ignore
+
+
+def _background_wait_budget() -> float:
+    try:
+        return max(0.0, min(8.0, float(os.environ.get("HARNESS_BACKGROUND_WAIT_SECS", "6"))))
+    except ValueError:
+        return 6.0
+
+
+def _background_stale_secs() -> float:
+    try:
+        return max(1.0, float(os.environ.get("HARNESS_BACKGROUND_STALE_SECS", "1800")))
+    except ValueError:
+        return 1800.0
+
+
+def _background_reason(task_id: str, active: list[dict]) -> str:
+    lines = [
+        f"Active harness task {task_id} has background subagent work still running.",
+        "Stop hook already waited automatically; do not stop until lifecycle hooks mark it complete.",
+    ]
+    for record in active[:5]:
+        agent_type = record.get("agent_type") or "subagent"
+        agent_id = record.get("id") or "(unknown)"
+        age = 0
+        try:
+            age = int(max(0, time.time() - float(record.get("updated_ts") or time.time())))
+        except Exception:
+            pass
+        lines.append(f"- {agent_type} {agent_id} active for ~{age}s")
+    if len(active) > 5:
+        lines.append(f"- ... {len(active) - 5} more active records")
+    return "\n".join(lines)
 
 
 def _active_task_id(active_path):
@@ -83,6 +118,22 @@ def main():
         if not td:
             return 0
         task_id = os.path.basename(td.rstrip("/"))[:120]
+
+        wait_result = background_registry.wait_for_clear(
+            repo_root,
+            task_id=task_id,
+            session_id=current_session_id(),
+            timeout_secs=_background_wait_budget(),
+            stale_secs=_background_stale_secs(),
+        )
+        if not wait_result.get("cleared"):
+            payload = gate_block(
+                reason=_background_reason(task_id, wait_result.get("active") or []),
+                owner_skill="Claude SubagentStart/SubagentStop hooks",
+                docs="plugin/scripts/background_registry.py",
+            )
+            json.dump(payload, sys.stdout)
+            return 0
 
         # BLOCKED_ENV runtime_verdict permits a legitimate paused-with-blocker
         # stop ONLY when fresh. The stop-judge agent
