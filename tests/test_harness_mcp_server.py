@@ -408,11 +408,70 @@ class HarnessMcpServerTests(unittest.TestCase):
                 result["structuredContent"]["written"],
                 ["PLAN.md", "PLAN.meta.json", "CHECKS.yaml"],
             )
+            bytes_written = result["structuredContent"]["bytes_written"]
+            self.assertGreater(bytes_written["PLAN.md"], 0)
+            self.assertGreater(bytes_written["PLAN.meta.json"], 0)
+            self.assertGreater(bytes_written["CHECKS.yaml"], 0)
             self.assertEqual((Path(task_dir) / "PLAN.md").read_text(encoding="utf-8"), "# MCP Plan\n")
             meta = json.loads((Path(task_dir) / "PLAN.meta.json").read_text(encoding="utf-8"))
             self.assertEqual(meta["author_role"], "plan-skill")
             self.assertEqual(meta["plan_meta"]["routing"], "light")
             self.assertIn("AC-001", (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8"))
+
+    def test_write_plan_artifact_checks_requires_content_not_checks_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__checksparam")
+            result = harness_server.call_tool(
+                "write_plan_artifact",
+                {
+                    "task_dir": task_dir,
+                    "artifact": "checks",
+                    "checks_content": "- id: AC-001\n  title: x\n  status: open\n",
+                },
+            )
+            self.assertTrue(result.get("isError"))
+            self.assertIn("use content", result["structuredContent"]["next_action"])
+            self.assertFalse((Path(task_dir) / "CHECKS.yaml").exists())
+
+    def test_write_plan_artifact_rejects_empty_checks_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__emptychecks")
+            result = harness_server.call_tool(
+                "write_plan_artifact",
+                {"task_dir": task_dir, "artifact": "checks", "content": " \n\t"},
+            )
+            self.assertTrue(result.get("isError"))
+            self.assertIn("empty CHECKS.yaml", result["structuredContent"]["error"])
+            self.assertFalse((Path(task_dir) / "CHECKS.yaml").exists())
+
+    def test_write_plan_artifact_checks_reports_bytes_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__checksbytes")
+            body = "- id: AC-001\n  title: x\n  status: open\n"
+            result = harness_server.call_tool(
+                "write_plan_artifact",
+                {"task_dir": task_dir, "artifact": "checks", "content": body},
+            )
+            self.assertNotIn("isError", result)
+            self.assertEqual(result["structuredContent"]["written"], ["CHECKS.yaml"])
+            self.assertEqual(result["structuredContent"]["bytes_written"]["CHECKS.yaml"], len(body.encode("utf-8")))
+            self.assertEqual((Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8"), body)
+
+    def test_write_plan_artifact_rejects_empty_plan_and_audit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__emptywrites")
+            plan_result = harness_server.call_tool(
+                "write_plan_artifact",
+                {"task_dir": task_dir, "artifact": "plan", "content": ""},
+            )
+            audit_result = harness_server.call_tool(
+                "write_plan_artifact",
+                {"task_dir": task_dir, "artifact": "audit", "content": "\n"},
+            )
+            self.assertTrue(plan_result.get("isError"))
+            self.assertTrue(audit_result.get("isError"))
+            self.assertIn("empty PLAN.md", plan_result["structuredContent"]["error"])
+            self.assertIn("empty AUDIT_TRAIL.md", audit_result["structuredContent"]["error"])
 
     def test_write_plan_artifact_appends_audit_header_once(self):
         with tempfile.TemporaryDirectory() as tmp:

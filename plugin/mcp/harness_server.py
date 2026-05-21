@@ -735,6 +735,26 @@ def _coerce_meta(raw: Any) -> dict:
     return {}
 
 
+def _nonempty_artifact_content(value: str, *, artifact: str, filename: str) -> str | dict:
+    if not value.strip():
+        return _err(
+            f"write_plan_artifact refused to write empty {filename}",
+            data={
+                "artifact": artifact,
+                "filename": filename,
+                "next_action": "Pass non-empty content, or omit the bundled artifact.",
+            },
+        )
+    return value
+
+
+def _record_write(path: str, text: str, written: list[str], bytes_written: dict[str, int]) -> None:
+    _atomic_write_text(path, text)
+    name = os.path.basename(path)
+    written.append(name)
+    bytes_written[name] = len(text.encode("utf-8"))
+
+
 def handle_write_plan_artifact(args: dict) -> dict:
     """MCP replacement for scripts/write_plan_artifact.py.
 
@@ -751,34 +771,51 @@ def handle_write_plan_artifact(args: dict) -> dict:
     content = raw_content if isinstance(raw_content, str) else ""
     meta = _coerce_meta(args.get("meta"))
     written: list[str] = []
+    bytes_written: dict[str, int] = {}
+    raw_checks_content = args.get("checks_content")
+    has_checks_content = isinstance(raw_checks_content, str)
+    checks_content = raw_checks_content if has_checks_content else None
+
+    if has_checks_content and artifact not in ("plan", "plan-meta"):
+        return _err(
+            "checks_content is only valid when bundled with artifact=plan or artifact=plan-meta",
+            data={
+                "artifact": artifact,
+                "next_action": "For artifact=checks, use content for the CHECKS.yaml body.",
+            },
+        )
 
     if artifact == "plan":
-        _atomic_write_text(os.path.join(td, "PLAN.md"), content)
-        _atomic_write_text(
-            os.path.join(td, "PLAN.meta.json"),
-            json.dumps(_plan_meta_dict(td, "PLAN.md", meta), indent=2, ensure_ascii=False) + "\n",
-        )
-        written.extend(["PLAN.md", "PLAN.meta.json"])
-        checks_content = _opt(args, "checks_content")
+        checked = _nonempty_artifact_content(content, artifact=artifact, filename="PLAN.md")
+        if isinstance(checked, dict):
+            return checked
+        _record_write(os.path.join(td, "PLAN.md"), checked, written, bytes_written)
+        plan_meta = json.dumps(_plan_meta_dict(td, "PLAN.md", meta), indent=2, ensure_ascii=False) + "\n"
+        _record_write(os.path.join(td, "PLAN.meta.json"), plan_meta, written, bytes_written)
         if checks_content is not None:
-            _atomic_write_text(os.path.join(td, "CHECKS.yaml"), checks_content)
-            written.append("CHECKS.yaml")
+            checked_checks = _nonempty_artifact_content(checks_content, artifact=artifact, filename="CHECKS.yaml")
+            if isinstance(checked_checks, dict):
+                return checked_checks
+            _record_write(os.path.join(td, "CHECKS.yaml"), checked_checks, written, bytes_written)
     elif artifact == "plan-meta":
         content_meta = _coerce_meta(content)
         content_meta.update(meta)
-        _atomic_write_text(
-            os.path.join(td, "PLAN.meta.json"),
-            json.dumps(_plan_meta_dict(td, "plan-meta", content_meta), indent=2, ensure_ascii=False) + "\n",
-        )
-        written.append("PLAN.meta.json")
-        checks_content = _opt(args, "checks_content")
+        plan_meta = json.dumps(_plan_meta_dict(td, "plan-meta", content_meta), indent=2, ensure_ascii=False) + "\n"
+        _record_write(os.path.join(td, "PLAN.meta.json"), plan_meta, written, bytes_written)
         if checks_content is not None:
-            _atomic_write_text(os.path.join(td, "CHECKS.yaml"), checks_content)
-            written.append("CHECKS.yaml")
+            checked_checks = _nonempty_artifact_content(checks_content, artifact=artifact, filename="CHECKS.yaml")
+            if isinstance(checked_checks, dict):
+                return checked_checks
+            _record_write(os.path.join(td, "CHECKS.yaml"), checked_checks, written, bytes_written)
     elif artifact == "checks":
-        _atomic_write_text(os.path.join(td, "CHECKS.yaml"), content)
-        written.append("CHECKS.yaml")
+        checked = _nonempty_artifact_content(content, artifact=artifact, filename="CHECKS.yaml")
+        if isinstance(checked, dict):
+            return checked
+        _record_write(os.path.join(td, "CHECKS.yaml"), checked, written, bytes_written)
     elif artifact == "audit":
+        checked = _nonempty_artifact_content(content, artifact=artifact, filename="AUDIT_TRAIL.md")
+        if isinstance(checked, dict):
+            return checked
         path = os.path.join(td, "AUDIT_TRAIL.md")
         try:
             existing = open(path, encoding="utf-8").read() if os.path.isfile(path) else ""
@@ -787,18 +824,18 @@ def handle_write_plan_artifact(args: dict) -> dict:
         first_line = existing.lstrip("\n").split("\n")[0] if existing.strip() else ""
         has_header = first_line.startswith("| # |")
         if not existing.strip():
-            new_content = AUDIT_HEADER + content.rstrip("\n") + "\n"
+            new_content = AUDIT_HEADER + checked.rstrip("\n") + "\n"
         elif has_header:
-            new_content = existing.rstrip("\n") + "\n" + content.rstrip("\n") + "\n"
+            new_content = existing.rstrip("\n") + "\n" + checked.rstrip("\n") + "\n"
         else:
-            new_content = existing.rstrip("\n") + "\n\n" + AUDIT_HEADER + content.rstrip("\n") + "\n"
-        _atomic_write_text(path, new_content)
-        written.append("AUDIT_TRAIL.md")
+            new_content = existing.rstrip("\n") + "\n\n" + AUDIT_HEADER + checked.rstrip("\n") + "\n"
+        _record_write(path, new_content, written, bytes_written)
 
     return _ok({
         "artifact": artifact,
         "task_dir": td,
         "written": written,
+        "bytes_written": bytes_written,
     })
 
 
@@ -857,7 +894,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "task_id": {"type": "string"}, "task_dir": {"type": "string"},
          "artifact": {"type": "string", "enum": ["plan", "plan-meta", "checks", "audit"]},
          "content": {"type": "string"},
-         "checks_content": {"type": "string"},
+         "checks_content": {"type": "string", "description": "Optional bundled CHECKS.yaml body. Valid only with artifact=plan or artifact=plan-meta; use content for artifact=checks."},
          "meta": {"type": ["object", "string"]}},
          "required": ["artifact"],
          "additionalProperties": False},

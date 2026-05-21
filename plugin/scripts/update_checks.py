@@ -31,6 +31,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -53,6 +54,86 @@ LEARNINGS_REL = "doc/harness/learnings.jsonl"
 # it contains a qa-browser section (special-case below in update_check).
 BROWSER_INTERACTION_KIND = "browser_interaction"
 BROWSER_INTERACTION_OWNER = "qa-browser"
+
+
+def _repo_root_for_cli(start: str) -> str:
+    """Resolve the harness repo root for CLI path arguments.
+
+    Prefer git because callers often run this script from a package subdir.
+    Fall back to the harness manifest marker, then to the current working dir
+    so fixture tests and non-git worktrees keep working.
+    """
+    start = os.path.abspath(start)
+    try:
+        proc = subprocess.run(
+            ["git", "-C", start, "rev-parse", "--show-toplevel"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        root = proc.stdout.strip()
+        if proc.returncode == 0 and root:
+            return os.path.abspath(root)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    cur = start
+    while True:
+        if os.path.isfile(os.path.join(cur, "doc", "harness", "manifest.yaml")):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return start
+        cur = parent
+
+
+def _checks_path_for_cli(task_dir: str | None, task_id: str | None) -> str:
+    """Resolve CLI task selectors to CHECKS.yaml with root-relative fallback."""
+    repo_root = _repo_root_for_cli(os.getcwd())
+    tried: list[str] = []
+
+    if task_id:
+        candidate = os.path.join(repo_root, "doc", "harness", "tasks", task_id)
+        checks = os.path.join(candidate, "CHECKS.yaml")
+        if os.path.isfile(checks):
+            return checks
+        raise FileNotFoundError(
+            f"CHECKS.yaml not found for --task-id {task_id!r}.\n"
+            f"  Expected: {checks}"
+        )
+
+    if not task_dir:
+        raise ValueError("--task-dir or --task-id required")
+
+    candidates: list[str] = []
+    if os.path.isabs(task_dir):
+        candidates.append(task_dir)
+    else:
+        cwd_candidate = os.path.abspath(task_dir)
+        root_candidate = os.path.abspath(os.path.join(repo_root, task_dir))
+        candidates.append(cwd_candidate)
+        if root_candidate != cwd_candidate:
+            candidates.append(root_candidate)
+
+    for candidate in candidates:
+        checks = os.path.join(candidate, "CHECKS.yaml")
+        tried.append(checks)
+        if os.path.isfile(checks):
+            return checks
+
+    hint = ""
+    if len(candidates) > 1:
+        root_candidate = candidates[-1]
+        hint = (
+            f"\n  did you mean: {root_candidate}"
+            "\n  Tip: use --task-id TASK__... to avoid cwd-sensitive paths."
+        )
+    raise FileNotFoundError(
+        "CHECKS.yaml not found for task selector.\n"
+        + "\n".join(f"  tried: {path}" for path in tried)
+        + hint
+    )
 
 
 def now_iso() -> str:
@@ -403,7 +484,9 @@ def update_check(
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Update a single AC in CHECKS.yaml")
-    p.add_argument("--task-dir", required=True)
+    selector = p.add_mutually_exclusive_group(required=True)
+    selector.add_argument("--task-dir")
+    selector.add_argument("--task-id", help="Task id under doc/harness/tasks, resolved from the repo root")
     p.add_argument("--ac", required=True, help="Acceptance criterion id (e.g. AC-001)")
     p.add_argument("--status", required=True, choices=sorted(VALID_STATUS))
     p.add_argument("--evidence", default=None, help="One-line evidence (file:line, test name, HANDOFF ref)")
@@ -421,8 +504,8 @@ def main() -> int:
                         "logged to doc/harness/learnings.jsonl as type=test-evidence-bypass.")
     args = p.parse_args()
 
-    checks = os.path.join(os.path.abspath(args.task_dir), "CHECKS.yaml")
     try:
+        checks = _checks_path_for_cli(args.task_dir, args.task_id)
         result = update_check(
             checks, args.ac, args.status, args.evidence, args.note, args.root_cause,
             test_evidence=args.test_evidence, no_test_required=args.no_test_required,

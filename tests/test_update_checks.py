@@ -8,10 +8,12 @@ Covers AC-001..AC-005 of TASK__test-workflow-gaps:
 - AC-005: --no-test-required bypass with non-empty reason; cap at 400 chars; logged
 """
 import json
+import io
 import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(REPO_ROOT, "plugin", "scripts"))
@@ -315,6 +317,62 @@ class TestSuggestion(unittest.TestCase):
                 uc.update_check(checks, "AC-007", "implemented_candidate")
             self.assertIn("Suggested:", str(cm.exception))
             self.assertIn("test_ac_007__behavior.py", str(cm.exception))
+
+
+class TestCliTaskPathResolution(unittest.TestCase):
+    """CLI selectors are stable when called from nested working directories."""
+
+    def test_task_id_resolves_from_repo_root_when_cwd_is_nested(self):
+        with tempfile.TemporaryDirectory() as root:
+            task_dir = _make_fake_repo(root)
+            _write_checks(task_dir, _ac_block("AC-001", kind="doc"))
+            nested = os.path.join(root, "services", "app")
+            os.makedirs(nested, exist_ok=True)
+            uc = _fresh_module()
+            with mock.patch.object(sys, "argv", [
+                "update_checks.py",
+                "--task-id", "TASK__fake",
+                "--ac", "AC-001",
+                "--status", "implemented_candidate",
+            ]), mock.patch("os.getcwd", return_value=nested):
+                self.assertEqual(uc.main(), 0)
+            with open(os.path.join(task_dir, "CHECKS.yaml")) as f:
+                self.assertIn("status: implemented_candidate", f.read())
+
+    def test_relative_task_dir_falls_back_to_repo_root_from_nested_cwd(self):
+        with tempfile.TemporaryDirectory() as root:
+            task_dir = _make_fake_repo(root)
+            _write_checks(task_dir, _ac_block("AC-001", kind="doc"))
+            nested = os.path.join(root, "services", "app")
+            os.makedirs(nested, exist_ok=True)
+            uc = _fresh_module()
+            with mock.patch.object(sys, "argv", [
+                "update_checks.py",
+                "--task-dir", "doc/harness/tasks/TASK__fake",
+                "--ac", "AC-001",
+                "--status", "implemented_candidate",
+            ]), mock.patch("os.getcwd", return_value=nested):
+                self.assertEqual(uc.main(), 0)
+            with open(os.path.join(task_dir, "CHECKS.yaml")) as f:
+                self.assertIn("status: implemented_candidate", f.read())
+
+    def test_missing_relative_task_dir_reports_did_you_mean_hint(self):
+        with tempfile.TemporaryDirectory() as root:
+            _make_fake_repo(root)
+            nested = os.path.join(root, "services", "app")
+            os.makedirs(nested, exist_ok=True)
+            uc = _fresh_module()
+            with mock.patch.object(sys, "argv", [
+                "update_checks.py",
+                "--task-dir", "doc/harness/tasks/TASK__missing",
+                "--ac", "AC-001",
+                "--status", "passed",
+            ]), mock.patch("os.getcwd", return_value=nested), mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                rc = uc.main()
+                err = stderr.getvalue()
+            self.assertEqual(rc, 1)
+            self.assertIn("did you mean:", err)
+            self.assertIn(os.path.join(root, "doc", "harness", "tasks", "TASK__missing"), err)
 
 
 if __name__ == "__main__":
