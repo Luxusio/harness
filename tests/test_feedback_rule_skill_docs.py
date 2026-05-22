@@ -73,3 +73,18 @@ def test_continuous_maintenance_doc_maps_former_maintain_work():
     assert "proposed_artifact" in body
     assert "AskUserQuestion" in body
     assert "request_user_input" in body
+
+
+def test_maintenance_state_naming_doc_records_compatibility_plan():
+    body = (REPO / "doc/harness/patterns/maintenance-state-naming.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "legacy-compatible" in body
+    assert ".maintain-pending.json" in body
+    assert ".maintain-last-run" in body
+    assert ".maintain-observe.log" in body
+    assert "maintain_restore.py" in body
+    assert ".hygiene-pending.json" in body
+    assert "Read both old and new locations" in body
+    assert "no-loss migration" in body

@@ -15,7 +15,7 @@ AC-008: Archive via git mv; SHA7 suffix on collision; commit msg with restore co
 AC-009: REVIEW appended to .maintain-pending.json via atomic write.
 AC-010: hygiene.yaml pin_paths honored; path validation; malformed yaml fail-safe.
 
-.maintain-pending.json schema (single source of truth):
+.maintain-pending.json schema (legacy-compatible single source of truth):
   List of objects:
     {
       "path": str,            # repo-relative path of file needing review

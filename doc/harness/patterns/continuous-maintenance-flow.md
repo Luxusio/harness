@@ -11,6 +11,10 @@ in committed artifacts before close or ask the user where the follow-up belongs.
 Private memory and gitignored queues are staging only; they are not shared
 maintenance.
 
+Some on-disk state paths still use `maintain` in their filename for
+compatibility. See `doc/harness/patterns/maintenance-state-naming.md`; those
+names are not standalone skill entrypoints.
+
 ## Maintain Responsibility Map
 
 | Former maintain responsibility | Continuous home | Required behavior |
@@ -44,4 +48,3 @@ deferring.
 Claude should use `AskUserQuestion` for large/risky deferrals. Codex should use
 `request_user_input` when available; otherwise it must ask in conversation and
 wait for the user's reply before recording a deferred self-healing item.
-

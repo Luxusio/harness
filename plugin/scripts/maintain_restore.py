@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """maintain_restore.py — restore a doc archived by doc_hygiene.py.
 
+Legacy-compatible CLI name retained after standalone maintain skill removal.
+See doc/harness/patterns/maintenance-state-naming.md before renaming.
+
 Usage:
   python3 plugin/scripts/maintain_restore.py <archive-path>
 

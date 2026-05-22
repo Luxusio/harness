@@ -19,6 +19,10 @@ Last-run: doc/harness/.maintain-last-run
 Lock: doc/harness/.hygiene.lock
 Pending: doc/harness/.maintain-pending.json
 
+The `maintain`-prefixed filenames are legacy-compatible state names retained
+after the standalone maintain skill was removed. See
+doc/harness/patterns/maintenance-state-naming.md before renaming.
+
 Stdlib only. Never raises — always exits 0 (fail-safe C-12).
 """
 from __future__ import annotations
