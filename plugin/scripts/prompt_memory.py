@@ -330,7 +330,7 @@ def _build_hygiene_block(repo_root: str) -> str:
         lines.append(line)
         total_chars += len(line)
 
-    lines.append("Run Skill(maintain) to process review queue.</system-reminder>")
+    lines.append("Process this queue in the active/next harness task; record decisions in Self-Healing Candidates at close.</system-reminder>")
     return "\n".join(lines)
 
 

@@ -56,8 +56,9 @@ Files that define harness runtime behaviour. Writes require a task with a
 `plugin/hooks/hooks.json`, `plugin/scripts/{prewrite_gate,mcp_bash_guard,stop_gate,_lib}.py`,
 `plugin/mcp/harness_server.py`, `doc/harness/manifest.yaml`.
 
-Touch `doc/harness/tasks/<task>/MAINTENANCE` (or route through the maintain skill)
-to enable writes. The prewrite gate itself does not create this marker.
+Touch `doc/harness/tasks/<task>/MAINTENANCE` to enable writes, and record the
+reason in close-time Self-Healing Candidates. The prewrite gate itself does not
+create this marker.
 
 ## Scope lock
 

@@ -22,8 +22,9 @@ committed artifact: a runbook, `doc/harness/patterns/*.md`,
 - `doc/harness/runbook_candidates.yaml` contains unapproved candidates.
 
 Approved runbooks are shown by `prompt_memory.py` in a capped
-`[harness-runbooks]` reminder. Candidates are only reminders to run
-`harness:maintain`; they are not trusted until reviewed.
+`[harness-runbooks]` reminder. Candidates are only reminders for the
+active/next harness task; they are not trusted until reviewed and recorded in
+close-time Self-Healing Candidates.
 
 ## Workflow
 
@@ -38,7 +39,7 @@ python3 plugin/scripts/runbook_memory.py add-candidate \
   --gotcha "Use --no-daemon when Gradle env changes"
 ```
 
-Approve or skip candidates through `harness:maintain`:
+Approve or skip candidates while handling the active/next harness task:
 
 ```bash
 python3 plugin/scripts/runbook_memory.py approve integration-up

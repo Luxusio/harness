@@ -219,7 +219,7 @@ break it immediately.
 ### C-16
 
 **Title:** Auto-hygiene — content-signal doc classification + contract drift auto-apply.
-**When:** SessionStart (automatic) and whenever `Skill(maintain)` is invoked.
+**When:** SessionStart (automatic) and normal harness task close-time self-healing.
 **Enforced by:** `plugin/scripts/hygiene_scan.py` (SessionStart hook, after
 `contract_lint --quick`); `plugin/scripts/doc_hygiene.py` (called by
 hygiene_scan); `doc/harness/hygiene.yaml` (config + canonical disable path).
@@ -230,7 +230,7 @@ indefinitely. Institutional memory erodes when the signal-to-noise ratio drops.
 **Tier A/B/C mapping (contract drift):**
 - `[INFO]` (Tier A): auto-applied as additive Edit within managed-block markers. No deletions.
 - `[SOFT]` additive (Tier B): auto-applied if action is matrix-row addition or contract heading addition only. Modifications/deletions deferred.
-- `[HARD]` (Tier C): deferred. Entry written to `.maintain-pending.json`; user confirms via `Skill(maintain)`.
+- `[HARD]` (Tier C): deferred. Entry written to `.maintain-pending.json`; user confirms in the active/next harness task and the decision is recorded in close-time Self-Healing Candidates.
 
 **KEEP-on-doubt rule:** absence of `superseded_by` or `distilled_to` frontmatter
 fields NEVER alone classifies a doc as REMOVE. Cold-start docs (no new frontmatter)

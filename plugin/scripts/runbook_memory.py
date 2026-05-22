@@ -246,7 +246,7 @@ def render_prompt_block(repo_root: str | None = None) -> str:
     if candidates:
         sample = ", ".join(sanitize_text(k, max_len=40) for k in sorted(candidates)[:ITEM_CAP])
         suffix = f" (+{len(candidates) - ITEM_CAP} more)" if len(candidates) > ITEM_CAP else ""
-        lines.append(f"pending candidates: {sample}{suffix}. Run Skill(harness:maintain) to approve/defer/skip.")
+        lines.append(f"pending candidates: {sample}{suffix}. Fold into the active/next harness task; approve/defer/skip through close-time Self-Healing Candidates.")
     lines.append("</system-reminder>")
     block = "\n".join(lines)
     if len(block) > PROMPT_CAP:

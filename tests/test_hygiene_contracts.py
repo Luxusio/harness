@@ -273,7 +273,7 @@ class TestBootstrap(unittest.TestCase):
                     "<!-- harness:managed-begin v1 -->\n"
                     "### C-15\n"
                     "**Title:** Setup must not overwrite user-owned files.\n"
-                    "**When:** setup or maintain skill.\n"
+                    "**When:** SessionStart or close-time self-healing.\n"
                     "**Enforced by:** Skill procedure.\n"
                     "**On violation:** hard-block.\n"
                     "**Why:** User trust.\n"
@@ -316,7 +316,7 @@ class TestBootstrap(unittest.TestCase):
                             },
                             {
                                 "type": "command",
-                                "command": "python3 scripts/contract_lint.py --quick || echo '[maintain-suggested]'",
+                                "command": "python3 scripts/contract_lint.py --quick || echo '[continuous-maintenance]'",
                                 "timeout": 5,
                                 "statusMessage": "Checking contract drift"
                             }
@@ -551,7 +551,7 @@ class TestDXTagNamespace(unittest.TestCase):
         os.makedirs(os.path.join(tmp, "doc", "harness"), exist_ok=True)
 
     def test_DX01_hygiene_scan_emits_only_hygiene_tags(self):
-        """DX-01: hygiene_scan.py emits only [hygiene-*] lines, never [maintain-suggested]."""
+        """DX-01: hygiene_scan.py emits only [hygiene-*] lines, never [continuous-maintenance]."""
         with tempfile.TemporaryDirectory() as tmp:
             self._make_minimal_repo(tmp)
             result = subprocess.run(
@@ -565,8 +565,8 @@ class TestDXTagNamespace(unittest.TestCase):
                 self.assertTrue(line.startswith("[hygiene-"),
                                 f"hygiene_scan.py emitted non-[hygiene-*] tag: {line!r}")
 
-    def test_DX02_maintain_suggested_reserved_for_contract_lint(self):
-        """DX-02: [maintain-suggested] is emitted by contract_lint, not hygiene_scan."""
+    def test_DX02_continuous_maintenance_reserved_for_contract_lint(self):
+        """DX-02: [continuous-maintenance] is emitted by contract_lint, not hygiene_scan."""
         hooks_path = os.path.join(REPO_ROOT, "plugin", "hooks", "hooks.json")
         with open(hooks_path, encoding="utf-8") as f:
             data = json.load(f)
@@ -574,13 +574,13 @@ class TestDXTagNamespace(unittest.TestCase):
         lint_cmd = next(
             (h["command"] for h in session_hooks if "contract_lint" in h.get("command", "")), ""
         )
-        self.assertIn("[maintain-suggested]", lint_cmd,
-                      "contract_lint hook must emit [maintain-suggested], not hygiene_scan")
+        self.assertIn("[continuous-maintenance]", lint_cmd,
+                      "contract_lint hook must emit [continuous-maintenance], not hygiene_scan")
         hygiene_cmd = next(
             (h["command"] for h in session_hooks if "hygiene_scan" in h.get("command", "")), ""
         )
-        self.assertNotIn("[maintain-suggested]", hygiene_cmd,
-                         "[maintain-suggested] must not appear in hygiene_scan hook command")
+        self.assertNotIn("[continuous-maintenance]", hygiene_cmd,
+                         "[continuous-maintenance] must not appear in hygiene_scan hook command")
 
     def test_DX03_hygiene_tags_valid_set(self):
         """DX-03: [hygiene-*] tag set is limited to defined values."""

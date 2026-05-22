@@ -286,7 +286,7 @@ def _deny(target, command):
     next_action = _NEXT.get(base, "")
     if not next_action and category == "workflow-control-surface":
         next_action = ("Create doc/harness/tasks/<active-task>/MAINTENANCE marker "
-                       "and run Skill('harness:maintain') or developer agent")
+                       "and handle through the active harness task's close-time Self-Healing Candidates")
     emit_permission_decision(
         "deny", f"{tail} {human}\n{hint}",
         next_action_command=next_action,

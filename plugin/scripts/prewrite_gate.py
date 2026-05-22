@@ -509,7 +509,8 @@ def main():
             human = (
                 f"{rel} is a workflow-control-surface file. Direct writes are "
                 f"only permitted from tasks with a MAINTENANCE marker. "
-                f"Run the maintain skill or touch doc/harness/tasks/<task>/MAINTENANCE."
+                f"Touch doc/harness/tasks/<task>/MAINTENANCE and record the reason "
+                f"in close-time Self-Healing Candidates."
             )
             _deny("workflow-control-surface", file_path, "maintain-skill", human, repo_root)
             return 0

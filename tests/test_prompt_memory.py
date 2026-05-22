@@ -290,7 +290,8 @@ class TestPromptMemory(unittest.TestCase):
             )
             r = _invoke(str(base))
         self.assertIn("pending candidates: backend-up", r.stdout)
-        self.assertIn("Skill(harness:maintain)", r.stdout)
+        self.assertIn("active/next harness task", r.stdout)
+        self.assertIn("Self-Healing Candidates", r.stdout)
 
     def test_runbook_block_sanitizes_system_reminder_tags(self):
         with tempfile.TemporaryDirectory() as tmp:

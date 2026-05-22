@@ -101,8 +101,8 @@ the user explicitly names them in their own prompt.
 | Architecture review | `Skill(plan-eng-review)` |
 | Design review | `Skill(plan-design-review)` |
 | DX review | `Skill(plan-devex-review)` |
-| Contract drift / "CLAUDE.md 정리" / "규약 정비" / post-upgrade cleanup | `Skill(maintain)` |
-| SessionStart reported `[maintain-suggested]` in reminders | Propose `Skill(maintain)` to user |
+| Contract drift / "CLAUDE.md 정리" / "규약 정비" / post-upgrade cleanup | Use the continuous maintenance flow: fix scoped items in the active harness task, or ask the user and record the follow-up in close-time Self-Healing Candidates |
+| SessionStart reported `[continuous-maintenance]` in reminders | Fold the item into the active/next harness task; do not require a separate maintenance command |
 | Explanation | Direct answer |
 
 ## 7. Verification

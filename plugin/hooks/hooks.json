@@ -23,7 +23,7 @@
           },
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/contract_lint.py --quick --quiet || echo '[maintain-suggested] CONTRACTS.md drift \u2014 run maintain skill'",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/contract_lint.py --quick --quiet || echo '[continuous-maintenance] CONTRACTS.md drift \u2014 handle in the active/next harness task and record Self-Healing Candidates at close'",
             "timeout": 5,
             "statusMessage": "Checking contract drift"
           },

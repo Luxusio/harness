@@ -177,7 +177,7 @@ else
 - Plan only → `Skill(harness:plan)`
 - Implement an approved PLAN.md → `Skill(harness:develop)`
 - Bootstrap harness in a new project / repair existing → `Skill(harness:setup)`
-- Contract drift / post-upgrade cleanup → `Skill(harness:maintain)`
+- Contract drift / post-upgrade cleanup → continuous maintenance flow in the active/next `Skill(harness:run)` task
 - Read-only question or explanation → answer directly, no skill
 ROUTING_EOF
 fi
@@ -317,10 +317,10 @@ On A, Edit tool inserts `@CONTRACTS.md` as a new line immediately after the firs
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/contract_lint.py" \
   --path CONTRACTS.md --repo-root . --quick || \
-  echo "WARN: contract_lint reported issues — run maintain skill"
+  echo "WARN: contract_lint reported issues — handle in the active/next harness task"
 ```
 
-WARN is non-blocking. `maintain` exists to repair drift.
+WARN is non-blocking. Use the continuous maintenance flow to repair drift.
 
 ### 3.7.5 Auto-hygiene bootstrap (single atomic step)
 

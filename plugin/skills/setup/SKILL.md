@@ -308,8 +308,8 @@ fi
 [ "$_SKIP_INTERVIEW" = "true" ] && echo "Phase 2.0 skipped: $_SKIP_REASON"
 ```
 
-If any condition matched: skip Phase 2.0. The maintain skill can re-open
-the interview later when drift is suspected.
+If any condition matched: skip Phase 2.0. The active/next harness task can
+re-open the interview later when drift is suspected.
 
 Interview output narrows Q1-Q3 below — check `doc/harness/.interview-answers.json` before asking each remaining question.
 
