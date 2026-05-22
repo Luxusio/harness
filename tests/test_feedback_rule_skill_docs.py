@@ -56,3 +56,20 @@ def test_self_improvement_documents_readable_tier2_format():
     assert "Commit-backed promotion checkpoint" in body
     assert "learnings.jsonl` by itself is never enough for `captured`" in body
     assert "committed artifact" in body
+
+
+def test_continuous_maintenance_doc_maps_former_maintain_work():
+    body = (REPO / "doc/harness/patterns/continuous-maintenance-flow.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Maintain Responsibility Map" in body
+    assert "REVIEW queue" in body
+    assert "Tier C contract drift" in body
+    assert "Runbook candidate" in body
+    assert "Staged hygiene archive" in body
+    assert "Self-Healing Candidates" in body
+    assert "user_decision" in body
+    assert "proposed_artifact" in body
+    assert "AskUserQuestion" in body
+    assert "request_user_input" in body
