@@ -32,7 +32,7 @@ Harness improvement: <what was wrong> → <what was fixed>
 ```
 If fix is ambiguous or risky, log the signal only. Modify the manifest only with clear evidence.
 
-Signals feed back: plan skill reads `learnings.jsonl` at Phase 0.1.5; setup reads it in repair mode. Improvements compound across tasks.
+Signals feed back: plan skill reads `learnings.jsonl` at Phase 0.1.5; setup reads it in repair mode. Improvements compound across tasks. Treat this file as local staging only: it is gitignored and does not share knowledge with future contributors until the lesson is promoted to a committed artifact.
 
 ---
 
@@ -71,6 +71,26 @@ Append to existing docs and preserve their current content.
 
 **When to write:** any discovery that saves 5+ min in a future session (build quirks, env vars, ordering, ports, framework specifics). Check after every task close.
 
+## Commit-backed promotion checkpoint
+
+Before task close, classify every reusable discovery, dogfood finding, user
+correction, setup recipe, repeated friction point, and harness-improvement
+signal as one of:
+
+- `captured` — promoted in this task to a committed artifact such as
+  `plugin/skills/**`, `plugin/scripts/**`, `tests/**`,
+  `doc/harness/patterns/*.md`, `doc/common/GUIDE__*.md`, or another durable
+  doc. The HANDOFF must list the committed path.
+- `rejected` — considered but intentionally not shared because it is
+  task-local, noisy, outdated, personal preference, or lacks a trigger/action/
+  verification rule. The HANDOFF must give the reason.
+- `none` — no reusable learning occurred.
+
+`doc/harness/learnings.jsonl` by itself is never enough for `captured`; it is
+only the staging queue. The close gate requires HANDOFF to include
+`## Commit-backed Learnings` with `Status: none`, `Status: captured`, or
+`Status: rejected` so local-only learnings cannot disappear silently.
+
 ## Feedback-derived rules (user correction → readable behavior)
 
 When a user correction points at an agent mistake, extract only a reusable conditional behavior rule:
@@ -93,7 +113,7 @@ When changing runtime-specific harness plugin behavior, review both the canonica
 Verify by explaining in `HANDOFF.md` which side changed and why any other side was left unchanged.
 ```
 
-Reject feedback-derived entries when they lack a trigger, action, or verification step; when they only describe blame; or when they are task-local preferences. The close-time requirement is judgment, not forced documentation: HANDOFF records `none`, `captured`, or `rejected`.
+Reject feedback-derived entries when they lack a trigger, action, or verification step; when they only describe blame; or when they are task-local preferences. The close-time requirement is judgment, not forced documentation: HANDOFF records `none`, `captured`, or `rejected`. Reusable feedback that should affect all future agents must be captured in a committed artifact, not only in `learnings.jsonl`.
 
 ---
 

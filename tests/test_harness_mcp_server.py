@@ -545,7 +545,8 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
 
     def _prepare_task(self, base: str, task_id: str, *, checks_yaml: str | None,
                       write_critic: bool = True, write_handoff: bool = True,
-                      touched_paths: list[str] | None = None) -> str:
+                      touched_paths: list[str] | None = None,
+                      handoff_body: str | None = None) -> str:
         task_dir = Path(base) / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
         tp = touched_paths or []
@@ -562,7 +563,10 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         )
         (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
         if write_handoff:
-            (task_dir / "HANDOFF.md").write_text("# handoff\n", encoding="utf-8")
+            (task_dir / "HANDOFF.md").write_text(
+                handoff_body or "# handoff\n\n## Commit-backed Learnings\n\nStatus: none\n",
+                encoding="utf-8",
+            )
         if write_critic:
             (task_dir / "CRITIC__qa.md").write_text("# critic\nverdict: PASS\n", encoding="utf-8")
         if checks_yaml is not None:
@@ -632,6 +636,46 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             self._patch(td)
             try:
                 result = harness_server.call_tool("task_close", {"task_id": "TASK__pr2-002"})
+            finally:
+                self._unpatch()
+        self.assertNotIn("isError", result)
+        self.assertTrue(result["structuredContent"]["closed"])
+
+    def test_close_rejects_handoff_without_commit_backed_learnings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-missing",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                handoff_body="# handoff\n\nNo shared learning section.\n",
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__commit-learning-missing"}
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        missing = result["structuredContent"]["missing_for_close"]
+        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
+
+    def test_close_accepts_commit_backed_learnings_captured_status(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-captured",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                handoff_body=(
+                    "# handoff\n\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: captured\n\n"
+                    "- captured: plugin/skills/run/self-improvement.md — shared rule.\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__commit-learning-captured"}
+                )
             finally:
                 self._unpatch()
         self.assertNotIn("isError", result)
@@ -720,7 +764,10 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 touched_paths=["doc/harness/tasks/TASK__pr2-artifact/HANDOFF.md"],
             )
             handoff = Path(td) / "HANDOFF.md"
-            handoff.write_text("# handoff after qa\n", encoding="utf-8")
+            handoff.write_text(
+                "# handoff after qa\n\n## Commit-backed Learnings\n\nStatus: none\n",
+                encoding="utf-8",
+            )
             _os.utime(Path(td) / "CRITIC__qa.md", (100, 100))
             self._patch(td)
             try:

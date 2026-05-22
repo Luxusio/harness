@@ -9,6 +9,13 @@ Harness runbooks are repo-local execution recipes that were discovered during
 work and are worth reusing in later sessions. They live outside chat history so
 the next agent can see them immediately.
 
+Runtime-local memory is only staging. Files such as
+`doc/harness/learnings.jsonl`, `doc/harness/tasks/**`, and
+`doc/harness/runtime/**` are not committed, so they do not share knowledge with
+future contributors by themselves. Reusable discoveries must be promoted to a
+committed artifact: a runbook, `doc/harness/patterns/*.md`,
+`doc/common/GUIDE__*.md`, a skill, a script, or a regression test.
+
 ## Files
 
 - `doc/harness/runbooks.yaml` contains approved runbooks.
@@ -40,3 +47,11 @@ python3 plugin/scripts/runbook_memory.py skip old-candidate
 
 Never persist tokens, passwords, API keys, private keys, or machine-specific
 secrets in a runbook. Redact the command first.
+
+## Commit-backed learning rule
+
+At task handoff, classify reusable learning as `none`, `captured`, or
+`rejected`. `captured` means the lesson now appears in a committed artifact and
+the HANDOFF names that path. `rejected` means the agent considered the lesson
+but kept it local because it was task-specific, noisy, or not reusable. A raw
+`learnings.jsonl` row alone is never enough for `captured`.

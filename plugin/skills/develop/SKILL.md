@@ -476,19 +476,20 @@ Call `mcp__plugin_harness_harness__write_handoff` with:
 5. Durable docs: before calling `write_handoff`, include links to `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or `POLICY__*.md` docs updated for behavior/contracts, reusable guidance, decisions, or external constraints; include any PLAN Durable Docs Decision correction discovered from the implementation diff; or `not needed — <specific non-observable reason>` where the reason proves the durable knowledge surfaces are unchanged. `not needed` is invalid for new or changed UI/API/backoffice/admin screens, routes, controllers, or endpoints.
 6. Do Not Regress (caveats, fragile patterns)
 7. Feedback-Derived Rules (status: none / captured / rejected; readable rule text if captured)
-8. Confidence Ratings table from Phase 4.6 (highlight ≤6)
-9. Adversarial Findings table from Phase 4.7 (critical/high fixed, lower deferred)
-10. Near-Zero Cost check (Phase 4.8 fixed + deferred)
-11. Test Failure Triage (Phase 7)
-12. Test Results per AC + fix history
-13. Judgment Items (Phase 3.6 ASK-classified)
-14. Debugging Notes (Phase 7 debug reports — Symptom / Root cause / Fix / Evidence / Regression / Related / Status)
-15. Visual Evidence (AC → screenshot path → console errors → viewport)
-16. Execution Metrics (phase timing + fix loop counts)
-17. Quality Score (weighted)
-18. Dogfood Findings — from Phase 7.7 `DOGFOOD.md`: high-impact suggestions summary,
+8. Commit-backed Learnings (status: none / captured / rejected). Local `doc/harness/learnings.jsonl` is gitignored staging, not shared memory. If this task surfaced a reusable fact, user correction, dogfood finding, setup recipe, or repeated friction that should help future contributors, either promote it in this same task to a committed artifact (`plugin/skills/**`, `plugin/scripts/**`, `tests/**`, `doc/harness/patterns/*.md`, `doc/common/GUIDE__*.md`, or another durable doc) and list the path, or mark `rejected` with the reason it is task-local/noisy/not reusable. `Status: none` is valid only when no reusable learning occurred.
+9. Confidence Ratings table from Phase 4.6 (highlight ≤6)
+10. Adversarial Findings table from Phase 4.7 (critical/high fixed, lower deferred)
+11. Near-Zero Cost check (Phase 4.8 fixed + deferred)
+12. Test Failure Triage (Phase 7)
+13. Test Results per AC + fix history
+14. Judgment Items (Phase 3.6 ASK-classified)
+15. Debugging Notes (Phase 7 debug reports — Symptom / Root cause / Fix / Evidence / Regression / Related / Status)
+16. Visual Evidence (AC → screenshot path → console errors → viewport)
+17. Execution Metrics (phase timing + fix loop counts)
+18. Quality Score (weighted)
+19. Dogfood Findings — from Phase 7.7 `DOGFOOD.md`: high-impact suggestions summary,
     re-plan recommendation if any. "No dogfood findings" if skipped or clean.
-19. Health Delta — recompute metrics from Phase 0 baseline:
+20. Health Delta — recompute metrics from Phase 0 baseline:
 
     ```
     | Metric | Before | After | Δ |
@@ -566,6 +567,29 @@ If the rule should enter Tier 2, log a structured learning so the promotion scri
 ```bash
 echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"feedback-rule","source":"develop","key":"SHORT_RULE_NAME","trigger":"<situation>","action":"<behavior>","verification":"<how to prove it>","reason":"<why this prevents recurrence>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
+
+### Phase 8.5.2: Commit-backed Learnings (mandatory HANDOFF classification)
+
+Classify whether this task produced knowledge that must be shared through git.
+`doc/harness/learnings.jsonl` is local, gitignored staging; it does not satisfy
+the shared-memory bar by itself. Future contributors only inherit what lands in
+committed artifacts.
+
+Add this HANDOFF section before calling `write_handoff`:
+
+```markdown
+## Commit-backed Learnings
+
+Status: none | captured | rejected
+
+- captured: <committed path> — <rule/fact now shared>
+- rejected: <candidate> — <why it is task-local, noisy, or not reusable>
+```
+
+Use `captured` when a reusable discovery, dogfood finding, user correction,
+setup command, or repeated friction changed a committed skill, script, test, or
+durable doc in this task. Use `rejected` when you considered a candidate but it
+should remain local. Use `none` only when there was no reusable learning.
 
 ### Phase 8.6: DOC_SYNC
 

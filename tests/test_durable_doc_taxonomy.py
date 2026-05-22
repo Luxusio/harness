@@ -64,6 +64,8 @@ def test_plan_requires_durable_docs_decision_for_claude_and_codex():
         assert "REQ path is required before develop starts" in body
         assert "blocking plan defect" in body
         assert "do not defer this to close" in body
+        assert "Original Request / Intent Summary" in body
+        assert "conversation summary" in body
         assert "doc/product/" not in body
 
 

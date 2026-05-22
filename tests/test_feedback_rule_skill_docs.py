@@ -14,6 +14,9 @@ def test_develop_skills_require_feedback_rule_judgment():
         assert "When X, do Y. Verify by Z." in body
         assert "Write behavior rules for Tier 2 docs" in body
         assert "incident-shaped lessons" in body
+        assert "Commit-backed Learnings" in body
+        assert "learnings.jsonl` is gitignored staging" in body
+        assert "committed artifact" in body
 
 
 def test_self_improvement_documents_readable_tier2_format():
@@ -23,3 +26,6 @@ def test_self_improvement_documents_readable_tier2_format():
     assert "When <trigger>, <action>." in body
     assert "Verify by <observable check>." in body
     assert "judgment, not forced documentation" in body
+    assert "Commit-backed promotion checkpoint" in body
+    assert "learnings.jsonl` by itself is never enough for `captured`" in body
+    assert "committed artifact" in body

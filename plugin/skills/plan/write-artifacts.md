@@ -20,7 +20,16 @@ Materialise plan content from in-memory review state into `/tmp/plan_content.md`
 ```
 Omit if no restore point.
 
-**Required sections:** objective, scope in, scope out, `NOT in scope`, `What already exists`, target files/surfaces, acceptance criteria (stable IDs AC-001+), verification contract, `Durable Docs Decision`, `Error & Rescue Registry`, `Failure Modes Registry`, `Dream state delta`, `Cross-phase themes`, doc-sync expectation, risk/rollback (if `risk_level: high`), next implementation step.
+**Required sections:** objective, `Original Request / Intent Summary`, scope in, scope out, `NOT in scope`, `What already exists`, target files/surfaces, acceptance criteria (stable IDs AC-001+), verification contract, `Durable Docs Decision`, `Error & Rescue Registry`, `Failure Modes Registry`, `Dream state delta`, `Cross-phase themes`, doc-sync expectation, risk/rollback (if `risk_level: high`), next implementation step.
+
+### Original Request / Intent Summary
+
+Every PLAN.md must preserve the user's request or intent in a committed-process
+artifact, because task-local `REQUEST.md` may be absent, thin, or gitignored. If
+`REQUEST.md` exists, summarize it and cite it. If it is absent or under 15
+non-empty lines, write a concise intent summary from the current user prompt and
+explicitly label the source as `conversation summary`. Do not rely on
+`REQUEST.md` alone for future intent reconstruction.
 
 ### Durable Docs Decision
 

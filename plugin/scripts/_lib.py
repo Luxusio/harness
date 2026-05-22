@@ -721,6 +721,14 @@ _API_PATH_FRAGMENTS = (
 _REQ_REF_RE = re.compile(r"doc/[^)\]\s`'\"]+/REQ__[A-Za-z0-9_.-]+\.md")
 _DURABLE_DOC_RE = re.compile(r"^doc/[^/]+/(?:REQ|GUIDE|ADR|POLICY)__[^/]+\.md$")
 _CRITIC_DOCUMENT_PASS_RE = re.compile(r"^\s*PASS\s*$", re.MULTILINE)
+_COMMIT_BACKED_LEARNING_HEADING_RE = re.compile(
+    r"^\s*#{1,3}\s*Commit-backed Learnings\b",
+    re.MULTILINE | re.IGNORECASE,
+)
+_COMMIT_BACKED_LEARNING_STATUS_RE = re.compile(
+    r"^\s*Status:\s*(none|captured|rejected)\b",
+    re.MULTILINE | re.IGNORECASE,
+)
 
 
 def _read_nested_manifest_field(repo_root, *keys):
@@ -873,6 +881,27 @@ def _has_qa_browser_section(task_dir):
     return False
 
 
+def _has_commit_backed_learning_section(task_dir):
+    """Return True when HANDOFF records shared-learning disposition.
+
+    Runtime-local `learnings.jsonl` is gitignored staging. Every task handoff must
+    say whether reusable learning was absent, captured into committed artifacts,
+    or explicitly rejected so future contributors are not asked to rely on a
+    private session memory file.
+    """
+    path = os.path.join(task_dir, "HANDOFF.md")
+    if not os.path.isfile(path):
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            body = f.read()
+    except OSError:
+        return False
+    if not _COMMIT_BACKED_LEARNING_HEADING_RE.search(body):
+        return False
+    return bool(_COMMIT_BACKED_LEARNING_STATUS_RE.search(body))
+
+
 def is_maintenance_task(task_dir, repo_root=None):
     if os.path.isfile(os.path.join(task_dir, "MAINTENANCE")):
         return True
@@ -1017,6 +1046,8 @@ def emit_compact_context(task_dir):
         missing_for_close.append("PLAN.md")
     if not has_handoff:
         missing_for_close.append("HANDOFF.md")
+    elif not _has_commit_backed_learning_section(task_dir):
+        missing_for_close.append("Commit-backed Learnings section in HANDOFF.md")
     if runtime_verdict != "PASS":
         missing_for_close.append("runtime_verdict PASS")
 
@@ -1072,6 +1103,13 @@ def emit_compact_context(task_dir):
     elif "qa-browser evidence in CRITIC__qa.md" in missing_for_close:
         next_action = ("Spawn Agent(subagent_type='harness:qa-browser', ...) "
                        "and call write_critic_qa with lens='browser'.")
+    elif "Commit-backed Learnings section in HANDOFF.md" in missing_for_close:
+        next_action = (
+            "Update HANDOFF.md with `## Commit-backed Learnings` and "
+            "`Status: none`, `Status: captured`, or `Status: rejected`. "
+            "Captured items must name committed artifacts such as skills, "
+            "scripts, tests, or doc/harness/patterns docs."
+        )
     else:
         next_action = "Runtime verdict PASS — run task_close."
 
