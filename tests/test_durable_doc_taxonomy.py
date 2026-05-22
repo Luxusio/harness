@@ -66,6 +66,9 @@ def test_plan_requires_durable_docs_decision_for_claude_and_codex():
         assert "do not defer this to close" in body
         assert "Original Request / Intent Summary" in body
         assert "conversation summary" in body
+        assert "gitignored" in body
+        assert "15" in body
+        assert "non-empty lines" in body
         assert "doc/product/" not in body
 
 

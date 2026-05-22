@@ -26,9 +26,9 @@ Omit if no restore point.
 
 Every PLAN.md must preserve the user's request or intent in a committed-process
 artifact, because task-local `REQUEST.md` may be absent, thin, or gitignored. If
-`REQUEST.md` exists, summarize it and cite it. If it is absent or under 15
-non-empty lines, write a concise intent summary from the current user prompt and
-explicitly label the source as `conversation summary`. Do not rely on
+`REQUEST.md` exists, summarize it and cite it. If it is absent, gitignored, or
+under 15 non-empty lines, write a concise intent summary from the current user
+prompt and explicitly label the source as `conversation summary`. Do not rely on
 `REQUEST.md` alone for future intent reconstruction.
 
 ### Durable Docs Decision

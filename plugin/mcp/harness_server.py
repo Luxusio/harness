@@ -466,15 +466,20 @@ def handle_task_close(args: dict) -> dict:
     sync_from_git_diff(td)
     ctx = emit_compact_context(td)
     missing = ctx.get("missing_for_close") or []
+    stale, stale_path = _runtime_is_stale(td)
+    checks_status, blocking = _checks_gate_status(td)
     if missing:
-        return _err("task_close blocked", data={
+        data = {
             "task_dir": td, "missing_for_close": missing, "task_context": ctx,
-        })
+            "stale": stale, "stale_path": stale_path,
+        }
+        if checks_status == "blocked":
+            data["blocking_acs"] = blocking
+        return _err("task_close blocked", data=data)
 
     # PR2 runtime-stale gate: refuse close when a touched path is newer
     # than CRITIC__qa.md. Caller must re-run task_verify so QA can
     # re-issue a fresh PASS.
-    stale, stale_path = _runtime_is_stale(td)
     if stale:
         return _err("task_close blocked: runtime_verdict stale — re-run task_verify", data={
             "task_dir": td, "stale_path": stale_path,
@@ -482,7 +487,6 @@ def handle_task_close(args: dict) -> dict:
 
     # PR2 CHECKS gate: refuse close when any AC is non-terminal.
     # Absent CHECKS.yaml → warn-log + proceed (pre-PR2 tasks).
-    checks_status, blocking = _checks_gate_status(td)
     if checks_status == "blocked":
         return _err("task_close blocked: CHECKS gate", data={
             "task_dir": td, "blocking_acs": blocking,
@@ -951,7 +955,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "additionalProperties": False},
      "handler": handle_write_critic_document},
     {"name": "write_handoff", "title": "Write developer handoff — developer only",
-     "description": "Write HANDOFF.md.",
+     "description": "Write HANDOFF.md. This is a full rewrite; when updating an existing handoff, preserve existing content and include the Commit-backed Learnings classification.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"}, "task_dir": {"type": "string"},
          "summary": {"type": "string"}, "verification": {"type": "string"}},

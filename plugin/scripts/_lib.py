@@ -722,13 +722,24 @@ _REQ_REF_RE = re.compile(r"doc/[^)\]\s`'\"]+/REQ__[A-Za-z0-9_.-]+\.md")
 _DURABLE_DOC_RE = re.compile(r"^doc/[^/]+/(?:REQ|GUIDE|ADR|POLICY)__[^/]+\.md$")
 _CRITIC_DOCUMENT_PASS_RE = re.compile(r"^\s*PASS\s*$", re.MULTILINE)
 _COMMIT_BACKED_LEARNING_HEADING_RE = re.compile(
-    r"^\s*#{1,3}\s*Commit-backed Learnings\b",
+    r"^[ \t]{0,3}#{1,3}\s*Commit-backed Learnings\b",
     re.MULTILINE | re.IGNORECASE,
 )
 _COMMIT_BACKED_LEARNING_STATUS_RE = re.compile(
-    r"^\s*Status:\s*(none|captured|rejected)\b",
+    r"^[ \t]{0,3}Status:\s*(none|captured|rejected)\b",
     re.MULTILINE | re.IGNORECASE,
 )
+_FENCED_CODE_BLOCK_RE = re.compile(r"(^|\n)[ \t]{0,3}(```|~~~).*?(\n[ \t]{0,3}\2|$)", re.DOTALL)
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+_COMMIT_BACKED_LEARNING_NEXT_HEADING_RE = re.compile(
+    r"^[ \t]{0,3}#{1,3}\s+\S+",
+    re.MULTILINE,
+)
+_COMMIT_BACKED_CAPTURED_LINE_RE = re.compile(
+    r"^[ \t]{0,3}[-*]\s*captured:\s*(.+)$",
+    re.MULTILINE | re.IGNORECASE,
+)
+_COMMIT_BACKED_CAPTURED_CANDIDATE_LIMIT = 32
 
 
 def _read_nested_manifest_field(repo_root, *keys):
@@ -897,9 +908,91 @@ def _has_commit_backed_learning_section(task_dir):
             body = f.read()
     except OSError:
         return False
-    if not _COMMIT_BACKED_LEARNING_HEADING_RE.search(body):
+    body = _HTML_COMMENT_RE.sub("\n", _FENCED_CODE_BLOCK_RE.sub("\n", body))
+    heading = _COMMIT_BACKED_LEARNING_HEADING_RE.search(body)
+    if not heading:
         return False
-    return bool(_COMMIT_BACKED_LEARNING_STATUS_RE.search(body))
+    remainder = body[heading.end():]
+    next_heading = _COMMIT_BACKED_LEARNING_NEXT_HEADING_RE.search(remainder)
+    section = remainder[:next_heading.start()] if next_heading else remainder
+    status_match = _COMMIT_BACKED_LEARNING_STATUS_RE.search(section)
+    if not status_match:
+        return False
+    status = status_match.group(1).lower()
+    if status != "captured":
+        return True
+
+    repo_root = find_repo_root(task_dir)
+    touched = _commit_backed_learning_touched_paths(task_dir)
+    touched_candidates = sorted(touched, key=len, reverse=True)
+    candidates = []
+    for line_match in _COMMIT_BACKED_CAPTURED_LINE_RE.finditer(section):
+        line = line_match.group(1)
+        for rel_path in touched_candidates:
+            if rel_path not in line:
+                continue
+            normalized = _normalize_commit_backed_learning_path(repo_root, rel_path)
+            if not normalized:
+                continue
+            candidates.append(normalized)
+            if len(candidates) >= _COMMIT_BACKED_CAPTURED_CANDIDATE_LIMIT:
+                break
+        if len(candidates) >= _COMMIT_BACKED_CAPTURED_CANDIDATE_LIMIT:
+            break
+    if not candidates:
+        return False
+    ignored = _git_ignored_paths(repo_root, candidates)
+    return any(path not in ignored for path in candidates)
+
+
+def _commit_backed_learning_touched_paths(task_dir):
+    paths = set()
+    st = read_state(task_dir)
+    for rel in st.get("touched_paths") or []:
+        norm = os.path.normpath(str(rel))
+        if norm and norm == str(rel) and not norm.startswith(".."):
+            paths.add(norm)
+    return paths
+
+
+def _normalize_commit_backed_learning_path(repo_root, rel_path):
+    """Return normalized rel_path when it names a real repo artifact."""
+    if not rel_path or os.path.isabs(rel_path):
+        return None
+    norm = os.path.normpath(rel_path)
+    if norm != rel_path or norm in (".", "") or norm.startswith(".."):
+        return None
+    if norm == "doc/harness/learnings.jsonl" or norm.startswith("doc/harness/tasks/"):
+        return None
+    abs_path = os.path.realpath(os.path.join(repo_root, norm))
+    real_root = os.path.realpath(repo_root)
+    if not (abs_path == real_root or abs_path.startswith(real_root + os.sep)):
+        return None
+    if not os.path.isfile(abs_path):
+        return None
+    return norm
+
+
+def _git_ignored_paths(repo_root, rel_paths):
+    """Return the subset of rel_paths ignored by git, using one bounded subprocess."""
+    paths = [p for p in rel_paths if p]
+    if not paths:
+        return set()
+    try:
+        ignored = subprocess.run(
+            ["git", "check-ignore", "--stdin"],
+            cwd=repo_root,
+            input="\n".join(paths) + "\n",
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=2.0,
+        )
+        if ignored.returncode == 0:
+            return {line.strip() for line in ignored.stdout.splitlines() if line.strip()}
+    except Exception:
+        pass
+    return set()
 
 
 def is_maintenance_task(task_dir, repo_root=None):
@@ -1105,10 +1198,11 @@ def emit_compact_context(task_dir):
                        "and call write_critic_qa with lens='browser'.")
     elif "Commit-backed Learnings section in HANDOFF.md" in missing_for_close:
         next_action = (
-            "Update HANDOFF.md with `## Commit-backed Learnings` and "
+            "Rewrite HANDOFF.md via write_handoff, preserving existing content, with "
+            "`## Commit-backed Learnings` and "
             "`Status: none`, `Status: captured`, or `Status: rejected`. "
-            "Captured items must name committed artifacts such as skills, "
-            "scripts, tests, or doc/harness/patterns docs."
+            "Captured items must name an existing commit-eligible repo artifact; "
+            "task-local artifacts and doc/harness/learnings.jsonl do not count."
         )
     else:
         next_action = "Runtime verdict PASS — run task_close."

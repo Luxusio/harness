@@ -79,6 +79,12 @@ def _next_action_for_missing(missing_item: str) -> tuple[str, str]:
     if "plan.md" in item:
         return ("Skill('harness:plan', '<task_id>')",
                 "plan-skill")
+    if "commit-backed learnings" in item:
+        return ("Rewrite HANDOFF.md via write_handoff, preserving existing content, with "
+                "`## Commit-backed Learnings` and "
+                "`Status: none`, `Status: captured`, or `Status: rejected`; "
+                "captured items must name an existing commit-eligible repo artifact path.",
+                "harness:developer")
     if "handoff.md" in item:
         return ("Spawn Agent(subagent_type='harness:developer', ...) to call "
                 "mcp__plugin_harness_harness__write_handoff",
@@ -94,6 +100,25 @@ def _next_action_for_missing(missing_item: str) -> tuple[str, str]:
                 "to BLOCKED_ENV via task_blocked)",
                 "harness:qa-* or harness:stop-judge")
     return "", ""
+
+
+def _owner_for_context_next_action(next_action: str) -> str:
+    action = (next_action or "").lower()
+    if not action:
+        return ""
+    if "plan.md" in action or "plan skill" in action:
+        return "plan-skill"
+    if "task_verify" in action or "runtime verdict" in action:
+        return "harness:qa-* or harness:stop-judge"
+    if "qa-browser" in action:
+        return "harness:qa-browser"
+    if "critic-document" in action:
+        return "harness:critic-document"
+    if "commit-backed learnings" in action or "handoff.md" in action:
+        return "harness:developer"
+    if "task_close" in action:
+        return "harness:run"
+    return ""
 
 
 def _resolve_active_task_dir(repo_root: str, active_path: str) -> str | None:
@@ -165,9 +190,17 @@ def main():
         next_action = ""
         owner_skill = ""
         if ctx is not None:
+            next_action = (ctx or {}).get("next_action") or ""
+            if next_action:
+                owner_skill = _owner_for_context_next_action(next_action)
             missing = (ctx or {}).get("missing_for_close") or []
             if missing:
-                next_action, owner_skill = _next_action_for_missing(missing[0])
+                mapped_action, mapped_owner = _next_action_for_missing(missing[0])
+                if not next_action:
+                    next_action = mapped_action
+                    owner_skill = mapped_owner
+                elif not owner_skill:
+                    owner_skill = mapped_owner
 
         # Cancel-push escape removed. The stop-judge agent is the only
         # legitimate non-PASS escape path — it transitions runtime_verdict to

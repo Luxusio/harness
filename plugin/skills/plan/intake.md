@@ -132,7 +132,7 @@ Store as `BASE_BRANCH`.
 
 ## Phase 0.4.5: Prerequisite offer
 
-**Trigger:** REQUEST.md absent OR < 15 non-empty lines.
+**Trigger:** REQUEST.md absent, gitignored, OR < 15 non-empty lines.
 
 Emit one AskUserQuestion:
 - A) Clarify inline → 3 goal-sharpening questions (outcome / NOT in scope / success)

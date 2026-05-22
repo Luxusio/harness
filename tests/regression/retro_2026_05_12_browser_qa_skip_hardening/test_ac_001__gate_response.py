@@ -144,6 +144,34 @@ class TestStopGateEmitsNextAction(unittest.TestCase):
         # PLAN.md missing → plan-skill route
         self.assertIn("plan", payload["next_action_command"].lower())
 
+    def test_commit_backed_learning_missing_has_specific_next_action(self):
+        stop_gate = _load("stop_gate_commit_learning_test", SCRIPTS / "stop_gate.py")
+        command, owner = stop_gate._next_action_for_missing(
+            "Commit-backed Learnings section in HANDOFF.md"
+        )
+        self.assertIn("Commit-backed Learnings", command)
+        self.assertIn("write_handoff", command)
+        self.assertIn("commit-eligible repo artifact path", command)
+        self.assertEqual(owner, "harness:developer")
+
+    def test_stop_gate_uses_context_next_action_priority(self):
+        stop_gate = _load("stop_gate_priority_test", SCRIPTS / "stop_gate.py")
+        task_dir = os.path.join(self.repo, "doc", "harness", "tasks", "TASK__demo")
+        with open(os.path.join(task_dir, "PLAN.md"), "w", encoding="utf-8") as f:
+            f.write("# plan\n")
+        with open(os.path.join(task_dir, "HANDOFF.md"), "w", encoding="utf-8") as f:
+            f.write("# handoff\n\nNo commit-backed learning classification.\n")
+        with mock.patch.object(stop_gate, "find_repo_root", return_value=self.repo):
+            buf = io.StringIO()
+            with mock.patch.object(sys, "stdin", io.StringIO("")):
+                with mock.patch.object(sys, "stdout", buf):
+                    stop_gate.main()
+            out = buf.getvalue()
+        payload = json.loads(out)
+        self.assertIn("task_verify", payload["next_action_command"])
+        self.assertNotIn("Commit-backed Learnings", payload["next_action_command"])
+        self.assertEqual(payload["owner_skill"], "harness:qa-* or harness:stop-judge")
+
 
 if __name__ == "__main__":
     unittest.main()

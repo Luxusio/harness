@@ -275,7 +275,7 @@ Both modes: Phase 1 premise gate and Phase 5.3 User Challenges never auto-decide
 - **Log every decision.** Every classification (Mechanical / Taste / User Challenge) gets a row in `AUDIT_TRAIL.md` via `write_plan_artifact { artifact: "audit" }`.
 - **Full depth means full depth.** Complete every loaded methodology section with its required evidence and decisions.
 - **Artifacts are deliverables.** PLAN.md, PLAN.meta.json, CHECKS.yaml, AUDIT_TRAIL.md must exist on disk before Phase 6 closes the session.
-- **Intent is preserved in PLAN.** Every PLAN.md includes `Original Request / Intent Summary`. If `REQUEST.md` is absent, thin, or gitignored, summarize the current user prompt as `conversation summary` so future reviewers can evaluate intent without relying on task-local request artifacts.
+- **Intent is preserved in PLAN.** Every PLAN.md includes `Original Request / Intent Summary`. If `REQUEST.md` exists, summarize it and cite it. If it is absent, gitignored, or under 15 non-empty lines, summarize the current user prompt and explicitly label the source as `conversation summary` so future reviewers can evaluate intent without relying on task-local request artifacts.
 - **Sequential order.** Phase 0 → 1 → 2 → 3 → 4 → 5 → 6.
 
 ---

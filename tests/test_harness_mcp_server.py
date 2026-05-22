@@ -547,6 +547,18 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                       write_critic: bool = True, write_handoff: bool = True,
                       touched_paths: list[str] | None = None,
                       handoff_body: str | None = None) -> str:
+        (Path(base) / ".git").mkdir(exist_ok=True)
+        for rel in (
+            "plugin/skills/run/self-improvement.md",
+            "plugin/scripts/_lib.py",
+            "plugin/scripts/health.py",
+            "plugin/CLAUDE.md",
+            "README.md",
+        ):
+            p = Path(base) / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            if not p.exists():
+                p.write_text("# fixture\n", encoding="utf-8")
         task_dir = Path(base) / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
         tp = touched_paths or []
@@ -659,11 +671,360 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         missing = result["structuredContent"]["missing_for_close"]
         self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
 
+    def test_close_missing_commit_learning_still_reports_stale_and_blocking_acs(self):
+        import os as _os
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-missing-with-diagnostics",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: open\n  kind: functional\n',
+                handoff_body="# handoff\n\nNo shared learning section.\n",
+                touched_paths=["plugin/scripts/health.py"],
+            )
+            critic = _os.path.join(td, "CRITIC__qa.md")
+            _os.utime(critic, (100, 100))
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close",
+                    {"task_id": "TASK__commit-learning-missing-with-diagnostics"},
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        data = result["structuredContent"]
+        self.assertIn("Commit-backed Learnings section in HANDOFF.md", data["missing_for_close"])
+        self.assertTrue(data["stale"])
+        self.assertEqual(data["stale_path"], "plugin/scripts/health.py")
+        self.assertEqual(data["blocking_acs"][0]["id"], "AC-001")
+
+    def test_close_rejects_commit_backed_status_outside_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-status-outside",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                handoff_body=(
+                    "# handoff\n\n"
+                    "## Previous Section\n\n"
+                    "Status: captured\n\n"
+                    "## Commit-backed Learnings\n\n"
+                    "No section-local status.\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__commit-learning-status-outside"}
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        missing = result["structuredContent"]["missing_for_close"]
+        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
+
+    def test_close_rejects_commit_backed_template_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-template-only",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                handoff_body=(
+                    "# handoff\n\n"
+                    "```md\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: captured\n\n"
+                    "- captured: plugin/skills/run/self-improvement.md — example.\n"
+                    "```\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__commit-learning-template-only"}
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        missing = result["structuredContent"]["missing_for_close"]
+        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
+
+    def test_close_rejects_commit_backed_tilde_fence_template_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-tilde-template-only",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                handoff_body=(
+                    "# handoff\n\n"
+                    "~~~md\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: captured\n\n"
+                    "- captured: plugin/skills/run/self-improvement.md — example.\n"
+                    "~~~\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__commit-learning-tilde-template-only"}
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        missing = result["structuredContent"]["missing_for_close"]
+        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
+
+    def test_close_rejects_commit_backed_indented_fence_template_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-indented-fence-template-only",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                handoff_body=(
+                    "# handoff\n\n"
+                    "   ```md\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: captured\n\n"
+                    "- captured: plugin/skills/run/self-improvement.md — example.\n"
+                    "   ```\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close",
+                    {"task_id": "TASK__commit-learning-indented-fence-template-only"},
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        missing = result["structuredContent"]["missing_for_close"]
+        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
+
+    def test_close_rejects_commit_backed_html_comment_template_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-html-comment-template-only",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                handoff_body=(
+                    "# handoff\n\n"
+                    "<!--\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: captured\n\n"
+                    "- captured: plugin/skills/run/self-improvement.md — hidden.\n"
+                    "-->\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close",
+                    {"task_id": "TASK__commit-learning-html-comment-template-only"},
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        missing = result["structuredContent"]["missing_for_close"]
+        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
+
+    def test_close_rejects_commit_backed_indented_template_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-indented-template-only",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                handoff_body=(
+                    "# handoff\n\n"
+                    "    ## Commit-backed Learnings\n\n"
+                    "    Status: captured\n\n"
+                    "    - captured: plugin/skills/run/self-improvement.md — example.\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__commit-learning-indented-template-only"}
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        missing = result["structuredContent"]["missing_for_close"]
+        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
+
+    def test_close_rejects_commit_backed_captured_without_shared_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-captured-no-path",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                handoff_body=(
+                    "# handoff\n\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: captured\n\n"
+                    "- captured: doc/harness/learnings.jsonl — local staging only.\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__commit-learning-captured-no-path"}
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        missing = result["structuredContent"]["missing_for_close"]
+        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
+
+    def test_close_rejects_commit_backed_captured_nonexistent_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-captured-nonexistent",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                handoff_body=(
+                    "# handoff\n\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: captured\n\n"
+                    "- captured: plugin/scripts/does_not_exist.py — missing file.\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__commit-learning-captured-nonexistent"}
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        missing = result["structuredContent"]["missing_for_close"]
+        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
+
+    def test_close_rejects_commit_backed_captured_ignored_touched_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["git", "init", "-q"], cwd=tmp, check=True)
+            ignored = Path(tmp) / "doc" / "common" / "GUIDE__ignored.md"
+            ignored.parent.mkdir(parents=True, exist_ok=True)
+            ignored.write_text("# ignored\n", encoding="utf-8")
+            (Path(tmp) / ".gitignore").write_text("doc/common/GUIDE__ignored.md\n", encoding="utf-8")
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-captured-ignored",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                touched_paths=["doc/common/GUIDE__ignored.md"],
+                handoff_body=(
+                    "# handoff\n\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: captured\n\n"
+                    "- captured: doc/common/GUIDE__ignored.md — ignored local file.\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close",
+                    {"task_id": "TASK__commit-learning-captured-ignored"},
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        missing = result["structuredContent"]["missing_for_close"]
+        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
+
+    def test_close_accepts_commit_backed_captured_path_when_line_mentions_learnings_jsonl(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-captured-with-learnings-mention",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                touched_paths=["plugin/scripts/_lib.py"],
+                handoff_body=(
+                    "# handoff\n\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: captured\n\n"
+                    "- captured: plugin/scripts/_lib.py — replaces reliance on doc/harness/learnings.jsonl.\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close",
+                    {"task_id": "TASK__commit-learning-captured-with-learnings-mention"},
+                )
+            finally:
+                self._unpatch()
+        self.assertNotIn("isError", result)
+        self.assertTrue(result["structuredContent"]["closed"])
+
+    def test_close_accepts_commit_backed_captured_general_repo_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-captured-general-artifact",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                touched_paths=["plugin/CLAUDE.md"],
+                handoff_body=(
+                    "# handoff\n\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: captured\n\n"
+                    "- captured: plugin/CLAUDE.md — shared runtime contract.\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close",
+                    {"task_id": "TASK__commit-learning-captured-general-artifact"},
+                )
+            finally:
+                self._unpatch()
+        self.assertNotIn("isError", result)
+        self.assertTrue(result["structuredContent"]["closed"])
+
+    def test_close_rejects_commit_backed_captured_untouched_existing_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-captured-untouched-existing",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                touched_paths=[],
+                handoff_body=(
+                    "# handoff\n\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: captured\n\n"
+                    "- captured: plugin/scripts/_lib.py — existing but unrelated.\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close",
+                    {"task_id": "TASK__commit-learning-captured-untouched-existing"},
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        missing = result["structuredContent"]["missing_for_close"]
+        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
+
+    def test_close_accepts_commit_backed_captured_top_level_touched_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__commit-learning-captured-top-level",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                touched_paths=["README.md"],
+                handoff_body=(
+                    "# handoff\n\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: captured\n\n"
+                    "- captured: README.md — shared setup note.\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close",
+                    {"task_id": "TASK__commit-learning-captured-top-level"},
+                )
+            finally:
+                self._unpatch()
+        self.assertNotIn("isError", result)
+        self.assertTrue(result["structuredContent"]["closed"])
+
     def test_close_accepts_commit_backed_learnings_captured_status(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(
                 tmp, "TASK__commit-learning-captured",
                 checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                touched_paths=["plugin/skills/run/self-improvement.md"],
                 handoff_body=(
                     "# handoff\n\n"
                     "## Commit-backed Learnings\n\n"

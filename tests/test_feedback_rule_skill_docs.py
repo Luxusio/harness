@@ -17,6 +17,7 @@ def test_develop_skills_require_feedback_rule_judgment():
         assert "Commit-backed Learnings" in body
         assert "learnings.jsonl` is gitignored staging" in body
         assert "committed artifact" in body
+        assert "changed a committed" in body
 
 
 def test_self_improvement_documents_readable_tier2_format():

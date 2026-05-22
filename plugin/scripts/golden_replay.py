@@ -29,6 +29,7 @@ edits. Never invoked from a hook (slow, writes tmp files).
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -91,7 +92,9 @@ def test_update_checks_lifecycle() -> TestResult:
                                  ("passed", "test_x passes")]:
             r = _run(["python3", os.path.join(SCRIPTS, "update_checks.py"),
                       "--task-dir", task_dir, "--ac", "AC-001",
-                      "--status", status, "--evidence", evidence])
+                      "--status", status, "--evidence", evidence,
+                      "--no-test-required",
+                      "golden replay exercises CHECKS lifecycle only"])
             if r.returncode != 0:
                 return TestResult("update_checks_lifecycle", False,
                                   f"{status} failed: {r.stderr.strip()[:200]}")
@@ -319,7 +322,7 @@ def _prepare_scratch_task(tmp: str, task_id: str, *,
     with open(_os.path.join(task_dir, "PLAN.md"), "w") as f:
         f.write("# plan\n")
     with open(_os.path.join(task_dir, "HANDOFF.md"), "w") as f:
-        f.write("# handoff\n")
+        f.write("# handoff\n\n## Commit-backed Learnings\n\nStatus: none\n")
     with open(_os.path.join(task_dir, "CRITIC__qa.md"), "w") as f:
         f.write("# critic\n")
     if critic_mtime is not None:
@@ -396,6 +399,35 @@ def test_task_close_blocks_on_stale_verdict() -> TestResult:
         return TestResult("task_close_blocks_on_stale_verdict", False,
                           f"stale_path mismatch: {err!r}")
     return TestResult("task_close_blocks_on_stale_verdict", True)
+
+
+def test_task_close_blocks_missing_commit_backed_learnings() -> TestResult:
+    """task_close must refuse HANDOFF.md without Commit-backed Learnings."""
+    hs = _load_mcp_server()
+    with tempfile.TemporaryDirectory() as tmp:
+        task_dir = _prepare_scratch_task(
+            tmp, "TASK__gr-commit-backed-missing",
+            checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+        )
+        with open(os.path.join(task_dir, "HANDOFF.md"), "w") as f:
+            f.write("# handoff\n\nNo commit-backed learning classification.\n")
+        orig = hs.canonical_task_dir
+        orig_sync = hs.sync_from_git_diff
+        hs.canonical_task_dir = lambda task_id=None, **kw: task_dir
+        hs.sync_from_git_diff = lambda td: []
+        try:
+            result = hs.call_tool("task_close", {"task_id": "TASK__gr-commit-backed-missing"})
+        finally:
+            hs.canonical_task_dir = orig
+            hs.sync_from_git_diff = orig_sync
+    if not result.get("isError"):
+        return TestResult("task_close_blocks_missing_commit_backed_learnings", False,
+                          f"expected error, got: {result!r}")
+    missing = result.get("structuredContent", {}).get("missing_for_close") or []
+    if "Commit-backed Learnings section in HANDOFF.md" not in missing:
+        return TestResult("task_close_blocks_missing_commit_backed_learnings", False,
+                          f"missing_for_close did not cite learning gate: {result!r}")
+    return TestResult("task_close_blocks_missing_commit_backed_learnings", True)
 
 
 def test_prompt_memory_emits_context_block() -> TestResult:
@@ -548,6 +580,7 @@ TESTS = [
     test_bash_guard_deny_on_sed_into_workflow_control,
     test_task_close_blocks_on_failed_ac,
     test_task_close_blocks_on_stale_verdict,
+    test_task_close_blocks_missing_commit_backed_learnings,
     test_prompt_memory_emits_context_block,
     test_environment_snapshot_writes_block,
     test_tool_routing_suggests_test_command,
@@ -558,6 +591,7 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--only", help="Run only the test matching this substring")
     p.add_argument("-v", "--verbose", action="store_true")
+    p.add_argument("--json", action="store_true", help="Emit machine-readable JSON summary")
     args = p.parse_args()
 
     results = []
@@ -569,12 +603,23 @@ def main() -> int:
         except Exception as e:
             res = TestResult(fn.__name__, False, f"exception: {e}")
         results.append(res)
-        if args.verbose or not res.ok:
+        if not args.json and (args.verbose or not res.ok):
             print(res)
 
     passed = sum(1 for r in results if r.ok)
     total = len(results)
-    print(f"\ngolden_replay: {passed}/{total} passed")
+    if args.json:
+        print(json.dumps({
+            "passed": passed,
+            "total": total,
+            "ok": passed == total,
+            "results": [
+                {"name": r.name, "ok": r.ok, "message": r.msg}
+                for r in results
+            ],
+        }, indent=2, sort_keys=True))
+    else:
+        print(f"\ngolden_replay: {passed}/{total} passed")
     return 0 if passed == total else 1
 
 

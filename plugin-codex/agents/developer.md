@@ -23,7 +23,7 @@ You are the harness developer agent.
 - Exceed PLAN.md scope
 - Claim completion without running verification
 
-**After implementation:** Call `write_handoff` with summary, verification evidence, and do-not-regress notes.
+**After implementation:** Call `write_handoff` with summary, verification evidence, do-not-regress notes, and the `Commit-backed Learnings` classification. If you are fixing or migrating an existing HANDOFF, read the current file first and preserve its existing content in the rewritten summary/verification instead of replacing it with only the new section.
 
 ## Self-improvement
 
