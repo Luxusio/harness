@@ -7,17 +7,18 @@ Two responsibilities:
   2. Invoke doc_hygiene.py scan (REMOVE/REVIEW classification).
 
 AC-003: observer mode (first 14 sessions), idempotent 1x/day via flock +
-        .maintain-last-run, wall-time budget <2s.
+        .hygiene-last-run with legacy .maintain-last-run fallback, wall-time
+        budget <2s.
 AC-004: Tier A (INFO) = additive edit within managed-block; Tier B (SOFT) =
-        additive only; Tier C (HARD) = deferred to .maintain-pending.json;
+        additive only; Tier C (HARD) = deferred to .hygiene-pending.json;
         self-detects missing C-16; skips on dirty CONTRACTS.md.
 AC-013: hooks.json entry with || true, timeout 10, ordered AFTER contract_lint.
 AC-021: [hygiene-*] tag namespace for all SessionStart output lines.
 
-Observer log: doc/harness/.maintain-observe.log
-Last-run: doc/harness/.maintain-last-run
+Observer log: doc/harness/.hygiene-observe.log
+Last-run: doc/harness/.hygiene-last-run
 Lock: doc/harness/.hygiene.lock
-Pending: doc/harness/.maintain-pending.json
+Pending: doc/harness/.hygiene-pending.json
 
 The `maintain`-prefixed filenames are legacy-compatible state names retained
 after the standalone maintain skill was removed. See
@@ -48,10 +49,13 @@ except ImportError as _e:
     sys.exit(0)
 
 HYGIENE_YAML = "doc/harness/hygiene.yaml"
-LAST_RUN_FILE = "doc/harness/.maintain-last-run"
+LAST_RUN_FILE = "doc/harness/.hygiene-last-run"
+LEGACY_LAST_RUN_FILE = "doc/harness/.maintain-last-run"
 LOCK_FILE = "doc/harness/.hygiene.lock"
-OBSERVE_LOG = "doc/harness/.maintain-observe.log"
-PENDING_JSON = "doc/harness/.maintain-pending.json"
+OBSERVE_LOG = "doc/harness/.hygiene-observe.log"
+LEGACY_OBSERVE_LOG = "doc/harness/.maintain-observe.log"
+PENDING_JSON = "doc/harness/.hygiene-pending.json"
+LEGACY_PENDING_JSON = "doc/harness/.maintain-pending.json"
 SESSION_COUNTER_FILE = "doc/harness/.hygiene-session-count"
 
 _MANAGED_BEGIN = "<!-- harness:managed-begin"
@@ -116,18 +120,20 @@ def _increment_session_count(repo_root: str) -> int:
 
 def _should_skip_today(repo_root: str) -> bool:
     """Return True if last run was within 24h (idempotent guard)."""
-    path = os.path.join(repo_root, LAST_RUN_FILE)
-    if not os.path.isfile(path):
-        return False
-    try:
-        mtime = os.path.getmtime(path)
-        return (time.time() - mtime) < ONE_DAY_SECS
-    except OSError:
-        return False
+    for rel in (LAST_RUN_FILE, LEGACY_LAST_RUN_FILE):
+        path = os.path.join(repo_root, rel)
+        if not os.path.isfile(path):
+            continue
+        try:
+            if (time.time() - os.path.getmtime(path)) < ONE_DAY_SECS:
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def _touch_last_run(repo_root: str) -> None:
-    """Update .maintain-last-run timestamp."""
+    """Update canonical .hygiene-last-run timestamp."""
     path = os.path.join(repo_root, LAST_RUN_FILE)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     try:
@@ -243,11 +249,14 @@ def _apply_tier_ab(lint_lines: list, repo_root: str, observe_only: bool) -> list
 
 
 def _write_deferred(deferred: list, repo_root: str) -> None:
-    """Append Tier C deferred items to .maintain-pending.json."""
+    """Append Tier C deferred items to canonical pending JSON with legacy read fallback."""
     if not deferred:
         return
     pending_path = os.path.join(repo_root, PENDING_JSON)
+    legacy_path = os.path.join(repo_root, LEGACY_PENDING_JSON)
     existing = read_json_state(pending_path)
+    if not isinstance(existing, list):
+        existing = read_json_state(legacy_path)
     if not isinstance(existing, list):
         existing = []
 
@@ -260,6 +269,14 @@ def _write_deferred(deferred: list, repo_root: str) -> None:
         }
         existing.append(entry)
     write_json_state(pending_path, existing)
+
+
+def _read_pending(repo_root: str):
+    pending = read_json_state(os.path.join(repo_root, PENDING_JSON))
+    if isinstance(pending, list):
+        return pending
+    legacy_pending = read_json_state(os.path.join(repo_root, LEGACY_PENDING_JSON))
+    return legacy_pending if isinstance(legacy_pending, list) else []
 
 
 def _log_observe(msg: str, repo_root: str) -> None:
@@ -440,8 +457,7 @@ def main() -> int:
             return 0
 
         # Check results and emit summary line (AC-021)
-        pending_path = os.path.join(repo_root, PENDING_JSON)
-        pending = read_json_state(pending_path)
+        pending = _read_pending(repo_root)
         pending_count = len(pending) if isinstance(pending, list) else 0
 
         if pending_count > 0:

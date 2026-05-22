@@ -249,7 +249,7 @@ All scripts under `plugin/scripts/`. Stdlib only (PIL optional for canary).
 | `inject_checkpoint.py` | SessionStart hook — surface latest checkpoint | reads `doc/harness/checkpoints/` |
 | `promote_learnings.py` | Tier 3→2 promotion + stale pruning | `doc/harness/patterns/<topic>.md` |
 | `retro.py` | Weekly retrospective (git + learnings + health) | `doc/harness/retros/<date>.md` |
-| `hygiene_scan.py` | SessionStart auto-hygiene (contract drift + doc classification) | `doc/harness/.maintain-last-run` + `doc/harness/.hygiene-session-count` |
+| `hygiene_scan.py` | SessionStart auto-hygiene (contract drift + doc classification) | `doc/harness/.hygiene-last-run` + `doc/harness/.hygiene-session-count` |
 
 All activated via manifest optional keys: `health_components`, `benchmark_components`,
 `audit_categories`. Health falls back to `test_command` when no components declared.

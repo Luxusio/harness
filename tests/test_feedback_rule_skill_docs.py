@@ -80,11 +80,14 @@ def test_maintenance_state_naming_doc_records_compatibility_plan():
         encoding="utf-8"
     )
 
-    assert "legacy-compatible" in body
+    assert "compatibility surfaces" in body
     assert ".maintain-pending.json" in body
     assert ".maintain-last-run" in body
     assert ".maintain-observe.log" in body
     assert "maintain_restore.py" in body
     assert ".hygiene-pending.json" in body
+    assert ".hygiene-last-run" in body
+    assert ".hygiene-observe.log" in body
     assert "Read both old and new locations" in body
     assert "no-loss migration" in body
+    assert "The first compatibility slice is implemented" in body

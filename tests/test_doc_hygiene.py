@@ -238,7 +238,7 @@ class TestReviewQueue(unittest.TestCase):
     def test_RV01_entry_appended(self):
         sigs = _signals(reference_count=0, freshness="suspect")
         append_review_entry("doc/changes/foo.md", sigs, self.repo)
-        pending_path = os.path.join(self.repo, "doc", "harness", ".maintain-pending.json")
+        pending_path = os.path.join(self.repo, "doc", "harness", ".hygiene-pending.json")
         self.assertTrue(os.path.isfile(pending_path))
         data = json.loads(open(pending_path).read())
         self.assertIsInstance(data, list)
@@ -253,16 +253,44 @@ class TestReviewQueue(unittest.TestCase):
         sigs = _signals(reference_count=0, freshness="suspect")
         append_review_entry("doc/changes/foo.md", sigs, self.repo)
         append_review_entry("doc/changes/foo.md", sigs, self.repo)
-        pending_path = os.path.join(self.repo, "doc", "harness", ".maintain-pending.json")
+        pending_path = os.path.join(self.repo, "doc", "harness", ".hygiene-pending.json")
         data = json.loads(open(pending_path).read())
         paths = [e["path"] for e in data]
         self.assertEqual(paths.count("doc/changes/foo.md"), 1)
+
+    def test_RV02_legacy_pending_migrates_without_loss(self):
+        legacy_path = os.path.join(self.repo, "doc", "harness", ".maintain-pending.json")
+        with open(legacy_path, "w", encoding="utf-8") as f:
+            json.dump([{"path": "doc/changes/legacy.md", "kind": "review"}], f)
+
+        sigs = _signals(reference_count=0, freshness="suspect")
+        append_review_entry("doc/changes/new.md", sigs, self.repo)
+
+        pending_path = os.path.join(self.repo, "doc", "harness", ".hygiene-pending.json")
+        data = json.loads(open(pending_path).read())
+        paths = [e["path"] for e in data]
+        self.assertEqual(paths, ["doc/changes/legacy.md", "doc/changes/new.md"])
+
+    def test_RV02_canonical_pending_preferred_over_legacy(self):
+        canonical_path = os.path.join(self.repo, "doc", "harness", ".hygiene-pending.json")
+        legacy_path = os.path.join(self.repo, "doc", "harness", ".maintain-pending.json")
+        with open(canonical_path, "w", encoding="utf-8") as f:
+            json.dump([{"path": "doc/changes/canonical.md", "kind": "review"}], f)
+        with open(legacy_path, "w", encoding="utf-8") as f:
+            json.dump([{"path": "doc/changes/legacy.md", "kind": "review"}], f)
+
+        sigs = _signals(reference_count=0, freshness="suspect")
+        append_review_entry("doc/changes/new.md", sigs, self.repo)
+
+        data = json.loads(open(canonical_path).read())
+        paths = [e["path"] for e in data]
+        self.assertEqual(paths, ["doc/changes/canonical.md", "doc/changes/new.md"])
 
     def test_RV03_atomic_write(self):
         sigs = _signals()
         for i in range(5):
             append_review_entry(f"doc/changes/foo{i}.md", sigs, self.repo)
-        pending_path = os.path.join(self.repo, "doc", "harness", ".maintain-pending.json")
+        pending_path = os.path.join(self.repo, "doc", "harness", ".hygiene-pending.json")
         data = json.loads(open(pending_path).read())
         self.assertIsInstance(data, list)
 

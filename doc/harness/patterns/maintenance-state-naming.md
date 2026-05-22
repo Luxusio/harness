@@ -43,9 +43,19 @@ Required sequence:
 | `.maintain-observe.log` | `.hygiene-observe.log` |
 | `maintain_restore.py` | `hygiene_restore.py` |
 
+## Implemented Slice
+
+The first compatibility slice is implemented:
+
+- `hygiene_scan.py`, `doc_hygiene.py`, and `prompt_memory.py` write/read the
+  canonical `.hygiene-*` names where they own writes.
+- Legacy `.maintain-*` files remain read fallbacks.
+- Old and new pending queues are not merged when both exist; the canonical
+  `.hygiene-pending.json` wins to avoid replaying stale legacy entries.
+- `maintain_restore.py` is unchanged in this slice.
+
 ## Decision
 
-Keep the legacy-compatible names for now. The standalone skill is removed from
-the active plugin surface, and active prompts route through continuous
-maintenance. Renaming state files is a separate compatibility migration task.
-
+Use canonical `.hygiene-*` state files going forward while preserving legacy
+`.maintain-*` read fallback. `maintain_restore.py` remains a separate
+compatibility migration task.

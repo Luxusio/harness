@@ -230,7 +230,7 @@ indefinitely. Institutional memory erodes when the signal-to-noise ratio drops.
 **Tier A/B/C mapping (contract drift):**
 - `[INFO]` (Tier A): auto-applied as additive Edit within managed-block markers. No deletions.
 - `[SOFT]` additive (Tier B): auto-applied if action is matrix-row addition or contract heading addition only. Modifications/deletions deferred.
-- `[HARD]` (Tier C): deferred. Entry written to `.maintain-pending.json`; user confirms in the active/next harness task and the decision is recorded in close-time Self-Healing Candidates.
+- `[HARD]` (Tier C): deferred. Entry written to `.hygiene-pending.json` (legacy read fallback: `.maintain-pending.json`); user confirms in the active/next harness task and the decision is recorded in close-time Self-Healing Candidates.
 
 **KEEP-on-doubt rule:** absence of `superseded_by` or `distilled_to` frontmatter
 fields NEVER alone classifies a doc as REMOVE. Cold-start docs (no new frontmatter)
@@ -238,7 +238,7 @@ always classify as KEEP or REVIEW.
 
 **Observer phase:** first `observer_until_session` sessions (default 14) run
 in observer-only mode — no archive writes, no contract edits. Intentions logged
-to `doc/harness/.maintain-observe.log`.
+to `doc/harness/.hygiene-observe.log`.
 
 **Restore:** `python3 plugin/scripts/maintain_restore.py <archive-path>`.
 Archive commit message always embeds the copy-pasteable restore command.

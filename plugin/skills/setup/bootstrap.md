@@ -230,9 +230,9 @@ _HARNESS_IGNORES=(
   "doc/harness/retros/"
   "doc/harness/quality-trend.jsonl"
   "doc/harness/hygiene.yaml"
-  "doc/harness/.maintain-last-run"
-  "doc/harness/.maintain-observe.log"
-  "doc/harness/.maintain-pending.json"
+  "doc/harness/.hygiene-last-run"
+  "doc/harness/.hygiene-observe.log"
+  "doc/harness/.hygiene-pending.json"
   "doc/harness/.hygiene.lock"
   "doc/harness/.hygiene-session-count"
 )

@@ -5,8 +5,9 @@ Emits a short ``[harness-context]`` block on stdout when a harness task is
 active, so agents don't burn a turn re-reading ``TASK_STATE.yaml`` /
 ``CHECKS.yaml`` to orient themselves in fix rounds.
 
-AC-014: Extended to additionally read doc/harness/.maintain-pending.json and
-inject a [hygiene-review] system-reminder when pending items exist.
+AC-014: Extended to additionally read doc/harness/.hygiene-pending.json
+(legacy fallback: .maintain-pending.json) and inject a [hygiene-review]
+system-reminder when pending items exist.
 Filenames sanitized (control chars + newlines + system-reminder tag escaped).
 Injection payload capped at 2KB total.
 
@@ -43,7 +44,8 @@ except Exception:
 
 MAX_BLOCK_CHARS = 400
 PREFIX = "[harness-context]"
-PENDING_JSON = "doc/harness/.maintain-pending.json"
+PENDING_JSON = "doc/harness/.hygiene-pending.json"
+LEGACY_PENDING_JSON = "doc/harness/.maintain-pending.json"
 HYGIENE_INJECT_CAP = 2048  # 2KB cap for hygiene-review block
 RESTORE_INJECT_CAP = 1400
 RESTORE_TOUCHED_CAP = 5
@@ -300,14 +302,21 @@ def _build_restore_block(task_dir: str, repo_root: str) -> str:
     return block
 
 
+def _read_pending_entries(repo_root: str):
+    pending = read_json_state(os.path.join(repo_root, PENDING_JSON))
+    if isinstance(pending, list):
+        return pending
+    legacy_pending = read_json_state(os.path.join(repo_root, LEGACY_PENDING_JSON))
+    return legacy_pending if isinstance(legacy_pending, list) else []
+
+
 def _build_hygiene_block(repo_root: str) -> str:
-    """Build [hygiene-review] injection block from .maintain-pending.json.
+    """Build [hygiene-review] injection block from pending hygiene JSON.
 
     Returns empty string if no pending items or on any error.
     Cap at 2KB.
     """
-    pending_path = os.path.join(repo_root, PENDING_JSON)
-    pending = read_json_state(pending_path)
+    pending = _read_pending_entries(repo_root)
     if not isinstance(pending, list) or not pending:
         return ""
 

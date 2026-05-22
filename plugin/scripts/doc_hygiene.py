@@ -5,17 +5,19 @@ Scans doc/changes/ and doc/common/. HARD-excludes doc/harness/patterns/ (owned
 by promote_learnings.py). Classifies each file as KEEP, REMOVE, or REVIEW based
 on content signals, then:
   - REMOVE: archives via git mv to <source-dir>/_archive/ (history preserved)
-  - REVIEW: appends entry to doc/harness/.maintain-pending.json (atomic write)
+  - REVIEW: appends entry to doc/harness/.hygiene-pending.json (atomic write;
+    legacy .maintain-pending.json is read as fallback)
   - KEEP: no action
 
 AC-005: HARD-exclude doc/harness/patterns/ — never touched here.
 AC-006: Signal computation — token-grep across CLAUDE.md + doc/** + active PLAN.md files.
 AC-007: Classification rules — absence of new frontmatter NEVER classifies as REMOVE.
 AC-008: Archive via git mv; SHA7 suffix on collision; commit msg with restore command.
-AC-009: REVIEW appended to .maintain-pending.json via atomic write.
+AC-009: REVIEW appended to .hygiene-pending.json via atomic write.
 AC-010: hygiene.yaml pin_paths honored; path validation; malformed yaml fail-safe.
 
-.maintain-pending.json schema (legacy-compatible single source of truth):
+.hygiene-pending.json schema (canonical, with legacy .maintain-pending.json
+read fallback):
   List of objects:
     {
       "path": str,            # repo-relative path of file needing review
@@ -67,8 +69,10 @@ SCAN_DIRS = ["doc/changes", "doc/common"]
 # AC-005 HARD-exclude — never touch this directory
 PATTERNS_DIR_SUFFIX = os.path.join("doc", "harness", "patterns")
 HYGIENE_YAML = "doc/harness/hygiene.yaml"
-PENDING_JSON = "doc/harness/.maintain-pending.json"
-LAST_RUN_FILE = "doc/harness/.maintain-last-run"
+PENDING_JSON = "doc/harness/.hygiene-pending.json"
+LEGACY_PENDING_JSON = "doc/harness/.maintain-pending.json"
+LAST_RUN_FILE = "doc/harness/.hygiene-last-run"
+LEGACY_LAST_RUN_FILE = "doc/harness/.maintain-last-run"
 ARCHIVE_DIR_NAME = "_archive"
 
 KEEP = "KEEP"
@@ -423,9 +427,12 @@ def archive_file(abs_path: str, rel_path: str, repo_root: str) -> bool:
 # ── REVIEW queue (AC-009) ────────────────────────────────────────────────
 
 def append_review_entry(rel_path: str, signals: dict, repo_root: str) -> None:
-    """Append a REVIEW entry to .maintain-pending.json (atomic write)."""
+    """Append a REVIEW entry to canonical pending JSON (atomic write)."""
     pending_path = os.path.join(repo_root, PENDING_JSON)
+    legacy_path = os.path.join(repo_root, LEGACY_PENDING_JSON)
     existing = read_json_state(pending_path)
+    if not isinstance(existing, list):
+        existing = read_json_state(legacy_path)
     if not isinstance(existing, list):
         existing = []
 

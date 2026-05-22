@@ -12,7 +12,7 @@
 #     Number of SessionStart events to run in observer-only mode before
 #     allowing any automatic writes (archive or contract edits).
 #     During observer mode hygiene_scan.py writes intentions to
-#     doc/harness/.maintain-observe.log but performs ZERO git mv or Edits.
+#     doc/harness/.hygiene-observe.log but performs ZERO git mv or Edits.
 #     Example: observer_until_session: 7
 #
 #   pin_paths: list[glob] (default: [])

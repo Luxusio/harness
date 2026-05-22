@@ -14,6 +14,7 @@ SCRIPTS_DIR = os.path.join(REPO_ROOT, "plugin", "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 
 from hygiene_scan import classify_lint_line, TIER_A, TIER_B, TIER_C, TIER_SKIP  # noqa: E402
+from hygiene_scan import _should_skip_today, _touch_last_run, _write_deferred  # noqa: E402
 
 
 def _make_minimal_repo(tmp_path, has_c16=True):
@@ -91,9 +92,9 @@ class TestObserverAndBootstrap(unittest.TestCase):
                 capture_output=True, text=True, timeout=15,
             )
             self.assertEqual(result.returncode, 0)
-            pending = os.path.join(tmp, "doc", "harness", ".maintain-pending.json")
+            pending = os.path.join(tmp, "doc", "harness", ".hygiene-pending.json")
             self.assertFalse(os.path.exists(pending),
-                ".maintain-pending.json must not be written in observe-only mode")
+                ".hygiene-pending.json must not be written in observe-only mode")
 
     def test_HK09_missing_c16_bootstrap_needed(self):
         """HK-09: missing C-16 → [hygiene-bootstrap-needed], exit 0."""
@@ -134,6 +135,38 @@ class TestConcurrency(unittest.TestCase):
             self.assertTrue(all(rc == 0 for rc in results))
 
 
+class TestStateCompatibility(unittest.TestCase):
+    """HK-10: hygiene state canonical writes + legacy fallback."""
+
+    def test_HK10_legacy_last_run_skips_today(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "doc", "harness"), exist_ok=True)
+            legacy = os.path.join(tmp, "doc", "harness", ".maintain-last-run")
+            with open(legacy, "w", encoding="utf-8") as f:
+                f.write("legacy\n")
+            self.assertTrue(_should_skip_today(tmp))
+
+    def test_HK10_touch_last_run_writes_canonical_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            _touch_last_run(tmp)
+            self.assertTrue(os.path.isfile(os.path.join(tmp, "doc", "harness", ".hygiene-last-run")))
+            self.assertFalse(os.path.exists(os.path.join(tmp, "doc", "harness", ".maintain-last-run")))
+
+    def test_HK10_deferred_reads_legacy_and_writes_canonical(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            os.makedirs(os.path.join(tmp, "doc", "harness"), exist_ok=True)
+            legacy = os.path.join(tmp, "doc", "harness", ".maintain-pending.json")
+            with open(legacy, "w", encoding="utf-8") as f:
+                json.dump([{"path": "legacy.md", "kind": "tier_c_drift"}], f)
+
+            _write_deferred(["[HARD] new drift"], tmp)
+
+            canonical = os.path.join(tmp, "doc", "harness", ".hygiene-pending.json")
+            data = json.loads(open(canonical, encoding="utf-8").read())
+            self.assertEqual(data[0]["path"], "legacy.md")
+            self.assertEqual(data[1]["reason"], "[HARD] new drift")
+
+
 class TestMalformedPending(unittest.TestCase):
     """HK-07: malformed pending JSON skipped."""
 
@@ -141,7 +174,7 @@ class TestMalformedPending(unittest.TestCase):
         """HK-07: _build_hygiene_block handles corrupt JSON gracefully."""
         import prompt_memory as pm
         with tempfile.TemporaryDirectory() as tmp:
-            pending_file = os.path.join(tmp, ".maintain-pending.json")
+            pending_file = os.path.join(tmp, ".hygiene-pending.json")
             with open(pending_file, "w") as f:
                 f.write("NOT VALID JSON {{{")
             orig = pm.PENDING_JSON
@@ -151,6 +184,44 @@ class TestMalformedPending(unittest.TestCase):
                 self.assertIsInstance(result, str)
             finally:
                 pm.PENDING_JSON = orig
+
+    def test_HK07_legacy_pending_json_fallback(self):
+        """HK-07: prompt_memory reads legacy pending file when canonical is absent."""
+        import prompt_memory as pm
+        with tempfile.TemporaryDirectory() as tmp:
+            legacy_file = os.path.join(tmp, ".maintain-pending.json")
+            with open(legacy_file, "w") as f:
+                json.dump([{"path": "doc/changes/legacy.md", "kind": "review"}], f)
+            orig_new = pm.PENDING_JSON
+            orig_legacy = pm.LEGACY_PENDING_JSON
+            pm.PENDING_JSON = ".hygiene-pending.json"
+            pm.LEGACY_PENDING_JSON = ".maintain-pending.json"
+            try:
+                result = pm._build_hygiene_block(tmp)
+                self.assertIn("doc/changes/legacy.md", result)
+            finally:
+                pm.PENDING_JSON = orig_new
+                pm.LEGACY_PENDING_JSON = orig_legacy
+
+    def test_HK07_canonical_pending_json_preferred(self):
+        """HK-07: prompt_memory prefers canonical pending file when both exist."""
+        import prompt_memory as pm
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, ".hygiene-pending.json"), "w") as f:
+                json.dump([{"path": "doc/changes/new.md", "kind": "review"}], f)
+            with open(os.path.join(tmp, ".maintain-pending.json"), "w") as f:
+                json.dump([{"path": "doc/changes/old.md", "kind": "review"}], f)
+            orig_new = pm.PENDING_JSON
+            orig_legacy = pm.LEGACY_PENDING_JSON
+            pm.PENDING_JSON = ".hygiene-pending.json"
+            pm.LEGACY_PENDING_JSON = ".maintain-pending.json"
+            try:
+                result = pm._build_hygiene_block(tmp)
+                self.assertIn("doc/changes/new.md", result)
+                self.assertNotIn("doc/changes/old.md", result)
+            finally:
+                pm.PENDING_JSON = orig_new
+                pm.LEGACY_PENDING_JSON = orig_legacy
 
 
 class TestTierMapping(unittest.TestCase):
