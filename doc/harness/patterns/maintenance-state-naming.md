@@ -11,7 +11,7 @@ in-place without a migration layer.
 | `doc/harness/.maintain-pending.json` | `hygiene_scan.py`, `doc_hygiene.py`, `prompt_memory.py` | Carries pending REVIEW and Tier C drift entries across sessions. Existing repos may already have this file. |
 | `doc/harness/.maintain-last-run` | `hygiene_scan.py`, `doc_hygiene.py` | Drives once-per-day hygiene idempotency. Renaming without fallback can cause duplicate hygiene runs. |
 | `doc/harness/.maintain-observe.log` | `hygiene_scan.py` | Records observer-mode decisions during early sessions. |
-| `plugin/scripts/maintain_restore.py` | doc archive recovery CLI | Restore commands may already be embedded in handoffs, logs, and commit messages. |
+| `plugin/scripts/maintain_restore.py` | legacy wrapper for doc archive recovery CLI | Restore commands may already be embedded in handoffs, logs, and commit messages. |
 
 These names refer to historical state and recovery compatibility, not to a
 standalone maintenance skill.
@@ -52,10 +52,11 @@ The first compatibility slice is implemented:
 - Legacy `.maintain-*` files remain read fallbacks.
 - Old and new pending queues are not merged when both exist; the canonical
   `.hygiene-pending.json` wins to avoid replaying stale legacy entries.
-- `maintain_restore.py` is unchanged in this slice.
+- `hygiene_restore.py` is the canonical restore CLI.
+- `maintain_restore.py` remains as a compatibility wrapper.
 
 ## Decision
 
-Use canonical `.hygiene-*` state files going forward while preserving legacy
-`.maintain-*` read fallback. `maintain_restore.py` remains a separate
-compatibility migration task.
+Use canonical `.hygiene-*` state files and `hygiene_restore.py` going forward
+while preserving legacy `.maintain-*` read fallback and the `maintain_restore.py`
+wrapper.

@@ -466,13 +466,14 @@ class TestDocOutputs(unittest.TestCase):
         self.assertIn("pin_paths:", content)
 
     def test_DOC02_readme_has_new_scripts(self):
-        """DOC-02: plugin/scripts/README.md mentions hygiene_scan.py, doc_hygiene.py, maintain_restore.py."""
+        """DOC-02: plugin/scripts/README.md mentions hygiene_scan.py, doc_hygiene.py, hygiene_restore.py."""
         readme_path = os.path.join(REPO_ROOT, "plugin", "scripts", "README.md")
         self.assertTrue(os.path.isfile(readme_path))
         with open(readme_path, encoding="utf-8") as f:
             content = f.read()
         self.assertIn("hygiene_scan.py", content)
         self.assertIn("doc_hygiene.py", content)
+        self.assertIn("hygiene_restore.py", content)
         self.assertIn("maintain_restore.py", content)
 
 

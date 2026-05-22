@@ -85,6 +85,7 @@ def test_maintenance_state_naming_doc_records_compatibility_plan():
     assert ".maintain-last-run" in body
     assert ".maintain-observe.log" in body
     assert "maintain_restore.py" in body
+    assert "hygiene_restore.py" in body
     assert ".hygiene-pending.json" in body
     assert ".hygiene-last-run" in body
     assert ".hygiene-observe.log" in body

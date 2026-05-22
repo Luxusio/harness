@@ -128,9 +128,10 @@ All under `plugin/scripts/`. Stdlib only.
 | `update_checks.py` | Atomic CHECKS.yaml AC status transitions (plan-first) | task-local |
 | `write_plan_artifact.py` | Legacy compatibility shim; prefer MCP `write_plan_artifact` for PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md | task-local |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
-| `hygiene_scan.py` | SessionStart auto-hygiene: Tier A/B auto-apply + doc archive pass | `doc/harness/.maintain-pending.json` |
-| `doc_hygiene.py` | Content-signal KEEP/REMOVE/REVIEW classifier; archives stale docs via `git mv` | `doc/harness/.maintain-pending.json` |
-| `maintain_restore.py` | Restore an archived file back to original location via `git mv` | — |
+| `hygiene_scan.py` | SessionStart auto-hygiene: Tier A/B auto-apply + doc archive pass | `doc/harness/.hygiene-pending.json` |
+| `doc_hygiene.py` | Content-signal KEEP/REMOVE/REVIEW classifier; archives stale docs via `git mv` | `doc/harness/.hygiene-pending.json` |
+| `hygiene_restore.py` | Restore an archived file back to original location via `git mv` | — |
+| `maintain_restore.py` | Legacy wrapper for old archive restore commands | — |
 | `background_registry.py` | Shared registry for Claude subagent lifecycle records used by Stop hook auto-wait | `doc/harness/runtime/background.json` |
 | `background_hook.py` | SubagentStart/SubagentStop hook adapter for `background_registry.py` | `doc/harness/runtime/background.json` |
 | `_gate_response.py` | Shared hook deny/allow response helper | — |

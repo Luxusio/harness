@@ -1,4 +1,4 @@
-"""RS-01..06: maintain_restore.py tests (AC-011, AC-012)."""
+"""RS-01..06: hygiene_restore.py + legacy wrapper tests (AC-011, AC-012)."""
 from __future__ import annotations
 
 import os
@@ -11,7 +11,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS_DIR = os.path.join(REPO_ROOT, "plugin", "scripts")
 sys.path.insert(0, SCRIPTS_DIR)
 
-from maintain_restore import restore, _strip_sha7_suffix  # noqa: E402
+from hygiene_restore import restore, _strip_sha7_suffix  # noqa: E402
 
 
 def _init_git(tmp_path):
@@ -122,26 +122,44 @@ class TestRestoreCLI(unittest.TestCase):
     def test_RS05_help_shows_example(self):
         """RS-05 / AC-012: --help shows usage with concrete example and recovery hint."""
         result = subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS_DIR, "hygiene_restore.py"), "--help"],
+            capture_output=True, text=True, timeout=5,
+        )
+        combined = result.stdout + result.stderr
+        self.assertIn("hygiene_restore.py", combined)
+        self.assertIn("_archive", combined)
+        self.assertIn("git log", combined, "--help must include git log recovery hint")
+
+    def test_RS05_legacy_wrapper_help_still_works(self):
+        """RS-05: legacy maintain_restore.py wrapper preserves old CLI entrypoint."""
+        result = subprocess.run(
             [sys.executable, os.path.join(SCRIPTS_DIR, "maintain_restore.py"), "--help"],
             capture_output=True, text=True, timeout=5,
         )
         combined = result.stdout + result.stderr
-        self.assertIn("maintain_restore.py", combined)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("hygiene_restore.py", combined)
         self.assertIn("_archive", combined)
-        self.assertIn("git log", combined, "--help must include git log recovery hint")
 
 
 class TestRestoreLOC(unittest.TestCase):
     """RS-06: LOC budget."""
 
     def test_RS06_loc_budget(self):
-        """RS-06: maintain_restore.py script body <= 100 code LOC."""
-        script_path = os.path.join(SCRIPTS_DIR, "maintain_restore.py")
+        """RS-06: hygiene_restore.py script body <= 100 code LOC."""
+        script_path = os.path.join(SCRIPTS_DIR, "hygiene_restore.py")
         with open(script_path, encoding="utf-8") as f:
             lines = f.readlines()
         code_lines = [l for l in lines if l.strip() and not l.strip().startswith("#")]
         self.assertLessEqual(len(code_lines), 100,
-            f"maintain_restore.py has {len(code_lines)} code lines (soft budget <=75, hard cap <=100)")
+            f"hygiene_restore.py has {len(code_lines)} code lines (soft budget <=75, hard cap <=100)")
+
+    def test_RS06_legacy_wrapper_is_tiny(self):
+        script_path = os.path.join(SCRIPTS_DIR, "maintain_restore.py")
+        with open(script_path, encoding="utf-8") as f:
+            lines = f.readlines()
+        code_lines = [l for l in lines if l.strip() and not l.strip().startswith("#")]
+        self.assertLessEqual(len(code_lines), 20)
 
 
 class TestStripSha7Suffix(unittest.TestCase):

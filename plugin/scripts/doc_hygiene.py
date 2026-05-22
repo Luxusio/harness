@@ -417,7 +417,7 @@ def archive_file(abs_path: str, rel_path: str, repo_root: str) -> bool:
 
     # Archive is staged (git mv leaves rename in the index). Commit happens
     # through normal harness task close-time maintenance, never automatically.
-    restore_cmd = f"python3 plugin/scripts/maintain_restore.py {rel_dest}"
+    restore_cmd = f"python3 plugin/scripts/hygiene_restore.py {rel_dest}"
 
     print(f"[doc_hygiene] archived (staged): {rel_src} -> {rel_dest}")
     print(f"[doc_hygiene] restore:  {restore_cmd}")

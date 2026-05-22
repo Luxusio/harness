@@ -111,7 +111,7 @@ provenance = broken audit chain. The Bash surface was added in PR1
 **Note (AC-019):** `doc/changes/**` and `doc/common/**` writes by
 `hygiene_scan.py` and `doc_hygiene.py` are authorized via C-16. These paths
 are NOT in PROTECTED_ARTIFACTS; their protection comes from hygiene.yaml
-validation, the observer phase, and `maintain_restore.py`.
+validation, the observer phase, and `hygiene_restore.py`.
 
 ### C-06
 
@@ -240,7 +240,7 @@ always classify as KEEP or REVIEW.
 in observer-only mode — no archive writes, no contract edits. Intentions logged
 to `doc/harness/.hygiene-observe.log`.
 
-**Restore:** `python3 plugin/scripts/maintain_restore.py <archive-path>`.
+**Restore:** `python3 plugin/scripts/hygiene_restore.py <archive-path>`.
 Archive commit message always embeds the copy-pasteable restore command.
 
 **Frontmatter fields (optional, added to individual doc files):**
