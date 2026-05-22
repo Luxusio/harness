@@ -32,6 +32,14 @@ def _load(name, path):
 
 lib = _load("_lib_ac002", REPO / "plugin" / "scripts" / "_lib.py")
 
+HANDOFF_OK = (
+    "# HANDOFF\n\n"
+    "## Commit-backed Learnings\n\n"
+    "Status: none\n\n"
+    "## Self-Healing Candidates\n\n"
+    "Status: none\n"
+)
+
 
 def _write(p, body):
     os.makedirs(os.path.dirname(p), exist_ok=True)
@@ -71,7 +79,7 @@ class TestCloseGateBrowserQA(unittest.TestCase):
         os.makedirs(self.task_dir, exist_ok=True)
         # PLAN.md + HANDOFF.md so the other gates pass
         _write(os.path.join(self.task_dir, "PLAN.md"), "# PLAN")
-        _write(os.path.join(self.task_dir, "HANDOFF.md"), "# HANDOFF")
+        _write(os.path.join(self.task_dir, "HANDOFF.md"), HANDOFF_OK)
 
     def tearDown(self):
         self.td_obj.cleanup()
@@ -200,7 +208,7 @@ class TestCloseGateDurableReq(unittest.TestCase):
         self.task_dir = os.path.join(self.repo, "doc", "harness", "tasks", "TASK__demo")
         os.makedirs(self.task_dir, exist_ok=True)
         _write(os.path.join(self.task_dir, "PLAN.md"), "# PLAN\n\n## Durable Docs Decision\nREQ: n/a\n")
-        _write(os.path.join(self.task_dir, "HANDOFF.md"), "# HANDOFF\n")
+        _write(os.path.join(self.task_dir, "HANDOFF.md"), HANDOFF_OK)
         _write(os.path.join(self.task_dir, "CRITIC__qa.md"), "# CRITIC\n\n## qa-browser verdict: PASS\n")
         _write(os.path.join(self.repo, "doc", "harness", "manifest.yaml"),
                "name: demo\nqa:\n  browser_qa_supported: true\n")

@@ -322,7 +322,13 @@ def _prepare_scratch_task(tmp: str, task_id: str, *,
     with open(_os.path.join(task_dir, "PLAN.md"), "w") as f:
         f.write("# plan\n")
     with open(_os.path.join(task_dir, "HANDOFF.md"), "w") as f:
-        f.write("# handoff\n\n## Commit-backed Learnings\n\nStatus: none\n")
+        f.write(
+            "# handoff\n\n"
+            "## Commit-backed Learnings\n\n"
+            "Status: none\n\n"
+            "## Self-Healing Candidates\n\n"
+            "Status: none\n"
+        )
     with open(_os.path.join(task_dir, "CRITIC__qa.md"), "w") as f:
         f.write("# critic\n")
     if critic_mtime is not None:
@@ -410,7 +416,10 @@ def test_task_close_blocks_missing_commit_backed_learnings() -> TestResult:
             checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
         )
         with open(os.path.join(task_dir, "HANDOFF.md"), "w") as f:
-            f.write("# handoff\n\nNo commit-backed learning classification.\n")
+            f.write(
+                "# handoff\n\nNo commit-backed learning classification.\n\n"
+                "## Self-Healing Candidates\n\nStatus: none\n"
+            )
         orig = hs.canonical_task_dir
         orig_sync = hs.sync_from_git_diff
         hs.canonical_task_dir = lambda task_id=None, **kw: task_dir
@@ -428,6 +437,35 @@ def test_task_close_blocks_missing_commit_backed_learnings() -> TestResult:
         return TestResult("task_close_blocks_missing_commit_backed_learnings", False,
                           f"missing_for_close did not cite learning gate: {result!r}")
     return TestResult("task_close_blocks_missing_commit_backed_learnings", True)
+
+
+def test_task_close_blocks_missing_self_healing_candidates() -> TestResult:
+    """task_close must refuse HANDOFF.md without Self-Healing Candidates."""
+    hs = _load_mcp_server()
+    with tempfile.TemporaryDirectory() as tmp:
+        task_dir = _prepare_scratch_task(
+            tmp, "TASK__gr-self-healing-missing",
+            checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+        )
+        with open(os.path.join(task_dir, "HANDOFF.md"), "w") as f:
+            f.write("# handoff\n\n## Commit-backed Learnings\n\nStatus: none\n")
+        orig = hs.canonical_task_dir
+        orig_sync = hs.sync_from_git_diff
+        hs.canonical_task_dir = lambda task_id=None, **kw: task_dir
+        hs.sync_from_git_diff = lambda td: []
+        try:
+            result = hs.call_tool("task_close", {"task_id": "TASK__gr-self-healing-missing"})
+        finally:
+            hs.canonical_task_dir = orig
+            hs.sync_from_git_diff = orig_sync
+    if not result.get("isError"):
+        return TestResult("task_close_blocks_missing_self_healing_candidates", False,
+                          f"expected error, got: {result!r}")
+    missing = result.get("structuredContent", {}).get("missing_for_close") or []
+    if "Self-Healing Candidates section in HANDOFF.md" not in missing:
+        return TestResult("task_close_blocks_missing_self_healing_candidates", False,
+                          f"missing_for_close did not cite self-healing gate: {result!r}")
+    return TestResult("task_close_blocks_missing_self_healing_candidates", True)
 
 
 def test_prompt_memory_emits_context_block() -> TestResult:
@@ -581,6 +619,7 @@ TESTS = [
     test_task_close_blocks_on_failed_ac,
     test_task_close_blocks_on_stale_verdict,
     test_task_close_blocks_missing_commit_backed_learnings,
+    test_task_close_blocks_missing_self_healing_candidates,
     test_prompt_memory_emits_context_block,
     test_environment_snapshot_writes_block,
     test_tool_routing_suggests_test_command,

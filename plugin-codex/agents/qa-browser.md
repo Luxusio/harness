@@ -106,6 +106,13 @@ from actual command output.
 
 ## Verdict
 
+Before the verdict, add `Self-Healing Candidates for HANDOFF` to the transcript
+when browser QA discovers recurring harness/project friction that should be
+prevented next time: dev-server command drift, missing entry_url/port config,
+browser MCP reachability issues, brittle test data, unreliable selectors, or
+manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
+when obvious; Phase 8 writes the final HANDOFF `Self-Healing Candidates` section.
+
 Call `write_critic_qa` with verdict, summary, and transcript.
 
 **PASS requires:** operation OK + intent adequate + UX acceptable + runtime

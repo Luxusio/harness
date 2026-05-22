@@ -93,6 +93,14 @@ data, shell history, `.env`, or clipboard overlays, do not attach it; write
 
 ## Verdict
 
+Before the verdict, add `Self-Healing Candidates for HANDOFF` to the transcript
+when desktop QA discovers recurring harness/project friction that should be
+prevented next time: display/Xvfb setup drift, missing app launch command,
+brittle fixtures, desktop MCP reachability issues, screenshot redaction workflow
+gaps, or manual recovery loops. Mark each candidate `applied`, `deferred`, or
+`rejected` when obvious; Phase 8 writes the final HANDOFF `Self-Healing
+Candidates` section.
+
 Call `write_critic_qa` with verdict, summary, and transcript.
 
 **PASS requires:** operation OK + intent adequate + UX acceptable + runtime

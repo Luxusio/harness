@@ -100,6 +100,15 @@ Log friction signals to `doc/harness/learnings.jsonl` when they would help a
 future task: command not found, wrong help format, missing manifest flags, or
 env-specific behavior.
 
+## Self-Healing Candidates for HANDOFF
+
+When QA discovers recurring harness/project friction that should be prevented
+next time, add a short `Self-Healing Candidates for HANDOFF` note to the
+`write_critic_qa` transcript. Include command drift, missing manifest/dev-server
+config, wrong tool documentation, brittle fixtures, CI/test command mismatch, or
+manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
+when obvious; Phase 8 writes the final HANDOFF `Self-Healing Candidates` section.
+
 ## Codifiable block contract
 
 For every AC whose verification can be reduced to a deterministic product

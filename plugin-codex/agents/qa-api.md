@@ -111,6 +111,15 @@ or external service, use `BLOCKED_ENV` for affected ACs or a qualified PASS only
 Append concise future-use discoveries to `doc/harness/qa/QA_KNOWLEDGE.yaml`;
 log useful friction signals to `doc/harness/learnings.jsonl`.
 
+## Self-Healing Candidates for HANDOFF
+
+When QA discovers recurring harness/project friction that should be prevented
+next time, add a short `Self-Healing Candidates for HANDOFF` note to the
+`write_critic_qa` transcript. Include server setup drift, missing seed/auth
+scripts, manifest base URL gaps, CI/test command mismatch, brittle fixtures, or
+manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
+when obvious; Phase 8 writes the final HANDOFF `Self-Healing Candidates` section.
+
 ## Codifiable block contract
 
 For every AC reducible to a deterministic product command, emit a `codifiable:`

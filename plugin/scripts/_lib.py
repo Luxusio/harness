@@ -725,8 +725,16 @@ _COMMIT_BACKED_LEARNING_HEADING_RE = re.compile(
     r"^[ \t]{0,3}#{1,3}\s*Commit-backed Learnings\b",
     re.MULTILINE | re.IGNORECASE,
 )
+_SELF_HEALING_HEADING_RE = re.compile(
+    r"^[ \t]{0,3}#{1,3}\s*Self-Healing Candidates\b",
+    re.MULTILINE | re.IGNORECASE,
+)
 _COMMIT_BACKED_LEARNING_STATUS_RE = re.compile(
     r"^[ \t]{0,3}Status:\s*(none|captured|rejected)\b",
+    re.MULTILINE | re.IGNORECASE,
+)
+_SELF_HEALING_STATUS_RE = re.compile(
+    r"^[ \t]{0,3}Status:\s*(none|applied|deferred|rejected)\b",
     re.MULTILINE | re.IGNORECASE,
 )
 _FENCED_CODE_BLOCK_RE = re.compile(r"(^|\n)[ \t]{0,3}(```|~~~).*?(\n[ \t]{0,3}\2|$)", re.DOTALL)
@@ -737,6 +745,18 @@ _COMMIT_BACKED_LEARNING_NEXT_HEADING_RE = re.compile(
 )
 _COMMIT_BACKED_CAPTURED_LINE_RE = re.compile(
     r"^[ \t]{0,3}[-*]\s*captured:\s*(.+)$",
+    re.MULTILINE | re.IGNORECASE,
+)
+_SELF_HEALING_APPLIED_LINE_RE = re.compile(
+    r"^[ \t]{0,3}[-*]\s*applied:\s*(.+)$",
+    re.MULTILINE | re.IGNORECASE,
+)
+_SELF_HEALING_DEFERRED_LINE_RE = re.compile(
+    r"^[ \t]{0,3}[-*]\s*deferred:\s*(.+)$",
+    re.MULTILINE | re.IGNORECASE,
+)
+_SELF_HEALING_REJECTED_LINE_RE = re.compile(
+    r"^[ \t]{0,3}[-*]\s*rejected:\s*(.+)$",
     re.MULTILINE | re.IGNORECASE,
 )
 _COMMIT_BACKED_CAPTURED_CANDIDATE_LIMIT = 32
@@ -901,32 +921,66 @@ def _has_commit_backed_learning_section(task_dir):
     private session memory file.
     """
     path = os.path.join(task_dir, "HANDOFF.md")
-    if not os.path.isfile(path):
+    section = _handoff_section_body(path, _COMMIT_BACKED_LEARNING_HEADING_RE)
+    if section is None:
         return False
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            body = f.read()
-    except OSError:
-        return False
-    body = _HTML_COMMENT_RE.sub("\n", _FENCED_CODE_BLOCK_RE.sub("\n", body))
-    heading = _COMMIT_BACKED_LEARNING_HEADING_RE.search(body)
-    if not heading:
-        return False
-    remainder = body[heading.end():]
-    next_heading = _COMMIT_BACKED_LEARNING_NEXT_HEADING_RE.search(remainder)
-    section = remainder[:next_heading.start()] if next_heading else remainder
     status_match = _COMMIT_BACKED_LEARNING_STATUS_RE.search(section)
     if not status_match:
         return False
     status = status_match.group(1).lower()
     if status != "captured":
         return True
+    return _section_names_changed_artifact(
+        task_dir, section, _COMMIT_BACKED_CAPTURED_LINE_RE
+    )
 
+
+def _has_self_healing_candidates_section(task_dir):
+    """Return True when HANDOFF records close-time self-healing disposition."""
+    path = os.path.join(task_dir, "HANDOFF.md")
+    section = _handoff_section_body(path, _SELF_HEALING_HEADING_RE)
+    if section is None:
+        return False
+    status_match = _SELF_HEALING_STATUS_RE.search(section)
+    if not status_match:
+        return False
+    status = status_match.group(1).lower()
+    if status == "none":
+        return True
+    if status == "applied":
+        return _section_names_changed_artifact(
+            task_dir, section, _SELF_HEALING_APPLIED_LINE_RE
+        )
+    if status == "deferred":
+        return bool(_SELF_HEALING_DEFERRED_LINE_RE.search(section))
+    if status == "rejected":
+        return bool(_SELF_HEALING_REJECTED_LINE_RE.search(section))
+    return False
+
+
+def _handoff_section_body(path, heading_re):
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            body = f.read()
+    except OSError:
+        return None
+    body = _HTML_COMMENT_RE.sub("\n", _FENCED_CODE_BLOCK_RE.sub("\n", body))
+    heading = heading_re.search(body)
+    if not heading:
+        return None
+    remainder = body[heading.end():]
+    next_heading = _COMMIT_BACKED_LEARNING_NEXT_HEADING_RE.search(remainder)
+    return remainder[:next_heading.start()] if next_heading else remainder
+
+
+def _section_names_changed_artifact(task_dir, section, item_re):
     repo_root = find_repo_root(task_dir)
     touched = _commit_backed_learning_touched_paths(task_dir)
     touched_candidates = sorted(touched, key=len, reverse=True)
     candidates = []
-    for line_match in _COMMIT_BACKED_CAPTURED_LINE_RE.finditer(section):
+    for line_match in item_re.finditer(section):
         line = line_match.group(1)
         for rel_path in touched_candidates:
             if rel_path not in line:
@@ -1139,8 +1193,11 @@ def emit_compact_context(task_dir):
         missing_for_close.append("PLAN.md")
     if not has_handoff:
         missing_for_close.append("HANDOFF.md")
-    elif not _has_commit_backed_learning_section(task_dir):
-        missing_for_close.append("Commit-backed Learnings section in HANDOFF.md")
+    else:
+        if not _has_commit_backed_learning_section(task_dir):
+            missing_for_close.append("Commit-backed Learnings section in HANDOFF.md")
+        if not _has_self_healing_candidates_section(task_dir):
+            missing_for_close.append("Self-Healing Candidates section in HANDOFF.md")
     if runtime_verdict != "PASS":
         missing_for_close.append("runtime_verdict PASS")
 
@@ -1203,6 +1260,13 @@ def emit_compact_context(task_dir):
             "`Status: none`, `Status: captured`, or `Status: rejected`. "
             "Captured items must name an existing commit-eligible repo artifact; "
             "task-local artifacts and doc/harness/learnings.jsonl do not count."
+        )
+    elif "Self-Healing Candidates section in HANDOFF.md" in missing_for_close:
+        next_action = (
+            "Rewrite HANDOFF.md via write_handoff, preserving existing content, with "
+            "`## Self-Healing Candidates` and `Status: none`, `Status: applied`, "
+            "`Status: deferred`, or `Status: rejected`. Applied items must name "
+            "a changed commit-eligible artifact; deferred/rejected items need a reason."
         )
     else:
         next_action = "Runtime verdict PASS — run task_close."

@@ -154,6 +154,16 @@ class TestStopGateEmitsNextAction(unittest.TestCase):
         self.assertIn("commit-eligible repo artifact path", command)
         self.assertEqual(owner, "harness:developer")
 
+    def test_self_healing_missing_has_specific_next_action(self):
+        stop_gate = _load("stop_gate_self_healing_test", SCRIPTS / "stop_gate.py")
+        command, owner = stop_gate._next_action_for_missing(
+            "Self-Healing Candidates section in HANDOFF.md"
+        )
+        self.assertIn("Self-Healing Candidates", command)
+        self.assertIn("write_handoff", command)
+        self.assertIn("applied", command)
+        self.assertEqual(owner, "harness:developer")
+
     def test_stop_gate_uses_context_next_action_priority(self):
         stop_gate = _load("stop_gate_priority_test", SCRIPTS / "stop_gate.py")
         task_dir = os.path.join(self.repo, "doc", "harness", "tasks", "TASK__demo")

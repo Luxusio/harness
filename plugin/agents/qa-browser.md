@@ -109,6 +109,16 @@ deps/ports/env, and retry. For each UI AC: navigate, snapshot/screenshot, verify
 expected elements, click/fill/keypress/navigate/resize as relevant, wait for the
 visible response, and record evidence.
 
+## Self-Healing Candidates for HANDOFF
+
+When browser QA discovers recurring harness/project friction that should be
+prevented next time, add a short `Self-Healing Candidates for HANDOFF` note to
+the `write_critic_qa` transcript. Include dev-server command drift, missing
+entry_url/port config, browser MCP reachability issues, brittle test data,
+unreliable selectors, or manual recovery loops. Mark each candidate `applied`,
+`deferred`, or `rejected` when obvious; Phase 8 writes the final HANDOFF
+`Self-Healing Candidates` section.
+
 ## Codifiable block contract
 
 If the PLAN includes codifiable QA checks, verify each block by `ac_id`. A v1

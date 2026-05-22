@@ -112,6 +112,15 @@ headers, endpoint quirks, rate limits, or intermittent 500s. Include
 Log useful friction signals to `doc/harness/learnings.jsonl`: wrong port,
 missing base_url, auth setup quirks, versioning issues, intermittent failures.
 
+## Self-Healing Candidates for HANDOFF
+
+When QA discovers recurring harness/project friction that should be prevented
+next time, add a short `Self-Healing Candidates for HANDOFF` note to the
+`write_critic_qa` transcript. Include server setup drift, missing seed/auth
+scripts, manifest base URL gaps, CI/test command mismatch, brittle fixtures, or
+manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
+when obvious; Phase 8 writes the final HANDOFF `Self-Healing Candidates` section.
+
 ## Codifiable block contract
 
 For every AC whose verification can be reduced to a deterministic product

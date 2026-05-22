@@ -477,19 +477,20 @@ Call `mcp__plugin_harness_harness__write_handoff` with:
 6. Do Not Regress (caveats, fragile patterns)
 7. Feedback-Derived Rules (status: none / captured / rejected; readable rule text if captured)
 8. Commit-backed Learnings (status: none / captured / rejected). Local `doc/harness/learnings.jsonl` is gitignored staging, not shared memory. If this task surfaced a reusable fact, user correction, dogfood finding, setup recipe, or repeated friction that should help future contributors, either promote it in this same task to a committed artifact (`plugin/skills/**`, `plugin/scripts/**`, `tests/**`, `doc/harness/patterns/*.md`, `doc/common/GUIDE__*.md`, or another durable doc) and list the path, or mark `rejected` with the reason it is task-local/noisy/not reusable. `Status: none` is valid only when no reusable learning occurred.
-9. Confidence Ratings table from Phase 4.6 (highlight ≤6)
-10. Adversarial Findings table from Phase 4.7 (critical/high fixed, lower deferred)
-11. Near-Zero Cost check (Phase 4.8 fixed + deferred)
-12. Test Failure Triage (Phase 7)
-13. Test Results per AC + fix history
-14. Judgment Items (Phase 3.6 ASK-classified)
-15. Debugging Notes (Phase 7 debug reports — Symptom / Root cause / Fix / Evidence / Regression / Related / Status)
-16. Visual Evidence (AC → screenshot path → console errors → viewport)
-17. Execution Metrics (phase timing + fix loop counts)
-18. Quality Score (weighted)
-19. Dogfood Findings — from Phase 7.7 `DOGFOOD.md`: high-impact suggestions summary,
+9. Self-Healing Candidates (status: none / applied / deferred / rejected). Include development, QA, dogfood, and close-gate discoveries that would prevent repeated harness/project friction. `applied` means this task changed a committed skill, script, test, manifest, workflow, or durable doc to prevent recurrence; `deferred` means useful but out of scope and names the proposed artifact/follow-up; `rejected` gives the reason it is one-off/noisy/not worth automating.
+10. Confidence Ratings table from Phase 4.6 (highlight ≤6)
+11. Adversarial Findings table from Phase 4.7 (critical/high fixed, lower deferred)
+12. Near-Zero Cost check (Phase 4.8 fixed + deferred)
+13. Test Failure Triage (Phase 7)
+14. Test Results per AC + fix history
+15. Judgment Items (Phase 3.6 ASK-classified)
+16. Debugging Notes (Phase 7 debug reports — Symptom / Root cause / Fix / Evidence / Regression / Related / Status)
+17. Visual Evidence (AC → screenshot path → console errors → viewport)
+18. Execution Metrics (phase timing + fix loop counts)
+19. Quality Score (weighted)
+20. Dogfood Findings — from Phase 7.7 `DOGFOOD.md`: high-impact suggestions summary,
     re-plan recommendation if any. "No dogfood findings" if skipped or clean.
-20. Health Delta — recompute metrics from Phase 0 baseline:
+21. Health Delta — recompute metrics from Phase 0 baseline:
 
     ```
     | Metric | Before | After | Δ |
@@ -590,6 +591,31 @@ Use `captured` when a reusable discovery, dogfood finding, user correction,
 setup command, or repeated friction changed a committed skill, script, test, or
 durable doc in this task. Use `rejected` when you considered a candidate but it
 should remain local. Use `none` only when there was no reusable learning.
+
+### Phase 8.5.3: Self-Healing Candidates (mandatory HANDOFF classification)
+
+Classify whether this task revealed a recurring failure mode that the harness or
+project can prevent next time. This includes development friction, QA-discovered
+verification gaps, tool/schema drift, CI command drift, brittle setup commands,
+and repeated manual recovery steps. QA lenses should surface candidates in their
+`CRITIC__qa.md` transcript; Phase 8 owns the final HANDOFF classification.
+
+Add this HANDOFF section before calling `write_handoff`:
+
+```markdown
+## Self-Healing Candidates
+
+Status: none | applied | deferred | rejected
+
+- applied: <failure mode> — <changed committed path> now prevents recurrence
+- deferred: <failure mode> — <why out of scope>; proposed artifact: <path/task>
+- rejected: <candidate> — <why one-off, noisy, or not worth automating>
+```
+
+Use `applied` only when this task changed a committed artifact named on the
+bullet. Use `deferred` when the improvement is real but outside the task. Use
+`rejected` for one-off environment noise or non-reproducible complaints. Use
+`none` only when develop, QA, dogfood, and close produced no self-healing signal.
 
 ### Phase 8.6: DOC_SYNC
 

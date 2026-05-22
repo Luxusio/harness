@@ -575,8 +575,12 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         )
         (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
         if write_handoff:
+            default_handoff = "# handoff\n\n## Commit-backed Learnings\n\nStatus: none\n"
+            body = handoff_body or default_handoff
+            if "Self-Healing Candidates" not in body:
+                body = body.rstrip() + "\n\n## Self-Healing Candidates\n\nStatus: none\n"
             (task_dir / "HANDOFF.md").write_text(
-                handoff_body or "# handoff\n\n## Commit-backed Learnings\n\nStatus: none\n",
+                body,
                 encoding="utf-8",
             )
         if write_critic:
@@ -1042,6 +1046,111 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         self.assertNotIn("isError", result)
         self.assertTrue(result["structuredContent"]["closed"])
 
+    def test_close_rejects_handoff_without_self_healing_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__self-healing-missing",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                handoff_body=(
+                    "# handoff\n\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: none\n"
+                ),
+            )
+            handoff = Path(td) / "HANDOFF.md"
+            handoff.write_text(
+                "# handoff\n\n## Commit-backed Learnings\n\nStatus: none\n",
+                encoding="utf-8",
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__self-healing-missing"}
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        missing = result["structuredContent"]["missing_for_close"]
+        self.assertIn("Self-Healing Candidates section in HANDOFF.md", missing)
+
+    def test_close_accepts_self_healing_applied_changed_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__self-healing-applied",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                touched_paths=["plugin/scripts/_lib.py"],
+                handoff_body=(
+                    "# handoff\n\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: none\n\n"
+                    "## Self-Healing Candidates\n\n"
+                    "Status: applied\n\n"
+                    "- applied: close gate parser drift — plugin/scripts/_lib.py now blocks recurrence.\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__self-healing-applied"}
+                )
+            finally:
+                self._unpatch()
+        self.assertNotIn("isError", result)
+        self.assertTrue(result["structuredContent"]["closed"])
+
+    def test_close_rejects_self_healing_applied_untouched_artifact(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__self-healing-applied-untouched",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                touched_paths=[],
+                handoff_body=(
+                    "# handoff\n\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: none\n\n"
+                    "## Self-Healing Candidates\n\n"
+                    "Status: applied\n\n"
+                    "- applied: claimed fix — plugin/scripts/_lib.py.\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__self-healing-applied-untouched"}
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        missing = result["structuredContent"]["missing_for_close"]
+        self.assertIn("Self-Healing Candidates section in HANDOFF.md", missing)
+
+    def test_close_accepts_self_healing_deferred_and_rejected_with_reason(self):
+        for status, bullet in (
+            ("deferred", "- deferred: browser MCP flake — needs separate runtime fixture task.\n"),
+            ("rejected", "- rejected: one-off typo — not reusable.\n"),
+        ):
+            with tempfile.TemporaryDirectory() as tmp:
+                task_id = f"TASK__self-healing-{status}"
+                td = self._prepare_task(
+                    tmp, task_id,
+                    checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                    handoff_body=(
+                        "# handoff\n\n"
+                        "## Commit-backed Learnings\n\n"
+                        "Status: none\n\n"
+                        "## Self-Healing Candidates\n\n"
+                        f"Status: {status}\n\n"
+                        f"{bullet}"
+                    ),
+                )
+                self._patch(td)
+                try:
+                    result = harness_server.call_tool("task_close", {"task_id": task_id})
+                finally:
+                    self._unpatch()
+            self.assertNotIn("isError", result)
+            self.assertTrue(result["structuredContent"]["closed"])
+
     # ---- AC-003: missing CHECKS.yaml warn-passes + logs ----
     def test_close_warn_passes_without_checks_yaml(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1126,7 +1235,11 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             )
             handoff = Path(td) / "HANDOFF.md"
             handoff.write_text(
-                "# handoff after qa\n\n## Commit-backed Learnings\n\nStatus: none\n",
+                "# handoff after qa\n\n"
+                "## Commit-backed Learnings\n\n"
+                "Status: none\n\n"
+                "## Self-Healing Candidates\n\n"
+                "Status: none\n",
                 encoding="utf-8",
             )
             _os.utime(Path(td) / "CRITIC__qa.md", (100, 100))

@@ -101,6 +101,16 @@ contains secrets, personal data, shell history, `.env`, or clipboard overlays,
 do not attach it; write `screenshot redacted — contained sensitive UI` and
 describe the observation instead.
 
+## Self-Healing Candidates for HANDOFF
+
+When desktop QA discovers recurring harness/project friction that should be
+prevented next time, add a short `Self-Healing Candidates for HANDOFF` note to
+the `write_critic_qa` transcript. Include display/Xvfb setup drift, missing app
+launch command, brittle fixtures, desktop MCP reachability issues, screenshot
+redaction workflow gaps, or manual recovery loops. Mark each candidate
+`applied`, `deferred`, or `rejected` when obvious; Phase 8 writes the final
+HANDOFF `Self-Healing Candidates` section.
+
 ## Verdict
 
 Call `mcp__plugin_harness_harness__write_critic_qa` with:
