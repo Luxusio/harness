@@ -952,7 +952,14 @@ def _has_self_healing_candidates_section(task_dir):
             task_dir, section, _SELF_HEALING_APPLIED_LINE_RE
         )
     if status == "deferred":
-        return bool(_SELF_HEALING_DEFERRED_LINE_RE.search(section))
+        if not _SELF_HEALING_DEFERRED_LINE_RE.search(section):
+            return False
+        lowered = section.lower()
+        return (
+            "user_decision:" in lowered
+            and ("proposed_artifact:" in lowered or "proposed_task:" in lowered)
+            and "reason:" in lowered
+        )
     if status == "rejected":
         return bool(_SELF_HEALING_REJECTED_LINE_RE.search(section))
     return False
@@ -1266,7 +1273,8 @@ def emit_compact_context(task_dir):
             "Rewrite HANDOFF.md via write_handoff, preserving existing content, with "
             "`## Self-Healing Candidates` and `Status: none`, `Status: applied`, "
             "`Status: deferred`, or `Status: rejected`. Applied items must name "
-            "a changed commit-eligible artifact; deferred/rejected items need a reason."
+            "a changed commit-eligible artifact; deferred items need user_decision, "
+            "reason, and proposed_artifact/proposed_task; rejected items need a reason."
         )
     else:
         next_action = "Runtime verdict PASS — run task_close."

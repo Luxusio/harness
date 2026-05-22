@@ -1124,9 +1124,39 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         missing = result["structuredContent"]["missing_for_close"]
         self.assertIn("Self-Healing Candidates section in HANDOFF.md", missing)
 
-    def test_close_accepts_self_healing_deferred_and_rejected_with_reason(self):
+    def test_close_rejects_self_healing_deferred_without_user_decision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__self-healing-deferred-without-user",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                handoff_body=(
+                    "# handoff\n\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Status: none\n\n"
+                    "## Self-Healing Candidates\n\n"
+                    "Status: deferred\n\n"
+                    "- deferred: browser MCP flake — needs separate runtime fixture task.\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__self-healing-deferred-without-user"}
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        missing = result["structuredContent"]["missing_for_close"]
+        self.assertIn("Self-Healing Candidates section in HANDOFF.md", missing)
+
+    def test_close_accepts_self_healing_deferred_with_user_decision_and_rejected_with_reason(self):
         for status, bullet in (
-            ("deferred", "- deferred: browser MCP flake — needs separate runtime fixture task.\n"),
+            ("deferred", (
+                "- deferred: browser MCP flake\n"
+                "  user_decision: separate task\n"
+                "  reason: requires runtime fixture and manifest changes\n"
+                "  proposed_artifact: plugin/agents/qa-browser.md\n"
+            )),
             ("rejected", "- rejected: one-off typo — not reusable.\n"),
         ):
             with tempfile.TemporaryDirectory() as tmp:

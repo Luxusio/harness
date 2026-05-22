@@ -206,12 +206,52 @@ def _required_env_missing(service: dict[str, Any]) -> list[str]:
     return [name for name in names if name and not env.get(name)]
 
 
-def _port_open(host: str, port: int, timeout: float = 0.25) -> bool:
+def _ipv4_proc_hex(host: str) -> str | None:
     try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
+        return socket.inet_aton(host)[::-1].hex().upper()
+    except OSError:
+        return None
+
+
+def _port_listening_proc(host: str, port: int) -> bool:
+    path = Path("/proc/net/tcp")
+    if not path.exists():
+        return False
+    host_hex = _ipv4_proc_hex(host)
+    accepted_hosts = {"00000000"}
+    if host_hex:
+        accepted_hosts.add(host_hex)
+    port_hex = f"{port:04X}"
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[1:]
     except OSError:
         return False
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        local, state = parts[1], parts[3]
+        if ":" not in local or state != "0A":
+            continue
+        addr_hex, local_port_hex = local.split(":", 1)
+        if local_port_hex.upper() == port_hex and addr_hex.upper() in accepted_hosts:
+            return True
+    return False
+
+
+def _port_open(host: str, port: int, timeout: float = 1.0) -> bool:
+    if _port_listening_proc(host, port):
+        return True
+    deadline = time.time() + timeout
+    while True:
+        try:
+            with socket.create_connection((host, port), timeout=min(0.25, timeout)):
+                return True
+        except OSError:
+            if time.time() >= deadline:
+                break
+            time.sleep(0.05)
+    return False
 
 
 def _port_conflict(service: dict[str, Any]) -> tuple[bool, str]:

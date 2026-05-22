@@ -477,7 +477,7 @@ Call `mcp__plugin_harness_harness__write_handoff` with:
 6. Do Not Regress (caveats, fragile patterns)
 7. Feedback-Derived Rules (status: none / captured / rejected; readable rule text if captured)
 8. Commit-backed Learnings (status: none / captured / rejected). Local `doc/harness/learnings.jsonl` is gitignored staging, not shared memory. If this task surfaced a reusable fact, user correction, dogfood finding, setup recipe, or repeated friction that should help future contributors, either promote it in this same task to a committed artifact (`plugin/skills/**`, `plugin/scripts/**`, `tests/**`, `doc/harness/patterns/*.md`, `doc/common/GUIDE__*.md`, or another durable doc) and list the path, or mark `rejected` with the reason it is task-local/noisy/not reusable. `Status: none` is valid only when no reusable learning occurred.
-9. Self-Healing Candidates (status: none / applied / deferred / rejected). Include development, QA, dogfood, and close-gate discoveries that would prevent repeated harness/project friction. `applied` means this task changed a committed skill, script, test, manifest, workflow, or durable doc to prevent recurrence; `deferred` means useful but out of scope and names the proposed artifact/follow-up; `rejected` gives the reason it is one-off/noisy/not worth automating.
+9. Self-Healing Candidates (status: none / applied / deferred / rejected). Include development, QA, dogfood, and close-gate discoveries that would prevent repeated harness/project friction. `applied` means this task changed a committed skill, script, test, manifest, workflow, or durable doc to prevent recurrence. If a candidate is useful but too large/risky for the current scope, ask the user with the current runtime's user-input mechanism before deferring: Claude uses `AskUserQuestion`; Codex uses `request_user_input` when available, otherwise a direct conversational ask and waits for the user's reply. `deferred` must record `user_decision:`, `reason:`, and `proposed_artifact:` or `proposed_task:`. `rejected` gives the reason it is one-off/noisy/not worth automating.
 10. Confidence Ratings table from Phase 4.6 (highlight ≤6)
 11. Adversarial Findings table from Phase 4.7 (critical/high fixed, lower deferred)
 12. Near-Zero Cost check (Phase 4.8 fixed + deferred)
@@ -608,14 +608,21 @@ Add this HANDOFF section before calling `write_handoff`:
 Status: none | applied | deferred | rejected
 
 - applied: <failure mode> — <changed committed path> now prevents recurrence
-- deferred: <failure mode> — <why out of scope>; proposed artifact: <path/task>
+- deferred: <failure mode>
+  user_decision: <separate task | not now | other user wording>
+  reason: <why not in this task>
+  proposed_artifact: <path> | proposed_task: <task>
 - rejected: <candidate> — <why one-off, noisy, or not worth automating>
 ```
 
 Use `applied` only when this task changed a committed artifact named on the
-bullet. Use `deferred` when the improvement is real but outside the task. Use
-`rejected` for one-off environment noise or non-reproducible complaints. Use
-`none` only when develop, QA, dogfood, and close produced no self-healing signal.
+bullet. If the improvement is real but large or risky, do not silently defer:
+ask the user before close. On Claude, use `AskUserQuestion`. On Codex, use
+`request_user_input` when available; otherwise ask in conversation and wait for
+the user's reply. Use `deferred` only after recording that user decision plus
+the reason and proposed artifact/task. Use `rejected` for one-off environment
+noise or non-reproducible complaints. Use `none` only when develop, QA, dogfood,
+and close produced no self-healing signal.
 
 ### Phase 8.6: DOC_SYNC
 

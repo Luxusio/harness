@@ -21,6 +21,10 @@ def test_develop_skills_require_feedback_rule_judgment():
         assert "Self-Healing Candidates" in body
         assert "development, QA, dogfood, and close-gate discoveries" in body
         assert "Status: none | applied | deferred | rejected" in body
+        assert "AskUserQuestion" in body
+        assert "request_user_input" in body
+        assert "user_decision:" in body
+        assert "proposed_artifact:" in body
 
 
 def test_qa_agents_surface_self_healing_candidates_for_handoff():

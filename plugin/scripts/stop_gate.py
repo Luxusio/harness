@@ -89,7 +89,8 @@ def _next_action_for_missing(missing_item: str) -> tuple[str, str]:
         return ("Rewrite HANDOFF.md via write_handoff, preserving existing content, with "
                 "`## Self-Healing Candidates` and `Status: none`, `Status: applied`, "
                 "`Status: deferred`, or `Status: rejected`; applied items must name "
-                "a changed commit-eligible artifact path.",
+                "a changed commit-eligible artifact path; deferred items need "
+                "user_decision, reason, and proposed_artifact/proposed_task.",
                 "harness:developer")
     if "handoff.md" in item:
         return ("Spawn Agent(subagent_type='harness:developer', ...) to call "
