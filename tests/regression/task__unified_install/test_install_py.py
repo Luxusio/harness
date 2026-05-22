@@ -206,7 +206,6 @@ def test_sync_codex_payload_produces_complete_plugin_bundle(tmp_path):
     skill_names = sorted(path.parent.name for path in (codex_plugin / "skills").glob("*/SKILL.md"))
     assert skill_names == [
         "develop",
-        "maintain",
         "plan",
         "plan-ceo-review",
         "plan-design-review",

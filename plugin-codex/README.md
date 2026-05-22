@@ -42,7 +42,7 @@ Further references:
 - `agents/` — 7 agent definitions as **methodology references**. On Claude these spawn via `Agent(subagent_type=...)`; on Codex 0.130.0 there is no Agent primitive in this scope, so the harness orchestrator reads them inline and executes the role's methodology in its own conversation context.
 - Codex hook config is emitted by `install.py` as plugin-local `hooks.json`. It intentionally omits Stop-loop control; Codex flow is prompt-controlled by the skills. Hook scripts provide prompt context and tool safety only.
 
-## Skills (9 ported)
+## Skills (8 ported)
 
 | Skill | Source L | Codex L | as-is % | Notes |
 |-------|----------|---------|---------|-------|
@@ -50,7 +50,6 @@ Further references:
 | run | 171 | 176 | 56 | v1.5 spike port |
 | plan | — | 292 | 45 | v1.5 spike port; dual-voice degrades to single-voice |
 | develop | 500 | 511 | 48 | Agent fan-out → sequential; sub-files fall back to plugin/skills/develop/<sub>.md |
-| maintain | 123 | 156 | 72 | Highest as-is — no control-flow primitives in source |
 | plan-ceo-review | 1293 | 1335 | 52 | 14 AskUQ → prose; single-voice degraded adversarial |
 | plan-eng-review | 846 | 912 | 55 | 9 AskUQ → prose; rubrics sub-file falls back to Claude tree |
 | plan-design-review | 853 | 910 | — | Browser MCP refs degrade to ASCII wireframes + `open file://...` |

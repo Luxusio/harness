@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "harness",
-  "description": "Execution harness for AI-assisted repository work — adaptive execution modes (light/standard/sprinted), orchestration modes (solo/subagents/team), evidence bundles, freshness-aware memory, maintain-lite, and browser-first QA.",
+  "description": "Execution harness for AI-assisted repository work — adaptive execution modes (light/standard/sprinted), orchestration modes (solo/subagents/team), evidence bundles, freshness-aware memory, continuous maintenance, and browser-first QA.",
   "owner": {
     "name": "harness"
   },
@@ -20,7 +20,7 @@
         "execution-modes",
         "evidence-bundles",
         "note-freshness",
-        "maintain-lite",
+        "continuous-maintenance",
         "orchestration-modes",
         "team-readiness",
         "auto-orchestration",

@@ -1,11 +1,10 @@
-"""CT-01..03, BC-01..03, DOC-01..02, DX-01..06, SK-01..02: contracts/DX/skill tests.
+"""CT-01..03, BC-01..03, DOC-01..02, DX-01..06: contracts/DX tests.
 
 Covers:
   CT: CONTRACTS.md C-16 + C-11 + C-05 updates
   BC: bootstrap order / contract_lint recognition
   DOC: hygiene.yaml presence + README entries
   DX: [hygiene-*] tag namespace
-  SK: maintain SKILL.md LOC + invariants
 """
 from __future__ import annotations
 
@@ -636,56 +635,6 @@ class TestDXTagNamespace(unittest.TestCase):
             hygiene_lines = [l for l in combined.splitlines() if l.strip().startswith("[hygiene-")]
             self.assertEqual(len(hygiene_lines), 0,
                 f"disabled hygiene must produce no [hygiene-*] lines, got: {hygiene_lines}")
-
-
-class TestSkillMaintain(unittest.TestCase):
-    """SK-01..02: maintain SKILL.md LOC + invariants."""
-
-    def test_SK01_maintain_skill_loc_count(self):
-        """SK-01: maintain SKILL.md is <= 120 LOC (AC-015)."""
-        skill_path = os.path.join(REPO_ROOT, "plugin", "skills", "maintain", "SKILL.md")
-        with open(skill_path, encoding="utf-8") as f:
-            lines = f.readlines()
-        loc = len(lines)
-        self.assertLessEqual(loc, 120,
-            f"maintain SKILL.md has {loc} lines (AC-015 requires <= 120 LOC)")
-
-    def test_SK01_maintain_skill_no_subagent_spawn(self):
-        """SK-01: maintain SKILL.md must NOT contain subagent spawn invocation patterns."""
-        skill_path = os.path.join(REPO_ROOT, "plugin", "skills", "maintain", "SKILL.md")
-        with open(skill_path, encoding="utf-8") as f:
-            content = f.read()
-        invocation_patterns = [
-            r"skill\(harness:writer\)",
-            r"skill\(oh-my-claudecode:writer\)",
-            r"invoke\s+writer\s+agent",
-        ]
-        for pattern in invocation_patterns:
-            self.assertFalse(re.search(pattern, content.lower()),
-                f"maintain SKILL.md must not invoke writer subagent: {pattern!r} (AC-015)")
-        self.assertTrue(
-            "no subagent spawn" in content.lower()
-            or "not spawn" in content.lower()
-            or "never spawn" in content.lower()
-            or bool(re.search(r"no.*subagent", content.lower())),
-            "SKILL.md must explicitly prohibit subagent spawn"
-        )
-
-    def test_SK02_maintain_skill_has_tier_c_flow(self):
-        """SK-02: maintain SKILL.md includes Tier C confirm flow with AskUserQuestion."""
-        skill_path = os.path.join(REPO_ROOT, "plugin", "skills", "maintain", "SKILL.md")
-        with open(skill_path, encoding="utf-8") as f:
-            content = f.read()
-        self.assertIn("AskUserQuestion", content,
-                      "Tier C confirm flow requires AskUserQuestion")
-        self.assertTrue("Tier C" in content or "tier_c" in content.lower())
-        self.assertTrue(
-            "not batched" in content.lower()
-            or "one item at a time" in content.lower()
-            or "single AskUserQuestion per item" in content.lower()
-            or "per item" in content.lower()
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

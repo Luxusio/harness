@@ -19,7 +19,6 @@ CODEX_SKILL_PROMPTS = [
     REPO / "plugin-codex" / "skills" / "run" / "SKILL.md",
     REPO / "plugin-codex" / "skills" / "plan" / "SKILL.md",
     REPO / "plugin-codex" / "skills" / "develop" / "SKILL.md",
-    REPO / "plugin-codex" / "skills" / "maintain" / "SKILL.md",
     REPO / "plugin-codex" / "skills" / "plan-ceo-review" / "SKILL.md",
     REPO / "plugin-codex" / "skills" / "plan-eng-review" / "SKILL.md",
     REPO / "plugin-codex" / "skills" / "plan-design-review" / "SKILL.md",

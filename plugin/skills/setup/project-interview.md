@@ -1,15 +1,15 @@
 # Project interview (office-hours style)
 
 Six forcing questions at install time. Captures WHY before configuring HOW.
-Runs once — either during `setup` Phase 2.0, or re-invoked by `maintain` when
-the project character has drifted (re-anchor).
+Runs once during `setup` Phase 2.0, and can be re-opened by an active harness
+task when the project character has drifted (re-anchor).
 
 ## When to skip
 
 - User passed `--skip-interview`.
 - `doc/common/CLAUDE.md` already has a non-empty `summary:` field AND
   `doc/harness/manifest.yaml` exists (upgrade/rerun case). In that case,
-  `maintain` may re-open this interview when drift is suspected.
+  the active/next harness task may re-open this interview when drift is suspected.
 - `MAINTENANCE` marker in task dir (maintenance-only install).
 
 ## Voice
@@ -131,7 +131,8 @@ AskUserQuestion:
 ### C-100
 **Title:** <Q6 답변 한 줄>
 **When:** 사용자가 하네스 설치 시 이 조건을 회피 요청함.
-**Enforced by:** 정기 `maintain` 스킬 실행 시 이 규약 위반 여부 감지.
+**Enforced by:** SessionStart/close-time continuous maintenance detects this
+condition and asks the user before changing project-level rules.
 **On violation:** AskUserQuestion으로 "하네스 재조정 필요"를 제안.
 **Why:** 사용자 신뢰가 최우선 제약 (C-15 재강조).
 ```
@@ -142,8 +143,8 @@ AskUserQuestion:
 
 Before any permanent file write, dump all six answers to
 `doc/harness/.interview-answers.json` (tmp). This is the single
-authoritative record. If the setup crashes mid-apply, this file lets
-`maintain` replay the config without re-asking the user.
+authoritative record. If the setup crashes mid-apply, this file lets a later
+setup or active harness task replay the config without re-asking the user.
 
 **Schema (v1):**
 ```json
@@ -162,8 +163,8 @@ authoritative record. If the setup crashes mid-apply, this file lets
 }
 ```
 
-`schema_version` bump on breaking changes — `maintain` refuses to apply
-unknown versions and prompts user.
+`schema_version` bump on breaking changes — setup/continuous maintenance refuses
+to apply unknown versions and prompts user.
 
 ### Step 2 — Apply to target files
 
@@ -191,19 +192,19 @@ Q5 (verify today): <answer>
 Q6 (failure to avoid): <answer>
 ```
 
-### Step 4 — Log re-interview trigger for maintain
+### Step 4 — Log re-interview trigger for continuous maintenance
 
 ```bash
 echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"operational","source":"project-interview","key":"initial-interview-done","insight":"wedge=<Q4>, verify=<Q5 short>","task":"setup"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
-## Re-interview flow (maintain-invoked)
+## Re-interview flow (continuous maintenance)
 
-When `maintain` detects signals that project character has drifted (e.g.,
-`summary:` doesn't match recent commits, or user explicitly asks), it
-re-reads `.interview-answers.json`, shows the prior answers, and asks
-which questions to re-answer. Only the changed answers update their
-target files — others stay put.
+When SessionStart, close-time self-healing, or the user detects signals that
+project character has drifted (e.g., `summary:` doesn't match recent commits),
+the active harness task re-reads `.interview-answers.json`, shows the prior
+answers, and asks which questions to re-answer. Only the changed answers update
+their target files — others stay put.
 
 ## Safety invariants
 

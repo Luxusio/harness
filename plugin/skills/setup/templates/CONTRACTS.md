@@ -151,10 +151,10 @@ unwanted changes.
 
 ### C-10
 
-**Title:** CLAUDE.md is self-managed via the `maintain` skill.
+**Title:** CLAUDE.md is self-managed via continuous maintenance.
 **When:** Structural changes to rules, contracts, or the operating mode.
-**Enforced by:** `plugin/skills/maintain/SKILL.md` — the only skill that
-edits CLAUDE.md's harness-managed section.
+**Enforced by:** active harness tasks with a `MAINTENANCE` marker and close-time
+Self-Healing Candidates.
 **On violation:** soft-warn from `contract_lint.py`.
 **Why:** Ad-hoc edits to CLAUDE.md drift away from enforcement points.
 
@@ -163,10 +163,10 @@ edits CLAUDE.md's harness-managed section.
 **Title:** `CONTRACTS.md` managed block is not hand-edited.
 **When:** Any change to rules between the `harness:managed-begin/end` markers.
 **Enforced by:** `plugin/scripts/contract_lint.py` (SessionStart hook) —
-detects marker tampering; `maintain` skill regenerates from template.
+detects marker tampering; setup/continuous maintenance regenerates from template.
 Authorized writers for additive Edits within the managed block:
-`maintain` skill (all changes) and `hygiene_scan.py` (additive Edits only,
-never deletions, never edits outside the managed block markers).
+active tasks with a `MAINTENANCE` marker and `hygiene_scan.py` (additive Edits
+only, never deletions, never edits outside the managed block markers).
 **On violation:** soft-warn. User can move content to `CONTRACTS.local.md`.
 **Why:** The managed block is upgraded atomically on harness release; manual
 edits are lost.
@@ -207,7 +207,7 @@ exists and is fresh (C-04).
 ### C-15
 
 **Title:** Setup must not overwrite user-owned files.
-**When:** `setup` or `maintain` skill installs/updates harness files.
+**When:** `setup` or continuous maintenance installs/updates harness files.
 **Enforced by:** Skill procedure — `CLAUDE.md` gets at most a 1-line
 `@CONTRACTS.md` import; `CONTRACTS.md` respects managed-block markers;
 `CONTRACTS.local.md` is never touched once created.
