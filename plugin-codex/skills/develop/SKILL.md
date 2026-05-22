@@ -1,6 +1,7 @@
 ---
 name: develop
 description: Implement PLAN.md on Codex. Reads PLAN.md, implements changes, routes independent ACs by current subagent capability, verifies, and writes HANDOFF.
+user-invocable: false
 ---
 
 Implement the plan for a harness task. Reads PLAN.md, implements changes, verifies completeness, writes HANDOFF.md.

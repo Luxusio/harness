@@ -95,12 +95,9 @@ the user explicitly names them in their own prompt.
 | Pre-planning / scope-sharpening (product framing before a task) | `Skill(harness:setup)` (fills the office-hours role; no separate office-hours skill) |
 | Any repo-mutating intent — new feature, fix, refactor, behavior change (default) | `Skill(harness:run)` |
 | User explicitly says "plan only" / "just plan" | `Skill(harness:plan)` |
-| User explicitly says "implement PLAN.md" / "develop only" | `Skill(harness:develop)` |
+| User explicitly says "implement PLAN.md" / "develop only" | `Skill(harness:run)` resume/develop path |
 | Multi-component or API↔frontend change in one task | `Skill(harness:run)` (develop Phase 3.0 auto-fanout) |
-| CEO review | `Skill(plan-ceo-review)` |
-| Architecture review | `Skill(plan-eng-review)` |
-| Design review | `Skill(plan-design-review)` |
-| DX review | `Skill(plan-devex-review)` |
+| CEO / Architecture / Design / DX review | `Skill(harness:plan)`; review lenses are internal sub-skills |
 | Contract drift / "CLAUDE.md 정리" / "규약 정비" / post-upgrade cleanup | Use the continuous maintenance flow: fix scoped items in the active harness task, or ask the user and record the follow-up in close-time Self-Healing Candidates |
 | SessionStart reported `[continuous-maintenance]` in reminders | Fold the item into the active/next harness task; do not require a separate maintenance command |
 | Explanation | Direct answer |

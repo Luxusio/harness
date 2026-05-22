@@ -174,9 +174,9 @@ else
 ## Harness routing
 <!-- harness:routing-injected -->
 - Run the full cycle (plan → develop → verify → close) → `Skill(harness:run)`
-- Plan only → `Skill(harness:plan)`
-- Implement an approved PLAN.md → `Skill(harness:develop)`
 - Bootstrap harness in a new project / repair existing → `Skill(harness:setup)`
+- Plan only → `Skill(harness:plan)`
+- Implement an approved PLAN.md / develop only → resume through `Skill(harness:run)`
 - Contract drift / post-upgrade cleanup → continuous maintenance flow in the active/next `Skill(harness:run)` task
 - Read-only question or explanation → answer directly, no skill
 ROUTING_EOF

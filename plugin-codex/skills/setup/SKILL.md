@@ -5,6 +5,7 @@ description: |
   project detection, conversational configuration, and core structure
   generation. Use when asked "set up harness", "bootstrap", "initialize
   harness", or on first run in a new project.
+user-invocable: true
 ---
 
 # GENERATED-CANDIDATE — hand-ported v1.5 spike from plugin/skills/setup/SKILL.md (469L source).

@@ -6,6 +6,7 @@ description: |
   project detection, AskUserQuestion-based configuration, and core
   structure generation. Use when asked "set up harness", "bootstrap",
   "initialize harness", or on first run in a new project.
+user-invocable: true
 allowed-tools:
   - Bash
   - Read

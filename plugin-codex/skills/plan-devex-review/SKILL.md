@@ -1,5 +1,6 @@
 ---
 name: plan-devex-review
+user-invocable: false
 description: |
   Interactive developer experience plan review. Explores developer personas,
   benchmarks against competitors, designs magical moments, and traces friction

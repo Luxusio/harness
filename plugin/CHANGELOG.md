@@ -8,7 +8,7 @@ All notable changes to the harness Claude Code plugin.
 - `plugin/agents/harness.md` — the orchestrator agent is gone. The main Claude session now invokes `Skill(harness:run)` and sub-skills directly. No more agent-switching.
 
 ### Changed
-- `plugin/skills/setup/bootstrap.md` §3.4 — setup now emits an idempotent `## Harness routing` block (marker: `<!-- harness:routing-injected -->`) into the user's CLAUDE.md that maps intents to `Skill(harness:run|plan|develop|setup|maintain)`.
+- `plugin/skills/setup/bootstrap.md` §3.4 — setup emits an idempotent `## Harness routing` block (marker: `<!-- harness:routing-injected -->`) into the user's CLAUDE.md that maps normal use to `Skill(harness:run|plan|setup)`; develop/review helpers are internal.
 - `plugin/skills/setup/bootstrap.md` §3.4 — added migration step that strips the legacy `Default agent is harness` line from existing CLAUDE.md on Repair/Upgrade runs.
 - `plugin/skills/setup/SKILL.md` — routing-injection now references the bootstrap §3.4 template with idempotency marker.
 - `plugin/skills/setup/verify-report.md` — verifies routing block presence and (new) pytest availability for CLI/library projects with pytest-based test_command.

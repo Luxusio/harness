@@ -1,6 +1,7 @@
 ---
 name: run
 description: Orchestrate full development cycle — plan -> develop -> verify -> close.
+user-invocable: true
 ---
 
 # GENERATED-CANDIDATE — hand-ported v1.5 spike from plugin/skills/run/SKILL.md (171L source).

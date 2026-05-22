@@ -1,6 +1,7 @@
 ---
 name: plan
 description: Harness 7-phase review pipeline that writes PLAN.md and related task contract artefacts via MCP. Codex variant runs single-voice (Claude-only dual-voice fan-out deferred to v2).
+user-invocable: true
 ---
 
 # GENERATED-CANDIDATE — hand-ported v1.5 spike from plugin/skills/plan/SKILL.md (298L source).

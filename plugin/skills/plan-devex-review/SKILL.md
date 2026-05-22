@@ -2,6 +2,7 @@
 name: plan-devex-review
 preamble-tier: 3
 version: 2.0.0
+user-invocable: false
 description: |
   Interactive developer experience plan review. Explores developer personas,
   benchmarks against competitors, designs magical moments, and traces friction

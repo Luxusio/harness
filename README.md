@@ -195,11 +195,10 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 | Skill | Description |
 |-------|-------------|
 | `/harness:setup` | Bootstrap harness in target project |
-| `/harness:plan` | 7-phase dual-voice review → PLAN.md + CHECKS.yaml |
-| `/harness:develop` | Implement plan with quality audit pipeline |
 | `/harness:run` | Full cycle: plan → develop → verify → close + self-improvement |
+| `/harness:plan` | Advanced plan-only path → PLAN.md + CHECKS.yaml |
 
-`/harness:plan` internally dispatches four review sub-skills (`plan-ceo-review`, `plan-design-review`, `plan-eng-review`, `plan-devex-review`) as dual-voice reviewers — they are not invoked directly.
+Normal usage is `/harness:setup` once per repository, then `/harness:run` for work. `/harness:plan` is available when the user explicitly wants only the task contract. `develop` and the four review sub-skills (`plan-ceo-review`, `plan-design-review`, `plan-eng-review`, `plan-devex-review`) are internal orchestration details and are not invoked directly.
 
 ## Plugin structure
 

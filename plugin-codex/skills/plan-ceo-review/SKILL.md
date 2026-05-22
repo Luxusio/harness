@@ -1,5 +1,6 @@
 ---
 name: plan-ceo-review
+user-invocable: false
 description: |
   CEO/founder-mode plan review. Rethink the problem, find the 10-star product,
   challenge premises, expand scope when it creates a better product. Four modes:

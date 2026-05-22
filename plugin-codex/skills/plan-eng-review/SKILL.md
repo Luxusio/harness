@@ -1,5 +1,6 @@
 ---
 name: plan-eng-review
+user-invocable: false
 description: |
   Eng manager-mode plan review. Lock in the execution plan — architecture,
   data flow, diagrams, edge cases, test coverage, performance. Walks through
@@ -856,7 +857,7 @@ _TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 echo '{"ts":"'"$_TS"'","type":"operational","source":"plan-eng-review","key":"SHORT_KEY","insight":"<one-line actionable instruction>","confidence":N,"task":"TASK__<id>"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
-This runs in addition to the plan orchestrator's write-artifacts Phase 6.8 learnings write-back — the orchestrator captures cross-phase learnings; this sub-skill captures eng-review-specific ones even when the sub-skill is invoked standalone (e.g. via `Skill(plan-eng-review)` directly). The `source` field distinguishes origin so the orchestrator can dedupe later if needed.
+This runs in addition to the plan orchestrator's write-artifacts Phase 6.8 learnings write-back — the orchestrator captures cross-phase learnings; this internal sub-skill captures eng-review-specific ones when routed by the plan flow. The `source` field distinguishes origin so the orchestrator can dedupe later if needed.
 
 Skip obvious facts, transient errors, and duplicate-entry risk. If the session surfaced no operational friction, skip silently — never fabricate.
 
