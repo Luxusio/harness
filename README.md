@@ -198,7 +198,6 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 | `/harness:plan` | 7-phase dual-voice review → PLAN.md + CHECKS.yaml |
 | `/harness:develop` | Implement plan with quality audit pipeline |
 | `/harness:run` | Full cycle: plan → develop → verify → close + self-improvement |
-| `/harness:maintain` | Contract drift, doc cleanup, re-interview |
 
 `/harness:plan` internally dispatches four review sub-skills (`plan-ceo-review`, `plan-design-review`, `plan-eng-review`, `plan-devex-review`) as dual-voice reviewers — they are not invoked directly.
 
