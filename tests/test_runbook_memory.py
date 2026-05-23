@@ -49,6 +49,29 @@ class TestRunbookMemory(unittest.TestCase):
             self.assertIn("./scripts/integration-up.sh", runbooks)
             self.assertFalse((repo / "doc" / "harness" / "runbook_candidates.yaml").exists())
 
+    def test_capture_candidate_records_failure_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self._repo(tmp)
+            capture = _run(
+                repo,
+                "capture",
+                "--id", "backoffice-dev",
+                "--description", "Start Backoffice dev server for browser QA",
+                "--failed-command", "npm run dev",
+                "--command", "VITE_API_PROXY_TARGET=http://localhost:8080 npm run dev -- --host 127.0.0.1",
+                "--failure-class", "missing-env",
+                "--source-phase", "qa-browser",
+                "--source-task", "TASK__demo",
+                "--gotcha", "VITE proxy target is required",
+            )
+            self.assertEqual(capture.returncode, 0, capture.stderr)
+
+            candidates = (repo / "doc" / "harness" / "runbook_candidates.yaml").read_text()
+            self.assertIn("backoffice-dev:", candidates)
+            self.assertIn("failed_command:", candidates)
+            self.assertIn("failure_class: \"missing-env\"", candidates)
+            self.assertIn("source_phase: \"qa-browser\"", candidates)
+
     def test_skip_removes_candidate(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = self._repo(tmp)

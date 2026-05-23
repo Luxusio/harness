@@ -2,8 +2,8 @@
 """Small runbook memory helper for harness projects.
 
 Approved runbooks are concise, repo-local execution recipes that are safe to
-surface in prompt context. Candidates are unapproved discoveries waiting for a
-maintain review.
+surface in prompt context. Candidates are unapproved discoveries waiting for
+close-time Self-Healing Candidates classification.
 """
 from __future__ import annotations
 
@@ -150,7 +150,16 @@ def _dump_root_map(root_key: str, items: dict[str, dict[str, Any]]) -> str:
     for item_id in sorted(items):
         item = items[item_id]
         lines.append(f"  {sanitize_text(item_id, max_len=80)}:")
-        for key in ("description", "command", "source_task", "learned_at", "verified_at"):
+        for key in (
+            "description",
+            "command",
+            "failed_command",
+            "failure_class",
+            "source_phase",
+            "source_task",
+            "learned_at",
+            "verified_at",
+        ):
             if item.get(key):
                 lines.append(f"    {key}: {_quote(sanitize_text(item[key], max_len=500))}")
         gotchas = item.get("gotchas") or []
@@ -199,6 +208,27 @@ def add_candidate(repo_root: str, item_id: str, description: str, command: str,
         raise ValueError("id must contain only letters, numbers, dot, underscore, or dash")
     candidates = load_candidates(repo_root)
     candidates[clean_id] = item
+    save_candidates(repo_root, candidates)
+    return item
+
+
+def capture_candidate(repo_root: str, item_id: str, description: str, command: str,
+                      failed_command: str = "", failure_class: str = "",
+                      source_phase: str = "", gotchas: list[str] | None = None,
+                      source_task: str = "") -> dict[str, Any]:
+    """Capture a discovered setup/test/dev command as an unapproved runbook candidate."""
+    item = add_candidate(repo_root, item_id, description, command, gotchas=gotchas, source_task=source_task)
+    extras = {
+        "failed_command": sanitize_text(failed_command, max_len=500),
+        "failure_class": sanitize_text(failure_class, max_len=160),
+        "source_phase": sanitize_text(source_phase, max_len=80),
+    }
+    item.update({k: v for k, v in extras.items() if v})
+    if contains_secret(item):
+        skip_candidate(repo_root, item_id)
+        raise ValueError("candidate contains secret-like content; redact it before persisting")
+    candidates = load_candidates(repo_root)
+    candidates[sanitize_text(item_id, max_len=80)] = item
     save_candidates(repo_root, candidates)
     return item
 
@@ -277,6 +307,19 @@ def main(argv: list[str] | None = None) -> int:
     p_add.add_argument("--gotcha", action="append", default=[])
     p_add.add_argument("--source-task", default="")
 
+    p_capture = sub.add_parser(
+        "capture",
+        help="Record a discovered successful setup/test/dev command as a pending runbook candidate",
+    )
+    p_capture.add_argument("--id", required=True)
+    p_capture.add_argument("--description", required=True)
+    p_capture.add_argument("--command", required=True, help="Final successful command or script")
+    p_capture.add_argument("--failed-command", default="", help="Representative failed command, if useful")
+    p_capture.add_argument("--failure-class", default="", help="Short class such as missing-env, wrong-host, crlf-env")
+    p_capture.add_argument("--source-phase", default="", help="develop, qa-browser, qa-api, qa-cli, setup, etc.")
+    p_capture.add_argument("--gotcha", action="append", default=[])
+    p_capture.add_argument("--source-task", default="")
+
     p_approve = sub.add_parser("approve")
     p_approve.add_argument("id")
 
@@ -293,6 +336,19 @@ def main(argv: list[str] | None = None) -> int:
             add_candidate(repo_root, args.id, args.description, args.command,
                           gotchas=args.gotcha, source_task=args.source_task)
             print(f"candidate added: {args.id}")
+        elif args.cmd == "capture":
+            capture_candidate(
+                repo_root,
+                args.id,
+                args.description,
+                args.command,
+                failed_command=args.failed_command,
+                failure_class=args.failure_class,
+                source_phase=args.source_phase,
+                gotchas=args.gotcha,
+                source_task=args.source_task,
+            )
+            print(f"candidate captured: {args.id}")
         elif args.cmd == "approve":
             approve_candidate(repo_root, args.id)
             print(f"candidate approved: {args.id}")

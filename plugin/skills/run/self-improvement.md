@@ -36,6 +36,48 @@ Signals feed back: plan skill reads `learnings.jsonl` at Phase 0.1.5; setup read
 
 ---
 
+## Runbook candidates from discovered commands
+
+When develop or QA turns a failing setup/test/dev-server command into a working
+command, capture it as a pending runbook candidate instead of baking the
+project-specific command into harness core. This applies to repo-local facts
+such as required env vars, container fallback commands, local DB wrappers,
+dev-server ports, migration apply recipes, and browser QA bootstrap commands.
+
+Capture only when all of these are true:
+
+- the final command succeeded or reached the next useful blocker;
+- the command is repo-specific enough that future contributors would benefit;
+- no secret-like value is present; redact tokens, passwords, and private keys;
+- the lesson is a repeatable command recipe, not just a one-off error message.
+
+Use the helper so the candidate stays pending until close-time review:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runbook_memory.py capture \
+  --id "<short-id>" \
+  --description "<what this starts/tests/verifies>" \
+  --failed-command "<representative failed command>" \
+  --command "<final successful command or wrapper script>" \
+  --failure-class "<missing-env|wrong-host|crlf-env|missing-tool|dev-server-bootstrap|db-bootstrap>" \
+  --source-phase "<develop|qa-browser|qa-api|qa-cli>" \
+  --source-task "<task_id>" \
+  --gotcha "<why the first attempt failed>"
+```
+
+Do not auto-approve candidates at capture time. Close-time
+`Self-Healing Candidates` owns the decision:
+
+- `applied` — approve the candidate into `doc/harness/runbooks.yaml` or replace
+  it with a committed manifest/script/doc update that prevents recurrence.
+- `deferred` — ask the user first, then record the proposed artifact/task.
+- `rejected` — skip noisy, one-off, stale, or unsafe candidates.
+
+Approved runbooks are repo-local execution memory surfaced by
+`prompt_memory.py`; pending candidates are visible but advisory.
+
+---
+
 ## Write learnings as docs (primary path)
 
 Most learnings go directly into readable Tier 2 docs under `doc/harness/patterns/`:

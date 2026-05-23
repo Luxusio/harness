@@ -600,6 +600,26 @@ verification gaps, tool/schema drift, CI command drift, brittle setup commands,
 and repeated manual recovery steps. QA lenses should surface candidates in their
 `CRITIC__qa.md` transcript; Phase 8 owns the final HANDOFF classification.
 
+If develop or QA discovered a working repo-local setup/test/dev-server command
+after one or more failed attempts, record it before HANDOFF as a pending runbook
+candidate:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runbook_memory.py capture \
+  --id "<short-id>" \
+  --description "<what this starts/tests/verifies>" \
+  --failed-command "<representative failed command>" \
+  --command "<final successful command or wrapper script>" \
+  --failure-class "<missing-env|wrong-host|crlf-env|missing-tool|dev-server-bootstrap|db-bootstrap>" \
+  --source-phase "<develop|qa-browser|qa-api|qa-cli>" \
+  --source-task "<task_id>" \
+  --gotcha "<why the first attempt failed>"
+```
+
+The candidate is not shared memory yet. In this HANDOFF section, either approve
+it into a committed artifact (`doc/harness/runbooks.yaml`, manifest, script, or
+durable doc), ask before deferring it, or reject/skip it as one-off/noisy.
+
 Add this HANDOFF section before calling `write_handoff`:
 
 ```markdown
