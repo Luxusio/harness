@@ -94,7 +94,7 @@ task_start { slug: "<ARGUMENTS>" }
 
 ### Phase 2: Plan
 
-Read `plugin-codex/skills/plan/SKILL.md` (the v1.5 hand-port; AC-003 spike target) and execute its phases inline, passing `task_id`. The plan skill writes PLAN.md to the task_dir. On BLOCKED: stop and report.
+Read `plugin-codex/internal-skills/plan/SKILL.md` (the v1.5 hand-port; AC-003 spike target) and execute its phases inline, passing `task_id`. The plan skill writes PLAN.md to the task_dir. On BLOCKED: stop and report.
 
 On Codex side the plan skill uses the available runtime surface. When `spawn_agent` or external model routes are available, use them for independent review voices; otherwise run the review methodology inline and record `Runtime Fallbacks` if expected independence was lost. The premise gate becomes a conversational ask.
 

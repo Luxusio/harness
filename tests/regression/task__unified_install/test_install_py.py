@@ -204,13 +204,14 @@ def test_sync_codex_payload_produces_complete_plugin_bundle(tmp_path):
         assert (codex_plugin / rel).exists(), f"manifest path must exist: {rel}"
 
     skill_names = sorted(path.parent.name for path in (codex_plugin / "skills").glob("*/SKILL.md"))
-    assert skill_names == ["plan", "run", "setup"]
+    assert skill_names == ["run", "setup"]
 
     internal_skill_names = sorted(
         path.parent.name for path in (codex_plugin / "internal-skills").glob("*/SKILL.md")
     )
     assert internal_skill_names == [
         "develop",
+        "plan",
         "plan-ceo-review",
         "plan-design-review",
         "plan-devex-review",

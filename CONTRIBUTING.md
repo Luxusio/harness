@@ -68,4 +68,4 @@ Runtime sources live under `plugin/`. Every change to runtime behavior (paths, h
 
 ## Running the harness loop on the harness repo
 
-This repository dogfoods itself: any repo-mutating change goes through the canonical loop (`plan → develop → verify → close`). Use `/harness:run <slug>` to drive the full cycle, or invoke the individual skills (`/harness:plan`, `/harness:develop`, `/harness:setup`, `/harness:maintain`) directly. CONTRACTS.md is authoritative for what counts as a hard gate vs. a soft warning.
+This repository dogfoods itself: any repo-mutating change goes through the canonical loop (`plan → develop → verify → close`). Use `/harness:run <slug>` to drive the full cycle, or `/harness:setup` to bootstrap/repair harness in a target project. Internal plan/develop/review prompts are orchestrated by `run`, not invoked directly. CONTRACTS.md is authoritative for what counts as a hard gate vs. a soft warning.

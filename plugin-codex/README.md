@@ -38,8 +38,8 @@ Further references:
 - `.codex-plugin/plugin.json` — Codex plugin manifest (mirror of Claude's `.claude-plugin/plugin.json`).
 - `.codex-version` — minimum Codex CLI version pin (0.130.0). Setup refuses registration if installed Codex is older.
 - `config.toml.example` — annotated snippet showing the `~/.codex/config.toml` block that Codex needs for harness to be discoverable. Setup's additive-merge appends a copy to your real config with a timestamped backup, using the installed copy under `~/.codex/harness/plugins/harness`.
-- `skills/` — 3 user-visible Codex skills: `setup`, `run`, and `plan`. Codex exposes every `skills/*/SKILL.md` entry, so internal orchestration prompts do not live here.
-- `internal-skills/` — hand-authored Codex methodology prompts used by `run`/`plan` but hidden from the user skill menu (`develop`, `plan-*-review`).
+- `skills/` — 2 user-visible Codex skills: `setup` and `run`. Codex exposes every `skills/*/SKILL.md` entry, so internal orchestration prompts do not live here.
+- `internal-skills/` — hand-authored Codex methodology prompts used by `run` but hidden from the user skill menu (`plan`, `develop`, `plan-*-review`).
 - `agents/` — 7 agent definitions as **methodology references**. On Claude these spawn via `Agent(subagent_type=...)`; on Codex 0.130.0 there is no Agent primitive in this scope, so the harness orchestrator reads them inline and executes the role's methodology in its own conversation context.
 - Codex hook config is emitted by `install.py` as plugin-local `hooks.json`. It intentionally omits Stop-loop control; Codex flow is prompt-controlled by the skills. Hook scripts provide prompt context and tool safety only.
 
@@ -49,7 +49,7 @@ Further references:
 |-------|----------|---------|---------|-------|
 | setup | — | — | 71 | v1.5 spike port |
 | run | 171 | 176 | 56 | v1.5 spike port |
-| plan | — | 292 | 45 | v1.5 spike port; dual-voice degrades to single-voice |
+| internal-skills/plan | — | 292 | 45 | v1.5 spike port; dual-voice degrades to single-voice |
 | internal-skills/develop | 500 | 511 | 48 | Agent fan-out → sequential; sub-files fall back to plugin/skills/develop/<sub>.md |
 | internal-skills/plan-ceo-review | 1293 | 1335 | 52 | 14 AskUQ → prose; single-voice degraded adversarial |
 | internal-skills/plan-eng-review | 846 | 912 | 55 | 9 AskUQ → prose; rubrics sub-file falls back to Claude tree |
@@ -71,7 +71,7 @@ Further references:
 
 - **Parallel sub-agent fanout** — Codex 0.130.0 has no `Agent(subagent_type=...)` primitive in skill scope. Develop Phase 3.0 (per-AC parallel), Phase 4.5-4.8 (parallel quality audit), Phase 7 (multi-lens QA in one batch), Phase 7.7 (dogfooder spawn) all collapse to sequential inline on Codex. Will revisit when Codex `multi_agent` ergonomics make subagent spawn cheap.
 - **Browser MCP verification** — qa-browser methodology is ported, but runtime calls to `mcp__chrome-devtools__*` have no Codex equivalent yet. Wire Codex Playwright MCP in v2.
-- **Dual-voice plan-* reviews** — plan-skill's Voice A / Voice B fan-out for the 4 plan-* review lenses degrades to single-voice on Codex (no Agent primitive). v2 fix is multi_agent-based; until then, users wanting dual-voice fidelity should run `claude $/harness:plan-<lens>-review` against the Claude side.
+- **Dual-voice plan-* reviews** — plan-skill's Voice A / Voice B fan-out for the 4 plan-* review lenses degrades to single-voice on Codex (no Agent primitive). v2 fix is multi_agent-based; until then, users wanting dual-voice fidelity should use the Claude runtime's `harness:run` plan phase.
 - **AskUserQuestion** — every call site in the 9 ported skills converted to conversational prose with numbered/lettered options. Functional but UX-wise less discoverable than the structured tool. v2 may introduce a Codex helper that renders prose asks with a consistent shape.
 - **Prewrite gate role-detection on Codex** — when the Codex orchestrator runs subagent-role methodology inline (e.g. qa-cli writes CRITIC__qa.md, developer writes HANDOFF.md), the prewrite gate's role-detection currently keys off the Claude subagent-name surface. Until v2 lands runtime-aware role detection in `plugin/scripts/prewrite_gate.py`, the orchestrator uses `HARNESS_SKIP_PREWRITE=1` (documented bypass per CLAUDE.md env-var table; logs `type=gate-bypass` to `learnings.jsonl`).
 - **Stop loop control** — disabled on Codex. Codex follows the prompt in `run` / `develop` to continue through verify and close inside the current turn when feasible. It does not rely on Stop-hook auto-resume.

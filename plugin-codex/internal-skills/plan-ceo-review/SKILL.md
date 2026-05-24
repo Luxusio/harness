@@ -417,7 +417,7 @@ Only log genuine discoveries that would save time in a future session.
 
 ## Shared Preamble
 
-Apply the shared plan rules from `plugin-codex/skills/plan/SKILL.md`: voice,
+Apply the shared plan rules from `plugin-codex/internal-skills/plan/SKILL.md`: voice,
 completeness, conversational ask format, search-before-building, context recovery,
 and repo ownership.
 

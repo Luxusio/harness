@@ -4,7 +4,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 BOOTSTRAP = REPO / "plugin" / "skills" / "setup" / "bootstrap.md"
 PLAN_WRITE = REPO / "plugin" / "skills" / "plan" / "write-artifacts.md"
-CODEX_PLAN = REPO / "plugin-codex" / "skills" / "plan" / "SKILL.md"
+CODEX_PLAN = REPO / "plugin-codex" / "internal-skills" / "plan" / "SKILL.md"
 CLAUDE_DEVELOP = REPO / "plugin" / "skills" / "develop" / "SKILL.md"
 CODEX_DEVELOP = REPO / "plugin-codex" / "internal-skills" / "develop" / "SKILL.md"
 QA_BROWSER = REPO / "plugin" / "agents" / "qa-browser.md"

@@ -1,7 +1,7 @@
 ---
 name: plan
 description: Harness 7-phase review pipeline that writes PLAN.md and related task contract artefacts via MCP. Codex variant runs single-voice (Claude-only dual-voice fan-out deferred to v2).
-user-invocable: true
+user-invocable: false
 ---
 
 # GENERATED-CANDIDATE — hand-ported v1.5 spike from plugin/skills/plan/SKILL.md (298L source).
@@ -12,7 +12,7 @@ user-invocable: true
 Codex-variant 7-phase review pipeline. Runs structured review across CEO, Engineering, and DX lenses (Design lens optional); single-voice on Codex (dual-voice Agent fan-out remains Claude-only); classifies every decision; surfaces only contested items to the user; writes the final task contract through the protected-artifact MCP.
 
 > **Codex runtime notes** (delta from Claude):
-> - **Dual Voice is degraded to single voice** on Codex v1.5. Claude's invariant "Phases 1-4 spawn Voice A and Voice B via Agent" cannot apply — Codex has no Agent fan-out tool. The orchestrator runs one critical-reviewer pass per phase instead of two independent voices. Cross-model adversariality is lost; flag this in PLAN.md's Review Status section. Use `claude $/harness:plan <task>` for dual-voice fidelity on high-stakes plans.
+> - **Dual Voice is degraded to single voice** on Codex v1.5. Claude's invariant "Phases 1-4 spawn Voice A and Voice B via Agent" cannot apply — Codex has no Agent fan-out tool. The orchestrator runs one critical-reviewer pass per phase instead of two independent voices. Cross-model adversariality is lost; flag this in PLAN.md's Review Status section. Use the Claude runtime for dual-voice fidelity on high-stakes plans.
 > - **Sub-skills are inlined, not invoked.** Claude's `Skill("harness:plan-ceo-review", task_id)` chain has no Codex equivalent. The orchestrator reads each internal prompt's SKILL.md content inline and executes the methodology in the same conversation. Codex keeps these prompts under `plugin-codex/internal-skills/` so they remain packaged without appearing in the user-visible skill menu.
 > - **AskUserQuestion = conversational ask.** Three mandatory user-gates remain: Phase 1.1 premise gate, Phase 5.3 User Challenge gate, Phase 5.4.1 final approval. Each becomes "ask the user X with options A/B/C; read the reply" prose. Same content, no structured envelope.
 > - **`${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}`** for bash invocations that remain, such as update_checks.py. Plan artifact writes use MCP `write_plan_artifact`, not the legacy CLI.
@@ -119,7 +119,7 @@ Phases 1-4 run ONE critical-reviewer pass per phase. The pass:
 - Classifies each finding (Mechanical / Taste / User Challenge).
 - Appends a `single-voice` consensus row to AUDIT_TRAIL.md.
 
-Compared to Claude's dual-voice: less cross-blind-spot detection, faster turnaround, no Voice A vs Voice B disagreement surfacing. For high-stakes plans, the user should run `claude $/harness:plan <task>` instead.
+Compared to Claude's dual-voice: less cross-blind-spot detection, faster turnaround, no Voice A vs Voice B disagreement surfacing. For high-stakes plans, prefer the Claude runtime's `harness:run` plan phase.
 
 Full protocol, dimensions, checklists, and degradation matrix: `review-phases.md` (Claude tree). The Codex orchestrator uses the `single-voice` row of the degradation matrix as its default.
 

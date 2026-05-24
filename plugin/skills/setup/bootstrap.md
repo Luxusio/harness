@@ -175,7 +175,7 @@ else
 <!-- harness:routing-injected -->
 - Run the full cycle (plan → develop → verify → close) → `Skill(harness:run)`
 - Bootstrap harness in a new project / repair existing → `Skill(harness:setup)`
-- Plan only → `Skill(harness:plan)`
+- Plan-only requests → start with `Skill(harness:run)` and stop after the plan if the user explicitly asks not to implement
 - Implement an approved PLAN.md / develop only → resume through `Skill(harness:run)`
 - Contract drift / post-upgrade cleanup → continuous maintenance flow in the active/next `Skill(harness:run)` task
 - Read-only question or explanation → answer directly, no skill

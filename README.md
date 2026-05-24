@@ -196,9 +196,8 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 |-------|-------------|
 | `/harness:setup` | Bootstrap harness in target project |
 | `/harness:run` | Full cycle: plan → develop → verify → close + self-improvement |
-| `/harness:plan` | Advanced plan-only path → PLAN.md + CHECKS.yaml |
 
-Normal usage is `/harness:setup` once per repository, then `/harness:run` for work. `/harness:plan` is available when the user explicitly wants only the task contract. `develop` and the four review sub-skills (`plan-ceo-review`, `plan-design-review`, `plan-eng-review`, `plan-devex-review`) are internal orchestration details and are not invoked directly.
+Normal usage is `/harness:setup` once per repository, then `/harness:run` for work. `plan`, `develop`, and the four review sub-skills (`plan-ceo-review`, `plan-design-review`, `plan-eng-review`, `plan-devex-review`) are internal orchestration details and are not invoked directly.
 
 ## Plugin structure
 
