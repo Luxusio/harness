@@ -20,7 +20,7 @@ def test_run_self_improvement_documents_runbook_candidate_capture():
 def test_develop_skills_route_self_healing_commands_to_runbook_candidates():
     for rel, root_var in (
         ("plugin/skills/develop/SKILL.md", "CLAUDE_PLUGIN_ROOT"),
-        ("plugin-codex/skills/develop/SKILL.md", "HARNESS_PLUGIN_ROOT"),
+        ("plugin-codex/internal-skills/develop/SKILL.md", "HARNESS_PLUGIN_ROOT"),
     ):
         body = (REPO / rel).read_text(encoding="utf-8")
         assert "runbook_memory.py capture" in body

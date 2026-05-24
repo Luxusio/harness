@@ -5,7 +5,7 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 def test_develop_skills_require_feedback_rule_judgment():
-    for rel in ("plugin/skills/develop/SKILL.md", "plugin-codex/skills/develop/SKILL.md"):
+    for rel in ("plugin/skills/develop/SKILL.md", "plugin-codex/internal-skills/develop/SKILL.md"):
         body = (REPO / rel).read_text(encoding="utf-8")
         assert "Feedback-Derived Rules" in body
         assert "none" in body

@@ -18,11 +18,11 @@ CODEX_SKILL_PROMPTS = [
     REPO / "plugin-codex" / "skills" / "setup" / "SKILL.md",
     REPO / "plugin-codex" / "skills" / "run" / "SKILL.md",
     REPO / "plugin-codex" / "skills" / "plan" / "SKILL.md",
-    REPO / "plugin-codex" / "skills" / "develop" / "SKILL.md",
-    REPO / "plugin-codex" / "skills" / "plan-ceo-review" / "SKILL.md",
-    REPO / "plugin-codex" / "skills" / "plan-eng-review" / "SKILL.md",
-    REPO / "plugin-codex" / "skills" / "plan-design-review" / "SKILL.md",
-    REPO / "plugin-codex" / "skills" / "plan-devex-review" / "SKILL.md",
+    REPO / "plugin-codex" / "internal-skills" / "develop" / "SKILL.md",
+    REPO / "plugin-codex" / "internal-skills" / "plan-ceo-review" / "SKILL.md",
+    REPO / "plugin-codex" / "internal-skills" / "plan-eng-review" / "SKILL.md",
+    REPO / "plugin-codex" / "internal-skills" / "plan-design-review" / "SKILL.md",
+    REPO / "plugin-codex" / "internal-skills" / "plan-devex-review" / "SKILL.md",
 ]
 
 REVIEW_SKILL_PROMPTS = [
@@ -30,10 +30,10 @@ REVIEW_SKILL_PROMPTS = [
     REPO / "plugin" / "skills" / "plan-eng-review" / "SKILL.md",
     REPO / "plugin" / "skills" / "plan-design-review" / "SKILL.md",
     REPO / "plugin" / "skills" / "plan-devex-review" / "SKILL.md",
-    REPO / "plugin-codex" / "skills" / "plan-ceo-review" / "SKILL.md",
-    REPO / "plugin-codex" / "skills" / "plan-eng-review" / "SKILL.md",
-    REPO / "plugin-codex" / "skills" / "plan-design-review" / "SKILL.md",
-    REPO / "plugin-codex" / "skills" / "plan-devex-review" / "SKILL.md",
+    REPO / "plugin-codex" / "internal-skills" / "plan-ceo-review" / "SKILL.md",
+    REPO / "plugin-codex" / "internal-skills" / "plan-eng-review" / "SKILL.md",
+    REPO / "plugin-codex" / "internal-skills" / "plan-design-review" / "SKILL.md",
+    REPO / "plugin-codex" / "internal-skills" / "plan-devex-review" / "SKILL.md",
 ]
 
 QA_WORD_BUDGETS = {

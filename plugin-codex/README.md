@@ -38,22 +38,23 @@ Further references:
 - `.codex-plugin/plugin.json` — Codex plugin manifest (mirror of Claude's `.claude-plugin/plugin.json`).
 - `.codex-version` — minimum Codex CLI version pin (0.130.0). Setup refuses registration if installed Codex is older.
 - `config.toml.example` — annotated snippet showing the `~/.codex/config.toml` block that Codex needs for harness to be discoverable. Setup's additive-merge appends a copy to your real config with a timestamped backup, using the installed copy under `~/.codex/harness/plugins/harness`.
-- `skills/` — 9 hand-authored Codex SKILL.md variants of the harness user-facing skills. Each file keeps only runtime-relevant Codex deltas in the prompt; historical port notes live in task history, not in every runtime prompt.
+- `skills/` — 3 user-visible Codex skills: `setup`, `run`, and `plan`. Codex exposes every `skills/*/SKILL.md` entry, so internal orchestration prompts do not live here.
+- `internal-skills/` — hand-authored Codex methodology prompts used by `run`/`plan` but hidden from the user skill menu (`develop`, `plan-*-review`).
 - `agents/` — 7 agent definitions as **methodology references**. On Claude these spawn via `Agent(subagent_type=...)`; on Codex 0.130.0 there is no Agent primitive in this scope, so the harness orchestrator reads them inline and executes the role's methodology in its own conversation context.
 - Codex hook config is emitted by `install.py` as plugin-local `hooks.json`. It intentionally omits Stop-loop control; Codex flow is prompt-controlled by the skills. Hook scripts provide prompt context and tool safety only.
 
-## Skills (8 ported)
+## Skills and Internal Prompts
 
 | Skill | Source L | Codex L | as-is % | Notes |
 |-------|----------|---------|---------|-------|
 | setup | — | — | 71 | v1.5 spike port |
 | run | 171 | 176 | 56 | v1.5 spike port |
 | plan | — | 292 | 45 | v1.5 spike port; dual-voice degrades to single-voice |
-| develop | 500 | 511 | 48 | Agent fan-out → sequential; sub-files fall back to plugin/skills/develop/<sub>.md |
-| plan-ceo-review | 1293 | 1335 | 52 | 14 AskUQ → prose; single-voice degraded adversarial |
-| plan-eng-review | 846 | 912 | 55 | 9 AskUQ → prose; rubrics sub-file falls back to Claude tree |
-| plan-design-review | 853 | 910 | — | Browser MCP refs degrade to ASCII wireframes + `open file://...` |
-| plan-devex-review | 1022 | 1105 | 52 | dx-hall-of-fame.md sub-file falls back to Claude tree |
+| internal-skills/develop | 500 | 511 | 48 | Agent fan-out → sequential; sub-files fall back to plugin/skills/develop/<sub>.md |
+| internal-skills/plan-ceo-review | 1293 | 1335 | 52 | 14 AskUQ → prose; single-voice degraded adversarial |
+| internal-skills/plan-eng-review | 846 | 912 | 55 | 9 AskUQ → prose; rubrics sub-file falls back to Claude tree |
+| internal-skills/plan-design-review | 853 | 910 | — | Browser MCP refs degrade to ASCII wireframes + `open file://...` |
+| internal-skills/plan-devex-review | 1022 | 1105 | 52 | dx-hall-of-fame.md sub-file falls back to Claude tree |
 
 ## Agents (7 ported as methodology references)
 

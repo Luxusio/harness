@@ -13,7 +13,7 @@ Codex-variant 7-phase review pipeline. Runs structured review across CEO, Engine
 
 > **Codex runtime notes** (delta from Claude):
 > - **Dual Voice is degraded to single voice** on Codex v1.5. Claude's invariant "Phases 1-4 spawn Voice A and Voice B via Agent" cannot apply — Codex has no Agent fan-out tool. The orchestrator runs one critical-reviewer pass per phase instead of two independent voices. Cross-model adversariality is lost; flag this in PLAN.md's Review Status section. Use `claude $/harness:plan <task>` for dual-voice fidelity on high-stakes plans.
-> - **Sub-skills are inlined, not invoked.** Claude's `Skill("harness:plan-ceo-review", task_id)` chain has no Codex equivalent. The orchestrator reads each sub-skill's SKILL.md content inline and executes the methodology in the same conversation. Sub-skill ports are AC-005 sync-engine scope (v2 in v1.5 → uses Claude-side sub-skill files at `plugin/skills/plan-*-review/SKILL.md`).
+> - **Sub-skills are inlined, not invoked.** Claude's `Skill("harness:plan-ceo-review", task_id)` chain has no Codex equivalent. The orchestrator reads each internal prompt's SKILL.md content inline and executes the methodology in the same conversation. Codex keeps these prompts under `plugin-codex/internal-skills/` so they remain packaged without appearing in the user-visible skill menu.
 > - **AskUserQuestion = conversational ask.** Three mandatory user-gates remain: Phase 1.1 premise gate, Phase 5.3 User Challenge gate, Phase 5.4.1 final approval. Each becomes "ask the user X with options A/B/C; read the reply" prose. Same content, no structured envelope.
 > - **`${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}`** for bash invocations that remain, such as update_checks.py. Plan artifact writes use MCP `write_plan_artifact`, not the legacy CLI.
 > - **MCP tool names** bare (`task_start`, `task_context`, `write_plan_artifact`) — not Claude-prefixed form. Where the Claude source mentions a prefixed name, read it as bare.
@@ -86,12 +86,12 @@ Complete every section before moving on. Use concrete content in each required s
 
 ## Sub-skill execution protocol (Codex variant)
 
-Each review phase reads its corresponding sub-skill from the Claude tree (until AC-005 ports them) and executes the methodology inline:
+Each review phase reads its corresponding Codex internal prompt and executes the methodology inline:
 
-- Phase 1 → `plugin/skills/plan-ceo-review/SKILL.md` (read + execute inline)
-- Phase 2 → `plugin/skills/plan-design-review/SKILL.md` (only if ui_scope=true)
-- Phase 3 → `plugin/skills/plan-eng-review/SKILL.md`
-- Phase 4 → `plugin/skills/plan-devex-review/SKILL.md` (only if dx_scope=true)
+- Phase 1 → `plugin-codex/internal-skills/plan-ceo-review/SKILL.md` (read + execute inline)
+- Phase 2 → `plugin-codex/internal-skills/plan-design-review/SKILL.md` (only if ui_scope=true)
+- Phase 3 → `plugin-codex/internal-skills/plan-eng-review/SKILL.md`
+- Phase 4 → `plugin-codex/internal-skills/plan-devex-review/SKILL.md` (only if dx_scope=true)
 
 These sub-skills are heavy dual-voice review pipelines on the Claude side. On Codex v1.5 the orchestrator runs them single-voice — same dimensions, same outputs, one reviewer instead of two. Surface this in the Phase N consensus row of AUDIT_TRAIL.md.
 

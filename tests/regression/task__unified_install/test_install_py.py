@@ -204,15 +204,17 @@ def test_sync_codex_payload_produces_complete_plugin_bundle(tmp_path):
         assert (codex_plugin / rel).exists(), f"manifest path must exist: {rel}"
 
     skill_names = sorted(path.parent.name for path in (codex_plugin / "skills").glob("*/SKILL.md"))
-    assert skill_names == [
+    assert skill_names == ["plan", "run", "setup"]
+
+    internal_skill_names = sorted(
+        path.parent.name for path in (codex_plugin / "internal-skills").glob("*/SKILL.md")
+    )
+    assert internal_skill_names == [
         "develop",
-        "plan",
         "plan-ceo-review",
         "plan-design-review",
         "plan-devex-review",
         "plan-eng-review",
-        "run",
-        "setup",
     ]
 
     hooks_text = (codex_plugin / "hooks.json").read_text()
@@ -709,7 +711,9 @@ def test_install_codex_plugin_cache_marks_plugin_installed(tmp_path):
 
 
 def test_codex_skill_files_start_with_yaml_frontmatter():
-    for skill_path in sorted((REPO_ROOT / "plugin-codex" / "skills").glob("*/SKILL.md")):
+    skill_paths = list((REPO_ROOT / "plugin-codex" / "skills").glob("*/SKILL.md"))
+    skill_paths += list((REPO_ROOT / "plugin-codex" / "internal-skills").glob("*/SKILL.md"))
+    for skill_path in sorted(skill_paths):
         text = skill_path.read_text()
         assert text.startswith("---\n"), f"{skill_path} must start with YAML frontmatter"
         assert "\n---\n" in text[4:], f"{skill_path} must close YAML frontmatter"

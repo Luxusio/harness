@@ -14,7 +14,9 @@ INTERNAL_SKILLS = {
     "plan-devex-review",
     "plan-eng-review",
 }
-SKILL_ROOTS = [REPO / "plugin" / "skills", REPO / "plugin-codex" / "skills"]
+CLAUDE_SKILL_ROOT = REPO / "plugin" / "skills"
+CODEX_SKILL_ROOT = REPO / "plugin-codex" / "skills"
+CODEX_INTERNAL_ROOT = REPO / "plugin-codex" / "internal-skills"
 
 
 def _frontmatter(path: Path) -> dict[str, str]:
@@ -34,13 +36,24 @@ def _frontmatter(path: Path) -> dict[str, str]:
 
 
 def test_public_and_internal_skill_visibility_is_explicit():
-    for root in SKILL_ROOTS:
-        for skill in sorted(PUBLIC_SKILLS | INTERNAL_SKILLS):
-            meta = _frontmatter(root / skill / "SKILL.md")
-            expected = "true" if skill in PUBLIC_SKILLS else "false"
-            assert meta.get("user-invocable") == expected, (
-                f"{root.name}/{skill} must set user-invocable: {expected}"
-            )
+    for skill in sorted(PUBLIC_SKILLS | INTERNAL_SKILLS):
+        meta = _frontmatter(CLAUDE_SKILL_ROOT / skill / "SKILL.md")
+        expected = "true" if skill in PUBLIC_SKILLS else "false"
+        assert meta.get("user-invocable") == expected, (
+            f"plugin/skills/{skill} must set user-invocable: {expected}"
+        )
+
+
+def test_codex_user_visible_skill_tree_contains_only_public_skills():
+    visible = {path.parent.name for path in CODEX_SKILL_ROOT.glob("*/SKILL.md")}
+    internal = {path.parent.name for path in CODEX_INTERNAL_ROOT.glob("*/SKILL.md")}
+
+    assert visible == PUBLIC_SKILLS
+    assert internal == INTERNAL_SKILLS
+    for skill in sorted(PUBLIC_SKILLS):
+        assert _frontmatter(CODEX_SKILL_ROOT / skill / "SKILL.md").get("user-invocable") == "true"
+    for skill in sorted(INTERNAL_SKILLS):
+        assert _frontmatter(CODEX_INTERNAL_ROOT / skill / "SKILL.md").get("user-invocable") == "false"
 
 
 def test_readme_user_skill_table_excludes_internal_skills():

@@ -24,7 +24,7 @@ TARGETED_OLD_NEGATIVE_PHRASES = [
 
 OPERATIONAL_DOCS = [
     REPO / "plugin-codex" / "skills" / "run" / "SKILL.md",
-    REPO / "plugin-codex" / "skills" / "develop" / "SKILL.md",
+    REPO / "plugin-codex" / "internal-skills" / "develop" / "SKILL.md",
     REPO / "plugin-codex" / "skills" / "plan" / "SKILL.md",
     REPO / "plugin" / "skills" / "run" / "SKILL.md",
     REPO / "plugin" / "skills" / "develop" / "SKILL.md",

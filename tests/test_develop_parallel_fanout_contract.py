@@ -4,7 +4,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 CLAUDE_DEVELOP = REPO / "plugin" / "skills" / "develop" / "SKILL.md"
 PARALLEL_FANOUT = REPO / "plugin" / "skills" / "develop" / "parallel-fanout.md"
-CODEX_DEVELOP = REPO / "plugin-codex" / "skills" / "develop" / "SKILL.md"
+CODEX_DEVELOP = REPO / "plugin-codex" / "internal-skills" / "develop" / "SKILL.md"
 CONTRACTS = REPO / "CONTRACTS.md"
 AC_WORKER = REPO / "plugin" / "agents" / "ac-worker.md"
 
