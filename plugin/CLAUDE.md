@@ -22,14 +22,16 @@ No step skipped. Smallest coherent diff per step.
 **Core (task driver — main session or run skill):**
 - `task_start` — create/resume task, return fresh context
 - `task_context` — refresh task state (only when needed)
-- `task_verify` — sync changed paths + check verification
+- `task_verify` — sync changed paths + check verification; optionally reconcile ACs from QA PASS evidence
 - `task_close` — gate: runtime verdict PASS → close
 - `task_blocked` — park unfinished work on a real environment blocker; writes BLOCKED.md and clears this session's active marker
 
 **Artifact writes (role-owned):**
 - `write_plan_artifact` → PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md (plan-skill)
-- `write_critic_qa` → CRITIC__qa.md + runtime_verdict (qa-* agents)
+- `write_critic_qa` → CRITIC__qa.md + runtime_verdict evidence ledger (qa-* agents)
+- `write_critic_ux` → CRITIC__ux.md (ux-* agents; no runtime_verdict mutation)
 - `write_critic_document` → CRITIC__document.md (critic-document agent)
+- `write_req_doc` → doc/<area>/REQ__*.md scaffold for observable behavior
 - `write_handoff` → HANDOFF.md (develop coordinator or dedicated developer role)
 - `write_doc_sync` → DOC_SYNC.md (develop coordinator)
 
@@ -80,6 +82,7 @@ Turn 종결 정당 사유 (runtime_verdict 기반):
 | CHECKS.yaml | plan-skill (create) + update_checks.py CLI (develop/qa updates) |
 | source + HANDOFF.md + DOC_SYNC.md + distilled change doc | developer |
 | CRITIC__qa.md | qa-browser / qa-api / qa-cli / qa-desktop |
+| CRITIC__ux.md | ux-browser / ux-api / ux-cli / ux-desktop |
 
 Do not write another role's artifact. Prewrite gate enforces this.
 

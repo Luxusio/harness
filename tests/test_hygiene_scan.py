@@ -171,57 +171,56 @@ class TestMalformedPending(unittest.TestCase):
     """HK-07: malformed pending JSON skipped."""
 
     def test_HK07_malformed_pending_json_skipped(self):
-        """HK-07: _build_hygiene_block handles corrupt JSON gracefully."""
-        import prompt_memory as pm
+        """HK-07: hygiene_followup skips corrupt pending JSON gracefully."""
+        import hygiene_followup as hf
         with tempfile.TemporaryDirectory() as tmp:
             pending_file = os.path.join(tmp, ".hygiene-pending.json")
             with open(pending_file, "w") as f:
                 f.write("NOT VALID JSON {{{")
-            orig = pm.PENDING_JSON
-            pm.PENDING_JSON = os.path.relpath(pending_file, tmp)
+            orig = hf.PENDING_JSON
+            hf.PENDING_JSON = os.path.relpath(pending_file, tmp)
             try:
-                result = pm._build_hygiene_block(tmp)
-                self.assertIsInstance(result, str)
+                result = hf._read_pending(tmp)
+                self.assertEqual(result, [])
             finally:
-                pm.PENDING_JSON = orig
+                hf.PENDING_JSON = orig
 
     def test_HK07_legacy_pending_json_fallback(self):
-        """HK-07: prompt_memory reads legacy pending file when canonical is absent."""
-        import prompt_memory as pm
+        """HK-07: hygiene_followup reads legacy pending file when canonical is absent."""
+        import hygiene_followup as hf
         with tempfile.TemporaryDirectory() as tmp:
             legacy_file = os.path.join(tmp, ".maintain-pending.json")
             with open(legacy_file, "w") as f:
                 json.dump([{"path": "doc/changes/legacy.md", "kind": "review"}], f)
-            orig_new = pm.PENDING_JSON
-            orig_legacy = pm.LEGACY_PENDING_JSON
-            pm.PENDING_JSON = ".hygiene-pending.json"
-            pm.LEGACY_PENDING_JSON = ".maintain-pending.json"
+            orig_new = hf.PENDING_JSON
+            orig_legacy = hf.LEGACY_PENDING_JSON
+            hf.PENDING_JSON = ".hygiene-pending.json"
+            hf.LEGACY_PENDING_JSON = ".maintain-pending.json"
             try:
-                result = pm._build_hygiene_block(tmp)
-                self.assertIn("doc/changes/legacy.md", result)
+                result = hf._read_pending(tmp)
+                self.assertEqual(result[0]["path"], "doc/changes/legacy.md")
             finally:
-                pm.PENDING_JSON = orig_new
-                pm.LEGACY_PENDING_JSON = orig_legacy
+                hf.PENDING_JSON = orig_new
+                hf.LEGACY_PENDING_JSON = orig_legacy
 
     def test_HK07_canonical_pending_json_preferred(self):
-        """HK-07: prompt_memory prefers canonical pending file when both exist."""
-        import prompt_memory as pm
+        """HK-07: hygiene_followup prefers canonical pending file when both exist."""
+        import hygiene_followup as hf
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, ".hygiene-pending.json"), "w") as f:
                 json.dump([{"path": "doc/changes/new.md", "kind": "review"}], f)
             with open(os.path.join(tmp, ".maintain-pending.json"), "w") as f:
                 json.dump([{"path": "doc/changes/old.md", "kind": "review"}], f)
-            orig_new = pm.PENDING_JSON
-            orig_legacy = pm.LEGACY_PENDING_JSON
-            pm.PENDING_JSON = ".hygiene-pending.json"
-            pm.LEGACY_PENDING_JSON = ".maintain-pending.json"
+            orig_new = hf.PENDING_JSON
+            orig_legacy = hf.LEGACY_PENDING_JSON
+            hf.PENDING_JSON = ".hygiene-pending.json"
+            hf.LEGACY_PENDING_JSON = ".maintain-pending.json"
             try:
-                result = pm._build_hygiene_block(tmp)
-                self.assertIn("doc/changes/new.md", result)
-                self.assertNotIn("doc/changes/old.md", result)
+                result = hf._read_pending(tmp)
+                self.assertEqual(result[0]["path"], "doc/changes/new.md")
             finally:
-                pm.PENDING_JSON = orig_new
-                pm.LEGACY_PENDING_JSON = orig_legacy
+                hf.PENDING_JSON = orig_new
+                hf.LEGACY_PENDING_JSON = orig_legacy
 
 
 class TestTierMapping(unittest.TestCase):

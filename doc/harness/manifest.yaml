@@ -39,6 +39,10 @@ verify_commands:
 qa:
   default_mode: cli
   browser_qa_supported: false
+  # Opt-in close gate for surface-specific UX review. When true, touched CLI,
+  # API, browser, or desktop user-facing surfaces require the matching
+  # CRITIC__ux.md lens PASS before task_close.
+  ux_review_supported: false
 
 browser:
   enabled: false

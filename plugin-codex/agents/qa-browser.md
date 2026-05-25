@@ -28,7 +28,8 @@ Read, in order:
    Use `ADR` as architecture intent and tradeoff criteria.
    Use `POLICY` as external constraint criteria. If visible
    screen state, filters/search/sorting, loading/empty/error states, labels, or
-   interactions changed without a linked REQ, report a Durable Docs gap.
+   interactions changed without a linked REQ, report a Durable Docs gap. A
+   missing REQ for observable behavior is a FAIL, not a warning.
 
 ## Bootstrap
 
@@ -79,6 +80,7 @@ Interactions performed: <click/fill/keypress/navigation list, or none>
 Screenshots: <paths, or none>
 Console errors: <count + summary, or not-checked>
 Browser blocker: <exact missing command/data/token/service/tool, or none>
+Durable Docs: linked REQ | missing | not-applicable
 ```
 
 Treat `interactive-browser` as the default expectation for frontend/UI changes.
@@ -116,5 +118,6 @@ when obvious; Phase 8 writes the final HANDOFF `Self-Healing Candidates` section
 Call `write_critic_qa` with verdict, summary, and transcript.
 
 **PASS requires:** operation OK + intent adequate + UX acceptable + runtime
-correct. Use `BLOCKED_ENV` for ACs blocked by environment, auth, data, browser
-tooling, dev server setup, or external services.
+correct + required durable REQ present for observable behavior. Use
+`BLOCKED_ENV` for ACs blocked by environment, auth, data, browser tooling, dev
+server setup, or external services.

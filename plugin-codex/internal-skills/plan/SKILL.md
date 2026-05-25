@@ -272,6 +272,12 @@ Both modes: Phase 1 premise gate and Phase 5.3 User Challenges never auto-decide
   `doc/common/GUIDE__coding-style.md`. New pages, admin/backoffice screens, routes, controllers, and endpoints are REQ-required even when additive.
   PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`; `REQ: n/a` is invalid for observable UI/API behavior.
   A concrete REQ path is required before develop starts for observable UI/API/backoffice work. If target files or surfaces include observable UI, API, backoffice/admin screens, routes, controllers, or endpoints and the decision says `REQ: n/a`, treat that as a blocking plan defect: revise the PLAN before Phase 6 and do not defer this to close.
+  Happy path: when request text, user feedback, target surfaces, or known file
+  paths imply observable UI/API/mobile/native/desktop behavior, pick the REQ
+  path proactively. If no suitable REQ exists, select a new path such as
+  `doc/ui/REQ__mobile-reader-navigation.md`; develop will create/update it with
+  `write_req_doc` or `req_scaffold.py` before source edits. Safety gates exist
+  only to catch misses, not as the normal discovery mechanism.
 - **Two gates.** The non-auto-decided asks are: (1) premise confirmation in Phase 1.1, and (2) User Challenges in Phase 5.3.
 - **Log every decision.** Every classification (Mechanical / Taste / User Challenge) gets a row in `AUDIT_TRAIL.md` via `write_plan_artifact { artifact: "audit" }`.
 - **Full depth means full depth.** Complete every loaded methodology section with its required evidence and decisions.

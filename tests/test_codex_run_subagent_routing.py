@@ -36,7 +36,20 @@ def test_codex_run_documents_qa_subagent_call_shape():
     assert "Agent` fan-out routed through `spawn_agent` when available" in body
 
 
-def test_run_skills_document_resume_detection_and_auto_promotion():
+def test_run_skills_document_parallel_ux_lens_routing():
+    for path in (CODEX_RUN, CLAUDE_RUN):
+        body = _text(path)
+        assert "ux-browser" in body
+        assert "ux-cli" in body
+        assert "ux-api" in body
+        assert "ux-desktop" in body
+        assert "write_critic_ux" in body
+        assert "CRITIC__ux.md" in body
+        assert "does not update" in body
+        assert "`runtime_verdict`" in body
+
+
+def test_run_skills_document_resume_detection_and_verify_reconciliation():
     for path in (CODEX_RUN, CLAUDE_RUN):
         body = _text(path)
         assert "Phase 0: Resume detection" in body
@@ -44,8 +57,17 @@ def test_run_skills_document_resume_detection_and_auto_promotion():
         assert "PLAN.md missing → Phase 2 Plan" in body
         assert "HANDOFF.md missing → Phase 3 Develop" in body
         assert "runtime_verdict is not PASS → Phase 4 Verify" in body
-        assert "auto_promote_open_acs" in body
+        assert "reconcile_acs" in body
+        assert "task_verify" in body
         assert "failed/deferred ACs still require" in body
+
+
+def test_run_skills_document_separate_hygiene_followup_policy():
+    for path in (CODEX_RUN, CLAUDE_RUN):
+        body = _text(path)
+        assert "Schedule pending hygiene as a separate follow-up task" in body
+        assert "do not mix unrelated" in body
+        assert "primary task" in body
 
 
 def test_codex_develop_no_longer_says_agent_absence_is_absolute():

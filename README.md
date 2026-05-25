@@ -105,8 +105,13 @@ All under `plugin/agents/`. Narrow tool surface — each agent gets only what it
 | `qa-browser` | Browser-first runtime QA via Chrome DevTools MCP |
 | `qa-api` | API runtime QA via curl / httpie |
 | `qa-cli` | CLI / library runtime QA |
+| `qa-desktop` | Native GUI runtime QA via X11 tooling |
+| `ux-browser` / `ux-api` / `ux-cli` / `ux-desktop` | Surface-specific UX review; judges whether the implemented experience is shippable |
 
-QA agents write the runtime verdict via the harness MCP `write_critic_qa` tool. On Codex the MCP tool names are bare (`write_critic_qa`, `task_verify`); on Claude they may be displayed with a runtime prefix. QA agents never hold `Edit`/`Write` on source files.
+QA agents write evidence and the runtime verdict via the harness MCP `write_critic_qa` tool. CHECKS.yaml reconciliation belongs to `task_verify(reconcile_acs=true)`, which promotes open ACs only from fresh QA PASS evidence. On Codex the MCP tool names are bare (`write_critic_qa`, `task_verify`); on Claude they may be displayed with a runtime prefix. QA agents never hold `Edit`/`Write` on source files.
+UX agents write `CRITIC__ux.md` via `write_critic_ux`; they do not update
+`runtime_verdict` or auto-promote functional ACs. Dogfooder remains a
+non-gating backlog pass after QA/UX.
 
 ## Quality scripts
 
@@ -125,11 +130,15 @@ All under `plugin/scripts/`. Stdlib only.
 | `qa_codifier.py` | Parses QA transcripts → regression tests under `tests/regression/` | — |
 | `golden_replay.py` | Record/replay runtime smoke runs for deterministic regression | `doc/harness/replays/` |
 | `runtime_services.py` | Start/status/log helper for manifest-declared runtime services | task-local audit evidence |
+| `verify_runner.py` | Deterministic manifest `verify_commands` runner with optional parallel execution | task/task_verify evidence |
+| `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | plan/develop/close evidence |
+| `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |
 | `update_checks.py` | Atomic CHECKS.yaml AC status transitions (plan-first) | task-local |
 | `write_plan_artifact.py` | Legacy compatibility shim; prefer MCP `write_plan_artifact` for PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md | task-local |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
 | `hygiene_scan.py` | SessionStart auto-hygiene: Tier A/B auto-apply + doc archive pass | `doc/harness/.hygiene-pending.json` |
 | `doc_hygiene.py` | Content-signal KEEP/REMOVE/REVIEW classifier; archives stale docs via `git mv` | `doc/harness/.hygiene-pending.json` |
+| `hygiene_followup.py` | Post-close scheduler that creates one standalone hygiene review task from pending items | `doc/harness/tasks/TASK__hygiene-review-pending-docs/` |
 | `hygiene_restore.py` | Restore an archived file back to original location via `git mv` | — |
 | `maintain_restore.py` | Legacy wrapper for old archive restore commands | — |
 | `background_registry.py` | Shared registry for Claude subagent lifecycle records used by Stop hook auto-wait | `doc/harness/runtime/background.json` |
@@ -175,16 +184,20 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 
 ## MCP tools
 
-10 tools via `plugin/mcp/harness_server.py`:
+14 tools via `plugin/mcp/harness_server.py`:
 
 | Tool | Purpose |
 |------|---------|
 | `task_start` | Create/resume task, return context |
 | `task_context` | Refresh task state |
-| `task_verify` | Sync paths + check verification |
+| `task_verify` | Sync paths, check verification, optionally reconcile ACs from QA PASS evidence |
 | `task_close` | Gate: all verdicts PASS → close |
 | `task_blocked` | Park a task on a genuine environment blocker |
-| `write_critic_qa` | QA agent writes runtime verdict |
+| `record_ac_evidence` | Append incremental evidence to one CHECKS.yaml AC without changing status |
+| `record_attempt` | Record retry attempt evidence under `attempts/attempt-NNN/` |
+| `write_critic_qa` | QA agent writes evidence + runtime verdict |
+| `write_critic_ux` | UX agent writes lens-aware UX review verdict |
+| `write_req_doc` | Auto-author durable REQ scaffold before observable source work |
 | `write_plan_artifact` | Plan skill writes PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md |
 | `write_critic_document` | Document critic writes DOC_SYNC + durable-doc quality verdict |
 | `write_handoff` | Developer writes HANDOFF.md |

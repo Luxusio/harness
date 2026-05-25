@@ -52,6 +52,13 @@ API request or response shape, status codes, auth/session behavior, validation,
 compatibility, externally consumed side effects, or observable bugfixes.
 New pages, admin/backoffice screens, routes, controllers, and endpoints are REQ-required even when additive. PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`. Do not write `REQ: n/a` when the plan creates or changes observable UI/API behavior; if uncertain, choose the REQ and let develop refine the exact path. A concrete REQ path is required before develop starts for observable UI/API/backoffice work. If target files or surfaces include observable UI, API, backoffice/admin screens, routes, controllers, or endpoints and the decision says `REQ: n/a`, treat that as a blocking plan defect: revise the PLAN before Phase 6 and do not defer this to close.
 
+Happy path: when request text, user feedback, target surfaces, or known file
+paths imply observable UI/API/mobile/native/desktop behavior, pick the REQ path
+proactively. If no suitable REQ exists, select a new path such as
+`doc/ui/REQ__mobile-reader-navigation.md`; develop will create/update it with
+`write_req_doc` or `req_scaffold.py` before source edits. Safety gates exist
+only to catch misses, not as the normal discovery mechanism.
+
 Use `GUIDE` when the task establishes reusable coding, design, testing, or
 implementation guidance. Use `ADR` when it makes a significant technical
 choice with alternatives or tradeoffs. Use `POLICY` only for external

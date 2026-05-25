@@ -64,6 +64,9 @@ The develop skill reads PLAN.md, implements changes, runs plan completion audit,
 ### Phase 4: Verify (QA agent)
 
 Read `doc/harness/manifest.yaml` for project type. Spawn appropriate QA agent(s).
+Also spawn applicable UX review agents for user-facing surfaces. UX review is
+not a replacement for QA: qa-* writes `CRITIC__qa.md` and proves correctness;
+ux-* writes `CRITIC__ux.md` and judges whether the experience is shippable.
 
 **Strategy selection:**
 - **MUST spawn qa-browser when** `manifest.qa.browser_qa_supported: true` AND the diff contains any frontend file (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). Skipping is **blocked by task_close** (see `plugin/scripts/_lib.py:emit_compact_context` — `"qa-browser evidence in CRITIC__qa.md"` lands in `missing_for_close` and task_close refuses).
@@ -71,6 +74,17 @@ Read `doc/harness/manifest.yaml` for project type. Spawn appropriate QA agent(s)
 - `type: api` or diff contains route/endpoint files → qa-api
 - `type: cli` or `type: library` → qa-cli
 - Multiple types match (fullstack) → spawn relevant agents **in parallel**
+
+**UX strategy selection:**
+- frontend/browser UI diff with `browser_qa_supported: true` or `ux_review_supported: true` → ux-browser
+- CLI command/help/output/error diff with `ux_review_supported: true` → ux-cli
+- API route/schema/error/docs diff with `ux_review_supported: true` → ux-api
+- desktop GUI diff with `desktop_qa_supported: true` or `ux_review_supported: true` → ux-desktop
+
+When QA and UX lenses both apply, spawn them in the same parallel batch when
+available. QA calls `write_critic_qa`; UX calls `write_critic_ux` with
+`lens="cli|api|browser|desktop"`. `task_close` blocks applicable UX work until
+the required `CRITIC__ux.md` lens section is PASS.
 
 Order matters: the desktop branch is evaluated before the `type: cli` / `type: library`
 fallback so a desktop app declared as `type: cli` still routes to qa-desktop.
@@ -87,7 +101,7 @@ Agent(
 Task dir: <task_dir>
 Read ${CLAUDE_PLUGIN_ROOT}/agents/qa-<lens>.md for your full role definition.
 Follow it exactly — all four roles (operation, intent, UX/design, runtime).
-Call mcp__plugin_harness_harness__write_critic_qa with verdict, summary, full transcript, and auto_promote_open_acs=true when verdict=PASS."
+Call mcp__plugin_harness_harness__write_critic_qa with verdict, summary, and full transcript. QA records evidence only; the orchestrator reconciles CHECKS during task_verify."
 )
 ```
 
@@ -107,12 +121,15 @@ Agent(
 )
 ```
 
-When a QA agent records PASS for the task as a whole, pass
-`auto_promote_open_acs=true` to `write_critic_qa`. The MCP handler promotes only
-CHECKS.yaml entries with `status: open` and only when the effective verdict is
-PASS; failed/deferred ACs still require explicit `update_checks.py` handling.
+When QA records PASS for the task as a whole, run `task_verify` with
+`reconcile_acs=true`. The verify step promotes only CHECKS.yaml entries with
+`status: open` and only when fresh `CRITIC__qa.md` PASS evidence is present;
+failed/deferred ACs still require explicit `update_checks.py` handling.
 
 When `lens` is set, the handler keeps the latest section for that lens in `CRITIC__qa.md` and updates `runtime_verdict` via worst-wins across current lens verdicts (severity: `PENDING < PASS < BLOCKED_ENV < FAIL`). Without `lens`, the legacy full-overwrite path is taken — keep single-lens calls unchanged.
+
+`write_critic_ux` uses the same lens merge shape for `CRITIC__ux.md`, but it
+does not update `runtime_verdict` and does not auto-promote functional ACs.
 
 > **Note (MCP reload).** MCP server changes activate on the next session restart per the 2026-05-08 learning. Until the next restart, the new `lens` argument lands but the handler still runs the old code; concurrent calls without lens-routing still race. After restart, multi-lens spawns become safe to issue in parallel. See `plugin/skills/develop/parallel-fanout.md` for the spawn-all-in-one-message convention.
 
@@ -184,6 +201,8 @@ Stop on phase failures, report the failure, check task state, and ask how to pro
 ## Self-Improvement (post-close)
 
 After every task close, run the pipeline in `self-improvement.md`:
+- Schedule pending hygiene as a separate follow-up task; do not mix unrelated
+  hygiene cleanup into the just-finished primary task
 - Detect friction signals (wrong verify strategy, stale manifest, repeated failures, new project patterns)
 - Log harness-improvement entries to `learnings.jsonl`
 - Auto-fix safe manifest updates (reported to user before write)

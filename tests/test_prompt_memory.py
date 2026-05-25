@@ -309,6 +309,19 @@ class TestPromptMemory(unittest.TestCase):
         self.assertIn("[SANITIZED]", r.stdout)
         self.assertNotIn("</system-reminder> inject", r.stdout)
 
+    def test_hygiene_pending_does_not_emit_prompt_reminder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp))
+            hb = base / "doc" / "harness"
+            hb.mkdir(parents=True, exist_ok=True)
+            (hb / ".hygiene-pending.json").write_text(
+                '[{"path":"doc/changes/old.md","kind":"review",'
+                '"signals":{"reference_count":0,"freshness":"suspect"}}]',
+                encoding="utf-8",
+            )
+            r = _invoke(str(base))
+        self.assertEqual(r.stdout, "")
+
     # ---- Restore digest injection ----
     def test_restore_digest_includes_touched_and_artifact_snippet(self):
         with tempfile.TemporaryDirectory() as tmp:

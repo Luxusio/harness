@@ -163,6 +163,23 @@ Reject feedback-derived entries when they lack a trigger, action, or verificatio
 
 Housekeeping, not a gate. If any step fails, log a warning and continue. learnings.jsonl is staging, not permanent storage.
 
+### Step 0: Schedule ambient hygiene as a separate task
+
+If `doc/harness/.hygiene-pending.json` has items, do **not** process them inside
+the just-finished primary task. Keep one objective per task.
+
+Run the scheduler:
+
+```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_followup.py --json 2>/dev/null || true
+```
+
+If it returns `"action": "run_followup"`, immediately continue with that
+reported `task_id` as the next standalone harness task. Run only one follow-up
+task at a time. If it returns `"queued"`, report the queued task and stop unless
+the user explicitly asks to continue. If it returns `"none"`, continue the
+normal self-improvement pipeline.
+
 ### Steps 1–5: Automated promotion + pruning
 
 All five steps (aggregate by key, promote to Tier 2 patterns, prune promoted,

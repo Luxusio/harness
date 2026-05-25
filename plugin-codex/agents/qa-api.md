@@ -22,7 +22,7 @@ Use `REQ` as behavior/contract verification criteria.
 Use `GUIDE` as implementation quality and consistency criteria.
 Use `ADR` as architecture intent and tradeoff criteria.
 Use `POLICY` as external constraint criteria. If externally consumed request/response shape, status codes, auth,
-validation, or compatibility changed without a linked REQ, report a Durable Docs gap.
+validation, or compatibility changed without a linked REQ, report a Durable Docs gap. A missing REQ for observable API behavior is a FAIL, not a warning.
 
 For every service, database, queue, runtime, or dependency claimed by PLAN:
 - If `runtime.services[]` exists, run `runtime_services.py start` and `status`.
@@ -66,6 +66,7 @@ Database started: yes | no | not-needed
 External dependencies: <Postgres, Redis, MinIO, OAuth, etc.>
 Live smoke endpoints: <method + URL list, or none>
 Live smoke blocker: <exact missing command/data/token/service, or none>
+Durable Docs: linked REQ | missing | not-applicable
 ```
 
 Treat live HTTP smoke as the default expectation for externally consumed API
@@ -104,7 +105,7 @@ All four roles must pass:
 correct. For externally consumed API changes, prefer `live-http` evidence. If
 live HTTP is blocked by missing server setup, seed data, auth token, database,
 or external service, use `BLOCKED_ENV` for affected ACs or a qualified PASS only when the plan explicitly accepts a lower tier.
-**FAIL if:** any role fails.
+**FAIL if:** any role fails, including a missing durable REQ for observable API behavior.
 
 ## QA Knowledge
 

@@ -3,14 +3,15 @@
 
 No plugin-legacy dependency. All operations are direct file I/O.
 MCP tools: task_start, task_context, task_verify, task_close, task_blocked,
-           write_critic_qa, write_critic_document,
-           write_handoff, write_doc_sync.
+           write_critic_qa, write_critic_ux, write_critic_document,
+           write_req_doc, write_handoff, write_doc_sync.
 """
 
 from __future__ import annotations
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -43,10 +44,12 @@ def _runtime_from_initialize(params: dict) -> str:
 
 def _initialize_instructions(runtime: str) -> str:
     base = (
-        "harness MCP — 10 tools, 7-field TASK_STATE. "
+        "harness MCP — 14 tools, 7-field TASK_STATE. "
         "Protocol tool names are bare: task_start, task_verify, task_close, "
         "task_blocked, write_plan_artifact, write_critic_qa, "
-        "write_critic_document, write_handoff, and write_doc_sync. "
+        "write_critic_ux, write_critic_document, write_req_doc, "
+        "write_handoff, write_doc_sync, "
+        "record_ac_evidence, and record_attempt. "
         "write_plan_artifact is the canonical PLAN/CHECKS/AUDIT writer and "
         "replaces the legacy Python shim. "
     )
@@ -75,12 +78,16 @@ from _lib import (  # type: ignore
     ensure_task_scaffold, emit_compact_context, sync_from_git_diff,
     artifact_exists, canonical_task_dir, canonical_task_id,
     find_repo_root, runtime_is_stale as _runtime_is_stale,
-    write_active_marker, clear_active_marker,
+    write_active_marker, clear_active_marker, record_attempt,
 )
 try:
     from environment_snapshot import snapshot as _env_snapshot  # type: ignore
 except Exception:
     _env_snapshot = None
+try:
+    from req_scaffold import write_req_doc as _write_req_doc_file  # type: ignore
+except Exception:
+    _write_req_doc_file = None
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
@@ -216,7 +223,7 @@ def _parse_checks_yaml(td: str) -> list[dict] | None:
     blocks: list[str] = []
     current: list[str] = []
     for line in text.splitlines():
-        if re.match(r"^-\s+id:\s*", line):
+        if re.match(r"^\s*-\s+id:\s*", line):
             if current:
                 blocks.append("\n".join(current))
             current = [line]
@@ -227,7 +234,7 @@ def _parse_checks_yaml(td: str) -> list[dict] | None:
 
     items: list[dict] = []
     for block in blocks:
-        m_id = re.match(r"^-\s+id:\s*(\S+)", block)
+        m_id = re.match(r"^\s*-\s+id:\s*(\S+)", block)
         m_status = re.search(r"^\s+status:\s*(\S+)", block, re.MULTILINE)
         m_title = re.search(r'^\s+title:\s*"?(.*?)"?\s*$', block, re.MULTILINE)
         if not m_id:
@@ -245,6 +252,123 @@ def _parse_checks_yaml(td: str) -> list[dict] | None:
 
 _CHECKS_GATE_TERMINAL = {"passed", "deferred"}
 _AC_AUTO_PROMOTE_STATUSES = {"open"}
+
+
+def _split_checks_blocks(text: str) -> list[str]:
+    lines = text.splitlines(keepends=True)
+    blocks: list[list[str]] = [[]]
+    in_ac = False
+    for line in lines:
+        if re.match(r"^\s*-\s+id:\s*", line):
+            blocks.append([line])
+            in_ac = True
+        elif in_ac:
+            blocks[-1].append(line)
+        else:
+            blocks[-1].append(line)
+    return ["".join(block) for block in blocks]
+
+
+def _yaml_quote(value: str) -> str:
+    escaped = str(value or "").replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _append_ac_evidence(td: str, ac_id: str, evidence: str, source: str = "verification") -> dict:
+    checks_path = os.path.join(td, "CHECKS.yaml")
+    if not os.path.isfile(checks_path):
+        return {"ok": False, "error": "CHECKS.yaml not found"}
+    try:
+        text = Path(checks_path).read_text(encoding="utf-8")
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
+
+    blocks = _split_checks_blocks(text)
+    if len(blocks) <= 1:
+        return {"ok": False, "error": "CHECKS.yaml has no AC blocks"}
+
+    entry = f"{now_iso()} | {source or 'verification'} | {(evidence or '').replace(chr(10), ' ').strip()}"
+    changed = False
+    for idx in range(1, len(blocks)):
+        block = blocks[idx]
+        m_id = re.match(r"^\s*-\s+id:\s*(\S+)", block)
+        if not m_id or m_id.group(1).strip().strip('"').strip("'") != ac_id:
+            continue
+
+        if re.search(r"^\s+evidence_log:\s*$", block, flags=re.MULTILINE):
+            lines = block.splitlines(keepends=True)
+            insert_at = len(lines)
+            in_log = False
+            for line_idx, line in enumerate(lines):
+                if re.match(r"^\s+evidence_log:\s*$", line):
+                    in_log = True
+                    insert_at = line_idx + 1
+                    continue
+                if in_log and re.match(r"^\s{2}\w+:", line):
+                    insert_at = line_idx
+                    break
+                if in_log and re.match(r"^\s{4}-\s+", line):
+                    insert_at = line_idx + 1
+            lines.insert(insert_at, f"    - {_yaml_quote(entry)}\n")
+            blocks[idx] = "".join(lines)
+        else:
+            suffix = "\n" if block.endswith("\n") else ""
+            blocks[idx] = block.rstrip("\n") + f"\n  evidence_log:\n    - {_yaml_quote(entry)}" + suffix
+        changed = True
+        break
+
+    if not changed:
+        return {"ok": False, "error": f"AC not found: {ac_id}"}
+    _atomic_write_text(checks_path, "".join(blocks))
+    return {"ok": True, "ac_id": ac_id, "evidence": entry}
+
+
+def handle_record_ac_evidence(args: dict) -> dict:
+    ti = _req(args, "task_id")
+    ac_id = _req(args, "ac_id")
+    evidence = _req(args, "evidence")
+    source = _opt(args, "source") or "verification"
+    td = canonical_task_dir(task_id=ti)
+    result = _append_ac_evidence(td, ac_id, evidence, source)
+    if not result.get("ok"):
+        return _err("record_ac_evidence failed", data={"task_dir": td, **result})
+    return _ok({"task_dir": td, **result})
+
+
+def handle_record_attempt(args: dict) -> dict:
+    ti = _req(args, "task_id")
+    kind = _opt(args, "kind") or "retry"
+    verdict = _opt(args, "verdict") or "unknown"
+    summary = _req(args, "summary")
+    transcript = _opt(args, "transcript") or ""
+    td = canonical_task_dir(task_id=ti)
+    meta = record_attempt(td, kind, verdict, summary, transcript)
+    return _ok({"task_dir": td, "attempt": meta})
+
+
+def _run_verify_runner(td: str, parallel: bool = True, max_workers: int | None = None) -> dict:
+    script = SCRIPTS_DIR / "verify_runner.py"
+    cmd = [sys.executable, str(script), "--json"]
+    if parallel:
+        cmd.append("--parallel")
+    if max_workers:
+        cmd.extend(["--max-workers", str(max_workers)])
+    proc = subprocess.run(
+        cmd,
+        cwd=find_repo_root(td),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        timeout=None,
+    )
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError:
+        payload = {"commands": [], "stdout": proc.stdout}
+    payload["returncode"] = proc.returncode
+    if proc.stderr:
+        payload["stderr"] = proc.stderr[-4000:]
+    return payload
 
 
 def _checks_gate_status(td: str) -> tuple[str, list[dict]]:
@@ -304,7 +428,7 @@ def _auto_promote_open_acs(td: str, evidence: str) -> list[str]:
     current: list[str] = []
     prefix_lines: list[str] = []
     for line in text.splitlines():
-        if re.match(r"^-\s+id:\s*", line):
+        if re.match(r"^\s*-\s+id:\s*", line):
             if current:
                 blocks.append("\n".join(current))
             current = [line]
@@ -323,7 +447,7 @@ def _auto_promote_open_acs(td: str, evidence: str) -> list[str]:
     if len(safe_evidence) > 240:
         safe_evidence = safe_evidence[:237].rstrip() + "..."
     for block in blocks:
-        m_id = re.match(r"^-\s+id:\s*(\S+)", block)
+        m_id = re.match(r"^\s*-\s+id:\s*(\S+)", block)
         m_status = re.search(r"^\s+status:\s*(\S+)", block, re.MULTILINE)
         status = (m_status.group(1) if m_status else "open").strip()
         if m_id and status in _AC_AUTO_PROMOTE_STATUSES:
@@ -340,6 +464,41 @@ def _auto_promote_open_acs(td: str, evidence: str) -> list[str]:
     except OSError:
         return []
     return promoted
+
+
+def _critic_qa_has_pass(td: str) -> bool:
+    """Return true when CRITIC__qa.md contains current PASS evidence."""
+    path = os.path.join(td, "CRITIC__qa.md")
+    if not os.path.isfile(path):
+        return False
+    try:
+        content = Path(path).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    if re.search(r"^## qa-[^\n]+ verdict: PASS\s*$", content, flags=re.MULTILINE):
+        return True
+    return bool(re.search(r"^## Verdict\s*\nPASS\s*$", content, flags=re.MULTILINE))
+
+
+def _reconcile_acs_from_qa(td: str) -> dict:
+    """Promote open ACs from fresh QA PASS evidence during task_verify."""
+    st = read_state(td)
+    runtime_verdict = (st.get("runtime_verdict") or "pending").upper()
+    if runtime_verdict != "PASS":
+        return {
+            "promoted_acs": [],
+            "reason": f"runtime_verdict is {runtime_verdict}, not PASS",
+        }
+    if not _critic_qa_has_pass(td):
+        return {
+            "promoted_acs": [],
+            "reason": "CRITIC__qa.md has no PASS evidence",
+        }
+    promoted = _auto_promote_open_acs(td, "CRITIC__qa.md task_verify PASS")
+    return {
+        "promoted_acs": promoted,
+        "reason": "promoted open ACs from QA PASS evidence" if promoted else "no open ACs to promote",
+    }
 
 
 def _log_gate_warn(task_id: str, key: str, insight: str) -> None:
@@ -400,6 +559,13 @@ def handle_task_start(args: dict) -> dict:
                 pass
 
     ensure_task_scaffold(task_dir, tid, request_text=request_text)
+    execution_mode = _opt(args, "execution_mode")
+    if execution_mode:
+        mode = execution_mode.strip().lower()
+        if mode not in {"standard", "micro"}:
+            raise ValueError("execution_mode must be standard or micro")
+        if mode == "micro":
+            set_state_field(task_dir, "plan_session_state", "micro_loop")
 
     # Write session-scoped active marker so multiple sessions can work in one repo.
     write_active_marker(repo_root, task_dir)
@@ -435,6 +601,15 @@ def handle_task_verify(args: dict) -> dict:
     ti = _req(args, "task_id")
     td = canonical_task_dir(task_id=ti)
     sync_from_git_diff(td)
+    verify_run = None
+    if _truthy(args.get("run_commands")):
+        max_workers_raw = args.get("max_workers")
+        max_workers = int(max_workers_raw) if isinstance(max_workers_raw, int) and max_workers_raw > 0 else None
+        verify_run = _run_verify_runner(
+            td,
+            parallel=_truthy(args.get("parallel")) or args.get("parallel") is None,
+            max_workers=max_workers,
+        )
 
     # Stale check: if any touched path is newer than CRITIC__qa.md,
     # revert the stored verdict to pending so task_close won't accept a
@@ -446,10 +621,20 @@ def handle_task_verify(args: dict) -> dict:
         if (st.get("runtime_verdict") or "").upper() == "PASS":
             set_state_field(td, "runtime_verdict", "pending")
 
+    ac_reconcile = {"promoted_acs": [], "reason": "not requested"}
+    if _truthy(args.get("reconcile_acs")):
+        if stale:
+            ac_reconcile = {
+                "promoted_acs": [],
+                "reason": "runtime_verdict is stale; rerun QA before AC reconciliation",
+            }
+        else:
+            ac_reconcile = _reconcile_acs_from_qa(td)
+
     st = read_state(td)
     rv = (st.get("runtime_verdict") or "pending").upper()
     ctx = emit_compact_context(td)
-    return _ok({
+    payload = {
         "task_dir": td, "runtime_verdict": rv,
         "touched_paths": st.get("touched_paths") or [],
         "next_action": ctx.get("next_action", ""),
@@ -457,7 +642,11 @@ def handle_task_verify(args: dict) -> dict:
         "report_path": _task_artifact_rel(td, "CRITIC__qa.md"),
         "stale": stale,
         "stale_path": stale_path,
-    })
+        "ac_reconcile": ac_reconcile,
+    }
+    if verify_run is not None:
+        payload["verify_run"] = verify_run
+    return _ok(payload)
 
 
 def handle_task_close(args: dict) -> dict:
@@ -660,12 +849,67 @@ def _lens_merge_critic_qa(td: str, lens: str, verdict: str,
     else:
         final = current
     set_state_field(td, "runtime_verdict", final)
-    promoted = []
-    if auto_promote_open_acs and final == "PASS":
-        promoted = _auto_promote_open_acs(td, f"CRITIC__qa.md qa-{lens} PASS")
+    attempt = None
+    if final in {"FAIL", "BLOCKED_ENV"}:
+        attempt = record_attempt(td, f"qa-{lens}", final, summary, transcript)
+    legacy_reconcile_note = ""
+    if auto_promote_open_acs:
+        legacy_reconcile_note = (
+            "auto_promote_open_acs is deprecated and no longer mutates CHECKS.yaml; "
+            "run task_verify with reconcile_acs=true after QA PASS."
+        )
     return _ok({"artifact": "CRITIC__qa.md", "task_dir": td,
                 "lens": lens, "verdict": final, "merged": True,
-                "promoted_acs": promoted})
+                "promoted_acs": [],
+                "ac_reconcile_next_action": legacy_reconcile_note,
+                "attempt": attempt or {}})
+
+
+def _lens_merge_critic_ux(td: str, lens: str, verdict: str,
+                          summary: str, transcript: str) -> dict:
+    """Lens-aware merge for CRITIC__ux.md.
+
+    UX verdicts gate close for applicable user-facing surfaces, but they do not
+    update TASK_STATE.runtime_verdict and never auto-promote functional ACs.
+    """
+    lens = lens.strip().lower()
+    if lens not in {"cli", "api", "browser", "desktop"}:
+        return _err("invalid lens — must be cli, api, browser, or desktop")
+    os.makedirs(td, exist_ok=True)
+    path = os.path.join(td, "CRITIC__ux.md")
+    section = (
+        f"\n## ux-{lens} verdict: {verdict}\n\n"
+        f"### summary\n{summary}\n\n"
+        f"### transcript\n{transcript}\n"
+    )
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            existing = f.read()
+        pattern = (
+            rf"\n## ux-{re.escape(lens)} verdict: "
+            r"(?:PASS|FAIL|BLOCKED_ENV|PENDING)\n.*?(?=\n## ux-[^\n]+ verdict: |\Z)"
+        )
+        content = re.sub(pattern, "", existing, flags=re.DOTALL)
+        if not content.strip():
+            content = "# CRITIC — ux\n"
+        if "# CRITIC" not in content.splitlines()[0]:
+            content = "# CRITIC — ux\n" + content
+        content = content.rstrip() + section
+    else:
+        content = f"# CRITIC — ux\n{section}"
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+    verdicts = re.findall(r"^## ux-[^\n]+ verdict: (PASS|FAIL|BLOCKED_ENV|PENDING)\s*$",
+                          content, flags=re.MULTILINE)
+    merged = "PENDING"
+    for v in verdicts:
+        merged = _worst_verdict(merged, v)
+    attempt = None
+    if verdict in {"FAIL", "BLOCKED_ENV"}:
+        attempt = record_attempt(td, f"ux-{lens}", verdict, summary, transcript)
+    return _ok({"artifact": "CRITIC__ux.md", "task_dir": td,
+                "lens": lens, "verdict": verdict, "ux_verdict": merged,
+                "merged": True, "attempt": attempt or {}})
 
 
 def handle_write_critic_qa(args: dict) -> dict:
@@ -696,15 +940,25 @@ def handle_write_critic_qa(args: dict) -> dict:
     args = dict(args)  # don't mutate caller's dict
     args["_rendered_manual_ux_section"] = manual_ux_md
     result = _write_artifact(args, "CRITIC__qa.md", "runtime_verdict", verdict_value=verdict)
-    promoted = []
-    if auto_promote and verdict == "PASS":
+    if verdict in {"FAIL", "BLOCKED_ENV"}:
         td = _opt(args, "task_dir")
         ti = _opt(args, "task_id") or (os.path.basename(td.rstrip("/")) if td else None)
-        if ti:
+        if ti and isinstance(result.get("structuredContent"), dict):
             td = td or canonical_task_dir(task_id=ti)
-            promoted = _auto_promote_open_acs(td, "CRITIC__qa.md PASS")
-    if promoted and isinstance(result.get("structuredContent"), dict):
-        result["structuredContent"]["promoted_acs"] = promoted
+            result["structuredContent"]["attempt"] = record_attempt(
+                td,
+                "qa",
+                verdict,
+                _opt(args, "summary") or "",
+                _opt(args, "transcript") or "",
+            )
+    if isinstance(result.get("structuredContent"), dict):
+        result["structuredContent"]["promoted_acs"] = []
+        if auto_promote:
+            result["structuredContent"]["ac_reconcile_next_action"] = (
+                "auto_promote_open_acs is deprecated and no longer mutates CHECKS.yaml; "
+                "run task_verify with reconcile_acs=true after QA PASS."
+            )
         try:
             result["content"][0]["text"] = json.dumps(result["structuredContent"], indent=2, ensure_ascii=False)
         except Exception:
@@ -712,11 +966,56 @@ def handle_write_critic_qa(args: dict) -> dict:
     return result
 
 
+def handle_write_critic_ux(args: dict) -> dict:
+    verdict = _req(args, "verdict")
+    if verdict not in ("PASS", "FAIL", "BLOCKED_ENV"):
+        return _err(f"invalid verdict '{verdict}' — must be PASS, FAIL, or BLOCKED_ENV")
+    lens = _req(args, "lens").lower()
+    td = _opt(args, "task_dir")
+    ti = _opt(args, "task_id") or (os.path.basename(td.rstrip("/")) if td else None)
+    if not ti:
+        return _err("task_id or task_dir required")
+    td = td or canonical_task_dir(task_id=ti)
+    summary = _opt(args, "summary") or ""
+    transcript = _opt(args, "transcript") or ""
+    return _lens_merge_critic_ux(td, lens, verdict, summary, transcript)
+
+
 def handle_write_critic_document(args: dict) -> dict:
     verdict = _req(args, "verdict")
     if verdict not in ("PASS", "FAIL"):
         return _err(f"invalid verdict '{verdict}' — must be PASS or FAIL")
     return _write_artifact(args, "CRITIC__document.md")
+
+
+def handle_write_req_doc(args: dict) -> dict:
+    if _write_req_doc_file is None:
+        return _err("write_req_doc unavailable: req_scaffold.py import failed")
+    ti = _req(args, "task_id")
+    area = _opt(args, "area") or "ui"
+    slug = _req(args, "slug")
+    intent = _req(args, "intent")
+    observable = _req(args, "observable_behaviors")
+    verification = _req(args, "verification_cues")
+    non_goals = _opt(args, "non_goals") or ""
+    source = _opt(args, "source") or f"task: {ti}"
+    repo_root = find_repo_root()
+    rel = _write_req_doc_file(
+        repo_root,
+        area,
+        slug,
+        intent,
+        observable,
+        verification,
+        non_goals,
+        source,
+    )
+    return _ok({
+        "artifact": rel,
+        "task_id": ti,
+        "task_dir": canonical_task_dir(task_id=ti),
+        "req_path": rel,
+    })
 
 
 def handle_write_handoff(args: dict) -> dict:
@@ -889,10 +1188,11 @@ def handle_write_plan_artifact(args: dict) -> dict:
 
 TOOL_DEFS: list[dict[str, Any]] = [
     {"name": "task_start", "title": "Create or resume a task",
-     "description": "Create task scaffolding (7-field TASK_STATE) and return fresh context.",
+     "description": "Create task scaffolding (7-field TASK_STATE) and return fresh context. Pass execution_mode='micro' for explicit no-plan develop->verify->close mode; verification remains mandatory.",
      "inputSchema": {"type": "object", "properties": {
          "task_dir": {"type": "string"}, "task_id": {"type": "string"},
-         "slug": {"type": "string"}, "request_file": {"type": "string"}},
+         "slug": {"type": "string"}, "request_file": {"type": "string"},
+         "execution_mode": {"type": "string", "enum": ["standard", "micro"]}},
          "additionalProperties": False},
      "handler": handle_task_start},
     {"name": "task_context", "title": "Read the task pack",
@@ -902,9 +1202,13 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id"], "additionalProperties": False},
      "handler": handle_task_context},
     {"name": "task_verify", "title": "Run task verification",
-     "description": "Sync changed paths and check verification state.",
+     "description": "Sync changed paths and check verification state. Optional run_commands executes manifest verify_commands through the parallel verify runner. Optional reconcile_acs promotes open CHECKS.yaml ACs from fresh QA PASS evidence.",
      "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"}},
+         "task_id": {"type": "string"},
+         "run_commands": {"type": "boolean"},
+         "reconcile_acs": {"type": "boolean", "description": "Optional. When true, promote open CHECKS.yaml ACs using fresh CRITIC__qa.md PASS evidence. Failed/deferred ACs are never promoted."},
+         "parallel": {"type": "boolean"},
+         "max_workers": {"type": "integer"}},
          "required": ["task_id"], "additionalProperties": False},
      "handler": handle_task_verify},
     {"name": "task_close", "title": "Run the completion gate",
@@ -922,6 +1226,27 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id", "blocked_reason", "unblock_condition"],
          "additionalProperties": False},
      "handler": handle_task_blocked},
+    {"name": "record_ac_evidence", "title": "Append incremental AC evidence",
+     "description": "Append timestamped evidence to one CHECKS.yaml AC without changing its status. Use during develop or focused verification before final QA PASS.",
+     "inputSchema": {"type": "object", "properties": {
+         "task_id": {"type": "string"},
+         "ac_id": {"type": "string"},
+         "evidence": {"type": "string"},
+         "source": {"type": "string"}},
+         "required": ["task_id", "ac_id", "evidence"],
+         "additionalProperties": False},
+     "handler": handle_record_ac_evidence},
+    {"name": "record_attempt", "title": "Record retry attempt evidence",
+     "description": "Create attempts/attempt-NNN with summary metadata and optional transcript for failed develop/verify retries.",
+     "inputSchema": {"type": "object", "properties": {
+         "task_id": {"type": "string"},
+         "kind": {"type": "string"},
+         "verdict": {"type": "string"},
+         "summary": {"type": "string"},
+         "transcript": {"type": "string"}},
+         "required": ["task_id", "summary"],
+         "additionalProperties": False},
+     "handler": handle_record_attempt},
     {"name": "write_critic_qa", "title": "Write runtime verdict — QA agents only",
      "description": "Write CRITIC__qa.md and set runtime_verdict. Called by qa-browser, qa-api, qa-cli, or qa-desktop. Pass `lens` (e.g. \"cli\", \"browser\") when multiple QA agents run in parallel — the handler keeps the latest section per lens and computes worst-wins runtime_verdict across current lens verdicts. Without `lens`, legacy full-overwrite behavior is preserved. Pass `manual_ux_verification` with a non-empty description of the manual UX verification performed; when lens='browser' and this field is empty, runtime_verdict is forced to PENDING (AC-006).",
      "inputSchema": {"type": "object", "properties": {
@@ -930,10 +1255,21 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "summary": {"type": "string"}, "transcript": {"type": "string"},
          "lens": {"type": "string", "description": "Optional QA lens identifier (cli, api, browser, desktop). When set, replaces that lens's prior section + worst-wins merges current lens verdicts."},
          "manual_ux_verification": {"type": "string", "description": "Optional. Description of manual UX checks performed (browser lens). Empty + lens=browser → verdict forced to PENDING (AC-006)."},
-         "auto_promote_open_acs": {"type": "boolean", "description": "Optional. When true and the effective verdict is PASS, promote CHECKS.yaml ACs with status=open to passed using CRITIC__qa.md as evidence. Failed/deferred ACs are never promoted."}},
+         "auto_promote_open_acs": {"type": "boolean", "description": "Deprecated compatibility no-op. QA tools only write evidence/runtime verdict; run task_verify with reconcile_acs=true to update CHECKS.yaml from QA PASS evidence."}},
          "required": ["task_id", "verdict", "summary", "transcript"],
          "additionalProperties": False},
      "handler": handle_write_critic_qa},
+    {"name": "write_critic_ux", "title": "Write UX review verdict — UX agents only",
+     "description": "Write lens-aware CRITIC__ux.md. Called by ux-cli, ux-api, ux-browser, or ux-desktop. Does not update runtime_verdict and does not auto-promote CHECKS functional ACs.",
+     "inputSchema": {"type": "object", "properties": {
+         "task_id": {"type": "string"}, "task_dir": {"type": "string"},
+         "verdict": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED_ENV"]},
+         "summary": {"type": "string"}, "transcript": {"type": "string"},
+         "lens": {"type": "string", "enum": ["cli", "api", "browser", "desktop"],
+                  "description": "UX lens identifier. Replaces that lens's prior section and recomputes the merged UX verdict."}},
+         "required": ["task_id", "verdict", "summary", "transcript", "lens"],
+         "additionalProperties": False},
+     "handler": handle_write_critic_ux},
     {"name": "write_plan_artifact", "title": "Write plan-owned artifacts",
      "description": "Write PLAN.md, PLAN.meta.json, CHECKS.yaml, or AUDIT_TRAIL.md through MCP. Replaces scripts/write_plan_artifact.py and does not require PLAN_SESSION.json handshakes.",
      "inputSchema": {"type": "object", "properties": {
@@ -954,6 +1290,20 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id", "verdict", "summary", "transcript"],
          "additionalProperties": False},
      "handler": handle_write_critic_document},
+    {"name": "write_req_doc", "title": "Create or update durable REQ doc",
+     "description": "Auto-author a doc/<area>/REQ__<slug>.md scaffold before observable source work. The scaffold is reviewed by critic-document when durable docs change.",
+     "inputSchema": {"type": "object", "properties": {
+         "task_id": {"type": "string"},
+         "area": {"type": "string"},
+         "slug": {"type": "string"},
+         "intent": {"type": "string"},
+         "observable_behaviors": {"type": "string"},
+         "verification_cues": {"type": "string"},
+         "non_goals": {"type": "string"},
+         "source": {"type": "string"}},
+         "required": ["task_id", "slug", "intent", "observable_behaviors", "verification_cues"],
+         "additionalProperties": False},
+     "handler": handle_write_req_doc},
     {"name": "write_handoff", "title": "Write developer handoff — developer only",
      "description": "Write HANDOFF.md. This is a full rewrite; when updating an existing handoff, preserve existing content and include the Commit-backed Learnings classification.",
      "inputSchema": {"type": "object", "properties": {

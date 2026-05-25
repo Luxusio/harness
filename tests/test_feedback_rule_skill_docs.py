@@ -46,6 +46,37 @@ def test_qa_agents_surface_self_healing_candidates_for_handoff():
         assert "rejected" in body
 
 
+def test_browser_and_api_qa_fail_missing_req_for_observable_behavior():
+    for rel in (
+        "plugin/agents/qa-browser.md",
+        "plugin/agents/qa-api.md",
+        "plugin-codex/agents/qa-browser.md",
+        "plugin-codex/agents/qa-api.md",
+    ):
+        body = (REPO / rel).read_text(encoding="utf-8")
+        assert "missing REQ" in body
+        assert "FAIL" in body
+        assert "Durable Docs: linked REQ | missing | not-applicable" in body
+
+
+def test_ux_agents_use_critic_ux_and_do_not_claim_qa_role():
+    for rel in (
+        "plugin/agents/ux-cli.md",
+        "plugin/agents/ux-api.md",
+        "plugin/agents/ux-browser.md",
+        "plugin/agents/ux-desktop.md",
+        "plugin-codex/agents/ux-cli.md",
+        "plugin-codex/agents/ux-api.md",
+        "plugin-codex/agents/ux-browser.md",
+        "plugin-codex/agents/ux-desktop.md",
+    ):
+        body = (REPO / rel).read_text(encoding="utf-8")
+        assert "write_critic_ux" in body
+        assert "CRITIC__ux.md" in body
+        assert "not qa-" in body.lower()
+        assert "shippable" in body
+
+
 def test_self_improvement_documents_readable_tier2_format():
     body = (REPO / "plugin/skills/run/self-improvement.md").read_text(encoding="utf-8")
 

@@ -64,6 +64,8 @@ def test_plan_requires_durable_docs_decision_for_claude_and_codex():
         assert "REQ path is required before develop starts" in body
         assert "blocking plan defect" in body
         assert "do not defer this to close" in body
+        assert "write_req_doc" in body
+        assert "Safety gates exist" in body
         assert "Original Request / Intent Summary" in body
         assert "conversation summary" in body
         assert "gitignored" in body
@@ -79,6 +81,8 @@ def test_develop_guidance_writes_selected_durable_docs():
         assert "Durable docs (REQ/GUIDE/ADR/POLICY)" in body
         assert "Durable Docs Preflight" in body
         assert "before source implementation" in body
+        assert "write_req_doc" in body
+        assert "req_scaffold.py" in body
         assert "doc/<area>/<TYPE>__<name>.md" in body
         assert "Use `REQ` for user-visible behavior" in body
         assert "Use `GUIDE` for reusable coding, design, testing" in body

@@ -59,6 +59,7 @@ PROTECTED_ARTIFACTS = {
     "CHECKS.yaml": "plan-skill-or-update_checks",
     "AUDIT_TRAIL.md": "plan-skill",
     "CRITIC__qa.md": "qa-agent",
+    "CRITIC__ux.md": "ux-agent",
     "CRITIC__document.md": "critic-document",
     "HANDOFF.md": "developer",
     "DOC_SYNC.md": "developer",
@@ -71,6 +72,7 @@ PROTECTED_ARTIFACT_HUMAN = {
     "CHECKS.yaml": "plan-skill (initial) + scripts/update_checks.py (updates)",
     "AUDIT_TRAIL.md": "plan-skill",
     "CRITIC__qa.md": "qa-browser / qa-api / qa-cli / qa-desktop",
+    "CRITIC__ux.md": "ux-browser / ux-api / ux-cli / ux-desktop",
     "CRITIC__document.md": "critic-document",
     "HANDOFF.md": "developer",
     "DOC_SYNC.md": "developer",
@@ -176,6 +178,34 @@ def _is_source_file(path, repo_root=None):
 
     _, ext = os.path.splitext(rel)
     return ext.lower() in SOURCE_EXTENSIONS
+
+
+def _task_has_req_reference(task_dir: str) -> bool:
+    import re
+    req_re = re.compile(r"doc/[^)\]\s`'\"]+/REQ__[A-Za-z0-9_.-]+\.md")
+    for name in ("PLAN.md", "HANDOFF.md", "DOC_SYNC.md"):
+        path = os.path.join(task_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                if req_re.search(f.read()):
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def _observable_req_needed_for_path(relpath: str) -> bool:
+    try:
+        from req_detector import detect_req_need  # type: ignore
+        result = detect_req_need(paths=[relpath])
+    except Exception:
+        return False
+    return bool(result.get("requires_req")) and str(result.get("confidence") or "").lower() in {
+        "high",
+        "medium",
+    }
 
 
 # ── Learnings.jsonl parse-fail log (reuse pre-existing pattern) ────────────
@@ -304,6 +334,10 @@ def _owner_to_next_action(owner: str) -> str:
         tool = _tool_hint("write_critic_qa", runtime)
         return ("Spawn Agent(subagent_type='harness:qa-browser' | 'harness:qa-api' | "
                 f"'harness:qa-cli' | 'harness:qa-desktop', ...) and call {tool}")
+    if "ux-agent" in o:
+        tool = _tool_hint("write_critic_ux", runtime)
+        return ("Spawn Agent(subagent_type='harness:ux-browser' | 'harness:ux-api' | "
+                f"'harness:ux-cli' | 'harness:ux-desktop', ...) and call {tool}")
     if "developer" in o:
         return ("Spawn Agent(subagent_type='harness:developer', ...) and call "
                 f"{_tool_hint('write_handoff', runtime)} or {_tool_hint('write_doc_sync', runtime)}")
@@ -539,12 +573,29 @@ def main():
         return 0
 
     if not os.path.isfile(os.path.join(active_dir, "PLAN.md")):
-        if not os.path.isfile(os.path.join(active_dir, "MAINTENANCE")):
+        st = read_state(active_dir)
+        micro_loop = str(st.get("plan_session_state") or "").strip().lower() in {
+            "micro",
+            "micro_loop",
+            "no_plan_micro",
+            "develop_verify_close",
+        }
+        if not os.path.isfile(os.path.join(active_dir, "MAINTENANCE")) and not micro_loop:
             human = "PLAN.md does not exist yet. Run Skill(harness:plan) first."
             _deny("C-02-plan-first", file_path, "plan-skill", human, repo_root)
             return 0
 
     rel = _rel(file_path, repo_root)
+    if _observable_req_needed_for_path(rel) and not _task_has_req_reference(active_dir):
+        human = (
+            f"{rel} looks like observable UI/API/native/desktop behavior, but "
+            "the active task has no linked doc/<area>/REQ__*.md. Create or "
+            "update the durable REQ first with write_req_doc or req_scaffold.py, "
+            "then retry the source edit."
+        )
+        _deny("C-REQ-observable-doc-required", file_path, "developer", human, repo_root)
+        return 0
+
     for other_dir in iter_active_task_dirs(repo_root):
         if os.path.normpath(other_dir) == os.path.normpath(active_dir):
             continue

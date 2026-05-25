@@ -718,9 +718,21 @@ _API_PATH_FRAGMENTS = (
     "/api/", "/apis/", "/controllers/", "/controller/", "/routes/",
     "/handlers/", "/handler/", "/endpoints/", "/endpoint/",
 )
+_CLI_PATH_FRAGMENTS = (
+    "/cli/", "/cmd/", "/commands/", "/bin/", "/scripts/",
+)
+_CLI_BASENAME_HINTS = ("cli", "command", "commands", "main")
+_DESKTOP_PATH_FRAGMENTS = (
+    "/desktop/", "/gui/", "/native/", "/electron/", "/tauri/", "/qt/", "/gtk/",
+    "/windows/", "/window/", "/menus/", "/dialogs/",
+)
 _REQ_REF_RE = re.compile(r"doc/[^)\]\s`'\"]+/REQ__[A-Za-z0-9_.-]+\.md")
 _DURABLE_DOC_RE = re.compile(r"^doc/[^/]+/(?:REQ|GUIDE|ADR|POLICY)__[^/]+\.md$")
 _CRITIC_DOCUMENT_PASS_RE = re.compile(r"^\s*PASS\s*$", re.MULTILINE)
+_UX_VERDICT_RE = re.compile(
+    r"^## ux-(cli|api|browser|desktop) verdict: (PASS|FAIL|BLOCKED_ENV|PENDING)\s*$",
+    re.MULTILINE,
+)
 _COMMIT_BACKED_LEARNING_HEADING_RE = re.compile(
     r"^[ \t]{0,3}#{1,3}\s*Commit-backed Learnings\b",
     re.MULTILINE | re.IGNORECASE,
@@ -799,6 +811,38 @@ def _read_nested_manifest_field(repo_root, *keys):
     return None
 
 
+def _read_top_manifest_field(repo_root, key):
+    path = os.path.join(repo_root, MANIFEST_PATH)
+    if not os.path.isfile(path):
+        return None
+    prefix = key + ":"
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                stripped = line.strip()
+                if stripped.startswith(prefix):
+                    val = stripped[len(prefix):].strip()
+                    if val in ("null", "~", "", "[]"):
+                        return None
+                    return val.strip('"').strip("'")
+    except Exception:
+        return None
+    return None
+
+
+def _manifest_bool(repo_root, top, sub=None):
+    try:
+        if sub is None:
+            val = _read_top_manifest_field(repo_root, top)
+        else:
+            val = _read_nested_manifest_field(repo_root, top, sub)
+            if val is None:
+                val = _read_top_manifest_field(repo_root, sub)
+    except Exception:
+        val = None
+    return (val or "").strip().lower() == "true"
+
+
 def _frontend_touched(touched_paths):
     """Return True if any touched path looks like a user-facing frontend file."""
     for p in touched_paths or []:
@@ -808,6 +852,31 @@ def _frontend_touched(touched_paths):
         if any(lp.endswith(ext) for ext in _FRONTEND_EXT):
             return True
         if any(frag in lp for frag in _FRONTEND_PATH_FRAGMENTS):
+            return True
+    return False
+
+
+def _cli_touched(touched_paths):
+    """Return True if touched paths look like user-facing CLI surface."""
+    for p in touched_paths or []:
+        if not isinstance(p, str):
+            continue
+        lp = "/" + p.lower().lstrip("./")
+        base = os.path.splitext(os.path.basename(lp))[0]
+        if any(frag in lp for frag in _CLI_PATH_FRAGMENTS):
+            return True
+        if base in _CLI_BASENAME_HINTS or any(hint in base for hint in ("_cli", "-cli")):
+            return True
+    return False
+
+
+def _desktop_touched(touched_paths):
+    """Return True if touched paths look like native desktop GUI surface."""
+    for p in touched_paths or []:
+        if not isinstance(p, str):
+            continue
+        lp = "/" + p.lower().lstrip("./")
+        if any(frag in lp for frag in _DESKTOP_PATH_FRAGMENTS):
             return True
     return False
 
@@ -823,6 +892,58 @@ def _api_touched(touched_paths):
         ):
             return True
     return False
+
+
+def _required_ux_lenses(repo_root, touched_paths):
+    """Return UX lenses required by manifest opt-in and touched surface."""
+    ux_supported = _manifest_bool(repo_root, "qa", "ux_review_supported")
+    browser_supported = _manifest_bool(repo_root, "qa", "browser_qa_supported")
+    desktop_supported = _manifest_bool(repo_root, "qa", "desktop_qa_supported")
+
+    lenses = []
+    if (ux_supported or browser_supported) and _frontend_touched(touched_paths):
+        lenses.append("browser")
+    if ux_supported and _api_touched(touched_paths):
+        lenses.append("api")
+    if ux_supported and _cli_touched(touched_paths):
+        lenses.append("cli")
+    if (ux_supported or desktop_supported) and _desktop_touched(touched_paths):
+        lenses.append("desktop")
+    return lenses
+
+
+def _ux_lens_verdicts(task_dir):
+    path = os.path.join(task_dir, "CRITIC__ux.md")
+    if not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            body = f.read()
+    except OSError:
+        return {}
+    return {lens: verdict for lens, verdict in _UX_VERDICT_RE.findall(body)}
+
+
+def _ux_review_stale(task_dir, touched_paths):
+    path = os.path.join(task_dir, "CRITIC__ux.md")
+    if not os.path.isfile(path):
+        return False, ""
+    try:
+        critic_mtime = os.path.getmtime(path)
+    except OSError:
+        return False, ""
+    repo_root = find_repo_root(task_dir)
+    for rel in (touched_paths or [])[:_STALE_CHECK_PATH_CAP]:
+        if _stale_skip(rel):
+            continue
+        abs_path = rel if os.path.isabs(rel) else os.path.join(repo_root, rel)
+        try:
+            m = os.path.getmtime(abs_path)
+        except OSError:
+            continue
+        if m > critic_mtime:
+            return True, rel
+    return False, ""
 
 
 def _has_req_doc_reference(task_dir, touched_paths):
@@ -860,6 +981,53 @@ def _durable_docs_touched(touched_paths):
         if _DURABLE_DOC_RE.match(rel):
             paths.append(rel)
     return paths
+
+
+def _effective_touched_paths(task_dir, touched_paths):
+    """Merge task state paths with current git diff as a close-gate fallback."""
+    out = set(touched_paths or [])
+    try:
+        repo_root = find_repo_root(task_dir)
+        out.update(_git_changed_paths(repo_root))
+    except Exception:
+        pass
+    return sorted(p for p in out if isinstance(p, str))
+
+
+def _task_req_detector_texts(task_dir):
+    texts = []
+    for name in ("USER_FEEDBACK.md",):
+        path = os.path.join(task_dir, name)
+        if not os.path.isfile(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                texts.append(f.read())
+        except OSError:
+            continue
+    handoff = os.path.join(task_dir, "HANDOFF.md")
+    if os.path.isfile(handoff):
+        try:
+            with open(handoff, encoding="utf-8") as f:
+                body = f.read()
+            match = re.search(
+                r"^[ \t]{0,3}#{1,3}\s*Post-Close User Feedback\b(.*?)(?=^[ \t]{0,3}#{1,3}\s+\S+|\Z)",
+                body,
+                flags=re.IGNORECASE | re.MULTILINE | re.DOTALL,
+            )
+            if match:
+                texts.append(match.group(1))
+        except OSError:
+            pass
+    return texts
+
+
+def _req_detector_result(task_dir, touched_paths):
+    try:
+        from req_detector import detect_req_need  # type: ignore
+        return detect_req_need(texts=_task_req_detector_texts(task_dir), paths=touched_paths)
+    except Exception:
+        return {"requires_req": False, "confidence": "low", "surfaces": [], "reasons": []}
 
 
 def _document_critic_status(task_dir, durable_doc_paths):
@@ -1041,7 +1209,7 @@ def _git_ignored_paths(repo_root, rel_paths):
         return set()
     try:
         ignored = subprocess.run(
-            ["git", "check-ignore", "--stdin"],
+            ["git", "-c", f"safe.directory={repo_root}", "check-ignore", "--stdin"],
             cwd=repo_root,
             input="\n".join(paths) + "\n",
             text=True,
@@ -1068,14 +1236,105 @@ def is_maintenance_task(task_dir, repo_root=None):
 def compile_routing(task_dir, repo_root=None):
     repo_root = repo_root or find_repo_root()
     maintenance = is_maintenance_task(task_dir, repo_root)
+    st = read_state(task_dir)
+    micro_loop = _is_micro_loop_state(st)
     return {
         "maintenance_task": maintenance,
         "workflow_locked": not maintenance,
         "risk_level": "high" if maintenance else "medium",
-        "execution_mode": "standard",
+        "execution_mode": "micro" if micro_loop else "standard",
         "orchestration_mode": "solo",
-        "planning_mode": "standard",
+        "planning_mode": "skipped" if micro_loop else "standard",
     }
+
+
+def _is_micro_loop_state(st):
+    """Return True when TASK_STATE explicitly selects no-plan micro-loop mode.
+
+    The harness keeps TASK_STATE to its historical 7 fields. To avoid a schema
+    migration, the opt-in is encoded in the existing ``plan_session_state``
+    field. Standard tasks keep ``closed`` and retain the plan-first gate.
+    """
+    mode = str((st or {}).get("plan_session_state") or "").strip().lower()
+    return mode in {"micro", "micro_loop", "no_plan_micro", "develop_verify_close"}
+
+
+def _attempts_dir(task_dir):
+    return os.path.join(task_dir, "attempts")
+
+
+def list_attempts(task_dir):
+    """Return compact metadata for recorded retry attempts."""
+    root = _attempts_dir(task_dir)
+    if not os.path.isdir(root):
+        return []
+    attempts = []
+    for name in sorted(os.listdir(root)):
+        if not re.match(r"^attempt-\d{3}$", name):
+            continue
+        meta_path = os.path.join(root, name, "attempt.json")
+        try:
+            with open(meta_path, encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            meta = {"id": name}
+        if isinstance(meta, dict):
+            meta.setdefault("id", name)
+            attempts.append(meta)
+    return attempts
+
+
+def record_attempt(task_dir, kind, verdict, summary, transcript=""):
+    """Create attempts/attempt-NNN with JSON metadata and optional transcript."""
+    root = _attempts_dir(task_dir)
+    os.makedirs(root, exist_ok=True)
+    existing = [
+        int(m.group(1))
+        for name in os.listdir(root)
+        for m in [re.match(r"^attempt-(\d{3})$", name)]
+        if m
+    ]
+    idx = (max(existing) + 1) if existing else 1
+    attempt_id = f"attempt-{idx:03d}"
+    adir = os.path.join(root, attempt_id)
+    os.makedirs(adir, exist_ok=False)
+    meta = {
+        "id": attempt_id,
+        "ts": now_iso(),
+        "kind": str(kind or "retry"),
+        "verdict": str(verdict or "unknown").upper(),
+        "summary": str(summary or "")[:1000],
+    }
+    _atomic_json_write(os.path.join(adir, "attempt.json"), meta)
+    if transcript:
+        with open(os.path.join(adir, "transcript.txt"), "w", encoding="utf-8") as f:
+            f.write(str(transcript))
+            if not str(transcript).endswith("\n"):
+                f.write("\n")
+    with open(os.path.join(adir, "SUMMARY.md"), "w", encoding="utf-8") as f:
+        f.write(
+            f"# {attempt_id}\n\n"
+            f"kind: {meta['kind']}\n\n"
+            f"verdict: {meta['verdict']}\n\n"
+            f"summary: {meta['summary']}\n"
+        )
+    return meta
+
+
+def _atomic_json_write(path, data):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".json.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # ── Task context ─────────────────────────────────────────────────────────
@@ -1154,7 +1413,7 @@ def runtime_is_stale(task_dir: str) -> tuple[bool, str]:
         return False, ""
 
     st = read_state(task_dir)
-    touched = st.get("touched_paths") or []
+    touched = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
     if not touched:
         return False, ""
 
@@ -1187,16 +1446,17 @@ def emit_compact_context(task_dir):
 
     routing = compile_routing(task_dir)
     runtime_verdict = (st.get("runtime_verdict") or "pending").upper()
-    touched = st.get("touched_paths") or []
+    touched = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
 
+    micro_loop = _is_micro_loop_state(st)
     has_plan = artifact_exists(task_dir, "PLAN.md")
-    source_write_allowed = has_plan
+    source_write_allowed = has_plan or micro_loop
     why_blocked = "" if source_write_allowed else "PLAN.md does not exist yet"
 
     has_handoff = artifact_exists(task_dir, "HANDOFF.md")
 
     missing_for_close = []
-    if not has_plan:
+    if not has_plan and not micro_loop:
         missing_for_close.append("PLAN.md")
     if not has_handoff:
         missing_for_close.append("HANDOFF.md")
@@ -1214,42 +1474,59 @@ def emit_compact_context(task_dir):
     # section. Prevents qa-api-only PASS verdicts on UI-bearing diffs.
     repo_root = find_repo_root()
     try:
-        browser_supported = (_read_nested_manifest_field(
-            repo_root, "qa", "browser_qa_supported") or "").lower() == "true"
+        browser_supported = _manifest_bool(repo_root, "qa", "browser_qa_supported")
     except Exception:
         browser_supported = False
     frontend_touched = _frontend_touched(touched)
     api_touched = _api_touched(touched)
     durable_doc_paths = _durable_docs_touched(touched)
+    req_detection = _req_detector_result(task_dir, touched)
     if browser_supported and frontend_touched:
         critic_path = os.path.join(task_dir, "CRITIC__qa.md")
         if os.path.isfile(critic_path) and not _has_qa_browser_section(task_dir):
             missing_for_close.append("qa-browser evidence in CRITIC__qa.md")
 
+    required_ux_lenses = _required_ux_lenses(repo_root, touched)
+    if required_ux_lenses:
+        ux_verdicts = _ux_lens_verdicts(task_dir)
+        ux_stale, _ux_stale_path = _ux_review_stale(task_dir, touched)
+        for lens in required_ux_lenses:
+            if ux_verdicts.get(lens) != "PASS" or ux_stale:
+                missing_for_close.append(f"ux-{lens} PASS in CRITIC__ux.md")
+
     # Durable-doc close gate. PLAN's Durable Docs Decision is still required,
     # but implementation can grow new visible/API surfaces after planning. The
     # close gate rechecks the actual diff so `REQ: n/a` cannot silently pass for
     # a new page, route, controller, endpoint, or comparable observable surface.
-    if (frontend_touched or api_touched) and not _has_req_doc_reference(task_dir, touched):
+    req_needed_by_detector = (
+        bool(req_detection.get("requires_req"))
+        and str(req_detection.get("confidence") or "").lower() in {"high", "medium"}
+    )
+    if (frontend_touched or api_touched or req_needed_by_detector) and not _has_req_doc_reference(task_dir, touched):
         if frontend_touched and api_touched:
             missing_for_close.append("REQ durable doc for UI/API observable behavior")
         elif frontend_touched:
             missing_for_close.append("REQ durable doc for UI observable behavior")
-        else:
+        elif api_touched:
             missing_for_close.append("REQ durable doc for API observable behavior")
+        else:
+            missing_for_close.append("REQ durable doc for observable behavior or user feedback")
 
     doc_critic_ok, doc_critic_reason = _document_critic_status(task_dir, durable_doc_paths)
     if not doc_critic_ok:
         missing_for_close.append(doc_critic_reason)
 
-    if not has_plan:
+    if not has_plan and not micro_loop:
         next_action = "Create PLAN.md via plan skill before source writes."
+    elif micro_loop and not has_handoff:
+        next_action = "Micro-loop active — develop, write HANDOFF.md, then verify. Verification is still required."
     elif runtime_verdict != "PASS":
         next_action = "Run task_verify to check runtime verification."
     elif any(m.startswith("REQ durable doc") for m in missing_for_close):
         next_action = (
             "Create or update a doc/<area>/REQ__*.md for the observable "
-            "UI/API behavior, then link it from PLAN.md or HANDOFF.md."
+            "behavior before source work. Use write_req_doc or req_scaffold.py, "
+            "then link it from PLAN.md or HANDOFF.md."
         )
     elif any(m.startswith("CRITIC__document.md") or m.startswith("fresh CRITIC__document.md")
              for m in missing_for_close):
@@ -1260,6 +1537,12 @@ def emit_compact_context(task_dir):
     elif "qa-browser evidence in CRITIC__qa.md" in missing_for_close:
         next_action = ("Spawn Agent(subagent_type='harness:qa-browser', ...) "
                        "and call write_critic_qa with lens='browser'.")
+    elif any(m.startswith("ux-") and m.endswith("PASS in CRITIC__ux.md")
+             for m in missing_for_close):
+        next_action = (
+            "Run the required ux-* review lens and call write_critic_ux with "
+            "lens='cli', 'api', 'browser', or 'desktop'."
+        )
     elif "Commit-backed Learnings section in HANDOFF.md" in missing_for_close:
         next_action = (
             "Rewrite HANDOFF.md via write_handoff, preserving existing content, with "
@@ -1281,6 +1564,8 @@ def emit_compact_context(task_dir):
 
     stale, stale_path = runtime_is_stale(task_dir)
 
+    attempts = list_attempts(task_dir)
+
     return {
         "task_id": st.get("task_id") or os.path.basename(task_dir),
         "status": st.get("status") or "unknown",
@@ -1291,9 +1576,11 @@ def emit_compact_context(task_dir):
         "why_source_write_blocked": why_blocked,
         "touched_paths": touched,
         "path_count": len(touched),
+        "attempt_count": len(attempts),
+        "latest_attempt": attempts[-1] if attempts else {},
         "missing_for_close": missing_for_close,
         "next_action": next_action,
-        "effective_close_gate": "standard",
+        "effective_close_gate": "micro" if micro_loop else "standard",
         "stale": stale,
         "stale_path": stale_path,
     }
@@ -1337,9 +1624,9 @@ def _fingerprint_path(repo_root, relpath):
 def _git_changed_paths(repo_root, prefix="", with_fingerprints=False):
     changed = {} if with_fingerprints else set()
     commands = (
-        ["git", "diff", "--name-only", "HEAD"],
-        ["git", "diff", "--cached", "--name-only", "HEAD"],
-        ["git", "ls-files", "--others", "--exclude-standard"],
+        ["git", "-c", f"safe.directory={repo_root}", "diff", "--name-only", "HEAD"],
+        ["git", "-c", f"safe.directory={repo_root}", "diff", "--cached", "--name-only", "HEAD"],
+        ["git", "-c", f"safe.directory={repo_root}", "ls-files", "--others", "--exclude-standard"],
     )
     for cmd in commands:
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=repo_root)
@@ -1497,6 +1784,10 @@ def provenance_from_artifacts(task_dir):
             "qa-api": "CRITIC__qa.md",
             "qa-cli": "CRITIC__qa.md",
             "qa-desktop": "CRITIC__qa.md",
+            "ux-browser": "CRITIC__ux.md",
+            "ux-api": "CRITIC__ux.md",
+            "ux-cli": "CRITIC__ux.md",
+            "ux-desktop": "CRITIC__ux.md",
         }.items()
     }
 

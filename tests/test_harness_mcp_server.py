@@ -26,7 +26,11 @@ EXPECTED_TOOLS = {
     "task_verify",
     "task_close",
     "task_blocked",
+    "record_ac_evidence",
+    "record_attempt",
     "write_critic_qa",
+    "write_critic_ux",
+    "write_req_doc",
     "write_plan_artifact",
     "write_critic_document",
     "write_handoff",
@@ -121,7 +125,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
         response = json.loads(stdout_bytes.getvalue().decode())
         instructions = response["result"]["instructions"]
-        self.assertIn("10 tools", instructions)
+        self.assertIn("14 tools", instructions)
         self.assertIn("bare tool names", instructions)
         self.assertIn("Codex callers should use these bare tool names directly", instructions)
         self.assertIn("write_plan_artifact", instructions)
@@ -148,7 +152,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
         response = json.loads(stdout_bytes.getvalue().decode())
         instructions = response["result"]["instructions"]
-        self.assertIn("10 tools", instructions)
+        self.assertIn("14 tools", instructions)
         self.assertIn("Protocol tool names are bare", instructions)
         self.assertIn("Claude Code may display callable tools with a runtime prefix", instructions)
         self.assertIn("mcp__plugin_harness_harness__write_critic_qa", instructions)
@@ -348,7 +352,42 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertTrue(result.get("isError"))
         self.assertIn("must be PASS or FAIL", result["structuredContent"]["error"])
 
-    def test_write_critic_qa_can_auto_promote_open_acs_on_pass(self):
+    def test_write_req_doc_creates_durable_req_without_runtime_verdict_change(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__reqdoc")
+            original_ctd = harness_server.canonical_task_dir
+            original_root = harness_server.find_repo_root
+            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
+            harness_server.find_repo_root = lambda *args, **kw: tmp
+            try:
+                result = harness_server.call_tool(
+                    "write_req_doc",
+                    {
+                        "task_id": "TASK__reqdoc",
+                        "area": "ui",
+                        "slug": "mobile-reader-navigation",
+                        "intent": "Mobile reader navigation should match native expectations.",
+                        "observable_behaviors": "Android back returns to the previous reader screen instead of exiting unexpectedly.",
+                        "verification_cues": "Verify on Android APK or emulator and browser mobile separately.",
+                        "non_goals": "Do not redesign the full reader.",
+                    },
+                )
+            finally:
+                harness_server.canonical_task_dir = original_ctd
+                harness_server.find_repo_root = original_root
+            req_path = Path(tmp) / "doc/ui/REQ__mobile-reader-navigation.md"
+            req_exists = req_path.is_file()
+            body = req_path.read_text(encoding="utf-8") if req_exists else ""
+            state = (Path(task_dir) / "TASK_STATE.yaml").read_text(encoding="utf-8")
+        self.assertNotIn("isError", result)
+        self.assertEqual(result["structuredContent"]["req_path"], "doc/ui/REQ__mobile-reader-navigation.md")
+        self.assertTrue(req_exists)
+        self.assertIn("## Observable Behavior", body)
+        self.assertIn("Android back returns", body)
+        self.assertIn("## Verification Cues", body)
+        self.assertIn("runtime_verdict: pending", state)
+
+    def test_write_critic_qa_auto_promote_flag_is_evidence_only_noop(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__qapromote")
             (Path(task_dir) / "CHECKS.yaml").write_text(
@@ -376,11 +415,47 @@ class HarnessMcpServerTests(unittest.TestCase):
                 harness_server.canonical_task_dir = original_ctd
             body = (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8")
         self.assertNotIn("isError", result)
-        self.assertEqual(result["structuredContent"]["promoted_acs"], ["AC-001", "AC-002"])
-        self.assertEqual(body.count("status: passed"), 2)
-        self.assertIn("evidence: CRITIC__qa.md qa-cli PASS", body)
+        self.assertEqual(result["structuredContent"]["promoted_acs"], [])
+        self.assertIn("deprecated", result["structuredContent"]["ac_reconcile_next_action"])
+        self.assertEqual(body.count("status: open"), 2)
 
-    def test_write_critic_qa_auto_promote_skips_failed_deferred_and_non_pass(self):
+    def test_task_verify_reconcile_promotes_open_acs_from_qa_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__qareconcile")
+            (Path(task_dir) / "CHECKS.yaml").write_text(
+                '- id: AC-001\n  title: "one"\n  status: open\n  kind: functional\n'
+                '  last_updated: 2026-01-01T00:00:00Z\n  evidence: ""\n'
+                '- id: AC-002\n  title: "two"\n  status: open\n  kind: functional\n'
+                '  last_updated: 2026-01-01T00:00:00Z\n  evidence: ""\n',
+                encoding="utf-8",
+            )
+            original_ctd = harness_server.canonical_task_dir
+            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
+            try:
+                qa = harness_server.call_tool(
+                    "write_critic_qa",
+                    {
+                        "task_id": "TASK__qareconcile",
+                        "lens": "cli",
+                        "verdict": "PASS",
+                        "summary": "ok",
+                        "transcript": "focused tests passed",
+                    },
+                )
+                verify = harness_server.call_tool(
+                    "task_verify",
+                    {"task_id": "TASK__qareconcile", "reconcile_acs": True},
+                )
+            finally:
+                harness_server.canonical_task_dir = original_ctd
+            body = (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8")
+        self.assertNotIn("isError", qa)
+        self.assertNotIn("isError", verify)
+        self.assertEqual(verify["structuredContent"]["ac_reconcile"]["promoted_acs"], ["AC-001", "AC-002"])
+        self.assertEqual(body.count("status: passed"), 2)
+        self.assertIn("evidence: CRITIC__qa.md task_verify PASS", body)
+
+    def test_task_verify_reconcile_skips_failed_deferred_and_non_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__qaskip")
             (Path(task_dir) / "CHECKS.yaml").write_text(
@@ -406,14 +481,183 @@ class HarnessMcpServerTests(unittest.TestCase):
                         "auto_promote_open_acs": True,
                     },
                 )
+                verify = harness_server.call_tool(
+                    "task_verify",
+                    {"task_id": "TASK__qaskip", "reconcile_acs": True},
+                )
             finally:
                 harness_server.canonical_task_dir = original_ctd
             body = (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8")
         self.assertNotIn("isError", result)
         self.assertEqual(result["structuredContent"]["promoted_acs"], [])
+        self.assertEqual(verify["structuredContent"]["ac_reconcile"]["promoted_acs"], [])
+        self.assertIn("not PASS", verify["structuredContent"]["ac_reconcile"]["reason"])
         self.assertIn("status: open", body)
         self.assertIn("status: failed", body)
         self.assertIn("status: deferred", body)
+
+    def test_task_verify_reconcile_promotes_plan_writer_indented_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__qaindent")
+            (Path(task_dir) / "CHECKS.yaml").write_text(
+                "version: 1\nchecks:\n"
+                "  - id: AC-001\n"
+                "    description: one\n"
+                "    status: open\n"
+                "    evidence: []\n",
+                encoding="utf-8",
+            )
+            original_ctd = harness_server.canonical_task_dir
+            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
+            try:
+                result = harness_server.call_tool(
+                    "write_critic_qa",
+                    {
+                        "task_id": "TASK__qaindent",
+                        "lens": "cli",
+                        "verdict": "PASS",
+                        "summary": "ok",
+                        "transcript": "focused tests passed",
+                    },
+                )
+                verify = harness_server.call_tool(
+                    "task_verify",
+                    {"task_id": "TASK__qaindent", "reconcile_acs": True},
+                )
+            finally:
+                harness_server.canonical_task_dir = original_ctd
+            body = (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8")
+        self.assertEqual(result["structuredContent"]["promoted_acs"], [])
+        self.assertEqual(verify["structuredContent"]["ac_reconcile"]["promoted_acs"], ["AC-001"])
+        self.assertIn("status: passed", body)
+
+    def test_write_critic_ux_merges_lenses_without_runtime_verdict_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__uxmerge")
+            original_ctd = harness_server.canonical_task_dir
+            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
+            try:
+                first = harness_server.call_tool(
+                    "write_critic_ux",
+                    {
+                        "task_id": "TASK__uxmerge",
+                        "lens": "browser",
+                        "verdict": "PASS",
+                        "summary": "browser UX shippable",
+                        "transcript": "interactive-browser evidence",
+                    },
+                )
+                second = harness_server.call_tool(
+                    "write_critic_ux",
+                    {
+                        "task_id": "TASK__uxmerge",
+                        "lens": "cli",
+                        "verdict": "FAIL",
+                        "summary": "CLI errors are not actionable",
+                        "transcript": "invalid input gives no next step",
+                    },
+                )
+            finally:
+                harness_server.canonical_task_dir = original_ctd
+            critic = (Path(task_dir) / "CRITIC__ux.md").read_text(encoding="utf-8")
+            state = (Path(task_dir) / "TASK_STATE.yaml").read_text(encoding="utf-8")
+        self.assertNotIn("isError", first)
+        self.assertNotIn("isError", second)
+        self.assertEqual(second["structuredContent"]["ux_verdict"], "FAIL")
+        self.assertIn("## ux-browser verdict: PASS", critic)
+        self.assertIn("## ux-cli verdict: FAIL", critic)
+        self.assertIn("runtime_verdict: pending", state)
+
+    def test_write_critic_ux_rejects_unknown_lens(self):
+        result = harness_server.call_tool(
+            "write_critic_ux",
+            {
+                "task_id": "TASK__uxbad",
+                "lens": "mobile",
+                "verdict": "PASS",
+                "summary": "x",
+                "transcript": "x",
+            },
+        )
+        self.assertTrue(result.get("isError"))
+        self.assertIn("invalid lens", result["structuredContent"]["error"])
+
+    def test_record_ac_evidence_appends_log_without_promoting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__acevidence")
+            (Path(task_dir) / "CHECKS.yaml").write_text(
+                '- id: AC-001\n  title: "one"\n  status: open\n  kind: functional\n',
+                encoding="utf-8",
+            )
+            original_ctd = harness_server.canonical_task_dir
+            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
+            try:
+                result = harness_server.call_tool(
+                    "record_ac_evidence",
+                    {
+                        "task_id": "TASK__acevidence",
+                        "ac_id": "AC-001",
+                        "source": "focused-test",
+                        "evidence": "uv run pytest tests/test_x.py::test_y",
+                    },
+                )
+            finally:
+                harness_server.canonical_task_dir = original_ctd
+            body = (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8")
+        self.assertNotIn("isError", result)
+        self.assertIn("status: open", body)
+        self.assertIn("evidence_log:", body)
+        self.assertIn("focused-test", body)
+
+    def test_record_attempt_creates_attempt_dir_and_context_surfaces_latest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__attempt")
+            original_ctd = harness_server.canonical_task_dir
+            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
+            try:
+                result = harness_server.call_tool(
+                    "record_attempt",
+                    {
+                        "task_id": "TASK__attempt",
+                        "kind": "qa-cli",
+                        "verdict": "FAIL",
+                        "summary": "unit test failed",
+                        "transcript": "traceback",
+                    },
+                )
+                ctx = harness_server.call_tool("task_context", {"task_id": "TASK__attempt"})
+            finally:
+                harness_server.canonical_task_dir = original_ctd
+            self.assertNotIn("isError", result)
+            attempt = result["structuredContent"]["attempt"]
+            self.assertEqual(attempt["id"], "attempt-001")
+            self.assertTrue((Path(task_dir) / "attempts" / "attempt-001" / "attempt.json").is_file())
+            self.assertEqual(ctx["structuredContent"]["task_context"]["attempt_count"], 1)
+            self.assertEqual(ctx["structuredContent"]["task_context"]["latest_attempt"]["summary"], "unit test failed")
+
+    def test_micro_execution_mode_allows_no_plan_but_still_requires_verify(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "TASK__micro"
+            original_ctd = harness_server.canonical_task_dir
+            original_root = harness_server.find_repo_root
+            harness_server.canonical_task_dir = lambda task_id=None, slug=None, repo_root=None, **kw: str(task_dir)
+            harness_server.find_repo_root = lambda *a, **kw: tmp
+            try:
+                start = harness_server.call_tool(
+                    "task_start",
+                    {"task_id": "TASK__micro", "execution_mode": "micro"},
+                )
+                close = harness_server.call_tool("task_close", {"task_id": "TASK__micro"})
+            finally:
+                harness_server.canonical_task_dir = original_ctd
+                harness_server.find_repo_root = original_root
+        ctx = start["structuredContent"]["task_context"]
+        self.assertTrue(ctx["source_write_allowed"])
+        self.assertEqual(ctx["routing"]["execution_mode"], "micro")
+        self.assertNotIn("PLAN.md", ctx["missing_for_close"])
+        self.assertTrue(close.get("isError"))
+        self.assertIn("HANDOFF.md", close["structuredContent"]["missing_for_close"])
+        self.assertIn("runtime_verdict PASS", close["structuredContent"]["missing_for_close"])
 
     def test_task_blocked_records_pause_state_and_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -600,6 +844,26 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         harness_server.canonical_task_dir = self._orig_ctd
         harness_server.sync_from_git_diff = self._orig_sync
 
+    def _patch_repo_root_for_context(self, repo_root: str):
+        self._orig_context_find_repo_root = harness_server.emit_compact_context.__globals__["find_repo_root"]
+        self._orig_context_git_changed_paths = harness_server.emit_compact_context.__globals__["_git_changed_paths"]
+        harness_server.emit_compact_context.__globals__["find_repo_root"] = (
+            lambda *args, **kw: repo_root
+        )
+
+    def _set_context_git_changed_paths(self, paths: list[str]):
+        harness_server.emit_compact_context.__globals__["_git_changed_paths"] = (
+            lambda repo_root: set(paths)
+        )
+
+    def _unpatch_repo_root_for_context(self):
+        harness_server.emit_compact_context.__globals__["find_repo_root"] = (
+            self._orig_context_find_repo_root
+        )
+        harness_server.emit_compact_context.__globals__["_git_changed_paths"] = (
+            self._orig_context_git_changed_paths
+        )
+
     # ---- AC-001: failed AC blocks close ----
     def test_close_rejects_failed_ac(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -653,6 +917,181 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             try:
                 result = harness_server.call_tool("task_close", {"task_id": "TASK__pr2-002"})
             finally:
+                self._unpatch()
+        self.assertNotIn("isError", result)
+        self.assertTrue(result["structuredContent"]["closed"])
+
+    def test_close_uses_git_diff_fallback_for_missing_req_when_touched_paths_empty(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / ".git").mkdir(exist_ok=True)
+            (Path(tmp) / "doc/harness").mkdir(parents=True, exist_ok=True)
+            (Path(tmp) / "doc/harness/manifest.yaml").write_text(
+                "type: browser\nqa:\n  browser_qa_supported: true\n",
+                encoding="utf-8",
+            )
+            td = self._prepare_task(
+                tmp,
+                "TASK__req-git-fallback",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+                touched_paths=[],
+            )
+            self._patch(td)
+            self._patch_repo_root_for_context(tmp)
+            self._set_context_git_changed_paths(["src/mobile/Reader.tsx"])
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__req-git-fallback"}
+                )
+            finally:
+                self._unpatch_repo_root_for_context()
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        self.assertIn(
+            "REQ durable doc for UI observable behavior",
+            result["structuredContent"]["missing_for_close"],
+        )
+
+    def test_close_requires_req_for_user_feedback_observable_behavior(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / ".git").mkdir(exist_ok=True)
+            (Path(tmp) / "doc/harness").mkdir(parents=True, exist_ok=True)
+            (Path(tmp) / "doc/harness/manifest.yaml").write_text("type: browser\n", encoding="utf-8")
+            td = self._prepare_task(
+                tmp,
+                "TASK__req-feedback",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+                touched_paths=[],
+            )
+            (Path(td) / "USER_FEEDBACK.md").write_text(
+                "Native Android APK/emulator back-stack behavior for the reader "
+                "must be verified; browser mobile is not enough.\n",
+                encoding="utf-8",
+            )
+            self._patch(td)
+            self._patch_repo_root_for_context(tmp)
+            self._set_context_git_changed_paths([])
+            try:
+                result = harness_server.call_tool("task_close", {"task_id": "TASK__req-feedback"})
+            finally:
+                self._unpatch_repo_root_for_context()
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        self.assertIn(
+            "REQ durable doc for observable behavior or user feedback",
+            result["structuredContent"]["missing_for_close"],
+        )
+
+    def test_close_requires_ux_cli_when_manifest_and_cli_surface_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / ".git").mkdir(exist_ok=True)
+            (Path(tmp) / "doc/harness").mkdir(parents=True, exist_ok=True)
+            (Path(tmp) / "doc/harness/manifest.yaml").write_text(
+                "type: cli\nqa:\n  ux_review_supported: true\n",
+                encoding="utf-8",
+            )
+            source = Path(tmp) / "src/cli/main.py"
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text("print('hi')\n", encoding="utf-8")
+            td = self._prepare_task(
+                tmp, "TASK__ux-cli-required",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+                touched_paths=["src/cli/main.py"],
+            )
+            self._patch(td)
+            self._patch_repo_root_for_context(tmp)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__ux-cli-required"}
+                )
+            finally:
+                self._unpatch_repo_root_for_context()
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        self.assertIn("ux-cli PASS in CRITIC__ux.md", result["structuredContent"]["missing_for_close"])
+
+    def test_close_accepts_required_ux_cli_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / ".git").mkdir(exist_ok=True)
+            (Path(tmp) / "doc/harness").mkdir(parents=True, exist_ok=True)
+            (Path(tmp) / "doc/harness/manifest.yaml").write_text(
+                "type: cli\nqa:\n  ux_review_supported: true\n",
+                encoding="utf-8",
+            )
+            source = Path(tmp) / "src/cli/main.py"
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text("print('hi')\n", encoding="utf-8")
+            td = self._prepare_task(
+                tmp, "TASK__ux-cli-pass",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+                touched_paths=["src/cli/main.py"],
+            )
+            (Path(td) / "CRITIC__ux.md").write_text(
+                "# CRITIC — ux\n\n## ux-cli verdict: PASS\n\n### summary\nok\n",
+                encoding="utf-8",
+            )
+            self._patch(td)
+            self._patch_repo_root_for_context(tmp)
+            try:
+                result = harness_server.call_tool("task_close", {"task_id": "TASK__ux-cli-pass"})
+            finally:
+                self._unpatch_repo_root_for_context()
+                self._unpatch()
+        self.assertNotIn("isError", result)
+        self.assertTrue(result["structuredContent"]["closed"])
+
+    def test_close_rejects_stale_required_ux_cli_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / ".git").mkdir(exist_ok=True)
+            (Path(tmp) / "doc/harness").mkdir(parents=True, exist_ok=True)
+            (Path(tmp) / "doc/harness/manifest.yaml").write_text(
+                "type: cli\nqa:\n  ux_review_supported: true\n",
+                encoding="utf-8",
+            )
+            source = Path(tmp) / "src/cli/main.py"
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text("print('hi')\n", encoding="utf-8")
+            td = self._prepare_task(
+                tmp, "TASK__ux-cli-stale",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+                touched_paths=["src/cli/main.py"],
+            )
+            (Path(td) / "CRITIC__ux.md").write_text(
+                "# CRITIC — ux\n\n## ux-cli verdict: PASS\n\n### summary\nok\n",
+                encoding="utf-8",
+            )
+            future = os.path.getmtime(Path(td) / "CRITIC__ux.md") + 10
+            os.utime(source, (future, future))
+            self._patch(td)
+            self._patch_repo_root_for_context(tmp)
+            try:
+                result = harness_server.call_tool("task_close", {"task_id": "TASK__ux-cli-stale"})
+            finally:
+                self._unpatch_repo_root_for_context()
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        self.assertIn("ux-cli PASS in CRITIC__ux.md", result["structuredContent"]["missing_for_close"])
+
+    def test_close_does_not_require_ux_for_non_applicable_library_task(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / ".git").mkdir(exist_ok=True)
+            (Path(tmp) / "doc/harness").mkdir(parents=True, exist_ok=True)
+            (Path(tmp) / "doc/harness/manifest.yaml").write_text(
+                "type: library\nqa:\n  ux_review_supported: false\n",
+                encoding="utf-8",
+            )
+            td = self._prepare_task(
+                tmp, "TASK__ux-not-applicable",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+                touched_paths=["plugin/scripts/_lib.py"],
+            )
+            self._patch(td)
+            self._patch_repo_root_for_context(tmp)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__ux-not-applicable"}
+                )
+            finally:
+                self._unpatch_repo_root_for_context()
                 self._unpatch()
         self.assertNotIn("isError", result)
         self.assertTrue(result["structuredContent"]["closed"])

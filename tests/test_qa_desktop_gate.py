@@ -66,6 +66,20 @@ class TestProvenance(unittest.TestCase):
             for agent in ("qa-browser", "qa-api", "qa-cli", "qa-desktop"):
                 self.assertTrue(prov[agent], f"{agent} provenance must be True")
 
+    def test_provenance_includes_ux_keys(self):
+        with tempfile.TemporaryDirectory() as td:
+            prov = _lib.provenance_from_artifacts(td)
+            for agent in ("ux-browser", "ux-api", "ux-cli", "ux-desktop"):
+                self.assertIn(agent, prov)
+                self.assertFalse(prov[agent])
+
+    def test_provenance_ux_true_with_critic_ux(self):
+        with tempfile.TemporaryDirectory() as td:
+            open(os.path.join(td, "CRITIC__ux.md"), "w").close()
+            prov = _lib.provenance_from_artifacts(td)
+            for agent in ("ux-browser", "ux-api", "ux-cli", "ux-desktop"):
+                self.assertTrue(prov[agent], f"{agent} provenance must be True")
+
 
 class TestDenyDecisionCriticQa(unittest.TestCase):
     def test_write_critic_qa_md_denies_with_qa_agent_owner(self):
@@ -80,6 +94,20 @@ class TestDenyDecisionCriticQa(unittest.TestCase):
             self.assertIn("C-05-protected-artifact", reason)
             self.assertIn("owner=qa-agent", reason)
             for agent in ("qa-browser", "qa-api", "qa-cli", "qa-desktop"):
+                self.assertIn(agent, reason, f"{agent} missing from deny reason")
+
+    def test_write_critic_ux_md_denies_with_ux_agent_owner(self):
+        """Direct Write to CRITIC__ux.md denies; structured tail owner=ux-agent."""
+        with scratch_task_in_real_repo("ux-critic") as task_dir:
+            critic = os.path.join(task_dir, "CRITIC__ux.md")
+            r = invoke_hook(GATE, "Write", {"file_path": critic})
+            self.assertEqual(r.returncode, 0)
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIsNotNone(reason)
+            self.assertIn("C-05-protected-artifact", reason)
+            self.assertIn("owner=ux-agent", reason)
+            for agent in ("ux-browser", "ux-api", "ux-cli", "ux-desktop"):
                 self.assertIn(agent, reason, f"{agent} missing from deny reason")
 
 

@@ -613,12 +613,13 @@ class TestDXTagNamespace(unittest.TestCase):
             self.assertLessEqual(len(hygiene_lines), 1,
                 f"hygiene_scan.py must emit at most 1 [hygiene-*] line, got: {hygiene_lines}")
 
-    def test_DX05_hygiene_review_tag_in_prompt_memory(self):
-        """DX-05: prompt_memory.py uses [hygiene-review] tag for pending injection."""
+    def test_DX05_prompt_memory_does_not_inject_hygiene_review(self):
+        """DX-05: prompt_memory.py leaves hygiene review to the follow-up scheduler."""
         pm_source_path = os.path.join(SCRIPTS_DIR, "prompt_memory.py")
         with open(pm_source_path, encoding="utf-8") as f:
             pm_source = f.read()
-        self.assertIn("[hygiene-review]", pm_source)
+        self.assertNotIn("[hygiene-review]", pm_source)
+        self.assertIn("hygiene_followup.py", pm_source)
 
     def test_DX06_enabled_false_disables_hygiene(self):
         """DX-06: hygiene.yaml enabled: false → hygiene_scan exits silently without [hygiene-*]."""

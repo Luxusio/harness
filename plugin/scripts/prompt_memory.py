@@ -5,11 +5,9 @@ Emits a short ``[harness-context]`` block on stdout when a harness task is
 active, so agents don't burn a turn re-reading ``TASK_STATE.yaml`` /
 ``CHECKS.yaml`` to orient themselves in fix rounds.
 
-AC-014: Extended to additionally read doc/harness/.hygiene-pending.json
-(legacy fallback: .maintain-pending.json) and inject a [hygiene-review]
-system-reminder when pending items exist.
-Filenames sanitized (control chars + newlines + system-reminder tag escaped).
-Injection payload capped at 2KB total.
+Pending hygiene is intentionally not injected here. The post-close
+`hygiene_followup.py` scheduler turns that queue into a separate task so prompt
+hooks do not dilute the active task's attention scope.
 
 Output is silent when no active task exists. Total length is hard-capped at
 400 chars for harness-context; excess truncates with ``…``. The ``|| true``
@@ -29,7 +27,6 @@ try:
         find_repo_root,
         TASK_DIR,
         _log_gate_error,
-        read_json_state,
         resolve_active_task_dir,
         runtime_is_stale,
     )
@@ -44,9 +41,6 @@ except Exception:
 
 MAX_BLOCK_CHARS = 400
 PREFIX = "[harness-context]"
-PENDING_JSON = "doc/harness/.hygiene-pending.json"
-LEGACY_PENDING_JSON = "doc/harness/.maintain-pending.json"
-HYGIENE_INJECT_CAP = 2048  # 2KB cap for hygiene-review block
 RESTORE_INJECT_CAP = 1400
 RESTORE_TOUCHED_CAP = 5
 RESTORE_COMMIT_CAP = 3
@@ -302,47 +296,6 @@ def _build_restore_block(task_dir: str, repo_root: str) -> str:
     return block
 
 
-def _read_pending_entries(repo_root: str):
-    pending = read_json_state(os.path.join(repo_root, PENDING_JSON))
-    if isinstance(pending, list):
-        return pending
-    legacy_pending = read_json_state(os.path.join(repo_root, LEGACY_PENDING_JSON))
-    return legacy_pending if isinstance(legacy_pending, list) else []
-
-
-def _build_hygiene_block(repo_root: str) -> str:
-    """Build [hygiene-review] injection block from pending hygiene JSON.
-
-    Returns empty string if no pending items or on any error.
-    Cap at 2KB.
-    """
-    pending = _read_pending_entries(repo_root)
-    if not isinstance(pending, list) or not pending:
-        return ""
-
-    lines = ["<system-reminder>[hygiene-review] docs pending review:"]
-    total_chars = len(lines[0])
-
-    for entry in pending:
-        if not isinstance(entry, dict):
-            continue
-        path = _sanitize_path(str(entry.get("path", "")))
-        kind = entry.get("kind", "review")
-        signals = entry.get("signals", {})
-        ref_count = signals.get("reference_count", "?")
-        freshness = signals.get("freshness", "?")
-        line = f"  - [{kind}] {path} (refs={ref_count}, freshness={freshness})"
-        if total_chars + len(line) + 50 > HYGIENE_INJECT_CAP:
-            remaining = len(pending) - lines.count("  -")
-            lines.append(f"  ...and {remaining} more")
-            break
-        lines.append(line)
-        total_chars += len(line)
-
-    lines.append("Process this queue in the active/next harness task; record decisions in Self-Healing Candidates at close.</system-reminder>")
-    return "\n".join(lines)
-
-
 def main() -> int:
     read_hook_input()
     repo_root = find_repo_root()
@@ -358,11 +311,6 @@ def main() -> int:
         restore_block = _build_restore_block(task_dir, repo_root)
         if restore_block:
             output_parts.append(restore_block)
-
-    # AC-014: hygiene-review injection
-    hygiene_block = _build_hygiene_block(repo_root)
-    if hygiene_block:
-        output_parts.append(hygiene_block)
 
     # Approved runbooks + pending candidates are repo-local execution memory.
     # They are advisory and capped inside runbook_memory.py.

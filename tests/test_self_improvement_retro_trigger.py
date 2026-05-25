@@ -148,6 +148,8 @@ class TestFirstFireBanner(unittest.TestCase):
         with open(path) as f:
             content = f.read()
         self.assertIn("promote_learnings.py", content)
+        self.assertIn("hygiene_followup.py --json", content)
+        self.assertIn("one follow-up", content)
 
 
 if __name__ == "__main__":
