@@ -162,7 +162,7 @@ Self-Healing Candidates.
 
 **Title:** `CONTRACTS.md` managed block is not hand-edited.
 **When:** Any change to rules between the `harness:managed-begin/end` markers.
-**Enforced by:** `plugin/scripts/contract_lint.py` (SessionStart hook) —
+**Enforced by:** `plugin/scripts/contract_lint.py` (setup/explicit check) —
 detects marker tampering; setup/continuous maintenance regenerates from template.
 Authorized writers for additive Edits within the managed block:
 active tasks with a `MAINTENANCE` marker and `hygiene_scan.py` (additive Edits
@@ -218,11 +218,11 @@ break it immediately.
 
 ### C-16
 
-**Title:** Auto-hygiene — content-signal doc classification + contract drift auto-apply.
-**When:** SessionStart (automatic) and normal harness task close-time self-healing.
-**Enforced by:** `plugin/scripts/hygiene_scan.py` (SessionStart hook, after
-`contract_lint --quick`); `plugin/scripts/doc_hygiene.py` (called by
-hygiene_scan); `doc/harness/hygiene.yaml` (config + canonical disable path).
+**Title:** Close-time hygiene — content-signal doc classification + contract drift auto-apply.
+**When:** Normal harness task close-time self-healing.
+**Enforced by:** `plugin/scripts/hygiene_scan.py` (post-close self-improvement
+pipeline); `plugin/scripts/doc_hygiene.py` (called by hygiene_scan);
+`doc/harness/hygiene.yaml` (config + canonical disable path).
 **On violation:** auto — hygiene is advisory; failure degrades to no-op.
 **Why:** Without automatic cleanup, `doc/changes/` and `doc/common/` accumulate
 indefinitely. Institutional memory erodes when the signal-to-noise ratio drops.

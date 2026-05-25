@@ -163,14 +163,19 @@ Reject feedback-derived entries when they lack a trigger, action, or verificatio
 
 Housekeeping, not a gate. If any step fails, log a warning and continue. learnings.jsonl is staging, not permanent storage.
 
-### Step 0: Schedule ambient hygiene as a separate task
+### Step 0: Run close-time hygiene scan, then schedule a separate follow-up
 
-If `doc/harness/.hygiene-pending.json` has items, do **not** process them inside
-the just-finished primary task. Keep one objective per task.
+After the primary task closes, run one quiet hygiene scan. This is deliberately
+post-close rather than SessionStart/UserPromptSubmit work, so the active task
+keeps one objective and prompt hooks stay lightweight.
 
-Run the scheduler:
+Then, if `doc/harness/.hygiene-pending.json` has items, do **not** process them
+inside the just-finished primary task. Keep one objective per task.
+
+Run the scan and scheduler:
 
 ```bash
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_scan.py --apply-safe >/dev/null 2>/dev/null || true
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_followup.py --json 2>/dev/null || true
 ```
 

@@ -37,29 +37,25 @@ def _make_minimal_repo(tmp_path, has_c16=True):
 class TestHooksJsonWiring(unittest.TestCase):
     """HK-01, HK-04, HK-05: hooks.json wiring tests."""
 
-    def test_HK01_has_hygiene_entry(self):
-        """HK-01: hooks.json SessionStart has hygiene_scan.py entry with timeout 10 + || true."""
+    def test_HK01_session_start_has_no_hygiene_entry(self):
+        """HK-01: SessionStart stays lightweight; hygiene runs after close."""
         hooks_path = os.path.join(REPO_ROOT, "plugin", "hooks", "hooks.json")
         with open(hooks_path, encoding="utf-8") as f:
             data = json.load(f)
         session_hooks = data["hooks"]["SessionStart"][0]["hooks"]
         hygiene_entries = [h for h in session_hooks if "hygiene_scan.py" in h.get("command", "")]
-        self.assertTrue(hygiene_entries, "hygiene_scan.py entry missing from SessionStart hooks")
-        entry = hygiene_entries[0]
-        self.assertEqual(entry["timeout"], 10)
-        self.assertIn("|| true", entry["command"])
+        self.assertEqual(hygiene_entries, [], "hygiene_scan.py must not run from SessionStart")
 
-    def test_HK01_hygiene_after_contract_lint(self):
-        """HK-01: hygiene_scan.py entry comes AFTER contract_lint --quick."""
-        hooks_path = os.path.join(REPO_ROOT, "plugin", "hooks", "hooks.json")
-        with open(hooks_path, encoding="utf-8") as f:
-            data = json.load(f)
-        commands = [h.get("command", "") for h in data["hooks"]["SessionStart"][0]["hooks"]]
-        lint_idx = next((i for i, c in enumerate(commands) if "contract_lint" in c), -1)
-        hygiene_idx = next((i for i, c in enumerate(commands) if "hygiene_scan.py" in c), -1)
-        self.assertGreaterEqual(lint_idx, 0)
-        self.assertGreaterEqual(hygiene_idx, 0)
-        self.assertGreater(hygiene_idx, lint_idx)
+    def test_HK01_self_improvement_runs_hygiene_before_followup(self):
+        """HK-01: close-time pipeline scans hygiene before scheduling follow-up."""
+        path = os.path.join(REPO_ROOT, "plugin", "skills", "run", "self-improvement.md")
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+        scan_idx = content.find("hygiene_scan.py --apply-safe")
+        followup_idx = content.find("hygiene_followup.py --json")
+        self.assertGreaterEqual(scan_idx, 0, "self-improvement.md must run hygiene_scan.py")
+        self.assertGreater(followup_idx, scan_idx,
+                           "hygiene_followup.py must run after hygiene_scan.py")
 
     def test_HK04_exit_zero_on_real_repo(self):
         """HK-04: hygiene_scan.py exits 0 on real repo."""

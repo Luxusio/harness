@@ -17,24 +17,6 @@
           },
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/inject_checkpoint.py || true",
-            "timeout": 5,
-            "statusMessage": "Checking for task checkpoint"
-          },
-          {
-            "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/contract_lint.py --quick --quiet || echo '[continuous-maintenance] CONTRACTS.md drift \u2014 handle in the active/next harness task and record Self-Healing Candidates at close'",
-            "timeout": 5,
-            "statusMessage": "Checking contract drift"
-          },
-          {
-            "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_scan.py --apply-safe || true",
-            "timeout": 10,
-            "statusMessage": "Auto-hygiene check"
-          },
-          {
-            "type": "command",
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/verification_gap_check.py || true",
             "timeout": 5,
             "statusMessage": "Checking verification gaps"

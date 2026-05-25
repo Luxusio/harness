@@ -322,11 +322,13 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/contract_lint.py" \
 
 WARN is non-blocking. Use the continuous maintenance flow to repair drift.
 
-### 3.7.5 Auto-hygiene bootstrap (single atomic step)
+### 3.7.5 Close-time hygiene bootstrap (single atomic step)
 
-This step installs the auto-hygiene system. **Order is critical:** C-16 in
-CONTRACTS.md MUST land before the `hygiene_scan.py` hook entry in hooks.json,
-so that `hygiene_scan.py`'s own C-16 self-detect passes on first run.
+This step installs the close-time hygiene system. **Order is critical:** C-16 in
+CONTRACTS.md MUST land before close-time hygiene is considered enabled, so that
+`hygiene_scan.py`'s own C-16 self-detect passes on first run. Do not add
+`hygiene_scan.py` to SessionStart hooks; `/harness:run` invokes it post-close
+from `self-improvement.md` and schedules any pending cleanup as a separate task.
 
 Run as a single logical transaction (all-or-nothing):
 
@@ -363,39 +365,18 @@ Also ensure C-11 names `hygiene_scan.py` as authorized additive writer (already
 in template; for upgrades, patch C-11 body via the same AskUserQuestion flow).
 Also ensure C-05 contains the AC-019 doc/changes note (already in template).
 
-**Step C — hooks.json hygiene_scan entry (idempotent, AFTER steps A+B)**
+**Step C — close-time invocation check (idempotent, AFTER steps A+B)**
 
-Only after CONTRACTS.md has C-16 (step B verified), add the hook entry:
+Only after CONTRACTS.md has C-16 (step B verified), confirm that the run skill
+invokes hygiene from `self-improvement.md`:
 
 ```bash
-if ! grep -q "hygiene_scan.py" "${CLAUDE_PLUGIN_ROOT}/hooks/hooks.json" 2>/dev/null; then
-  python3 -c "
-import json, sys
-hooks_path = '${CLAUDE_PLUGIN_ROOT}/hooks/hooks.json'
-with open(hooks_path) as f:
-    data = json.load(f)
-session_hooks = data['hooks']['SessionStart'][0]['hooks']
-# Insert AFTER contract_lint --quick entry
-lint_idx = next((i for i, h in enumerate(session_hooks)
-                 if 'contract_lint' in h.get('command', '')), len(session_hooks) - 1)
-hygiene_entry = {
-    'type': 'command',
-    'command': 'python3 \${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_scan.py --apply-safe || true',
-    'timeout': 10,
-    'statusMessage': 'Auto-hygiene check'
-}
-session_hooks.insert(lint_idx + 1, hygiene_entry)
-import tempfile, os
-tmp = hooks_path + '.tmp'
-with open(tmp, 'w') as f:
-    json.dump(data, f, indent=2)
-os.replace(tmp, hooks_path)
-print('hygiene_scan.py hook entry added')
-"
+if grep -q "hygiene_scan.py --apply-safe" "${CLAUDE_PLUGIN_ROOT}/skills/run/self-improvement.md" 2>/dev/null; then
+  echo "hygiene_scan.py close-time invocation present"
 else
-  echo "hygiene_scan.py hook already present — skip"
+  echo "WARN: self-improvement.md missing hygiene_scan.py close-time invocation"
 fi
 ```
 
-**Invariant:** If step B fails or is skipped, step C must NOT run. The hook
-entry goes in only after C-16 is confirmed present in CONTRACTS.md.
+**Invariant:** If step B fails or is skipped, step C must NOT claim hygiene is
+enabled. Hygiene runs after close, never as a SessionStart reminder.

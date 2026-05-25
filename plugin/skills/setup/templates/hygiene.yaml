@@ -1,15 +1,15 @@
-# doc/harness/hygiene.yaml — auto-hygiene configuration
+# doc/harness/hygiene.yaml — close-time hygiene configuration
 #
 # FIELD REFERENCE (every field is optional; defaults shown):
 #
 #   enabled: bool (default: true)
-#     Master on/off switch for the auto-hygiene system.
+#     Master on/off switch for the close-time hygiene system.
 #     Set to false to disable all automatic doc scanning and contract drift
-#     application without removing the hook entry from hooks.json.
+#     application without editing the run self-improvement pipeline.
 #     Example: enabled: false
 #
 #   observer_until_session: int (default: 14)
-#     Number of SessionStart events to run in observer-only mode before
+#     Number of close-time scan events to run in observer-only mode before
 #     allowing any automatic writes (archive or contract edits).
 #     During observer mode hygiene_scan.py writes intentions to
 #     doc/harness/.hygiene-observe.log but performs ZERO git mv or Edits.
@@ -29,7 +29,8 @@
 # CANONICAL DISABLE PATH:
 #   Set `enabled: false` in this file. This is the documented per-feature
 #   off-switch. Global kill-switches (OMC_SKIP_HOOKS, DISABLE_OMC,
-#   removing the hook entry) also work but are not the preferred path.
+#   editing the run self-improvement pipeline) also work but are not the
+#   preferred path.
 #
 # FRONTMATTER FIELDS (optional, added to individual doc files):
 #   superseded_by: <path>   — this doc is replaced by <path>; if target

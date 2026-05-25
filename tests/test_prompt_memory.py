@@ -194,8 +194,8 @@ class TestPromptMemory(unittest.TestCase):
         self.assertNotIn("AC-005:", r.stdout)
         self.assertNotIn("AC-006:", r.stdout)
 
-    # ---- AC-005: suspect note listing ----
-    def test_suspect_note_listed(self):
+    # ---- AC-005: suspect note listing suppressed ----
+    def test_suspect_note_not_listed(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(
                 Path(tmp), active_task_id="TASK__note",
@@ -205,8 +205,8 @@ class TestPromptMemory(unittest.TestCase):
                 ignored_note=True,
             )
             r = _invoke(str(base))
-        self.assertIn("suspect=", r.stdout)
-        self.assertIn("doc/common/sus.md", r.stdout)
+        self.assertNotIn("suspect=", r.stdout)
+        self.assertNotIn("doc/common/sus.md", r.stdout)
         self.assertNotIn("current.md", r.stdout)
 
     # ---- AC-006: 400-char cap ----

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""hygiene_scan.py — SessionStart auto-hygiene: contract drift + doc classification.
+"""hygiene_scan.py — close-time hygiene scan: contract drift + doc classification.
 
-Invoked at SessionStart via hooks.json with --apply-safe flag.
+Invoked after task close by the self-improvement pipeline with --apply-safe.
 Two responsibilities:
   1. Run contract_lint.py --quick, classify output by Tier, auto-apply Tier A/B.
   2. Invoke doc_hygiene.py scan (REMOVE/REVIEW classification).
@@ -12,8 +12,8 @@ AC-003: observer mode (first 14 sessions), idempotent 1x/day via flock +
 AC-004: Tier A (INFO) = additive edit within managed-block; Tier B (SOFT) =
         additive only; Tier C (HARD) = deferred to .hygiene-pending.json;
         self-detects missing C-16; skips on dirty CONTRACTS.md.
-AC-013: hooks.json entry with || true, timeout 10, ordered AFTER contract_lint.
-AC-021: [hygiene-*] tag namespace for all SessionStart output lines.
+AC-013: invoked from the post-close self-improvement pipeline before follow-up scheduling.
+AC-021: [hygiene-*] tag namespace for all output lines.
 
 Observer log: doc/harness/.hygiene-observe.log
 Last-run: doc/harness/.hygiene-last-run
@@ -355,7 +355,7 @@ def _cleanup_stale_index_lock(repo_root: str, max_age_secs: int = 60) -> bool:
 # ── Main ─────────────────────────────────────────────────────────────────
 
 def main() -> int:
-    p = argparse.ArgumentParser(description="SessionStart auto-hygiene")
+    p = argparse.ArgumentParser(description="close-time hygiene scan")
     p.add_argument("--apply-safe", action="store_true",
                    help="Apply Tier A/B contract drift; run doc_hygiene scan")
     p.add_argument("--observe-only", action="store_true",
@@ -374,7 +374,7 @@ def main() -> int:
 
     # Best-effort cleanup of a stale .git/index.lock left by a SIGKILL'd
     # subprocess (e.g. an earlier session's hygiene git op that got killed
-    # by the SessionStart timeout). Guarded by three conditions — never
+    # by close-time best-effort execution). Guarded by three conditions — never
     # touches an active lock. See plugin/scripts/hygiene_scan.py
     # _cleanup_stale_index_lock for the safety contract.
     _cleanup_stale_index_lock(repo_root)

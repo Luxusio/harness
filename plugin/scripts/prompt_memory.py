@@ -5,9 +5,9 @@ Emits a short ``[harness-context]`` block on stdout when a harness task is
 active, so agents don't burn a turn re-reading ``TASK_STATE.yaml`` /
 ``CHECKS.yaml`` to orient themselves in fix rounds.
 
-Pending hygiene is intentionally not injected here. The post-close
-`hygiene_followup.py` scheduler turns that queue into a separate task so prompt
-hooks do not dilute the active task's attention scope.
+Pending hygiene and suspect-note summaries are intentionally not injected here.
+The post-close `hygiene_followup.py` scheduler turns hygiene output into a
+separate task so prompt hooks do not dilute the active task's attention scope.
 
 Output is silent when no active task exists. Total length is hard-capped at
 400 chars for harness-context; excess truncates with ``…``. The ``|| true``
@@ -50,9 +50,6 @@ _STALE_SKIP_SUFFIXES = (".pyc", ".pyo", ".pyd")
 _STALE_SKIP_FRAGMENTS = ("__pycache__/", "/.DS_Store", ".swp", ".swo")
 _STALE_PATH_CAP = 50   # bound mtime scan cost on the hook hot path
 _AC_CAP = 3
-_NOTE_CAP = 2
-_DOC_FILE_CAP = 100    # cap frontmatter scan so a huge doc/ can't blow timeout
-_DOC_DEPTH_CAP = 2     # walk doc/ root + 2 subdirs only
 _AC_TERMINAL = {"passed", "deferred"}
 _TITLE_MAX = 24
 
@@ -129,48 +126,6 @@ def _open_acs(task_dir: str) -> "tuple[list[tuple[str, str]], int]":
     return out, reopen_total
 
 
-_FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)^---\s*\n", re.MULTILINE | re.DOTALL)
-_FRESHNESS_RE = re.compile(r"^\s*freshness:\s*(\S+)", re.MULTILINE)
-
-
-def _suspect_notes(repo_root: str) -> list:
-    """Walk doc/ root + capped depth/files, list up to _NOTE_CAP suspect notes."""
-    doc_root = os.path.join(repo_root, "doc")
-    if not os.path.isdir(doc_root):
-        return []
-    out: list = []
-    scanned = 0
-    for dirpath, dirnames, filenames in os.walk(doc_root):
-        rel_dir = os.path.relpath(dirpath, doc_root)
-        depth = 0 if rel_dir == "." else rel_dir.count(os.sep) + 1
-        if depth > _DOC_DEPTH_CAP:
-            dirnames[:] = []
-            continue
-        for fn in filenames:
-            if not fn.endswith(".md"):
-                continue
-            if scanned >= _DOC_FILE_CAP:
-                return out
-            scanned += 1
-            path = os.path.join(dirpath, fn)
-            try:
-                with open(path, encoding="utf-8") as f:
-                    head = f.read(600)
-            except OSError:
-                continue
-            m = _FRONTMATTER_RE.match(head)
-            if not m:
-                continue
-            m_fresh = _FRESHNESS_RE.search(m.group(1))
-            if not m_fresh:
-                continue
-            if m_fresh.group(1).strip() == "suspect":
-                out.append(os.path.relpath(path, repo_root))
-                if len(out) >= _NOTE_CAP:
-                    return out
-    return out
-
-
 def _truncate(block: str) -> str:
     if len(block) <= MAX_BLOCK_CHARS:
         return block
@@ -201,15 +156,9 @@ def _build_block(task_dir: str, repo_root: str) -> str:
             summary += f" ⚠reopened={reopen_total}"
         pieces.append(summary)
 
-    suspects = _suspect_notes(repo_root)
-    if suspects:
-        pieces.append("suspect=" + ",".join(suspects))
-
     block = " ".join(pieces)
     return _truncate(block)
 
-
-# ── AC-014: hygiene-review injection ─────────────────────────────────────
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 _SYSTEM_REMINDER_RE = re.compile(r"</?system-reminder[^>]*>", re.IGNORECASE)

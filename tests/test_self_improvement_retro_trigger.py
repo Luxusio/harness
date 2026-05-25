@@ -148,7 +148,10 @@ class TestFirstFireBanner(unittest.TestCase):
         with open(path) as f:
             content = f.read()
         self.assertIn("promote_learnings.py", content)
+        self.assertIn("hygiene_scan.py --apply-safe", content)
         self.assertIn("hygiene_followup.py --json", content)
+        self.assertLess(content.find("hygiene_scan.py --apply-safe"),
+                        content.find("hygiene_followup.py --json"))
         self.assertIn("one follow-up", content)
 
 

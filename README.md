@@ -126,9 +126,11 @@ All under `plugin/scripts/`. Stdlib only.
 | `search_learnings.py` | Keyword/filter search over Tier 3 learnings | reads `learnings.jsonl` |
 | `promote_learnings.py` | Tier 3 → Tier 2 promotion + stale pruning | `doc/harness/patterns/` |
 | `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/` |
+| `inject_checkpoint.py` | Manual resume helper for latest checkpoint context | `doc/harness/checkpoints/` |
 | `retro.py` | Weekly retrospective (git + learnings + health) | `doc/harness/retros/` |
 | `qa_codifier.py` | Parses QA transcripts → regression tests under `tests/regression/` | — |
 | `golden_replay.py` | Record/replay runtime smoke runs for deterministic regression | `doc/harness/replays/` |
+| `contract_lint.py` | CONTRACTS.md managed-block lint and skill weight checks | — |
 | `runtime_services.py` | Start/status/log helper for manifest-declared runtime services | task-local audit evidence |
 | `verify_runner.py` | Deterministic manifest `verify_commands` runner with optional parallel execution | task/task_verify evidence |
 | `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | plan/develop/close evidence |
@@ -136,7 +138,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `update_checks.py` | Atomic CHECKS.yaml AC status transitions (plan-first) | task-local |
 | `write_plan_artifact.py` | Legacy compatibility shim; prefer MCP `write_plan_artifact` for PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md | task-local |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
-| `hygiene_scan.py` | SessionStart auto-hygiene: Tier A/B auto-apply + doc archive pass | `doc/harness/.hygiene-pending.json` |
+| `hygiene_scan.py` | Close-time hygiene scan: Tier A/B auto-apply + doc archive pass | `doc/harness/.hygiene-pending.json` |
 | `doc_hygiene.py` | Content-signal KEEP/REMOVE/REVIEW classifier; archives stale docs via `git mv` | `doc/harness/.hygiene-pending.json` |
 | `hygiene_followup.py` | Post-close scheduler that creates one standalone hygiene review task from pending items | `doc/harness/tasks/TASK__hygiene-review-pending-docs/` |
 | `hygiene_restore.py` | Restore an archived file back to original location via `git mv` | — |
@@ -163,16 +165,14 @@ The post-close self-improvement pass (`/harness:run`) auto-promotes keys with 2+
 
 | Hook | Script | Purpose |
 |------|--------|---------|
-| SessionStart | `inject_checkpoint.py` | Resume briefing from latest checkpoint |
 | SessionStart | `note_freshness.py` | Flip changed notes current → suspect |
-| SessionStart | `contract_lint.py` | Detect CONTRACTS.md drift |
 | Stop | `stop_gate.py` | Warn if open tasks remain |
 | SubagentStart | `background_hook.py` | Register active Claude subagent work for Stop hook auto-wait |
 | SubagentStop | `background_hook.py` | Mark Claude subagent work complete |
 | PreToolUse | `prewrite_gate.py` | Artifact ownership + plan-first rule |
 | PreToolUse | `hook_pre_tool_use.py` | Codex plugin wrapper for PreToolUse gates |
 | PreToolUse (Bash) | `mcp_bash_guard.py` | Block Bash-layer mutations of source / protected / workflow-control paths |
-| UserPromptSubmit | `prompt_memory.py` | Inject `[harness-context]` block on each prompt (active task + verdict + open ACs + suspect notes) |
+| UserPromptSubmit | `prompt_memory.py` | Inject `[harness-context]` block on each prompt (active task + verdict + open ACs) |
 | UserPromptSubmit | `hook_user_prompt_submit.py` | Codex plugin wrapper for prompt memory |
 | PostToolUse (Bash) | `tool_routing.py` | Emit `[harness-hint]` on known failures (wrong test command, missing script) |
 | PostToolUse (Bash) | `hook_post_tool_use.py` | Codex plugin wrapper for tool routing |

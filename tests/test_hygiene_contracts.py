@@ -119,7 +119,7 @@ def _apply_setup_bootstrap_step(tmp):
     Simulate the setup skill's bootstrap step 3.7.5 in the correct order:
       A) Install hygiene.yaml stub
       B) Install CONTRACTS.md with C-16 (from template — fresh install)
-      C) Add hygiene_scan.py hook entry to hooks.json (AFTER A+B verified)
+      C) Confirm close-time hygiene invocation in self-improvement.md
 
     Returns a dict with paths for assertion.
     """
@@ -140,7 +140,8 @@ def _apply_setup_bootstrap_step(tmp):
         contracts_text = f.read()
     c16_present = "### C-16" in contracts_text
 
-    # Step C: hooks.json — only if C-16 confirmed present
+    # Step C: hooks.json remains free of hygiene_scan; close-time invocation is
+    # provided by the run skill's self-improvement pipeline.
     with open(HOOKS_JSON, encoding="utf-8") as f:
         hooks_data = json.load(f)
 
@@ -148,29 +149,16 @@ def _apply_setup_bootstrap_step(tmp):
     with open(hooks_dst, "w", encoding="utf-8") as f:
         json.dump(hooks_data, f, indent=2)
 
-    if c16_present:
-        # Simulate adding hygiene_scan entry after contract_lint entry
-        session_hooks = hooks_data["hooks"]["SessionStart"][0]["hooks"]
-        lint_idx = next(
-            (i for i, h in enumerate(session_hooks)
-             if "contract_lint" in h.get("command", "")),
-            len(session_hooks) - 1
-        )
-        hygiene_entry = {
-            "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_scan.py --apply-safe || true",
-            "timeout": 10,
-            "statusMessage": "Auto-hygiene check",
-        }
-        session_hooks.insert(lint_idx + 1, hygiene_entry)
-        with open(hooks_dst, "w", encoding="utf-8") as f:
-            json.dump(hooks_data, f, indent=2)
+    self_improvement = os.path.join(REPO_ROOT, "plugin", "skills", "run", "self-improvement.md")
+    with open(self_improvement, encoding="utf-8") as f:
+        close_time_invocation = "hygiene_scan.py --apply-safe" in f.read()
 
     return {
         "hygiene_yaml": hygiene_yaml_dst,
         "contracts": contracts_dst,
         "hooks": hooks_dst,
         "c16_was_present_before_hook_step": c16_present,
+        "close_time_invocation_present": close_time_invocation,
     }
 
 
@@ -178,13 +166,13 @@ class TestBootstrap(unittest.TestCase):
     """BC-01..03: bootstrap order / contract_lint recognition."""
 
     def test_BC01_setup_fresh_repo_atomic_bootstrap_order(self):
-        """BC-01: setup on fresh repo — CONTRACTS.md gets C-16 BEFORE hooks.json gains hygiene_scan entry.
+        """BC-01: setup on fresh repo — CONTRACTS.md gets C-16 before hygiene is enabled.
 
         Verifies the setup-side atomic transaction (AC-020):
         - CONTRACTS.md (from template) contains C-16, C-11 hygiene_scan.py mention, C-05 doc/changes note
         - doc/harness/hygiene.yaml stub is installed
-        - hooks.json gains hygiene_scan.py entry positioned AFTER contract_lint entry
-        - C-16 lands in CONTRACTS.md BEFORE the hooks.json entry is added (bootstrap order)
+        - hooks.json does not gain a SessionStart hygiene_scan.py entry
+        - C-16 lands in CONTRACTS.md BEFORE close-time hygiene is considered enabled
         """
         with tempfile.TemporaryDirectory() as tmp:
             _build_fresh_repo(tmp)
@@ -223,33 +211,20 @@ class TestBootstrap(unittest.TestCase):
                 "Bootstrap order violated: C-16 must be in CONTRACTS.md before hooks.json step"
             )
 
-            # (6) hooks.json has hygiene_scan entry
+            # (6) hooks.json has no SessionStart hygiene_scan entry
             with open(result["hooks"], encoding="utf-8") as f:
                 hooks_data = json.load(f)
             session_hooks = hooks_data["hooks"]["SessionStart"][0]["hooks"]
             commands = [h.get("command", "") for h in session_hooks]
             hygiene_cmds = [c for c in commands if "hygiene_scan" in c]
-            self.assertTrue(len(hygiene_cmds) >= 1,
-                            "hooks.json must have hygiene_scan.py entry after bootstrap")
+            self.assertEqual(hygiene_cmds, [],
+                             "hygiene_scan.py must not be installed as a SessionStart hook")
 
-            # (7) hygiene_scan entry is ordered AFTER contract_lint entry
-            hygiene_idx = next(
-                (i for i, c in enumerate(commands) if "hygiene_scan" in c), -1
+            # (7) close-time pipeline invokes hygiene_scan
+            self.assertTrue(
+                result["close_time_invocation_present"],
+                "self-improvement.md must invoke hygiene_scan.py after close"
             )
-            lint_idx = next(
-                (i for i, c in enumerate(commands) if "contract_lint" in c), -1
-            )
-            self.assertGreater(
-                hygiene_idx, lint_idx,
-                f"hygiene_scan (idx={hygiene_idx}) must come AFTER contract_lint (idx={lint_idx})"
-            )
-
-            # (8) hygiene_scan entry is fail-safe (|| true) and timeout=10
-            hygiene_hook = session_hooks[hygiene_idx]
-            self.assertIn("|| true", hygiene_hook["command"],
-                          "hygiene_scan hook must be fail-safe with || true")
-            self.assertEqual(hygiene_hook.get("timeout"), 10,
-                             "hygiene_scan hook must have timeout=10")
 
     def test_BC02_upgrade_repo_missing_c16_shows_diff_before_hook(self):
         """BC-02: setup on existing repo without C-16 — C-16 added to managed-block,
@@ -287,7 +262,7 @@ class TestBootstrap(unittest.TestCase):
             self.assertTrue(c16_missing, "Test setup: C-16 must be absent initially")
 
             # The upgrade path must: detect missing C-16, show diff first (C-15),
-            # then patch managed-block, then (and only then) add hooks.json entry.
+            # then patch managed-block, then (and only then) allow close-time hygiene.
             # We verify:
             # (a) template has the C-16 text to use for patching
             contracts_template = os.path.join(TEMPLATES_DIR, "CONTRACTS.md")
@@ -296,13 +271,10 @@ class TestBootstrap(unittest.TestCase):
             self.assertIn("### C-16", template_text,
                           "Template must contain C-16 stanza for upgrade patching")
 
-            # (b) The bootstrap procedure specifies: hook step only runs after
-            #     C-16 is confirmed present. Simulate the guard using a minimal
-            #     pre-hygiene hooks.json (representing a repo before this task).
-            #     The real hooks.json already has hygiene_scan (post-install);
-            #     we test the ordering invariant, not the current file state.
+            # (b) The bootstrap procedure specifies: close-time hygiene is
+            #     considered enabled only after C-16 is confirmed present.
             hooks_dst = os.path.join(tmp, "hooks.json")
-            # Minimal hooks.json WITHOUT hygiene_scan (pre-install state)
+            # Minimal hooks.json WITHOUT hygiene_scan.
             pre_hygiene_hooks = {
                 "hooks": {
                     "SessionStart": [{
@@ -312,12 +284,6 @@ class TestBootstrap(unittest.TestCase):
                                 "command": "python3 scripts/note_freshness.py || true",
                                 "timeout": 5,
                                 "statusMessage": "Checking note freshness"
-                            },
-                            {
-                                "type": "command",
-                                "command": "python3 scripts/contract_lint.py --quick || echo '[continuous-maintenance]'",
-                                "timeout": 5,
-                                "statusMessage": "Checking contract drift"
                             }
                         ]
                     }]
@@ -332,17 +298,17 @@ class TestBootstrap(unittest.TestCase):
                 "hygiene_scan" in h.get("command", "")
                 for h in session_hooks_before
             )
-            # With C-16 absent, the hook step must be deferred (not yet added).
-            # The pre-hygiene hooks.json must NOT have hygiene_scan — confirms
+            # With C-16 absent, close-time hygiene must not be claimed enabled.
+            # SessionStart hooks must NOT have hygiene_scan — confirms
             # the bootstrap invariant from 3.7.5:
             # "If step B fails or is skipped, step C must NOT run."
             self.assertFalse(
                 hygiene_present_before,
-                "Pre-hygiene hooks.json must not contain hygiene_scan entry (test setup check)"
+                "SessionStart hooks must not contain hygiene_scan entry"
             )
 
             # (c) After applying C-16 patch (simulating AskUserQuestion approval),
-            #     both conditions are met and hooks.json may receive the entry
+            #     both conditions are met and close-time hygiene may proceed.
             begin = template_text.find("### C-16")
             end_marker = template_text.find("<!-- harness:managed-end -->")
             c16_stanza = template_text[begin:end_marker].rstrip()
@@ -357,41 +323,21 @@ class TestBootstrap(unittest.TestCase):
             with open(contracts_dst, "w", encoding="utf-8") as f:
                 f.write(patched)
 
-            # Now C-16 is present — hooks.json step may proceed
+            # Now C-16 is present — close-time hygiene may proceed
             with open(contracts_dst, encoding="utf-8") as f:
                 final_contracts = f.read()
             self.assertIn("### C-16", final_contracts,
                           "C-16 must be in CONTRACTS.md after upgrade patch")
 
-            # Add hook entry (step C)
-            hooks_data = json.loads(open(hooks_dst, encoding="utf-8").read())
-            session_hooks = hooks_data["hooks"]["SessionStart"][0]["hooks"]
-            lint_idx = next(
-                (i for i, h in enumerate(session_hooks)
-                 if "contract_lint" in h.get("command", "")),
-                len(session_hooks) - 1
-            )
-            hygiene_entry = {
-                "type": "command",
-                "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_scan.py --apply-safe || true",
-                "timeout": 10,
-                "statusMessage": "Auto-hygiene check",
-            }
-            session_hooks.insert(lint_idx + 1, hygiene_entry)
-            with open(hooks_dst, "w", encoding="utf-8") as f:
-                json.dump(hooks_data, f, indent=2)
-
-            # Verify final state: hooks.json has hygiene_scan AFTER contract_lint
+            # Verify final state: SessionStart remains free of hygiene_scan and
+            # run self-improvement owns close-time invocation.
             final_hooks = json.loads(open(hooks_dst, encoding="utf-8").read())
             final_session = final_hooks["hooks"]["SessionStart"][0]["hooks"]
             commands = [h.get("command", "") for h in final_session]
-            hygiene_idx = next((i for i, c in enumerate(commands) if "hygiene_scan" in c), -1)
-            lint_idx2 = next((i for i, c in enumerate(commands) if "contract_lint" in c), -1)
-            self.assertGreater(hygiene_idx, -1, "hooks.json must have hygiene_scan entry after upgrade")
-            self.assertGreater(
-                hygiene_idx, lint_idx2,
-                "hygiene_scan must come AFTER contract_lint in hooks.json"
-            )
+            self.assertFalse(any("hygiene_scan" in c for c in commands))
+            self_improvement = os.path.join(REPO_ROOT, "plugin", "skills", "run", "self-improvement.md")
+            with open(self_improvement, encoding="utf-8") as f:
+                self.assertIn("hygiene_scan.py --apply-safe", f.read())
 
     def test_BC03_hygiene_scan_c16_self_detect(self):
         """BC-03 (belt-and-suspenders): hygiene_scan.py detects missing C-16 and no-ops."""
@@ -566,19 +512,15 @@ class TestDXTagNamespace(unittest.TestCase):
                                 f"hygiene_scan.py emitted non-[hygiene-*] tag: {line!r}")
 
     def test_DX02_continuous_maintenance_reserved_for_contract_lint(self):
-        """DX-02: [continuous-maintenance] is emitted by contract_lint, not hygiene_scan."""
+        """DX-02: [continuous-maintenance] is not emitted by hygiene_scan."""
         hooks_path = os.path.join(REPO_ROOT, "plugin", "hooks", "hooks.json")
         with open(hooks_path, encoding="utf-8") as f:
             data = json.load(f)
         session_hooks = data["hooks"]["SessionStart"][0]["hooks"]
-        lint_cmd = next(
-            (h["command"] for h in session_hooks if "contract_lint" in h.get("command", "")), ""
-        )
-        self.assertIn("[continuous-maintenance]", lint_cmd,
-                      "contract_lint hook must emit [continuous-maintenance], not hygiene_scan")
         hygiene_cmd = next(
             (h["command"] for h in session_hooks if "hygiene_scan" in h.get("command", "")), ""
         )
+        self.assertEqual(hygiene_cmd, "", "hygiene_scan must not run from SessionStart")
         self.assertNotIn("[continuous-maintenance]", hygiene_cmd,
                          "[continuous-maintenance] must not appear in hygiene_scan hook command")
 

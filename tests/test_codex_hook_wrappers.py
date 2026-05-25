@@ -36,6 +36,7 @@ class TestCodexHookWrappers(unittest.TestCase):
         calls: list[dict] = []
 
         def fake_run(*args, **kwargs):
+            kwargs["cmd"] = args[0]
             calls.append(kwargs)
             return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
 
@@ -48,6 +49,10 @@ class TestCodexHookWrappers(unittest.TestCase):
 
         self.assertTrue(calls)
         self.assertTrue(all(call.get("cwd") == repo for call in calls))
+        child_names = [Path(call["cmd"][1]).name for call in calls]
+        self.assertNotIn("hygiene_scan.py", child_names)
+        self.assertNotIn("inject_checkpoint.py", child_names)
+        self.assertNotIn("contract_lint.py", child_names)
 
     def test_pre_post_prompt_and_stop_wrappers_use_payload_cwd(self):
         modules = [

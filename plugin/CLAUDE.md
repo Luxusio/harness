@@ -101,8 +101,7 @@ the user explicitly names them in their own prompt.
 | User explicitly says "implement PLAN.md" / "develop only" | `Skill(harness:run)` resume/develop path |
 | Multi-component or API↔frontend change in one task | `Skill(harness:run)` (develop Phase 3.0 auto-fanout) |
 | CEO / Architecture / Design / DX review | `Skill(harness:run)` plan phase; review lenses are internal sub-skills |
-| Contract drift / "CLAUDE.md 정리" / "규약 정비" / post-upgrade cleanup | Use the continuous maintenance flow: fix scoped items in the active harness task, or ask the user and record the follow-up in close-time Self-Healing Candidates |
-| SessionStart reported `[continuous-maintenance]` in reminders | Fold the item into the active/next harness task; do not require a separate maintenance command |
+| Contract drift / "CLAUDE.md 정리" / "규약 정비" / post-upgrade cleanup | Use the close-time self-improvement flow: run hygiene after task close, then schedule cleanup as a separate follow-up task when needed |
 | Explanation | Direct answer |
 
 ## 7. Verification
@@ -246,10 +245,10 @@ All scripts under `plugin/scripts/`. Stdlib only (PIL optional for canary).
 | `canary.py` | Visual regression baseline + sha/pixel diff | `doc/harness/visual-baselines/<task-id>/` |
 | `search_learnings.py` | Keyword/type/skill/since search over Tier 3 | reads `doc/harness/learnings.jsonl` |
 | `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/<task-id>.md` |
-| `inject_checkpoint.py` | SessionStart hook — surface latest checkpoint | reads `doc/harness/checkpoints/` |
+| `inject_checkpoint.py` | Manual resume helper — surface latest checkpoint | reads `doc/harness/checkpoints/` |
 | `promote_learnings.py` | Tier 3→2 promotion + stale pruning | `doc/harness/patterns/<topic>.md` |
 | `retro.py` | Weekly retrospective (git + learnings + health) | `doc/harness/retros/<date>.md` |
-| `hygiene_scan.py` | SessionStart auto-hygiene (contract drift + doc classification) | `doc/harness/.hygiene-last-run` + `doc/harness/.hygiene-session-count` |
+| `hygiene_scan.py` | Close-time hygiene scan (contract drift + doc classification) | `doc/harness/.hygiene-last-run` + `doc/harness/.hygiene-session-count` |
 
 All activated via manifest optional keys: `health_components`, `benchmark_components`,
 `audit_categories`. Health falls back to `test_command` when no components declared.

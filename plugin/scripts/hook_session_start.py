@@ -39,9 +39,6 @@ def main() -> int:
     chunks: list[str] = []
     commands = [
         ["note_freshness.py", "--from-git", "1", "--quiet"],
-        ["inject_checkpoint.py"],
-        ["contract_lint.py", "--quick", "--quiet"],
-        ["hygiene_scan.py", "--apply-safe"],
         ["verification_gap_check.py"],
     ]
     for command in commands:
