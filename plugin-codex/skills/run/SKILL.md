@@ -14,16 +14,22 @@ Orchestrate the full harness development cycle for a task.
 
 > **Codex runtime notes** (delta from Claude):
 > - Claude's `Skill("harness:plan", task_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. Effect is identical (plan -> develop -> verify -> close), but the chain is sequential prose, not tool calls.
-> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks. If `spawn_agent` is unavailable, run the role methodology inline, call the same MCP artifact writer, and record a short `Runtime Fallbacks` note only when that fallback replaces an expected independent QA/review path.
+> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. If `spawn_agent` is unavailable, run the role methodology inline, call the same MCP artifact writer, and record a short `Runtime Fallbacks` note only when that fallback replaces an expected independent QA/review path.
 > - MCP tool names on Codex use bare form (`task_start`, `task_verify`, `task_close`, `write_critic_qa`) — not Claude-prefixed form. Where this skill mentions a prefixed name, read it as the bare form.
 > - `${CLAUDE_PLUGIN_ROOT}` is not injected on Codex. Use `${HARNESS_PLUGIN_ROOT}` (set by the Codex plugin install).
 > - AskUserQuestion (Phase 4 FAIL retry) is conversational prose on Codex — emit the question + options, read the reply from the next user turn.
 
 ## Codex Subagent Routing
 
-Route from the current session tools.
+Route from the current session tools and the task shape, not from whether the
+user explicitly requested delegation. "The user did not ask for parallel
+agents" is not a valid reason to skip `spawn_agent`. Do not wait for the user
+to request delegation. User request is not a condition for parallel routing.
 
-When `spawn_agent` is available, prefer it for independent review/QA and bounded side work. Use concrete Codex calls like:
+When `spawn_agent` is available and work is independent, use it for
+independent review/QA and bounded side work. Independent lanes include separate
+AC ownership, QA/UX lenses, read-only exploration, and bounded worker tasks
+that can run without touching the same files. Use concrete Codex calls like:
 
 ```text
 spawn_agent {
@@ -53,7 +59,7 @@ spawn_agent {
 }
 ```
 
-Use inline execution as the fallback for roles that normally benefit from independence. Add a short `Runtime Fallbacks` section when an expected independent QA/review path was replaced by inline verification or a required tool was unavailable. Keep it to: reason, risk, compensating check.
+Use inline execution as the fallback for roles that normally benefit from independence only when `spawn_agent` is unavailable or the work is not actually independent. If independent work runs sequentially, record `parallel-trigger-skipped` evidence with the concrete reason, affected lanes, and compensating check; vague reasons such as lack of user request are invalid. Add a short `Runtime Fallbacks` section when an expected independent QA/review path was replaced by inline verification or a required tool was unavailable. Keep it to: reason, risk, compensating check.
 
 ## Sub-file
 

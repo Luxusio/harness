@@ -16,12 +16,20 @@ def test_codex_run_uses_capability_first_subagent_routing():
     body = _text(CODEX_RUN)
 
     assert "Codex Subagent Routing" in body
-    assert "Route from the current session tools." in body
+    assert "Route from the current session tools and the task shape" in body
+    assert "not from whether the\nuser explicitly requested delegation" in body
+    assert '"The user did not ask for parallel\nagents" is not a valid reason' in body
+    assert "Do not wait for the user\nto request delegation" in body
+    assert "User request is not a condition for parallel routing" in body
+    assert "the user does not need to request delegation" in body
     assert "spawn_agent {" in body
     assert 'agent_type: "default"' in body
     assert 'agent_type: "worker"' in body
     assert 'agent_type: "explorer"' in body
+    assert "When `spawn_agent` is available and work is independent, use it" in body
     assert "Use inline execution as the fallback" in body
+    assert "record `parallel-trigger-skipped` evidence" in body
+    assert "vague reasons such as lack of user request are invalid" in body
 
 
 def test_codex_run_documents_qa_subagent_call_shape():

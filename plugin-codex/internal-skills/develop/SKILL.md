@@ -8,7 +8,7 @@ Implement the plan for a harness task. Reads PLAN.md, implements changes, verifi
 
 > **Codex runtime notes** (delta from Claude develop skill — read these first):
 > - **No `Skill()` chain.** Where Claude invokes `Skill("harness:plan", task_id)` etc., Codex orchestrator reads the relevant SKILL.md inline and executes its phases as part of the same conversation. The plan / verify / close transitions still happen — they're just prose flow, not tool calls.
-> - **Agent fan-out is capability-gated.** Where Claude spawns `oh-my-claudecode:executor` (per-AC parallel implementation), `harness:qa-*` (verification), `harness:dogfooder` (post-PASS dogfooding), or haiku sub-agents (test-coverage trace, adversarial review, edge-case scan), Codex should use `spawn_agent` when the current session exposes it. If `spawn_agent` is unavailable, run the equivalent role methodology inline in the orchestrator's own context and record a short `Runtime Fallbacks` note only when that fallback replaces expected independent QA/review. Multi-AC implementation can remain sequential for small tasks; preserve independent QA/review by routing from current session capability.
+> - **Agent fan-out is capability-gated, not user-request-gated.** Where Claude spawns `oh-my-claudecode:executor` (per-AC parallel implementation), `harness:qa-*` (verification), `harness:dogfooder` (post-PASS dogfooding), or haiku sub-agents (test-coverage trace, adversarial review, edge-case scan), Codex should use `spawn_agent` when the current session exposes it. The user does not need to ask for delegation. `user did not ask for delegation`, `delegation was not requested`, and equivalent rationale are invalid skip reasons. If `spawn_agent` is unavailable, run the equivalent role methodology inline in the orchestrator's own context and record a short `Runtime Fallbacks` note only when that fallback replaces expected independent QA/review. Multi-AC implementation can remain sequential only when `spawn_agent` is unavailable, ACs are dependent or file-conflicting, or the documented `sequential-small-task` threshold applies; preserve independent QA/review by routing from current session capability.
 > - **No `AskUserQuestion` structured tool.** Where Claude emits an AskUserQuestion with labeled options, Codex emits the question + options as plain prose and reads the user's reply on the next turn. Options stay numbered/lettered so the user can pick them by short response (e.g. "A", "B", "1", "2").
 > - **Browser tools are availability-gated on Codex.** The Claude `qa_delegation_gate.py` blocks main-session `mcp__chrome-devtools__*` calls and redirects them to `harness:qa-browser`; Codex routes by available tools. Use `spawn_agent` for the qa-browser lens when available, or run `plugin-codex/agents/qa-browser.md` inline when browser tools are present but no subagent path exists. If browser verification is required and tools or a reachable app are missing, write `write_critic_qa(lens="browser", verdict="BLOCKED_ENV", ...)` with the blocker. Preserve browser-required tasks with browser-lens evidence.
 > - **MCP tool names are bare** on Codex (`task_start`, `task_verify`, `task_close`, `write_critic_qa`, `write_handoff`, `write_doc_sync`, `update_checks`). The Claude long-form (Claude-prefixed) does not apply.
@@ -137,16 +137,19 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 ### Phase 3.0: AC Dependency Analysis
 
-Codex AC implementation is capability-gated. Build the same lane table as the
-Claude develop skill before editing files:
+Codex AC implementation is capability-gated, not user-request-gated. Build the
+same lane table as the Claude develop skill before editing files. The user does
+not need to ask for delegation; `user did not ask for delegation` is an invalid
+skip rationale. Do not wait for the user to request delegation. User request is
+not a condition for parallel routing.
 
 | AC | Files | Depends on | Lane | Route | Reason |
 |----|-------|------------|------|-------|--------|
 
 `Route` is `spawn_agent(worker)`, `sequential-prelude`,
 `sequential-dependent`, or `sequential-small-task`. When the table has two or
-more independent AC rows and `spawn_agent` is available, spawn one worker per
-independent AC in one assistant message. Use explicit file ownership:
+more independent AC rows and `spawn_agent` is available, you must spawn one worker per independent AC in one assistant message. This is mandatory capability/task-shape routing, not an optional optimization. Use explicit file
+ownership:
 
 ```text
 spawn_agent {
@@ -162,9 +165,12 @@ worker. Workers list changed paths and write any per-AC notes to
 CHECKS.yaml after all siblings return.
 
 Use `sequential-small-task` only for genuinely trivial N=2 work (estimated <20
-changed lines combined and <30 seconds of editing). Record AC ids,
-estimated_lines, estimated_seconds, and reason in `parallel-trigger-skipped`.
-When `spawn_agent` is unavailable for otherwise independent ACs, record
+changed lines combined and <30 seconds of editing). Sequential fallback must
+record `parallel-trigger-skipped` with `ac_count`, AC ids, `conflict` (specific
+dependency/file conflict, or `none`), `estimated_lines`, `estimated_seconds`,
+and `reason`. Valid reasons are only `spawn_agent-unavailable`,
+`dependency-conflict`, or `small-task`; `user did not ask for delegation` is
+invalid. When `spawn_agent` is unavailable for otherwise independent ACs, record
 `Runtime Fallbacks` in HANDOFF.
 
 Log the selected routing as `parallel-trigger` or `parallel-trigger-skipped`.

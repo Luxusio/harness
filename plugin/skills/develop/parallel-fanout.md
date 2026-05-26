@@ -8,8 +8,16 @@ This sub-file covers Phase 3.0 / Phase 4.5-4.8 / Phase 7 / Phase 7.7 parallel-Ag
 
 The orchestrator uses three Claude Code primitives. Pick the smallest primitive
 type that fits the work; do not reduce worker count for independent ACs.
-Parallel is the default posture. Sequential execution needs a declared
-dependency, unavailable Agent tool, or the narrow small-task exception below.
+Parallel is the default posture. Mandatory parallel delegation is
+capability/task-shape based: when `Agent(...)` is available and the work has
+independent lanes, spawn one worker per lane. This is mandatory
+capability/task-shape routing; the user does not need to request delegation.
+"User did not ask for delegation" is an invalid skip rationale. Sequential
+execution needs a declared dependency, unavailable Agent tool, or the narrow
+small-task exception below, and any sequential fallback after a matched fanout
+trigger must be backed by `parallel-trigger-skipped` evidence.
+Do not wait for the user to request delegation. User request is not a condition
+for parallel routing.
 
 1. `Agent(subagent_type="...", model="...", prompt="...")` — one-shot subagent with isolated context. Default for quality phases (4.5–4.8), per-AC worker fanout, multi-lens QA, and dogfooder. Use `harness:ac-worker` for Phase 3 per-AC implementation.
 2. `TeamCreate({team_name, description})` — bounded multi-agent pipeline with shared task list, dependency tracking, and inter-agent `SendMessage`. Use when the work decomposes into 3+ stages with cross-stage handoffs.
@@ -85,6 +93,16 @@ AC ids, estimated lines, estimated runtime, and `parallel-trigger-skipped` with
 evidenced opt-out, not the default. If the user explicitly asks for aggressive
 subagent use or faster parallel execution, this opt-out is disabled.
 
+### Invalid skip rationales
+
+User-request-based routing is forbidden. The fanout decision comes from runtime
+capability plus task shape: available `Agent(...)`, independent ACs, applicable
+QA lenses, or independent audit workers. Do not use `user-did-not-ask`, "user
+did not ask for delegation", "not requested", or equivalent wording to justify
+inline execution. If the trigger matches and the run goes sequential, record
+`parallel-trigger-skipped` with the concrete blocker: declared dependency,
+unavailable Agent tool, or small-task estimate.
+
 ### Lane table requirement
 
 Before implementation, emit this table and use it as the routing contract:
@@ -130,8 +148,18 @@ echo '{"ts":"'"$_TS"'","type":"parallel-trigger","source":"develop","trigger":"<
 ```
 
 Also log skips:
-- `parallel-trigger-skipped` with reason `small-task` for the volume edge case.
+- `parallel-trigger-skipped` with reason `small-task` for the volume edge case,
+  including AC ids, `estimated_lines`, and `estimated_seconds`.
+- `parallel-trigger-skipped` with reason `declared-dependency` when an apparent
+  fanout lane is blocked by an explicit PLAN matrix dependency, including AC ids
+  and the dependency edge.
+- `parallel-trigger-skipped` with reason `agent-tool-unavailable` when the
+  runtime lacks the required Agent primitive, including the missing primitive and
+  affected lanes.
 - `helper-extract-guard-fired` when the extract trigger would have fired but the extract AC was missing from PLAN.
+
+Never log or accept `parallel-trigger-skipped` with a user-request reason.
+Whether the user asked for delegation is not evidence.
 
 The retro skill (and any future 6-month audit) reads these rows to decide whether the trigger threshold is still right — too many fires with low per-fire savings means narrow the threshold; too few fires means broaden further or rebalance the cap.
 

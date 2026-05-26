@@ -138,7 +138,18 @@ or `sequential-small-task`. Fill the table before editing files. If the table ha
 two or more independent `Agent(...)` rows, spawn those executors in one assistant
 message before doing local implementation work.
 
-**Default posture: parallel-first.** Assume every AC, QA lens, quality audit, and verification command can run in a subagent unless the dependency matrix proves otherwise. The coordinator's job is to split work, spawn siblings together, keep shared ledgers serialized, and merge. Inline work is reserved for sequential preludes, dependency-bound followups, and tiny evidenced exceptions.
+**Default posture: parallel-first.** Mandatory parallel delegation is
+capability/task-shape based: if the runtime has `Agent(...)` and the lane table
+shows independent work, spawn one worker per lane. This is mandatory
+capability/task-shape routing; a user request is not a prerequisite for
+delegation. Do not skip parallel fanout because "user did not ask for
+delegation"; that is an invalid skip rationale. Do not wait for the user to
+request delegation. User request is not a condition for parallel routing. Assume
+every AC, QA lens, quality audit, and verification command can run in a subagent
+unless the dependency matrix proves otherwise. The coordinator's job is to split
+work, spawn siblings together, keep shared ledgers serialized, and merge. Inline
+work is reserved for sequential preludes, dependency-bound followups, and tiny
+evidenced exceptions.
 
 **Component-independent (definition for this phase):** two ACs are component-independent iff (a) their PLAN target file sets are disjoint, OR (b) shared files are factored into a dedicated helper-extract AC that runs first (sequential prelude → parallel consumers).
 
@@ -149,13 +160,20 @@ message before doing local implementation work.
 
 **Helper-extract-first guard.** The extract trigger fires ONLY when the extract is already a declared AC in PLAN.md. Mid-task "extract while I'm here" is scope creep blocked by Phase 5. If a fanout decision *would* require extracting a helper from shared files but no such AC exists, the trigger does not fire — run sequentially and surface the missing AC as a Plan Challenge in HANDOFF for the next plan cycle.
 
+**Sequential fallback evidence.** If a parallel trigger matches but the route is
+sequential, log `parallel-trigger-skipped` to `learnings.jsonl` before editing
+with concrete evidence: `reason`, `ac_count`, affected AC ids, and the blocking
+fact. Valid reasons are `small-task`, `declared-dependency`, and `agent-tool-unavailable`.
+`user-did-not-ask`, "user did not ask for delegation", or any equivalent
+user-request rationale is invalid.
+
 **Small-task edge case.** N=2 ACs where total edit volume is genuinely trivial
 (target estimate <10 changed lines combined and <15 seconds of editing) may use
 `sequential-small-task`. Record the concrete estimate in the lane table and log
 `parallel-trigger-skipped` to `learnings.jsonl` with `reason:"small-task"`,
-`ac_count`, `estimated_lines`, and `estimated_seconds`. Default is parallel;
-sequential is the evidenced exception. User requests for speed or aggressive
-parallelism disable this edge case for the current task.
+`ac_count`, affected AC ids, `estimated_lines`, and `estimated_seconds`. Default
+is parallel; sequential is the evidenced exception. User requests for speed or
+aggressive parallelism disable this edge case for the current task.
 
 Inline spawn template (copyable; one block per AC, ALL in one assistant turn):
 

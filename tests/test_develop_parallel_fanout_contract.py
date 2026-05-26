@@ -39,6 +39,8 @@ def test_parallel_fanout_small_task_skip_requires_evidence_and_coordinator_merge
     body = _text(PARALLEL_FANOUT)
 
     assert "Parallel is the default posture" in body
+    assert "Mandatory parallel delegation is" in body
+    assert "User request is not a condition\nfor parallel routing" in body
     assert "do not reduce worker count for independent ACs" in body
     assert "Executors write per-AC result files under `<task_dir>/audit/`" in body
     assert "coordinator" in body and "only writer to PROGRESS.md and CHECKS.yaml" in body
@@ -92,3 +94,26 @@ def test_codex_develop_uses_spawn_agent_lane_analysis_not_sequential_default():
     assert "Runtime Fallbacks" in body
     assert "For sequential batches, work **one AC at a time**" in body
     assert "1. **One AC at a time**, in order." not in body
+
+
+def test_codex_develop_rejects_user_request_based_parallel_skip():
+    body = _text(CODEX_DEVELOP)
+
+    assert "capability-gated, not user-request-gated" in body
+    assert "The user does not need to ask for delegation" in body
+    assert "`user did not ask for delegation` is an invalid" in body
+    assert "`delegation was not requested`" in body
+    assert "Do not wait for the user to request delegation" in body
+    assert "User request is\nnot a condition for parallel routing" in body
+    assert "mandatory capability/task-shape routing" in body
+
+
+def test_codex_develop_sequential_fallback_requires_skip_evidence_payload():
+    body = _text(CODEX_DEVELOP)
+
+    assert "Sequential fallback must" in body
+    assert "record `parallel-trigger-skipped` with `ac_count`" in body
+    assert "`conflict` (specific" in body
+    assert "`estimated_lines`, `estimated_seconds`" in body
+    assert "Valid reasons are only `spawn_agent-unavailable`" in body
+    assert "`dependency-conflict`, or `small-task`" in body
