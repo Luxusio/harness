@@ -57,6 +57,18 @@ class TestHooksJsonWiring(unittest.TestCase):
         self.assertGreater(followup_idx, scan_idx,
                            "hygiene_followup.py must run after hygiene_scan.py")
 
+    def test_HK01_run_followup_is_mandatory_before_done(self):
+        """HK-01: auto-runnable follow-up tasks are not optional cleanup."""
+        path = os.path.join(REPO_ROOT, "plugin", "skills", "run", "self-improvement.md")
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn('"action": "run_followup"', content)
+        self.assertIn("mandatory\ncontinuation before DONE", content)
+        self.assertIn("not optional cleanup or a recommendation", content)
+        self.assertIn("Do not send\nthe final completion report", content)
+        self.assertIn("HARNESS_AUTO_FOLLOWUP_MAX", content)
+        self.assertIn("continue the follow-up unless the user explicitly says", content)
+
     def test_HK04_exit_zero_on_real_repo(self):
         """HK-04: hygiene_scan.py exits 0 on real repo."""
         result = subprocess.run(

@@ -210,9 +210,37 @@ task_close { task_id: "<task_id>" }
 ```
 
 If blocked: report `missing_for_close`, fix the stated gate, retry.
-If success: emit completion report, then run self-improvement pipeline (see `self-improvement.md` in the Claude tree).
+If success: run self-improvement pipeline (see `self-improvement.md` in the
+Claude tree) before emitting the completion report.
+
+## Mandatory Follow-up Continuation
+
+Post-close self-improvement is part of the same `harness:run` transaction.
+Do not report DONE until the pipeline has been evaluated.
+
+If `hygiene_followup.py --json` returns `"action": "run_followup"`:
+- Treat the returned `task_id` as the next active harness task immediately.
+- Do not send a final completion response yet.
+- Do not treat this as optional cleanup or a recommendation.
+- Run that follow-up through plan/develop/verify/close before reporting DONE.
+- If the user asks for a commit, status, or summary during this window, satisfy
+  that request briefly, then continue the follow-up unless the user explicitly
+  says stop, pause, or cancel.
+- If another follow-up returns `"action": "run_followup"`, continue up to
+  `HARNESS_AUTO_FOLLOWUP_MAX` (default 3). After the cap, report the queued
+  work instead of continuing indefinitely.
+
+If the result is `"queued"`, report the queued task and stop. If the result is
+`"none"`, the harness run may complete. If the follow-up is blocked, record the
+blocker through the normal task-blocked path and report it.
 
 ## Completion Report
+
+Before writing DONE, assert:
+- primary task is closed
+- runtime_verdict is PASS or task is BLOCKED
+- post-close self-improvement returned `none` or `queued`
+- no auto-runnable follow-up task remains open
 
 ```
 DONE
@@ -247,12 +275,15 @@ Stop on phase failures, report the failure, check task state, and ask how to pro
 After every task close, run the pipeline in `self-improvement.md` (Claude tree):
 - Schedule pending hygiene as a separate follow-up task; do not mix unrelated
   hygiene cleanup into the just-finished primary task
+- If the scheduler returns `run_followup`, continue that task before reporting
+  DONE; this is a mandatory continuation, not advisory cleanup
 - Detect friction signals (wrong verify strategy, stale manifest, repeated failures, new project patterns)
 - Log harness-improvement entries to `learnings.jsonl`
 - Auto-fix safe manifest updates (reported to user before write)
 - Promote learnings: Tier 3 (jsonl) -> Tier 2 (patterns/*.md) -> Tier 1 (CLAUDE.md or AGENTS.md)
 - Prune promoted entries and stale (>90 day) non-eureka entries
 
-Pipeline is housekeeping, not a gate. On failure: log warning and continue.
+Pipeline failures are housekeeping, not a gate. Auto-runnable follow-up tasks
+are different: they must be run or explicitly blocked before DONE.
 
 ---

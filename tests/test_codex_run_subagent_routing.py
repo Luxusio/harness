@@ -70,6 +70,18 @@ def test_run_skills_document_separate_hygiene_followup_policy():
         assert "primary task" in body
 
 
+def test_run_skills_require_auto_followup_before_done():
+    for path in (CODEX_RUN, CLAUDE_RUN):
+        body = _text(path)
+        assert "Mandatory Follow-up Continuation" in body
+        assert 'returns `"action": "run_followup"`' in body
+        assert "Do not send a final completion response yet" in body
+        assert "continue the follow-up unless the user explicitly" in body
+        assert "HARNESS_AUTO_FOLLOWUP_MAX" in body
+        assert "Before writing DONE, assert:" in body
+        assert "no auto-runnable follow-up task remains open" in body
+
+
 def test_codex_develop_no_longer_says_agent_absence_is_absolute():
     body = _text(CODEX_DEVELOP)
 

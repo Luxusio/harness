@@ -180,10 +180,19 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_followup.py --json 2>/dev/null || 
 ```
 
 If it returns `"action": "run_followup"`, immediately continue with that
-reported `task_id` as the next standalone harness task. Run only one follow-up
-task at a time. If it returns `"queued"`, report the queued task and stop unless
-the user explicitly asks to continue. If it returns `"none"`, continue the
-normal self-improvement pipeline.
+reported `task_id` as the next standalone harness task. This is a mandatory
+continuation before DONE, not optional cleanup or a recommendation. Do not send
+the final completion report while an auto-runnable follow-up remains open. Run
+only one follow-up task at a time. If another follow-up returns
+`"action": "run_followup"`, continue up to `HARNESS_AUTO_FOLLOWUP_MAX`
+(default 3) and then report queued work instead of continuing indefinitely. If
+the user asks for a commit, status, or summary during this window, satisfy that
+request briefly, then continue the follow-up unless the user explicitly says
+stop, pause, or cancel.
+
+If it returns `"queued"`, report the queued task and stop unless the user
+explicitly asks to continue. If it returns `"none"`, continue the normal
+self-improvement pipeline.
 
 ### Steps 1–5: Automated promotion + pruning
 
