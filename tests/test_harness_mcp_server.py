@@ -96,7 +96,11 @@ class HarnessMcpServerTests(unittest.TestCase):
         stdout = io.TextIOWrapper(stdout_bytes, encoding="utf-8")
 
         server = harness_server.McpServer()
-        with mock.patch.object(harness_server.sys, "stdin", stdin), mock.patch.object(harness_server.sys, "stdout", stdout):
+        with (
+            mock.patch.dict(harness_server.os.environ, {"HARNESS_RUNTIME": ""}),
+            mock.patch.object(harness_server.sys, "stdin", stdin),
+            mock.patch.object(harness_server.sys, "stdout", stdout),
+        ):
             server.handle_request(server._read())
             stdout.flush()
 
@@ -119,7 +123,11 @@ class HarnessMcpServerTests(unittest.TestCase):
         stdout = io.TextIOWrapper(stdout_bytes, encoding="utf-8")
 
         server = harness_server.McpServer()
-        with mock.patch.object(harness_server.sys, "stdin", stdin), mock.patch.object(harness_server.sys, "stdout", stdout):
+        with (
+            mock.patch.dict(harness_server.os.environ, {"HARNESS_RUNTIME": ""}),
+            mock.patch.object(harness_server.sys, "stdin", stdin),
+            mock.patch.object(harness_server.sys, "stdout", stdout),
+        ):
             server.handle_request(server._read())
             stdout.flush()
 
@@ -146,7 +154,11 @@ class HarnessMcpServerTests(unittest.TestCase):
         stdout = io.TextIOWrapper(stdout_bytes, encoding="utf-8")
 
         server = harness_server.McpServer()
-        with mock.patch.object(harness_server.sys, "stdin", stdin), mock.patch.object(harness_server.sys, "stdout", stdout):
+        with (
+            mock.patch.dict(harness_server.os.environ, {"HARNESS_RUNTIME": ""}),
+            mock.patch.object(harness_server.sys, "stdin", stdin),
+            mock.patch.object(harness_server.sys, "stdout", stdout),
+        ):
             server.handle_request(server._read())
             stdout.flush()
 
