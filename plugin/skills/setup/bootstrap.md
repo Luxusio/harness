@@ -179,6 +179,15 @@ else
 - Implement an approved PLAN.md / develop only → resume through `Skill(harness:run)`
 - Contract drift / post-upgrade cleanup → continuous maintenance flow in the active/next `Skill(harness:run)` task
 - Read-only question or explanation → answer directly, no skill
+
+### Durable Decision Documentation Gate
+
+A user-stated durable decision is not handled until it is documented under `doc/`.
+If the user establishes, corrects, or confirms a lasting product, design,
+architecture, domain, workflow, or implementation rule, update the matching
+`doc/` file before finalizing. Conversation history is not durable memory. If
+no matching document exists, create one under the appropriate `doc/` area; if no
+doc is needed, record the no-doc rationale in DOC_SYNC/HANDOFF.
 ROUTING_EOF
 fi
 ```

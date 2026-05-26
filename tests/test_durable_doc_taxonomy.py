@@ -3,6 +3,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 BOOTSTRAP = REPO / "plugin" / "skills" / "setup" / "bootstrap.md"
+CLAUDE_SETUP = REPO / "plugin" / "skills" / "setup" / "SKILL.md"
+CODEX_SETUP = REPO / "plugin-codex" / "skills" / "setup" / "SKILL.md"
 PLAN_WRITE = REPO / "plugin" / "skills" / "plan" / "write-artifacts.md"
 CODEX_PLAN = REPO / "plugin-codex" / "internal-skills" / "plan" / "SKILL.md"
 CLAUDE_DEVELOP = REPO / "plugin" / "skills" / "develop" / "SKILL.md"
@@ -49,6 +51,23 @@ def test_setup_introduces_durable_doc_taxonomy():
     assert "OBS" in body
     assert "INF" in body
     assert "doc/product/" not in body
+
+
+def test_setup_routing_includes_durable_decision_doc_gate():
+    bootstrap = _text(BOOTSTRAP)
+    for needle in (
+        "Durable Decision Documentation Gate",
+        "not handled until it is documented under `doc/`",
+        "Conversation history is not durable memory",
+        "DOC_SYNC/HANDOFF",
+    ):
+        assert needle in bootstrap
+
+    for path in (CLAUDE_SETUP, CODEX_SETUP):
+        body = _text(path)
+        assert "Durable Decision Documentation Gate" in body
+        assert "not handled until documented under `doc/`" in body
+        assert "DOC_SYNC/HANDOFF" in body
 
 
 def test_plan_requires_durable_docs_decision_for_claude_and_codex():

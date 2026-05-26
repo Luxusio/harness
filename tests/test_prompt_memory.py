@@ -35,6 +35,7 @@ def _invoke(repo_root: str, *, env_extra=None) -> subprocess.CompletedProcess:
 
 
 def _build_scratch_repo(base: Path, *,
+                        harness_enabled: bool = True,
                         active_task_id: str | None = None,
                         task_state: str | None = None,
                         plan: bool = True,
@@ -45,6 +46,10 @@ def _build_scratch_repo(base: Path, *,
                         ignored_note: bool = False) -> Path:
     """Build a git-rooted scratch repo with optional task + CHECKS + notes."""
     (base / ".git").mkdir(parents=True, exist_ok=True)  # marks repo_root for find_repo_root
+    if harness_enabled:
+        manifest = base / "doc" / "harness" / "manifest.yaml"
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        manifest.write_text("type: test\n", encoding="utf-8")
     tasks = base / "doc" / "harness" / "tasks"
     tasks.mkdir(parents=True, exist_ok=True)
     if active_task_id:
@@ -86,9 +91,18 @@ def _build_scratch_repo(base: Path, *,
 class TestPromptMemory(unittest.TestCase):
 
     # ---- AC-002: silent paths ----
-    def test_no_active_task_is_silent(self):
+    def test_no_active_task_in_harness_repo_emits_doc_gate(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
+            r = _invoke(str(base))
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("[harness-doc-gate]", r.stdout)
+        self.assertIn("Durable decisions require doc/ update before final", r.stdout)
+        self.assertIn("DOC_SYNC/HANDOFF", r.stdout)
+
+    def test_non_harness_repo_is_silent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp), harness_enabled=False)
             r = _invoke(str(base))
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "")
@@ -122,7 +136,8 @@ class TestPromptMemory(unittest.TestCase):
             )
             r = _invoke(str(base))
         self.assertEqual(r.returncode, 0)
-        self.assertTrue(r.stdout.startswith("[harness-context] "), r.stdout)
+        self.assertTrue(r.stdout.startswith("[harness-doc-gate] "), r.stdout)
+        self.assertIn("[harness-context] ", r.stdout)
         self.assertIn("task=TASK__happy", r.stdout)
         self.assertIn("status=implementing", r.stdout)
         self.assertIn("verdict=PASS", r.stdout)
@@ -273,6 +288,7 @@ class TestPromptMemory(unittest.TestCase):
             r = _invoke(str(base))
         self.assertEqual(r.returncode, 0)
         self.assertIn("[harness-runbooks]", r.stdout)
+        self.assertIn("[harness-doc-gate]", r.stdout)
         self.assertIn("integration-up", r.stdout)
         self.assertIn("./scripts/integration-up.sh", r.stdout)
 
@@ -320,7 +336,8 @@ class TestPromptMemory(unittest.TestCase):
                 encoding="utf-8",
             )
             r = _invoke(str(base))
-        self.assertEqual(r.stdout, "")
+        self.assertIn("[harness-doc-gate]", r.stdout)
+        self.assertNotIn(".hygiene-pending", r.stdout)
 
     # ---- Restore digest injection ----
     def test_restore_digest_includes_touched_and_artifact_snippet(self):

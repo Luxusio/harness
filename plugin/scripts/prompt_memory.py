@@ -9,9 +9,10 @@ Pending hygiene and suspect-note summaries are intentionally not injected here.
 The post-close `hygiene_followup.py` scheduler turns hygiene output into a
 separate task so prompt hooks do not dilute the active task's attention scope.
 
-Output is silent when no active task exists. Total length is hard-capped at
-400 chars for harness-context; excess truncates with ``…``. The ``|| true``
-wrapper in ``hooks.json`` (C-12 fail-safe) keeps the session healthy on any crash.
+Output is silent outside harness-enabled repos. Total length is hard-capped at
+400 chars for the compact prompt context; excess truncates with ``…``. The
+``|| true`` wrapper in ``hooks.json`` (C-12 fail-safe) keeps the session healthy
+on any crash.
 """
 from __future__ import annotations
 
@@ -25,6 +26,7 @@ try:
         read_hook_input,
         read_state,
         find_repo_root,
+        is_harness_enabled_repo,
         TASK_DIR,
         _log_gate_error,
         resolve_active_task_dir,
@@ -40,7 +42,12 @@ except Exception:
 
 
 MAX_BLOCK_CHARS = 400
+MAX_OUTPUT_CHARS = 400
 PREFIX = "[harness-context]"
+DOC_GATE = (
+    "[harness-doc-gate] Durable decisions require doc/ update before final; "
+    "if no doc applies, record no-doc rationale in DOC_SYNC/HANDOFF."
+)
 RESTORE_INJECT_CAP = 1400
 RESTORE_TOUCHED_CAP = 5
 RESTORE_COMMIT_CAP = 3
@@ -130,6 +137,12 @@ def _truncate(block: str) -> str:
     if len(block) <= MAX_BLOCK_CHARS:
         return block
     return block[: MAX_BLOCK_CHARS - 2].rstrip() + " …"
+
+
+def _truncate_output(output: str) -> str:
+    if len(output) <= MAX_OUTPUT_CHARS:
+        return output
+    return output[: MAX_OUTPUT_CHARS - 2].rstrip() + " …"
 
 
 def _build_block(task_dir: str, repo_root: str) -> str:
@@ -248,9 +261,11 @@ def _build_restore_block(task_dir: str, repo_root: str) -> str:
 def main() -> int:
     read_hook_input()
     repo_root = find_repo_root()
+    if not is_harness_enabled_repo(repo_root):
+        return 0
     task_dir = _find_active_task_dir(repo_root)
 
-    output_parts = []
+    output_parts = [DOC_GATE]
 
     # Harness context block (existing behavior)
     if task_dir:
@@ -269,7 +284,7 @@ def main() -> int:
             output_parts.append(runbook_block)
 
     if output_parts:
-        sys.stdout.write("\n".join(output_parts))
+        sys.stdout.write(_truncate_output("\n".join(output_parts)))
         sys.stdout.flush()
 
     return 0
