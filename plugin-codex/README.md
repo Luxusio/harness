@@ -38,7 +38,7 @@ Further references:
 - `.codex-plugin/plugin.json` — Codex plugin manifest (mirror of Claude's `.claude-plugin/plugin.json`).
 - `.codex-version` — minimum Codex CLI version pin (0.130.0). Setup refuses registration if installed Codex is older.
 - `config.toml.example` — annotated snippet showing the `~/.codex/config.toml` block that Codex needs for harness to be discoverable. Setup's additive-merge appends a copy to your real config with a timestamped backup, using the installed copy under `~/.codex/harness/plugins/harness`.
-- `skills/` — 2 user-visible Codex skills: `setup` and `run`. Codex exposes every `skills/*/SKILL.md` entry, so internal orchestration prompts do not live here.
+- `skills/` — 3 user-visible Codex skills: `setup`, `run`, and `autopilot`. Codex exposes every `skills/*/SKILL.md` entry, so internal orchestration prompts do not live here.
 - `internal-skills/` — hand-authored Codex methodology prompts used by `run` but hidden from the user skill menu (`plan`, `develop`, `plan-*-review`).
 - `agents/` — 7 agent definitions as **methodology references**. On Claude these spawn via `Agent(subagent_type=...)`; on Codex 0.130.0 there is no Agent primitive in this scope, so the harness orchestrator reads them inline and executes the role's methodology in its own conversation context.
 - Codex hook config is emitted by `install.py` as plugin-local `hooks.json`. It intentionally omits Stop-loop control; Codex flow is prompt-controlled by the skills. Hook scripts provide prompt context and tool safety only.

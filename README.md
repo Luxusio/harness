@@ -132,6 +132,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `golden_replay.py` | Record/replay runtime smoke runs for deterministic regression | `doc/harness/replays/` |
 | `contract_lint.py` | CONTRACTS.md managed-block lint and skill weight checks | — |
 | `runtime_services.py` | Start/status/log helper for manifest-declared runtime services | task-local audit evidence |
+| `autopilot_runner.py` | Persistent `/harness:autopilot` slice queue runner with heartbeat, recover, event log, failure policy, and optional harness-close verification | `doc/harness/autopilot.yaml` |
 | `verify_runner.py` | Deterministic manifest `verify_commands` runner with optional parallel execution | task/task_verify evidence |
 | `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | plan/develop/close evidence |
 | `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |
@@ -209,8 +210,9 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 |-------|-------------|
 | `/harness:setup` | Bootstrap harness in target project |
 | `/harness:run` | Full cycle: plan → develop → verify → close + self-improvement |
+| `/harness:autopilot` | Product builder: clarify direction, lock stack, define slices, then run repeated harness loops until shippable or blocked |
 
-Normal usage is `/harness:setup` once per repository, then `/harness:run` for work. `plan`, `develop`, and the four review sub-skills (`plan-ceo-review`, `plan-design-review`, `plan-eng-review`, `plan-devex-review`) are internal orchestration details and are not invoked directly.
+Normal usage is `/harness:setup` once per repository, then `/harness:run` for bounded work or `/harness:autopilot` for broad product-building work. `plan`, `develop`, and the four review sub-skills (`plan-ceo-review`, `plan-design-review`, `plan-eng-review`, `plan-devex-review`) are internal orchestration details and are not invoked directly.
 
 ## Plugin structure
 

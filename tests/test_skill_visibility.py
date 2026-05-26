@@ -6,7 +6,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 
-PUBLIC_SKILLS = {"setup", "run"}
+PUBLIC_SKILLS = {"setup", "run", "autopilot"}
 INTERNAL_SKILLS = {
     "plan",
     "develop",
@@ -62,6 +62,7 @@ def test_readme_user_skill_table_excludes_internal_skills():
 
     assert "| `/harness:setup` |" in readme
     assert "| `/harness:run` |" in readme
+    assert "| `/harness:autopilot` |" in readme
     assert "| `/harness:plan` |" not in readme
     assert "| `/harness:develop` |" not in readme
     assert "internal orchestration details" in readme
