@@ -42,6 +42,7 @@ try:
         iter_active_task_dirs,
         read_state,
         current_session_id,
+        is_harness_enabled_repo,
     )
 except Exception:
     # _lib unavailable: fail-open. `|| true` would mask an ImportError exit
@@ -213,6 +214,8 @@ def _observable_req_needed_for_path(relpath: str) -> bool:
 
 def _log_gate_parse_fail(repo_root, reason):
     try:
+        if not is_harness_enabled_repo(repo_root):
+            return
         learn_path = os.path.join(repo_root, "doc", "harness", "learnings.jsonl")
         os.makedirs(os.path.dirname(learn_path), exist_ok=True)
         entry = json.dumps({

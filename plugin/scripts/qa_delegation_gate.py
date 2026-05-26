@@ -41,6 +41,7 @@ try:
         log_gate_crash,
         last_hook_input,
         find_repo_root,
+        is_harness_enabled_repo,
     )
 except Exception:
     sys.exit(0)
@@ -69,6 +70,8 @@ def _log_warn(tool_name: str) -> None:
         from datetime import datetime, timezone
         import json
         repo = find_repo_root() or os.getcwd()
+        if not is_harness_enabled_repo(repo):
+            return
         log_path = os.path.join(repo, "doc", "harness", "learnings.jsonl")
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         row = {

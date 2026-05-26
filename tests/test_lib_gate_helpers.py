@@ -18,6 +18,13 @@ sys.path.insert(0, SCRIPTS)
 import _lib  # noqa: E402
 
 
+def _mark_harness_enabled(path: str) -> None:
+    manifest = os.path.join(path, "doc", "harness", "manifest.yaml")
+    os.makedirs(os.path.dirname(manifest), exist_ok=True)
+    with open(manifest, "w", encoding="utf-8") as f:
+        f.write("type: test\n")
+
+
 class TestEmitPermissionDecision(unittest.TestCase):
     def test_deny_emits_json_envelope(self):
         buf = io.StringIO()
@@ -115,11 +122,19 @@ class TestReadHookInput(unittest.TestCase):
         data = json.loads(r.stdout)
         self.assertEqual(data["root"], data["repo"])
 
+    def test_is_harness_enabled_requires_manifest(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.makedirs(os.path.join(td, ".git"))
+            self.assertFalse(_lib.is_harness_enabled_repo(td))
+            _mark_harness_enabled(td)
+            self.assertTrue(_lib.is_harness_enabled_repo(td))
+
 
 class TestLogGateError(unittest.TestCase):
     def test_writes_gate_error_line(self):
         with tempfile.TemporaryDirectory() as td:
             os.makedirs(os.path.join(td, ".git"))  # so find_repo_root(td) returns td
+            _mark_harness_enabled(td)
             cwd = os.getcwd()
             try:
                 os.chdir(td)
@@ -136,6 +151,20 @@ class TestLogGateError(unittest.TestCase):
                 self.assertEqual(entry["source"], "test_gate")
                 self.assertIn("ValueError", entry["error"])
                 self.assertIn("boom", entry["error"])
+            finally:
+                os.chdir(cwd)
+
+    def test_no_gate_error_line_outside_harness_project(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.makedirs(os.path.join(td, ".git"))
+            cwd = os.getcwd()
+            try:
+                os.chdir(td)
+                try:
+                    raise ValueError("boom")
+                except ValueError as exc:
+                    _lib._log_gate_error(exc, "test_gate")
+                self.assertFalse(os.path.exists(os.path.join(td, "doc", "harness")))
             finally:
                 os.chdir(cwd)
 
@@ -158,6 +187,7 @@ class TestLogGateBypass(unittest.TestCase):
     def test_writes_bypass_line(self):
         with tempfile.TemporaryDirectory() as td:
             os.makedirs(os.path.join(td, ".git"))
+            _mark_harness_enabled(td)
             cwd = os.getcwd()
             try:
                 os.chdir(td)
@@ -168,6 +198,17 @@ class TestLogGateBypass(unittest.TestCase):
                 self.assertEqual(entry["type"], "gate-bypass")
                 self.assertEqual(entry["source"], "prewrite")
                 self.assertEqual(entry["path"], "src/x.py")
+            finally:
+                os.chdir(cwd)
+
+    def test_no_bypass_line_outside_harness_project(self):
+        with tempfile.TemporaryDirectory() as td:
+            os.makedirs(os.path.join(td, ".git"))
+            cwd = os.getcwd()
+            try:
+                os.chdir(td)
+                _lib.log_gate_bypass("prewrite", "src/x.py")
+                self.assertFalse(os.path.exists(os.path.join(td, "doc", "harness")))
             finally:
                 os.chdir(cwd)
 

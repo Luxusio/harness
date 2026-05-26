@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import threading
 
@@ -19,6 +20,13 @@ def _repo(tmp_path):
     task_dir.mkdir(parents=True)
     (tasks / ".active").write_text(str(task_dir), encoding="utf-8")
     return str(tmp_path), str(task_dir)
+
+
+def _mark_harness_enabled(repo: str) -> None:
+    manifest = os.path.join(repo, "doc", "harness", "manifest.yaml")
+    os.makedirs(os.path.dirname(manifest), exist_ok=True)
+    with open(manifest, "w", encoding="utf-8") as f:
+        f.write("type: test\n")
 
 
 def test_subagent_start_and_stop_updates_registry(tmp_path):
@@ -46,6 +54,74 @@ def test_subagent_start_and_stop_updates_registry(tmp_path):
     assert stopped["status"] == "done"
     assert stopped["transcript_path"] == "/tmp/transcript.jsonl"
     assert background_registry.active_records(repo, task_id="TASK__bg", session_id="sess-1") == []
+
+
+def test_background_hook_skips_non_harness_repo(tmp_path):
+    repo = tmp_path / "project"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+
+    result = subprocess.run(
+        [sys.executable, os.path.join(SCRIPTS_DIR, "background_hook.py"), "--event", "stop"],
+        cwd=repo,
+        input=json.dumps({
+            "session_id": "sess-1",
+            "agent_id": "agent-1",
+            "agent_type": "harness:ac-worker",
+        }),
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not (repo / "doc" / "harness").exists()
+
+
+def test_background_hook_payload_cwd_non_harness_repo_does_not_write(tmp_path):
+    repo = tmp_path / "project"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    plugin_cwd = tmp_path / "plugin"
+    plugin_cwd.mkdir()
+
+    result = subprocess.run(
+        [sys.executable, os.path.join(SCRIPTS_DIR, "background_hook.py"), "--event", "stop"],
+        cwd=plugin_cwd,
+        input=json.dumps({
+            "cwd": str(repo),
+            "session_id": "sess-1",
+            "agent_id": "agent-1",
+            "agent_type": "harness:ac-worker",
+        }),
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not (repo / "doc" / "harness").exists()
+
+
+def test_background_hook_writes_in_harness_enabled_repo(tmp_path):
+    repo_path, _task_dir = _repo(tmp_path)
+    _mark_harness_enabled(repo_path)
+
+    result = subprocess.run(
+        [sys.executable, os.path.join(SCRIPTS_DIR, "background_hook.py"), "--event", "stop"],
+        cwd=repo_path,
+        input=json.dumps({
+            "session_id": "sess-1",
+            "agent_id": "agent-1",
+            "agent_type": "harness:ac-worker",
+        }),
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert os.path.isfile(background_registry.registry_path(repo_path))
 
 
 def test_official_subagent_stop_fields_are_preserved(tmp_path):

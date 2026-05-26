@@ -238,6 +238,8 @@ def _log_gate_error(exc, source):
     """
     try:
         repo_root = find_repo_root()
+        if not is_harness_enabled_repo(repo_root):
+            return
         learn_path = os.path.join(repo_root, "doc", "harness", "learnings.jsonl")
         os.makedirs(os.path.dirname(learn_path), exist_ok=True)
         entry = _json.dumps({
@@ -274,6 +276,8 @@ def log_gate_crash(exc, script, hook_input=None):
     """
     try:
         repo_root = find_repo_root()
+        if not is_harness_enabled_repo(repo_root):
+            return
         learn_path = os.path.join(repo_root, "doc", "harness", "learnings.jsonl")
         os.makedirs(os.path.dirname(learn_path), exist_ok=True)
         record = {
@@ -300,6 +304,8 @@ def log_gate_bypass(gate_name, path=""):
     """Append a gate-bypass entry when an escape-hatch env var short-circuits a gate."""
     try:
         repo_root = find_repo_root()
+        if not is_harness_enabled_repo(repo_root):
+            return
         learn_path = os.path.join(repo_root, "doc", "harness", "learnings.jsonl")
         os.makedirs(os.path.dirname(learn_path), exist_ok=True)
         entry = _json.dumps({
@@ -515,6 +521,17 @@ def find_repo_root(start_dir=None):
             return d
         d = os.path.dirname(d)
     return os.path.abspath(start_dir or os.getcwd())
+
+
+def is_harness_enabled_repo(repo_root=None):
+    """Return True when a repo has completed harness setup.
+
+    Claude hooks may be installed globally and can run from arbitrary project
+    directories. A git root alone is not enough permission to create
+    ``doc/harness`` runtime files; setup creates ``doc/harness/manifest.yaml``.
+    """
+    root = repo_root or find_repo_root()
+    return os.path.isfile(os.path.join(root, MANIFEST_PATH))
 
 
 def _normalize_task_id(task_id=None, slug=None, task_dir=None):

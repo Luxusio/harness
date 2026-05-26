@@ -9,7 +9,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 try:
-    from _lib import find_repo_root, last_hook_input, log_gate_crash, read_hook_input  # type: ignore
+    from _lib import (  # type: ignore
+        find_repo_root,
+        is_harness_enabled_repo,
+        last_hook_input,
+        log_gate_crash,
+        read_hook_input,
+    )
     import background_registry  # type: ignore
 except Exception:
     sys.exit(0)
@@ -22,6 +28,8 @@ def main() -> int:
     try:
         payload = read_hook_input()
         repo_root = find_repo_root()
+        if not is_harness_enabled_repo(repo_root):
+            return 0
         background_registry.handle_subagent_hook(repo_root, payload, forced_event=args.event)
         background_registry.prune(repo_root)
     except Exception as exc:

@@ -30,6 +30,7 @@ def test_log_gate_crash_writes_record(tmp_path, monkeypatch=None):
     # Redirect repo root to tmp so we don't pollute real learnings.jsonl
     learn_dir = tmp_path / "doc" / "harness"
     learn_dir.mkdir(parents=True)
+    (learn_dir / "manifest.yaml").write_text("type: test\n", encoding="utf-8")
     learn_path = learn_dir / "learnings.jsonl"
     # Stub find_repo_root by chdir + ensuring our scratch is detected.
     (tmp_path / ".git").mkdir()
@@ -59,6 +60,7 @@ def test_log_gate_crash_without_hook_input(tmp_path):
     (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
     learn_dir = tmp_path / "doc" / "harness"
     learn_dir.mkdir(parents=True)
+    (learn_dir / "manifest.yaml").write_text("type: test\n", encoding="utf-8")
     learn_path = learn_dir / "learnings.jsonl"
     cwd = os.getcwd()
     os.chdir(tmp_path)
@@ -70,6 +72,20 @@ def test_log_gate_crash_without_hook_input(tmp_path):
         assert record["script"] == "x_gate"
         assert "tool_name" not in record
         assert "payload_keys" not in record
+    finally:
+        os.chdir(cwd)
+
+
+def test_log_gate_crash_skips_non_harness_repo(tmp_path):
+    """Global hooks must not create doc/harness in repos that have not run setup."""
+    from _lib import log_gate_crash
+
+    (tmp_path / ".git").mkdir()
+    cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        log_gate_crash(RuntimeError("outside setup"), "x_gate", hook_input={"cwd": str(tmp_path)})
+        assert not (tmp_path / "doc" / "harness").exists()
     finally:
         os.chdir(cwd)
 
