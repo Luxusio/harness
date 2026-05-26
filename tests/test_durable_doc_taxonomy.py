@@ -30,6 +30,10 @@ def test_taxonomy_guide_defines_durable_doc_types():
     assert "`OBS__...` records observed facts" in body
     assert "`INF__...` records inference or hypotheses" in body
     assert "Keep harness-internal execution rules in skills, agents, scripts, and tests" in body
+    assert "Start with a documentation impact decision" in body
+    assert "`REQ needed`" in body
+    assert "`Pattern/skill doc enough`" in body
+    assert "`No durable doc needed`" in body
     assert "New pages, admin/backoffice screens, routes, controllers, and endpoints require" in body
     assert "PLAN.md acceptance criteria do not replace durable requirements" in body
 
@@ -52,6 +56,11 @@ def test_plan_requires_durable_docs_decision_for_claude_and_codex():
         body = _text(path)
 
         assert "Durable Docs Decision" in body
+        assert "documentation impact" in body
+        assert "blanket REQ" in body
+        assert "`REQ needed`" in body
+        assert "`Pattern/skill doc enough`" in body
+        assert "`No durable doc needed`" in body
         assert "REQ: doc/<area>/REQ__<name>.md | n/a" in body
         assert "GUIDE: doc/<area>/GUIDE__<name>.md | n/a" in body
         assert "ADR: doc/<area>/ADR__<name>.md | n/a" in body
@@ -81,6 +90,11 @@ def test_develop_guidance_writes_selected_durable_docs():
         assert "Durable docs (REQ/GUIDE/ADR/POLICY)" in body
         assert "Durable Docs Preflight" in body
         assert "before source implementation" in body
+        assert "documentation-impact judgment" in body
+        assert "not a rote REQ checklist" in body
+        assert "`REQ needed`" in body
+        assert "`Pattern/skill doc enough`" in body
+        assert "`No durable doc needed`" in body
         assert "write_req_doc" in body
         assert "req_scaffold.py" in body
         assert "doc/<area>/<TYPE>__<name>.md" in body
@@ -90,8 +104,10 @@ def test_develop_guidance_writes_selected_durable_docs():
         assert "Use `POLICY` only for external security, legal" in body
         assert "New pages, admin/backoffice screens, routes, controllers, and endpoints require a REQ" in body
         assert "Recheck the actual diff after implementation" in body
+        assert "update the relevant `GUIDE`, skill, pattern doc, or tests rather than inventing a REQ" in body
         assert "record the correction in DOC_SYNC" in body
-        assert "Durable docs: before calling `write_handoff`, include links to `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or `POLICY__*.md`" in body
+        assert "Durable docs: before calling `write_handoff`, include the documentation-impact judgment" in body
+        assert "links to `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or `POLICY__*.md`" in body
         assert "before calling `write_handoff`" in body
         assert "specific non-observable reason" in body
         assert "`not needed` is invalid for new or changed UI/API/backoffice/admin screens" in body
@@ -115,6 +131,10 @@ def test_qa_agents_read_durable_docs_by_type():
 def test_document_critic_checks_req_quality():
     playbook = _text(DOCUMENT_CRITIC_PLAYBOOK)
     assert "Durable REQ quality bar" in playbook
+    assert "Documentation impact judgment" in playbook
+    assert "Pattern/skill doc enough" in playbook
+    assert "No durable doc needed" in playbook
+    assert "recorded durable-doc decision is coherent" in playbook
     assert "too vague for implementation or QA to verify" in playbook
     assert "observable behavior exists only in task artifacts and not in the REQ" in playbook
 
@@ -124,6 +144,9 @@ def test_document_critic_checks_req_quality():
         assert "write_critic_document" in body
         assert "`REQ__*.md` that is too vague for future implementation or QA" in body
         assert "Observable behavior introduced by the diff but missing from the REQ" in body
+        assert "Documentation impact judgment" in body
+        assert "Pattern/skill doc enough" in body
+        assert "recorded documentation-impact decision is coherent" in body
         assert "Do not edit documentation yourself" in body
 
 

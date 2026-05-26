@@ -16,6 +16,25 @@ updated: 2026-03-30
 - A changed `REQ__*.md` omits observable UI/API behavior introduced by the diff
 - A changed `REQ__*.md` contradicts PLAN.md, HANDOFF.md, tests, or implementation
 
+# Documentation impact judgment
+
+Before failing a task for a missing REQ, inspect the task's PLAN/HANDOFF/DOC_SYNC
+durable-doc judgment:
+
+- `REQ needed` should name a concrete `doc/<area>/REQ__*.md` path or explain why
+  an existing REQ already covers the behavior.
+- `Pattern/skill doc enough` is coherent when the diff changes harness process,
+  agent instructions, testing guidance, coding conventions, or implementation
+  patterns without changing a product/runtime contract.
+- `No durable doc needed` is coherent only for internal-only, test-only,
+  mechanical, or one-off maintenance changes where the reason names the
+  unchanged durable knowledge surface.
+
+For clear UI/API/backoffice/admin screens, routes, controllers, endpoints,
+native navigation/back-stack behavior, externally consumed contracts, or
+observable bugfixes, missing REQ remains a FAIL. For ambiguous changes, judge
+whether the recorded durable-doc decision is coherent before escalating.
+
 # Durable REQ quality bar
 
 For each changed `doc/<area>/REQ__*.md`, verify that the note answers:

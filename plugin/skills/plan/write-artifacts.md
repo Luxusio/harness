@@ -33,8 +33,10 @@ prompt and explicitly label the source as `conversation summary`. Do not rely on
 
 ### Durable Docs Decision
 
-Every PLAN.md must classify which durable docs should be created or updated
-before develop starts:
+Every PLAN.md must classify documentation impact before develop starts. This is
+a judgment step, not a blanket REQ requirement. Use one of these outcomes in the
+reason: `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`.
+Then list which durable docs should be created or updated:
 
 ```md
 ## Durable Docs Decision
@@ -58,6 +60,12 @@ proactively. If no suitable REQ exists, select a new path such as
 `doc/ui/REQ__mobile-reader-navigation.md`; develop will create/update it with
 `write_req_doc` or `req_scaffold.py` before source edits. Safety gates exist
 only to catch misses, not as the normal discovery mechanism.
+
+When the change affects harness process, agent instructions, coding patterns, or
+verification practice but not a product/runtime contract, prefer `GUIDE` or
+skill/pattern docs and write `REQ: n/a` with `Pattern/skill doc enough` in the
+reason. For purely mechanical, test-only, or internal refactors, write
+`No durable doc needed` and name the unchanged durable knowledge surface.
 
 Use `GUIDE` when the task establishes reusable coding, design, testing, or
 implementation guidance. Use `ADR` when it makes a significant technical

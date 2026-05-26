@@ -257,7 +257,10 @@ Both modes: Phase 1 premise gate and Phase 5.3 User Challenges never auto-decide
 ## Important Rules
 
 - **Never abort.** Surface every decision; never silently redirect to a shorter path.
-- **Durable Docs Decision.** Every PLAN.md includes:
+- **Durable Docs Decision.** Every PLAN.md classifies documentation impact
+  before develop starts. This is a judgment step, not a blanket REQ
+  requirement. Use one of these outcomes in the reason: `REQ needed`,
+  `Pattern/skill doc enough`, or `No durable doc needed`. Then include:
   `REQ: doc/<area>/REQ__<name>.md | n/a`,
   `GUIDE: doc/<area>/GUIDE__<name>.md | n/a`,
   `ADR: doc/<area>/ADR__<name>.md | n/a`,
@@ -278,6 +281,11 @@ Both modes: Phase 1 premise gate and Phase 5.3 User Challenges never auto-decide
   `doc/ui/REQ__mobile-reader-navigation.md`; develop will create/update it with
   `write_req_doc` or `req_scaffold.py` before source edits. Safety gates exist
   only to catch misses, not as the normal discovery mechanism.
+  When the change affects harness process, agent instructions, coding patterns,
+  or verification practice but not a product/runtime contract, prefer `GUIDE`
+  or skill/pattern docs and write `REQ: n/a` with `Pattern/skill doc enough` in
+  the reason. For purely mechanical, test-only, or internal refactors, write
+  `No durable doc needed` and name the unchanged durable knowledge surface.
 - **Two gates.** The non-auto-decided asks are: (1) premise confirmation in Phase 1.1, and (2) User Challenges in Phase 5.3.
 - **Log every decision.** Every classification (Mechanical / Taste / User Challenge) gets a row in `AUDIT_TRAIL.md` via `write_plan_artifact { artifact: "audit" }`.
 - **Full depth means full depth.** Complete every loaded methodology section with its required evidence and decisions.

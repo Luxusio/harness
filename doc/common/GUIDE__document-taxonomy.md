@@ -49,6 +49,18 @@ doc/common/INF__initial-stack-assumptions.md
 
 ## Capture Rules
 
+Start with a documentation impact decision, not a default-to-REQ reflex:
+
+- `REQ needed` when the diff changes observable behavior, externally consumed
+  contracts, process guarantees, or constraints where a mismatch is a defect.
+- `Pattern/skill doc enough` when the durable knowledge is guidance for agents,
+  contributors, implementation style, testing practice, or harness workflow.
+- `No durable doc needed` when the change is internal-only, test-only,
+  mechanical, or one-off maintenance and no durable knowledge surface changes.
+
+Record the decision in PLAN/HANDOFF/DOC_SYNC with a concrete reason. The reason
+should explain which durable knowledge surface is affected, or why none is.
+
 Create or update `REQ` when a task changes observable behavior: visible screen
 state, filters, search, sorting, loading, empty/error states, labels,
 visibility, click/input interactions, externally consumed API request/response
