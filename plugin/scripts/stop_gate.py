@@ -152,11 +152,20 @@ def main():
         task_id = os.path.basename(td.rstrip("/"))[:120]
 
         # Official Stop input includes stop_hook_active=true when Claude is
-        # already continuing due to a Stop hook. Do not emit another
-        # background-specific block in that recursive path; fall through to the
-        # canonical task close gate and let Claude Code's built-in 8-block cap
-        # remain the final guard.
-        if not bool(hook_input.get("stop_hook_active")):
+        # already continuing due to a Stop hook. If background work is still
+        # active in that recursive path, return success silently: the first
+        # Stop hook already forced the continuation, and re-blocking here loops
+        # until Claude Code's consecutive hook cap fires.
+        if bool(hook_input.get("stop_hook_active")):
+            active_background = background_registry.active_records(
+                repo_root,
+                task_id=task_id,
+                session_id=current_session_id(),
+                stale_secs=_background_stale_secs(),
+            )
+            if active_background:
+                return 0
+        else:
             wait_result = background_registry.wait_for_clear(
                 repo_root,
                 task_id=task_id,

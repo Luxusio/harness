@@ -177,8 +177,8 @@ def test_stale_background_record_does_not_mask_normal_stop_gate(tmp_path):
     assert "background subagent work still running" not in payload["reason"]
 
 
-def test_stop_hook_active_skips_background_specific_block(tmp_path):
-    """Recursive Stop hook continuation should not re-block solely on background state."""
+def test_stop_hook_active_with_active_background_silently_allows(tmp_path):
+    """Recursive Stop hook continuation should not re-block while background work runs."""
     repo = _fake_repo(tmp_path, active_contents="TASK__recursive-bg\n")
     runtime = tmp_path / "doc" / "harness" / "runtime"
     runtime.mkdir(parents=True)
@@ -194,6 +194,20 @@ def test_stop_hook_active_skips_background_specific_block(tmp_path):
             "updated_ts": time.time(),
         }],
     }), encoding="utf-8")
+
+    result = _run(
+        repo,
+        stdin=json.dumps({"session_id": "sess-1", "hook_event_name": "Stop", "stop_hook_active": True}),
+        env={"HARNESS_BACKGROUND_WAIT_SECS": "0"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+
+
+def test_stop_hook_active_without_active_background_still_blocks_open_task(tmp_path):
+    """Recursive Stop without active background records still protects the open task."""
+    repo = _fake_repo(tmp_path, active_contents="TASK__recursive-no-bg\n")
 
     result = _run(
         repo,
