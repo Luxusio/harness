@@ -6,6 +6,7 @@ leak into the real repo's doc/harness/tasks/.
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -106,6 +107,41 @@ class TestPromptMemory(unittest.TestCase):
             r = _invoke(str(base))
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "")
+
+    def test_autopilot_state_emits_continuation_reminder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp))
+            state = {
+                "status": "active",
+                "slices": [
+                    {"id": "slice-001", "status": "passed"},
+                    {"id": "slice-002", "status": "pending"},
+                ],
+            }
+            (base / "doc" / "harness" / "autopilot.yaml").write_text(
+                json.dumps(state),
+                encoding="utf-8",
+            )
+            r = _invoke(str(base))
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("[harness-autopilot]", r.stdout)
+        self.assertIn("Slice close is not final", r.stdout)
+        self.assertIn("start/queue next slice", r.stdout)
+
+    def test_completed_autopilot_state_does_not_emit_reminder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp))
+            state = {
+                "status": "done",
+                "slices": [{"id": "slice-001", "status": "passed"}],
+            }
+            (base / "doc" / "harness" / "autopilot.yaml").write_text(
+                json.dumps(state),
+                encoding="utf-8",
+            )
+            r = _invoke(str(base))
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("[harness-autopilot]", r.stdout)
 
     def test_active_points_nowhere_is_silent(self):
         with tempfile.TemporaryDirectory() as tmp:

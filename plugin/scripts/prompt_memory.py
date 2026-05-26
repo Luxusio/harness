@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import json
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
@@ -47,6 +48,10 @@ PREFIX = "[harness-context]"
 DOC_GATE = (
     "[harness-doc-gate] Durable decisions require doc/ update before final; "
     "if no doc applies, record no-doc rationale in DOC_SYNC/HANDOFF."
+)
+AUTOPILOT_GATE = (
+    "[harness-autopilot] Slice close is not final; review gaps and start/queue "
+    "next slice unless product done, blocked, stopped, or budget-capped."
 )
 RESTORE_INJECT_CAP = 1400
 RESTORE_TOUCHED_CAP = 5
@@ -258,6 +263,24 @@ def _build_restore_block(task_dir: str, repo_root: str) -> str:
     return block
 
 
+def _build_autopilot_block(repo_root: str) -> str:
+    path = os.path.join(repo_root, "doc", "harness", "autopilot.yaml")
+    if not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            state = json.load(f)
+    except Exception:
+        return ""
+    status = str(state.get("status") or "").lower()
+    if status in {"done", "blocked", "stopped"}:
+        return ""
+    slices = state.get("slices") if isinstance(state.get("slices"), list) else []
+    if slices and all(str(item.get("status") or "") == "passed" for item in slices if isinstance(item, dict)):
+        return ""
+    return AUTOPILOT_GATE
+
+
 def main() -> int:
     read_hook_input()
     repo_root = find_repo_root()
@@ -282,6 +305,10 @@ def main() -> int:
         runbook_block = _render_runbook_block(repo_root)
         if runbook_block:
             output_parts.append(runbook_block)
+
+    autopilot_block = _build_autopilot_block(repo_root)
+    if autopilot_block:
+        output_parts.append(autopilot_block)
 
     if output_parts:
         sys.stdout.write(_truncate_output("\n".join(output_parts)))

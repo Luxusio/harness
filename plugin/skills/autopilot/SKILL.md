@@ -265,6 +265,30 @@ Natural flow preference: use review and preflight to surface problems before the
 agent collides with harness close gates. Hard gates exist for unattended safety,
 but the normal loop should make the next action obvious before a command fails.
 
+## Autopilot Continuation Gate
+
+Closing one harness slice is never enough to report autopilot completion. Treat
+each closed slice as an iteration checkpoint, not a final answer.
+
+After every closed slice, the agent MUST:
+
+1. Compare the current implementation against the locked product goal.
+2. List the remaining product gaps.
+3. Choose the next highest-value thin vertical slice.
+4. Start or queue the next harness task, unless a stop condition below applies.
+
+A final response is allowed only when one of these is true:
+
+- The product goal and agreed done criteria are fully satisfied.
+- A user or environment blocker prevents further progress.
+- The user explicitly stopped, narrowed, or paused autopilot.
+- The configured autopilot budget/cap was reached.
+- The next slice is already active or queued and the response is explicitly a
+  status update.
+
+`MVP scaffold complete` is not `AUTOPILOT DONE` unless the locked goal was only
+to build a scaffold.
+
 ## Phase 6: Gap Discovery Loop
 
 After all planned MVP slices pass:

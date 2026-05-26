@@ -65,6 +65,21 @@ changes, replan notes, or a targeted follow-up before the next slice. Blockers
 should stop unattended execution until the failed workflow or missing evidence is
 resolved.
 
+## Continuation Gate
+
+Closing one harness slice is an iteration checkpoint, not autopilot completion.
+After every closed slice, compare the current product against the locked product
+goal, list remaining product gaps, choose the next highest-value thin vertical
+slice, and start or queue the next harness task unless a valid stop condition
+applies.
+
+An autopilot final response is allowed only when the product goal is fully
+satisfied, a user/environment blocker prevents further progress, the user
+explicitly stopped or narrowed the run, the configured budget/cap was reached,
+or the next slice is already active/queued and the response is only a status
+update. `MVP scaffold complete` is not `AUTOPILOT DONE` unless the locked goal
+was only to build a scaffold.
+
 ## Preflight Gates
 
 Use preflight before a long unattended loop or when resuming after interruption:

@@ -47,6 +47,31 @@ def test_autopilot_skills_define_direction_stack_and_harness_loop():
         assert "quality_warnings" in body
         assert "quality_blockers" in body
         assert "warning-only" in body
+        assert "Autopilot Continuation Gate" in body
+        assert "Closing one harness slice is never enough" in body
+        assert "MVP scaffold complete" in body
+        assert "next slice is already active or queued" in body
+
+
+def test_autopilot_run_skills_prevent_slice_close_final_answer():
+    for rel in (
+        "plugin/skills/run/SKILL.md",
+        "plugin-codex/skills/run/SKILL.md",
+    ):
+        body = _body(rel)
+        assert "If this run is an autopilot slice" in body
+        assert "task close is an iteration checkpoint" in body
+        assert "choose the next highest-value slice" in body
+        assert "next slice is already active/queued" in body
+
+
+def test_autopilot_agile_loop_records_continuation_gate():
+    body = _body("doc/harness/patterns/autopilot-agile-loop.md")
+
+    assert "Continuation Gate" in body
+    assert "Closing one harness slice is an iteration checkpoint" in body
+    assert "autopilot final response is allowed only when" in body
+    assert "MVP scaffold complete" in body
 
 
 def test_autopilot_codex_skill_documents_runtime_substitutions():
