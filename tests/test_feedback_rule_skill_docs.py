@@ -89,6 +89,21 @@ def test_self_improvement_documents_readable_tier2_format():
     assert "committed artifact" in body
 
 
+def test_harness_source_completion_requires_commit_and_force_install():
+    root = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "commit the completed diff" in root
+    assert "python3 install.py --force" in root
+    assert "before the final response" in root
+
+    for rel in ("plugin/skills/run/SKILL.md", "plugin-codex/skills/run/SKILL.md"):
+        body = (REPO / rel).read_text(encoding="utf-8")
+        assert "For this harness plugin source repo" in body
+        assert "commit the completed diff" in body
+        assert "python3 install.py --force" in body
+        assert "final response" in body
+        assert "force-install result" in body
+
+
 def test_continuous_maintenance_doc_maps_former_maintain_work():
     body = (REPO / "doc/harness/patterns/continuous-maintenance-flow.md").read_text(
         encoding="utf-8"

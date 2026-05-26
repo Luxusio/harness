@@ -219,6 +219,12 @@ If blocked: report `missing_for_close`, fix the stated gate, retry.
 If success: run self-improvement pipeline (see `self-improvement.md` in the
 Claude tree) before emitting the completion report.
 
+For this harness plugin source repo, successful repo-mutating development is
+not complete at task close. After post-close self-improvement returns `none` or
+`queued`, commit the completed diff and run `python3 install.py --force` before
+the final response, unless the user explicitly says not to. Include the commit
+hash and force-install result in the completion report.
+
 ## Mandatory Follow-up Continuation
 
 Post-close self-improvement is part of the same `harness:run` transaction.
@@ -247,6 +253,8 @@ Before writing DONE, assert:
 - runtime_verdict is PASS or task is BLOCKED
 - post-close self-improvement returned `none` or `queued`
 - no auto-runnable follow-up task remains open
+- for this harness plugin source repo, the completed diff has been committed
+  and `python3 install.py --force` has run, unless the user explicitly opted out
 
 ```
 DONE
