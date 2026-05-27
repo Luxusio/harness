@@ -26,6 +26,7 @@ try:
         read_hook_input,
         yaml_field,
         find_repo_root,
+        is_harness_enabled_repo,
         MANIFEST_PATH,
         _log_gate_error,
     )
@@ -127,6 +128,8 @@ def main() -> int:
         return 0
 
     repo_root = find_repo_root()
+    if not is_harness_enabled_repo(repo_root):
+        return 0
     m_cmd = _CMD_NOT_FOUND_RE.search(error_text)
     m_miss = _NO_SUCH_SCRIPT_RE.search(error_text)
     hint = ""

@@ -24,6 +24,8 @@ def _setup_task_dir(repo_root: str, verdict: str) -> str:
     tasks_root = os.path.join(repo_root, "doc", "harness", "tasks")
     task_dir = os.path.join(tasks_root, "TASK__test_blocked_env")
     os.makedirs(task_dir, exist_ok=True)
+    with open(os.path.join(repo_root, "doc", "harness", "manifest.yaml"), "w") as f:
+        f.write("type: test\n")
     # Minimal TASK_STATE.yaml — 7 required fields per _lib.SCHEMA_FIELDS.
     state = textwrap.dedent(f"""\
         task_id: TASK__test_blocked_env

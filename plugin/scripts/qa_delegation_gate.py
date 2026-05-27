@@ -151,6 +151,9 @@ def main() -> int:
     tool_name = payload.get("tool_name") or ""
     if not isinstance(tool_name, str) or not tool_name.startswith(_BLOCKED_TOOL_PREFIX):
         return 0
+    repo_root = find_repo_root()
+    if not is_harness_enabled_repo(repo_root):
+        return 0
 
     if os.environ.get("HARNESS_SKIP_QA_DELEGATION") == "1":
         try:

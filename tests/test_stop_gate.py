@@ -25,6 +25,7 @@ def _fake_repo(tmp_path, active_contents: str | None = None) -> str:
     (tmp_path / ".git").mkdir()
     tasks_dir = tmp_path / "doc" / "harness" / "tasks"
     tasks_dir.mkdir(parents=True)
+    (tmp_path / "doc" / "harness" / "manifest.yaml").write_text("type: test\n", encoding="utf-8")
     if active_contents is not None:
         (tasks_dir / ".active").write_text(active_contents, encoding="utf-8")
     return str(tmp_path)
@@ -101,6 +102,7 @@ def test_safe_on_error(tmp_path):
     (tmp_path / ".git").mkdir()
     tasks_dir = tmp_path / "doc" / "harness" / "tasks"
     tasks_dir.mkdir(parents=True)
+    (tmp_path / "doc" / "harness" / "manifest.yaml").write_text("type: test\n", encoding="utf-8")
     (tasks_dir / ".active").mkdir()  # directory in place of the expected file
 
     result = _run(str(tmp_path), stdin="")  # empty stdin, unreadable marker

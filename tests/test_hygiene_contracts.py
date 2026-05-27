@@ -347,6 +347,8 @@ class TestBootstrap(unittest.TestCase):
             with open(contracts, "w") as f:
                 f.write("<!-- harness:managed-begin v1 -->\n### C-15\n<!-- harness:managed-end -->\n")
             os.makedirs(os.path.join(tmp, "doc", "harness"), exist_ok=True)
+            with open(os.path.join(tmp, "doc", "harness", "manifest.yaml"), "w") as f:
+                f.write("type: test\n")
 
             result = subprocess.run(
                 [sys.executable, os.path.join(SCRIPTS_DIR, "hygiene_scan.py"),
@@ -495,6 +497,8 @@ class TestDXTagNamespace(unittest.TestCase):
         with open(contracts, "w") as f:
             f.write("<!-- harness:managed-begin v1 -->\n### C-16\n<!-- harness:managed-end -->\n")
         os.makedirs(os.path.join(tmp, "doc", "harness"), exist_ok=True)
+        with open(os.path.join(tmp, "doc", "harness", "manifest.yaml"), "w") as f:
+            f.write("type: test\n")
 
     def test_DX01_hygiene_scan_emits_only_hygiene_tags(self):
         """DX-01: hygiene_scan.py emits only [hygiene-*] lines, never [continuous-maintenance]."""

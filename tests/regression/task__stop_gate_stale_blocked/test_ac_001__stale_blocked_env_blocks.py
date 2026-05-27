@@ -34,6 +34,7 @@ def _scaffold_stale_task(tmp_path: Path) -> Path:
     (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
     tasks = repo / "doc" / "harness" / "tasks"
     tasks.mkdir(parents=True)
+    (repo / "doc" / "harness" / "manifest.yaml").write_text("type: test\n")
     task_dir = tasks / "TASK__test_stale"
     task_dir.mkdir()
     # The touched file lives under repo root, NOT inside task_dir, so the
@@ -119,6 +120,7 @@ def test_fresh_blocked_env_permits_stop(tmp_path):
     (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
     tasks = repo / "doc" / "harness" / "tasks"
     tasks.mkdir(parents=True)
+    (repo / "doc" / "harness" / "manifest.yaml").write_text("type: test\n")
     task_dir = tasks / "TASK__test_fresh"
     task_dir.mkdir()
     # Touched file FIRST (mtime baseline)

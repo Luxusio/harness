@@ -108,6 +108,8 @@ class TestStopGateEmitsNextAction(unittest.TestCase):
         self.td_obj = tempfile.TemporaryDirectory()
         self.repo = self.td_obj.name
         os.makedirs(os.path.join(self.repo, "doc", "harness", "tasks"), exist_ok=True)
+        with open(os.path.join(self.repo, "doc", "harness", "manifest.yaml"), "w", encoding="utf-8") as f:
+            f.write("type: test\n")
         os.makedirs(os.path.join(self.repo, "doc", "harness", "tasks", "TASK__demo"), exist_ok=True)
         # minimal TASK_STATE.yaml for emit_compact_context
         with open(os.path.join(self.repo, "doc", "harness", "tasks", "TASK__demo",

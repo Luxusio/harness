@@ -34,6 +34,8 @@ try:
         read_array_field,
         read_scalar_field,
         set_scalar_field,
+        find_repo_root,
+        is_harness_enabled_repo,
     )
     # Private aliases for backward compat
     _split_frontmatter = split_frontmatter
@@ -94,6 +96,12 @@ except ImportError:
     _read_array = read_array_field
     _read_scalar = read_scalar_field
     _set_scalar = set_scalar_field
+
+    def find_repo_root(start_dir=None):  # type: ignore[misc]
+        return os.path.abspath(start_dir or os.getcwd())
+
+    def is_harness_enabled_repo(repo_root=None):  # type: ignore[misc]
+        return False
 
 
 FRESHNESS_CURRENT = "current"
@@ -213,6 +221,10 @@ def main() -> int:
                    help="fallback to `git diff HEAD~N HEAD` if --paths empty")
     p.add_argument("--quiet", action="store_true")
     args = p.parse_args()
+
+    repo_root = find_repo_root()
+    if not is_harness_enabled_repo(repo_root):
+        return 0
 
     changed = _gather_changed(args.from_git, args.paths)
     if not changed:

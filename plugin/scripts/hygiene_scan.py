@@ -41,6 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from _lib import (  # type: ignore
         find_repo_root,
+        is_harness_enabled_repo,
         read_json_state,
         write_json_state,
     )
@@ -365,6 +366,8 @@ def main() -> int:
 
     start_time = time.monotonic()
     repo_root = args.repo_root or find_repo_root()
+    if not is_harness_enabled_repo(repo_root):
+        return 0
     observe_only = args.observe_only
 
     cfg = _load_config(repo_root)

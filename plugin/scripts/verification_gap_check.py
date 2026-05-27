@@ -32,7 +32,7 @@ def main() -> int:
         from _lib import (  # type: ignore
             TASK_DIR, find_repo_root,
             _read_nested_manifest_field, _frontend_touched, _has_qa_browser_section,
-            read_state, resolve_active_task_dir,
+            read_state, resolve_active_task_dir, is_harness_enabled_repo,
         )
     except Exception:
         return 0
@@ -42,6 +42,8 @@ def main() -> int:
     except Exception:
         return 0
     if not repo_root:
+        return 0
+    if not is_harness_enabled_repo(repo_root):
         return 0
 
     task_dir = resolve_active_task_dir(repo_root)

@@ -31,6 +31,8 @@ def _make_minimal_repo(tmp_path, has_c16=True):
         f.write(contracts_content)
     doc_harness = os.path.join(tmp_path, "doc", "harness")
     os.makedirs(doc_harness, exist_ok=True)
+    with open(os.path.join(doc_harness, "manifest.yaml"), "w", encoding="utf-8") as f:
+        f.write("type: test\n")
     return tmp_path
 
 

@@ -503,6 +503,8 @@ def main():
 
     file_path = os.path.abspath(file_path)
     repo_root = find_repo_root()
+    if not is_harness_enabled_repo(repo_root):
+        return 0
     tasks_dir = os.path.join(repo_root, TASK_DIR)
     try:
         common = os.path.commonpath([repo_root, file_path])

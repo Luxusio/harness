@@ -33,6 +33,7 @@ try:
         _escape_hint,
         log_gate_bypass,
         find_repo_root,
+        is_harness_enabled_repo,
     )
     from prewrite_gate import (
         _is_protected_artifact,
@@ -323,6 +324,8 @@ def main():
         return 0
 
     repo_root = find_repo_root()
+    if not is_harness_enabled_repo(repo_root):
+        return 0
     targets = _extract_mutation_targets(command, repo_root)
     if targets:
         _deny(targets[0], command)
