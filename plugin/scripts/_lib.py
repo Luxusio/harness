@@ -758,6 +758,10 @@ _SELF_HEALING_HEADING_RE = re.compile(
     r"^[ \t]{0,3}#{1,3}\s*Self-Healing Candidates\b",
     re.MULTILINE | re.IGNORECASE,
 )
+_USER_FEEDBACK_HEADING_RE = re.compile(
+    r"^[ \t]{0,3}#{1,3}\s*User Feedback Disposition\b",
+    re.MULTILINE | re.IGNORECASE,
+)
 _COMMIT_BACKED_LEARNING_STATUS_RE = re.compile(
     r"^[ \t]{0,3}Status:\s*(none|captured|rejected)\b",
     re.MULTILINE | re.IGNORECASE,
@@ -787,6 +791,11 @@ _SELF_HEALING_DEFERRED_LINE_RE = re.compile(
 _SELF_HEALING_REJECTED_LINE_RE = re.compile(
     r"^[ \t]{0,3}[-*]\s*rejected:\s*(.+)$",
     re.MULTILINE | re.IGNORECASE,
+)
+_USER_FEEDBACK_TERMINAL_STATUSES = {"promoted", "handled-local", "deferred", "rejected"}
+_USER_FEEDBACK_DISPOSITION_RE = re.compile(
+    r"\bevent:\s*([A-Za-z0-9_.:-]+)\b.*?\bstatus:\s*([A-Za-z-]+)\b",
+    re.IGNORECASE,
 )
 _COMMIT_BACKED_CAPTURED_CANDIDATE_LIMIT = 32
 
@@ -1045,6 +1054,56 @@ def _req_detector_result(task_dir, touched_paths):
         return detect_req_need(texts=_task_req_detector_texts(task_dir), paths=touched_paths)
     except Exception:
         return {"requires_req": False, "confidence": "low", "surfaces": [], "reasons": []}
+
+
+def _feedback_event_ids(task_dir):
+    """Return captured user-feedback event ids from task-local JSONL."""
+    path = os.path.join(task_dir, "USER_FEEDBACK.jsonl")
+    if not os.path.isfile(path):
+        return []
+    ids = []
+    seen = set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                event_id = str(event.get("id") or "").strip()
+                if not event_id or event_id in seen:
+                    continue
+                seen.add(event_id)
+                ids.append(event_id)
+    except OSError:
+        return []
+    return ids
+
+
+def _feedback_disposition_ids(task_dir):
+    """Return event ids terminally disposed in HANDOFF.md."""
+    path = os.path.join(task_dir, "HANDOFF.md")
+    section = _handoff_section_body(path, _USER_FEEDBACK_HEADING_RE)
+    if section is None:
+        return set()
+    resolved = set()
+    for match in _USER_FEEDBACK_DISPOSITION_RE.finditer(section):
+        event_id = match.group(1).strip()
+        status = match.group(2).strip().lower()
+        if status in _USER_FEEDBACK_TERMINAL_STATUSES:
+            resolved.add(event_id)
+    return resolved
+
+
+def _unresolved_feedback_event_ids(task_dir):
+    events = _feedback_event_ids(task_dir)
+    if not events:
+        return []
+    resolved = _feedback_disposition_ids(task_dir)
+    return [event_id for event_id in events if event_id not in resolved]
 
 
 def _document_critic_status(task_dir, durable_doc_paths):
@@ -1498,6 +1557,7 @@ def emit_compact_context(task_dir):
     api_touched = _api_touched(touched)
     durable_doc_paths = _durable_docs_touched(touched)
     req_detection = _req_detector_result(task_dir, touched)
+    unresolved_feedback = _unresolved_feedback_event_ids(task_dir)
     if browser_supported and frontend_touched:
         critic_path = os.path.join(task_dir, "CRITIC__qa.md")
         if os.path.isfile(critic_path) and not _has_qa_browser_section(task_dir):
@@ -1532,6 +1592,8 @@ def emit_compact_context(task_dir):
     doc_critic_ok, doc_critic_reason = _document_critic_status(task_dir, durable_doc_paths)
     if not doc_critic_ok:
         missing_for_close.append(doc_critic_reason)
+    if unresolved_feedback:
+        missing_for_close.append("User feedback disposition in HANDOFF.md")
 
     if not has_plan and not micro_loop:
         next_action = "Create PLAN.md via plan skill before source writes."
@@ -1550,6 +1612,13 @@ def emit_compact_context(task_dir):
         next_action = (
             "Run the critic-document agent on changed durable docs and write "
             "CRITIC__document.md with write_critic_document."
+        )
+    elif "User feedback disposition in HANDOFF.md" in missing_for_close:
+        next_action = (
+            "Review USER_FEEDBACK.jsonl before the next dependent action. Reflect "
+            "each event in code/docs/tests, defer it, or reject it, then add "
+            "`## User Feedback Disposition` lines to HANDOFF.md using "
+            "`event: <id> status: promoted|handled-local|deferred|rejected`."
         )
     elif "qa-browser evidence in CRITIC__qa.md" in missing_for_close:
         next_action = ("Spawn Agent(subagent_type='harness:qa-browser', ...) "
@@ -1597,6 +1666,8 @@ def emit_compact_context(task_dir):
         "latest_attempt": attempts[-1] if attempts else {},
         "missing_for_close": missing_for_close,
         "next_action": next_action,
+        "unresolved_feedback_count": len(unresolved_feedback),
+        "unresolved_feedback_ids": unresolved_feedback[:5],
         "effective_close_gate": "micro" if micro_loop else "standard",
         "stale": stale,
         "stale_path": stale_path,

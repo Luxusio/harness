@@ -20,6 +20,8 @@ import os
 import re
 import sys
 import json
+import time
+import hashlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
@@ -32,6 +34,7 @@ try:
         _log_gate_error,
         resolve_active_task_dir,
         runtime_is_stale,
+        emit_compact_context,
     )
 except Exception:
     sys.exit(0)
@@ -57,6 +60,9 @@ RESTORE_INJECT_CAP = 1400
 RESTORE_TOUCHED_CAP = 5
 RESTORE_COMMIT_CAP = 3
 RESTORE_ARTIFACTS = ("HANDOFF.md", "CRITIC__qa.md", "DOC_SYNC.md", "BLOCKED.md")
+FEEDBACK_FILE = "USER_FEEDBACK.jsonl"
+FEEDBACK_PROMPT_CAP = 1200
+FEEDBACK_TOUCHED_CAP = 5
 
 _STALE_SKIP_SUFFIXES = (".pyc", ".pyo", ".pyd")
 _STALE_SKIP_FRAGMENTS = ("__pycache__/", "/.DS_Store", ".swp", ".swo")
@@ -281,8 +287,71 @@ def _build_autopilot_block(repo_root: str) -> str:
     return AUTOPILOT_GATE
 
 
+def _extract_user_prompt(data: dict) -> str:
+    """Return the user prompt text from known Claude/Codex hook payload shapes."""
+    for key in ("prompt", "user_prompt", "message", "text", "content"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return _sanitize_prompt_text(value)[:FEEDBACK_PROMPT_CAP]
+    return ""
+
+
+def _feedback_event_id(task_id: str, prompt: str) -> str:
+    ts_ns = str(time.time_ns())
+    digest = hashlib.sha1(f"{task_id}\0{ts_ns}\0{prompt}".encode("utf-8")).hexdigest()[:12]
+    return f"ufe-{digest}"
+
+
+def _append_feedback_event(task_dir: str, repo_root: str, data: dict) -> bool:
+    """Append a context-rich, task-local user-feedback event.
+
+    The hook only records evidence. It does not classify, promote, or mutate
+    durable docs because doing that without phase context would be unsafe.
+    """
+    prompt = _extract_user_prompt(data)
+    if not prompt:
+        return False
+    st = read_state(task_dir)
+    if not st:
+        return False
+    task_id = st.get("task_id") or os.path.basename(task_dir)
+    try:
+        ctx = emit_compact_context(task_dir)
+    except Exception:
+        ctx = {}
+    open_acs, _reopen_total = _open_acs(task_dir)
+    touched = [
+        _sanitize_path(str(p))
+        for p in (st.get("touched_paths") or [])[:FEEDBACK_TOUCHED_CAP]
+        if str(p).strip()
+    ]
+    event = {
+        "id": _feedback_event_id(str(task_id), prompt),
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "task_id": task_id,
+        "status": st.get("status") or "unknown",
+        "plan_session_state": st.get("plan_session_state") or "",
+        "runtime_verdict": (st.get("runtime_verdict") or "pending").upper(),
+        "next_action": _sanitize_prompt_text(str(ctx.get("next_action") or ""))[:240],
+        "open_acs": [
+            {"id": ac_id, "title": title}
+            for ac_id, title in open_acs
+        ],
+        "touched_paths": touched,
+        "prompt_excerpt": prompt,
+        "source": "user_prompt_hook",
+    }
+    path = os.path.join(task_dir, FEEDBACK_FILE)
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+        return True
+    except OSError:
+        return False
+
+
 def main() -> int:
-    read_hook_input()
+    data = read_hook_input()
     repo_root = find_repo_root()
     if not is_harness_enabled_repo(repo_root):
         return 0
@@ -292,6 +361,7 @@ def main() -> int:
 
     # Harness context block (existing behavior)
     if task_dir:
+        _append_feedback_event(task_dir, repo_root, data)
         block = _build_block(task_dir, repo_root)
         if block:
             output_parts.append(block)

@@ -25,6 +25,24 @@ def test_develop_skills_require_feedback_rule_judgment():
         assert "request_user_input" in body
         assert "user_decision:" in body
         assert "proposed_artifact:" in body
+        assert "User Feedback Event Review" in body
+        assert "USER_FEEDBACK.jsonl" in body
+        assert "durable source of truth" in body
+        assert "by itself" in body
+        assert "before the next action that depends on it" in body
+        assert "User Feedback Disposition" in body
+        assert "promoted|handled-local|deferred|rejected" in body
+        assert "needs-user-decision` is not a closeable disposition" in body
+
+
+def test_run_skills_check_feedback_events_before_dependent_actions():
+    for rel in ("plugin/skills/run/SKILL.md", "plugin-codex/skills/run/SKILL.md"):
+        body = (REPO / rel).read_text(encoding="utf-8")
+        assert "USER_FEEDBACK.jsonl" in body
+        assert "automatic evidence from UserPromptSubmit" in body
+        assert "before the next dependent action" in body
+        assert "User Feedback Disposition" in body
+        assert "Close-time checking only catches missed feedback" in body
 
 
 def test_qa_agents_surface_self_healing_candidates_for_handoff():

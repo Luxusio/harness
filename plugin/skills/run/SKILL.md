@@ -61,6 +61,16 @@ Skill("harness:develop", "<task_id>")
 
 The develop skill reads PLAN.md, implements changes, runs plan completion audit, scope drift detection, bisectable commits, verification gate, runtime QA subagents, DOC_SYNC generation, and distilled change doc. On completion: HANDOFF.md and DOC_SYNC.md exist in task_dir. If BLOCKED: stop, report, ask user.
 
+Before entering develop, re-entering develop after QA/UX FAIL, entering verify,
+or closing, check `<task_dir>/USER_FEEDBACK.jsonl` when present. This file is
+automatic evidence from UserPromptSubmit, not durable truth by itself. If a
+feedback event changes what should be built, tested, or judged, reflect it
+before the next dependent action. The final HANDOFF must include
+`## User Feedback Disposition` with one terminal line per event:
+`event: <id> status: promoted|handled-local|deferred|rejected ...`.
+Close-time checking only catches missed feedback; it is not the primary moment
+to interpret user intent.
+
 ### Phase 4: Verify (QA agent)
 
 Read `doc/harness/manifest.yaml` for project type. Spawn appropriate QA agent(s).

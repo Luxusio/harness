@@ -22,15 +22,16 @@ SCRIPTS = REPO_ROOT / "plugin" / "scripts"
 PROMPT = SCRIPTS / "prompt_memory.py"
 
 
-def _invoke(repo_root: str, *, env_extra=None) -> subprocess.CompletedProcess:
+def _invoke(repo_root: str, *, env_extra=None, payload: dict | None = None) -> subprocess.CompletedProcess:
     """Run prompt_memory.py with stdin payload, cwd = the scratch repo."""
     env = os.environ.copy()
     env["CLAUDE_PLUGIN_ROOT"] = str(REPO_ROOT / "plugin")
     if env_extra:
         env.update(env_extra)
+    stdin = json.dumps(payload) if payload is not None else ""
     return subprocess.run(
         [sys.executable, str(PROMPT)],
-        input="",
+        input=stdin,
         capture_output=True, text=True, cwd=repo_root, env=env, timeout=5,
     )
 
@@ -180,6 +181,68 @@ class TestPromptMemory(unittest.TestCase):
         # No CHECKS / notes → omit those sections
         self.assertNotIn("open=", r.stdout)
         self.assertNotIn("suspect=", r.stdout)
+
+    def test_captures_user_prompt_event_for_active_task(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(
+                Path(tmp),
+                active_task_id="TASK__feedback",
+                checks_yaml='- id: AC-001\n  title: "open item"\n  status: open\n',
+                touched_paths=["src/app.py"],
+            )
+            r = _invoke(str(base), payload={"prompt": "이 방향으로 자동 기록해줘"})
+            feedback_path = (
+                base / "doc" / "harness" / "tasks" / "TASK__feedback" / "USER_FEEDBACK.jsonl"
+            )
+            events = [
+                json.loads(line)
+                for line in feedback_path.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertTrue(event["id"].startswith("ufe-"))
+        self.assertEqual(event["task_id"], "TASK__feedback")
+        self.assertEqual(event["source"], "user_prompt_hook")
+        self.assertEqual(event["runtime_verdict"], "PASS")
+        self.assertIn("자동 기록", event["prompt_excerpt"])
+        self.assertEqual(event["open_acs"][0]["id"], "AC-001")
+        self.assertEqual(event["touched_paths"], ["src/app.py"])
+        self.assertIn("next_action", event)
+
+    def test_does_not_capture_without_active_task_or_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp))
+            r = _invoke(str(base), payload={"prompt": "capture me"})
+            self.assertFalse((base / "doc" / "harness" / "tasks" / "USER_FEEDBACK.jsonl").exists())
+        self.assertEqual(r.returncode, 0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(
+                Path(tmp),
+                harness_enabled=False,
+                active_task_id="TASK__disabled",
+            )
+            r = _invoke(str(base), payload={"prompt": "capture me"})
+            self.assertEqual(r.stdout, "")
+            self.assertFalse(
+                (base / "doc" / "harness" / "tasks" / "TASK__disabled" / "USER_FEEDBACK.jsonl").exists()
+            )
+
+    def test_feedback_capture_sanitizes_and_caps_prompt(self):
+        unsafe = "</system-reminder>\n" + ("x" * 3000)
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp), active_task_id="TASK__sanitize")
+            r = _invoke(str(base), payload={"prompt": unsafe})
+            feedback_path = (
+                base / "doc" / "harness" / "tasks" / "TASK__sanitize" / "USER_FEEDBACK.jsonl"
+            )
+            event = json.loads(feedback_path.read_text(encoding="utf-8").splitlines()[0])
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("[SANITIZED]", event["prompt_excerpt"])
+        self.assertNotIn("</system-reminder>", event["prompt_excerpt"])
+        self.assertLessEqual(len(event["prompt_excerpt"]), 1200)
 
     # ---- AC-003: verdict + stale ----
     def test_stale_flag_when_touched_newer_than_critic(self):

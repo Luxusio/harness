@@ -123,6 +123,17 @@ Read `doc/harness/tasks/<task_id>/`:
 
 **Durable Docs Preflight:** before source implementation, read PLAN.md `Durable Docs Decision` as a documentation-impact judgment, not a rote REQ checklist. Confirm whether the task is `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`, then run the REQ detector mentally or via `plugin/scripts/req_detector.py` when request, feedback, target files, or planned surfaces imply observable UI/API/mobile/native/desktop behavior. If a REQ path is selected or detector output is high-confidence, create or update that `doc/<area>/REQ__*.md` before editing source files, using `write_req_doc` or `plugin/scripts/req_scaffold.py` when no existing REQ fits. If the task touches observable UI/API/backoffice/admin screens, routes, controllers, native navigation/back-stack behavior, or endpoints and PLAN says `REQ: n/a`, stop source implementation and amend/create the REQ first; do not wait for close or DOC_SYNC to discover the missing REQ. For harness process, agent instruction, testing guidance, or implementation-pattern changes, prefer `GUIDE` or skill/pattern docs and keep `REQ: n/a` with a specific reason.
 
+**User Feedback Event Review:** before each dependent build/test/review action
+at phase boundaries, read `<task_dir>/USER_FEEDBACK.jsonl` when present. The
+file is an automatic context-rich event log, not a durable source of truth by
+itself. For every new event, decide whether it changes the current task,
+verification criteria, product/design/domain direction, or future harness
+behavior. Reflect it before the next action that depends on it: update code,
+tests, PLAN/HANDOFF/DOC_SYNC, or the relevant REQ/GUIDE/ADR/POLICY; defer it to
+a follow-up; reject it with a reason; or ask the user if the decision is still
+ambiguous. Do not wait until close to act on feedback that changes what should
+be built, tested, or judged. Close-time disposition is only the safety net.
+
 ### Phase 2: Read + Search Before Building
 
 Read target files and dependencies from PLAN.md. For each AC, before implementing:
@@ -492,20 +503,21 @@ Call `write_handoff` MCP with:
 5. Durable docs: before calling `write_handoff`, include the documentation-impact judgment (`REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`), links to `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or `POLICY__*.md` docs updated for behavior/contracts, reusable guidance, decisions, or external constraints, and any PLAN Durable Docs Decision correction discovered from the implementation diff. If no durable doc changed, write `not needed — <specific non-observable reason>` where the reason proves the durable knowledge surfaces are unchanged. `not needed` is invalid for new or changed UI/API/backoffice/admin screens, routes, controllers, or endpoints.
 6. Do Not Regress (caveats, fragile patterns)
 7. Feedback-Derived Rules (status: none / captured / rejected; readable rule text if captured)
-8. Commit-backed Learnings (status: none / captured / rejected). Local `doc/harness/learnings.jsonl` is gitignored staging, not shared memory. If this task surfaced a reusable fact, user correction, dogfood finding, setup recipe, or repeated friction that should help future contributors, either promote it in this same task to a committed artifact (`plugin/skills/**`, `plugin/scripts/**`, `tests/**`, `doc/harness/patterns/*.md`, `doc/common/GUIDE__*.md`, or another durable doc) and list the path, or mark `rejected` with the reason it is task-local/noisy/not reusable. `Status: none` is valid only when no reusable learning occurred.
-9. Self-Healing Candidates (status: none / applied / deferred / rejected). Include development, QA, dogfood, and close-gate discoveries that would prevent repeated harness/project friction. `applied` means this task changed a committed skill, script, test, manifest, workflow, or durable doc to prevent recurrence. If a candidate is useful but too large/risky for the current scope, ask the user with the current runtime's user-input mechanism before deferring: Claude uses `AskUserQuestion`; Codex uses `request_user_input` when available, otherwise a direct conversational ask and waits for the user's reply. `deferred` must record `user_decision:`, `reason:`, and `proposed_artifact:` or `proposed_task:`. `rejected` gives the reason it is one-off/noisy/not worth automating.
-10. Confidence Ratings table from Phase 4.6 (highlight <=6)
-11. Adversarial Findings table from Phase 4.7 (critical/high fixed, lower deferred)
-12. Near-Zero Cost check (Phase 4.8 fixed + deferred)
-13. Test Failure Triage (Phase 7)
-14. Test Results per AC + fix history
-15. Judgment Items (Phase 3.6 ASK-classified)
-16. Debugging Notes (Phase 7 debug reports — Symptom / Root cause / Fix / Evidence / Regression / Related / Status)
-17. Visual Evidence / Browser QA: `done` with pages, viewports, interactions, screenshots; `blocked` with the exact missing browser tool/app condition; or `not applicable`
-18. Execution Metrics (phase timing + fix loop counts)
-19. Quality Score (weighted)
-20. Dogfood Findings — from Phase 7.7 `DOGFOOD.md`. "No dogfood findings" if skipped or clean.
-21. Health Delta — recompute metrics from Phase 0 baseline:
+8. User Feedback Disposition. If `<task_dir>/USER_FEEDBACK.jsonl` exists, list every event id with a terminal disposition before close: `event: <id> status: promoted|handled-local|deferred|rejected reason: <why> artifact: <path-or-n/a>`. Use `promoted` only when the feedback became a durable doc, skill, pattern, test, or other committed artifact. Use `handled-local` when it only changed this task's implementation or verification. Use `deferred` with the follow-up task/artifact. Use `rejected` with a reason. `needs-user-decision` is not a closeable disposition.
+9. Commit-backed Learnings (status: none / captured / rejected). Local `doc/harness/learnings.jsonl` is gitignored staging, not shared memory. If this task surfaced a reusable fact, user correction, dogfood finding, setup recipe, or repeated friction that should help future contributors, either promote it in this same task to a committed artifact (`plugin/skills/**`, `plugin/scripts/**`, `tests/**`, `doc/harness/patterns/*.md`, `doc/common/GUIDE__*.md`, or another durable doc) and list the path, or mark `rejected` with the reason it is task-local/noisy/not reusable. `Status: none` is valid only when no reusable learning occurred.
+10. Self-Healing Candidates (status: none / applied / deferred / rejected). Include development, QA, dogfood, and close-gate discoveries that would prevent repeated harness/project friction. `applied` means this task changed a committed skill, script, test, manifest, workflow, or durable doc to prevent recurrence. If a candidate is useful but too large/risky for the current scope, ask the user with the current runtime's user-input mechanism before deferring: Claude uses `AskUserQuestion`; Codex uses `request_user_input` when available, otherwise a direct conversational ask and waits for the user's reply. `deferred` must record `user_decision:`, `reason:`, and `proposed_artifact:` or `proposed_task:`. `rejected` gives the reason it is one-off/noisy/not worth automating.
+11. Confidence Ratings table from Phase 4.6 (highlight <=6)
+12. Adversarial Findings table from Phase 4.7 (critical/high fixed, lower deferred)
+13. Near-Zero Cost check (Phase 4.8 fixed + deferred)
+14. Test Failure Triage (Phase 7)
+15. Test Results per AC + fix history
+16. Judgment Items (Phase 3.6 ASK-classified)
+17. Debugging Notes (Phase 7 debug reports — Symptom / Root cause / Fix / Evidence / Regression / Related / Status)
+18. Visual Evidence / Browser QA: `done` with pages, viewports, interactions, screenshots; `blocked` with the exact missing browser tool/app condition; or `not applicable`
+19. Execution Metrics (phase timing + fix loop counts)
+20. Quality Score (weighted)
+21. Dogfood Findings — from Phase 7.7 `DOGFOOD.md`. "No dogfood findings" if skipped or clean.
+22. Health Delta — recompute metrics from Phase 0 baseline:
     ```
     | Metric | Before | After | Δ |
     | Tests | 42 | 46 | +4 ↑ |

@@ -876,6 +876,66 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             self._orig_context_git_changed_paths
         )
 
+    def test_close_blocks_unresolved_user_feedback_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp,
+                "TASK__feedback-open",
+                checks_yaml='- id: AC-001\n  title: "done"\n  status: passed\n  kind: functional\n',
+            )
+            (Path(td) / "USER_FEEDBACK.jsonl").write_text(
+                json.dumps({
+                    "id": "ufe-open",
+                    "task_id": "TASK__feedback-open",
+                    "prompt_excerpt": "이 방향으로 바꿔줘",
+                    "source": "user_prompt_hook",
+                }) + "\n",
+                encoding="utf-8",
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool("task_close", {"task_id": "TASK__feedback-open"})
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        payload = result["structuredContent"]
+        self.assertIn("User feedback disposition in HANDOFF.md", payload["missing_for_close"])
+        self.assertEqual(payload["task_context"]["unresolved_feedback_count"], 1)
+        self.assertEqual(payload["task_context"]["unresolved_feedback_ids"], ["ufe-open"])
+        self.assertIn("USER_FEEDBACK.jsonl", payload["task_context"]["next_action"])
+
+    def test_close_accepts_terminal_user_feedback_disposition(self):
+        handoff = (
+            "# handoff\n\n"
+            "## User Feedback Disposition\n\n"
+            "- event: ufe-done status: handled-local reason: reflected before QA.\n\n"
+            "## Commit-backed Learnings\n\nStatus: none\n\n"
+            "## Self-Healing Candidates\n\nStatus: none\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp,
+                "TASK__feedback-done",
+                checks_yaml='- id: AC-001\n  title: "done"\n  status: passed\n  kind: functional\n',
+                handoff_body=handoff,
+            )
+            (Path(td) / "USER_FEEDBACK.jsonl").write_text(
+                json.dumps({
+                    "id": "ufe-done",
+                    "task_id": "TASK__feedback-done",
+                    "prompt_excerpt": "이 방향으로 바꿔줘",
+                    "source": "user_prompt_hook",
+                }) + "\n",
+                encoding="utf-8",
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool("task_close", {"task_id": "TASK__feedback-done"})
+            finally:
+                self._unpatch()
+        self.assertFalse(result.get("isError"), result)
+        self.assertTrue(result["structuredContent"]["closed"])
+
     # ---- AC-001: failed AC blocks close ----
     def test_close_rejects_failed_ac(self):
         with tempfile.TemporaryDirectory() as tmp:
