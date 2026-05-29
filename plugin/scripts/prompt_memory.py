@@ -56,6 +56,10 @@ AUTOPILOT_GATE = (
     "[harness-autopilot] Slice close is not final; review gaps and start/queue "
     "next slice unless product done, blocked, stopped, or budget-capped."
 )
+TASK_PACK_GATE = (
+    "[harness-task-pack] Task close is not final; claim/start the next queued "
+    "task-pack item unless the pack is done, blocked, stopped, or budget-capped."
+)
 RESTORE_INJECT_CAP = 1400
 RESTORE_TOUCHED_CAP = 5
 RESTORE_COMMIT_CAP = 3
@@ -287,6 +291,28 @@ def _build_autopilot_block(repo_root: str) -> str:
     return AUTOPILOT_GATE
 
 
+def _build_task_pack_block(repo_root: str) -> str:
+    path = os.path.join(repo_root, "doc", "harness", "task-packs", "current.json")
+    if not os.path.isfile(path):
+        return ""
+    try:
+        with open(path, encoding="utf-8") as f:
+            state = json.load(f)
+    except Exception:
+        return ""
+    status = str(state.get("status") or "").lower()
+    if status in {"done", "blocked", "stopped"}:
+        return ""
+    tasks = state.get("tasks") if isinstance(state.get("tasks"), list) else []
+    if tasks and all(
+        str(item.get("status") or "") in {"closed", "blocked", "skipped"}
+        for item in tasks
+        if isinstance(item, dict)
+    ):
+        return ""
+    return TASK_PACK_GATE
+
+
 def _extract_user_prompt(data: dict) -> str:
     """Return the user prompt text from known Claude/Codex hook payload shapes."""
     for key in ("prompt", "user_prompt", "message", "text", "content"):
@@ -379,6 +405,10 @@ def main() -> int:
     autopilot_block = _build_autopilot_block(repo_root)
     if autopilot_block:
         output_parts.append(autopilot_block)
+
+    task_pack_block = _build_task_pack_block(repo_root)
+    if task_pack_block:
+        output_parts.append(task_pack_block)
 
     if output_parts:
         sys.stdout.write(_truncate_output("\n".join(output_parts)))

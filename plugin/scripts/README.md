@@ -10,6 +10,7 @@ Minimal harness scripts. Self-contained — no plugin-legacy dependency.
 - `note_freshness.py` — flips `freshness: current -> suspect` on invalidated notes
 - `environment_snapshot.py` — task_start snapshot with manifest, tool manager, and tool version probes
 - `prompt_memory.py` — UserPromptSubmit context injection, including active-task restore digest and runbook reminders
+- `task_pack_runner.py` — ordered multi-task queue state for roadmap/stage requests that should continue without asking users to choose internal task sequence
 - `contract_lint.py` — CONTRACTS.md managed-block lint; `--check-weight` enforces C-13 SKILL.md budget
 - `prewrite_gate.py` — PreToolUse hook (artifact ownership + plan-first enforcement)
 - `stop_gate.py` — Stop hook (open task reminder)

@@ -20,6 +20,22 @@ Direct, terse. Status updates, not narration. "Phase N done." not "I have comple
 
 Execute phases in strict order. Each phase must complete before the next begins. On any phase failure: stop, report, ask how to proceed.
 
+### Task-pack continuation
+
+For a user request that names multiple sequential stages, roadmap items, or
+follow-up tasks, create an ordered task pack before implementation when the
+known tasks can be named. Use `plugin/scripts/task_pack_runner.py init` with
+one `--task "slug:title"` per known stage. The user does not choose the split
+or sequence; derive order from the stated roadmap, dependency order, or
+highest-risk/highest-value order.
+
+When a task pack exists, use `task_pack_runner.py next` / `claim-next` to report
+and claim the next queued task. Present the selected next task as status, not a
+question. Ask the user only for go/no-go at an agreed batch boundary, genuine
+product/architecture/auth/billing/data/destructive decisions, environment or
+credential blockers, or contradictions that would likely implement the wrong
+intent.
+
 ### Phase 0: Resume detection
 
 Before creating a new task, check whether this session already has an active
@@ -36,6 +52,11 @@ Resume routing:
 
 Only call `task_start` when no active task can be resolved, or when the user
 explicitly asks for a new task.
+
+If no active task exists and `doc/harness/task-packs/current.json` is active,
+run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/task_pack_runner.py next` and then
+`claim-next` for the next queued item. Start that returned `task_id` or slug
+without asking which task to do next.
 
 ### Phase 1: Start task
 
@@ -179,6 +200,12 @@ mcp__plugin_harness_harness__task_close { task_id: "<task_id>" }
 If blocked: report `missing_for_close`, fix the stated gate, retry.
 If success: run self-improvement pipeline (see `self-improvement.md`) before
 emitting the completion report.
+
+If this run belongs to an active task pack, mark the item closed with
+`python3 ${CLAUDE_PLUGIN_ROOT}/scripts/task_pack_runner.py close --task <slug>`.
+If the runner prints another `next:` item, start or queue that task before a
+final DONE response unless the pack is done, blocked/stopped, budget-capped, or
+waiting at an explicit user go/no-go boundary.
 
 If this run is an autopilot slice, task close is an iteration checkpoint rather
 than a final product completion. Before any final response, run the autopilot

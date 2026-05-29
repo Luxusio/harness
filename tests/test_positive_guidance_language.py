@@ -54,6 +54,7 @@ def test_positive_guidance_replacements_are_present():
         "Convert corrective feedback into a reusable conditional behavior rule",
         "Stop on phase failures, report the failure, check task state, and ask how to proceed",
         "Auto-decide scope-partition choices",
+        "Present the selected next task as status",
         "Complete every loaded sub-skill methodology section",
     ]
     for phrase in expected:

@@ -144,6 +144,25 @@ class TestPromptMemory(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertNotIn("[harness-autopilot]", r.stdout)
 
+    def test_task_pack_state_emits_continuation_reminder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp))
+            state = {
+                "status": "active",
+                "tasks": [
+                    {"id": "stage-1", "status": "closed"},
+                    {"id": "stage-2", "status": "queued"},
+                ],
+            }
+            pack_dir = base / "doc" / "harness" / "task-packs"
+            pack_dir.mkdir(parents=True, exist_ok=True)
+            (pack_dir / "current.json").write_text(json.dumps(state), encoding="utf-8")
+            r = _invoke(str(base))
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("[harness-task-pack]", r.stdout)
+        self.assertIn("Task close is not final", r.stdout)
+        self.assertIn("claim/start the next queued", r.stdout)
+
     def test_active_points_nowhere_is_silent(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
