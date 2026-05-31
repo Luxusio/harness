@@ -133,6 +133,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `contract_lint.py` | CONTRACTS.md managed-block lint and skill weight checks | — |
 | `runtime_services.py` | Start/status/log helper for manifest-declared runtime services | task-local audit evidence |
 | `autopilot_runner.py` | Persistent `/harness:autopilot` slice queue runner with heartbeat, recover, event log, failure policy, and optional harness-close verification | `doc/harness/autopilot.yaml` |
+| `task_pack_runner.py` | Ordered task-pack state for multi-step harness requests; records the user's known ordered work and makes the next task deterministic after each close | task pack state files |
 | `verify_runner.py` | Deterministic manifest `verify_commands` runner with optional parallel execution | task/task_verify evidence |
 | `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | plan/develop/close evidence |
 | `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |
@@ -149,6 +150,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `_gate_response.py` | Shared hook deny/allow response helper | — |
 | `qa_delegation_gate.py` | Browser QA delegation guard for protected MCP calls | — |
 | `verification_gap_check.py` | Resume-time warning for missing verification evidence | — |
+| `drift_warn.py` | SessionStart drift detector: reminds dev-of-harness users when installed plugin lags source (silent in non-dev / non-harness repos) | — |
 
 Activated via optional manifest keys: `health_components`, `benchmark_components`, `audit_categories`. Health falls back to `test_command` when no components declared.
 

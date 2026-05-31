@@ -991,14 +991,14 @@ def handle_write_critic_document(args: dict) -> dict:
 def handle_write_req_doc(args: dict) -> dict:
     if _write_req_doc_file is None:
         return _err("write_req_doc unavailable: req_scaffold.py import failed")
-    ti = _req(args, "task_id")
+    ti = _opt(args, "task_id") or ""
     area = _opt(args, "area") or "ui"
     slug = _req(args, "slug")
     intent = _req(args, "intent")
     observable = _req(args, "observable_behaviors")
     verification = _req(args, "verification_cues")
     non_goals = _opt(args, "non_goals") or ""
-    source = _opt(args, "source") or f"task: {ti}"
+    source = _opt(args, "source") or (f"task: {ti}" if ti else f"adhoc:{now_iso()}")
     repo_root = find_repo_root()
     rel = _write_req_doc_file(
         repo_root,
@@ -1013,8 +1013,9 @@ def handle_write_req_doc(args: dict) -> dict:
     return _ok({
         "artifact": rel,
         "task_id": ti,
-        "task_dir": canonical_task_dir(task_id=ti),
+        "task_dir": canonical_task_dir(task_id=ti) if ti else "",
         "req_path": rel,
+        "source": source,
     })
 
 
@@ -1291,7 +1292,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "additionalProperties": False},
      "handler": handle_write_critic_document},
     {"name": "write_req_doc", "title": "Create or update durable REQ doc",
-     "description": "Auto-author a doc/<area>/REQ__<slug>.md scaffold before observable source work. The scaffold is reviewed by critic-document when durable docs change.",
+     "description": "Auto-author a doc/<area>/REQ__<slug>.md scaffold before observable source work. The scaffold is reviewed by critic-document when durable docs change. task_id is optional — when omitted, source defaults to adhoc:<ISO8601> and task_dir is empty.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"},
          "area": {"type": "string"},
@@ -1301,7 +1302,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "verification_cues": {"type": "string"},
          "non_goals": {"type": "string"},
          "source": {"type": "string"}},
-         "required": ["task_id", "slug", "intent", "observable_behaviors", "verification_cues"],
+         "required": ["slug", "intent", "observable_behaviors", "verification_cues"],
          "additionalProperties": False},
      "handler": handle_write_req_doc},
     {"name": "write_handoff", "title": "Write developer handoff — developer only",
