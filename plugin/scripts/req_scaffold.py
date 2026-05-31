@@ -25,10 +25,11 @@ def _bullet_lines(value: str) -> str:
 
 def render_req_doc(title: str, intent: str, observable_behaviors: str,
                    verification_cues: str, non_goals: str = "",
-                   source: str = "") -> str:
+                   source: str = "", status: str = "accepted") -> str:
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return (
         f"# REQ - {title}\n\n"
+        f"status: {status.strip() or 'accepted'}\n\n"
         "## Intent\n"
         f"{intent.strip() or 'TBD'}\n\n"
         "## Observable Behavior\n"
@@ -48,14 +49,14 @@ def render_req_doc(title: str, intent: str, observable_behaviors: str,
 def write_req_doc(repo_root: str, area: str, slug: str, intent: str,
                   observable_behaviors: str, verification_cues: str,
                   non_goals: str = "", source: str = "",
-                  append: bool = True) -> str:
+                  append: bool = True, status: str = "accepted") -> str:
     area = _slugify(area)
     slug = _slugify(slug)
     rel = os.path.join("doc", area, f"REQ__{slug}.md")
     path = os.path.join(repo_root, rel)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     title = slug.replace("-", " ").title()
-    new_body = render_req_doc(title, intent, observable_behaviors, verification_cues, non_goals, source)
+    new_body = render_req_doc(title, intent, observable_behaviors, verification_cues, non_goals, source, status)
 
     if append and os.path.exists(path):
         with open(path, encoding="utf-8") as f:
@@ -94,6 +95,9 @@ def main() -> int:
     parser.add_argument("--verification-cues", required=True)
     parser.add_argument("--non-goals", default="")
     parser.add_argument("--source", default="")
+    parser.add_argument("--status", default="accepted",
+                        help="REQ frontmatter status: accepted (default) | candidate. "
+                             "critic-document retrospective writes use 'candidate'.")
     parser.add_argument("--path", action="append", default=[])
     args = parser.parse_args()
 
@@ -110,6 +114,7 @@ def main() -> int:
         args.verification_cues,
         args.non_goals,
         source,
+        status=args.status,
     )
     print(rel)
     return 0

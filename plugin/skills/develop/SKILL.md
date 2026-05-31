@@ -684,10 +684,15 @@ and close produced no self-healing signal.
 Mechanical. Read HANDOFF.md (changed file list) + `doc/CLAUDE.md` (registered roots). For each file, map to doc root. Call `mcp__plugin_harness_harness__write_doc_sync`.
 
 When the task changes `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or
-`POLICY__*.md`, run the `critic-document` agent after DOC_SYNC. It verifies both
-DOC_SYNC consistency and durable doc quality. The task cannot close until
-`CRITIC__document.md` has a fresh `PASS`; a changed REQ with vague or missing
-observable behavior is a FAIL, not a warning.
+`POLICY__*.md` OR the task's `<task_dir>/USER_FEEDBACK.jsonl` is non-empty
+(per C-101 in `CONTRACTS.local.md`), run the `critic-document` agent after
+DOC_SYNC. It verifies both DOC_SYNC consistency and durable doc quality, and
+runs the Retrospective REQ pass over USER_FEEDBACK.jsonl to catch user-stated
+requirements that closed without becoming durable REQ docs. The task cannot
+close until `CRITIC__document.md` has a fresh `PASS`; a changed REQ with vague
+or missing observable behavior is a FAIL, not a warning. Candidate REQs written
+by the Retrospective pass land with `status: candidate` frontmatter and do not
+block close on their own.
 
 ### Phase 8.7: Distilled Change Doc
 

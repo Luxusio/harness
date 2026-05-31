@@ -999,6 +999,7 @@ def handle_write_req_doc(args: dict) -> dict:
     verification = _req(args, "verification_cues")
     non_goals = _opt(args, "non_goals") or ""
     source = _opt(args, "source") or (f"task: {ti}" if ti else f"adhoc:{now_iso()}")
+    status = _opt(args, "status") or "accepted"
     repo_root = find_repo_root()
     rel = _write_req_doc_file(
         repo_root,
@@ -1009,6 +1010,7 @@ def handle_write_req_doc(args: dict) -> dict:
         verification,
         non_goals,
         source,
+        status=status,
     )
     return _ok({
         "artifact": rel,
@@ -1016,6 +1018,7 @@ def handle_write_req_doc(args: dict) -> dict:
         "task_dir": canonical_task_dir(task_id=ti) if ti else "",
         "req_path": rel,
         "source": source,
+        "status": status,
     })
 
 
@@ -1292,7 +1295,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "additionalProperties": False},
      "handler": handle_write_critic_document},
     {"name": "write_req_doc", "title": "Create or update durable REQ doc",
-     "description": "Auto-author a doc/<area>/REQ__<slug>.md scaffold before observable source work. The scaffold is reviewed by critic-document when durable docs change. task_id is optional — when omitted, source defaults to adhoc:<ISO8601> and task_dir is empty.",
+     "description": "Auto-author a doc/<area>/REQ__<slug>.md scaffold before observable source work. The scaffold is reviewed by critic-document when durable docs change. task_id is optional — when omitted, source defaults to adhoc:<ISO8601> and task_dir is empty. status is optional — defaults to 'accepted'; critic-document retrospective writes use 'candidate' so the REQ lands for user review without claiming acceptance.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"},
          "area": {"type": "string"},
@@ -1301,7 +1304,8 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "observable_behaviors": {"type": "string"},
          "verification_cues": {"type": "string"},
          "non_goals": {"type": "string"},
-         "source": {"type": "string"}},
+         "source": {"type": "string"},
+         "status": {"type": "string", "enum": ["accepted", "candidate"]}},
          "required": ["slug", "intent", "observable_behaviors", "verification_cues"],
          "additionalProperties": False},
      "handler": handle_write_req_doc},

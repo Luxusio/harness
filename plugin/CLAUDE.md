@@ -30,8 +30,8 @@ No step skipped. Smallest coherent diff per step.
 - `write_plan_artifact` → PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md (plan-skill)
 - `write_critic_qa` → CRITIC__qa.md + runtime_verdict evidence ledger (qa-* agents)
 - `write_critic_ux` → CRITIC__ux.md (ux-* agents; no runtime_verdict mutation)
-- `write_critic_document` → CRITIC__document.md (critic-document agent)
-- `write_req_doc` → doc/<area>/REQ__*.md scaffold for observable behavior
+- `write_critic_document` → CRITIC__document.md (critic-document agent; fires at close when durable docs change OR `<task_dir>/USER_FEEDBACK.jsonl` is non-empty, per C-101)
+- `write_req_doc` → doc/<area>/REQ__*.md scaffold for observable behavior (accepts optional `status: accepted|candidate`; critic-document retrospective writes use `candidate`)
 - `write_handoff` → HANDOFF.md (develop coordinator or dedicated developer role)
 - `write_doc_sync` → DOC_SYNC.md (develop coordinator)
 
