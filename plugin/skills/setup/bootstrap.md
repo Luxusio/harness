@@ -238,6 +238,7 @@ _HARNESS_IGNORES=(
   "doc/harness/.interview-answers.json"
   "doc/harness/retros/"
   "doc/harness/quality-trend.jsonl"
+  "doc/harness/runtime/"
   "doc/harness/hygiene.yaml"
   "doc/harness/.hygiene-last-run"
   "doc/harness/.hygiene-observe.log"

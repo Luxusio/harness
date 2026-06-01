@@ -26,6 +26,7 @@ doc/harness/visual-baselines/
 doc/harness/retros/
 doc/harness/quality-trend.jsonl
 doc/harness/.interview-answers.json
+doc/harness/runtime/
 
 # auto-hygiene runtime state (per-user; template at plugin/skills/setup/templates/hygiene.yaml)
 doc/harness/hygiene.yaml
