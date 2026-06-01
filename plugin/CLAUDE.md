@@ -56,6 +56,9 @@ Routing is computed on-the-fly from manifest + artifacts. Never stored in TASK_S
 Do not mutate source before PLAN.md exists.
 Short approvals only authorize the last explicit transition proposed.
 
+`execution_mode: micro` (passed to `task_start`) exempts the PLAN.md rule for
+one-shot bugfix/maintenance edits; the REQ durable-doc gate still applies.
+
 ## 4a. Turn-end rule (P1 strict)
 
 Task in_progress (`.active` marker exists) 동안:

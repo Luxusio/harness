@@ -181,9 +181,12 @@ def _is_source_file(path, repo_root=None):
     return ext.lower() in SOURCE_EXTENSIONS
 
 
-def _task_has_req_reference(task_dir: str) -> bool:
+def _task_has_req_reference(task_dir: str, repo_root: str = "") -> bool:
     import re
     req_re = re.compile(r"doc/[^)\]\s`'\"]+/REQ__[A-Za-z0-9_.-]+\.md")
+    # Scan task-local PLAN/HANDOFF/DOC_SYNC bodies for any REQ path string.
+    # Original behavior; the back-link path below catches REQs registered via
+    # write_req_doc(task_id=...) without a body mirror.
     for name in ("PLAN.md", "HANDOFF.md", "DOC_SYNC.md"):
         path = os.path.join(task_dir, name)
         if not os.path.isfile(path):
@@ -194,6 +197,51 @@ def _task_has_req_reference(task_dir: str) -> bool:
                     return True
         except OSError:
             continue
+    # Back-link path: walk doc/**/REQ__*.md and look for a `source: task: <id>`
+    # line written by req_scaffold.write_req_doc when invoked with task_id.
+    # Solves the producer/consumer mismatch where write_req_doc records the
+    # link but the gate ignored it.
+    task_id = os.path.basename(os.path.normpath(task_dir))
+    if not task_id.startswith("TASK__"):
+        return False
+    if not repo_root:
+        # task_dir is always <repo>/doc/harness/tasks/TASK__<id> — walk 4 up.
+        repo_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.dirname(task_dir)))
+        )
+    doc_root = os.path.join(repo_root, "doc")
+    if not os.path.isdir(doc_root):
+        return False
+    # REQ docs always live at doc/<area>/REQ__*.md per req_scaffold.write_req_doc
+    # (req_scaffold.py:55 — `rel = os.path.join("doc", area, f"REQ__{slug}.md")`).
+    # Depth-2 scan instead of os.walk keeps gate latency O(area-dirs × REQs-per-area)
+    # so this back-link path doesn't dominate every source-edit gate call.
+    back_link = f"source: task: {task_id}"
+    try:
+        areas = os.listdir(doc_root)
+    except OSError:
+        return False
+    for area in areas:
+        if area == "harness":
+            # Skip doc/harness/ (contains tasks/, patterns/, etc; no project REQs).
+            continue
+        area_path = os.path.join(doc_root, area)
+        if not os.path.isdir(area_path):
+            continue
+        try:
+            entries = os.listdir(area_path)
+        except OSError:
+            continue
+        for name in entries:
+            if not (name.startswith("REQ__") and name.endswith(".md")):
+                continue
+            path = os.path.join(area_path, name)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    if back_link in f.read():
+                        return True
+            except OSError:
+                continue
     return False
 
 

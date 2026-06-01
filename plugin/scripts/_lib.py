@@ -1598,7 +1598,11 @@ def emit_compact_context(task_dir):
     if not has_plan and not micro_loop:
         next_action = "Create PLAN.md via plan skill before source writes."
     elif micro_loop and not has_handoff:
-        next_action = "Micro-loop active — develop, write HANDOFF.md, then verify. Verification is still required."
+        next_action = (
+            "Micro-loop active — PLAN.md is exempt under execution_mode='micro' "
+            "(REQ durable-doc gate still applies). Develop, write HANDOFF.md, "
+            "then verify. Verification is still required."
+        )
     elif runtime_verdict != "PASS":
         next_action = "Run task_verify to check runtime verification."
     elif any(m.startswith("REQ durable doc") for m in missing_for_close):

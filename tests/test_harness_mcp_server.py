@@ -667,6 +667,11 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertTrue(ctx["source_write_allowed"])
         self.assertEqual(ctx["routing"]["execution_mode"], "micro")
         self.assertNotIn("PLAN.md", ctx["missing_for_close"])
+        # AC-002: micro-mode next_action must state PLAN.md exemption + REQ gate
+        # so the agent can discover the rule without reading source.
+        self.assertIn("PLAN.md is exempt", ctx["next_action"])
+        self.assertIn("REQ", ctx["next_action"])
+        self.assertIn("micro", ctx["next_action"])
         self.assertTrue(close.get("isError"))
         self.assertIn("HANDOFF.md", close["structuredContent"]["missing_for_close"])
         self.assertIn("runtime_verdict PASS", close["structuredContent"]["missing_for_close"])
