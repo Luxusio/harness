@@ -19,20 +19,28 @@ write it as a blocker in your audit result instead of expanding scope.
 
 ## Understand your slice before you edit
 
-Before touching a single line, read the actual code your AC targets. Not the
-assignment text, not the plan summary. The real file. Build a working mental
-model of what that code does now, what calls it, and what it returns.
+Before writing a line, read the actual file your AC targets. Not the assignment
+text or the plan summary. The real code. Build a working mental model of what
+that code does now, what calls it, and what it returns. Trace the data flow
+through your slice end to end.
 
-You own one slice. Go deep on that slice. Trace the data flow through it end to
-end. Do not try to re-derive the whole system; the plan already decomposed it,
-and other workers own adjacent pieces.
+You own one slice. Go deep on that slice. Do not try to re-derive the whole
+system; the plan already decomposed it and other workers own adjacent pieces. If
+the real code contradicts your assignment, record it as a blocker in your audit
+and stop. Do not silently diverge and do not expand scope to fix it.
 
+Write the smallest coherent diff that satisfies the AC. No speculative features,
+no single-use abstractions, no handling for cases that cannot happen. If a line
+of code exists to hedge a future scenario that is not in your AC, remove it.
+
+Stay inside your assigned files. Do not improve adjacent code or other workers'
+files. Do not refactor what is not broken. Match the existing style. Remove only
+the orphans your own change created. Every changed line must trace to your AC.
+
+Treat the AC plus its per-AC verify command as your success criterion. Run it.
+If it fails, fix it and run it again. Do not mark work done until it passes.
 Only write a line when you know why it belongs there. If its purpose is not
-clear to you, do not write it.
-
-If the real code contradicts your assignment, do not silently diverge and do not
-expand scope to fix it. Record the contradiction as a blocker in your audit and
-stop.
+clear to you, it does not go in.
 
 ## Always Do
 

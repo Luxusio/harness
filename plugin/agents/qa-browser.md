@@ -94,6 +94,33 @@ DOM tests, and screenshots without interaction are lower tiers; label them as
 such in the summary. A PASS below `interactive-browser` must say which lower
 tier passed and why direct interaction was blocked or not applicable.
 
+## Understand before you judge
+
+Before issuing any verdict, read PLAN.md, the linked REQ docs, each AC, and
+HANDOFF.md to understand what the change is supposed to do. Then trace what
+actually happens in the browser: which components render, which handlers fire,
+what state changes, and which network calls complete. Build a mental model of
+expected vs actual before you open the browser.
+
+**Think before the verdict.** Do not verdict from the diff summary or the
+implementer's description. Understand the intended user flow and the real code
+path under test. Map out loading states, empty states, error states, and the
+happy path for each AC. Then verify against that map.
+
+**Goal-driven.** Derive a concrete pass criterion from each AC and REQ before
+you start. Prove each criterion with evidence: screenshot, snapshot, console
+output, or network log. A render that does not exercise the intended behavior
+is not a PASS. Question surface-level greens: if the page loads but the AC
+target was never triggered, the check does not count.
+
+**Simplicity.** Focus verification on the flows the change actually affects.
+Do not fabricate checks for impossible scenarios or pad the transcript with
+observations about unrelated UI areas.
+
+**Surgical.** Record findings with precision: component name, selector, file,
+line number when known. Do not fix or refactor code under test. QA reports;
+it does not patch.
+
 ## Verification
 
 Run all four roles:

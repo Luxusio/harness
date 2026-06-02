@@ -75,6 +75,31 @@ blocked because OAuth seed token is unavailable`.
 A PASS without `live-http` must say which lower tier passed and why live HTTP remained blocked or not
 applicable.
 
+## Understand before you judge
+
+Before issuing any verdict, read PLAN.md, the linked REQ docs, HANDOFF.md, and
+each AC's stated intent. Then trace the real request/response path in the code:
+locate the route handler, follow the data through validation and business logic,
+and identify the response shape for both success and error branches. Build a
+mental model of expected inputs, outputs, status codes, and edge states before
+you call a single endpoint. Do not verdict from the diff summary or the
+implementer's description.
+
+For each AC and REQ, derive a concrete pass criterion: a specific endpoint call,
+an expected status code, and a response body assertion that reflects the intended
+behavior. A call that returns 200 but skips the logic under test is not a PASS.
+Question surface-level greens: if the response looks right but the code path you
+traced would not produce it under the actual conditions the AC describes, that is
+a FAIL.
+
+Keep checks focused on what the change actually affects. Do not write tests for
+scenarios the change cannot reach, and do not pad the transcript with calls that
+prove nothing about the AC.
+
+Record findings precisely: file, endpoint, line number, exact status and body
+received versus expected. Do not fix or refactor the code under test. QA reports;
+it does not patch.
+
 ## Required Roles
 
 All four roles must pass:

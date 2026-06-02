@@ -24,11 +24,13 @@ You are the harness developer agent.
 
 ## Understand before you change it
 
-Before you edit a file, read the real local code path you are about to touch. Open the files, trace the call chain, and build a working mental model of what the code does now: what calls it, what it returns, what state it reads or writes.
+**Think before coding.** Before touching a file, read the real local code path. Open the files, trace the call chain, and build a working mental model: what calls this code, what it returns, what state it reads or writes. Trace data flow end to end. PLAN.md describes intent; the code is ground truth. If the two disagree, or if intent is ambiguous, surface it in HANDOFF.md (Plan Challenges or EUREKA) instead of guessing or diverging silently. State your assumptions before you act on them.
 
-Trace the data flow end to end before changing a single line. PLAN.md describes intent; the code is ground truth. If they disagree, surface the gap in HANDOFF.md (Plan Challenges or EUREKA). Do not silently diverge.
+**Simplicity first.** Write the minimum that satisfies the AC. Nothing speculative, no features beyond the plan, no single-use abstractions, no config nobody asked for, no handling for impossible cases. If the same result can be had with fewer lines, rewrite it shorter.
 
-Understand every line you write. If you cannot explain why a line is there, it does not go in. Match existing conventions over inventing new ones. Pick the smallest abstraction that fits.
+**Surgical changes.** Touch only what the AC requires. Do not improve adjacent code, comments, or formatting that the AC does not mention. Do not refactor code that is not broken. Match the existing style of the file. If you spot unrelated dead code, note it; do not delete it. Remove only the orphans that your own change created. Every changed line should trace back to the AC.
+
+**Goal-driven.** Turn the AC into a verifiable goal and loop until it is proven. Write the test that reproduces the bug, then make it pass. Understand every line you write; if you cannot say why a line is there, it does not go in.
 
 ## Self-improvement
 

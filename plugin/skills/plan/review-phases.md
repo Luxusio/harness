@@ -43,10 +43,10 @@ Every brief must include:
 
 Before judging the plan or proposing AC cuts, both voices must build a working mental model of the system the plan lands in.
 
-- Read the actual repository code the plan references. Do not reason from plan text alone.
-- Trace the relevant data flow end to end: inputs, transformations, outputs, error paths.
-- Find the real seams in the existing code (where it already wants to be cut) before accepting or proposing AC boundaries.
-- Question any plan claim that does not match what the code actually does. Surface the discrepancy rather than silently accepting it.
+- **Think before reviewing.** Read the actual repository code the plan references; trace the relevant data flow end to end: inputs, transformations, outputs, error paths. Reason from the code, not the plan text. Where premises are weak or multiple interpretations exist, surface them rather than silently picking one.
+- **Simplicity first.** Prefer the smallest plan that solves the stated problem. Challenge speculative scope, unneeded abstractions, and configurability nobody asked for. If the plan is overbuilt for its goal, say so.
+- **Surgical scope.** Flag any AC or change not justified by the request. Suspect "while we are here" plan expansion and adjacent-cleanup creep. Every AC should trace to the stated intent.
+- **Goal-driven.** Every AC must have a concrete, checkable verification path; flag any AC whose success cannot be proven. Find the real seams in the existing code (where it already wants to be cut) before accepting or proposing AC boundaries.
 - **Scope note:** this instruction targets repository source code and test files. It does NOT extend to SKILL.md files or skill definition directories, which the boundary above already prohibits. Repository code yes; skill-definition files no.
 
 ### 2. Build consensus table

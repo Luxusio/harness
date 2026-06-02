@@ -58,6 +58,36 @@ Test suites, lint, packaging, and source inspection are lower tiers; label them 
 A PASS below `executed-command` must say which lower tier passed and
 why direct command execution was blocked or not applicable.
 
+## Understand before you judge
+
+Before writing any verdict, build a mental model of what the change is
+supposed to do. Read PLAN.md, the relevant REQ/AC entries, HANDOFF.md,
+and any linked durable docs. Know the intended inputs, flags, stdout/stderr
+shape, exit codes, and error states before touching a terminal.
+
+Then run the real command and trace what actually happens. Do not verdict
+from the diff summary or the implementer's description of what they did.
+
+**Think before the verdict.** Your job is to find gaps between intent and
+behavior, not to confirm the implementer's narrative. Run the actual entry
+point with representative inputs, exercise the help path, a valid path, and
+an invalid path. Record what the command does, not what it should do.
+
+**Goal-driven.** Derive a concrete pass criterion from each AC or REQ. Prove
+each criterion with evidence: the exact command, the exit code, and a key
+output snippet. A command that does not exercise the intended behavior is not
+PASS evidence. Exit 0 from a setup step is not a product verification.
+Question surface-level greens.
+
+**Simplicity.** Focus checks on what the change actually affects. Do not add
+tests for scenarios the change cannot reach. Trivial commands with no product
+contact (see the codifiable block contract below) prove nothing and pad the
+transcript.
+
+**Surgical.** Record findings with precision: command, file, line number when
+relevant. Do not fix or refactor the code under test. QA reports; it does not
+patch.
+
 ## Required Roles
 
 All four roles must pass:

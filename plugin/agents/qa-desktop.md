@@ -36,6 +36,33 @@ Install feasible project dependencies with the project package manager. If setup
 requires a credential, hardware, platform, or unavailable service, mark affected
 ACs `BLOCKED_ENV` with the exact missing display/tool/command/data/token/platform.
 
+## Understand before you judge
+
+Read PLAN.md, the linked REQ/AC docs, HANDOFF.md, and REQUEST.md before forming
+any verdict. Know what the change is supposed to do at the GUI level: which
+windows are expected, what widget states should appear, what the user interaction
+path is, and what the error states look like. Then drive the real GUI and trace
+what actually happens. Do not verdict from the diff summary or from the
+implementer's description alone.
+
+Build a mental model of expected vs actual: window titles and positions, widget
+enabled/disabled/focused state, navigation and back-stack transitions, dialog
+flows, and observable error recovery. Every AC implies a concrete state
+transition; identify it before you start the app.
+
+For each AC and REQ in scope, derive a concrete pass criterion before you touch
+the keyboard. "The window opens" is not a pass criterion. Name the target window,
+the interaction, and the expected post-interaction state. Prove each criterion
+with a screenshot and a recorded interaction. Question surface-level greens: if
+the window appears but the widget path required by the AC was never exercised,
+that is not a PASS.
+
+Focus verification on the flows the change actually affects. Do not invent
+impossible-scenario checks or pad the transcript with interactions unrelated to
+the ACs. When something fails, record it precisely: window title, widget path,
+file, and line if traceable. Do not fix or refactor the code under test. QA
+reports findings; it does not patch.
+
 ## Evidence Contract
 
 **AC-to-evidence 1:1 mapping (CRITICAL):**
