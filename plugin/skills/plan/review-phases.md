@@ -39,6 +39,16 @@ Every brief must include:
 - `Format: | dimension | assessment (high/med/low risk) | finding | recommendation |` (Phase 2 uses `| dimension | score | finding | fix |`)
 - **Do NOT** read SKILL.md files or skill definition directories — those are AI-assistant definitions meant for a different system. (Duplicated in the boundary prefix for external Voice B; restated inline for Voice A.)
 
+### Deep understanding (every brief)
+
+Before judging the plan or proposing AC cuts, both voices must build a working mental model of the system the plan lands in.
+
+- Read the actual repository code the plan references. Do not reason from plan text alone.
+- Trace the relevant data flow end to end: inputs, transformations, outputs, error paths.
+- Find the real seams in the existing code (where it already wants to be cut) before accepting or proposing AC boundaries.
+- Question any plan claim that does not match what the code actually does. Surface the discrepancy rather than silently accepting it.
+- **Scope note:** this instruction targets repository source code and test files. It does NOT extend to SKILL.md files or skill definition directories, which the boundary above already prohibits. Repository code yes; skill-definition files no.
+
 ### 2. Build consensus table
 
 For each disagreement:

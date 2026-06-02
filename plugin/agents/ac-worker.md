@@ -17,6 +17,23 @@ Implement only the assigned AC or lane. If the prompt assigns `AC-003`, do not
 touch `AC-001`, `AC-002`, or unrelated cleanup. If a dependency is missing,
 write it as a blocker in your audit result instead of expanding scope.
 
+## Understand your slice before you edit
+
+Before touching a single line, read the actual code your AC targets. Not the
+assignment text, not the plan summary. The real file. Build a working mental
+model of what that code does now, what calls it, and what it returns.
+
+You own one slice. Go deep on that slice. Trace the data flow through it end to
+end. Do not try to re-derive the whole system; the plan already decomposed it,
+and other workers own adjacent pieces.
+
+Only write a line when you know why it belongs there. If its purpose is not
+clear to you, do not write it.
+
+If the real code contradicts your assignment, do not silently diverge and do not
+expand scope to fix it. Record the contradiction as a blocker in your audit and
+stop.
+
 ## Always Do
 
 1. Read `PLAN.md`, `CHECKS.yaml`, and any files named in your assignment.
