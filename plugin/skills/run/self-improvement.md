@@ -20,6 +20,44 @@ mkdir -p doc/harness 2>/dev/null || true
 echo '{"ts":"'"$_TS"'","type":"harness-improvement","source":"run","key":"SHORT_KEY","insight":"DESCRIPTION","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
+## Evidence-backed backlog shaping
+
+Treat dogfooding feedback, retrospectives, QA complaints, and agent-proposed
+harness improvements as hypotheses until the current repository proves them.
+Do not convert a raw claim directly into an implementation task.
+
+Before proposing or applying a harness change, inspect the owning code path and
+tests for the named gate, hook, artifact, or workflow. Classify each claim as
+exactly one:
+
+- `confirmed` — current code and tests show the claimed failure.
+- `partially-confirmed` — the direction is right, but the scope is narrower or
+  different than stated.
+- `already-handled` — current code already covers the claim.
+- `duplicate` — another open/past harness item covers it.
+- `not-found` — no matching code path exists in this checkout.
+- `needs-runtime-check` — likely lives in generated install artifacts, host
+  runtime hooks, or an environment-specific path outside the repo.
+
+For `partially-confirmed`, rewrite the issue to the smallest accurate failing
+case before planning implementation. Preserve the safety intent of existing
+gates: if a proposal weakens a runtime, browser, QA, or close gate, propose a
+new explicit evidence tier instead of silently removing the gate.
+
+Backlog items produced from feedback must include:
+
+- `status`: one of the classifications above.
+- `evidence`: file/function/test references inspected.
+- `corrected_scope`: the smallest true problem.
+- `safe_fix_direction`: the implementation direction that preserves gate
+  intent.
+
+Example: "durable docs stale runtime QA" may be only
+`partially-confirmed` if task artifacts, `doc/harness/**`, and `doc/changes/**`
+are already skipped; the corrected scope may be REQ/GUIDE/ADR/POLICY docs under
+registered roots such as `doc/common/**` still going through runtime staleness
+instead of document-critic freshness.
+
 ## Auto-fix during close (only when safe)
 
 1. **Stale manifest field** — update with the correct value discovered during the task.

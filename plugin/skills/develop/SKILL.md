@@ -635,6 +635,16 @@ verification gaps, tool/schema drift, CI command drift, brittle setup commands,
 and repeated manual recovery steps. QA lenses should surface candidates in their
 `CRITIC__qa.md` transcript; Phase 8 owns the final HANDOFF classification.
 
+For harness-improvement candidates, treat dogfood feedback and agent retros as
+hypotheses until checked against the repo. Before marking a candidate `applied`
+or proposing follow-up work, inspect the owning code path and relevant tests.
+Classify the claim as `confirmed`, `partially-confirmed`, `already-handled`,
+`duplicate`, `not-found`, or `needs-runtime-check`. If it is
+`partially-confirmed`, rewrite it to the smallest accurate failing case. If the
+raw proposal would weaken an existing QA/runtime/close gate, preserve the gate's
+safety intent by proposing an explicit alternative evidence tier rather than
+removing the gate. Record the corrected scope and evidence path in HANDOFF.
+
 If develop or QA discovered a working repo-local setup/test/dev-server command
 after one or more failed attempts, record it before HANDOFF as a pending runbook
 candidate:

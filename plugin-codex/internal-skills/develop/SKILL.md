@@ -505,7 +505,7 @@ Call `write_handoff` MCP with:
 7. Feedback-Derived Rules (status: none / captured / rejected; readable rule text if captured)
 8. User Feedback Disposition. If `<task_dir>/USER_FEEDBACK.jsonl` exists, list every event id with a terminal disposition before close: `event: <id> status: promoted|handled-local|deferred|rejected reason: <why> artifact: <path-or-n/a>`. Use `promoted` only when the feedback became a durable doc, skill, pattern, test, or other committed artifact. Use `handled-local` when it only changed this task's implementation or verification. Use `deferred` with the follow-up task/artifact. Use `rejected` with a reason. `needs-user-decision` is not a closeable disposition.
 9. Commit-backed Learnings (status: none / captured / rejected). Local `doc/harness/learnings.jsonl` is gitignored staging, not shared memory. If this task surfaced a reusable fact, user correction, dogfood finding, setup recipe, or repeated friction that should help future contributors, either promote it in this same task to a committed artifact (`plugin/skills/**`, `plugin/scripts/**`, `tests/**`, `doc/harness/patterns/*.md`, `doc/common/GUIDE__*.md`, or another durable doc) and list the path, or mark `rejected` with the reason it is task-local/noisy/not reusable. `Status: none` is valid only when no reusable learning occurred.
-10. Self-Healing Candidates (status: none / applied / deferred / rejected). Include development, QA, dogfood, and close-gate discoveries that would prevent repeated harness/project friction. `applied` means this task changed a committed skill, script, test, manifest, workflow, or durable doc to prevent recurrence. If a candidate is useful but too large/risky for the current scope, ask the user with the current runtime's user-input mechanism before deferring: Claude uses `AskUserQuestion`; Codex uses `request_user_input` when available, otherwise a direct conversational ask and waits for the user's reply. `deferred` must record `user_decision:`, `reason:`, and `proposed_artifact:` or `proposed_task:`. `rejected` gives the reason it is one-off/noisy/not worth automating.
+10. Self-Healing Candidates (status: none / applied / deferred / rejected). Include development, QA, dogfood, and close-gate discoveries that would prevent repeated harness/project friction. Treat dogfood feedback and agent retros as hypotheses until checked against the repo: inspect the owning code path and tests, classify the claim as `confirmed`, `partially-confirmed`, `already-handled`, `duplicate`, `not-found`, or `needs-runtime-check`, rewrite `partially-confirmed` claims to the smallest accurate failing case, and preserve existing QA/runtime/close gate safety by proposing an explicit alternative evidence tier instead of removing a gate. `applied` means this task changed a committed skill, script, test, manifest, workflow, or durable doc to prevent recurrence. If a candidate is useful but too large/risky for the current scope, ask the user with the current runtime's user-input mechanism before deferring: Claude uses `AskUserQuestion`; Codex uses `request_user_input` when available, otherwise a direct conversational ask and waits for the user's reply. `deferred` must record `user_decision:`, `reason:`, and `proposed_artifact:` or `proposed_task:`. `rejected` gives the reason it is one-off/noisy/not worth automating.
 11. Confidence Ratings table from Phase 4.6 (highlight <=6)
 12. Adversarial Findings table from Phase 4.7 (critical/high fixed, lower deferred)
 13. Near-Zero Cost check (Phase 4.8 fixed + deferred)
@@ -605,6 +605,16 @@ project can prevent next time. This includes development friction, QA-discovered
 verification gaps, tool/schema drift, CI command drift, brittle setup commands,
 and repeated manual recovery steps. QA lenses should surface candidates in their
 `CRITIC__qa.md` transcript; Phase 8 owns the final HANDOFF classification.
+
+For harness-improvement candidates, treat dogfood feedback and agent retros as
+hypotheses until checked against the repo. Before marking a candidate `applied`
+or proposing follow-up work, inspect the owning code path and relevant tests.
+Classify the claim as `confirmed`, `partially-confirmed`, `already-handled`,
+`duplicate`, `not-found`, or `needs-runtime-check`. If it is
+`partially-confirmed`, rewrite it to the smallest accurate failing case. If the
+raw proposal would weaken an existing QA/runtime/close gate, preserve the gate's
+safety intent by proposing an explicit alternative evidence tier rather than
+removing the gate. Record the corrected scope and evidence path in HANDOFF.
 
 If develop or QA discovered a working repo-local setup/test/dev-server command
 after one or more failed attempts, record it before HANDOFF as a pending runbook

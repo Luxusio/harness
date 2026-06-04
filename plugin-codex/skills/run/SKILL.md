@@ -338,6 +338,14 @@ After every task close, run the pipeline in `self-improvement.md` (Claude tree):
 - If the scheduler returns `run_followup`, continue that task before reporting
   DONE; this is a mandatory continuation, not advisory cleanup
 - Detect friction signals (wrong verify strategy, stale manifest, repeated failures, new project patterns)
+- Treat dogfooding feedback, retrospectives, QA complaints, and agent-proposed
+  harness improvements as hypotheses until the repo proves them. Before shaping
+  backlog or implementation, inspect owning code/tests and classify each claim
+  as `confirmed`, `partially-confirmed`, `already-handled`, `duplicate`,
+  `not-found`, or `needs-runtime-check`.
+- Rewrite `partially-confirmed` claims to the smallest accurate failing case,
+  and preserve QA/runtime/close gate safety by adding an explicit alternative
+  evidence tier instead of removing a gate.
 - Log harness-improvement entries to `learnings.jsonl`
 - Auto-fix safe manifest updates (reported to user before write)
 - Promote learnings: Tier 3 (jsonl) -> Tier 2 (patterns/*.md) -> Tier 1 (CLAUDE.md or AGENTS.md)

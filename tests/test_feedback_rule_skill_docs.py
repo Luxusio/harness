@@ -20,6 +20,10 @@ def test_develop_skills_require_feedback_rule_judgment():
         assert "changed a committed" in body
         assert "Self-Healing Candidates" in body
         assert "development, QA, dogfood, and close-gate discoveries" in body
+        assert "hypotheses until checked against the repo" in body
+        assert "partially-confirmed" in body
+        assert "needs-runtime-check" in body
+        assert "alternative evidence tier" in body
         assert "Status: none | applied | deferred | rejected" in body
         assert "AskUserQuestion" in body
         assert "request_user_input" in body
@@ -105,6 +109,14 @@ def test_self_improvement_documents_readable_tier2_format():
     assert "Commit-backed promotion checkpoint" in body
     assert "learnings.jsonl` by itself is never enough for `captured`" in body
     assert "committed artifact" in body
+    assert "Evidence-backed backlog shaping" in body
+    assert "hypotheses until the current repository proves them" in body
+    assert "confirmed" in body
+    assert "partially-confirmed" in body
+    assert "already-handled" in body
+    assert "needs-runtime-check" in body
+    assert "corrected_scope" in body
+    assert "safe_fix_direction" in body
 
 
 def test_harness_source_completion_requires_commit_and_force_install():
