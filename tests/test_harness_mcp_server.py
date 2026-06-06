@@ -75,6 +75,22 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("inputSchema", tool)
             self.assertTrue(tool["description"], f"{tool['name']} missing description")
 
+    def test_write_handoff_description_names_close_gate_contract(self):
+        tools = {tool["name"]: tool for tool in harness_server.list_tools()}
+        description = tools["write_handoff"]["description"]
+        for expected in (
+            "User Feedback Disposition",
+            "one terminal event line",
+            "Commit-backed Learnings",
+            "changed/touched commit-eligible artifact",
+            "Self-Healing Candidates",
+            "user_decision",
+            "proposed_artifact or proposed_task",
+            "durable-doc judgment",
+            "specific no-doc rationale",
+        ):
+            self.assertIn(expected, description)
+
     def test_unknown_tool_returns_error_payload(self):
         result = harness_server.call_tool("does_not_exist", {})
         self.assertTrue(result.get("isError"))
@@ -880,6 +896,123 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         harness_server.emit_compact_context.__globals__["_git_changed_paths"] = (
             self._orig_context_git_changed_paths
         )
+
+    def test_write_handoff_auto_adds_close_gate_templates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp,
+                "TASK__handoff-auto-templates",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+                write_handoff=False,
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "write_handoff",
+                    {
+                        "task_id": "TASK__handoff-auto-templates",
+                        "summary": "Implemented small fix.",
+                        "verification": "Targeted tests passed.",
+                    },
+                )
+            finally:
+                self._unpatch()
+            self.assertNotIn("isError", result)
+            body = Path(td, "HANDOFF.md").read_text(encoding="utf-8")
+        self.assertIn("## User Feedback Disposition", body)
+        self.assertIn("No USER_FEEDBACK.jsonl events for this task", body)
+        self.assertIn("## Commit-backed Learnings\n\nStatus: none", body)
+        self.assertIn("## Self-Healing Candidates\n\nStatus: none", body)
+
+    def test_write_handoff_auto_adds_feedback_disposition_stubs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp,
+                "TASK__handoff-feedback-stubs",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+                write_handoff=False,
+            )
+            Path(td, "USER_FEEDBACK.jsonl").write_text(
+                json.dumps({"id": "ufe-123", "prompt_excerpt": "clarify route"}) + "\n"
+                + json.dumps({"id": "ufe-456", "prompt_excerpt": "tighten docs"}) + "\n",
+                encoding="utf-8",
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "write_handoff",
+                    {
+                        "task_id": "TASK__handoff-feedback-stubs",
+                        "summary": "Implemented small fix.",
+                        "verification": "Targeted tests passed.",
+                    },
+                )
+            finally:
+                self._unpatch()
+            self.assertNotIn("isError", result)
+            body = Path(td, "HANDOFF.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "event: ufe-123 status: <promoted|handled-local|deferred|rejected>",
+            body,
+        )
+        self.assertIn(
+            "event: ufe-456 status: <promoted|handled-local|deferred|rejected>",
+            body,
+        )
+
+    def test_context_reports_precise_handoff_status_diagnostics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp,
+                "TASK__handoff-precise-status",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+                handoff_body=(
+                    "# handoff\n\n"
+                    "## Commit-backed Learnings\n\n"
+                    "Heading exists, but no status line.\n\n"
+                    "## Self-Healing Candidates\n\n"
+                    "Heading exists, but no status line.\n"
+                ),
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_context", {"task_id": "TASK__handoff-precise-status"}
+                )
+            finally:
+                self._unpatch()
+        missing = result["structuredContent"]["task_context"]["missing_for_close"]
+        self.assertIn("Commit-backed Learnings Status line in HANDOFF.md", missing)
+        self.assertIn("Self-Healing Candidates Status line in HANDOFF.md", missing)
+        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
+        self.assertIn("Self-Healing Candidates section in HANDOFF.md", missing)
+
+    def test_context_names_unresolved_feedback_ids_in_next_action(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp,
+                "TASK__feedback-next-action-ids",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+                handoff_body=(
+                    "# handoff\n\n"
+                    "## Commit-backed Learnings\n\nStatus: none\n\n"
+                    "## Self-Healing Candidates\n\nStatus: none\n"
+                ),
+            )
+            Path(td, "USER_FEEDBACK.jsonl").write_text(
+                json.dumps({"id": "ufe-needed", "prompt_excerpt": "remember this"}) + "\n",
+                encoding="utf-8",
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_context", {"task_id": "TASK__feedback-next-action-ids"}
+                )
+            finally:
+                self._unpatch()
+        ctx = result["structuredContent"]["task_context"]
+        self.assertEqual(ctx["unresolved_feedback_ids"], ["ufe-needed"])
+        self.assertIn("ufe-needed", ctx["next_action"])
 
     def test_close_blocks_unresolved_user_feedback_event(self):
         with tempfile.TemporaryDirectory() as tmp:

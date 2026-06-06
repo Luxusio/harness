@@ -39,6 +39,31 @@ def test_develop_skills_require_feedback_rule_judgment():
         assert "needs-user-decision` is not a closeable disposition" in body
 
 
+def test_developer_prompts_reference_handoff_close_gate_guide():
+    for rel in ("plugin/agents/developer.md", "plugin-codex/agents/developer.md"):
+        body = (REPO / rel).read_text(encoding="utf-8")
+        assert "adjacent `HANDOFF_CLOSE_GATE.md`" in body
+        assert "close-gate sections from that guide" in body
+
+
+def test_handoff_close_gate_guide_names_strict_contract():
+    for rel in ("plugin/agents/HANDOFF_CLOSE_GATE.md", "plugin-codex/agents/HANDOFF_CLOSE_GATE.md"):
+        body = (REPO / rel).read_text(encoding="utf-8")
+        assert "User Feedback Disposition" in body
+        assert "event: <id> status: <promoted|handled-local|deferred|rejected>" in body
+        assert "Commit-backed Learnings" in body
+        assert "Status: <none|captured|rejected>" in body
+        assert "changed/touched" in body
+        assert "commit-eligible repo artifact" in body
+        assert "doc/harness/learnings.jsonl" in body
+        assert "untouched existing files do not" in body
+        assert "Self-Healing Candidates" in body
+        assert "Status: <none|applied|deferred|rejected>" in body
+        assert "user_decision:" in body
+        assert "proposed_artifact:" in body
+        assert "Durable docs: not needed" in body
+
+
 def test_run_skills_check_feedback_events_before_dependent_actions():
     for rel in ("plugin/skills/run/SKILL.md", "plugin-codex/skills/run/SKILL.md"):
         body = (REPO / rel).read_text(encoding="utf-8")

@@ -1179,6 +1179,29 @@ def _has_commit_backed_learning_section(task_dir):
     )
 
 
+def _commit_backed_learning_missing_reasons(task_dir):
+    """Return precise close-gate reasons for the HANDOFF learning section."""
+    path = os.path.join(task_dir, "HANDOFF.md")
+    section = _handoff_section_body(path, _COMMIT_BACKED_LEARNING_HEADING_RE)
+    if section is None:
+        return ["Commit-backed Learnings section in HANDOFF.md"]
+    status_match = _COMMIT_BACKED_LEARNING_STATUS_RE.search(section)
+    if not status_match:
+        return [
+            "Commit-backed Learnings Status line in HANDOFF.md",
+            "Commit-backed Learnings section in HANDOFF.md",
+        ]
+    status = status_match.group(1).lower()
+    if status != "captured":
+        return []
+    if _section_names_changed_artifact(task_dir, section, _COMMIT_BACKED_CAPTURED_LINE_RE):
+        return []
+    return [
+        "Commit-backed Learnings captured artifact path in HANDOFF.md",
+        "Commit-backed Learnings section in HANDOFF.md",
+    ]
+
+
 def _has_self_healing_candidates_section(task_dir):
     """Return True when HANDOFF records close-time self-healing disposition."""
     path = os.path.join(task_dir, "HANDOFF.md")
@@ -1207,6 +1230,49 @@ def _has_self_healing_candidates_section(task_dir):
     if status == "rejected":
         return bool(_SELF_HEALING_REJECTED_LINE_RE.search(section))
     return False
+
+
+def _self_healing_candidates_missing_reasons(task_dir):
+    """Return precise close-gate reasons for the HANDOFF self-healing section."""
+    path = os.path.join(task_dir, "HANDOFF.md")
+    section = _handoff_section_body(path, _SELF_HEALING_HEADING_RE)
+    if section is None:
+        return ["Self-Healing Candidates section in HANDOFF.md"]
+    status_match = _SELF_HEALING_STATUS_RE.search(section)
+    if not status_match:
+        return [
+            "Self-Healing Candidates Status line in HANDOFF.md",
+            "Self-Healing Candidates section in HANDOFF.md",
+        ]
+    status = status_match.group(1).lower()
+    if status == "none":
+        return []
+    if status == "applied":
+        if _section_names_changed_artifact(task_dir, section, _SELF_HEALING_APPLIED_LINE_RE):
+            return []
+        return [
+            "Self-Healing Candidates applied artifact path in HANDOFF.md",
+            "Self-Healing Candidates section in HANDOFF.md",
+        ]
+    if status == "deferred":
+        lowered = section.lower()
+        if (
+            _SELF_HEALING_DEFERRED_LINE_RE.search(section)
+            and "user_decision:" in lowered
+            and ("proposed_artifact:" in lowered or "proposed_task:" in lowered)
+            and "reason:" in lowered
+        ):
+            return []
+        return [
+            "Self-Healing Candidates deferred decision fields in HANDOFF.md",
+            "Self-Healing Candidates section in HANDOFF.md",
+        ]
+    if status == "rejected" and _SELF_HEALING_REJECTED_LINE_RE.search(section):
+        return []
+    return [
+        "Self-Healing Candidates valid status body in HANDOFF.md",
+        "Self-Healing Candidates section in HANDOFF.md",
+    ]
 
 
 def _handoff_section_body(path, heading_re):
@@ -1537,10 +1603,8 @@ def emit_compact_context(task_dir):
     if not has_handoff:
         missing_for_close.append("HANDOFF.md")
     else:
-        if not _has_commit_backed_learning_section(task_dir):
-            missing_for_close.append("Commit-backed Learnings section in HANDOFF.md")
-        if not _has_self_healing_candidates_section(task_dir):
-            missing_for_close.append("Self-Healing Candidates section in HANDOFF.md")
+        missing_for_close.extend(_commit_backed_learning_missing_reasons(task_dir))
+        missing_for_close.extend(_self_healing_candidates_missing_reasons(task_dir))
     if runtime_verdict != "PASS":
         missing_for_close.append("runtime_verdict PASS")
 
@@ -1618,11 +1682,13 @@ def emit_compact_context(task_dir):
             "CRITIC__document.md with write_critic_document."
         )
     elif "User feedback disposition in HANDOFF.md" in missing_for_close:
+        feedback_ids = ", ".join(unresolved_feedback)
         next_action = (
             "Review USER_FEEDBACK.jsonl before the next dependent action. Reflect "
             "each event in code/docs/tests, defer it, or reject it, then add "
             "`## User Feedback Disposition` lines to HANDOFF.md using "
-            "`event: <id> status: promoted|handled-local|deferred|rejected`."
+            "`event: <id> status: promoted|handled-local|deferred|rejected`. "
+            f"Unresolved feedback ids: {feedback_ids}."
         )
     elif "qa-browser evidence in CRITIC__qa.md" in missing_for_close:
         next_action = ("Spawn Agent(subagent_type='harness:qa-browser', ...) "
@@ -1633,21 +1699,26 @@ def emit_compact_context(task_dir):
             "Run the required ux-* review lens and call write_critic_ux with "
             "lens='cli', 'api', 'browser', or 'desktop'."
         )
-    elif "Commit-backed Learnings section in HANDOFF.md" in missing_for_close:
+    elif any(m.startswith("Commit-backed Learnings") for m in missing_for_close):
         next_action = (
-            "Rewrite HANDOFF.md via write_handoff, preserving existing content, with "
-            "`## Commit-backed Learnings` and "
-            "`Status: none`, `Status: captured`, or `Status: rejected`. "
-            "Captured items must name an existing commit-eligible repo artifact; "
-            "task-local artifacts and doc/harness/learnings.jsonl do not count."
+            "Rewrite HANDOFF.md via write_handoff, preserving existing content, "
+            "and fix Commit-backed Learnings. Required shape: "
+            "`## Commit-backed Learnings`, `Status: none|captured|rejected`. "
+            "When captured, include `- captured: <changed commit-eligible path> "
+            "- <rule/fact>`; doc/harness/learnings.jsonl, task-local files, "
+            "ignored files, nonexistent files, and untouched existing files do "
+            f"not count. Missing: {', '.join(m for m in missing_for_close if m.startswith('Commit-backed Learnings'))}."
         )
-    elif "Self-Healing Candidates section in HANDOFF.md" in missing_for_close:
+    elif any(m.startswith("Self-Healing Candidates") for m in missing_for_close):
         next_action = (
-            "Rewrite HANDOFF.md via write_handoff, preserving existing content, with "
-            "`## Self-Healing Candidates` and `Status: none`, `Status: applied`, "
-            "`Status: deferred`, or `Status: rejected`. Applied items must name "
-            "a changed commit-eligible artifact; deferred items need user_decision, "
-            "reason, and proposed_artifact/proposed_task; rejected items need a reason."
+            "Rewrite HANDOFF.md via write_handoff, preserving existing content, "
+            "and fix Self-Healing Candidates. Required shape: "
+            "`## Self-Healing Candidates`, `Status: none|applied|deferred|rejected`. "
+            "When applied, include `- applied: <failure mode> - <changed "
+            "commit-eligible path>`; when deferred, include a `- deferred:` item "
+            "plus `user_decision:`, `reason:`, and `proposed_artifact:` or "
+            "`proposed_task:`; rejected items need `- rejected: <candidate> - "
+            f"<reason>`. Missing: {', '.join(m for m in missing_for_close if m.startswith('Self-Healing Candidates'))}."
         )
     else:
         next_action = "Runtime verdict PASS — run task_close."

@@ -699,6 +699,85 @@ def handle_task_close(args: dict) -> dict:
     })
 
 
+_HANDOFF_USER_FEEDBACK_HEADING_RE = re.compile(
+    r"^[ \t]{0,3}#{1,3}\s*User Feedback Disposition\b",
+    re.MULTILINE | re.IGNORECASE,
+)
+_HANDOFF_COMMIT_BACKED_HEADING_RE = re.compile(
+    r"^[ \t]{0,3}#{1,3}\s*Commit-backed Learnings\b",
+    re.MULTILINE | re.IGNORECASE,
+)
+_HANDOFF_SELF_HEALING_HEADING_RE = re.compile(
+    r"^[ \t]{0,3}#{1,3}\s*Self-Healing Candidates\b",
+    re.MULTILINE | re.IGNORECASE,
+)
+_HANDOFF_FEEDBACK_DISPOSITION_RE = re.compile(
+    r"\bevent:\s*([A-Za-z0-9_.:-]+)\b.*?\bstatus:\s*([A-Za-z-]+)\b",
+    re.IGNORECASE,
+)
+_HANDOFF_TERMINAL_FEEDBACK_STATUSES = {"promoted", "handled-local", "deferred", "rejected"}
+
+
+def _task_feedback_event_ids(td: str) -> list[str]:
+    path = os.path.join(td, "USER_FEEDBACK.jsonl")
+    if not os.path.isfile(path):
+        return []
+    ids: list[str] = []
+    seen: set[str] = set()
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                event_id = str(event.get("id") or "").strip()
+                if event_id and event_id not in seen:
+                    seen.add(event_id)
+                    ids.append(event_id)
+    except OSError:
+        return []
+    return ids
+
+
+def _disposed_feedback_ids_in_text(text: str) -> set[str]:
+    resolved: set[str] = set()
+    for match in _HANDOFF_FEEDBACK_DISPOSITION_RE.finditer(text or ""):
+        status = match.group(2).strip().lower()
+        if status in _HANDOFF_TERMINAL_FEEDBACK_STATUSES:
+            resolved.add(match.group(1).strip())
+    return resolved
+
+
+def _augment_handoff_text(td: str, text: str) -> str:
+    """Append close-gate HANDOFF defaults so agents do not learn by collision."""
+    additions: list[str] = []
+    if not _HANDOFF_USER_FEEDBACK_HEADING_RE.search(text):
+        event_ids = _task_feedback_event_ids(td)
+        resolved = _disposed_feedback_ids_in_text(text)
+        pending = [event_id for event_id in event_ids if event_id not in resolved]
+        lines = ["## User Feedback Disposition", ""]
+        if pending:
+            for event_id in pending:
+                lines.append(
+                    f"event: {event_id} status: <promoted|handled-local|deferred|rejected> "
+                    "reason: <fill> artifact: <path-or-n/a>"
+                )
+        else:
+            lines.append("No USER_FEEDBACK.jsonl events for this task. Nothing to disposition.")
+        additions.append("\n".join(lines))
+    if not _HANDOFF_COMMIT_BACKED_HEADING_RE.search(text):
+        additions.append("## Commit-backed Learnings\n\nStatus: none")
+    if not _HANDOFF_SELF_HEALING_HEADING_RE.search(text):
+        additions.append("## Self-Healing Candidates\n\nStatus: none")
+    if not additions:
+        return text
+    return text.rstrip() + "\n\n" + "\n\n".join(additions) + "\n"
+
+
 def _write_artifact(args: dict, filename: str, verdict_field: str | None = None,
                     verdict_value: str | None = None) -> dict:
     """Common artifact write: create file, optionally update verdict. Atomic.
@@ -726,6 +805,8 @@ def _write_artifact(args: dict, filename: str, verdict_field: str | None = None,
     os.makedirs(td, exist_ok=True)
     import tempfile
     text = "\n".join(content_parts)
+    if filename == "HANDOFF.md":
+        text = _augment_handoff_text(td, text)
     fd, tmp = tempfile.mkstemp(dir=td, prefix=f".{filename}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -1310,7 +1391,18 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "additionalProperties": False},
      "handler": handle_write_req_doc},
     {"name": "write_handoff", "title": "Write developer handoff — developer only",
-     "description": "Write HANDOFF.md. This is a full rewrite; when updating an existing handoff, preserve existing content and include the Commit-backed Learnings classification.",
+     "description": (
+         "Write HANDOFF.md. This is a full rewrite; when updating an existing "
+         "handoff, preserve existing content. Include close-gate sections: "
+         "User Feedback Disposition with one terminal event line per "
+         "USER_FEEDBACK.jsonl id; Commit-backed Learnings with Status "
+         "none|captured|rejected where captured names a changed/touched "
+         "commit-eligible artifact; Self-Healing Candidates with Status "
+         "none|applied|deferred|rejected where applied names a changed/touched "
+         "commit-eligible artifact and deferred includes user_decision, reason, "
+         "and proposed_artifact or proposed_task; and a durable-doc judgment or "
+         "specific no-doc rationale."
+     ),
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"}, "task_dir": {"type": "string"},
          "summary": {"type": "string"}, "verification": {"type": "string"}},
