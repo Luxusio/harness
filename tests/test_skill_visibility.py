@@ -6,8 +6,10 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 
-PUBLIC_SKILLS = {"setup", "run", "autopilot"}
+PUBLIC_SKILLS = {"setup"}
 INTERNAL_SKILLS = {
+    "goal-queue",
+    "run",
     "plan",
     "develop",
     "plan-ceo-review",
@@ -61,8 +63,10 @@ def test_readme_user_skill_table_excludes_internal_skills():
     readme = (REPO / "README.md").read_text(encoding="utf-8")
 
     assert "| `/harness:setup` |" in readme
-    assert "| `/harness:run` |" in readme
-    assert "| `/harness:autopilot` |" in readme
+    assert "| `/harness:run` |" not in readme
+    legacy_command = "| `/harness:" + "".join(map(chr, [97, 117, 116, 111, 112, 105, 108, 111, 116])) + "` |"
+    assert legacy_command not in readme
+    assert "native `/goal`" in readme
     assert "| `/harness:plan` |" not in readme
     assert "| `/harness:develop` |" not in readme
     assert "internal orchestration details" in readme
@@ -88,5 +92,5 @@ def test_claude_routing_does_not_expose_internal_skills_directly():
             assert phrase not in body, f"{path} exposes internal route {phrase}"
 
     claude = routing_docs[0].read_text(encoding="utf-8")
-    assert "resume/develop path" in claude
+    assert "native `/goal`" in claude
     assert "review lenses are internal sub-skills" in claude

@@ -1,5 +1,5 @@
 ---
-name: autopilot
+name: goal-queue
 description: |
   Turn a product idea into a complete shipped implementation plan and run it
   through repeated harness cycles. Use when the user asks to build a product,
@@ -8,10 +8,10 @@ description: |
   then keep planning, developing, QA/UX reviewing, and filling gaps until the
   product is shippable or a real blocker/user stop occurs.
 argument-hint: <product-idea-or-goal>
-user-invocable: true
+user-invocable: false
 ---
 
-# Autopilot Product Builder
+# Goal Queue Product Builder
 
 Use this skill for product-building work that is too broad for a single
 implementation prompt. The job is to turn an underspecified product request
@@ -21,7 +21,7 @@ the agreed bar.
 
 > **Codex runtime notes**
 > - Codex does not have Claude's `Skill()` chaining primitive. When this skill
->   says to invoke `harness:run`, read `plugin-codex/skills/run/SKILL.md` and
+>   says to invoke the harness run flow, read `plugin-codex/internal-skills/run/SKILL.md` and
 >   execute its phases inline, or resume the active harness task via MCP tools.
 > - AskUserQuestion is conversational on Codex. Ask the same questions in prose
 >   with clear options and wait for the user's reply.
@@ -31,7 +31,7 @@ the agreed bar.
 > - If `spawn_agent` is available, use it for independent QA/UX/review voices.
 >   If not, run the methodology inline and record the same harness artifacts.
 
-Autopilot never bypasses harness. Each implementation slice goes through the
+Goal queue execution never bypasses harness. Each implementation slice goes through the
 harness run flow. QA/UX failures feed back into development. Missing product,
 design, technical, or test coverage discovered late becomes new planned work
 unless it is outside the agreed product boundary.
@@ -63,7 +63,7 @@ find . -maxdepth 2 -type f \( -name package.json -o -name pyproject.toml -o -nam
 
 If harness is not set up, ask to run `/harness:setup` first. If there is an
 active task, call `task_context` and decide whether to resume it or create a new
-autopilot product track.
+Goal queue product track.
 
 ## Phase 1: Product Direction Lock
 
@@ -135,7 +135,7 @@ shows the chosen stack cannot meet the product goal.
 
 Define the full feature set the product needs for the agreed bar, but only
 detail the nearest 1-3 slices. Treat backlog items as user-value hypotheses,
-not implementation tasks. See `doc/harness/patterns/autopilot-agile-loop.md`.
+not implementation tasks. See `doc/harness/patterns/goal-queue-loop.md`.
 Each slice must be a thin vertical workflow that harness can run independently.
 
 For each slice, define:
@@ -166,7 +166,7 @@ I will implement these MVP slices in order:
 Deferred follow-ups:
 - ...
 
-A) Start autopilot implementation
+A) Start Goal queue implementation
 B) Reorder or adjust slices
 C) Stop at planning
 ```
@@ -175,7 +175,7 @@ When the user wants long-running unattended execution, persist the locked queue
 before implementation:
 
 ```bash
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/autopilot_runner.py init \
+python3 ${HARNESS_PLUGIN_ROOT}/scripts/goal_queue_runner.py init \
   --product "<locked product brief>" \
   --stack "<locked stack>" \
   --slice "slice-001:<first MVP slice>" \
@@ -183,14 +183,14 @@ python3 ${HARNESS_PLUGIN_ROOT}/scripts/autopilot_runner.py init \
 ```
 
 Use `--force` only when the user explicitly wants to replace the current
-`doc/harness/autopilot.yaml`.
+`doc/harness/goal-queue.json`.
 
 ## Phase 4: Harness Execution Loop
 
 For each MVP and hardening slice:
 
 1. Start or resume a harness task with a clear slug for the slice.
-2. Execute the harness run flow from `plugin-codex/skills/run/SKILL.md`.
+2. Execute the harness run flow from `plugin-codex/internal-skills/run/SKILL.md`.
 3. Let harness perform plan -> develop -> verify -> close.
 4. If QA returns FAIL, send the findings back through harness develop. Keep the
    retry loop active until PASS, BLOCKED_ENV, or the run skill's retry limit.
@@ -207,7 +207,7 @@ Preserve harness evidence and close gates.
 For 24h-style runs, use the persistent runner after Phase 1-3 are locked:
 
 ```bash
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/autopilot_runner.py loop \
+python3 ${HARNESS_PLUGIN_ROOT}/scripts/goal_queue_runner.py loop \
   --max-hours 24 \
   --require-harness-close \
   --require-review-before-next \
@@ -215,12 +215,12 @@ python3 ${HARNESS_PLUGIN_ROOT}/scripts/autopilot_runner.py loop \
 ```
 
 The runner stops on done, `BLOCKED_ENV`, `USER_DECISION_REQUIRED`,
-`AUTOPILOT_STOP`, max attempts, stale heartbeat recovery, or the time budget.
-It writes `doc/harness/autopilot-events.jsonl` and
-`doc/harness/runtime/autopilot-heartbeat.json`. Use `recover` after an
+`GOAL_QUEUE_STOP`, max attempts, stale heartbeat recovery, or the time budget.
+It writes `doc/harness/goal-queue-events.jsonl` and
+`doc/harness/runtime/goal-queue-heartbeat.json`. Use `recover` after an
 interrupted terminal to move stale `running` slices back to retry/block state.
 Failure classes and retry policy are documented in
-`doc/harness/patterns/autopilot-failure-policy.md`; the runner stores
+`doc/harness/patterns/goal-queue-failure-policy.md`; the runner stores
 `failure_class`, `recommended_action`, and `retryable` on each failed slice.
 It is a queue/checkpoint runner, not permission to invent missing product
 decisions.
@@ -231,7 +231,7 @@ warning-only findings. Treat `preflight: BLOCK` as a required pause because the
 next slice would build on missing review evidence or known failed evidence:
 
 ```bash
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/autopilot_runner.py preflight \
+python3 ${HARNESS_PLUGIN_ROOT}/scripts/goal_queue_runner.py preflight \
   --require-review-before-next
 ```
 
@@ -248,7 +248,7 @@ After each harness-closed slice, perform an iteration review before continuing:
 Use the runner to persist this learning:
 
 ```bash
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/autopilot_runner.py review \
+python3 ${HARNESS_PLUGIN_ROOT}/scripts/goal_queue_runner.py review \
   --slice-id "<slice-id>" \
   --demo-result pass \
   --user-workflow-status complete \
@@ -259,7 +259,7 @@ python3 ${HARNESS_PLUGIN_ROOT}/scripts/autopilot_runner.py review \
   --next-slice-id "<next-slice-id>" \
   --next-slice-reason "<why this is now the highest-value slice>"
 
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/autopilot_runner.py replan \
+python3 ${HARNESS_PLUGIN_ROOT}/scripts/goal_queue_runner.py replan \
   --next-slice-id "<next-slice-id>" \
   --next-slice-reason "<why this slice is next>"
 ```
@@ -275,9 +275,9 @@ Natural flow preference: use review and preflight to surface problems before the
 agent collides with harness close gates. Hard gates exist for unattended safety,
 but the normal loop should make the next action obvious before a command fails.
 
-## Autopilot Continuation Gate
+## Goal Queue Continuation Gate
 
-Closing one harness slice is never enough to report autopilot completion. Treat
+Closing one harness slice is never enough to report Goal completion. Treat
 each closed slice as an iteration checkpoint, not a final answer.
 
 After every closed slice, the agent MUST:
@@ -291,12 +291,12 @@ A final response is allowed only when one of these is true:
 
 - The product goal and agreed done criteria are fully satisfied.
 - A user or environment blocker prevents further progress.
-- The user explicitly stopped, narrowed, or paused autopilot.
-- The configured autopilot budget/cap was reached.
+- The user explicitly stopped, narrowed, or paused the Goal.
+- The configured Goal queue budget/cap was reached.
 - The next slice is already active or queued and the response is explicitly a
   status update.
 
-`MVP scaffold complete` is not `AUTOPILOT DONE` unless the locked goal was only
+`MVP scaffold complete` is not `GOAL DONE` unless the locked goal was only
 to build a scaffold.
 
 ## Phase 6: Gap Discovery Loop
@@ -318,7 +318,7 @@ available. For APIs and CLIs, execute realistic commands and failure cases.
 
 ## Stop Conditions
 
-Autopilot stops only when one of these is true:
+Goal queue execution stops only when one of these is true:
 
 - All MVP and hardening slices are closed with fresh QA PASS and required UX
   PASS, and gap discovery finds no blocker.
@@ -331,7 +331,7 @@ Autopilot stops only when one of these is true:
 Final report:
 
 ```text
-AUTOPILOT DONE
+GOAL DONE
 Product:
 Stack:
 Closed tasks:

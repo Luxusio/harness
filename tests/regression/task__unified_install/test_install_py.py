@@ -204,18 +204,20 @@ def test_sync_codex_payload_produces_complete_plugin_bundle(tmp_path):
         assert (codex_plugin / rel).exists(), f"manifest path must exist: {rel}"
 
     skill_names = sorted(path.parent.name for path in (codex_plugin / "skills").glob("*/SKILL.md"))
-    assert skill_names == ["autopilot", "run", "setup"]
+    assert skill_names == ["setup"]
 
     internal_skill_names = sorted(
         path.parent.name for path in (codex_plugin / "internal-skills").glob("*/SKILL.md")
     )
     assert internal_skill_names == [
         "develop",
+        "goal-queue",
         "plan",
         "plan-ceo-review",
         "plan-design-review",
         "plan-devex-review",
         "plan-eng-review",
+        "run",
     ]
 
     hooks_text = (codex_plugin / "hooks.json").read_text()
@@ -483,7 +485,8 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
     assert (cached / ".codex-plugin" / "plugin.json").is_file()
     assert (cached / "hooks.json").is_file()
     assert (cached / ".mcp.json").is_file()
-    assert (cached / "skills" / "run" / "SKILL.md").is_file()
+    assert not (cached / "skills" / "run" / "SKILL.md").exists()
+    assert (cached / "internal-skills" / "run" / "SKILL.md").is_file()
     assert (cached / "scripts" / "hook_pre_tool_use.py").is_file()
     assert (cached / "mcp" / "harness_server.py").is_file()
     parsed = tomllib.loads(config_path.read_text())
@@ -707,7 +710,8 @@ def test_install_codex_plugin_cache_marks_plugin_installed(tmp_path):
     assert (cached / ".codex-plugin" / "plugin.json").is_file()
     assert (cached / ".mcp.json").is_file()
     assert (cached / "hooks.json").is_file()
-    assert (cached / "skills" / "run" / "SKILL.md").is_file()
+    assert not (cached / "skills" / "run" / "SKILL.md").exists()
+    assert (cached / "internal-skills" / "run" / "SKILL.md").is_file()
     assert not (cached / "stale.txt").exists()
 
 

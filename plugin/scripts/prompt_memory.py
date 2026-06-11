@@ -35,6 +35,11 @@ try:
         resolve_active_task_dir,
         runtime_is_stale,
         emit_compact_context,
+        goal_command_objective,
+        read_current_goal,
+        next_goal_task,
+        start_harness_goal,
+        write_goal_payload_probe,
     )
 except Exception:
     sys.exit(0)
@@ -52,9 +57,10 @@ DOC_GATE = (
     "[harness-doc-gate] Durable decisions require doc/ update before final; "
     "if no doc applies, record no-doc rationale in DOC_SYNC/HANDOFF."
 )
-AUTOPILOT_GATE = (
-    "[harness-autopilot] Slice close is not final; review gaps and start/queue "
-    "next slice unless product done, blocked, stopped, or budget-capped."
+GOAL_QUEUE_GATE = (
+    "[harness-goal-queue] Child task close is not final; review gaps and "
+    "start/queue the next child task unless the Goal is done, blocked, "
+    "stopped, or budget-capped."
 )
 TASK_PACK_GATE = (
     "[harness-task-pack] Task close is not final; claim/start the next queued "
@@ -74,6 +80,41 @@ _STALE_PATH_CAP = 50   # bound mtime scan cost on the hook hot path
 _AC_CAP = 3
 _AC_TERMINAL = {"passed", "deferred"}
 _TITLE_MAX = 24
+
+
+def _build_goal_block(repo_root: str, synced_goal: dict | None = None) -> str:
+    """Inject the runtime Goal sync procedure.
+
+    Hooks cannot call agent-only tools such as Codex get_goal, so the hook
+    provides the exact MCP sequence the agent should run when native goal
+    context is present.
+    """
+    try:
+        goal = synced_goal or read_current_goal(repo_root)
+    except Exception:
+        goal = synced_goal or {}
+    goal_id = str(goal.get("goal_id") or "")
+    objective = _sanitize_prompt_text(str(goal.get("objective") or ""))
+    tasks = goal.get("tasks") if isinstance(goal.get("tasks"), list) else []
+    try:
+        next_info = next_goal_task(repo_root) if goal else {"task": None}
+    except Exception:
+        next_info = {"task": None}
+    task = next_info.get("task") if isinstance(next_info, dict) else None
+    next_task = task.get("task_id") if isinstance(task, dict) else ""
+
+    status = ""
+    if goal_id:
+        status = f" active={goal_id} tasks={len(tasks)}"
+        if next_task:
+            status += f" next={next_task}"
+        if objective:
+            status += f" objective={objective[:80]}"
+    return (
+        "[harness-goal] native goal? get_goal->goal_start; "
+        "no child: task_start->goal_add_task; next: goal_next_task."
+        + status
+    )
 
 
 def _stale_skip(rel: str) -> bool:
@@ -273,8 +314,8 @@ def _build_restore_block(task_dir: str, repo_root: str) -> str:
     return block
 
 
-def _build_autopilot_block(repo_root: str) -> str:
-    path = os.path.join(repo_root, "doc", "harness", "autopilot.yaml")
+def _build_goal_queue_block(repo_root: str) -> str:
+    path = os.path.join(repo_root, "doc", "harness", "goal-queue.json")
     if not os.path.isfile(path):
         return ""
     try:
@@ -288,7 +329,7 @@ def _build_autopilot_block(repo_root: str) -> str:
     slices = state.get("slices") if isinstance(state.get("slices"), list) else []
     if slices and all(str(item.get("status") or "") == "passed" for item in slices if isinstance(item, dict)):
         return ""
-    return AUTOPILOT_GATE
+    return GOAL_QUEUE_GATE
 
 
 def _build_task_pack_block(repo_root: str) -> str:
@@ -381,10 +422,26 @@ def main() -> int:
     repo_root = find_repo_root()
     if not is_harness_enabled_repo(repo_root):
         return 0
+    write_goal_payload_probe(repo_root, data, source="UserPromptSubmit")
+    synced_goal = None
+    objective = goal_command_objective(data.get("prompt") if isinstance(data, dict) else "")
+    if objective:
+        try:
+            synced_goal = start_harness_goal(
+                repo_root,
+                objective,
+                source={
+                    "runtime": "claude",
+                    "hook_event": "UserPromptSubmit",
+                    "session_id": data.get("session_id") if isinstance(data, dict) else "",
+                    "transcript_path": data.get("transcript_path") if isinstance(data, dict) else "",
+                },
+            )
+        except Exception:
+            synced_goal = None
     task_dir = _find_active_task_dir(repo_root)
 
     output_parts = [DOC_GATE]
-
     # Harness context block (existing behavior)
     if task_dir:
         _append_feedback_event(task_dir, repo_root, data)
@@ -402,13 +459,16 @@ def main() -> int:
         if runbook_block:
             output_parts.append(runbook_block)
 
-    autopilot_block = _build_autopilot_block(repo_root)
-    if autopilot_block:
-        output_parts.append(autopilot_block)
+    goal_queue_block = _build_goal_queue_block(repo_root)
+    if goal_queue_block:
+        output_parts.append(goal_queue_block)
 
     task_pack_block = _build_task_pack_block(repo_root)
     if task_pack_block:
         output_parts.append(task_pack_block)
+
+    if synced_goal or not task_dir:
+        output_parts.append(_build_goal_block(repo_root, synced_goal))
 
     if output_parts:
         sys.stdout.write(_truncate_output("\n".join(output_parts)))

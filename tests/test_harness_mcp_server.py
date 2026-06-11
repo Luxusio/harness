@@ -21,6 +21,11 @@ spec.loader.exec_module(harness_server)
 
 
 EXPECTED_TOOLS = {
+    "goal_start",
+    "goal_context",
+    "goal_add_task",
+    "goal_next_task",
+    "goal_finish",
     "task_start",
     "task_context",
     "task_verify",
@@ -96,6 +101,42 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertTrue(result.get("isError"))
         self.assertIn("Unknown tool", result["structuredContent"]["error"])
 
+    def test_goal_tools_manage_active_goal_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            original_find_repo_root = harness_server.find_repo_root
+            harness_server.find_repo_root = lambda *a, **kw: tmp
+            try:
+                start = harness_server.call_tool(
+                    "goal_start",
+                    {
+                        "objective": "Fix every bug on the login page",
+                        "source": {"runtime": "codex"},
+                    },
+                )
+                self.assertNotIn("isError", start)
+                goal = start["structuredContent"]["goal"]
+                self.assertEqual(goal["status"], "active")
+                self.assertNotIn("strategy", goal)
+
+                add = harness_server.call_tool(
+                    "goal_add_task",
+                    {
+                        "task_id": "TASK__login-bugs",
+                        "title": "Audit and fix login bugs",
+                        "status": "queued",
+                    },
+                )
+                self.assertNotIn("isError", add)
+
+                nxt = harness_server.call_tool("goal_next_task", {})
+                self.assertEqual(nxt["structuredContent"]["task"]["task_id"], "TASK__login-bugs")
+
+                finish = harness_server.call_tool("goal_finish", {"status": "complete"})
+                self.assertEqual(finish["structuredContent"]["goal"]["status"], "complete")
+                self.assertTrue((Path(tmp) / "doc" / "harness" / "goals" / "current.json").is_file())
+            finally:
+                harness_server.find_repo_root = original_find_repo_root
+
     def test_stdio_transport_accepts_content_length_frames(self):
         request = {
             "jsonrpc": "2.0",
@@ -149,9 +190,11 @@ class HarnessMcpServerTests(unittest.TestCase):
 
         response = json.loads(stdout_bytes.getvalue().decode())
         instructions = response["result"]["instructions"]
-        self.assertIn("14 tools", instructions)
+        self.assertIn("Goal-first control plane", instructions)
+        self.assertIn("goal_start", instructions)
         self.assertIn("bare tool names", instructions)
         self.assertIn("Codex callers should use these bare tool names directly", instructions)
+        self.assertIn("get_goal", instructions)
         self.assertIn("write_plan_artifact", instructions)
         self.assertNotIn("7 tools", instructions)
         self.assertIn("mcp__plugin_harness_harness__", instructions)
@@ -180,7 +223,8 @@ class HarnessMcpServerTests(unittest.TestCase):
 
         response = json.loads(stdout_bytes.getvalue().decode())
         instructions = response["result"]["instructions"]
-        self.assertIn("14 tools", instructions)
+        self.assertIn("Goal-first control plane", instructions)
+        self.assertIn("goal_context", instructions)
         self.assertIn("Protocol tool names are bare", instructions)
         self.assertIn("Claude Code may display callable tools with a runtime prefix", instructions)
         self.assertIn("mcp__plugin_harness_harness__write_critic_qa", instructions)

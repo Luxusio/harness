@@ -2,7 +2,8 @@
 """harness MCP server — self-contained, 7-field TASK_STATE.
 
 No plugin-legacy dependency. All operations are direct file I/O.
-MCP tools: task_start, task_context, task_verify, task_close, task_blocked,
+MCP tools: goal_start, goal_context, goal_add_task, goal_next_task, goal_finish,
+           task_start, task_context, task_verify, task_close, task_blocked,
            write_critic_qa, write_critic_ux, write_critic_document,
            write_req_doc, write_handoff, write_doc_sync.
 """
@@ -44,11 +45,15 @@ def _runtime_from_initialize(params: dict) -> str:
 
 def _initialize_instructions(runtime: str) -> str:
     base = (
-        "harness MCP — 14 tools, 7-field TASK_STATE. "
+        "harness MCP — Goal-first control plane plus 7-field TASK_STATE. "
+        "Use goal_start/goal_context/goal_add_task/goal_next_task/goal_finish "
+        "for native /goal orchestration. A Goal owns a child task queue; create "
+        "or attach child tasks as scope expands. "
         "Protocol tool names are bare: task_start, task_verify, task_close, "
         "task_blocked, write_plan_artifact, write_critic_qa, "
         "write_critic_ux, write_critic_document, write_req_doc, "
-        "write_handoff, write_doc_sync, "
+        "write_handoff, write_doc_sync, goal_start, goal_context, "
+        "goal_add_task, goal_next_task, goal_finish, "
         "record_ac_evidence, and record_attempt. "
         "write_plan_artifact is the canonical PLAN/CHECKS/AUDIT writer and "
         "replaces the legacy Python shim. "
@@ -57,7 +62,11 @@ def _initialize_instructions(runtime: str) -> str:
         return (
             base
             + "Codex callers should use these bare tool names directly; do not "
-            "use Claude display prefixes like mcp__plugin_harness_harness__*."
+            "use Claude display prefixes like mcp__plugin_harness_harness__*. "
+            "When native Codex goal context is active, call get_goal to read "
+            "the objective, then call goal_start to sync it. Use goal_context; "
+            "if no child task exists, create one with task_start and attach it "
+            "with goal_add_task. Use goal_next_task to continue queued work."
         )
     if runtime == "claude":
         return (
@@ -79,6 +88,8 @@ from _lib import (  # type: ignore
     artifact_exists, canonical_task_dir, canonical_task_id,
     find_repo_root, runtime_is_stale as _runtime_is_stale,
     write_active_marker, clear_active_marker, record_attempt,
+    read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
+    finish_harness_goal,
 )
 try:
     from environment_snapshot import snapshot as _env_snapshot  # type: ignore
@@ -586,6 +597,61 @@ def handle_task_start(args: dict) -> dict:
         "task_dir": task_dir, "task_id": tid, "task_context": ctx,
         "environment_snapshot": snapshot_path,
     })
+
+
+def handle_goal_start(args: dict) -> dict:
+    objective = _req(args, "objective")
+    repo_root = find_repo_root()
+    source_raw = args.get("source")
+    source = source_raw if isinstance(source_raw, dict) else {}
+    state = start_harness_goal(
+        repo_root,
+        objective,
+        goal_id=_opt(args, "goal_id"),
+        source=source,
+    )
+    return _ok({"goal": state, "next_action": "Use goal_context; if no child task exists, task_start then goal_add_task."})
+
+
+def handle_goal_context(args: dict) -> dict:
+    repo_root = find_repo_root()
+    goal = read_current_goal(repo_root)
+    if not goal:
+        return _ok({"goal": None, "active": False, "next_action": "No active harness goal. Call goal_start."})
+    return _ok({"goal": goal, "active": goal.get("status") == "active"})
+
+
+def handle_goal_add_task(args: dict) -> dict:
+    task_id = _req(args, "task_id")
+    repo_root = find_repo_root()
+    state = add_goal_task(
+        repo_root,
+        task_id,
+        title=_opt(args, "title") or "",
+        status=_opt(args, "status") or "queued",
+        task_dir=_opt(args, "task_dir") or "",
+    )
+    return _ok({"goal": state})
+
+
+def handle_goal_next_task(args: dict) -> dict:
+    repo_root = find_repo_root()
+    result = next_goal_task(repo_root)
+    return _ok({
+        "goal": result.get("goal") or None,
+        "task": result.get("task"),
+        "next_action": (
+            "Start or resume the returned child task."
+            if result.get("task")
+            else "No queued goal tasks. If the objective is not proven, create the next child task with task_start then goal_add_task; otherwise call goal_finish."
+        ),
+    })
+
+
+def handle_goal_finish(args: dict) -> dict:
+    repo_root = find_repo_root()
+    state = finish_harness_goal(repo_root, status=_opt(args, "status") or "complete")
+    return _ok({"goal": state})
 
 
 def handle_task_context(args: dict) -> dict:
@@ -1272,6 +1338,37 @@ def handle_write_plan_artifact(args: dict) -> dict:
 # ── Tool definitions ─────────────────────────────────────────────────────
 
 TOOL_DEFS: list[dict[str, Any]] = [
+    {"name": "goal_start", "title": "Start or sync a native goal",
+     "description": "Create or update the active harness Goal from a native /goal objective. Goal is the public orchestration container and owns child harness tasks.",
+     "inputSchema": {"type": "object", "properties": {
+         "objective": {"type": "string"},
+         "goal_id": {"type": "string"},
+         "source": {"type": "object"}},
+         "required": ["objective"], "additionalProperties": False},
+     "handler": handle_goal_start},
+    {"name": "goal_context", "title": "Read active goal",
+     "description": "Return the active harness Goal and its child task queue.",
+     "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+     "handler": handle_goal_context},
+    {"name": "goal_add_task", "title": "Add or update a goal child task",
+     "description": "Attach a harness task to the active Goal. Use this after task_start or when new scope is discovered and the Goal needs another child task.",
+     "inputSchema": {"type": "object", "properties": {
+         "task_id": {"type": "string"},
+         "title": {"type": "string"},
+         "status": {"type": "string", "enum": ["queued", "active", "closed", "blocked"]},
+         "task_dir": {"type": "string"}},
+         "required": ["task_id"], "additionalProperties": False},
+     "handler": handle_goal_add_task},
+    {"name": "goal_next_task", "title": "Return next goal child task",
+     "description": "Return the next queued or active child task for the active Goal, or indicate that none remain.",
+     "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
+     "handler": handle_goal_next_task},
+    {"name": "goal_finish", "title": "Finish active goal",
+     "description": "Mark the active Goal complete or blocked after child tasks prove the objective is satisfied or genuinely blocked.",
+     "inputSchema": {"type": "object", "properties": {
+         "status": {"type": "string", "enum": ["complete", "blocked"]}},
+         "additionalProperties": False},
+     "handler": handle_goal_finish},
     {"name": "task_start", "title": "Create or resume a task",
      "description": "Create task scaffolding (7-field TASK_STATE) and return fresh context. Pass execution_mode='micro' for explicit no-plan develop->verify->close mode; verification remains mandatory.",
      "inputSchema": {"type": "object", "properties": {

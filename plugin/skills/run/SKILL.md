@@ -2,7 +2,7 @@
 name: run
 description: Orchestrate full development cycle — plan → develop → verify → close.
 argument-hint: <task-slug-or-description>
-user-invocable: true
+user-invocable: false
 allowed-tools: Read, Glob, Grep, Bash, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context, mcp__plugin_harness_harness__task_verify, mcp__plugin_harness_harness__task_close
 ---
 
@@ -207,12 +207,12 @@ If the runner prints another `next:` item, start or queue that task before a
 final DONE response unless the pack is done, blocked/stopped, budget-capped, or
 waiting at an explicit user go/no-go boundary.
 
-If this run is an autopilot slice, task close is an iteration checkpoint rather
-than a final product completion. Before any final response, run the autopilot
-iteration review: compare the implementation to the locked product goal, list
+If this run is a Goal queue child task, task close is an iteration checkpoint
+rather than a final Goal completion. Before any final response, run the Goal
+queue iteration review: compare the implementation to the locked Goal, list
 remaining gaps, choose the next highest-value slice, and start or queue that
-slice unless the product is done, blocked/stopped by user or environment, or the
-autopilot budget/cap has been reached.
+slice unless the Goal is done, blocked/stopped by user or environment, or the
+Goal queue budget/cap has been reached.
 
 For this harness plugin source repo, successful repo-mutating development is
 not complete at task close. After post-close self-improvement returns `none` or
@@ -248,7 +248,7 @@ Before writing DONE, assert:
 - runtime_verdict is PASS or task is BLOCKED
 - post-close self-improvement returned `none` or `queued`
 - no auto-runnable follow-up task remains open
-- if this was an autopilot slice, the product is done/blocked/stopped/budgeted
+- if this was a Goal queue child task, the Goal is done/blocked/stopped/budgeted
   or the next slice is already active/queued
 - for this harness plugin source repo, the completed diff has been committed
   and `python3 install.py --force` has run, unless the user explicitly opted out

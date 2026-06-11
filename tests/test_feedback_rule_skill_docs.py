@@ -65,7 +65,7 @@ def test_handoff_close_gate_guide_names_strict_contract():
 
 
 def test_run_skills_check_feedback_events_before_dependent_actions():
-    for rel in ("plugin/skills/run/SKILL.md", "plugin-codex/skills/run/SKILL.md"):
+    for rel in ("plugin/skills/run/SKILL.md", "plugin-codex/internal-skills/run/SKILL.md"):
         body = (REPO / rel).read_text(encoding="utf-8")
         assert "USER_FEEDBACK.jsonl" in body
         assert "automatic evidence from UserPromptSubmit" in body
@@ -150,7 +150,7 @@ def test_harness_source_completion_requires_commit_and_force_install():
     assert "python3 install.py --force" in root
     assert "before the final response" in root
 
-    for rel in ("plugin/skills/run/SKILL.md", "plugin-codex/skills/run/SKILL.md"):
+    for rel in ("plugin/skills/run/SKILL.md", "plugin-codex/internal-skills/run/SKILL.md"):
         body = (REPO / rel).read_text(encoding="utf-8")
         assert "For this harness plugin source repo" in body
         assert "commit the completed diff" in body

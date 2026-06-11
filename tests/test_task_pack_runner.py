@@ -51,7 +51,7 @@ def test_init_persists_ordered_task_records_and_next(tmp_path):
     nxt = run(tmp_path, "next")
     assert nxt.returncode == 0
     assert "next: TASK__stage-4 - Admin density spec and application" in nxt.stdout
-    assert "prompt: /harness:run task-pack toss-redesign-stages task stage-4" in nxt.stdout
+    assert "prompt: /goal task-pack toss-redesign-stages task stage-4" in nxt.stdout
     assert any(event["type"] == "initialized" for event in events(tmp_path))
 
 

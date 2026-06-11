@@ -149,21 +149,21 @@ Create if absent; append harness section if present. Under 40 lines. Include: ha
 
 ### Legacy line cleanup (migration)
 
-Remove any pre-existing `Default (operating) agent is harness` line from old installs so the new routing block is the only authoritative source. Run BEFORE the routing-block injection below. Idempotent — no-op when the line is absent. Portable across GNU/BSD sed by using grep -v + mv.
+Run the native Goal queue migration before routing-block injection. This
+migrates pre-native queue state from `doc/harness/autopilot.yaml` to
+`doc/harness/goal-queue.json`, archives the legacy state file, removes stale
+`Default agent is harness` lines, and replaces any old marked `## Harness
+routing` block with the current Goal child-task queue block.
 
 ```bash
-if [ -f CLAUDE.md ] && grep -qE "^- Default (agent|operating agent) is harness" CLAUDE.md; then
-  # portable sed -i (GNU vs BSD): use tmp file
-  _TMP_CLAUDE=$(mktemp)
-  grep -vE "^- Default (agent|operating agent) is harness" CLAUDE.md > "$_TMP_CLAUDE"
-  mv "$_TMP_CLAUDE" CLAUDE.md
-  echo "Legacy 'Default agent is harness' line removed"
-fi
+python3 "${CLAUDE_PLUGIN_ROOT}/scripts/goal_queue_migrate.py" --repo "$(pwd)"
 ```
 
 ### Harness routing block (emit into user's CLAUDE.md)
 
-The emitted block must be idempotent (skip re-inject if present). Marker: `<!-- harness:routing-injected -->`.
+The migration script above is the preferred path because it can replace stale
+marked blocks. If a setup environment cannot run it, fall back to the
+idempotent append below. Marker: `<!-- harness:routing-injected -->`.
 
 ```bash
 if grep -q "harness:routing-injected" CLAUDE.md 2>/dev/null; then
@@ -173,11 +173,11 @@ else
 
 ## Harness routing
 <!-- harness:routing-injected -->
-- Run the full cycle (plan → develop → verify → close) → `Skill(harness:run)`
+- Run the full cycle (plan → develop → verify → close) → native `/goal`, then start or resume the next Goal child task
 - Bootstrap harness in a new project / repair existing → `Skill(harness:setup)`
-- Plan-only requests → start with `Skill(harness:run)` and stop after the plan if the user explicitly asks not to implement
-- Implement an approved PLAN.md / develop only → resume through `Skill(harness:run)`
-- Contract drift / post-upgrade cleanup → continuous maintenance flow in the active/next `Skill(harness:run)` task
+- Plan-only requests → sync/create Goal and stop after the internal plan phase if the user explicitly asks not to implement
+- Implement an approved PLAN.md / develop only → resume the active Goal child task through the internal develop path
+- Contract drift / post-upgrade cleanup → continuous maintenance flow in the active/next Goal child task
 - Read-only question or explanation → answer directly, no skill
 
 ### Durable Decision Documentation Gate
@@ -337,7 +337,7 @@ WARN is non-blocking. Use the continuous maintenance flow to repair drift.
 This step installs the close-time hygiene system. **Order is critical:** C-16 in
 CONTRACTS.md MUST land before close-time hygiene is considered enabled, so that
 `hygiene_scan.py`'s own C-16 self-detect passes on first run. Do not add
-`hygiene_scan.py` to SessionStart hooks; `/harness:run` invokes it post-close
+`hygiene_scan.py` to SessionStart hooks; the Goal child-task executor invokes it post-close
 from `self-improvement.md` and schedules any pending cleanup as a separate task.
 
 Run as a single logical transaction (all-or-nothing):

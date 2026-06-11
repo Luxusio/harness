@@ -66,6 +66,42 @@ def test_silent_when_no_active(tmp_path):
     assert result.stdout == "", f"expected empty stdout, got {result.stdout!r}"
 
 
+def test_goal_payload_probe_runs_on_stop_without_active_task(tmp_path):
+    """Opt-in goal probe should observe Stop payloads without changing stdout."""
+    repo = _fake_repo(tmp_path, active_contents=None)
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(
+        '{"type":"system","content":"Goal set: GOAL TASK내용 감지 테스트"}\n',
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "goal-probe"
+    payload = {
+        "hook_event_name": "Stop",
+        "session_id": "claude-goal-test",
+        "transcript_path": str(transcript),
+    }
+
+    result = _run(
+        repo,
+        stdin=json.dumps(payload),
+        env={
+            "HARNESS_CAPTURE_GOAL_PAYLOADS": "1",
+            "HARNESS_GOAL_PAYLOAD_DIR": str(out_dir),
+            "HARNESS_RUNTIME": "claude",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    files = list(out_dir.glob("claude_Stop__*__claude-goal-test.json"))
+    assert len(files) == 1
+    record = json.loads(files[0].read_text(encoding="utf-8"))
+    assert record["_event_inferred"] == "Stop"
+    assert record["_runtime_inferred"] == "claude"
+    assert record["transcript_candidates"]
+    assert record["transcript_candidates"][0]["contains_goal_set"] is True
+
+
 def test_reason_contains_task_id_and_exits(tmp_path):
     """AC-003: reason names the active task_id and legitimate stop exits."""
     repo = _fake_repo(tmp_path, active_contents="TASK__alpha-beta-gamma\n")

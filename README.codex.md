@@ -42,7 +42,7 @@ See [`doc/harness/runtime-matrix.md`](doc/harness/runtime-matrix.md) for the ful
 - Core loop: `plan → develop → verify → close`
 - Shared MCP server (same `harness_server.py` as Claude)
 - Shared Python scripts via `HARNESS_PLUGIN_ROOT` env
-- `setup`, `maintain`, `run` (sequential), `plan` (degraded), `develop` (sequential), `qa-cli`, `qa-api` (after AC-003 ports land in your install)
+- `setup`, native `/goal` orchestration, Goal child-task queues, `plan` (degraded), `develop` (sequential), `qa-cli`, `qa-api` (after AC-003 ports land in your install)
 - Hooks (prompt/context/safety only; Codex does not use Stop hooks for loop control)
 
 ## First-run walkthrough
@@ -50,12 +50,12 @@ See [`doc/harness/runtime-matrix.md`](doc/harness/runtime-matrix.md) for the ful
 ```bash
 cd <your project>
 
-# Start a task. Codex uses $skill or /skills invocation.
-codex exec '$harness:run "fix the flaky test in tests/auth/"' < /dev/null
+# Start a Goal. Codex reads native goal context, then syncs it through harness goal_start.
+codex exec '/goal fix the flaky test in tests/auth/' < /dev/null
 
 # Watch it walk plan -> develop -> verify -> close.
 # Verify with:
-codex exec '$harness:run --status' < /dev/null
+codex exec 'show the active harness goal and next child task' < /dev/null
 ```
 
 If a skill returns "tool not found", check that the MCP server registered: `codex mcp test harness`. If hooks don't fire (e.g. `prewrite_gate.py` doesn't intercept a write to `PLAN.md`), refresh the plugin-local hook install with `python3 install.py --codex-only --force`.

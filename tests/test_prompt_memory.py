@@ -101,6 +101,8 @@ class TestPromptMemory(unittest.TestCase):
         self.assertIn("[harness-doc-gate]", r.stdout)
         self.assertIn("Durable decisions require doc/ update before final", r.stdout)
         self.assertIn("DOC_SYNC/HANDOFF", r.stdout)
+        self.assertIn("[harness-goal]", r.stdout)
+        self.assertIn("get_goal->goal_start", r.stdout)
 
     def test_non_harness_repo_is_silent(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -109,7 +111,7 @@ class TestPromptMemory(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "")
 
-    def test_autopilot_state_emits_continuation_reminder(self):
+    def test_goal_queue_state_emits_continuation_reminder(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             state = {
@@ -119,30 +121,30 @@ class TestPromptMemory(unittest.TestCase):
                     {"id": "slice-002", "status": "pending"},
                 ],
             }
-            (base / "doc" / "harness" / "autopilot.yaml").write_text(
+            (base / "doc" / "harness" / "goal-queue.json").write_text(
                 json.dumps(state),
                 encoding="utf-8",
             )
             r = _invoke(str(base))
         self.assertEqual(r.returncode, 0)
-        self.assertIn("[harness-autopilot]", r.stdout)
-        self.assertIn("Slice close is not final", r.stdout)
-        self.assertIn("start/queue next slice", r.stdout)
+        self.assertIn("[harness-goal-queue]", r.stdout)
+        self.assertIn("Child task close is not final", r.stdout)
+        self.assertIn("start/queue the next child task", r.stdout)
 
-    def test_completed_autopilot_state_does_not_emit_reminder(self):
+    def test_completed_goal_queue_state_does_not_emit_reminder(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             state = {
                 "status": "done",
                 "slices": [{"id": "slice-001", "status": "passed"}],
             }
-            (base / "doc" / "harness" / "autopilot.yaml").write_text(
+            (base / "doc" / "harness" / "goal-queue.json").write_text(
                 json.dumps(state),
                 encoding="utf-8",
             )
             r = _invoke(str(base))
         self.assertEqual(r.returncode, 0)
-        self.assertNotIn("[harness-autopilot]", r.stdout)
+        self.assertNotIn("[harness-goal-queue]", r.stdout)
 
     def test_task_pack_state_emits_continuation_reminder(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -262,6 +264,87 @@ class TestPromptMemory(unittest.TestCase):
         self.assertIn("[SANITIZED]", event["prompt_excerpt"])
         self.assertNotIn("</system-reminder>", event["prompt_excerpt"])
         self.assertLessEqual(len(event["prompt_excerpt"]), 1200)
+
+    def test_goal_payload_probe_is_opt_in(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp))
+            r = _invoke(str(base), payload={"prompt": "/goal fix login"})
+            debug_dir = base / "doc" / "harness" / "debug" / "goal-hook-payloads"
+        self.assertEqual(r.returncode, 0)
+        self.assertFalse(debug_dir.exists())
+
+    def test_goal_payload_probe_records_payload_shape_when_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp))
+            r = _invoke(
+                str(base),
+                env_extra={"HARNESS_CAPTURE_GOAL_PAYLOADS": "1", "HARNESS_RUNTIME": "codex"},
+                payload={
+                    "cwd": str(base),
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "goal-session",
+                    "prompt": "/goal fix login and keep tests green",
+                },
+            )
+            debug_dir = base / "doc" / "harness" / "debug" / "goal-hook-payloads"
+            files = sorted(debug_dir.glob("codex_UserPromptSubmit__*__goal-session.json"))
+            record = json.loads(files[0].read_text(encoding="utf-8"))
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(len(files), 1)
+        self.assertEqual(record["_event_inferred"], "UserPromptSubmit")
+        self.assertIn("prompt", record["_keys_at_top_level"])
+        self.assertEqual(record["prompt_candidates"][0]["field"], "prompt")
+        self.assertTrue(record["prompt_candidates"][0]["looks_like_goal_command"])
+
+    def test_goal_payload_probe_can_be_enabled_by_repo_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp))
+            marker = base / "doc" / "harness" / "debug" / "CAPTURE_GOAL_PAYLOADS"
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text("capture next UserPromptSubmit payloads\n", encoding="utf-8")
+            r = _invoke(str(base), payload={"prompt": "ordinary follow-up"})
+            debug_dir = base / "doc" / "harness" / "debug" / "goal-hook-payloads"
+            files = sorted(debug_dir.glob("*_UserPromptSubmit__*.json"))
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(len(files), 1)
+
+    def test_claude_goal_prompt_syncs_harness_goal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp))
+            r = _invoke(
+                str(base),
+                payload={
+                    "cwd": str(base),
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "claude-goal",
+                    "prompt": "/goal Fix login bug cleanly",
+                },
+            )
+            current = base / "doc" / "harness" / "goals" / "current.json"
+            record = json.loads(current.read_text(encoding="utf-8"))
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("[harness-goal]", r.stdout)
+        self.assertIn("goal_next_task", r.stdout)
+        self.assertEqual(record["objective"], "Fix login bug cleanly")
+        self.assertNotIn("strategy", record)
+        self.assertEqual(record["source"]["hook_event"], "UserPromptSubmit")
+
+    def test_claude_korean_goal_prompt_syncs_harness_goal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp))
+            r = _invoke(
+                str(base),
+                payload={
+                    "cwd": str(base),
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "claude-goal",
+                    "prompt": "/골 특정 페이지 버그 전부 다 찾아서 고쳐",
+                },
+            )
+            record = json.loads((base / "doc" / "harness" / "goals" / "current.json").read_text(encoding="utf-8"))
+        self.assertEqual(r.returncode, 0)
+        self.assertNotIn("strategy", record)
+        self.assertIn("특정 페이지", record["objective"])
 
     # ---- AC-003: verdict + stale ----
     def test_stale_flag_when_touched_newer_than_critic(self):

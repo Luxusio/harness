@@ -5,12 +5,12 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[1]
-SCRIPT = REPO / "plugin" / "scripts" / "autopilot_runner.py"
+SCRIPT = REPO / "plugin" / "scripts" / "goal_queue_runner.py"
 
 
 def run(tmp_path, *args):
     return subprocess.run(
-        [sys.executable, str(SCRIPT), "--state", str(tmp_path / "autopilot.yaml"), *args],
+        [sys.executable, str(SCRIPT), "--state", str(tmp_path / "goal-queue.json"), *args],
         text=True,
         capture_output=True,
         timeout=20,
@@ -18,11 +18,11 @@ def run(tmp_path, *args):
 
 
 def load(tmp_path):
-    return json.loads((tmp_path / "autopilot.yaml").read_text(encoding="utf-8"))
+    return json.loads((tmp_path / "goal-queue.json").read_text(encoding="utf-8"))
 
 
 def events(tmp_path):
-    path = tmp_path / "autopilot-events.jsonl"
+    path = tmp_path / "goal-queue-events.jsonl"
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
@@ -66,7 +66,7 @@ def test_init_status_and_next_prompt(tmp_path):
 
     nxt = run(tmp_path, "next")
     assert nxt.returncode == 0
-    assert "/harness:run autopilot slice auth" in nxt.stdout
+    assert "/goal child task auth" in nxt.stdout
 
 
 def test_run_once_marks_slice_passed_and_advances(tmp_path):
@@ -80,7 +80,7 @@ def test_run_once_marks_slice_passed_and_advances(tmp_path):
     assert state["status"] == "done"
     assert state["slices"][0]["status"] == "passed"
     assert state["slices"][0]["attempts"] == 1
-    assert (tmp_path / "runtime" / "autopilot-heartbeat.json").exists()
+    assert (tmp_path / "runtime" / "goal-queue-heartbeat.json").exists()
     assert any(event["type"] == "slice_passed" for event in events(tmp_path))
 
 
@@ -96,7 +96,7 @@ def test_require_harness_close_blocks_false_pass_until_task_closed(tmp_path):
     assert state["slices"][0]["retryable"] is True
     assert "HARNESS_CLOSE_REQUIRED" in state["slices"][0]["last_result"]
 
-    write_task_state(tmp_path, "TASK__autopilot-contacts")
+    write_task_state(tmp_path, "TASK__goal-queue-contacts")
     second = run(tmp_path, "run-once", "--require-harness-close", "--command-template", command)
     assert second.returncode == 0, second.stdout + second.stderr
     state = load(tmp_path)
@@ -105,7 +105,7 @@ def test_require_harness_close_blocks_false_pass_until_task_closed(tmp_path):
 
 
 def test_require_harness_close_resolves_default_doc_harness_state_shape(tmp_path):
-    state_path = tmp_path / "doc" / "harness" / "autopilot.yaml"
+    state_path = tmp_path / "doc" / "harness" / "goal-queue.json"
     result = subprocess.run(
         [
             sys.executable,
@@ -125,7 +125,7 @@ def test_require_harness_close_resolves_default_doc_harness_state_shape(tmp_path
         timeout=20,
     )
     assert result.returncode == 0
-    write_task_state(tmp_path, "TASK__autopilot-contacts")
+    write_task_state(tmp_path, "TASK__goal-queue-contacts")
 
     result = subprocess.run(
         [
@@ -470,10 +470,10 @@ def test_recover_stale_running_slice_to_failed(tmp_path):
     state = load(tmp_path)
     state["slices"][0]["status"] = "running"
     state["slices"][0]["attempts"] = 1
-    (tmp_path / "autopilot.yaml").write_text(json.dumps(state), encoding="utf-8")
+    (tmp_path / "goal-queue.json").write_text(json.dumps(state), encoding="utf-8")
     runtime = tmp_path / "runtime"
     runtime.mkdir()
-    (runtime / "autopilot-heartbeat.json").write_text(
+    (runtime / "goal-queue-heartbeat.json").write_text(
         json.dumps({"ts": "2000-01-01T00:00:00Z", "pid": 999999, "slice_id": "contacts"}),
         encoding="utf-8",
     )

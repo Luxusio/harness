@@ -91,19 +91,20 @@ Do not write another role's artifact. Prewrite gate enforces this.
 
 ## 6. Auto-routing
 
-**Default for repo-mutating intent: `Skill(harness:run)`.** Never AskUserQuestion
-to choose between plan / run / develop flows — narrower flows fire only when
-the user explicitly names them in their own prompt.
+**Default for repo-mutating intent: native `/goal` / harness Goal.** Never ask
+the user to choose an orchestration mode. Goal owns the public request, then
+either executes one child task or grows the child-task queue as new work is
+discovered.
 
 | Intent | Route to |
 |--------|----------|
 | Set up harness | `Skill(setup)` |
 | Pre-planning / scope-sharpening (product framing before a task) | `Skill(harness:setup)` (fills the office-hours role; no separate office-hours skill) |
-| Any repo-mutating intent — new feature, fix, refactor, behavior change (default) | `Skill(harness:run)` |
-| User explicitly says "plan only" / "just plan" | `Skill(harness:run)`; stop after plan if the user explicitly asks not to implement |
-| User explicitly says "implement PLAN.md" / "develop only" | `Skill(harness:run)` resume/develop path |
-| Multi-component or API↔frontend change in one task | `Skill(harness:run)` (develop Phase 3.0 auto-fanout) |
-| CEO / Architecture / Design / DX review | `Skill(harness:run)` plan phase; review lenses are internal sub-skills |
+| Any repo-mutating intent — new feature, fix, refactor, behavior change (default) | Sync/create Goal from native `/goal`, then start or resume the next Goal child task |
+| User explicitly says "plan only" / "just plan" | Sync/create Goal, run the internal plan phase, then stop after plan |
+| User explicitly says "implement PLAN.md" / "develop only" | Resume the active Goal child task through the internal develop path |
+| Multi-component or API↔frontend change in one task | Goal child task with develop Phase 3.0 auto-fanout |
+| CEO / Architecture / Design / DX review | Goal child task plan phase; review lenses are internal sub-skills |
 | Contract drift / "CLAUDE.md 정리" / "규약 정비" / post-upgrade cleanup | Use the close-time self-improvement flow: run hygiene after task close, then schedule cleanup as a separate follow-up task when needed |
 | Explanation | Direct answer |
 

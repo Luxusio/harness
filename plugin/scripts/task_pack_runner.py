@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Ordered task-pack state for multi-step harness requests.
 
-This runner is deliberately smaller than autopilot_runner.py. It does not pick
-product strategy or execute commands. It records the user's known ordered work,
+This runner is deliberately smaller than goal_queue_runner.py. It does not pick
+product scope or execute commands. It records the user's known ordered work,
 lets the orchestrator claim one task at a time, and makes the next task
 deterministic after each close.
 """
@@ -202,7 +202,7 @@ def next_cmd(args: argparse.Namespace) -> int:
     print(f"slug: {item['slug']}")
     print(
         "prompt: "
-        f"/harness:run task-pack {state.get('pack_id')} "
+        f"/goal task-pack {state.get('pack_id')} "
         f"task {item['slug']}: {item['title']}"
     )
     return 0

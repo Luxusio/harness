@@ -615,13 +615,13 @@ def main():
             return 0
         human = (
             "No active task. Source writes require the canonical loop. "
-            "Run Skill(harness:run) or Skill(harness:plan) first."
+            "Start a native /goal and let harness create or resume a Goal child task first."
         )
         _deny("no-active-task", file_path, "plan-skill", human, repo_root)
         return 0
 
     if not (active_dir and os.path.isdir(active_dir) and active_dir.startswith(tasks_dir)):
-        human = "Active task points to invalid path. Run Skill(harness:run) to create a new task."
+        human = "Active task points to invalid path. Start a native /goal to create a new Goal child task."
         _deny("invalid-active", file_path, "plan-skill", human, repo_root)
         return 0
 

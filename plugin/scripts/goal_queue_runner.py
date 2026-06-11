@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Persistent queue runner for /harness:autopilot product slices.
+"""Persistent queue runner for Goal child tasks.
 
 The state file is JSON-compatible YAML so it can live at
-doc/harness/autopilot.yaml without requiring PyYAML.
+doc/harness/goal-queue.json without requiring PyYAML.
 """
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ from pathlib import Path
 from typing import Any
 
 
-DEFAULT_STATE = Path("doc/harness/autopilot.yaml")
-STOP_MARKERS = ("BLOCKED_ENV", "USER_DECISION_REQUIRED", "AUTOPILOT_STOP")
+DEFAULT_STATE = Path("doc/harness/goal-queue.json")
+STOP_MARKERS = ("BLOCKED_ENV", "USER_DECISION_REQUIRED", "GOAL_QUEUE_STOP")
 NON_RETRYABLE_FAILURES = {"auth_required", "browser_unavailable", "user_decision_required"}
 FAILURE_POLICIES: dict[str, dict[str, Any]] = {
     "auth_required": {
@@ -38,7 +38,7 @@ FAILURE_POLICIES: dict[str, dict[str, Any]] = {
     },
     "test_failure": {
         "retryable": True,
-        "recommended_action": "Feed the failing test output back through /harness:run develop.",
+        "recommended_action": "Feed the failing test output back through the active Goal child task.",
     },
     "harness_close_missing": {
         "retryable": True,
@@ -93,13 +93,13 @@ def atomic_write(path: Path, text: str) -> None:
 
 def load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
-        raise SystemExit(f"autopilot state not found: {path}")
+        raise SystemExit(f"goal queue state not found: {path}")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise SystemExit(f"autopilot state must be JSON-compatible YAML: {exc}") from exc
+        raise SystemExit(f"goal queue state must be JSON-compatible YAML: {exc}") from exc
     if not isinstance(data, dict) or not isinstance(data.get("slices"), list):
-        raise SystemExit("autopilot state missing slices[]")
+        raise SystemExit("goal queue state missing slices[]")
     return data
 
 
@@ -109,11 +109,11 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
 
 
 def event_path(state_path: Path) -> Path:
-    return state_path.parent / "autopilot-events.jsonl"
+    return state_path.parent / "goal-queue-events.jsonl"
 
 
 def heartbeat_path(state_path: Path) -> Path:
-    return state_path.parent / "runtime" / "autopilot-heartbeat.json"
+    return state_path.parent / "runtime" / "goal-queue-heartbeat.json"
 
 
 def append_event(state_path: Path, event_type: str, **fields: Any) -> None:
@@ -171,7 +171,7 @@ def parse_slice(raw: str, index: int) -> dict[str, Any]:
         "title": title,
         "status": "pending",
         "attempts": 0,
-        "task_id": f"TASK__autopilot-{slice_id}",
+        "task_id": f"TASK__goal-queue-{slice_id}",
         "last_result": "",
         "last_command": "",
         "updated_at": now_iso(),
@@ -261,7 +261,7 @@ def init_state(args: argparse.Namespace) -> int:
     ensure_agile_fields(state)
     save_state(args.state, state)
     append_event(args.state, "initialized", product=args.product, slices=len(state["slices"]))
-    print(f"autopilot initialized: {args.state} ({len(state['slices'])} slices)")
+    print(f"goal queue initialized: {args.state} ({len(state['slices'])} child tasks)")
     return 0
 
 
@@ -493,7 +493,7 @@ def format_command(template: str, item: dict[str, Any], state: dict[str, Any]) -
         "product": state.get("product", ""),
         "stack": state.get("stack", ""),
         "prompt": (
-            f"/harness:run autopilot slice {item.get('id')}: {item.get('title')} "
+            f"/goal child task {item.get('id')}: {item.get('title')} "
             f"for product {state.get('product')} using stack {state.get('stack')}"
         ),
     }
@@ -640,13 +640,13 @@ def run_once(args: argparse.Namespace) -> int:
         return preflight_rc
     refresh_top_status(state)
     if state.get("status") in {"done", "blocked", "stopped"}:
-        print(f"autopilot {state['status']}: no runnable slice")
+        print(f"goal queue {state['status']}: no runnable child task")
         return 0 if state.get("status") == "done" else 2
     item = next_slice(state)
     if not item:
         refresh_top_status(state)
         save_state(args.state, state)
-        print(f"autopilot {state['status']}: no runnable slice")
+        print(f"goal queue {state['status']}: no runnable child task")
         return 0
     if not args.command_template:
         print(f"next: {item['id']} - {item['title']}")
@@ -672,7 +672,7 @@ def run_once(args: argparse.Namespace) -> int:
         returncode, output = run_command(command, args.timeout, args.state, item)
     except subprocess.TimeoutExpired as exc:
         returncode = 124
-        output = f"AUTOPILOT_STOP command timed out after {args.timeout}s: {exc}"
+        output = f"GOAL_QUEUE_STOP command timed out after {args.timeout}s: {exc}"
 
     if returncode == 0 and args.require_harness_close:
         ok, detail = harness_task_passed(args.state, item)
@@ -698,10 +698,10 @@ def loop(args: argparse.Namespace) -> int:
     last_rc = 0
     while True:
         if args.max_iterations and iterations >= args.max_iterations:
-            print("autopilot stopped: max iterations reached")
+            print("goal queue stopped: max iterations reached")
             return last_rc
         if args.max_hours and time.time() >= deadline:
-            print("autopilot stopped: time budget reached")
+            print("goal queue stopped: time budget reached")
             return last_rc
         iterations += 1
         last_rc = run_once(args)
@@ -709,7 +709,7 @@ def loop(args: argparse.Namespace) -> int:
         refresh_top_status(state)
         save_state(args.state, state)
         if state.get("status") in {"done", "blocked", "stopped"}:
-            print(f"autopilot {state['status']}")
+            print(f"goal queue {state['status']}")
             return 0 if state.get("status") == "done" else 2
         if last_rc not in (0, 1):
             return last_rc
@@ -839,7 +839,7 @@ def replan(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Persistent /harness:autopilot queue runner")
+    parser = argparse.ArgumentParser(description="Persistent Goal child-task queue runner")
     parser.add_argument("--state", type=Path, default=DEFAULT_STATE)
     sub = parser.add_subparsers(dest="cmd", required=True)
 

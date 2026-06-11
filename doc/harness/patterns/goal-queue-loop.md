@@ -1,11 +1,12 @@
-# Autopilot Agile Loop
+# Goal Queue Loop
 
-This policy defines how `/harness:autopilot` should guide product development.
-The runner executes slices, but the product loop is Agile: each iteration
+This policy defines how native `/goal` uses the Goal child-task queue for broad
+product development. The runner executes child tasks, but the product loop is
+Agile: each iteration
 creates a thin vertical workflow, reviews the working product, rewrites the
 backlog from evidence, and selects the next highest-value slice with a reason.
 The quality-gate behavior is specified in
-`doc/common/REQ__process-autopilot-quality-gates.md`.
+`doc/common/REQ__process-goal-queue-quality-gates.md`.
 
 ## Principles
 
@@ -17,7 +18,7 @@ The quality-gate behavior is specified in
 - Quality gates should be preflight-first: surface likely collisions before the
   next command runs, and reserve hard blocking for missing review evidence or
   known failed/blocking evidence.
-- `USER_DECISION_REQUIRED` remains a hard stop. Autopilot must not invent
+- `USER_DECISION_REQUIRED` remains a hard stop. Goal queue execution must not invent
   product, billing, auth, or architecture decisions.
 
 ## Backlog Item Shape
@@ -67,17 +68,17 @@ resolved.
 
 ## Continuation Gate
 
-Closing one harness slice is an iteration checkpoint, not autopilot completion.
+Closing one harness slice is an iteration checkpoint, not Goal completion.
 After every closed slice, compare the current product against the locked product
 goal, list remaining product gaps, choose the next highest-value thin vertical
 slice, and start or queue the next harness task unless a valid stop condition
 applies.
 
-An autopilot final response is allowed only when the product goal is fully
+The final Goal response is allowed only when the product goal is fully
 satisfied, a user/environment blocker prevents further progress, the user
 explicitly stopped or narrowed the run, the configured budget/cap was reached,
 or the next slice is already active/queued and the response is only a status
-update. `MVP scaffold complete` is not `AUTOPILOT DONE` unless the locked goal
+update. `MVP scaffold complete` is not `GOAL DONE` unless the locked goal
 was only to build a scaffold.
 
 ## Preflight Gates
@@ -85,7 +86,7 @@ was only to build a scaffold.
 Use preflight before a long unattended loop or when resuming after interruption:
 
 ```bash
-python3 plugin/scripts/autopilot_runner.py preflight \
+python3 plugin/scripts/goal_queue_runner.py preflight \
   --require-review-before-next
 ```
 

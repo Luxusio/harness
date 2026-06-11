@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (  # type: ignore
     TASK_DIR, find_repo_root, read_hook_input, emit_compact_context,
     log_gate_crash, last_hook_input, resolve_active_task_dir, current_session_id,
-    is_harness_enabled_repo,
+    is_harness_enabled_repo, write_goal_payload_probe,
 )
 from _gate_response import block as gate_block  # type: ignore
 import background_registry  # type: ignore
@@ -148,6 +148,7 @@ def main():
         repo_root = find_repo_root()
         if not is_harness_enabled_repo(repo_root):
             return 0
+        write_goal_payload_probe(repo_root, hook_input, source="Stop")
         active_path = os.path.join(repo_root, TASK_DIR, ".active")
         td = resolve_active_task_dir(repo_root)
         if not td:

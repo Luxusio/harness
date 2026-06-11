@@ -97,6 +97,13 @@ _STDIN_CAP_BYTES = 1 << 16  # 64 KiB read cap for hook payload
 # uses last_hook_input() in gate scripts' outer except so log_gate_crash can
 # capture payload keys + tool_name even when main() raises before returning.
 _LAST_HOOK_INPUT: dict = {}
+GOAL_PAYLOAD_DEBUG_DIR = os.path.join("doc", "harness", "debug", "goal-hook-payloads")
+GOAL_PAYLOAD_MARKER = os.path.join("doc", "harness", "debug", "CAPTURE_GOAL_PAYLOADS")
+GOAL_PAYLOAD_VALUE_CAP = 2000
+GOAL_PAYLOAD_RAW_CAP = 32000
+GOAL_TRANSCRIPT_TAIL_CAP = 65536
+GOALS_DIR = os.path.join("doc", "harness", "goals")
+GOAL_CURRENT_FILE = os.path.join(GOALS_DIR, "current.json")
 
 
 def read_hook_input():
@@ -134,6 +141,267 @@ def last_hook_input() -> dict:
     without having to refactor every gate's main() signature.
     """
     return _LAST_HOOK_INPUT
+
+
+def _goal_probe_capture_enabled(repo_root: str) -> bool:
+    env = str(os.environ.get("HARNESS_CAPTURE_GOAL_PAYLOADS") or "").strip().lower()
+    if env in {"1", "true", "yes", "on"}:
+        return True
+    return os.path.isfile(os.path.join(repo_root, GOAL_PAYLOAD_MARKER))
+
+
+def _goal_probe_safe(value: object, default: str = "unknown") -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or default)).strip("._")
+    return (safe or default)[:80]
+
+
+def _goal_probe_runtime(data: dict) -> str:
+    raw = (
+        os.environ.get("HARNESS_RUNTIME")
+        or data.get("runtime")
+        or data.get("client")
+        or data.get("source")
+        or "unknown"
+    )
+    return _goal_probe_safe(raw)
+
+
+def _goal_probe_session(data: dict) -> str:
+    raw = (
+        data.get("session_id")
+        or data.get("sessionId")
+        or os.environ.get("CODEX_SESSION_ID")
+        or os.environ.get("CLAUDE_SESSION_ID")
+        or "no-session"
+    )
+    return _goal_probe_safe(raw, default="no-session")[:40]
+
+
+def _goal_probe_text(value: object) -> str:
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
+    cleaned = re.sub(r"</?system-reminder[^>]*>", "[SANITIZED]", cleaned, flags=re.IGNORECASE)
+    return " ".join(cleaned.split()).strip()
+
+
+def _goal_probe_prompt_candidates(data: dict) -> list[dict]:
+    out: list[dict] = []
+    for key in ("prompt", "user_prompt", "message", "text", "content"):
+        value = data.get(key)
+        if not isinstance(value, str) or not value.strip():
+            continue
+        clean = _goal_probe_text(value)[:GOAL_PAYLOAD_VALUE_CAP]
+        lowered = clean.lower()
+        out.append({
+            "field": key,
+            "length": len(value),
+            "excerpt": clean,
+            "looks_like_goal_command": lowered.startswith("/goal") or lowered.startswith("/골"),
+        })
+    return out
+
+
+def _goal_probe_transcript_candidates(data: dict) -> list[dict]:
+    path = data.get("transcript_path")
+    if not isinstance(path, str) or not path:
+        return []
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - GOAL_TRANSCRIPT_TAIL_CAP))
+            tail = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return []
+    out: list[dict] = []
+    for line in tail.splitlines():
+        if "/goal" not in line and "Goal set" not in line and "goal" not in line.lower():
+            continue
+        clean = _goal_probe_text(line)
+        if not clean:
+            continue
+        out.append({
+            "excerpt": clean[:GOAL_PAYLOAD_VALUE_CAP],
+            "contains_slash_goal": "/goal" in clean,
+            "contains_goal_set": "Goal set" in clean,
+        })
+        if len(out) >= 10:
+            break
+    return out
+
+
+def write_goal_payload_probe(repo_root: str, data: dict, *, source: str = "") -> bool:
+    """Opt-in /goal payload probe for discovering runtime hook envelope shape.
+
+    Disabled by default because hook payloads and transcripts can contain user
+    prompt text. Enable with HARNESS_CAPTURE_GOAL_PAYLOADS=1 or by creating
+    doc/harness/debug/CAPTURE_GOAL_PAYLOADS in the repo.
+    """
+    if not isinstance(data, dict) or not _goal_probe_capture_enabled(repo_root):
+        return False
+    try:
+        out_dir = os.environ.get("HARNESS_GOAL_PAYLOAD_DIR") or os.path.join(repo_root, GOAL_PAYLOAD_DEBUG_DIR)
+        os.makedirs(out_dir, exist_ok=True)
+        ts = now_iso().replace("-", "").replace(":", "")
+        runtime = _goal_probe_runtime(data)
+        event = str(data.get("hook_event_name") or data.get("hookEventName") or source or "hook")
+        event_safe = _goal_probe_safe(event, default="hook")
+        session = _goal_probe_session(data)
+        raw = json.dumps(data, ensure_ascii=False, sort_keys=True)
+        record = {
+            "_captured_at": now_iso(),
+            "_event_inferred": event,
+            "_keys_at_top_level": sorted(data.keys()),
+            "_runtime_inferred": runtime,
+            "prompt_candidates": _goal_probe_prompt_candidates(data),
+            "transcript_candidates": _goal_probe_transcript_candidates(data),
+            "raw_payload_truncated": len(raw) > GOAL_PAYLOAD_RAW_CAP,
+            "envelope": data if len(raw) <= GOAL_PAYLOAD_RAW_CAP else {"_raw_head": raw[:GOAL_PAYLOAD_RAW_CAP]},
+        }
+        path = os.path.join(out_dir, f"{runtime}_{event_safe}__{ts}__{session}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        return True
+    except OSError:
+        return False
+
+
+def goal_command_objective(prompt: object) -> str:
+    """Return objective text from a native /goal or /골 prompt, if present."""
+    text = _goal_probe_text(prompt)
+    lowered = text.lower()
+    for prefix in ("/goal", "/골"):
+        if lowered == prefix or lowered.startswith(prefix + " "):
+            return text[len(prefix):].strip()
+    return ""
+
+
+def _goal_slug(value: str) -> str:
+    import hashlib
+    words = re.findall(r"[A-Za-z0-9]+", value.lower())
+    slug = "-".join(words[:6]) or "goal"
+    digest = hashlib.sha1(value.encode("utf-8", errors="ignore")).hexdigest()[:8]
+    return f"{slug}-{digest}"
+
+
+def _goal_id(goal_id: str | None = None, objective: str = "") -> str:
+    if goal_id:
+        return goal_id if goal_id.startswith("GOAL__") else f"GOAL__{_goal_slug(goal_id)}"
+    return f"GOAL__{_goal_slug(objective or 'goal')}"
+
+
+def _goal_path(repo_root: str, goal_id: str) -> str:
+    return os.path.join(repo_root, GOALS_DIR, f"{goal_id}.json")
+
+
+def _current_goal_path(repo_root: str) -> str:
+    return os.path.join(repo_root, GOAL_CURRENT_FILE)
+
+
+def _read_json_file(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def read_current_goal(repo_root: str | None = None) -> dict:
+    root = repo_root or find_repo_root()
+    current = _read_json_file(_current_goal_path(root))
+    if current.get("goal_id"):
+        return current
+    return {}
+
+
+def write_goal_state(repo_root: str, state: dict) -> dict:
+    goal_id = str(state.get("goal_id") or _goal_id(objective=str(state.get("objective") or "")))
+    state = dict(state)
+    state["goal_id"] = goal_id
+    state["updated_at"] = now_iso()
+    goals_dir = os.path.join(repo_root, GOALS_DIR)
+    os.makedirs(goals_dir, exist_ok=True)
+    text = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    for path in (_goal_path(repo_root, goal_id), _current_goal_path(repo_root)):
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    return state
+
+
+def start_harness_goal(
+    repo_root: str,
+    objective: str,
+    *,
+    goal_id: str | None = None,
+    source: dict | None = None,
+) -> dict:
+    objective = _goal_probe_text(objective)
+    if not objective:
+        raise ValueError("objective required")
+    gid = _goal_id(goal_id, objective)
+    existing = _read_json_file(_goal_path(repo_root, gid))
+    current = read_current_goal(repo_root)
+    if current.get("status") == "active" and current.get("goal_id") == gid:
+        existing = current
+    state = {
+        "goal_id": gid,
+        "objective": objective,
+        "status": existing.get("status") or "active",
+        "created_at": existing.get("created_at") or now_iso(),
+        "updated_at": now_iso(),
+        "source": source or existing.get("source") or {},
+        "tasks": existing.get("tasks") if isinstance(existing.get("tasks"), list) else [],
+    }
+    return write_goal_state(repo_root, state)
+
+
+def add_goal_task(repo_root: str, task_id: str, *, title: str = "", status: str = "queued", task_dir: str = "") -> dict:
+    current = read_current_goal(repo_root)
+    if not current:
+        raise ValueError("no active goal")
+    tid = task_id if task_id.startswith("TASK__") else f"TASK__{task_id}"
+    tasks = current.get("tasks") if isinstance(current.get("tasks"), list) else []
+    updated = False
+    for task in tasks:
+        if isinstance(task, dict) and task.get("task_id") == tid:
+            if title:
+                task["title"] = title
+            if status:
+                task["status"] = status
+            if task_dir:
+                task["task_dir"] = task_dir
+            updated = True
+            break
+    if not updated:
+        tasks.append({
+            "task_id": tid,
+            "title": title or tid,
+            "status": status or "queued",
+            "task_dir": task_dir,
+        })
+    current["tasks"] = tasks
+    return write_goal_state(repo_root, current)
+
+
+def next_goal_task(repo_root: str) -> dict:
+    current = read_current_goal(repo_root)
+    tasks = current.get("tasks") if isinstance(current.get("tasks"), list) else []
+    for task in tasks:
+        if isinstance(task, dict) and task.get("status") in {"queued", "active"}:
+            return {"goal": current, "task": task}
+    return {"goal": current, "task": None}
+
+
+def finish_harness_goal(repo_root: str, *, status: str = "complete") -> dict:
+    current = read_current_goal(repo_root)
+    if not current:
+        raise ValueError("no active goal")
+    final_status = status if status in {"complete", "blocked"} else "complete"
+    current["status"] = final_status
+    current["finished_at"] = now_iso()
+    return write_goal_state(repo_root, current)
 
 
 def _hook_payload_cwd():
