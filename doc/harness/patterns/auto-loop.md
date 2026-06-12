@@ -1,14 +1,14 @@
 ---
 tags: [harness, hooks, stop-gate, auto-loop, claude-goal]
-summary: Anthropic /goal과 harness stop_gate.py가 동일한 Stop hook primitive로 자동 ralph 루프를 돌린다는 사실, 두 시스템의 차이, 동시 사용 방법.
+summary: Native /goal과 harness stop_gate.py가 함께 Goal child-task close loop를 유지하는 방식, 두 Stop hook primitive의 차이, 동시 사용 방법.
 freshness: current
-updated: 2026-05-21
+updated: 2026-06-12
 ---
 
-# Auto-loop primitive — Anthropic `/goal`과 harness `stop_gate.py` 등가성
+# Auto-loop primitive — native `/goal`과 harness `stop_gate.py`
 
 ## 한 줄 요약
-**harness:run 사용자는 이미 `/goal`과 동등한 자동 루프를 돌고 있다.** 추가 설정이나 `/goal` 입력 없이 `Skill(harness:run)` 한 번이 plan → develop → verify → close를 끝까지 끌고 간다. 매 turn 종료 시 `plugin/scripts/stop_gate.py`가 미완료 close-gate를 감지하면 다음 액션 reason을 Claude에 주입해서 자동 재개시킨다.
+**현재 사용자-facing 진입점은 native `/goal`이다.** Harness는 Goal을 durable state에 동기화하고, 각 Goal child task의 plan → develop → verify → close 루프는 `plugin/scripts/stop_gate.py`가 close-gate를 감지해 자동 재개시킨다.
 
 ## 동작 메커니즘 비교
 
@@ -27,7 +27,7 @@ updated: 2026-05-21
 7. `/goal clear` 또는 `/clear`로 취소.
 
 ### harness `stop_gate.py`
-1. 사용자가 `/harness:run <slug>` 입력 → `task_start` MCP가 `doc/harness/tasks/.active` 마커 생성.
+1. 사용자가 native `/goal <objective>` 입력 → harness Goal state가 생성/동기화되고, 필요한 경우 `task_start` + `goal_add_task`가 `doc/harness/tasks/.active` 마커를 만든다.
 2. `plugin/hooks/hooks.json` Stop 엔트리에 등록된 `python3 plugin/scripts/stop_gate.py`가 매 turn 종료 시 실행.
 3. `stop_gate.py:77-151`이 active task 마커 확인 → `emit_compact_context`로 `missing_for_close` 계산:
    - PLAN.md 없음, HANDOFF.md 없음, qa-browser evidence 없음, `runtime_verdict ≠ PASS` 등.
@@ -50,7 +50,7 @@ updated: 2026-05-21
 |---|---|---|
 | Evaluator | Haiku (자연어 transcript 판단) | Python 규칙 (`missing_for_close`, mtime staleness) |
 | 조건 입력 | 자연어 4000자 (`/goal …`) | 하드코딩 close-gate (PLAN.md / CHECKS.yaml / runtime_verdict) |
-| 초기 kickoff | 조건 텍스트가 first directive로 즉시 발사 | `Skill(harness:run)`이 plan→develop 체이닝 |
+| 초기 kickoff | 조건 텍스트가 first directive로 즉시 발사 | native Goal sync 후 Goal child task가 plan→develop 체이닝 |
 | 저장 위치 | 세션 메모리 (휘발) | `plugin/hooks/hooks.json` (영속) |
 | Turn cap | "or stop after N turns" 명시 가능 | 없음 (close-gate 충족까지 지속) |
 | Cancel UX | `/goal clear` | task_close 또는 stop-judge → task_blocked |
@@ -72,7 +72,7 @@ Anthropic 실제 `/goal`을 함께 켜고 싶다면 develop 진입 시점에 수
 
 두 reason이 모두 Claude 입력으로 합쳐져 들어온다. **주의**: deterministic 쪽이 BLOCKED_ENV(fresh)로 silent allow를 결정해도 `/goal` 쪽은 자체 판단을 계속한다. `/goal`도 같이 멈추려면 `/goal clear`를 따로 쳐야 한다.
 
-대부분의 경우 `stop_gate.py`만으로 충분하므로 동시 사용은 권장 default 아니다.
+대부분의 경우 native `/goal` + harness Goal child task close gate만으로 충분하므로 별도 prompt-based `/goal` stop hook을 수동으로 겹쳐 쓰는 것은 권장 default가 아니다.
 
 ## 코드 인용
 

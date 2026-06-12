@@ -125,7 +125,7 @@ def _owner_for_context_next_action(next_action: str) -> str:
     if "commit-backed learnings" in action or "self-healing candidates" in action or "handoff.md" in action:
         return "harness:developer"
     if "task_close" in action:
-        return "harness:run"
+        return "harness-goal"
     return ""
 
 

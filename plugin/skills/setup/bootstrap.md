@@ -161,16 +161,17 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/goal_queue_migrate.py" --repo "$(pwd)"
 
 ### Harness routing block (emit into user's CLAUDE.md)
 
-The migration script above is the preferred path because it can replace stale
-marked blocks. If a setup environment cannot run it, fall back to the
-idempotent append below. Marker: `<!-- harness:routing-injected -->`.
+The migration script above is the preferred path because it can also migrate
+legacy queue state. If a setup environment cannot run it, fall back to the
+idempotent replace/append below. Marker: `<!-- harness:routing-injected -->`.
 
 ```bash
-if grep -q "harness:routing-injected" CLAUDE.md 2>/dev/null; then
-  echo "Harness routing block already present — skipping"
-else
-  cat >> CLAUDE.md << 'ROUTING_EOF'
+python3 - <<'PY'
+from pathlib import Path
 
+path = Path("CLAUDE.md")
+text = path.read_text(encoding="utf-8") if path.exists() else ""
+block = """\
 ## Harness routing
 <!-- harness:routing-injected -->
 - Run the full cycle (plan → develop → verify → close) → native `/goal`, then start or resume the next Goal child task
@@ -188,8 +189,32 @@ architecture, domain, workflow, or implementation rule, update the matching
 `doc/` file before finalizing. Conversation history is not durable memory. If
 no matching document exists, create one under the appropriate `doc/` area; if no
 doc is needed, record the no-doc rationale in DOC_SYNC/HANDOFF.
-ROUTING_EOF
-fi
+"""
+lines = [line for line in text.splitlines() if line.strip() != "- Default agent is harness"]
+start = None
+for i, line in enumerate(lines):
+    if line.strip() in {"## Harness routing", "<!-- harness:routing-injected -->"}:
+        start = i - 1 if line.strip() == "<!-- harness:routing-injected -->" and i > 0 and lines[i - 1].strip() == "## Harness routing" else i
+        break
+if start is None:
+    if lines and lines[-1].strip():
+        lines.append("")
+    lines.extend(block.rstrip().splitlines())
+else:
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        if lines[i].startswith("## ") and lines[i].strip() != "## Harness routing":
+            end = i
+            break
+    prefix = lines[:start]
+    suffix = lines[end:]
+    while prefix and not prefix[-1].strip():
+        prefix.pop()
+    while suffix and not suffix[0].strip():
+        suffix.pop(0)
+    lines = prefix + [""] + block.rstrip().splitlines() + ([""] + suffix if suffix else [])
+path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+PY
 ```
 
 Note: no `Default agent is X` line. The harness routes via skills, not agent switching.

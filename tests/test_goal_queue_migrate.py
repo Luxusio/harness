@@ -46,9 +46,40 @@ def test_migrates_legacy_state_and_archives_source(tmp_path):
     state = json.loads(target.read_text(encoding="utf-8"))
     assert state["migrated_from"] == "doc/harness/autopilot.yaml"
     assert state["slices"][0]["task_id"] == "TASK__goal-queue-auth"
+    assert state["slices"][0]["legacy_task_id"] == "TASK__autopilot-auth"
+    assert state["task_id_migration"]["rewritten_missing_task_dir"] == 1
     assert not legacy.exists()
     archives = list((harness / "legacy").glob("goal-queue-pre-native-state.*.json"))
     assert len(archives) == 1
+
+
+def test_preserves_legacy_task_id_when_task_dir_exists(tmp_path):
+    harness = tmp_path / "doc" / "harness"
+    harness.mkdir(parents=True)
+    task_dir = harness / "tasks" / "TASK__autopilot-auth"
+    task_dir.mkdir(parents=True)
+    (task_dir / "TASK_STATE.yaml").write_text(
+        "task_id: TASK__autopilot-auth\nstatus: closed\nruntime_verdict: PASS\n",
+        encoding="utf-8",
+    )
+    (harness / "autopilot.yaml").write_text(
+        json.dumps(
+            {
+                "status": "active",
+                "slices": [{"id": "auth", "task_id": "TASK__autopilot-auth"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_migrate(tmp_path, "--state-only")
+    assert result.returncode == 0, result.stderr
+
+    state = json.loads((harness / "goal-queue.json").read_text(encoding="utf-8"))
+    assert state["slices"][0]["task_id"] == "TASK__autopilot-auth"
+    assert state["slices"][0]["legacy_task_id"] == "TASK__autopilot-auth"
+    assert state["task_id_migration"]["preserved_existing_task_dir"] == 1
+    assert task_dir.is_dir()
 
 
 def test_state_migration_is_idempotent_when_target_exists(tmp_path):
@@ -121,5 +152,7 @@ def test_setup_docs_reference_existing_repo_migration():
     assert "goal_queue_migrate.py" in bootstrap
     assert "doc/harness/autopilot.yaml" in bootstrap
     assert "doc/harness/goal-queue.json" in bootstrap
+    assert "already present — skipping" not in bootstrap
+    assert "idempotent replace/append" in bootstrap
     assert "Goal queue migration from §3.4" in setup
     assert "Repair/Upgrade setup runs `plugin/scripts/goal_queue_migrate.py`" in native_goals

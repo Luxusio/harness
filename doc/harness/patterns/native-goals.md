@@ -48,9 +48,11 @@ idempotent and handles the two pre-native artifacts that can remain in user
 repositories:
 
 - `doc/harness/autopilot.yaml` is converted to `doc/harness/goal-queue.json`.
-  Legacy `TASK__autopilot-*` child IDs are rewritten to `TASK__goal-queue-*`,
-  migration metadata is added, and the old state file is archived under
-  `doc/harness/legacy/`.
+  Legacy `TASK__autopilot-*` child IDs are preserved when the corresponding
+  `doc/harness/tasks/<task_id>/` directory exists, so migrated state does not
+  point at missing task artifacts. Missing task-dir references are rewritten to
+  `TASK__goal-queue-*`. Migration metadata records which policy was used, and
+  the old state file is archived under `doc/harness/legacy/`.
 - A marked `## Harness routing` block in `CLAUDE.md` is replaced with the
   current native Goal child-task queue block. Stale `Default agent is harness`
   lines are removed.

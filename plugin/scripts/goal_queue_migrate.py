@@ -71,11 +71,31 @@ def read_json_compatible(path: Path) -> dict[str, Any]:
     return data
 
 
-def rewrite_legacy_task_ids(value: Any) -> Any:
+def legacy_task_id_target(repo_root: Path, task_id: str) -> tuple[str, str]:
+    if not task_id.startswith("TASK__autopilot-"):
+        return task_id, "unchanged"
+    task_dir = repo_root / "doc" / "harness" / "tasks" / task_id
+    if task_dir.exists():
+        return task_id, "preserved_existing_task_dir"
+    return task_id.replace("TASK__autopilot-", "TASK__goal-queue-"), "rewritten_missing_task_dir"
+
+
+def rewrite_legacy_task_ids(value: Any, repo_root: Path, policy_counts: dict[str, int]) -> Any:
     if isinstance(value, dict):
-        return {str(k): rewrite_legacy_task_ids(v) for k, v in value.items()}
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            str_key = str(key)
+            if str_key == "task_id" and isinstance(item, str):
+                rewritten, policy = legacy_task_id_target(repo_root, item)
+                out[str_key] = rewritten
+                if policy != "unchanged":
+                    out.setdefault("legacy_task_id", item)
+                    policy_counts[policy] = policy_counts.get(policy, 0) + 1
+                continue
+            out[str_key] = rewrite_legacy_task_ids(item, repo_root, policy_counts)
+        return out
     if isinstance(value, list):
-        return [rewrite_legacy_task_ids(item) for item in value]
+        return [rewrite_legacy_task_ids(item, repo_root, policy_counts) for item in value]
     if isinstance(value, str):
         return value.replace("TASK__autopilot-", "TASK__goal-queue-")
     return value
@@ -89,12 +109,15 @@ def migrate_state(repo_root: Path, *, force: bool = False, archive: bool = True)
     if target.exists() and not force:
         return "state: goal-queue state already exists"
 
-    state = rewrite_legacy_task_ids(read_json_compatible(legacy))
+    policy_counts: dict[str, int] = {}
+    state = rewrite_legacy_task_ids(read_json_compatible(legacy), repo_root, policy_counts)
     if not isinstance(state, dict):
         raise SystemExit("legacy goal queue state must migrate to an object")
     state.setdefault("version", 1)
     state["migrated_from"] = str(LEGACY_STATE)
     state["migrated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if policy_counts:
+        state["task_id_migration"] = policy_counts
     atomic_write(target, json.dumps(state, indent=2, sort_keys=True) + "\n")
 
     if archive:

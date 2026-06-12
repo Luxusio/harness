@@ -358,8 +358,8 @@ _RULE_NEXT_ACTION = {
     "C-02-plan-first": ("Skill('harness:plan', '<task_id>')",
                         "plan-skill",
                         "plugin/CLAUDE.md § 4 Plan-first rule"),
-    "invalid-active": ("Skill('harness:run', '<slug>') to create a new task",
-                       "harness:run",
+    "invalid-active": ("Start a native /goal to create or resume a Goal child task",
+                       "harness-goal",
                        "plugin/CLAUDE.md § 6 Auto-routing"),
     "C-05-protected-artifact": ("",  # populated dynamically by callers via owner
                                 "",

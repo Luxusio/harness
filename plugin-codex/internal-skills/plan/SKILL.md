@@ -119,7 +119,7 @@ Phases 1-4 run ONE critical-reviewer pass per phase. The pass:
 - Classifies each finding (Mechanical / Taste / User Challenge).
 - Appends a `single-voice` consensus row to AUDIT_TRAIL.md.
 
-Compared to Claude's dual-voice: less cross-blind-spot detection, faster turnaround, no Voice A vs Voice B disagreement surfacing. For high-stakes plans, prefer the Claude runtime's `harness:run` plan phase.
+Compared to Claude's dual-voice: less cross-blind-spot detection, faster turnaround, no Voice A vs Voice B disagreement surfacing. For high-stakes plans, prefer native `/goal` on the Claude runtime, which routes through the full plan phase.
 
 Full protocol, dimensions, checklists, and degradation matrix: `review-phases.md` (Claude tree). The Codex orchestrator uses the `single-voice` row of the degradation matrix as its default.
 

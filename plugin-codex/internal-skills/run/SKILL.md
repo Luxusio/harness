@@ -271,7 +271,7 @@ hash and force-install result in the completion report.
 
 ## Mandatory Follow-up Continuation
 
-Post-close self-improvement is part of the same `harness:run` transaction.
+Post-close self-improvement is part of the same Goal child-task transaction.
 Do not report DONE until the pipeline has been evaluated.
 
 If `hygiene_followup.py --json` returns `"action": "run_followup"`:
