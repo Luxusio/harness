@@ -251,6 +251,10 @@ touch "$_GITIGNORE"
 
 _HARNESS_IGNORES=(
   "doc/harness/tasks/"
+  "doc/harness/goals/"
+  "doc/harness/goal-queue.json"
+  "doc/harness/goal-queue-events.jsonl"
+  "doc/harness/legacy/goal-queue-pre-native-state.*.json"
   "doc/harness/learnings.jsonl"
   "doc/harness/timeline.jsonl"
   "doc/harness/checkpoints/"

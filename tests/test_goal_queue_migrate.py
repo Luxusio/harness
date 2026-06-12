@@ -152,6 +152,9 @@ def test_setup_docs_reference_existing_repo_migration():
     assert "goal_queue_migrate.py" in bootstrap
     assert "doc/harness/autopilot.yaml" in bootstrap
     assert "doc/harness/goal-queue.json" in bootstrap
+    assert '"doc/harness/goals/"' in bootstrap
+    assert '"doc/harness/goal-queue-events.jsonl"' in bootstrap
+    assert '"doc/harness/legacy/goal-queue-pre-native-state.*.json"' in bootstrap
     assert "already present — skipping" not in bootstrap
     assert "idempotent replace/append" in bootstrap
     assert "Goal queue migration from §3.4" in setup
