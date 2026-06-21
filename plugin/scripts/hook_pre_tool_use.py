@@ -11,10 +11,11 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
 try:
-    from _lib import find_repo_root  # type: ignore
+    from _lib import find_repo_root, resolve_active_task_dir  # type: ignore
     from background_registry import register_subagent_start  # type: ignore
 except Exception:  # pragma: no cover - hook must fail open
     find_repo_root = None
+    resolve_active_task_dir = None
     register_subagent_start = None
 
 
@@ -53,33 +54,13 @@ def _is_subagent_spawn_tool(tool_name: str) -> bool:
     )
 
 
-def _text_field(data: dict, *keys: str) -> str:
-    for key in keys:
-        val = data.get(key)
-        if isinstance(val, str) and val.strip():
-            return val
-    return ""
-
-
-def _infer_harness_agent_type(tool_input: dict) -> str:
-    explicit = str(tool_input.get("agent_type") or tool_input.get("type") or "").strip()
-    if explicit and explicit.lower() not in {"default", "agent"}:
-        return explicit
-    text = _text_field(tool_input, "message", "prompt", "instructions", "task")
-    lowered = text.lower()
-    for family in ("qa", "ux"):
-        for lens in ("browser", "desktop", "api", "cli"):
-            token = f"{family}-{lens}"
-            if token in lowered:
-                return f"harness:{token}"
-    for role in ("critic-document", "dogfooder", "developer", "stop-judge"):
-        if role in lowered:
-            return f"harness:{role}"
-    return explicit or "default"
+def _structured_task_id(tool_input: dict) -> str:
+    task_id = tool_input.get("task_id") or tool_input.get("taskId")
+    return str(task_id).strip() if task_id else ""
 
 
 def _record_codex_subagent_start(payload: bytes) -> None:
-    if register_subagent_start is None or find_repo_root is None:
+    if register_subagent_start is None or find_repo_root is None or resolve_active_task_dir is None:
         return
     data = _json_payload(payload)
     if not _is_subagent_spawn_tool(str(data.get("tool_name") or data.get("tool") or "")):
@@ -88,8 +69,13 @@ def _record_codex_subagent_start(payload: bytes) -> None:
         repo_root = find_repo_root(_payload_cwd(payload) or os.getcwd())
         tool_input = data.get("tool_input") or data.get("input") or data.get("arguments") or {}
         if isinstance(tool_input, dict):
+            expected_task_id = _structured_task_id(tool_input)
+            if expected_task_id:
+                active_task_dir = resolve_active_task_dir(repo_root)
+                if os.path.basename(os.path.normpath(active_task_dir or "")) != expected_task_id:
+                    return
             payload_for_registry = dict(data)
-            payload_for_registry["agent_type"] = _infer_harness_agent_type(tool_input)
+            payload_for_registry["agent_type"] = str(tool_input.get("agent_type") or tool_input.get("type") or "default")
             payload_for_registry["agent_id"] = str(
                 data.get("tool_call_id")
                 or data.get("call_id")

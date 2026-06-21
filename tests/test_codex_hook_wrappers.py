@@ -113,7 +113,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             self.assertEqual(receipt["agent_type"], "harness:qa-cli")
             self.assertEqual(receipt["lens"], "qa-cli")
 
-    def test_pre_tool_use_infers_harness_agent_type_from_message(self):
+    def test_pre_tool_use_does_not_infer_agent_type_from_message(self):
         mod = _load("hook_pre_tool_use")
 
         def fake_run(*args, **kwargs):
@@ -141,8 +141,38 @@ class TestCodexHookWrappers(unittest.TestCase):
                         self.assertEqual(mod.main(), 0)
 
             receipt = json.loads((task_dir / "SUBAGENT_RECEIPTS.jsonl").read_text(encoding="utf-8").splitlines()[0])
-            self.assertEqual(receipt["agent_type"], "harness:qa-browser")
-            self.assertEqual(receipt["lens"], "qa-browser")
+            self.assertEqual(receipt["agent_type"], "default")
+            self.assertEqual(receipt["lens"], "")
+
+    def test_pre_tool_use_skips_receipt_when_structured_task_id_mismatches_active_task(self):
+        mod = _load("hook_pre_tool_use")
+
+        def fake_run(*args, **kwargs):
+            return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as repo:
+            root = Path(repo)
+            (root / ".git").mkdir()
+            tasks_dir = root / "doc" / "harness" / "tasks"
+            task_dir = tasks_dir / "TASK__active"
+            task_dir.mkdir(parents=True)
+            (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
+            payload = {
+                "cwd": repo,
+                "tool_name": "spawn_agent",
+                "tool_call_id": "call-other",
+                "tool_input": {
+                    "task_id": "TASK__other",
+                    "agent_type": "harness:qa-cli",
+                    "message": "Run QA for TASK__other.",
+                },
+            }
+            with mock.patch("subprocess.run", side_effect=fake_run):
+                with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(payload))):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(mod.main(), 0)
+
+            self.assertFalse((task_dir / "SUBAGENT_RECEIPTS.jsonl").exists())
 
 
 if __name__ == "__main__":
