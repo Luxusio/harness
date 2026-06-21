@@ -5,7 +5,7 @@ Detects the case where:
   - an active harness task exists
   - manifest declares qa.browser_qa_supported: true
   - the task's touched_paths include frontend files
-  - CRITIC__qa.md exists but has no qa-browser section
+  - no hook-owned subagent start receipt exists yet
 
 On match, prints a one-line `[verification-gap]` message so the orchestrator
 sees the gap on session resume (the 2026-05-12 retro showed that compaction
@@ -30,8 +30,8 @@ def main() -> int:
         return 0
     try:
         from _lib import (  # type: ignore
-            TASK_DIR, find_repo_root,
-            _read_nested_manifest_field, _frontend_touched, _has_qa_browser_section,
+            SUBAGENT_RECEIPTS_NAME, find_repo_root,
+            _read_nested_manifest_field, _frontend_touched,
             read_state, resolve_active_task_dir, is_harness_enabled_repo,
         )
     except Exception:
@@ -66,18 +66,15 @@ def main() -> int:
     if not _frontend_touched(touched):
         return 0
 
-    critic_path = os.path.join(task_dir, "CRITIC__qa.md")
-    if not os.path.isfile(critic_path):
-        return 0  # no CRITIC yet — runtime_verdict gate already covers this
-
-    if _has_qa_browser_section(task_dir):
+    receipt_path = os.path.join(task_dir, SUBAGENT_RECEIPTS_NAME)
+    if os.path.isfile(receipt_path):
         return 0
 
     task_id = os.path.basename(task_dir.rstrip("/"))
     print(
         f"[verification-gap] active task {task_id}: browser QA required "
         f"(manifest.qa.browser_qa_supported=true + frontend diff) but no "
-        f"qa-browser section in CRITIC__qa.md. Spawn qa-browser before close."
+        f"subagent start receipt exists. Spawn qa-browser before close."
     )
     return 0
 

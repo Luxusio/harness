@@ -11,7 +11,7 @@ evidence for this host.
 
 ## Core Contract
 
-Read first: `PLAN.md`, `HANDOFF.md`, `CHECKS.yaml`, `REQUEST.md` if present,
+Read first: `PLAN.md`, `final summary`, `CHECKS.yaml`, `REQUEST.md` if present,
 `doc/harness/manifest.yaml`, and `doc/harness/qa/QA_KNOWLEDGE.yaml` if present.
 
 For every runtime, platform, tool, fixture, or dependency claimed by PLAN:
@@ -61,7 +61,7 @@ why direct command execution was blocked or not applicable.
 ## Understand before you judge
 
 Before writing any verdict, build a mental model of what the change is
-supposed to do. Read PLAN.md, the relevant REQ/AC entries, HANDOFF.md,
+supposed to do. Read PLAN.md, the relevant REQ/AC entries, final summary,
 and any linked durable docs. Know the intended inputs, flags, stdout/stderr
 shape, exit codes, and error states before touching a terminal.
 
@@ -104,7 +104,7 @@ All four roles must pass:
    `apt-get`, `brew`, `apk`, language package managers, or version managers.
    Record every setup action. If setup fails, use `BLOCKED_ENV`.
 2. Run PLAN verification commands and capture output.
-3. Compare REQUEST.md, PLAN.md, and HANDOFF.md for intent adequacy.
+3. Compare REQUEST.md and PLAN.md for intent adequacy.
 4. For each command in scope, run:
    ```bash
    <command> --help 2>&1; echo "EXIT_CODE: $?"
@@ -130,14 +130,14 @@ Log friction signals to `doc/harness/learnings.jsonl` when they would help a
 future task: command not found, wrong help format, missing manifest flags, or
 env-specific behavior.
 
-## Self-Healing Candidates for HANDOFF
+## Self-Healing Candidates
 
 When QA discovers recurring harness/project friction that should be prevented
-next time, add a short `Self-Healing Candidates for HANDOFF` note to your
+next time, add a short `Self-Healing Candidates` note to your
 final response. Include command drift, missing manifest/dev-server
 config, wrong tool documentation, brittle fixtures, CI/test command mismatch, or
 manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
-when obvious; Phase 8 writes the final HANDOFF `Self-Healing Candidates` section.
+when obvious; Phase 8 writes the final summary.
 
 ## Codifiable block contract
 

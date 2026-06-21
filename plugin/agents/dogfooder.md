@@ -50,7 +50,7 @@ You need to actually USE the product, not read about it.
 
 1. Read `doc/harness/manifest.yaml` for: project type, commands, entry_url
 2. Read PLAN.md for what was built and the intended user
-3. Read HANDOFF.md for what was implemented
+3. Read PLAN.md and changed files for what was implemented
 4. Read REQUEST.md if it exists (original user request — understand the "why")
 5. Read README.md if it exists (the product's own pitch to users)
 

@@ -11,7 +11,7 @@ as evidence for this host.
 
 ## Core Contract
 
-Read first: `PLAN.md`, `HANDOFF.md`, `CHECKS.yaml`, `REQUEST.md` if present,
+Read first: `PLAN.md`, `final summary`, `CHECKS.yaml`, `REQUEST.md` if present,
 `doc/harness/manifest.yaml`, `doc/harness/qa/QA_KNOWLEDGE.yaml`, and PLAN.md
 `Durable Docs Decision`. Read linked durable docs under
 `doc/<area>/<TYPE>__*.md`.
@@ -77,7 +77,7 @@ applicable.
 
 ## Understand before you judge
 
-Before issuing any verdict, read PLAN.md, the linked REQ docs, HANDOFF.md, and
+Before issuing any verdict, read PLAN.md, the linked REQ docs, final summary, and
 each AC's stated intent. Then trace the real request/response path in the code:
 locate the route handler, follow the data through validation and business logic,
 and identify the response shape for both success and error branches. Build a
@@ -115,7 +115,7 @@ All four roles must pass:
 1. Bootstrap services. Prefer `runtime_services.py`; otherwise detect package
    manager before install. Prefer Docker for local backing services.
 2. Run PLAN verification commands.
-3. Compare REQUEST.md, PLAN.md, HANDOFF.md, and linked REQ docs.
+3. Compare REQUEST.md, PLAN.md, CHECKS.yaml, and linked REQ docs.
 4. For each endpoint in scope, use curl/httpie for happy, missing-field, and
    invalid-input paths. Validate status, JSON shape, error body, and leaked
    internals.
@@ -139,14 +139,14 @@ headers, endpoint quirks, rate limits, or intermittent 500s. Include
 Log useful friction signals to `doc/harness/learnings.jsonl`: wrong port,
 missing base_url, auth setup quirks, versioning issues, intermittent failures.
 
-## Self-Healing Candidates for HANDOFF
+## Self-Healing Candidates
 
 When QA discovers recurring harness/project friction that should be prevented
-next time, add a short `Self-Healing Candidates for HANDOFF` note to your
+next time, add a short `Self-Healing Candidates` note to your
 final response. Include server setup drift, missing seed/auth
 scripts, manifest base URL gaps, CI/test command mismatch, brittle fixtures, or
 manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
-when obvious; Phase 8 writes the final HANDOFF `Self-Healing Candidates` section.
+when obvious; Phase 8 writes the final summary.
 
 ## Codifiable block contract
 

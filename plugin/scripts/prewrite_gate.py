@@ -60,8 +60,6 @@ PROTECTED_ARTIFACTS = {
     "CHECKS.yaml": "plan-skill-or-update_checks",
     "AUDIT_TRAIL.md": "plan-skill",
     "SUBAGENT_RECEIPTS.jsonl": "subagent-start-hook",
-    "HANDOFF.md": "developer",
-    "DOC_SYNC.md": "developer",
 }
 
 # Human-readable owner description (used in deny message text, not in the tail).
@@ -71,8 +69,6 @@ PROTECTED_ARTIFACT_HUMAN = {
     "CHECKS.yaml": "plan-skill (initial) + scripts/update_checks.py (updates)",
     "AUDIT_TRAIL.md": "plan-skill",
     "SUBAGENT_RECEIPTS.jsonl": "Codex/Claude subagent-start hook",
-    "HANDOFF.md": "developer",
-    "DOC_SYNC.md": "developer",
 }
 
 SOURCE_EXTENSIONS = {
@@ -180,10 +176,8 @@ def _is_source_file(path, repo_root=None):
 def _task_has_req_reference(task_dir: str, repo_root: str = "") -> bool:
     import re
     req_re = re.compile(r"doc/[^)\]\s`'\"]+/REQ__[A-Za-z0-9_.-]+\.md")
-    # Scan task-local PLAN/HANDOFF/DOC_SYNC bodies for any REQ path string.
-    # Original behavior; the back-link path below catches REQs registered via
-    # write_req_doc(task_id=...) without a body mirror.
-    for name in ("PLAN.md", "HANDOFF.md", "DOC_SYNC.md"):
+    # Scan task-local PLAN body for any REQ path string.
+    for name in ("PLAN.md",):
         path = os.path.join(task_dir, name)
         if not os.path.isfile(path):
             continue
@@ -194,9 +188,7 @@ def _task_has_req_reference(task_dir: str, repo_root: str = "") -> bool:
         except OSError:
             continue
     # Back-link path: walk doc/**/REQ__*.md and look for a `source: task: <id>`
-    # line written by req_scaffold.write_req_doc when invoked with task_id.
-    # Solves the producer/consumer mismatch where write_req_doc records the
-    # link but the gate ignored it.
+    # line written by req_scaffold.py.
     task_id = os.path.basename(os.path.normpath(task_dir))
     if not task_id.startswith("TASK__"):
         return False
@@ -373,15 +365,12 @@ def _owner_to_next_action(owner: str) -> str:
         return ""
     o = owner.lower()
     if "plan-skill" in o and "update_checks" in o:
-        return ("write_plan_artifact { artifact='checks', content='...' } for initial create or "
+        return ("write_plan { plan='...', checks='...' } for initial create or "
                 "python3 plugin/scripts/update_checks.py for AC updates")
     if "plan-skill" in o:
-        return _tool_hint("write_plan_artifact", _runtime_name())
+        return _tool_hint("write_plan", _runtime_name())
     if "subagent-start-hook" in o:
         return "Spawn the required subagent; the runtime hook records SUBAGENT_RECEIPTS.jsonl"
-    if "developer" in o:
-        return ("Spawn Agent(subagent_type='harness:developer', ...) and call "
-                f"{_tool_hint('write_handoff', runtime)} or {_tool_hint('write_doc_sync', runtime)}")
     return ""
 
 
@@ -398,9 +387,7 @@ def _runtime_name() -> str:
 def _tool_hint(tool: str, runtime: str | None = None) -> str:
     runtime = runtime or _runtime_name()
     args = {
-        "write_handoff": "task_id=..., summary=..., verification=...",
-        "write_doc_sync": "task_id=..., summary=...",
-        "write_plan_artifact": "task_id=..., artifact=plan|plan-meta|checks|audit, content=...",
+        "write_plan": "task_id=..., plan=..., checks=..., audit=...",
     }.get(tool, "...")
     if runtime == "codex":
         return f"{tool} {{ {args} }}"
@@ -560,7 +547,7 @@ def main():
         owner_human = PROTECTED_ARTIFACT_HUMAN.get(basename, owner)
         human = (
             f"{basename} is owned by {owner_human}. Use the owning skill or MCP "
-            f"tool (e.g. write_plan_artifact for PLAN.md/CHECKS.yaml)."
+            f"tool (e.g. write_plan for PLAN.md/CHECKS.yaml)."
         )
         _deny("C-05-protected-artifact", file_path, owner, human, repo_root)
         return 0
@@ -586,7 +573,7 @@ def main():
                 f"{rel} is a workflow-control-surface file. Direct writes are "
                 f"only permitted from tasks with a MAINTENANCE marker. "
                 f"Touch doc/harness/tasks/<task>/MAINTENANCE and record the reason "
-                f"in close-time Self-Healing Candidates."
+                f"in the task plan or final summary."
             )
             _deny("workflow-control-surface", file_path, "maintain-skill", human, repo_root)
             return 0
@@ -632,7 +619,7 @@ def main():
         human = (
             f"{rel} looks like observable UI/API/native/desktop behavior, but "
             "the active task has no linked doc/<area>/REQ__*.md. Create or "
-            "update the durable REQ first with write_req_doc or req_scaffold.py, "
+            "update the durable REQ first directly or with req_scaffold.py, "
             "then retry the source edit."
         )
         _deny("C-REQ-observable-doc-required", file_path, "developer", human, repo_root)

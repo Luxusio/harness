@@ -55,7 +55,7 @@ MAX_OUTPUT_CHARS = 400
 PREFIX = "[harness-context]"
 DOC_GATE = (
     "[harness-doc-gate] Durable decisions require doc/ update before final; "
-    "if no doc applies, record no-doc rationale in DOC_SYNC/HANDOFF."
+    "if no doc applies, keep the PLAN durable-doc rationale specific."
 )
 GOAL_QUEUE_GATE = (
     "[harness-goal-queue] Child task close is not final; review gaps and "
@@ -69,7 +69,7 @@ TASK_PACK_GATE = (
 RESTORE_INJECT_CAP = 1400
 RESTORE_TOUCHED_CAP = 5
 RESTORE_COMMIT_CAP = 3
-RESTORE_ARTIFACTS = ("HANDOFF.md", "SUBAGENT_RECEIPTS.jsonl", "DOC_SYNC.md", "BLOCKED.md")
+RESTORE_ARTIFACTS = ("SUBAGENT_RECEIPTS.jsonl", "BLOCKED.md")
 FEEDBACK_FILE = "USER_FEEDBACK.jsonl"
 FEEDBACK_PROMPT_CAP = 1200
 FEEDBACK_TOUCHED_CAP = 5

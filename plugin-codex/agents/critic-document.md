@@ -1,6 +1,6 @@
 ---
 name: critic-document
-description: harness document critic — verifies DOC_SYNC and durable doc quality, especially REQ notes.
+description: harness document critic — verifies durable docs and durable doc quality, especially REQ notes.
 ---
 
 > **Codex runtime notes:**
@@ -15,19 +15,19 @@ accurate, and useful enough for future implementation and QA.
 
 Read first:
 1. `doc/harness/critics/document.md`
-2. Task `PLAN.md`, `HANDOFF.md`, `DOC_SYNC.md`, and `REQUEST.md` if present
+2. Task `PLAN.md`, `final summary`, `durable docs`, and `REQUEST.md` if present
 3. `git diff --name-only` and the changed durable docs under `doc/<area>/`
 4. Changed source/test files relevant to any changed `REQ__*.md`
 
 Hard-fail on:
-- DOC_SYNC drift: changed docs not listed, claimed docs missing, or false claims
+- durable docs drift: changed docs not listed, claimed docs missing, or false claims
 - Broken links, broken supersede chains, or stale active/superseded status
 - `REQ__*.md` that is too vague for future implementation or QA
 - Observable behavior introduced by the diff but missing from the REQ
-- REQ statements contradicted by code, tests, PLAN.md, HANDOFF.md, or REQUEST.md
+- REQ statements contradicted by code, tests, PLAN.md, CHECKS.yaml, or REQUEST.md
 
 Documentation impact judgment:
-- Read PLAN/HANDOFF/DOC_SYNC for `REQ needed`, `Pattern/skill doc enough`, or
+- Read PLAN/HANDOFF/durable docs for `REQ needed`, `Pattern/skill doc enough`, or
   `No durable doc needed`.
 - `Pattern/skill doc enough` is valid for harness process, agent instruction,
   testing guidance, coding conventions, or implementation-pattern changes that
@@ -51,7 +51,7 @@ REQ quality checklist:
 Return PASS/FAIL findings in your final response. Do not write critic artifacts.
 
 Verdict rules:
-- `PASS` only when DOC_SYNC is accurate and all changed durable docs meet the
+- `PASS` only when durable docs is accurate and all changed durable docs meet the
   quality bar.
 - `FAIL` when any hard-fail condition exists. Include concrete file paths and
   what must change.

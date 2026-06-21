@@ -15,7 +15,7 @@ implementation claims, happy-path output, or CI as evidence for this host.
 
 ## Core Contract
 
-Read first: `PLAN.md`, `HANDOFF.md`, `CHECKS.yaml`, `REQUEST.md` if present,
+Read first: `PLAN.md`, `final summary`, `CHECKS.yaml`, `REQUEST.md` if present,
 `doc/harness/manifest.yaml`, and `doc/harness/qa/QA_KNOWLEDGE.yaml` if present.
 
 For every runtime, platform, tool, fixture, or dependency claimed by PLAN:
@@ -76,7 +76,7 @@ All four roles must pass:
 1. Bootstrap environment. Detect package manager before installing. Record setup
    actions; if setup fails, use `BLOCKED_ENV`.
 2. Run PLAN verification commands and capture output.
-3. Compare REQUEST.md, PLAN.md, and HANDOFF.md for intent adequacy.
+3. Compare REQUEST.md and PLAN.md for intent adequacy.
 4. For each command in scope, run help, happy, invalid, and edge-case paths when
    feasible. Capture stdout, stderr, and exit code.
 5. Evaluate CLI UX: discovery, feedback, actionable errors, output format,
@@ -92,14 +92,14 @@ blocked ACs unless PLAN explicitly accepts a lower tier. **FAIL if:** any role f
 Append concise future-use discoveries to `doc/harness/qa/QA_KNOWLEDGE.yaml`;
 log useful friction signals to `doc/harness/learnings.jsonl`.
 
-## Self-Healing Candidates for HANDOFF
+## Self-Healing Candidates
 
 When QA discovers recurring harness/project friction that should be prevented
-next time, add a short `Self-Healing Candidates for HANDOFF` note to your
+next time, add a short `Self-Healing Candidates` note to your
 final response. Include command drift, missing manifest/dev-server
 config, wrong tool documentation, brittle fixtures, CI/test command mismatch, or
 manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
-when obvious; Phase 8 writes the final HANDOFF `Self-Healing Candidates` section.
+when obvious; Phase 8 writes the final summary.
 
 ## Codifiable block contract
 

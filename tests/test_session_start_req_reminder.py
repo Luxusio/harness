@@ -23,7 +23,7 @@ def test_session_start_banner_includes_req_reminder():
     banner_cmd = entries[0]["command"]
     assert "REQ:" in banner_cmd, f"REQ: missing from banner. cmd={banner_cmd[:300]}"
     assert "REQ__" in banner_cmd, "REQ__ slug placeholder missing"
-    assert "write_req_doc" in banner_cmd, "write_req_doc cue missing"
+    assert "when behavior changes" in banner_cmd, "behavior-change cue missing"
 
 
 def test_session_start_banner_executes_cleanly():

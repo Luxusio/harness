@@ -29,7 +29,7 @@ def test_develop_skill_phase_86_mentions_user_feedback_jsonl_trigger():
 def test_plugin_claude_md_mentions_user_feedback_close_gate():
     text = CLAUDE_RUNTIME.read_text(encoding="utf-8")
     assert "USER_FEEDBACK.jsonl" in text
-    assert "User feedback disposition in HANDOFF.md" in text
+    assert "not a close-gate evidence document" in text
 
 
 def test_contracts_local_c101_present_with_four_fields():

@@ -70,13 +70,13 @@ class TestDenyProtectedArtifact(unittest.TestCase):
 
 class TestMultiEdit(unittest.TestCase):
     def test_multiedit_triggers_gate(self):
-        """MultiEdit on a protected artifact must deny (current gate hole pre-PR1)."""
+        """MultiEdit on a protected artifact must deny."""
         with scratch_task_in_real_repo("pr1-multiedit") as task_dir:
-            handoff = os.path.join(task_dir, "HANDOFF.md")
-            r = invoke_hook(GATE, "MultiEdit", {"file_path": handoff})
+            plan = os.path.join(task_dir, "PLAN.md")
+            r = invoke_hook(GATE, "MultiEdit", {"file_path": plan})
             decision, reason = parse_decision(r.stdout)
             self.assertEqual(decision, "deny")
-            self.assertIn("HANDOFF.md", reason)
+            self.assertIn("PLAN.md", reason)
 
 
 class TestPlanFirst(unittest.TestCase):
@@ -151,7 +151,7 @@ class TestFailSafe(unittest.TestCase):
 class TestReasonFormat(unittest.TestCase):
     def test_every_deny_has_structured_tail(self):
         with scratch_task_in_real_repo("pr1-tail") as task_dir:
-            for basename in ("PLAN.md", "HANDOFF.md", "CHECKS.yaml", "DOC_SYNC.md", "SUBAGENT_RECEIPTS.jsonl"):
+            for basename in ("PLAN.md", "CHECKS.yaml", "SUBAGENT_RECEIPTS.jsonl"):
                 target = os.path.join(task_dir, basename)
                 r = invoke_hook(GATE, "Write", {"file_path": target})
                 decision, reason = parse_decision(r.stdout)

@@ -4,7 +4,7 @@
 No plugin-legacy dependency. All operations are direct file I/O.
 MCP tools: goal_start, goal_context, goal_add_task, goal_next_task, goal_finish,
            task_start, task_context, task_verify, task_close, task_blocked,
-           write_req_doc, write_handoff, write_doc_sync.
+           write_plan.
 """
 
 from __future__ import annotations
@@ -48,13 +48,10 @@ def _initialize_instructions(runtime: str) -> str:
         "Use goal_start/goal_context/goal_add_task/goal_next_task/goal_finish "
         "for native /goal orchestration. A Goal owns a child task queue; create "
         "or attach child tasks as scope expands. "
-        "Protocol tool names are bare: task_start, task_verify, task_close, "
-        "task_blocked, write_plan_artifact, write_req_doc, "
-        "write_handoff, write_doc_sync, goal_start, goal_context, "
-        "goal_add_task, goal_next_task, goal_finish, "
-        "and record_attempt. "
-        "write_plan_artifact is the canonical PLAN/CHECKS/AUDIT writer and "
-        "replaces the legacy Python shim. "
+        "Protocol tool names are bare: goal_start, goal_context, "
+        "goal_add_task, goal_next_task, goal_finish, task_start, "
+        "task_context, task_verify, task_close, task_blocked, and write_plan. "
+        "write_plan is the canonical task-local PLAN/CHECKS/AUDIT writer. "
     )
     if runtime == "codex":
         return (
@@ -84,7 +81,7 @@ from _lib import (  # type: ignore
     ensure_task_scaffold, emit_compact_context, sync_from_git_diff,
     artifact_exists, canonical_task_dir, canonical_task_id,
     find_repo_root, runtime_is_stale as _runtime_is_stale,
-    write_active_marker, clear_active_marker, record_attempt,
+    write_active_marker, clear_active_marker,
     receipt_runtime_verdict, subagent_receipt_summary,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
@@ -93,11 +90,6 @@ try:
     from environment_snapshot import snapshot as _env_snapshot  # type: ignore
 except Exception:
     _env_snapshot = None
-try:
-    from req_scaffold import write_req_doc as _write_req_doc_file  # type: ignore
-except Exception:
-    _write_req_doc_file = None
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -281,17 +273,6 @@ def _split_checks_blocks(text: str) -> list[str]:
 def _yaml_quote(value: str) -> str:
     escaped = str(value or "").replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
-
-
-def handle_record_attempt(args: dict) -> dict:
-    ti = _req(args, "task_id")
-    kind = _opt(args, "kind") or "retry"
-    verdict = _opt(args, "verdict") or "unknown"
-    summary = _req(args, "summary")
-    transcript = _opt(args, "transcript") or ""
-    td = canonical_task_dir(task_id=ti)
-    meta = record_attempt(td, kind, verdict, summary, transcript)
-    return _ok({"task_dir": td, "attempt": meta})
 
 
 def _run_verify_runner(td: str, parallel: bool = True, max_workers: int | None = None) -> dict:
@@ -667,167 +648,8 @@ def handle_task_close(args: dict) -> dict:
     st = read_state(td)
     return _ok({
         "task_dir": td, "closed": True, "status": st.get("status"),
-        "gate_artifact": _task_artifact_rel(td, "HANDOFF.md"),
+        "gate_artifact": _task_artifact_rel(td, "PLAN.md"),
     })
-
-
-_HANDOFF_USER_FEEDBACK_HEADING_RE = re.compile(
-    r"^[ \t]{0,3}#{1,3}\s*User Feedback Disposition\b",
-    re.MULTILINE | re.IGNORECASE,
-)
-_HANDOFF_COMMIT_BACKED_HEADING_RE = re.compile(
-    r"^[ \t]{0,3}#{1,3}\s*Commit-backed Learnings\b",
-    re.MULTILINE | re.IGNORECASE,
-)
-_HANDOFF_SELF_HEALING_HEADING_RE = re.compile(
-    r"^[ \t]{0,3}#{1,3}\s*Self-Healing Candidates\b",
-    re.MULTILINE | re.IGNORECASE,
-)
-_HANDOFF_FEEDBACK_DISPOSITION_RE = re.compile(
-    r"\bevent:\s*([A-Za-z0-9_.:-]+)\b.*?\bstatus:\s*([A-Za-z-]+)\b",
-    re.IGNORECASE,
-)
-_HANDOFF_TERMINAL_FEEDBACK_STATUSES = {"promoted", "handled-local", "deferred", "rejected"}
-
-
-def _task_feedback_event_ids(td: str) -> list[str]:
-    path = os.path.join(td, "USER_FEEDBACK.jsonl")
-    if not os.path.isfile(path):
-        return []
-    ids: list[str] = []
-    seen: set[str] = set()
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except Exception:
-                    continue
-                event_id = str(event.get("id") or "").strip()
-                if event_id and event_id not in seen:
-                    seen.add(event_id)
-                    ids.append(event_id)
-    except OSError:
-        return []
-    return ids
-
-
-def _disposed_feedback_ids_in_text(text: str) -> set[str]:
-    resolved: set[str] = set()
-    for match in _HANDOFF_FEEDBACK_DISPOSITION_RE.finditer(text or ""):
-        status = match.group(2).strip().lower()
-        if status in _HANDOFF_TERMINAL_FEEDBACK_STATUSES:
-            resolved.add(match.group(1).strip())
-    return resolved
-
-
-def _augment_handoff_text(td: str, text: str) -> str:
-    """Append close-gate HANDOFF defaults so agents do not learn by collision."""
-    additions: list[str] = []
-    if not _HANDOFF_USER_FEEDBACK_HEADING_RE.search(text):
-        event_ids = _task_feedback_event_ids(td)
-        resolved = _disposed_feedback_ids_in_text(text)
-        pending = [event_id for event_id in event_ids if event_id not in resolved]
-        lines = ["## User Feedback Disposition", ""]
-        if pending:
-            for event_id in pending:
-                lines.append(
-                    f"event: {event_id} status: <promoted|handled-local|deferred|rejected> "
-                    "reason: <fill> artifact: <path-or-n/a>"
-                )
-        else:
-            lines.append("No USER_FEEDBACK.jsonl events for this task. Nothing to disposition.")
-        additions.append("\n".join(lines))
-    if not _HANDOFF_COMMIT_BACKED_HEADING_RE.search(text):
-        additions.append("## Commit-backed Learnings\n\nStatus: none")
-    if not _HANDOFF_SELF_HEALING_HEADING_RE.search(text):
-        additions.append("## Self-Healing Candidates\n\nStatus: none")
-    if not additions:
-        return text
-    return text.rstrip() + "\n\n" + "\n\n".join(additions) + "\n"
-
-
-def _write_artifact(args: dict, filename: str, verdict_field: str | None = None,
-                    verdict_value: str | None = None) -> dict:
-    """Common artifact write: create file, optionally update verdict. Atomic."""
-    td = _opt(args, "task_dir")
-    ti = _opt(args, "task_id") or (os.path.basename(td.rstrip("/")) if td else None)
-    if not ti:
-        return _err("task_id or task_dir required")
-    td = td or canonical_task_dir(task_id=ti)
-    content_parts = [f"# {filename.replace('.md', '').replace('__', ' — ')}\n"]
-    for key in ("verdict", "summary", "verification", "transcript"):
-        val = _opt(args, key)
-        if val:
-            content_parts.append(f"\n## {key.title()}\n{val}\n")
-    path = os.path.join(td, filename)
-    os.makedirs(td, exist_ok=True)
-    import tempfile
-    text = "\n".join(content_parts)
-    if filename == "HANDOFF.md":
-        text = _augment_handoff_text(td, text)
-    fd, tmp = tempfile.mkstemp(dir=td, prefix=f".{filename}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    result = {"artifact": filename, "task_dir": td}
-    if verdict_field:
-        verdict = verdict_value or _opt(args, "verdict") or "PASS"
-        set_state_field(td, verdict_field, verdict)
-        result["verdict"] = verdict
-    return _ok(result)
-
-
-def handle_write_req_doc(args: dict) -> dict:
-    if _write_req_doc_file is None:
-        return _err("write_req_doc unavailable: req_scaffold.py import failed")
-    ti = _opt(args, "task_id") or ""
-    area = _opt(args, "area") or "ui"
-    slug = _req(args, "slug")
-    intent = _req(args, "intent")
-    observable = _req(args, "observable_behaviors")
-    verification = _req(args, "verification_cues")
-    non_goals = _opt(args, "non_goals") or ""
-    source = _opt(args, "source") or (f"task: {ti}" if ti else f"adhoc:{now_iso()}")
-    status = _opt(args, "status") or "accepted"
-    repo_root = find_repo_root()
-    rel = _write_req_doc_file(
-        repo_root,
-        area,
-        slug,
-        intent,
-        observable,
-        verification,
-        non_goals,
-        source,
-        status=status,
-    )
-    return _ok({
-        "artifact": rel,
-        "task_id": ti,
-        "task_dir": canonical_task_dir(task_id=ti) if ti else "",
-        "req_path": rel,
-        "source": source,
-        "status": status,
-    })
-
-
-def handle_write_handoff(args: dict) -> dict:
-    return _write_artifact(args, "HANDOFF.md")
-
-
-def handle_write_doc_sync(args: dict) -> dict:
-    return _write_artifact(args, "DOC_SYNC.md")
 
 
 def handle_task_blocked(args: dict) -> dict:
@@ -887,7 +709,7 @@ def _coerce_meta(raw: Any) -> dict:
 def _nonempty_artifact_content(value: str, *, artifact: str, filename: str) -> str | dict:
     if not value.strip():
         return _err(
-            f"write_plan_artifact refused to write empty {filename}",
+            f"write_plan refused to write empty {filename}",
             data={
                 "artifact": artifact,
                 "filename": filename,
@@ -904,67 +726,39 @@ def _record_write(path: str, text: str, written: list[str], bytes_written: dict[
     bytes_written[name] = len(text.encode("utf-8"))
 
 
-def handle_write_plan_artifact(args: dict) -> dict:
-    """MCP replacement for scripts/write_plan_artifact.py.
-
-    The MCP call is the ownership boundary, so it intentionally does not require
-    PLAN_SESSION.json token choreography.
-    """
-    artifact = _req(args, "artifact")
-    if artifact not in ("plan", "plan-meta", "checks", "audit"):
-        return _err("invalid artifact — must be plan, plan-meta, checks, or audit")
+def handle_write_plan(args: dict) -> dict:
+    """Write the minimal task-local planning artifacts in one MCP call."""
     td = _resolve_td(args)
     if not os.path.isfile(os.path.join(td, "TASK_STATE.yaml")):
-        return _err("write_plan_artifact failed: missing TASK_STATE.yaml", data={"task_dir": td})
-    raw_content = args.get("content")
-    content = raw_content if isinstance(raw_content, str) else ""
+        return _err("write_plan failed: missing TASK_STATE.yaml", data={"task_dir": td})
+    raw_plan = args.get("plan")
+    plan = raw_plan if isinstance(raw_plan, str) else ""
+    raw_checks = args.get("checks")
+    checks = raw_checks if isinstance(raw_checks, str) else None
+    raw_audit = args.get("audit")
+    audit = raw_audit if isinstance(raw_audit, str) else None
     meta = _coerce_meta(args.get("meta"))
     written: list[str] = []
     bytes_written: dict[str, int] = {}
-    raw_checks_content = args.get("checks_content")
-    has_checks_content = isinstance(raw_checks_content, str)
-    checks_content = raw_checks_content if has_checks_content else None
 
-    if has_checks_content and artifact not in ("plan", "plan-meta"):
-        return _err(
-            "checks_content is only valid when bundled with artifact=plan or artifact=plan-meta",
-            data={
-                "artifact": artifact,
-                "next_action": "For artifact=checks, use content for the CHECKS.yaml body.",
-            },
-        )
+    checked_plan = _nonempty_artifact_content(plan, artifact="plan", filename="PLAN.md")
+    if isinstance(checked_plan, dict):
+        return checked_plan
+    _record_write(os.path.join(td, "PLAN.md"), checked_plan, written, bytes_written)
 
-    if artifact == "plan":
-        checked = _nonempty_artifact_content(content, artifact=artifact, filename="PLAN.md")
-        if isinstance(checked, dict):
-            return checked
-        _record_write(os.path.join(td, "PLAN.md"), checked, written, bytes_written)
-        plan_meta = json.dumps(_plan_meta_dict(td, "PLAN.md", meta), indent=2, ensure_ascii=False) + "\n"
-        _record_write(os.path.join(td, "PLAN.meta.json"), plan_meta, written, bytes_written)
-        if checks_content is not None:
-            checked_checks = _nonempty_artifact_content(checks_content, artifact=artifact, filename="CHECKS.yaml")
-            if isinstance(checked_checks, dict):
-                return checked_checks
-            _record_write(os.path.join(td, "CHECKS.yaml"), checked_checks, written, bytes_written)
-    elif artifact == "plan-meta":
-        content_meta = _coerce_meta(content)
-        content_meta.update(meta)
-        plan_meta = json.dumps(_plan_meta_dict(td, "plan-meta", content_meta), indent=2, ensure_ascii=False) + "\n"
-        _record_write(os.path.join(td, "PLAN.meta.json"), plan_meta, written, bytes_written)
-        if checks_content is not None:
-            checked_checks = _nonempty_artifact_content(checks_content, artifact=artifact, filename="CHECKS.yaml")
-            if isinstance(checked_checks, dict):
-                return checked_checks
-            _record_write(os.path.join(td, "CHECKS.yaml"), checked_checks, written, bytes_written)
-    elif artifact == "checks":
-        checked = _nonempty_artifact_content(content, artifact=artifact, filename="CHECKS.yaml")
-        if isinstance(checked, dict):
-            return checked
-        _record_write(os.path.join(td, "CHECKS.yaml"), checked, written, bytes_written)
-    elif artifact == "audit":
-        checked = _nonempty_artifact_content(content, artifact=artifact, filename="AUDIT_TRAIL.md")
-        if isinstance(checked, dict):
-            return checked
+    plan_meta = json.dumps(_plan_meta_dict(td, "PLAN.md", meta), indent=2, ensure_ascii=False) + "\n"
+    _record_write(os.path.join(td, "PLAN.meta.json"), plan_meta, written, bytes_written)
+
+    if checks is not None:
+        checked_checks = _nonempty_artifact_content(checks, artifact="checks", filename="CHECKS.yaml")
+        if isinstance(checked_checks, dict):
+            return checked_checks
+        _record_write(os.path.join(td, "CHECKS.yaml"), checked_checks, written, bytes_written)
+
+    if audit is not None:
+        checked_audit = _nonempty_artifact_content(audit, artifact="audit", filename="AUDIT_TRAIL.md")
+        if isinstance(checked_audit, dict):
+            return checked_audit
         path = os.path.join(td, "AUDIT_TRAIL.md")
         try:
             existing = open(path, encoding="utf-8").read() if os.path.isfile(path) else ""
@@ -973,15 +767,15 @@ def handle_write_plan_artifact(args: dict) -> dict:
         first_line = existing.lstrip("\n").split("\n")[0] if existing.strip() else ""
         has_header = first_line.startswith("| # |")
         if not existing.strip():
-            new_content = AUDIT_HEADER + checked.rstrip("\n") + "\n"
+            new_content = AUDIT_HEADER + checked_audit.rstrip("\n") + "\n"
         elif has_header:
-            new_content = existing.rstrip("\n") + "\n" + checked.rstrip("\n") + "\n"
+            new_content = existing.rstrip("\n") + "\n" + checked_audit.rstrip("\n") + "\n"
         else:
-            new_content = existing.rstrip("\n") + "\n\n" + AUDIT_HEADER + checked.rstrip("\n") + "\n"
+            new_content = existing.rstrip("\n") + "\n\n" + AUDIT_HEADER + checked_audit.rstrip("\n") + "\n"
         _record_write(path, new_content, written, bytes_written)
 
     return _ok({
-        "artifact": artifact,
+        "artifact": "plan",
         "task_dir": td,
         "written": written,
         "bytes_written": bytes_written,
@@ -1061,68 +855,17 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id", "blocked_reason", "unblock_condition"],
          "additionalProperties": False},
      "handler": handle_task_blocked},
-    {"name": "record_attempt", "title": "Record retry attempt evidence",
-     "description": "Create attempts/attempt-NNN with summary metadata and optional transcript for failed develop/verify retries.",
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"},
-         "kind": {"type": "string"},
-         "verdict": {"type": "string"},
-         "summary": {"type": "string"},
-         "transcript": {"type": "string"}},
-         "required": ["task_id", "summary"],
-         "additionalProperties": False},
-     "handler": handle_record_attempt},
-    {"name": "write_plan_artifact", "title": "Write plan-owned artifacts",
-     "description": "Write PLAN.md, PLAN.meta.json, CHECKS.yaml, or AUDIT_TRAIL.md through MCP. Replaces scripts/write_plan_artifact.py and does not require PLAN_SESSION.json handshakes.",
+    {"name": "write_plan", "title": "Write task plan artifacts",
+     "description": "Write the minimal task-local planning artifacts: PLAN.md and PLAN.meta.json, with optional CHECKS.yaml and AUDIT_TRAIL.md. This is the only MCP writer for plan-owned task artifacts.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"}, "task_dir": {"type": "string"},
-         "artifact": {"type": "string", "enum": ["plan", "plan-meta", "checks", "audit"]},
-         "content": {"type": "string"},
-         "checks_content": {"type": "string", "description": "Optional bundled CHECKS.yaml body. Valid only with artifact=plan or artifact=plan-meta; use content for artifact=checks."},
+         "plan": {"type": "string"},
+         "checks": {"type": "string"},
+         "audit": {"type": "string"},
          "meta": {"type": ["object", "string"]}},
-         "required": ["artifact"],
+         "required": ["plan"],
          "additionalProperties": False},
-     "handler": handle_write_plan_artifact},
-    {"name": "write_req_doc", "title": "Create or update durable REQ doc",
-     "description": "Auto-author a doc/<area>/REQ__<slug>.md scaffold before observable source work. The scaffold is reviewed by critic-document when durable docs change. task_id is optional — when omitted, source defaults to adhoc:<ISO8601> and task_dir is empty. status is optional — defaults to 'accepted'; critic-document retrospective writes use 'candidate' so the REQ lands for user review without claiming acceptance.",
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"},
-         "area": {"type": "string"},
-         "slug": {"type": "string"},
-         "intent": {"type": "string"},
-         "observable_behaviors": {"type": "string"},
-         "verification_cues": {"type": "string"},
-         "non_goals": {"type": "string"},
-         "source": {"type": "string"},
-         "status": {"type": "string", "enum": ["accepted", "candidate"]}},
-         "required": ["slug", "intent", "observable_behaviors", "verification_cues"],
-         "additionalProperties": False},
-     "handler": handle_write_req_doc},
-    {"name": "write_handoff", "title": "Write developer handoff — developer only",
-     "description": (
-         "Write HANDOFF.md. This is a full rewrite; when updating an existing "
-         "handoff, preserve existing content. Include close-gate sections: "
-         "User Feedback Disposition with one terminal event line per "
-         "USER_FEEDBACK.jsonl id; Commit-backed Learnings with Status "
-         "none|captured|rejected where captured names a changed/touched "
-         "commit-eligible artifact; Self-Healing Candidates with Status "
-         "none|applied|deferred|rejected where applied names a changed/touched "
-         "commit-eligible artifact and deferred includes user_decision, reason, "
-         "and proposed_artifact or proposed_task; and a durable-doc judgment or "
-         "specific no-doc rationale."
-     ),
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"}, "task_dir": {"type": "string"},
-         "summary": {"type": "string"}, "verification": {"type": "string"}},
-         "required": ["task_id", "summary", "verification"], "additionalProperties": False},
-     "handler": handle_write_handoff},
-    {"name": "write_doc_sync", "title": "Write DOC_SYNC — developer only",
-     "description": "Write DOC_SYNC.md.",
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"}, "task_dir": {"type": "string"},
-         "summary": {"type": "string"}},
-         "required": ["task_id", "summary"], "additionalProperties": False},
-     "handler": handle_write_doc_sync},
+     "handler": handle_write_plan},
 ]
 
 TOOLS = {t["name"]: t for t in TOOL_DEFS}

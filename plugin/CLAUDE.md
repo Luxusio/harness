@@ -27,10 +27,8 @@ No step skipped. Smallest coherent diff per step.
 - `task_blocked` — park unfinished work on a real environment blocker; writes BLOCKED.md and clears this session's active marker
 
 **Artifact writes (role-owned):**
-- `write_plan_artifact` → PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md (plan-skill)
-- `write_req_doc` → doc/<area>/REQ__*.md scaffold for observable behavior (accepts optional `status: accepted|candidate`; critic-document retrospective writes use `candidate`)
-- `write_handoff` → HANDOFF.md (develop coordinator or dedicated developer role)
-- `write_doc_sync` → DOC_SYNC.md (develop coordinator)
+- `write_plan` → PLAN.md / PLAN.meta.json / optional CHECKS.yaml / optional AUDIT_TRAIL.md (plan-skill)
+- durable docs such as `doc/<area>/REQ__*.md` are normal repo docs, not MCP evidence tools
 
 Verification provenance = `SUBAGENT_RECEIPTS.jsonl` written by Codex/Claude hooks when a subagent starts. The main session never writes verification receipts or critic verdicts.
 
@@ -78,9 +76,9 @@ Turn 종결 정당 사유 (runtime_verdict 기반):
 
 | Artifact | Owner |
 |----------|-------|
-| PLAN.md / PLAN.meta.json / AUDIT_TRAIL.md | plan-skill via `write_plan_artifact` MCP |
+| PLAN.md / PLAN.meta.json / AUDIT_TRAIL.md | plan-skill via `write_plan` MCP |
 | CHECKS.yaml | plan-skill (create) + update_checks.py CLI (develop/qa updates) |
-| source + HANDOFF.md + DOC_SYNC.md + distilled change doc | developer |
+| source + durable docs | developer |
 | SUBAGENT_RECEIPTS.jsonl | Codex/Claude subagent-start hooks |
 
 Do not write another role's artifact. Prewrite gate enforces this.
@@ -113,9 +111,7 @@ Do not claim success from static inspection when runtime verification is require
 
 Runtime verdict becomes PASS only when `SUBAGENT_RECEIPTS.jsonl` contains at least one hook-recorded subagent start for the task.
 Use `task_close`. If blocked, fix the stated gate.
-Captured user feedback is stored in task-local `USER_FEEDBACK.jsonl`; close
-requires each event to be dispositioned in HANDOFF.md. Missing entries surface
-as `User feedback disposition in HANDOFF.md`.
+Captured user feedback is stored in task-local `USER_FEEDBACK.jsonl`; it is prompt context, not a close-gate evidence document.
 
 ## 8a. Note freshness
 

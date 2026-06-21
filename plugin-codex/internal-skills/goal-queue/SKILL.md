@@ -26,9 +26,9 @@ the agreed bar.
 > - AskUserQuestion is conversational on Codex. Ask the same questions in prose
 >   with clear options and wait for the user's reply.
 > - Use bare MCP tool names on Codex: `task_start`, `task_context`,
->   `task_verify`, `task_close`, `write_handoff`, and `write_doc_sync`.
+>   `task_verify`, `task_close`, and goal tools.
 > - If `spawn_agent` is available, use it for independent QA/UX/review voices.
->   If not, run the methodology inline and record the same harness artifacts.
+>   If not, run the methodology inline. Verification still needs a hook-owned subagent receipt.
 
 Goal queue execution never bypasses harness. Each implementation slice goes through the
 harness run flow. QA/UX failures feed back into development. Missing product,

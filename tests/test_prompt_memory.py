@@ -103,7 +103,7 @@ class TestPromptMemory(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertIn("[harness-doc-gate]", r.stdout)
         self.assertIn("Durable decisions require doc/ update before final", r.stdout)
-        self.assertIn("DOC_SYNC/HANDOFF", r.stdout)
+        self.assertIn("PLAN durable-doc rationale", r.stdout)
         self.assertIn("[harness-goal]", r.stdout)
         self.assertIn("get_goal->goal_start", r.stdout)
 
@@ -554,7 +554,7 @@ class TestPromptMemory(unittest.TestCase):
             r = _invoke(str(base))
         self.assertIn("[harness-restore]", r.stdout)
         self.assertIn("recent touched: src/a.py, src/b.py", r.stdout)
-        self.assertIn("HANDOFF.md: Useful next step", r.stdout)
+        self.assertNotIn("HANDOFF.md:", r.stdout)
 
     def test_restore_digest_sanitizes_prompt_tags_and_caps(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -571,7 +571,7 @@ class TestPromptMemory(unittest.TestCase):
             )
             r = _invoke(str(base))
         self.assertIn("[harness-restore]", r.stdout)
-        self.assertIn("[SANITIZED]", r.stdout)
+        self.assertNotIn("HANDOFF.md:", r.stdout)
         self.assertNotIn("</system-reminder> x", r.stdout)
         self.assertNotIn("src/file_8.py", r.stdout)
         self.assertLessEqual(len(r.stdout), 2200)

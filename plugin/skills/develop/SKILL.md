@@ -1,12 +1,12 @@
 ---
 name: develop
-description: Implement PLAN.md. Orchestrates per-AC implementation, quality audit, verification gate, and HANDOFF generation. Uses aggressive parallel agents for implementation, quality, and verification phases. Detail lives in sub-files — this file is the orchestration layer.
+description: Implement PLAN.md. Orchestrates per-AC implementation, quality audit, verification gate, and final summary generation. Uses aggressive parallel agents for implementation, quality, and verification phases. Detail lives in sub-files — this file is the orchestration layer.
 argument-hint: <task-id>
 user-invocable: false
-allowed-tools: Read, Glob, Grep, Bash, Edit, Write, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context, mcp__plugin_harness_harness__write_handoff, mcp__plugin_harness_harness__write_doc_sync, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__new_page, mcp__chrome-devtools__select_page, mcp__chrome-devtools__emulate, mcp__chrome-devtools__click, mcp__chrome-devtools__fill, mcp__chrome-devtools__press_key, mcp__chrome-devtools__type_text, mcp__chrome-devtools__hover, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__lighthouse_audit
+allowed-tools: Read, Glob, Grep, Bash, Edit, Write, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__new_page, mcp__chrome-devtools__select_page, mcp__chrome-devtools__emulate, mcp__chrome-devtools__click, mcp__chrome-devtools__fill, mcp__chrome-devtools__press_key, mcp__chrome-devtools__type_text, mcp__chrome-devtools__hover, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__lighthouse_audit
 ---
 
-Implement the plan for a harness task. Reads PLAN.md, implements changes, verifies completeness, writes HANDOFF.md.
+Implement the plan for a harness task. Reads PLAN.md, implements changes, verifies completeness, writes final summary.
 
 ## Voice
 
@@ -14,19 +14,19 @@ Develop-orchestrator voice: opinionated, concrete, builder-to-builder. The devel
 
 - Lead with the point. Say what the phase did, what it found, what changes downstream.
 - Be concrete. Name files, functions, line numbers, AC ids, commit hashes, test names. Real numbers over qualifiers.
-- Tie technical choices to outcomes — what the next phase reads, what the user sees in HANDOFF, what the verifier now has evidence for.
+- Tie technical choices to outcomes — what the next phase reads, what the user sees in final summary, what the verifier now has evidence for.
 - Be direct about quality. A confident PASS without test evidence matters more than a thoroughly-explained FAIL. Stale verdicts matter. Scope creep matters.
 - Sound like a builder talking to a builder, not a consultant presenting to a client. No founder cosplay, no hype.
 - No em dashes. No AI vocabulary: `delve`, `crucial`, `robust`, `comprehensive`, `nuanced`, `multifaceted`, `furthermore`, `moreover`, `additionally`, `pivotal`, `landscape`, `tapestry`, `underscore`, `foster`, `showcase`, `intricate`, `vibrant`, `fundamental`, `significant`, `seamless`, `leverage`. These signal AI prose; cut them.
 - Korean/English bilingual context: technical terms stay English, explanations may use Korean.
 - The user has context you do not. Adversarial agreement is a recommendation, not a decision. The user decides at premise gate (Phase 2 EUREKA), at scope-expansion gate (Phase 5), and at any 3-strike escalation.
 
-Good: "AC-003 done. PROGRESS.md:34 records 9/10 completeness. Per-AC test passed (`tests/regression/task_xx/test_ac_003__loop_detect.py`). Edge case deferred: nested phase loops (rare, documented in HANDOFF Adversarial Findings)."
+Good: "AC-003 done. PROGRESS.md:34 records 9/10 completeness. Per-AC test passed (`tests/regression/task_xx/test_ac_003__loop_detect.py`). Edge case deferred: nested phase loops (rare, documented in final summary Adversarial Findings)."
 Bad: "I have successfully completed the implementation of AC-003 and the changes appear to be working as expected based on my analysis."
 
 ## Anti-shortcut clause
 
-CHECKS.yaml `passed` is evidence the gate ran, not a substitute for fresh runtime verification (C-04 IRON LAW: PASS verdict must be fresh after the last edit). PROGRESS.md is the scope-lock contract for this task, not a substitute for HANDOFF.md narrative — both must exist at close. Hand-editing CHECKS.yaml or skipping `update_checks.py` produces a plausible-looking ledger that lies about `reopen_count` and `last_updated` (the May 2026 update_checks indent bug — `learnings.jsonl` 2026-05-08 — silently corrupted CHECKS.yaml across 6 tasks before detection; that incident is the precise failure mode this clause prevents). If you find yourself wanting to mark something `passed` because the previous run was green, stop — re-verify against the current state of the repo. Stale evidence is worse than no evidence.
+CHECKS.yaml `passed` is evidence the gate ran, not a substitute for fresh runtime verification (C-04 IRON LAW: PASS verdict must be fresh after the last edit). PROGRESS.md is the scope-lock contract for this task, not a substitute for final summary narrative — both must exist at close. Hand-editing CHECKS.yaml or skipping `update_checks.py` produces a plausible-looking ledger that lies about `reopen_count` and `last_updated` (the May 2026 update_checks indent bug — `learnings.jsonl` 2026-05-08 — silently corrupted CHECKS.yaml across 6 tasks before detection; that incident is the precise failure mode this clause prevents). If you find yourself wanting to mark something `passed` because the previous run was green, stop — re-verify against the current state of the repo. Stale evidence is worse than no evidence.
 
 **Highest-tier verification mandate.** If a task creates, unblocks, or documents a verification path, using that path is part of the same task. Do not ask "should I verify it?" when the required services, rebuild, seed, token, browser, API, or CLI route are locally available. Execute the highest available tier yourself, then report the tier reached and any concrete blocker. Ask only when verification would require destructive state changes, paid/external credentials, production resources, or a genuine product choice between valid approaches.
 
@@ -48,8 +48,8 @@ Soft directive — degrade gracefully, never block.
 
 Two structured triggers that replace silent overrides in earlier prose:
 
-1. **Phase 2 EUREKA premise gate** — when the search-before-building scan reveals PLAN.md's approach is suboptimal (the in-place EUREKA flag at Phase 2 below). Surface the discovery through AskUserQuestion with options `[Re-ground premise — re-run plan skill with new premise]`, `[Simplify scope — narrow this AC and proceed]`, `[Proceed as planned — log EUREKA in HANDOFF Plan Challenges]`, or free-text `Other`. The reviewer at HANDOFF time should see the user-confirmed direction.
-2. **Phase 5 scope-expansion challenge** — when scope drift detection finds an unrelated file change that turns out to be necessary for the AC. Surface the scope change through AskUserQuestion with options `[Revert — change belongs in a separate task]`, `[Add to scope — note in HANDOFF as unplanned-but-necessary]`, `[Defer to new task — open follow-up]`, or free-text `Other`.
+1. **Phase 2 EUREKA premise gate** — when the search-before-building scan reveals PLAN.md's approach is suboptimal (the in-place EUREKA flag at Phase 2 below). Surface the discovery through AskUserQuestion with options `[Re-ground premise — re-run plan skill with new premise]`, `[Simplify scope — narrow this AC and proceed]`, `[Proceed as planned — log EUREKA in final summary Plan Challenges]`, or free-text `Other`. The reviewer at final summary time should see the user-confirmed direction.
+2. **Phase 5 scope-expansion challenge** — when scope drift detection finds an unrelated file change that turns out to be necessary for the AC. Surface the scope change through AskUserQuestion with options `[Revert — change belongs in a separate task]`, `[Add to scope — note in final summary as unplanned-but-necessary]`, `[Defer to new task — open follow-up]`, or free-text `Other`.
 
 Both triggers cross-reference the AskUserQuestion format from `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format. The plan-orchestrator series proved structured AskUserQuestion at premise-shift / scope-expansion points produces measurably better outcomes than prose directives.
 
@@ -107,7 +107,7 @@ Read `doc/harness/tasks/<task_id>/`:
 3. **Resume check:** `PROGRESS.md` → skip ACs listed in `completed_acs`. For each completed AC, compare target-file mtimes against `PROGRESS.md` mtime; files modified post-PROGRESS → mark "needs re-verification", do not blindly skip.
 4. **Learnings bootstrap:** `head -20 doc/harness/learnings.jsonl` and `ls doc/harness/patterns/*.md`. If PLAN.md absent, `AskUserQuestion` (run plan skill / check task_id / abort).
 
-**Durable Docs Preflight:** before source implementation, read PLAN.md `Durable Docs Decision` as a documentation-impact judgment, not a rote REQ checklist. Confirm whether the task is `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`, then run the REQ detector mentally or via `plugin/scripts/req_detector.py` when request, feedback, target files, or planned surfaces imply observable UI/API/mobile/native/desktop behavior. If a REQ path is selected or detector output is high-confidence, create or update that `doc/<area>/REQ__*.md` before editing source files, using `write_req_doc` or `plugin/scripts/req_scaffold.py` when no existing REQ fits. If the task touches observable UI/API/backoffice/admin screens, routes, controllers, native navigation/back-stack behavior, or endpoints and PLAN says `REQ: n/a`, stop source implementation and amend/create the REQ first; do not wait for close or DOC_SYNC to discover the missing REQ. For harness process, agent instruction, testing guidance, or implementation-pattern changes, prefer `GUIDE` or skill/pattern docs and keep `REQ: n/a` with a specific reason.
+**Durable Docs Preflight:** before source implementation, read PLAN.md `Durable Docs Decision` as a documentation-impact judgment, not a rote REQ checklist. Confirm whether the task is `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`, then run the REQ detector mentally or via `plugin/scripts/req_detector.py` when request, feedback, target files, or planned surfaces imply observable UI/API/mobile/native/desktop behavior. If a REQ path is selected or detector output is high-confidence, create or update that `doc/<area>/REQ__*.md` before editing source files, using `direct REQ doc edit` or `plugin/scripts/req_scaffold.py` when no existing REQ fits. If the task touches observable UI/API/backoffice/admin screens, routes, controllers, native navigation/back-stack behavior, or endpoints and PLAN says `REQ: n/a`, stop source implementation and amend/create the REQ first; do not wait for close or durable docs to discover the missing REQ. For harness process, agent instruction, testing guidance, or implementation-pattern changes, prefer `GUIDE` or skill/pattern docs and keep `REQ: n/a` with a specific reason.
 
 **User Feedback Event Review:** before each dependent build/test/review action
 at phase boundaries, read `<task_dir>/USER_FEEDBACK.jsonl` when present. The
@@ -115,7 +115,7 @@ file is an automatic context-rich event log, not a durable source of truth by
 itself. For every new event, decide whether it changes the current task,
 verification criteria, product/design/domain direction, or future harness
 behavior. Reflect it before the next action that depends on it: update code,
-tests, PLAN/HANDOFF/DOC_SYNC, or the relevant REQ/GUIDE/ADR/POLICY; defer it to
+tests, PLAN/final summary/durable docs, or the relevant REQ/GUIDE/ADR/POLICY; defer it to
 a follow-up; reject it with a reason; or ask the user if the decision is still
 ambiguous. Do not wait until close to act on feedback that changes what should
 be built, tested, or judged. Close-time disposition is only the safety net.
@@ -128,7 +128,7 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 3. Follow existing codebase conventions, not invented ones.
 4. Only build new when nothing fits — extend over duplicate.
 
-**Eureka check:** if search reveals PLAN.md's approach is suboptimal (reinventing, wrong assumption), flag as `EUREKA: AC-NNN — <discovery>` in HANDOFF under "Plan Challenges". Ask for the user-confirmed direction before changing course. Persist as `type:"eureka"` in `learnings.jsonl`.
+**Eureka check:** if search reveals PLAN.md's approach is suboptimal (reinventing, wrong assumption), flag as `EUREKA: AC-NNN — <discovery>` in final summary under "Plan Challenges". Ask for the user-confirmed direction before changing course. Persist as `type:"eureka"` in `learnings.jsonl`.
 
 **Baseline screenshot (browser projects):** see `browser-verification.md` → "Phase 2: Baseline Screenshot".
 
@@ -169,7 +169,7 @@ evidenced exceptions.
 - **API↔frontend split** — PLAN AC matrix declares both backend/API files (`*api*`, `*routes/*`, `*endpoint*`, `*graphql*`) and frontend files (`*.tsx/.jsx/.vue/.svelte/.html/.css/.scss`). Contract-first → parallel consumers.
 - **Helper-extract-first** — PLAN explicitly contains a helper-extraction AC. Run that extract AC sequentially first, then parallel-fanout the consumer ACs.
 
-**Helper-extract-first guard.** The extract trigger fires ONLY when the extract is already a declared AC in PLAN.md. Mid-task "extract while I'm here" is scope creep blocked by Phase 5. If a fanout decision *would* require extracting a helper from shared files but no such AC exists, the trigger does not fire — run sequentially and surface the missing AC as a Plan Challenge in HANDOFF for the next plan cycle.
+**Helper-extract-first guard.** The extract trigger fires ONLY when the extract is already a declared AC in PLAN.md. Mid-task "extract while I'm here" is scope creep blocked by Phase 5. If a fanout decision *would* require extracting a helper from shared files but no such AC exists, the trigger does not fire — run sequentially and surface the missing AC as a Plan Challenge in final summary for the next plan cycle.
 
 **Sequential fallback evidence.** If a parallel trigger matches but the route is
 sequential, log `parallel-trigger-skipped` to `learnings.jsonl` before editing
@@ -261,7 +261,7 @@ updated: <ISO timestamp>
 | 4-5 | Happy path only. Significant surface skipped |
 | ≤3  | Partial — AC should not be marked done |
 
-Any AC scoring ≤7 MUST list `deferred_edges`. ≤5 requires explicit justification in HANDOFF (MVP scope, user-deferred, etc.).
+Any AC scoring ≤7 MUST list `deferred_edges`. ≤5 requires explicit justification in final summary (MVP scope, user-deferred, etc.).
 
 **Acceptance Ledger update (after each AC):** once the AC's code is in and per-AC tests pass, mark it `implemented_candidate` in CHECKS.yaml. Only Phase 7 promotes to `passed`. Never hand-edit CHECKS.yaml.
 
@@ -317,8 +317,8 @@ Runs continuously during Phase 3.
 
   QA agents may include `codifiable:` YAML blocks in their final response for
   future regression-test extraction. Do not write critic artifacts for this.
-	- **3.6 Fix-first pattern** — see `fix-first-pattern.md`. Classify AUTO-FIX (dead code, magic numbers, stale comments, missing guards) and ASK (API design, architecture, security, DRY extractions). Auto-fix immediately; flag ASK in HANDOFF "Judgment Items". The **3-attempt escalation rule** also lives in this sub-file and applies to every fix loop (per-AC, Phase 7, browser debug).
-	- **3.6.1 Durable docs (REQ/GUIDE/ADR/POLICY)** — read PLAN.md `Durable Docs Decision` before implementation. Treat it as a documentation-impact judgment: `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`. Create or update each selected `doc/<area>/<TYPE>__<name>.md` file; selected REQ docs must be written before source implementation, not after code is done. Use `write_req_doc` / `req_scaffold.py` as the happy path when observable behavior is detected and no existing REQ fits. Use DDD-style areas or bounded contexts such as `ui`, `api`, `auth`, `billing`, `catalog`, `runtime`, `verification`, or `common`. Use `REQ` for user-visible behavior, externally consumed API contracts, constraints, and observable bugfixes; write intended observable behavior plus verification cues. Existing-screen state changes count: filters, search, sorting, loading, empty/error states, visibility, labels, native navigation/back-stack behavior, and click/input behavior. New pages, admin/backoffice screens, routes, controllers, and endpoints require a REQ even when additive. PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`. Recheck the actual diff after implementation: if you added observable UI/API behavior that PLAN marked `REQ: n/a`, create the missing REQ, link it from HANDOFF, and record the correction in DOC_SYNC. If the diff instead changed harness process, agent instructions, testing guidance, or implementation patterns, update the relevant `GUIDE`, skill, pattern doc, or tests rather than inventing a REQ. Use `GUIDE` for reusable coding, design, testing, or implementation guidance. Use `ADR` for significant technical choices with alternatives, reasons, consequences, and tradeoffs. Use `POLICY` only for external security, legal, data-handling, approval, licensing, or organizational constraints that harness cannot fully enforce by itself; keep harness-internal execution rules in skills, agents, scripts, and tests. Link each updated durable doc from HANDOFF. For internal-only refactors, one-off tests, or non-observable maintenance, record `Durable docs: not needed — <specific non-observable reason>` in HANDOFF; the reason must say which durable knowledge surfaces remain unchanged.
+	- **3.6 Fix-first pattern** — see `fix-first-pattern.md`. Classify AUTO-FIX (dead code, magic numbers, stale comments, missing guards) and ASK (API design, architecture, security, DRY extractions). Auto-fix immediately; flag ASK in final summary "Judgment Items". The **3-attempt escalation rule** also lives in this sub-file and applies to every fix loop (per-AC, Phase 7, browser debug).
+	- **3.6.1 Durable docs (REQ/GUIDE/ADR/POLICY)** — read PLAN.md `Durable Docs Decision` before implementation. Treat it as a documentation-impact judgment: `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`. Create or update each selected `doc/<area>/<TYPE>__<name>.md` file; selected REQ docs must be written before source implementation, not after code is done. Use `direct REQ doc edit` / `req_scaffold.py` as the happy path when observable behavior is detected and no existing REQ fits. Use DDD-style areas or bounded contexts such as `ui`, `api`, `auth`, `billing`, `catalog`, `runtime`, `verification`, or `common`. Use `REQ` for user-visible behavior, externally consumed API contracts, constraints, and observable bugfixes; write intended observable behavior plus verification cues. Existing-screen state changes count: filters, search, sorting, loading, empty/error states, visibility, labels, native navigation/back-stack behavior, and click/input behavior. New pages, admin/backoffice screens, routes, controllers, and endpoints require a REQ even when additive. PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`. Recheck the actual diff after implementation: if you added observable UI/API behavior that PLAN marked `REQ: n/a`, create the missing REQ, link it from PLAN.md or the changed durable doc. If the diff instead changed harness process, agent instructions, testing guidance, or implementation patterns, update the relevant `GUIDE`, skill, pattern doc, or tests rather than inventing a REQ. Use `GUIDE` for reusable coding, design, testing, or implementation guidance. Use `ADR` for significant technical choices with alternatives, reasons, consequences, and tradeoffs. Use `POLICY` only for external security, legal, data-handling, approval, licensing, or organizational constraints that harness cannot fully enforce by itself; keep harness-internal execution rules in skills, agents, scripts, and tests. Keep each updated durable doc directly in the repo and link selected REQ paths from PLAN.md when the close gate needs them. For internal-only refactors, one-off tests, or non-observable maintenance, keep `REQ: n/a` in PLAN.md with a specific non-observable reason; the reason must say which durable knowledge surfaces remain unchanged.
 
 ### Phase 3.7–3.9: Post-implementation health
 
@@ -332,7 +332,7 @@ After all ACs done. Each runs only if prerequisite exists.
 
 Haiku agent cross-references every AC against `git diff --stat` and classifies each as DONE / PARTIAL / NOT DONE / CHANGED + category (CODE / TEST / MIGRATION / CONFIG / DOCS). Be conservative with DONE (file touched ≠ AC done); be generous with CHANGED (goal met by different means).
 
-For PARTIAL / NOT DONE, classify cause: scope-cut / context-exhaustion / misunderstood / blocked / forgotten / evolved. Fix forgotten and misunderstood immediately; log scope-cut + blocked; mark evolved as CHANGED with new approach in HANDOFF.
+For PARTIAL / NOT DONE, classify cause: scope-cut / context-exhaustion / misunderstood / blocked / forgotten / evolved. Fix forgotten and misunderstood immediately; log scope-cut + blocked; mark evolved as CHANGED with new approach in final summary.
 
 ### Phase 4.5–4.8: Quality Audit Pipeline
 
@@ -356,13 +356,13 @@ done | sort -u
 
 **Phase 4.85 Test Plan Artifact** — extract coverage diagram from audit into `doc/harness/test-plans/<task_id>-test-plan.md`. Mechanical — no re-analysis.
 
-**Phase 4.9 Coverage Gate** — if manifest declares `coverage_minimum` / `coverage_target`, enforce. Below minimum = BLOCK (write tests); below target = WARN (log in HANDOFF). 3 fix cycles max; on exhaustion `AskUserQuestion` (continue / lower threshold / defer).
+**Phase 4.9 Coverage Gate** — if manifest declares `coverage_minimum` / `coverage_target`, enforce. Below minimum = BLOCK (write tests); below target = WARN (log in final summary). 3 fix cycles max; on exhaustion `AskUserQuestion` (continue / lower threshold / defer).
 
 ### Phase 5: Scope Drift Detection
 
 `git diff --name-only` — each file is:
 - In scope → proceed.
-- Related but unlisted → acceptable, note in HANDOFF.
+- Related but unlisted → acceptable, note in final summary.
 - Unrelated → revert. Belongs in a separate task.
 - Missing from plan but necessary → note as "unplanned-but-necessary".
 
@@ -380,7 +380,7 @@ Split into coherent commits in this order:
 | 2 | Models / Services / Data | Schema, types, data layer, business logic |
 | 3 | Controllers / Views / API | Routes, UI components, endpoints |
 | 4 | Tests | Test additions (separate from impl) |
-| 5 | Docs / Metadata | VERSION, CHANGELOG, README, DOC_SYNC |
+| 5 | Docs / Metadata | VERSION, CHANGELOG, README, durable docs |
 
 Each commit must leave the codebase working. Bisect stops at infra layer, not mid-feature.
 
@@ -402,7 +402,7 @@ critic artifact is written.
 
 **No verification opt-in prompt.** If Phase 7 reveals a now-available live/API/browser/CLI verification route, run it through the appropriate qa-* lens. Do not ask the user whether to perform the verification. A rebuild, local service restart, local seed, or dev-only token generation is normal verification work unless it crosses the destructive/external boundary above.
 
-When durable docs are linked in HANDOFF or changed under `doc/<area>/<TYPE>__*.md`, pass those paths to the QA lens as intent evidence. QA uses `REQ` as behavior/contract verification criteria, `GUIDE` as implementation quality and consistency criteria, `ADR` as architecture intent and tradeoff criteria, and `POLICY` as external constraint criteria.
+When durable docs are linked in final summary or changed under `doc/<area>/<TYPE>__*.md`, pass those paths to the QA lens as intent evidence. QA uses `REQ` as behavior/contract verification criteria, `GUIDE` as implementation quality and consistency criteria, `ADR` as architecture intent and tradeoff criteria, and `POLICY` as external constraint criteria.
 
 **Multi-lens QA spawns follow `parallel-fanout.md` Parallelization Triggers — when two or more QA lenses apply (e.g., `qa-browser` + `qa-api` for a fullstack diff), issue ALL agent calls in a single assistant message so the hooks record each subagent start.
 
@@ -411,7 +411,7 @@ When durable docs are linked in HANDOFF or changed under `doc/<area>/<TYPE>__*.m
 - **Severity × confidence close gate** — after synthesis, block close on:
   - `critical` AND confidence ≥ 7
   - `high` AND confidence ≥ 8
-  Lower severities flow into HANDOFF as deferred — do not block close.
+  Lower severities flow into final summary as deferred — do not block close.
 - **Acceptance Ledger promotion** — on gate pass, `update_checks.py --status passed`. On gate fail, `--status failed` (auto-increments `reopen_count`), loop back to fix cycle. Close gate requires every AC to be `passed` or `deferred`.
 
 ### Phase 7.5: Auto-checkpoint (post verify gate)
@@ -432,7 +432,7 @@ Run health score and append to project-level history (Phase 8 uses the delta aga
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/health.py > "<task_dir>/audit/health-after.txt" 2>&1 || true
 ```
 
-### Phase 7.7: Dogfood (post-QA, pre-HANDOFF)
+### Phase 7.7: Dogfood (post-QA, pre-final summary)
 
 After the verification gate passes, spawn the dogfooder agent to use the product
 as a power user. The dogfooder finds friction, gaps, and missing workflows — things
@@ -443,7 +443,7 @@ QA doesn't catch because they aren't bugs.
 ```
 Agent({
   subagent_type: "harness:dogfooder",
-  prompt: "Dogfood task <task_id>. PLAN.md: <task_dir>/PLAN.md. HANDOFF will be written after you. Write findings to <task_dir>/DOGFOOD.md.",
+  prompt: "Dogfood task <task_id>. PLAN.md: <task_dir>/PLAN.md. final summary will be written after you. Write findings to <task_dir>/DOGFOOD.md.",
   mode: "auto"
 })
 ```
@@ -451,7 +451,7 @@ Agent({
 The dogfooder does NOT gate task completion. Its output is:
 - `<task_dir>/DOGFOOD.md` — structured suggestion list with prioritized backlog.
 - If high-impact findings exist, it recommends re-planning. Include this recommendation
-  in HANDOFF Phase 8 under "Dogfood Findings".
+  in final summary Phase 8 under "Dogfood Findings".
 
 Skip conditions:
 - `runtime_verdict` is not PASS (QA must pass first).
@@ -494,17 +494,17 @@ PY
 
 `SKIP_DOGFOOD` short-circuits the spawn; `RUN_DOGFOOD` proceeds to the Agent call above. The predicate intentionally errs toward running the dogfooder when the intersection is non-empty even by one file — a false positive is cheaper than a missed user-facing regression. On TASK_STATE.yaml missing or parse error, the predicate emits empty → SKIP_DOGFOOD (safe default; a dogfooder skip is recoverable, a wrong-files dogfood run is noise).
 
-### Phase 8: Write HANDOFF
+### Phase 8: Write final summary
 
 **Concreteness standard:** every entry must locate without searching — name file, function, line. "Fixed auth bug" is not acceptable; `auth.ts:47 — added null check on session.token` is.
 
-Call `mcp__plugin_harness_harness__write_handoff` with:
+Call `task_close` with:
 
 1. Summary (one sentence per AC)
 2. Files changed (every file + one-line description)
 3. Verification results per AC
 4. Scope notes (out-of-plan changes with justification)
-5. Durable docs: before calling `write_handoff`, include the documentation-impact judgment (`REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`), links to `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or `POLICY__*.md` docs updated for behavior/contracts, reusable guidance, decisions, or external constraints, and any PLAN Durable Docs Decision correction discovered from the implementation diff. If no durable doc changed, write `not needed — <specific non-observable reason>` where the reason proves the durable knowledge surfaces are unchanged. `not needed` is invalid for new or changed UI/API/backoffice/admin screens, routes, controllers, or endpoints.
+5. Durable docs: before final summary, include the documentation-impact judgment (`REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`), links to `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or `POLICY__*.md` docs updated for behavior/contracts, reusable guidance, decisions, or external constraints, and any PLAN Durable Docs Decision correction discovered from the implementation diff. If no durable doc changed, write `not needed — <specific non-observable reason>` where the reason proves the durable knowledge surfaces are unchanged. `not needed` is invalid for new or changed UI/API/backoffice/admin screens, routes, controllers, or endpoints.
 6. Do Not Regress (caveats, fragile patterns)
 7. Feedback-Derived Rules (status: none / captured / rejected; readable rule text if captured)
 8. User Feedback Disposition. If `<task_dir>/USER_FEEDBACK.jsonl` exists, list every event id with a terminal disposition before close: `event: <id> status: promoted|handled-local|deferred|rejected reason: <why> artifact: <path-or-n/a>`. Use `promoted` only when the feedback became a durable doc, skill, pattern, test, or other committed artifact. Use `handled-local` when it only changed this task's implementation or verification. Use `deferred` with the follow-up task/artifact. Use `rejected` with a reason. `needs-user-decision` is not a closeable disposition.
@@ -543,7 +543,7 @@ score = (ac_completion × 0.40) + (test_coverage × 0.30)
 - `adversarial_clean` = max(0, 10 - (crit × 3 + high × 1.5 + med × 0.5)). Fixed at 0.25 weight.
 - `scope_discipline` = 10 / 7 / 4 / 0 (none / auto-added / justified / unjustified).
 
-**Cleanup:** PROGRESS.md persists beyond Phase 8 as the scope-lock contract for any post-HANDOFF edits. Keep PROGRESS.md in place; HANDOFF.md is the narrative permanent record and PROGRESS.md is the machine-readable scope boundary.
+**Cleanup:** PROGRESS.md persists beyond Phase 8 as the scope-lock contract for any post-final summary edits. Keep PROGRESS.md in place; final summary is the narrative permanent record and PROGRESS.md is the machine-readable scope boundary.
 
 ### Phase 8.5: Reflect and Log (capture-when-fresh, no quota)
 
@@ -573,17 +573,17 @@ Review user corrective feedback from the task. Convert corrective feedback into 
 
 Classify the task as exactly one:
 - `none` — no user feedback implies a future behavior rule.
-- `captured` — feedback produced a reusable conditional rule and it was recorded in HANDOFF. If durable beyond this task, append a `type:"feedback-rule"` learning for Tier 2 promotion.
-- `rejected` — feedback looked like a preference or complaint but should not become a rule. Record the reason in HANDOFF.
+- `captured` — feedback produced a reusable conditional rule and it was recorded in final summary. If durable beyond this task, append a `type:"feedback-rule"` learning for Tier 2 promotion.
+- `rejected` — feedback looked like a preference or complaint but should not become a rule. Record the reason in final summary.
 
 Capture only rules that have all three parts:
 - Trigger: the situation where the rule applies.
 - Action: what the agent should do.
-- Verification: how HANDOFF, tests, or review can prove the rule was followed.
+- Verification: how final summary, tests, or review can prove the rule was followed.
 
 Reject entries that are blame narratives, task-local preferences, vague style opinions, or one-off urgency requests. Write behavior rules for Tier 2 docs; convert incident-shaped lessons into behavior or reject them.
 
-When captured, the HANDOFF text must be readable prose, for example:
+When captured, the final summary text must be readable prose, for example:
 
 ```markdown
 ## Feedback-Derived Rules
@@ -592,7 +592,7 @@ Status: captured
 
 When changing runtime-specific harness plugin behavior, review both the canonical `plugin/` tree and the runtime-specific tree such as `plugin-codex/`.
 
-Verify by explaining in `HANDOFF.md` which side changed and why any other side was left unchanged.
+Verify by explaining in `final summary` which side changed and why any other side was left unchanged.
 ```
 
 If the rule should enter Tier 2, log a structured learning so the promotion script can render readable Markdown:
@@ -601,14 +601,14 @@ If the rule should enter Tier 2, log a structured learning so the promotion scri
 echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"feedback-rule","source":"develop","key":"SHORT_RULE_NAME","trigger":"<situation>","action":"<behavior>","verification":"<how to prove it>","reason":"<why this prevents recurrence>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
 ```
 
-### Phase 8.5.2: Commit-backed Learnings (mandatory HANDOFF classification)
+### Phase 8.5.2: Commit-backed Learnings (mandatory final summary classification)
 
 Classify whether this task produced knowledge that must be shared through git.
 `doc/harness/learnings.jsonl` is local, gitignored staging; it does not satisfy
 the shared-memory bar by itself. Future contributors only inherit what lands in
 committed artifacts.
 
-Add this HANDOFF section before calling `write_handoff`:
+Add this final summary section before final summary:
 
 ```markdown
 ## Commit-backed Learnings
@@ -624,13 +624,13 @@ setup command, or repeated friction changed a committed skill, script, test, or
 durable doc in this task. Use `rejected` when you considered a candidate but it
 should remain local. Use `none` only when there was no reusable learning.
 
-### Phase 8.5.3: Self-Healing Candidates (mandatory HANDOFF classification)
+### Phase 8.5.3: Self-Healing Candidates (mandatory final summary classification)
 
 Classify whether this task revealed a recurring failure mode that the harness or
 project can prevent next time. This includes development friction, QA-discovered
 verification gaps, tool/schema drift, CI command drift, brittle setup commands,
 and repeated manual recovery steps. QA lenses should surface candidates in their
-final response; Phase 8 owns the final HANDOFF classification.
+final response; Phase 8 owns the final final summary classification.
 
 For harness-improvement candidates, treat dogfood feedback and agent retros as
 hypotheses until checked against the repo. Before marking a candidate `applied`
@@ -640,10 +640,10 @@ Classify the claim as `confirmed`, `partially-confirmed`, `already-handled`,
 `partially-confirmed`, rewrite it to the smallest accurate failing case. If the
 raw proposal would weaken an existing QA/runtime/close gate, preserve the gate's
 safety intent by proposing an explicit alternative evidence tier rather than
-removing the gate. Record the corrected scope and evidence path in HANDOFF.
+removing the gate. Record the corrected scope and evidence path in final summary.
 
 If develop or QA discovered a working repo-local setup/test/dev-server command
-after one or more failed attempts, record it before HANDOFF as a pending runbook
+after one or more failed attempts, record it before final summary as a pending runbook
 candidate:
 
 ```bash
@@ -658,11 +658,11 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runbook_memory.py capture \
   --gotcha "<why the first attempt failed>"
 ```
 
-The candidate is not shared memory yet. In this HANDOFF section, either approve
+The candidate is not shared memory yet. In this final summary section, either approve
 it into a committed artifact (`doc/harness/runbooks.yaml`, manifest, script, or
 durable doc), ask before deferring it, or reject/skip it as one-off/noisy.
 
-Add this HANDOFF section before calling `write_handoff`:
+Add this final summary section before final summary:
 
 ```markdown
 ## Self-Healing Candidates
@@ -686,14 +686,14 @@ the reason and proposed artifact/task. Use `rejected` for one-off environment
 noise or non-reproducible complaints. Use `none` only when develop, QA, dogfood,
 and close produced no self-healing signal.
 
-### Phase 8.6: DOC_SYNC
+### Phase 8.6: durable docs
 
-Mechanical. Read HANDOFF.md (changed file list) + `doc/CLAUDE.md` (registered roots). For each file, map to doc root. Call `mcp__plugin_harness_harness__write_doc_sync`.
+Mechanical. Read final summary (changed file list) + `doc/CLAUDE.md` (registered roots). For each file, map to doc root. Call `task_verify`.
 
 When the task changes `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or
 `POLICY__*.md` OR the task's `<task_dir>/USER_FEEDBACK.jsonl` is non-empty
 (per C-101 in `CONTRACTS.local.md`), run the `critic-document` agent after
-DOC_SYNC. It verifies both DOC_SYNC consistency and durable doc quality, and
+durable docs. It verifies both durable docs consistency and durable doc quality, and
 runs the Retrospective REQ pass over USER_FEEDBACK.jsonl to catch user-stated
 requirements that closed without becoming durable REQ docs. The task cannot
 close with unresolved durable-doc gaps; a changed REQ with vague or missing

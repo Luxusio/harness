@@ -34,7 +34,7 @@ that can run without touching the same files. Use concrete Codex calls like:
 ```text
 spawn_agent {
   agent_type: "harness:qa-cli",
-  message: "You are the qa-cli lens for <task_id>. Read <task_dir>/PLAN.md, HANDOFF.md, CHECKS.yaml, and changed files. Run focused verification. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with concrete findings and evidence.",
+  message: "You are the qa-cli lens for <task_id>. Read <task_dir>/PLAN.md, CHECKS.yaml, and changed files. Run focused verification. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with concrete findings and evidence.",
   fork_context: true
 }
 ```
@@ -103,8 +103,7 @@ resume instead of creating a duplicate.
 
 Resume routing:
 - PLAN.md missing → Phase 2 Plan.
-- PLAN.md exists and HANDOFF.md missing → Phase 3 Develop.
-- HANDOFF.md exists and runtime_verdict is not PASS → Phase 4 Verify.
+- PLAN.md exists and runtime_verdict is not PASS → Phase 3 Develop/Verify.
 - runtime_verdict is PASS and `missing_for_close` is empty → Phase 5 Close.
 - `missing_for_close` names specific artifacts or AC blockers → fix that gate
   and then continue from the corresponding phase.
@@ -133,11 +132,11 @@ On Codex side the plan skill uses the available runtime surface. When `spawn_age
 
 ### Phase 3: Develop
 
-Read `plugin-codex/internal-skills/develop/SKILL.md` and execute its phases, passing `task_id`. The develop skill on Codex is a hand-port of the Claude source (`plugin/skills/develop/SKILL.md`) under the MCP-only-sharing policy (spike-report §3.6) — same canonical-loop methodology, with `Agent` fan-out routed through `spawn_agent` when available, `Skill()` chains rendered as inline-read sub-skill references, and `AskUserQuestion` gates rendered as conversational prose asks. Phase 0 through Phase 8.7 parity is preserved. Develop writes HANDOFF.md + DOC_SYNC.md to the task_dir. On BLOCKED: stop and report.
+Read `plugin-codex/internal-skills/develop/SKILL.md` and execute its phases, passing `task_id`. The develop skill on Codex is a hand-port of the Claude source (`plugin/skills/develop/SKILL.md`) under the MCP-only-sharing policy (spike-report §3.6) — same canonical-loop methodology, with `Agent` fan-out routed through `spawn_agent` when available, `Skill()` chains rendered as inline-read sub-skill references, and `AskUserQuestion` gates rendered as conversational prose asks. Phase 0 through Phase 8.7 parity is preserved. Develop changes source/docs directly, then verification must spawn a QA subagent so the hook records SUBAGENT_RECEIPTS.jsonl. On BLOCKED: stop and report.
 
 Multi-lens parallel QA (qa-browser + qa-api in one batch) should use `spawn_agent` when available. Browser MCP verification is availability-gated: if the current Codex session exposes browser tools (for example `chrome_devtools` or a future Playwright MCP), run the qa-browser methodology via subagent when possible or inline when no subagent path exists; if browser verification is required but no browser tool or reachable app exists, write a browser-lens `BLOCKED_ENV` verdict instead of silently falling back to CLI-only QA.
 
-On completion: HANDOFF.md and DOC_SYNC.md exist in task_dir. If BLOCKED: stop, report, ask user.
+On completion: SUBAGENT_RECEIPTS.jsonl exists for the task and task_verify reports PASS. If BLOCKED: stop, report, ask user.
 
 Before entering develop, re-entering develop after QA/UX FAIL, entering verify,
 or closing, check `<task_dir>/USER_FEEDBACK.jsonl` when present. This file is
@@ -178,7 +177,7 @@ QA subagent pattern on Codex:
 ```text
 spawn_agent {
   agent_type: "harness:qa-<lens>",
-  message: "You are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, HANDOFF.md, CHECKS.yaml, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with command/browser evidence and concrete findings.",
+  message: "You are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, CHECKS.yaml, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with command/browser evidence and concrete findings.",
   fork_context: true
 }
 ```

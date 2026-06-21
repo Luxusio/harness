@@ -80,23 +80,6 @@ def _next_action_for_missing(missing_item: str) -> tuple[str, str]:
     if "plan.md" in item:
         return ("Skill('harness:plan', '<task_id>')",
                 "plan-skill")
-    if "commit-backed learnings" in item:
-        return ("Rewrite HANDOFF.md via write_handoff, preserving existing content, with "
-                "`## Commit-backed Learnings` and "
-                "`Status: none`, `Status: captured`, or `Status: rejected`; "
-                "captured items must name an existing commit-eligible repo artifact path.",
-                "harness:developer")
-    if "self-healing candidates" in item:
-        return ("Rewrite HANDOFF.md via write_handoff, preserving existing content, with "
-                "`## Self-Healing Candidates` and `Status: none`, `Status: applied`, "
-                "`Status: deferred`, or `Status: rejected`; applied items must name "
-                "a changed commit-eligible artifact path; deferred items need "
-                "user_decision, reason, and proposed_artifact/proposed_task.",
-                "harness:developer")
-    if "handoff.md" in item:
-        return ("Spawn Agent(subagent_type='harness:developer', ...) to call "
-                "mcp__plugin_harness_harness__write_handoff",
-                "harness:developer")
     if "qa-browser" in item:
         return ("Spawn Agent(subagent_type='harness:qa-browser', ...); the hook "
                 "records the subagent start receipt",

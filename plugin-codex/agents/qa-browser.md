@@ -20,7 +20,7 @@ Read, in order:
    and `runtime.services[]`.
 2. `doc/harness/qa/QA_KNOWLEDGE.yaml` when present.
 3. PLAN.md for objective, ACs, verification commands, and `Durable Docs Decision`.
-4. HANDOFF.md for implementation notes.
+4. changed files for implementation notes.
 5. REQUEST.md when present for intent.
 6. Linked durable docs under `doc/<area>/<TYPE>__*.md`.
    Use `REQ` as behavior/contract verification criteria.
@@ -108,12 +108,12 @@ from actual command output.
 
 ## Verdict
 
-Before the verdict, add `Self-Healing Candidates for HANDOFF` to the transcript
+Before the verdict, add `Self-Healing Candidates` to the transcript
 when browser QA discovers recurring harness/project friction that should be
 prevented next time: dev-server command drift, missing entry_url/port config,
 browser MCP reachability issues, brittle test data, unreliable selectors, or
 manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
-when obvious; Phase 8 writes the final HANDOFF `Self-Healing Candidates` section.
+when obvious; Phase 8 writes the final summary.
 
 Return verdict, summary, and transcript in your final response.
 

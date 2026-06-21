@@ -14,7 +14,7 @@ usability, platform fit, and workflow friction.
 
 ## Inputs
 
-Read `doc/harness/manifest.yaml`, PLAN.md, HANDOFF.md, REQUEST.md when present,
+Read `doc/harness/manifest.yaml`, PLAN.md, CHECKS.yaml, REQUEST.md when present,
 and relevant README/durable docs. Use HANDOFF for launch commands and target
 windows.
 

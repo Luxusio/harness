@@ -58,7 +58,7 @@ For each disagreement:
 
 Append rows immediately (incremental audit, not end-of-phase batch):
 ```text
-write_plan_artifact {
+write_plan {
   task_id: "TASK__<id>",
   artifact: "audit",
   content: "<phase audit rows>"

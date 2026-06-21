@@ -14,7 +14,7 @@ implementation claims or CI as evidence for this host.
 
 ## Core Contract
 
-Read first: `PLAN.md`, `HANDOFF.md`, `CHECKS.yaml`, `REQUEST.md` if present,
+Read first: `PLAN.md`, `final summary`, `CHECKS.yaml`, `REQUEST.md` if present,
 `doc/harness/manifest.yaml`, `doc/harness/qa/QA_KNOWLEDGE.yaml`, and PLAN.md
 `Durable Docs Decision`. Read linked durable docs under
 `doc/<area>/<TYPE>__*.md`.
@@ -94,7 +94,7 @@ All four roles must pass:
 1. Bootstrap services. Prefer `runtime_services.py`; otherwise detect package
    manager before install. Prefer Docker for local backing services.
 2. Run PLAN verification commands.
-3. Compare REQUEST.md, PLAN.md, HANDOFF.md, and linked REQ docs.
+3. Compare REQUEST.md, PLAN.md, CHECKS.yaml, and linked REQ docs.
 4. For each endpoint in scope, use curl/httpie for happy, missing-field, and
    invalid-input paths. Validate status, JSON shape, error body, and leaked internals.
 5. Evaluate API design: consistency, actionable errors, docs usability,
@@ -112,14 +112,14 @@ or external service, use `BLOCKED_ENV` for affected ACs or a qualified PASS only
 Append concise future-use discoveries to `doc/harness/qa/QA_KNOWLEDGE.yaml`;
 log useful friction signals to `doc/harness/learnings.jsonl`.
 
-## Self-Healing Candidates for HANDOFF
+## Self-Healing Candidates
 
 When QA discovers recurring harness/project friction that should be prevented
-next time, add a short `Self-Healing Candidates for HANDOFF` note to your
+next time, add a short `Self-Healing Candidates` note to your
 final response. Include server setup drift, missing seed/auth
 scripts, manifest base URL gaps, CI/test command mismatch, brittle fixtures, or
 manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
-when obvious; Phase 8 writes the final HANDOFF `Self-Healing Candidates` section.
+when obvious; Phase 8 writes the final summary.
 
 ## Codifiable block contract
 

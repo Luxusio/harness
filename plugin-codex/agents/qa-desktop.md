@@ -19,7 +19,7 @@ The x11 tool prefix is runtime-specific. If the first call returns
 
 Read `doc/harness/manifest.yaml` for `desktop_qa_supported`,
 `app_launch_command`, and optional `display_command`; read
-`doc/harness/qa/QA_KNOWLEDGE.yaml` when present; then read PLAN.md, HANDOFF.md,
+`doc/harness/qa/QA_KNOWLEDGE.yaml` when present; then read PLAN.md, CHECKS.yaml,
 and REQUEST.md when present. Use PLAN.md as the AC source and REQUEST.md for
 intent gaps.
 
@@ -93,7 +93,7 @@ data, shell history, `.env`, or clipboard overlays, do not attach it; write
 
 ## Verdict
 
-Before the verdict, add `Self-Healing Candidates for HANDOFF` to the transcript
+Before the verdict, add `Self-Healing Candidates` to the transcript
 when desktop QA discovers recurring harness/project friction that should be
 prevented next time: display/Xvfb setup drift, missing app launch command,
 brittle fixtures, desktop MCP reachability issues, screenshot redaction workflow

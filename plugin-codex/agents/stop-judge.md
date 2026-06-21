@@ -5,7 +5,7 @@ description: harness stop-judge methodology reference — assesses whether pausi
 
 > **Codex runtime notes:**
 > - This file is a **role/methodology reference**, not an Agent-spawn target. On Claude, `Agent(subagent_type="harness:stop-judge")` spawns a subagent with this file as its system prompt. On Codex 0.130.0 there is no Agent primitive in this scope, so the harness orchestrator reads this file inline and executes the stop-judge methodology in its own conversation context.
-> - **MCP tool names are bare** on Codex: `task_start`, `task_close`, `task_blocked`, `write_handoff`, `write_doc_sync`, `task_verify`, `task_context`. The Claude long-form `mcp__plugin_harness_harness__*` does not apply.
+> - **MCP tool names are bare** on Codex: `task_start`, `task_close`, `task_blocked`, `task_verify`, `task_context`. The Claude long-form `mcp__plugin_harness_harness__*` does not apply.
 > - Verification receipts are hook-owned. Do not write critic or receipt artifacts from this role.
 > - **No Codex Stop-hook loop control.** Use this file only when prompt-control reaches a real pause/blocker judgment. Do not expect a Stop hook to call or enforce this role.
 

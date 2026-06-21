@@ -44,8 +44,7 @@ and resume rather than creating a duplicate.
 
 Resume routing:
 - PLAN.md missing → Phase 2 Plan.
-- PLAN.md exists and HANDOFF.md missing → Phase 3 Develop.
-- HANDOFF.md exists and runtime_verdict is not PASS → Phase 4 Verify.
+- PLAN.md exists and runtime_verdict is not PASS → Phase 3 Develop/Verify.
 - runtime_verdict is PASS and `missing_for_close` is empty → Phase 5 Close.
 - `missing_for_close` names specific artifacts or AC blockers → fix that gate
   and then continue from the corresponding phase.
@@ -80,7 +79,7 @@ The plan skill runs its full review pipeline and writes PLAN.md. On completion: 
 Skill("harness:develop", "<task_id>")
 ```
 
-The develop skill reads PLAN.md, implements changes, runs plan completion audit, scope drift detection, bisectable commits, verification gate, runtime QA subagents, DOC_SYNC generation, and distilled change doc. On completion: HANDOFF.md and DOC_SYNC.md exist in task_dir. If BLOCKED: stop, report, ask user.
+The develop skill reads PLAN.md, implements changes, runs plan completion audit, scope drift detection, bisectable commits, verification gate, runtime QA subagents, and any needed durable-doc updates. On completion, a hook-owned subagent start receipt exists and `task_verify` reports PASS. If BLOCKED: stop, report, ask user.
 
 Before entering develop, re-entering develop after QA/UX FAIL, entering verify,
 or closing, check `<task_dir>/USER_FEEDBACK.jsonl` when present. This file is

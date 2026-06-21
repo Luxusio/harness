@@ -102,15 +102,15 @@ state of the repo.
 ### C-05
 
 **Title:** Protected artifact ownership.
-**When:** Any `Write`/`Edit` to PLAN.md, CHECKS.yaml, HANDOFF.md,
-DOC_SYNC.md, or CRITIC__qa.md — and any `Bash` mutation (sed -i,
+**When:** Any `Write`/`Edit` to PLAN.md, CHECKS.yaml,
+AUDIT_TRAIL.md, PLAN.meta.json, or SUBAGENT_RECEIPTS.jsonl — and any `Bash` mutation (sed -i,
 redirect, cp, mv, tee, python -c open(…,'w'), …) targeting the same basenames.
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`
 (Write/Edit/MultiEdit surface) + `plugin/scripts/mcp_bash_guard.py`
 (Bash surface; same helper classifiers).
-**On violation:** hard-block. Agent must route through the owning MCP tool
-(`write_plan_artifact`, `write_handoff`, `write_doc_sync`,
-`write_critic_qa`, etc.) or the post-plan `update_checks.py` status updater.
+**On violation:** hard-block. Agent must route through `write_plan`,
+the hook-owned subagent receipt path, or the post-plan `update_checks.py`
+status updater.
 **Why:** Provenance is derived from artifact existence. Wrong writer = wrong
 provenance = broken audit chain. The Bash surface was added in PR1
 (`TASK__gate-reliability-pr1`) to close the `sed -i PLAN.md` / `echo >> CHECKS.yaml` bypass.

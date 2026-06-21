@@ -7,8 +7,8 @@ Sub-file for plan/SKILL.md Phase 6. Always runs.
 ## 6.1 Artifact writer
 
 PLAN.md, PLAN.meta.json, CHECKS.yaml, and AUDIT_TRAIL.md are written through
-the harness MCP `write_plan_artifact` tool. Do not use
-`scripts/write_plan_artifact.py`; it is a legacy compatibility shim.
+the harness MCP `write_plan` tool. Do not use
+`scripts/write_plan.py`; it is a legacy compatibility shim.
 
 ## 6.2 Assemble PLAN.md content
 
@@ -58,7 +58,7 @@ Happy path: when request text, user feedback, target surfaces, or known file
 paths imply observable UI/API/mobile/native/desktop behavior, pick the REQ path
 proactively. If no suitable REQ exists, select a new path such as
 `doc/ui/REQ__mobile-reader-navigation.md`; develop will create/update it with
-`write_req_doc` or `req_scaffold.py` before source edits. Safety gates exist
+a direct `doc/<area>/REQ__*.md` update or `req_scaffold.py` before source edits. Safety gates exist
 only to catch misses, not as the normal discovery mechanism.
 
 When the change affects harness process, agent instructions, coding patterns, or
@@ -128,7 +128,7 @@ No harness policy boilerplate. Keep concise and executable.
 ## 6.3 Write PLAN.md via MCP
 
 ```text
-write_plan_artifact {
+write_plan {
   task_id: "TASK__<id>",
   artifact: "plan",
   content: "<PLAN.md content>"
@@ -151,7 +151,7 @@ Write `/tmp/plan_meta.json`:
 ## 6.5 Write PLAN.meta.json via MCP
 
 ```text
-write_plan_artifact {
+write_plan {
   task_id: "TASK__<id>",
   artifact: "plan-meta",
   content: "<PLAN.meta.json object as JSON>",
@@ -183,7 +183,7 @@ All ACs start `status: open`, `reopen_count: 0`. Later skills (develop, qa) muta
 ## 6.7 Write CHECKS.yaml via MCP
 
 ```text
-write_plan_artifact {
+write_plan {
   task_id: "TASK__<id>",
   artifact: "checks",
   content: "<CHECKS.yaml content>"
@@ -193,7 +193,7 @@ write_plan_artifact {
 Audit rows from earlier phases are also written through MCP:
 
 ```text
-write_plan_artifact {
+write_plan {
   task_id: "TASK__<id>",
   artifact: "audit",
   content: "<AUDIT_TRAIL.md table row>"

@@ -92,7 +92,7 @@ def test_plan_requires_durable_docs_decision_for_claude_and_codex():
         assert "REQ path is required before develop starts" in body
         assert "blocking plan defect" in body
         assert "do not defer this to close" in body
-        assert "write_req_doc" in body
+        assert "doc/<area>/REQ__*.md" in body
         assert "Safety gates exist" in body
         assert "Original Request / Intent Summary" in body
         assert "conversation summary" in body
@@ -114,7 +114,7 @@ def test_develop_guidance_writes_selected_durable_docs():
         assert "`REQ needed`" in body
         assert "`Pattern/skill doc enough`" in body
         assert "`No durable doc needed`" in body
-        assert "write_req_doc" in body
+        assert "doc/<area>/REQ__*.md" in body
         assert "req_scaffold.py" in body
         assert "doc/<area>/<TYPE>__<name>.md" in body
         assert "Use `REQ` for user-visible behavior" in body
@@ -124,10 +124,10 @@ def test_develop_guidance_writes_selected_durable_docs():
         assert "New pages, admin/backoffice screens, routes, controllers, and endpoints require a REQ" in body
         assert "Recheck the actual diff after implementation" in body
         assert "update the relevant `GUIDE`, skill, pattern doc, or tests rather than inventing a REQ" in body
-        assert "record the correction in DOC_SYNC" in body
-        assert "Durable docs: before calling `write_handoff`, include the documentation-impact judgment" in body
+        assert "link it from PLAN.md or the changed durable doc" in body
+        assert "Durable docs: before final summary, include the documentation-impact judgment" in body
         assert "links to `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or `POLICY__*.md`" in body
-        assert "before calling `write_handoff`" in body
+        assert "before final summary" in body
         assert "specific non-observable reason" in body
         assert "`not needed` is invalid for new or changed UI/API/backoffice/admin screens" in body
         assert "doc/product/" not in body

@@ -76,7 +76,7 @@ def test_harness_ac_worker_is_scoped_to_one_ac_and_no_shared_artifacts():
     body = _text(AC_WORKER)
 
     assert "Implement only the assigned AC or lane" in body
-    assert "Do not write `PLAN.md`, `HANDOFF.md`, `DOC_SYNC.md`, `SUBAGENT_RECEIPTS.jsonl`" in body
+    assert "Do not write `PLAN.md`, `SUBAGENT_RECEIPTS.jsonl`" in body
     assert "`PROGRESS.md`, or `CHECKS.yaml`" in body
     assert "Do not collapse multiple independent ACs into your lane" in body
 

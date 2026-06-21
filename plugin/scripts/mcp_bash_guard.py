@@ -72,12 +72,10 @@ _PY_PATTERNS = [
 # Protected-artifact → owning MCP/CLI tool (for human-text fix hint).
 _ARTIFACT_TOOL_HINT = {
     "SUBAGENT_RECEIPTS.jsonl": "runtime subagent-start hook",
-    "HANDOFF.md": "mcp__plugin_harness_harness__write_handoff",
-    "DOC_SYNC.md": "mcp__plugin_harness_harness__write_doc_sync",
-    "PLAN.md": "mcp__plugin_harness_harness__write_plan_artifact",
-    "PLAN.meta.json": "mcp__plugin_harness_harness__write_plan_artifact",
+    "PLAN.md": "mcp__plugin_harness_harness__write_plan",
+    "PLAN.meta.json": "mcp__plugin_harness_harness__write_plan",
     "CHECKS.yaml": "plan-skill + scripts/update_checks.py",
-    "AUDIT_TRAIL.md": "mcp__plugin_harness_harness__write_plan_artifact",
+    "AUDIT_TRAIL.md": "mcp__plugin_harness_harness__write_plan",
 }
 
 RULE_DOCS = {
@@ -274,13 +272,11 @@ def _deny(target, command):
     # orchestrator gets an actionable resolution path inline.
     base = os.path.basename(rel)
     _NEXT = {
-        "PLAN.md": "mcp__plugin_harness_harness__write_plan_artifact artifact=plan",
-        "PLAN.meta.json": "mcp__plugin_harness_harness__write_plan_artifact artifact=plan-meta",
+        "PLAN.md": "mcp__plugin_harness_harness__write_plan",
+        "PLAN.meta.json": "mcp__plugin_harness_harness__write_plan",
         "CHECKS.yaml": "python3 plugin/scripts/update_checks.py --task-dir <td> --ac <id> --status <s>",
-        "AUDIT_TRAIL.md": "mcp__plugin_harness_harness__write_plan_artifact artifact=audit",
+        "AUDIT_TRAIL.md": "mcp__plugin_harness_harness__write_plan",
         "SUBAGENT_RECEIPTS.jsonl": "Spawn the required subagent; the runtime hook records this file",
-        "HANDOFF.md": "Spawn Agent(subagent_type='harness:developer', ...) + write_handoff MCP",
-        "DOC_SYNC.md": "Spawn Agent(subagent_type='harness:developer', ...) + write_doc_sync MCP",
     }
     next_action = _NEXT.get(base, "")
     if not next_action and category == "workflow-control-surface":

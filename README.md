@@ -51,7 +51,7 @@ plan → develop → verify → close
 | **plan** | 7-phase dual-voice review pipeline writes PLAN.md + CHECKS.yaml |
 | **develop** | Implement per-AC, checkpoint progress, run quality audit, dogfood |
 | **verify** | QA/UX subagent starts are hook-recorded in SUBAGENT_RECEIPTS.jsonl |
-| **close** | Gate: PLAN.md + HANDOFF.md exist + runtime_verdict = PASS |
+| **close** | Gate: PLAN.md exists + runtime_verdict = PASS + CHECKS terminal |
 
 After close, the Goal child-task executor performs a self-improvement pass — surfaces friction signals into `learnings.jsonl`, promotes recurring keys into Tier 2 patterns, and prunes stale entries.
 
@@ -100,7 +100,7 @@ All under `plugin/agents/`. Narrow tool surface — each agent gets only what it
 
 | Agent | Role |
 |-------|------|
-| `developer` | Implements PLAN.md per AC, writes HANDOFF.md |
+| `developer` | Implements PLAN.md per AC |
 | `dogfooder` | Post-QA power-user pass; finds friction + missing workflows |
 | `qa-browser` | Browser-first runtime QA via Chrome DevTools MCP |
 | `qa-api` | API runtime QA via curl / httpie |
@@ -140,7 +140,6 @@ All under `plugin/scripts/`. Stdlib only.
 | `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | plan/develop/close evidence |
 | `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |
 | `update_checks.py` | Atomic CHECKS.yaml AC status transitions (plan-first) | task-local |
-| `write_plan_artifact.py` | Legacy compatibility shim; prefer MCP `write_plan_artifact` for PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md | task-local |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
 | `hygiene_scan.py` | Close-time hygiene scan: Tier A/B auto-apply + doc archive pass | `doc/harness/.hygiene-pending.json` |
 | `doc_hygiene.py` | Content-signal KEEP/REMOVE/REVIEW classifier; archives stale docs via `git mv` | `doc/harness/.hygiene-pending.json` |
@@ -189,7 +188,7 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 
 ## MCP tools
 
-10 tools via `plugin/mcp/harness_server.py`:
+11 tools via `plugin/mcp/harness_server.py`:
 
 | Tool | Purpose |
 |------|---------|
@@ -198,11 +197,12 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 | `task_verify` | Sync paths, compute verification from subagent-start receipts, optionally reconcile ACs |
 | `task_close` | Gate: all verdicts PASS → close |
 | `task_blocked` | Park a task on a genuine environment blocker |
-| `record_attempt` | Record retry attempt evidence under `attempts/attempt-NNN/` |
-| `write_req_doc` | Auto-author durable REQ scaffold before observable source work |
-| `write_plan_artifact` | Plan skill writes PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md |
-| `write_handoff` | Developer writes HANDOFF.md |
-| `write_doc_sync` | Developer writes DOC_SYNC.md |
+| `goal_start` | Start/sync native goal state |
+| `goal_context` | Read active goal and child task queue |
+| `goal_add_task` | Attach or update a child task under the goal |
+| `goal_next_task` | Return the next queued/active child task |
+| `goal_finish` | Mark the active goal complete or blocked |
+| `write_plan` | Write PLAN.md / PLAN.meta.json plus optional CHECKS.yaml / AUDIT_TRAIL.md |
 
 ## Skills
 

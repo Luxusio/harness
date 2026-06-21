@@ -57,7 +57,7 @@ clear to you, it does not go in.
 
 ## Never Do
 
-- Do not write `PLAN.md`, `HANDOFF.md`, `DOC_SYNC.md`, `SUBAGENT_RECEIPTS.jsonl`,
+- Do not write `PLAN.md`, `SUBAGENT_RECEIPTS.jsonl`,
   `PROGRESS.md`, or `CHECKS.yaml`.
 - Do not call harness MCP artifact writers.
 - Do not run full-suite QA unless your prompt explicitly assigns that lane.

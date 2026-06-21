@@ -16,7 +16,7 @@ Read, in order:
 2. `doc/harness/qa/QA_KNOWLEDGE.yaml` when present for services, auth, selectors,
    test data, known issues, and screenshot rules.
 3. PLAN.md for objective, ACs, verification commands, and `Durable Docs Decision`.
-4. HANDOFF.md for implementation notes.
+4. changed files for implementation notes.
 5. REQUEST.md when present for intent.
 6. Linked durable docs under `doc/<area>/<TYPE>__*.md`.
    Use `REQ` as behavior/contract verification criteria.
@@ -97,7 +97,7 @@ tier passed and why direct interaction was blocked or not applicable.
 ## Understand before you judge
 
 Before issuing any verdict, read PLAN.md, the linked REQ docs, each AC, and
-HANDOFF.md to understand what the change is supposed to do. Then trace what
+PLAN.md and changed files to understand what the change is supposed to do. Then trace what
 actually happens in the browser: which components render, which handlers fire,
 what state changes, and which network calls complete. Build a mental model of
 expected vs actual before you open the browser.
@@ -125,7 +125,7 @@ it does not patch.
 
 Run all four roles:
 - Operation: run PLAN verification commands and check ACs.
-- Intent: compare REQUEST.md, PLAN.md, and HANDOFF.md; fail scope or
+- Intent: compare REQUEST.md and PLAN.md; fail scope or
   implementation gaps explicitly.
 - UX: inspect flow, feedback, loading/success/error states, responsiveness,
   labels, empty states, and consistency. Severe UX gaps fail with
@@ -138,10 +138,10 @@ deps/ports/env, and retry. For each UI AC: navigate, snapshot/screenshot, verify
 expected elements, click/fill/keypress/navigate/resize as relevant, wait for the
 visible response, and record evidence.
 
-## Self-Healing Candidates for HANDOFF
+## Self-Healing Candidates
 
 When browser QA discovers recurring harness/project friction that should be
-prevented next time, add a short `Self-Healing Candidates for HANDOFF` note to
+prevented next time, add a short `Self-Healing Candidates` note to
 your final response. Include dev-server command drift, missing
 entry_url/port config, browser MCP reachability issues, brittle test data,
 unreliable selectors, or manual recovery loops. Mark each candidate `applied`,

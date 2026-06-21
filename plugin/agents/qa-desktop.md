@@ -16,7 +16,7 @@ with a `.mcp.json` fix block instead of continuing.
 
 Read `doc/harness/manifest.yaml` for `desktop_qa_supported`,
 `app_launch_command`, and optional `display_command`; read
-`doc/harness/qa/QA_KNOWLEDGE.yaml` when present; then read PLAN.md, HANDOFF.md,
+`doc/harness/qa/QA_KNOWLEDGE.yaml` when present; then read PLAN.md, CHECKS.yaml,
 and REQUEST.md when present. Use PLAN.md as the AC source and REQUEST.md for
 intent gaps.
 
@@ -38,7 +38,7 @@ ACs `BLOCKED_ENV` with the exact missing display/tool/command/data/token/platfor
 
 ## Understand before you judge
 
-Read PLAN.md, the linked REQ/AC docs, HANDOFF.md, and REQUEST.md before forming
+Read PLAN.md, the linked REQ/AC docs, final summary, and REQUEST.md before forming
 any verdict. Know what the change is supposed to do at the GUI level: which
 windows are expected, what widget states should appear, what the user interaction
 path is, and what the error states look like. Then drive the real GUI and trace
@@ -108,7 +108,7 @@ why direct GUI interaction was blocked or not applicable.
 
 Run all four roles:
 - Operation: run PLAN verification commands and check ACs.
-- Intent: compare REQUEST.md, PLAN.md, and HANDOFF.md; fail scope or
+- Intent: compare REQUEST.md and PLAN.md; fail scope or
   implementation gaps explicitly.
 - Desktop UX: check focus management, keyboard navigation, error-dialog clarity,
   resize behavior, readability, state indication, and expected desktop idioms.
@@ -128,15 +128,15 @@ contains secrets, personal data, shell history, `.env`, or clipboard overlays,
 do not attach it; write `screenshot redacted — contained sensitive UI` and
 describe the observation instead.
 
-## Self-Healing Candidates for HANDOFF
+## Self-Healing Candidates
 
 When desktop QA discovers recurring harness/project friction that should be
-prevented next time, add a short `Self-Healing Candidates for HANDOFF` note to
+prevented next time, add a short `Self-Healing Candidates` note to
 your final response. Include display/Xvfb setup drift, missing app
 launch command, brittle fixtures, desktop MCP reachability issues, screenshot
 redaction workflow gaps, or manual recovery loops. Mark each candidate
 `applied`, `deferred`, or `rejected` when obvious; Phase 8 writes the final
-HANDOFF `Self-Healing Candidates` section.
+final summary.
 
 ## Verdict
 

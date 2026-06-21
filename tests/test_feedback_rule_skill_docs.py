@@ -39,29 +39,16 @@ def test_develop_skills_require_feedback_rule_judgment():
         assert "needs-user-decision` is not a closeable disposition" in body
 
 
-def test_developer_prompts_reference_handoff_close_gate_guide():
+def test_developer_prompts_do_not_reference_handoff_close_gate_guide():
     for rel in ("plugin/agents/developer.md", "plugin-codex/agents/developer.md"):
         body = (REPO / rel).read_text(encoding="utf-8")
-        assert "adjacent `HANDOFF_CLOSE_GATE.md`" in body
-        assert "close-gate sections from that guide" in body
+        assert "HANDOFF_CLOSE_GATE.md" not in body
+        assert "close-gate sections from that guide" not in body
 
 
-def test_handoff_close_gate_guide_names_strict_contract():
+def test_handoff_close_gate_guide_removed():
     for rel in ("plugin/agents/HANDOFF_CLOSE_GATE.md", "plugin-codex/agents/HANDOFF_CLOSE_GATE.md"):
-        body = (REPO / rel).read_text(encoding="utf-8")
-        assert "User Feedback Disposition" in body
-        assert "event: <id> status: <promoted|handled-local|deferred|rejected>" in body
-        assert "Commit-backed Learnings" in body
-        assert "Status: <none|captured|rejected>" in body
-        assert "changed/touched" in body
-        assert "commit-eligible repo artifact" in body
-        assert "doc/harness/learnings.jsonl" in body
-        assert "untouched existing files do not" in body
-        assert "Self-Healing Candidates" in body
-        assert "Status: <none|applied|deferred|rejected>" in body
-        assert "user_decision:" in body
-        assert "proposed_artifact:" in body
-        assert "Durable docs: not needed" in body
+        assert not (REPO / rel).exists()
 
 
 def test_run_skills_check_feedback_events_before_dependent_actions():
@@ -74,7 +61,7 @@ def test_run_skills_check_feedback_events_before_dependent_actions():
         assert "Close-time checking only catches missed feedback" in body
 
 
-def test_qa_agents_surface_self_healing_candidates_for_handoff():
+def test_qa_agents_surface_self_healing_candidates():
     for rel in (
         "plugin/agents/qa-cli.md",
         "plugin/agents/qa-api.md",
@@ -86,7 +73,7 @@ def test_qa_agents_surface_self_healing_candidates_for_handoff():
         "plugin-codex/agents/qa-desktop.md",
     ):
         body = (REPO / rel).read_text(encoding="utf-8")
-        assert "Self-Healing Candidates for HANDOFF" in body
+        assert "Self-Healing Candidates" in body
         assert "final response" in body
         assert "applied" in body
         assert "deferred" in body

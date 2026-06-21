@@ -31,11 +31,7 @@ EXPECTED_TOOLS = {
     "task_verify",
     "task_close",
     "task_blocked",
-    "record_attempt",
-    "write_req_doc",
-    "write_plan_artifact",
-    "write_handoff",
-    "write_doc_sync",
+    "write_plan",
 }
 
 
@@ -104,22 +100,6 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("description", tool)
             self.assertIn("inputSchema", tool)
             self.assertTrue(tool["description"], f"{tool['name']} missing description")
-
-    def test_write_handoff_description_names_close_gate_contract(self):
-        tools = {tool["name"]: tool for tool in harness_server.list_tools()}
-        description = tools["write_handoff"]["description"]
-        for expected in (
-            "User Feedback Disposition",
-            "one terminal event line",
-            "Commit-backed Learnings",
-            "changed/touched commit-eligible artifact",
-            "Self-Healing Candidates",
-            "user_decision",
-            "proposed_artifact or proposed_task",
-            "durable-doc judgment",
-            "specific no-doc rationale",
-        ):
-            self.assertIn(expected, description)
 
     def test_unknown_tool_returns_error_payload(self):
         result = harness_server.call_tool("does_not_exist", {})
@@ -220,7 +200,12 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertIn("bare tool names", instructions)
         self.assertIn("Codex callers should use these bare tool names directly", instructions)
         self.assertIn("get_goal", instructions)
-        self.assertIn("write_plan_artifact", instructions)
+        self.assertIn("write_plan", instructions)
+        self.assertNotIn("write_plan_artifact", instructions)
+        self.assertNotIn("write_handoff", instructions)
+        self.assertNotIn("write_doc_sync", instructions)
+        self.assertNotIn("write_req_doc", instructions)
+        self.assertNotIn("record_attempt", instructions)
         self.assertNotIn("7 tools", instructions)
         self.assertIn("mcp__plugin_harness_harness__", instructions)
         self.assertIn("do not use Claude display prefixes", instructions)
@@ -423,41 +408,6 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertTrue(result.get("isError"), tool)
             self.assertIn("Unknown tool", result["structuredContent"]["error"], tool)
 
-    def test_write_req_doc_creates_durable_req_without_runtime_verdict_change(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__reqdoc")
-            original_ctd = harness_server.canonical_task_dir
-            original_root = harness_server.find_repo_root
-            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
-            harness_server.find_repo_root = lambda *args, **kw: tmp
-            try:
-                result = harness_server.call_tool(
-                    "write_req_doc",
-                    {
-                        "task_id": "TASK__reqdoc",
-                        "area": "ui",
-                        "slug": "mobile-reader-navigation",
-                        "intent": "Mobile reader navigation should match native expectations.",
-                        "observable_behaviors": "Android back returns to the previous reader screen instead of exiting unexpectedly.",
-                        "verification_cues": "Verify on Android APK or emulator and browser mobile separately.",
-                        "non_goals": "Do not redesign the full reader.",
-                    },
-                )
-            finally:
-                harness_server.canonical_task_dir = original_ctd
-                harness_server.find_repo_root = original_root
-            req_path = Path(tmp) / "doc/ui/REQ__mobile-reader-navigation.md"
-            req_exists = req_path.is_file()
-            body = req_path.read_text(encoding="utf-8") if req_exists else ""
-            state = (Path(task_dir) / "TASK_STATE.yaml").read_text(encoding="utf-8")
-        self.assertNotIn("isError", result)
-        self.assertEqual(result["structuredContent"]["req_path"], "doc/ui/REQ__mobile-reader-navigation.md")
-        self.assertTrue(req_exists)
-        self.assertIn("## Observable Behavior", body)
-        self.assertIn("Android back returns", body)
-        self.assertIn("## Verification Cues", body)
-        self.assertIn("runtime_verdict: pending", state)
-
     def test_task_verify_reconcile_skips_without_subagent_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__qapromote")
@@ -615,32 +565,6 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertEqual(verify["structuredContent"]["subagent_receipts"]["by_agent_type"]["harness:qa-cli"], 1)
         self.assertEqual(verify["structuredContent"]["subagent_receipts"]["by_source"]["subagent_start_hook"], 1)
 
-    def test_record_attempt_creates_attempt_dir_and_context_surfaces_latest(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__attempt")
-            original_ctd = harness_server.canonical_task_dir
-            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
-            try:
-                result = harness_server.call_tool(
-                    "record_attempt",
-                    {
-                        "task_id": "TASK__attempt",
-                        "kind": "qa-cli",
-                        "verdict": "FAIL",
-                        "summary": "unit test failed",
-                        "transcript": "traceback",
-                    },
-                )
-                ctx = harness_server.call_tool("task_context", {"task_id": "TASK__attempt"})
-            finally:
-                harness_server.canonical_task_dir = original_ctd
-            self.assertNotIn("isError", result)
-            attempt = result["structuredContent"]["attempt"]
-            self.assertEqual(attempt["id"], "attempt-001")
-            self.assertTrue((Path(task_dir) / "attempts" / "attempt-001" / "attempt.json").is_file())
-            self.assertEqual(ctx["structuredContent"]["task_context"]["attempt_count"], 1)
-            self.assertEqual(ctx["structuredContent"]["task_context"]["latest_attempt"]["summary"], "unit test failed")
-
     def test_micro_execution_mode_allows_no_plan_but_still_requires_verify(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = Path(tmp) / "TASK__micro"
@@ -661,13 +585,8 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertTrue(ctx["source_write_allowed"])
         self.assertEqual(ctx["routing"]["execution_mode"], "micro")
         self.assertNotIn("PLAN.md", ctx["missing_for_close"])
-        # AC-002: micro-mode next_action must state PLAN.md exemption + REQ gate
-        # so the agent can discover the rule without reading source.
-        self.assertIn("PLAN.md is exempt", ctx["next_action"])
-        self.assertIn("REQ", ctx["next_action"])
-        self.assertIn("micro", ctx["next_action"])
+        self.assertIn("subagent", ctx["next_action"])
         self.assertTrue(close.get("isError"))
-        self.assertIn("HANDOFF.md", close["structuredContent"]["missing_for_close"])
         self.assertIn("subagent start receipt", close["structuredContent"]["missing_for_close"])
 
     def test_task_blocked_records_pause_state_and_artifact(self):
@@ -697,96 +616,73 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("status: blocked", state)
             self.assertIn("runtime_verdict: BLOCKED_ENV", state)
 
-    def test_write_plan_artifact_writes_plan_meta_and_checks(self):
+    def test_write_plan_writes_plan_meta_checks_and_audit(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__planmcp")
             result = harness_server.call_tool(
-                "write_plan_artifact",
+                "write_plan",
                 {
                     "task_dir": task_dir,
-                    "artifact": "plan",
-                    "content": "# MCP Plan\n",
-                    "checks_content": "- id: AC-001\n  title: x\n  status: open\n",
+                    "plan": "# MCP Plan\n",
+                    "checks": "- id: AC-001\n  title: x\n  status: open\n",
+                    "audit": "| 1 | p | d | c | p | r | - |\n",
                     "meta": {"routing": "light"},
                 },
             )
             self.assertNotIn("isError", result)
             self.assertEqual(
                 result["structuredContent"]["written"],
-                ["PLAN.md", "PLAN.meta.json", "CHECKS.yaml"],
+                ["PLAN.md", "PLAN.meta.json", "CHECKS.yaml", "AUDIT_TRAIL.md"],
             )
             bytes_written = result["structuredContent"]["bytes_written"]
             self.assertGreater(bytes_written["PLAN.md"], 0)
             self.assertGreater(bytes_written["PLAN.meta.json"], 0)
             self.assertGreater(bytes_written["CHECKS.yaml"], 0)
+            self.assertGreater(bytes_written["AUDIT_TRAIL.md"], 0)
             self.assertEqual((Path(task_dir) / "PLAN.md").read_text(encoding="utf-8"), "# MCP Plan\n")
             meta = json.loads((Path(task_dir) / "PLAN.meta.json").read_text(encoding="utf-8"))
             self.assertEqual(meta["author_role"], "plan-skill")
             self.assertEqual(meta["plan_meta"]["routing"], "light")
             self.assertIn("AC-001", (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8"))
+            self.assertIn("| 1 |", (Path(task_dir) / "AUDIT_TRAIL.md").read_text(encoding="utf-8"))
 
-    def test_write_plan_artifact_checks_requires_content_not_checks_content(self):
+    def test_write_plan_rejects_empty_plan(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__checksparam")
+            task_dir = self._make_task(tmp, "TASK__emptyplan")
             result = harness_server.call_tool(
-                "write_plan_artifact",
-                {
-                    "task_dir": task_dir,
-                    "artifact": "checks",
-                    "checks_content": "- id: AC-001\n  title: x\n  status: open\n",
-                },
+                "write_plan",
+                {"task_dir": task_dir, "plan": " \n\t"},
             )
             self.assertTrue(result.get("isError"))
-            self.assertIn("use content", result["structuredContent"]["next_action"])
-            self.assertFalse((Path(task_dir) / "CHECKS.yaml").exists())
+            self.assertIn("empty PLAN.md", result["structuredContent"]["error"])
 
-    def test_write_plan_artifact_rejects_empty_checks_content(self):
+    def test_write_plan_rejects_empty_optional_checks(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__emptychecks")
             result = harness_server.call_tool(
-                "write_plan_artifact",
-                {"task_dir": task_dir, "artifact": "checks", "content": " \n\t"},
+                "write_plan",
+                {"task_dir": task_dir, "plan": "# Plan\n", "checks": " \n\t"},
             )
             self.assertTrue(result.get("isError"))
             self.assertIn("empty CHECKS.yaml", result["structuredContent"]["error"])
-            self.assertFalse((Path(task_dir) / "CHECKS.yaml").exists())
 
-    def test_write_plan_artifact_checks_reports_bytes_written(self):
+    def test_write_plan_rejects_empty_optional_audit(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__checksbytes")
-            body = "- id: AC-001\n  title: x\n  status: open\n"
+            task_dir = self._make_task(tmp, "TASK__emptyaudit")
             result = harness_server.call_tool(
-                "write_plan_artifact",
-                {"task_dir": task_dir, "artifact": "checks", "content": body},
+                "write_plan",
+                {"task_dir": task_dir, "plan": "# Plan\n", "audit": "\n"},
             )
-            self.assertNotIn("isError", result)
-            self.assertEqual(result["structuredContent"]["written"], ["CHECKS.yaml"])
-            self.assertEqual(result["structuredContent"]["bytes_written"]["CHECKS.yaml"], len(body.encode("utf-8")))
-            self.assertEqual((Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8"), body)
+            self.assertTrue(result.get("isError"))
+            self.assertIn("empty AUDIT_TRAIL.md", result["structuredContent"]["error"])
 
-    def test_write_plan_artifact_rejects_empty_plan_and_audit(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__emptywrites")
-            plan_result = harness_server.call_tool(
-                "write_plan_artifact",
-                {"task_dir": task_dir, "artifact": "plan", "content": ""},
-            )
-            audit_result = harness_server.call_tool(
-                "write_plan_artifact",
-                {"task_dir": task_dir, "artifact": "audit", "content": "\n"},
-            )
-            self.assertTrue(plan_result.get("isError"))
-            self.assertTrue(audit_result.get("isError"))
-            self.assertIn("empty PLAN.md", plan_result["structuredContent"]["error"])
-            self.assertIn("empty AUDIT_TRAIL.md", audit_result["structuredContent"]["error"])
-
-    def test_write_plan_artifact_appends_audit_header_once(self):
+    def test_write_plan_appends_audit_header_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__auditmcp")
             for row in ("| 1 | p | d | c | p | r | - |\n", "| 2 | p | d2 | c | p | r | - |\n"):
                 result = harness_server.call_tool(
-                    "write_plan_artifact",
-                    {"task_dir": task_dir, "artifact": "audit", "content": row},
+                    "write_plan",
+                    {"task_dir": task_dir, "plan": "# Plan\n", "audit": row},
                 )
                 self.assertNotIn("isError", result)
             body = (Path(task_dir) / "AUDIT_TRAIL.md").read_text(encoding="utf-8")
@@ -894,107 +790,12 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             self._orig_context_git_changed_paths
         )
 
-    def test_write_handoff_auto_adds_close_gate_templates(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp,
-                "TASK__handoff-auto-templates",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-                write_handoff=False,
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "write_handoff",
-                    {
-                        "task_id": "TASK__handoff-auto-templates",
-                        "summary": "Implemented small fix.",
-                        "verification": "Targeted tests passed.",
-                    },
-                )
-            finally:
-                self._unpatch()
-            self.assertNotIn("isError", result)
-            body = Path(td, "HANDOFF.md").read_text(encoding="utf-8")
-        self.assertIn("## User Feedback Disposition", body)
-        self.assertIn("No USER_FEEDBACK.jsonl events for this task", body)
-        self.assertIn("## Commit-backed Learnings\n\nStatus: none", body)
-        self.assertIn("## Self-Healing Candidates\n\nStatus: none", body)
-
-    def test_write_handoff_auto_adds_feedback_disposition_stubs(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp,
-                "TASK__handoff-feedback-stubs",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-                write_handoff=False,
-            )
-            Path(td, "USER_FEEDBACK.jsonl").write_text(
-                json.dumps({"id": "ufe-123", "prompt_excerpt": "clarify route"}) + "\n"
-                + json.dumps({"id": "ufe-456", "prompt_excerpt": "tighten docs"}) + "\n",
-                encoding="utf-8",
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "write_handoff",
-                    {
-                        "task_id": "TASK__handoff-feedback-stubs",
-                        "summary": "Implemented small fix.",
-                        "verification": "Targeted tests passed.",
-                    },
-                )
-            finally:
-                self._unpatch()
-            self.assertNotIn("isError", result)
-            body = Path(td, "HANDOFF.md").read_text(encoding="utf-8")
-        self.assertIn(
-            "event: ufe-123 status: <promoted|handled-local|deferred|rejected>",
-            body,
-        )
-        self.assertIn(
-            "event: ufe-456 status: <promoted|handled-local|deferred|rejected>",
-            body,
-        )
-
-    def test_context_reports_precise_handoff_status_diagnostics(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp,
-                "TASK__handoff-precise-status",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-                handoff_body=(
-                    "# handoff\n\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Heading exists, but no status line.\n\n"
-                    "## Self-Healing Candidates\n\n"
-                    "Heading exists, but no status line.\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_context", {"task_id": "TASK__handoff-precise-status"}
-                )
-            finally:
-                self._unpatch()
-        missing = result["structuredContent"]["task_context"]["missing_for_close"]
-        self.assertIn("Commit-backed Learnings Status line in HANDOFF.md", missing)
-        self.assertIn("Self-Healing Candidates Status line in HANDOFF.md", missing)
-        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
-        self.assertIn("Self-Healing Candidates section in HANDOFF.md", missing)
-
-    def test_context_names_unresolved_feedback_ids_in_next_action(self):
+    def test_context_surfaces_feedback_ids_without_handoff_close_gate(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(
                 tmp,
                 "TASK__feedback-next-action-ids",
                 checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-                handoff_body=(
-                    "# handoff\n\n"
-                    "## Commit-backed Learnings\n\nStatus: none\n\n"
-                    "## Self-Healing Candidates\n\nStatus: none\n"
-                ),
             )
             Path(td, "USER_FEEDBACK.jsonl").write_text(
                 json.dumps({"id": "ufe-needed", "prompt_excerpt": "remember this"}) + "\n",
@@ -1009,67 +810,8 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 self._unpatch()
         ctx = result["structuredContent"]["task_context"]
         self.assertEqual(ctx["unresolved_feedback_ids"], ["ufe-needed"])
-        self.assertIn("ufe-needed", ctx["next_action"])
-
-    def test_close_blocks_unresolved_user_feedback_event(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp,
-                "TASK__feedback-open",
-                checks_yaml='- id: AC-001\n  title: "done"\n  status: passed\n  kind: functional\n',
-            )
-            (Path(td) / "USER_FEEDBACK.jsonl").write_text(
-                json.dumps({
-                    "id": "ufe-open",
-                    "task_id": "TASK__feedback-open",
-                    "prompt_excerpt": "이 방향으로 바꿔줘",
-                    "source": "user_prompt_hook",
-                }) + "\n",
-                encoding="utf-8",
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool("task_close", {"task_id": "TASK__feedback-open"})
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        payload = result["structuredContent"]
-        self.assertIn("User feedback disposition in HANDOFF.md", payload["missing_for_close"])
-        self.assertEqual(payload["task_context"]["unresolved_feedback_count"], 1)
-        self.assertEqual(payload["task_context"]["unresolved_feedback_ids"], ["ufe-open"])
-        self.assertIn("USER_FEEDBACK.jsonl", payload["task_context"]["next_action"])
-
-    def test_close_accepts_terminal_user_feedback_disposition(self):
-        handoff = (
-            "# handoff\n\n"
-            "## User Feedback Disposition\n\n"
-            "- event: ufe-done status: handled-local reason: reflected before QA.\n\n"
-            "## Commit-backed Learnings\n\nStatus: none\n\n"
-            "## Self-Healing Candidates\n\nStatus: none\n"
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp,
-                "TASK__feedback-done",
-                checks_yaml='- id: AC-001\n  title: "done"\n  status: passed\n  kind: functional\n',
-                handoff_body=handoff,
-            )
-            (Path(td) / "USER_FEEDBACK.jsonl").write_text(
-                json.dumps({
-                    "id": "ufe-done",
-                    "task_id": "TASK__feedback-done",
-                    "prompt_excerpt": "이 방향으로 바꿔줘",
-                    "source": "user_prompt_hook",
-                }) + "\n",
-                encoding="utf-8",
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool("task_close", {"task_id": "TASK__feedback-done"})
-            finally:
-                self._unpatch()
-        self.assertFalse(result.get("isError"), result)
-        self.assertTrue(result["structuredContent"]["closed"])
+        self.assertNotIn("User feedback disposition", ctx["missing_for_close"])
+        self.assertNotIn("ufe-needed", ctx["next_action"])
 
     # ---- AC-001: failed AC blocks close ----
     def test_close_rejects_failed_ac(self):
@@ -1294,527 +1036,6 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 self._unpatch()
         self.assertNotIn("isError", result)
         self.assertTrue(result["structuredContent"]["closed"])
-
-    def test_close_rejects_handoff_without_commit_backed_learnings(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-missing",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                handoff_body="# handoff\n\nNo shared learning section.\n",
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close", {"task_id": "TASK__commit-learning-missing"}
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        missing = result["structuredContent"]["missing_for_close"]
-        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
-
-    def test_close_missing_commit_learning_still_reports_blocking_acs(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-missing-with-diagnostics",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: open\n  kind: functional\n',
-                handoff_body="# handoff\n\nNo shared learning section.\n",
-                touched_paths=["plugin/scripts/health.py"],
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close",
-                    {"task_id": "TASK__commit-learning-missing-with-diagnostics"},
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        data = result["structuredContent"]
-        self.assertIn("Commit-backed Learnings section in HANDOFF.md", data["missing_for_close"])
-        self.assertFalse(data["stale"])
-        self.assertEqual(data["stale_path"], "")
-        self.assertEqual(data["blocking_acs"][0]["id"], "AC-001")
-
-    def test_close_rejects_commit_backed_status_outside_section(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-status-outside",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                handoff_body=(
-                    "# handoff\n\n"
-                    "## Previous Section\n\n"
-                    "Status: captured\n\n"
-                    "## Commit-backed Learnings\n\n"
-                    "No section-local status.\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close", {"task_id": "TASK__commit-learning-status-outside"}
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        missing = result["structuredContent"]["missing_for_close"]
-        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
-
-    def test_close_rejects_commit_backed_template_only(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-template-only",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                handoff_body=(
-                    "# handoff\n\n"
-                    "```md\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: captured\n\n"
-                    "- captured: plugin/skills/run/self-improvement.md — example.\n"
-                    "```\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close", {"task_id": "TASK__commit-learning-template-only"}
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        missing = result["structuredContent"]["missing_for_close"]
-        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
-
-    def test_close_rejects_commit_backed_tilde_fence_template_only(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-tilde-template-only",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                handoff_body=(
-                    "# handoff\n\n"
-                    "~~~md\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: captured\n\n"
-                    "- captured: plugin/skills/run/self-improvement.md — example.\n"
-                    "~~~\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close", {"task_id": "TASK__commit-learning-tilde-template-only"}
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        missing = result["structuredContent"]["missing_for_close"]
-        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
-
-    def test_close_rejects_commit_backed_indented_fence_template_only(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-indented-fence-template-only",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                handoff_body=(
-                    "# handoff\n\n"
-                    "   ```md\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: captured\n\n"
-                    "- captured: plugin/skills/run/self-improvement.md — example.\n"
-                    "   ```\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close",
-                    {"task_id": "TASK__commit-learning-indented-fence-template-only"},
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        missing = result["structuredContent"]["missing_for_close"]
-        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
-
-    def test_close_rejects_commit_backed_html_comment_template_only(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-html-comment-template-only",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                handoff_body=(
-                    "# handoff\n\n"
-                    "<!--\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: captured\n\n"
-                    "- captured: plugin/skills/run/self-improvement.md — hidden.\n"
-                    "-->\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close",
-                    {"task_id": "TASK__commit-learning-html-comment-template-only"},
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        missing = result["structuredContent"]["missing_for_close"]
-        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
-
-    def test_close_rejects_commit_backed_indented_template_only(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-indented-template-only",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                handoff_body=(
-                    "# handoff\n\n"
-                    "    ## Commit-backed Learnings\n\n"
-                    "    Status: captured\n\n"
-                    "    - captured: plugin/skills/run/self-improvement.md — example.\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close", {"task_id": "TASK__commit-learning-indented-template-only"}
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        missing = result["structuredContent"]["missing_for_close"]
-        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
-
-    def test_close_rejects_commit_backed_captured_without_shared_path(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-captured-no-path",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                handoff_body=(
-                    "# handoff\n\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: captured\n\n"
-                    "- captured: doc/harness/learnings.jsonl — local staging only.\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close", {"task_id": "TASK__commit-learning-captured-no-path"}
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        missing = result["structuredContent"]["missing_for_close"]
-        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
-
-    def test_close_rejects_commit_backed_captured_nonexistent_path(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-captured-nonexistent",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                handoff_body=(
-                    "# handoff\n\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: captured\n\n"
-                    "- captured: plugin/scripts/does_not_exist.py — missing file.\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close", {"task_id": "TASK__commit-learning-captured-nonexistent"}
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        missing = result["structuredContent"]["missing_for_close"]
-        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
-
-    def test_close_rejects_commit_backed_captured_ignored_touched_path(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            subprocess.run(["git", "init", "-q"], cwd=tmp, check=True)
-            ignored = Path(tmp) / "doc" / "common" / "GUIDE__ignored.md"
-            ignored.parent.mkdir(parents=True, exist_ok=True)
-            ignored.write_text("# ignored\n", encoding="utf-8")
-            (Path(tmp) / ".gitignore").write_text("doc/common/GUIDE__ignored.md\n", encoding="utf-8")
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-captured-ignored",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                touched_paths=["doc/common/GUIDE__ignored.md"],
-                handoff_body=(
-                    "# handoff\n\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: captured\n\n"
-                    "- captured: doc/common/GUIDE__ignored.md — ignored local file.\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close",
-                    {"task_id": "TASK__commit-learning-captured-ignored"},
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        missing = result["structuredContent"]["missing_for_close"]
-        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
-
-    def test_close_accepts_commit_backed_captured_path_when_line_mentions_learnings_jsonl(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-captured-with-learnings-mention",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                touched_paths=["plugin/scripts/_lib.py"],
-                handoff_body=(
-                    "# handoff\n\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: captured\n\n"
-                    "- captured: plugin/scripts/_lib.py — replaces reliance on doc/harness/learnings.jsonl.\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close",
-                    {"task_id": "TASK__commit-learning-captured-with-learnings-mention"},
-                )
-            finally:
-                self._unpatch()
-        self.assertNotIn("isError", result)
-        self.assertTrue(result["structuredContent"]["closed"])
-
-    def test_close_accepts_commit_backed_captured_general_repo_artifact(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-captured-general-artifact",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                touched_paths=["plugin/CLAUDE.md"],
-                handoff_body=(
-                    "# handoff\n\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: captured\n\n"
-                    "- captured: plugin/CLAUDE.md — shared runtime contract.\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close",
-                    {"task_id": "TASK__commit-learning-captured-general-artifact"},
-                )
-            finally:
-                self._unpatch()
-        self.assertNotIn("isError", result)
-        self.assertTrue(result["structuredContent"]["closed"])
-
-    def test_close_rejects_commit_backed_captured_untouched_existing_path(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-captured-untouched-existing",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                touched_paths=[],
-                handoff_body=(
-                    "# handoff\n\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: captured\n\n"
-                    "- captured: plugin/scripts/_lib.py — existing but unrelated.\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close",
-                    {"task_id": "TASK__commit-learning-captured-untouched-existing"},
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        missing = result["structuredContent"]["missing_for_close"]
-        self.assertIn("Commit-backed Learnings section in HANDOFF.md", missing)
-
-    def test_close_accepts_commit_backed_captured_top_level_touched_path(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-captured-top-level",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                touched_paths=["README.md"],
-                handoff_body=(
-                    "# handoff\n\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: captured\n\n"
-                    "- captured: README.md — shared setup note.\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close",
-                    {"task_id": "TASK__commit-learning-captured-top-level"},
-                )
-            finally:
-                self._unpatch()
-        self.assertNotIn("isError", result)
-        self.assertTrue(result["structuredContent"]["closed"])
-
-    def test_close_accepts_commit_backed_learnings_captured_status(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__commit-learning-captured",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                touched_paths=["plugin/skills/run/self-improvement.md"],
-                handoff_body=(
-                    "# handoff\n\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: captured\n\n"
-                    "- captured: plugin/skills/run/self-improvement.md — shared rule.\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close", {"task_id": "TASK__commit-learning-captured"}
-                )
-            finally:
-                self._unpatch()
-        self.assertNotIn("isError", result)
-        self.assertTrue(result["structuredContent"]["closed"])
-
-    def test_close_rejects_handoff_without_self_healing_candidates(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__self-healing-missing",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                handoff_body=(
-                    "# handoff\n\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: none\n"
-                ),
-            )
-            handoff = Path(td) / "HANDOFF.md"
-            handoff.write_text(
-                "# handoff\n\n## Commit-backed Learnings\n\nStatus: none\n",
-                encoding="utf-8",
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close", {"task_id": "TASK__self-healing-missing"}
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        missing = result["structuredContent"]["missing_for_close"]
-        self.assertIn("Self-Healing Candidates section in HANDOFF.md", missing)
-
-    def test_close_accepts_self_healing_applied_changed_artifact(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__self-healing-applied",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                touched_paths=["plugin/scripts/_lib.py"],
-                handoff_body=(
-                    "# handoff\n\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: none\n\n"
-                    "## Self-Healing Candidates\n\n"
-                    "Status: applied\n\n"
-                    "- applied: close gate parser drift — plugin/scripts/_lib.py now blocks recurrence.\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close", {"task_id": "TASK__self-healing-applied"}
-                )
-            finally:
-                self._unpatch()
-        self.assertNotIn("isError", result)
-        self.assertTrue(result["structuredContent"]["closed"])
-
-    def test_close_rejects_self_healing_applied_untouched_artifact(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__self-healing-applied-untouched",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                touched_paths=[],
-                handoff_body=(
-                    "# handoff\n\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: none\n\n"
-                    "## Self-Healing Candidates\n\n"
-                    "Status: applied\n\n"
-                    "- applied: claimed fix — plugin/scripts/_lib.py.\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close", {"task_id": "TASK__self-healing-applied-untouched"}
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        missing = result["structuredContent"]["missing_for_close"]
-        self.assertIn("Self-Healing Candidates section in HANDOFF.md", missing)
-
-    def test_close_rejects_self_healing_deferred_without_user_decision(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__self-healing-deferred-without-user",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                handoff_body=(
-                    "# handoff\n\n"
-                    "## Commit-backed Learnings\n\n"
-                    "Status: none\n\n"
-                    "## Self-Healing Candidates\n\n"
-                    "Status: deferred\n\n"
-                    "- deferred: browser MCP flake — needs separate runtime fixture task.\n"
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close", {"task_id": "TASK__self-healing-deferred-without-user"}
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        missing = result["structuredContent"]["missing_for_close"]
-        self.assertIn("Self-Healing Candidates section in HANDOFF.md", missing)
-
-    def test_close_accepts_self_healing_deferred_with_user_decision_and_rejected_with_reason(self):
-        for status, bullet in (
-            ("deferred", (
-                "- deferred: browser MCP flake\n"
-                "  user_decision: separate task\n"
-                "  reason: requires runtime fixture and manifest changes\n"
-                "  proposed_artifact: plugin/agents/qa-browser.md\n"
-            )),
-            ("rejected", "- rejected: one-off typo — not reusable.\n"),
-        ):
-            with tempfile.TemporaryDirectory() as tmp:
-                task_id = f"TASK__self-healing-{status}"
-                td = self._prepare_task(
-                    tmp, task_id,
-                    checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                    handoff_body=(
-                        "# handoff\n\n"
-                        "## Commit-backed Learnings\n\n"
-                        "Status: none\n\n"
-                        "## Self-Healing Candidates\n\n"
-                        f"Status: {status}\n\n"
-                        f"{bullet}"
-                    ),
-                )
-                self._patch(td)
-                try:
-                    result = harness_server.call_tool("task_close", {"task_id": task_id})
-                finally:
-                    self._unpatch()
-            self.assertNotIn("isError", result)
-            self.assertTrue(result["structuredContent"]["closed"])
 
     # ---- AC-003: missing CHECKS.yaml warn-passes + logs ----
     def test_close_warn_passes_without_checks_yaml(self):

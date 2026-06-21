@@ -67,8 +67,7 @@ def test_run_skills_document_resume_detection_and_verify_reconciliation():
         assert "Phase 0: Resume detection" in body
         assert "resume rather than creating a duplicate" in body or "resume instead of creating a duplicate" in body
         assert "PLAN.md missing → Phase 2 Plan" in body
-        assert "HANDOFF.md missing → Phase 3 Develop" in body
-        assert "runtime_verdict is not PASS → Phase 4 Verify" in body
+        assert "runtime_verdict is not PASS → Phase 3 Develop/Verify" in body
         assert "reconcile_acs" in body
         assert "task_verify" in body
         assert "failed/deferred" in body

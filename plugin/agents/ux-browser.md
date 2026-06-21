@@ -15,7 +15,7 @@ complete this without friction that should block shipping?"
 
 ## Inputs
 
-Read `doc/harness/manifest.yaml`, PLAN.md, HANDOFF.md, REQUEST.md when present,
+Read `doc/harness/manifest.yaml`, PLAN.md, CHECKS.yaml, REQUEST.md when present,
 and relevant README/durable docs. Use HANDOFF to find pages and flows.
 
 ## Review Method

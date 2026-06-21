@@ -67,4 +67,4 @@ def test_prewrite_denies_observable_source_edit_without_req_link():
     decision, reason = parse_decision(result.stdout)
     assert decision == "deny"
     assert "C-REQ-observable-doc-required" in (reason or "")
-    assert "write_req_doc" in (reason or "")
+    assert "req_scaffold.py" in (reason or "")

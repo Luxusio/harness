@@ -15,7 +15,7 @@ description: |
 > **Codex runtime notes** (delta from Claude plan-ceo-review skill — read these first):
 > - **No `AskUserQuestion` structured tool.** Where the Claude skill emits an AskUserQuestion with labeled options, Codex emits the question + options as plain prose and reads the user's reply on the next turn. Options stay lettered/numbered so the user can pick by short response (e.g. "A", "B", "1"). Every call site that says "use AskUserQuestion" or "call AskUserQuestion" or "surface via AskUserQuestion" is replaced with a conversational prose ask in this port.
 > - **No `Agent(subagent_type=...)` Voice fan-out for spec review loop.** The source skill dispatches an independent reviewer subagent via the Agent tool. Source declares dual-voice via Agent fan-out; Codex v1.5 has no Agent primitive in this skill's scope, so the spec review loop runs single-voice in the orchestrator's context. v2 will re-evaluate when multi_agent ergonomics improve.
-> - **MCP tool names are bare** on Codex (`task_start`, `task_close`, `write_handoff`, `write_doc_sync`). The Claude long-form prefix (Claude-prefixed) does not apply.
+> - **MCP tool names are bare** on Codex (`task_start`, `task_context`, `task_verify`, `task_close`). The Claude long-form prefix (Claude-prefixed) does not apply.
 > - **Env var is `HARNESS_PLUGIN_ROOT`**, not `CLAUDE_PLUGIN_ROOT`. Bash blocks below use this variant.
 > - **Sub-file fallback.** The source has no sub-files; this note is informational only. If future sub-files appear in the Claude tree under `plugin/skills/plan-ceo-review/`, read them from there. DO NOT expect Codex-native copies.
 > - **Outside Voice — Codex available path.** When Codex IS available (this runtime), the Outside Voice section applies: construct the review prompt and run it via `codex exec`. The Claude adversarial subagent path is the fallback used only when `which codex` fails.
@@ -170,12 +170,12 @@ If a prior plan-ceo-review or `Skill(harness:setup)` session paused partway thro
 
 ```bash
 _TASK_DIR="doc/harness/tasks/$(ls doc/harness/tasks/ 2>/dev/null | grep TASK__ | head -1)"
-if [ -f "$_TASK_DIR/HANDOFF.md" ]; then
-  grep -A3 "CEO Review Handoff\|setup Handoff\|paused at\|resume from" "$_TASK_DIR/HANDOFF.md" 2>/dev/null | head -20
+if [ -f "$_TASK_DIR/final summary" ]; then
+  grep -A3 "CEO Review Handoff\|setup Handoff\|paused at\|resume from" "$_TASK_DIR/final summary" 2>/dev/null | head -20
 fi
 ```
 
-If a handoff is found: extract the prior premises, scope decisions, and any user answers. Do NOT re-ask questions that were already answered in the prior session. Only ask what is genuinely new or changed since the handoff. Scope HANDOFF.md reads to the current `TASK__<id>` directory — never cross tasks.
+If a summary is found: extract the prior premises, scope decisions, and any user answers. Do NOT re-ask questions that were already answered in the prior session. Only ask what is genuinely new or changed since the summary. Scope final summary reads to the current `TASK__<id>` directory — never cross tasks.
 
 ## Landscape Check
 
@@ -275,7 +275,7 @@ After the loop: "Your doc survived N rounds of adversarial review. M issues caug
 
 ## Handoff Notes
 
-If this review pauses mid-session (e.g. to run another skill), capture a handoff note:
+If this review pauses mid-session (e.g. to run another skill), capture a summary note:
 
 ```markdown
 # CEO Review Handoff Note
@@ -287,7 +287,7 @@ Pending questions: {list}
 Next step: {what to resume with}
 ```
 
-Write to `doc/harness/tasks/<task-id>/ceo-handoff.md`. On resume, read this note first to pick up where you left off.
+Write to `doc/harness/tasks/<task-id>/ceo-summary.md`. On resume, read this note first to pick up where you left off.
 
 ## Cross-project Learnings
 

@@ -1014,59 +1014,10 @@ _DESKTOP_PATH_FRAGMENTS = (
 )
 _REQ_REF_RE = re.compile(r"doc/[^)\]\s`'\"]+/REQ__[A-Za-z0-9_.-]+\.md")
 _DURABLE_DOC_RE = re.compile(r"^doc/[^/]+/(?:REQ|GUIDE|ADR|POLICY)__[^/]+\.md$")
-_CRITIC_DOCUMENT_PASS_RE = re.compile(r"^\s*PASS\s*$", re.MULTILINE)
 _UX_VERDICT_RE = re.compile(
     r"^## ux-(cli|api|browser|desktop) verdict: (PASS|FAIL|BLOCKED_ENV|PENDING)\s*$",
     re.MULTILINE,
 )
-_COMMIT_BACKED_LEARNING_HEADING_RE = re.compile(
-    r"^[ \t]{0,3}#{1,3}\s*Commit-backed Learnings\b",
-    re.MULTILINE | re.IGNORECASE,
-)
-_SELF_HEALING_HEADING_RE = re.compile(
-    r"^[ \t]{0,3}#{1,3}\s*Self-Healing Candidates\b",
-    re.MULTILINE | re.IGNORECASE,
-)
-_USER_FEEDBACK_HEADING_RE = re.compile(
-    r"^[ \t]{0,3}#{1,3}\s*User Feedback Disposition\b",
-    re.MULTILINE | re.IGNORECASE,
-)
-_COMMIT_BACKED_LEARNING_STATUS_RE = re.compile(
-    r"^[ \t]{0,3}Status:\s*(none|captured|rejected)\b",
-    re.MULTILINE | re.IGNORECASE,
-)
-_SELF_HEALING_STATUS_RE = re.compile(
-    r"^[ \t]{0,3}Status:\s*(none|applied|deferred|rejected)\b",
-    re.MULTILINE | re.IGNORECASE,
-)
-_FENCED_CODE_BLOCK_RE = re.compile(r"(^|\n)[ \t]{0,3}(```|~~~).*?(\n[ \t]{0,3}\2|$)", re.DOTALL)
-_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
-_COMMIT_BACKED_LEARNING_NEXT_HEADING_RE = re.compile(
-    r"^[ \t]{0,3}#{1,3}\s+\S+",
-    re.MULTILINE,
-)
-_COMMIT_BACKED_CAPTURED_LINE_RE = re.compile(
-    r"^[ \t]{0,3}[-*]\s*captured:\s*(.+)$",
-    re.MULTILINE | re.IGNORECASE,
-)
-_SELF_HEALING_APPLIED_LINE_RE = re.compile(
-    r"^[ \t]{0,3}[-*]\s*applied:\s*(.+)$",
-    re.MULTILINE | re.IGNORECASE,
-)
-_SELF_HEALING_DEFERRED_LINE_RE = re.compile(
-    r"^[ \t]{0,3}[-*]\s*deferred:\s*(.+)$",
-    re.MULTILINE | re.IGNORECASE,
-)
-_SELF_HEALING_REJECTED_LINE_RE = re.compile(
-    r"^[ \t]{0,3}[-*]\s*rejected:\s*(.+)$",
-    re.MULTILINE | re.IGNORECASE,
-)
-_USER_FEEDBACK_TERMINAL_STATUSES = {"promoted", "handled-local", "deferred", "rejected"}
-_USER_FEEDBACK_DISPOSITION_RE = re.compile(
-    r"\bevent:\s*([A-Za-z0-9_.:-]+)\b.*?\bstatus:\s*([A-Za-z-]+)\b",
-    re.IGNORECASE,
-)
-_COMMIT_BACKED_CAPTURED_CANDIDATE_LIMIT = 32
 
 
 def _read_nested_manifest_field(repo_root, *keys):
@@ -1210,7 +1161,7 @@ def _required_ux_lenses(repo_root, touched_paths):
 def _has_req_doc_reference(task_dir, touched_paths):
     """Return True when task artifacts or touched docs reference a durable REQ."""
     repo_root = find_repo_root(task_dir)
-    artifact_names = ("PLAN.md", "HANDOFF.md", "DOC_SYNC.md")
+    artifact_names = ("PLAN.md",)
     for name in artifact_names:
         path = os.path.join(task_dir, name)
         if not os.path.isfile(path):
@@ -1266,20 +1217,6 @@ def _task_req_detector_texts(task_dir):
                 texts.append(f.read())
         except OSError:
             continue
-    handoff = os.path.join(task_dir, "HANDOFF.md")
-    if os.path.isfile(handoff):
-        try:
-            with open(handoff, encoding="utf-8") as f:
-                body = f.read()
-            match = re.search(
-                r"^[ \t]{0,3}#{1,3}\s*Post-Close User Feedback\b(.*?)(?=^[ \t]{0,3}#{1,3}\s+\S+|\Z)",
-                body,
-                flags=re.IGNORECASE | re.MULTILINE | re.DOTALL,
-            )
-            if match:
-                texts.append(match.group(1))
-        except OSError:
-            pass
     return texts
 
 
@@ -1318,237 +1255,8 @@ def _feedback_event_ids(task_dir):
     return ids
 
 
-def _feedback_disposition_ids(task_dir):
-    """Return event ids terminally disposed in HANDOFF.md."""
-    path = os.path.join(task_dir, "HANDOFF.md")
-    section = _handoff_section_body(path, _USER_FEEDBACK_HEADING_RE)
-    if section is None:
-        return set()
-    resolved = set()
-    for match in _USER_FEEDBACK_DISPOSITION_RE.finditer(section):
-        event_id = match.group(1).strip()
-        status = match.group(2).strip().lower()
-        if status in _USER_FEEDBACK_TERMINAL_STATUSES:
-            resolved.add(event_id)
-    return resolved
-
-
 def _unresolved_feedback_event_ids(task_dir):
-    events = _feedback_event_ids(task_dir)
-    if not events:
-        return []
-    resolved = _feedback_disposition_ids(task_dir)
-    return [event_id for event_id in events if event_id not in resolved]
-
-
-def _has_commit_backed_learning_section(task_dir):
-    """Return True when HANDOFF records shared-learning disposition.
-
-    Runtime-local `learnings.jsonl` is gitignored staging. Every task handoff must
-    say whether reusable learning was absent, captured into committed artifacts,
-    or explicitly rejected so future contributors are not asked to rely on a
-    private session memory file.
-    """
-    path = os.path.join(task_dir, "HANDOFF.md")
-    section = _handoff_section_body(path, _COMMIT_BACKED_LEARNING_HEADING_RE)
-    if section is None:
-        return False
-    status_match = _COMMIT_BACKED_LEARNING_STATUS_RE.search(section)
-    if not status_match:
-        return False
-    status = status_match.group(1).lower()
-    if status != "captured":
-        return True
-    return _section_names_changed_artifact(
-        task_dir, section, _COMMIT_BACKED_CAPTURED_LINE_RE
-    )
-
-
-def _commit_backed_learning_missing_reasons(task_dir):
-    """Return precise close-gate reasons for the HANDOFF learning section."""
-    path = os.path.join(task_dir, "HANDOFF.md")
-    section = _handoff_section_body(path, _COMMIT_BACKED_LEARNING_HEADING_RE)
-    if section is None:
-        return ["Commit-backed Learnings section in HANDOFF.md"]
-    status_match = _COMMIT_BACKED_LEARNING_STATUS_RE.search(section)
-    if not status_match:
-        return [
-            "Commit-backed Learnings Status line in HANDOFF.md",
-            "Commit-backed Learnings section in HANDOFF.md",
-        ]
-    status = status_match.group(1).lower()
-    if status != "captured":
-        return []
-    if _section_names_changed_artifact(task_dir, section, _COMMIT_BACKED_CAPTURED_LINE_RE):
-        return []
-    return [
-        "Commit-backed Learnings captured artifact path in HANDOFF.md",
-        "Commit-backed Learnings section in HANDOFF.md",
-    ]
-
-
-def _has_self_healing_candidates_section(task_dir):
-    """Return True when HANDOFF records close-time self-healing disposition."""
-    path = os.path.join(task_dir, "HANDOFF.md")
-    section = _handoff_section_body(path, _SELF_HEALING_HEADING_RE)
-    if section is None:
-        return False
-    status_match = _SELF_HEALING_STATUS_RE.search(section)
-    if not status_match:
-        return False
-    status = status_match.group(1).lower()
-    if status == "none":
-        return True
-    if status == "applied":
-        return _section_names_changed_artifact(
-            task_dir, section, _SELF_HEALING_APPLIED_LINE_RE
-        )
-    if status == "deferred":
-        if not _SELF_HEALING_DEFERRED_LINE_RE.search(section):
-            return False
-        lowered = section.lower()
-        return (
-            "user_decision:" in lowered
-            and ("proposed_artifact:" in lowered or "proposed_task:" in lowered)
-            and "reason:" in lowered
-        )
-    if status == "rejected":
-        return bool(_SELF_HEALING_REJECTED_LINE_RE.search(section))
-    return False
-
-
-def _self_healing_candidates_missing_reasons(task_dir):
-    """Return precise close-gate reasons for the HANDOFF self-healing section."""
-    path = os.path.join(task_dir, "HANDOFF.md")
-    section = _handoff_section_body(path, _SELF_HEALING_HEADING_RE)
-    if section is None:
-        return ["Self-Healing Candidates section in HANDOFF.md"]
-    status_match = _SELF_HEALING_STATUS_RE.search(section)
-    if not status_match:
-        return [
-            "Self-Healing Candidates Status line in HANDOFF.md",
-            "Self-Healing Candidates section in HANDOFF.md",
-        ]
-    status = status_match.group(1).lower()
-    if status == "none":
-        return []
-    if status == "applied":
-        if _section_names_changed_artifact(task_dir, section, _SELF_HEALING_APPLIED_LINE_RE):
-            return []
-        return [
-            "Self-Healing Candidates applied artifact path in HANDOFF.md",
-            "Self-Healing Candidates section in HANDOFF.md",
-        ]
-    if status == "deferred":
-        lowered = section.lower()
-        if (
-            _SELF_HEALING_DEFERRED_LINE_RE.search(section)
-            and "user_decision:" in lowered
-            and ("proposed_artifact:" in lowered or "proposed_task:" in lowered)
-            and "reason:" in lowered
-        ):
-            return []
-        return [
-            "Self-Healing Candidates deferred decision fields in HANDOFF.md",
-            "Self-Healing Candidates section in HANDOFF.md",
-        ]
-    if status == "rejected" and _SELF_HEALING_REJECTED_LINE_RE.search(section):
-        return []
-    return [
-        "Self-Healing Candidates valid status body in HANDOFF.md",
-        "Self-Healing Candidates section in HANDOFF.md",
-    ]
-
-
-def _handoff_section_body(path, heading_re):
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            body = f.read()
-    except OSError:
-        return None
-    body = _HTML_COMMENT_RE.sub("\n", _FENCED_CODE_BLOCK_RE.sub("\n", body))
-    heading = heading_re.search(body)
-    if not heading:
-        return None
-    remainder = body[heading.end():]
-    next_heading = _COMMIT_BACKED_LEARNING_NEXT_HEADING_RE.search(remainder)
-    return remainder[:next_heading.start()] if next_heading else remainder
-
-
-def _section_names_changed_artifact(task_dir, section, item_re):
-    repo_root = find_repo_root(task_dir)
-    touched = _commit_backed_learning_touched_paths(task_dir)
-    touched_candidates = sorted(touched, key=len, reverse=True)
-    candidates = []
-    for line_match in item_re.finditer(section):
-        line = line_match.group(1)
-        for rel_path in touched_candidates:
-            if rel_path not in line:
-                continue
-            normalized = _normalize_commit_backed_learning_path(repo_root, rel_path)
-            if not normalized:
-                continue
-            candidates.append(normalized)
-            if len(candidates) >= _COMMIT_BACKED_CAPTURED_CANDIDATE_LIMIT:
-                break
-        if len(candidates) >= _COMMIT_BACKED_CAPTURED_CANDIDATE_LIMIT:
-            break
-    if not candidates:
-        return False
-    ignored = _git_ignored_paths(repo_root, candidates)
-    return any(path not in ignored for path in candidates)
-
-
-def _commit_backed_learning_touched_paths(task_dir):
-    paths = set()
-    st = read_state(task_dir)
-    for rel in st.get("touched_paths") or []:
-        norm = os.path.normpath(str(rel))
-        if norm and norm == str(rel) and not norm.startswith(".."):
-            paths.add(norm)
-    return paths
-
-
-def _normalize_commit_backed_learning_path(repo_root, rel_path):
-    """Return normalized rel_path when it names a real repo artifact."""
-    if not rel_path or os.path.isabs(rel_path):
-        return None
-    norm = os.path.normpath(rel_path)
-    if norm != rel_path or norm in (".", "") or norm.startswith(".."):
-        return None
-    if norm == "doc/harness/learnings.jsonl" or norm.startswith("doc/harness/tasks/"):
-        return None
-    abs_path = os.path.realpath(os.path.join(repo_root, norm))
-    real_root = os.path.realpath(repo_root)
-    if not (abs_path == real_root or abs_path.startswith(real_root + os.sep)):
-        return None
-    if not os.path.isfile(abs_path):
-        return None
-    return norm
-
-
-def _git_ignored_paths(repo_root, rel_paths):
-    """Return the subset of rel_paths ignored by git, using one bounded subprocess."""
-    paths = [p for p in rel_paths if p]
-    if not paths:
-        return set()
-    try:
-        ignored = subprocess.run(
-            ["git", "-c", f"safe.directory={repo_root}", "check-ignore", "--stdin"],
-            cwd=repo_root,
-            input="\n".join(paths) + "\n",
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=2.0,
-        )
-        if ignored.returncode == 0:
-            return {line.strip() for line in ignored.stdout.splitlines() if line.strip()}
-    except Exception:
-        pass
-    return set()
+    return _feedback_event_ids(task_dir)
 
 
 def is_maintenance_task(task_dir, repo_root=None):
@@ -1609,43 +1317,6 @@ def list_attempts(task_dir):
             meta.setdefault("id", name)
             attempts.append(meta)
     return attempts
-
-
-def record_attempt(task_dir, kind, verdict, summary, transcript=""):
-    """Create attempts/attempt-NNN with JSON metadata and optional transcript."""
-    root = _attempts_dir(task_dir)
-    os.makedirs(root, exist_ok=True)
-    existing = [
-        int(m.group(1))
-        for name in os.listdir(root)
-        for m in [re.match(r"^attempt-(\d{3})$", name)]
-        if m
-    ]
-    idx = (max(existing) + 1) if existing else 1
-    attempt_id = f"attempt-{idx:03d}"
-    adir = os.path.join(root, attempt_id)
-    os.makedirs(adir, exist_ok=False)
-    meta = {
-        "id": attempt_id,
-        "ts": now_iso(),
-        "kind": str(kind or "retry"),
-        "verdict": str(verdict or "unknown").upper(),
-        "summary": str(summary or "")[:1000],
-    }
-    _atomic_json_write(os.path.join(adir, "attempt.json"), meta)
-    if transcript:
-        with open(os.path.join(adir, "transcript.txt"), "w", encoding="utf-8") as f:
-            f.write(str(transcript))
-            if not str(transcript).endswith("\n"):
-                f.write("\n")
-    with open(os.path.join(adir, "SUMMARY.md"), "w", encoding="utf-8") as f:
-        f.write(
-            f"# {attempt_id}\n\n"
-            f"kind: {meta['kind']}\n\n"
-            f"verdict: {meta['verdict']}\n\n"
-            f"summary: {meta['summary']}\n"
-        )
-    return meta
 
 
 def _atomic_json_write(path, data):
@@ -1884,16 +1555,9 @@ def emit_compact_context(task_dir):
     source_write_allowed = has_plan or micro_loop
     why_blocked = "" if source_write_allowed else "PLAN.md does not exist yet"
 
-    has_handoff = artifact_exists(task_dir, "HANDOFF.md")
-
     missing_for_close = []
     if not has_plan and not micro_loop:
         missing_for_close.append("PLAN.md")
-    if not has_handoff:
-        missing_for_close.append("HANDOFF.md")
-    else:
-        missing_for_close.extend(_commit_backed_learning_missing_reasons(task_dir))
-        missing_for_close.extend(_self_healing_candidates_missing_reasons(task_dir))
     receipt_summary = subagent_receipt_summary(task_dir)
     if runtime_verdict != "PASS":
         missing_for_close.append("subagent start receipt")
@@ -1928,54 +1592,14 @@ def emit_compact_context(task_dir):
         else:
             missing_for_close.append("REQ durable doc for observable behavior or user feedback")
 
-    if unresolved_feedback:
-        missing_for_close.append("User feedback disposition in HANDOFF.md")
-
     if not has_plan and not micro_loop:
         next_action = "Create PLAN.md via plan skill before source writes."
-    elif micro_loop and not has_handoff:
-        next_action = (
-            "Micro-loop active — PLAN.md is exempt under execution_mode='micro' "
-            "(REQ durable-doc gate still applies). Develop, write HANDOFF.md, "
-            "then verify. Verification is still required."
-        )
     elif runtime_verdict != "PASS":
         next_action = "Spawn a subagent; the start hook records the verification receipt."
     elif any(m.startswith("REQ durable doc") for m in missing_for_close):
         next_action = (
             "Create or update a doc/<area>/REQ__*.md for the observable "
-            "behavior before source work. Use write_req_doc or req_scaffold.py, "
-            "then link it from PLAN.md or HANDOFF.md."
-        )
-    elif "User feedback disposition in HANDOFF.md" in missing_for_close:
-        feedback_ids = ", ".join(unresolved_feedback)
-        next_action = (
-            "Review USER_FEEDBACK.jsonl before the next dependent action. Reflect "
-            "each event in code/docs/tests, defer it, or reject it, then add "
-            "`## User Feedback Disposition` lines to HANDOFF.md using "
-            "`event: <id> status: promoted|handled-local|deferred|rejected`. "
-            f"Unresolved feedback ids: {feedback_ids}."
-        )
-    elif any(m.startswith("Commit-backed Learnings") for m in missing_for_close):
-        next_action = (
-            "Rewrite HANDOFF.md via write_handoff, preserving existing content, "
-            "and fix Commit-backed Learnings. Required shape: "
-            "`## Commit-backed Learnings`, `Status: none|captured|rejected`. "
-            "When captured, include `- captured: <changed commit-eligible path> "
-            "- <rule/fact>`; doc/harness/learnings.jsonl, task-local files, "
-            "ignored files, nonexistent files, and untouched existing files do "
-            f"not count. Missing: {', '.join(m for m in missing_for_close if m.startswith('Commit-backed Learnings'))}."
-        )
-    elif any(m.startswith("Self-Healing Candidates") for m in missing_for_close):
-        next_action = (
-            "Rewrite HANDOFF.md via write_handoff, preserving existing content, "
-            "and fix Self-Healing Candidates. Required shape: "
-            "`## Self-Healing Candidates`, `Status: none|applied|deferred|rejected`. "
-            "When applied, include `- applied: <failure mode> - <changed "
-            "commit-eligible path>`; when deferred, include a `- deferred:` item "
-            "plus `user_decision:`, `reason:`, and `proposed_artifact:` or "
-            "`proposed_task:`; rejected items need `- rejected: <candidate> - "
-            f"<reason>`. Missing: {', '.join(m for m in missing_for_close if m.startswith('Self-Healing Candidates'))}."
+            "behavior before source work, then link it from PLAN.md."
         )
     else:
         next_action = "Subagent receipt present — run task_close."
@@ -2198,7 +1822,6 @@ def provenance_from_artifacts(task_dir):
     has_subagent = artifact_exists(task_dir, SUBAGENT_RECEIPTS_NAME)
     return {
         "plan-skill": artifact_exists(task_dir, "PLAN.md"),
-        "developer": artifact_exists(task_dir, "HANDOFF.md"),
         "subagent-start-hook": has_subagent,
         "qa-browser": has_subagent,
         "qa-api": has_subagent,
