@@ -184,7 +184,7 @@ For each MVP and hardening slice:
 3. Let harness perform plan -> develop -> verify -> close.
 4. If QA returns FAIL, send the findings back through harness develop. Keep the
    retry loop active until PASS, BLOCKED_ENV, or the run skill's retry limit.
-5. If UX returns FAIL or `task_close` reports `ux-* PASS in CRITIC__ux.md`,
+5. If UX returns FAIL or `task_close` reports a missing subagent start receipt,
    treat the UX finding as required product work for that slice. Fix it and
    re-run the relevant UX/QA verification.
 6. If harness discovers missing durable docs, REQ gaps, tests, or product

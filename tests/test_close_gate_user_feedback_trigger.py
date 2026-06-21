@@ -26,15 +26,10 @@ def test_develop_skill_phase_86_mentions_user_feedback_jsonl_trigger():
     )
 
 
-def test_plugin_claude_md_mentions_critic_document_user_feedback_trigger():
+def test_plugin_claude_md_mentions_user_feedback_close_gate():
     text = CLAUDE_RUNTIME.read_text(encoding="utf-8")
-    idx = text.find("write_critic_document")
-    assert idx >= 0, "write_critic_document entry missing from plugin/CLAUDE.md"
-    after = text[idx : idx + 500]
-    assert "USER_FEEDBACK.jsonl" in after, (
-        "write_critic_document line must mention USER_FEEDBACK.jsonl trigger"
-    )
-    assert "C-101" in after, "write_critic_document line must cite C-101"
+    assert "USER_FEEDBACK.jsonl" in text
+    assert "User feedback disposition in HANDOFF.md" in text
 
 
 def test_contracts_local_c101_present_with_four_fields():

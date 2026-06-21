@@ -3,7 +3,7 @@
 This is the Codex-runtime tree for the harness plugin. **Opt-in.** It does NOT materialize automatically on existing Claude Code installs — set `harness.codex_enabled: true` in your `.claude-plugin/marketplace.json` or invoke `Skill(setup) --include-codex` to enable.
 
 Architecture lives in [`doc/harness/spike-report.md`](../doc/harness/spike-report.md) §3.6 — **MCP-only sharing**:
-- Shared across runtimes: MCP server, hook payload schemas, `plugin/scripts/` (gate scripts, helpers), contract artifacts (PLAN.md / CHECKS.yaml / HANDOFF.md / DOC_SYNC.md / CRITIC__qa.md / CRITIC__ux.md / CRITIC__document.md).
+- Shared across runtimes: MCP server, hook payload schemas, `plugin/scripts/` (gate scripts, helpers), contract artifacts (PLAN.md / CHECKS.yaml / HANDOFF.md / DOC_SYNC.md / SUBAGENT_RECEIPTS.jsonl).
 - Single installer: repo-root `install.py` emits the `~/.codex/config.toml` MCP+hook block that wires the shared substrate into a Codex install.
 - Independent per runtime: SKILL.md trees, agent definitions. Hand-authored on each side, both consuming the same shared substrate.
 
@@ -63,7 +63,7 @@ Further references:
 - `qa-api.md` — API endpoint QA lens.
 - `qa-browser.md` — browser QA lens. Methodology preserved; runtime path deferred until Codex Playwright MCP lands (v2).
 - `qa-desktop.md` — native GUI / x11 QA lens.
-- `ux-cli.md`, `ux-api.md`, `ux-browser.md`, `ux-desktop.md` — surface-specific UX review lenses that write `CRITIC__ux.md`.
+- `ux-cli.md`, `ux-api.md`, `ux-browser.md`, `ux-desktop.md` — surface-specific UX review lenses that return final-response findings.
 - `dogfooder.md` — post-PASS user-facing-experience pass.
 - `developer.md` — HANDOFF / DOC_SYNC / change-doc writer role.
 - `critic-document.md` — DOC_SYNC and durable-doc quality critic role.
@@ -74,7 +74,7 @@ Further references:
 - **Browser MCP verification** — qa-browser methodology is ported, but runtime calls to `mcp__chrome-devtools__*` have no Codex equivalent yet. Wire Codex Playwright MCP in v2.
 - **Dual-voice plan-* reviews** — plan-skill's Voice A / Voice B fan-out for the 4 plan-* review lenses degrades to single-voice on Codex (no Agent primitive). v2 fix is multi_agent-based; until then, users wanting dual-voice fidelity should use native `/goal` on the Claude runtime, which routes through the full plan phase.
 - **AskUserQuestion** — every call site in the 9 ported skills converted to conversational prose with numbered/lettered options. Functional but UX-wise less discoverable than the structured tool. v2 may introduce a Codex helper that renders prose asks with a consistent shape.
-- **Prewrite gate role-detection on Codex** — when the Codex orchestrator runs subagent-role methodology inline (e.g. qa-cli writes CRITIC__qa.md, developer writes HANDOFF.md), the prewrite gate's role-detection currently keys off the Claude subagent-name surface. Until v2 lands runtime-aware role detection in `plugin/scripts/prewrite_gate.py`, the orchestrator uses `HARNESS_SKIP_PREWRITE=1` (documented bypass per CLAUDE.md env-var table; logs `type=gate-bypass` to `learnings.jsonl`).
+- **Prewrite gate role-detection on Codex** — verification receipts are hook-owned, and Codex subagent starts are captured by PreToolUse. Inline fallback roles return final-response findings and do not write critic artifacts.
 - **Stop loop control** — disabled on Codex. Codex follows the prompt in `run` / `develop` to continue through verify and close inside the current turn when feasible. It does not rely on Stop-hook auto-resume.
 
 ## For Claude users

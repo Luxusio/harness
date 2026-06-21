@@ -98,8 +98,8 @@ def _next_action_for_missing(missing_item: str) -> tuple[str, str]:
                 "mcp__plugin_harness_harness__write_handoff",
                 "harness:developer")
     if "qa-browser" in item:
-        return ("Spawn Agent(subagent_type='harness:qa-browser', ...) and call "
-                "mcp__plugin_harness_harness__write_critic_qa with lens='browser'",
+        return ("Spawn Agent(subagent_type='harness:qa-browser', ...); the hook "
+                "records the subagent start receipt",
                 "harness:qa-browser")
     if "runtime_verdict" in item or "pass" in item:
         return ("mcp__plugin_harness_harness__task_verify { task_id: '<task_id>' } "
@@ -116,6 +116,8 @@ def _owner_for_context_next_action(next_action: str) -> str:
         return ""
     if "plan.md" in action or "plan skill" in action:
         return "plan-skill"
+    if "spawn a subagent" in action or "subagent" in action and "receipt" in action:
+        return "harness:qa-*"
     if "task_verify" in action or "runtime verdict" in action:
         return "harness:qa-* or harness:stop-judge"
     if "qa-browser" in action:
@@ -187,16 +189,8 @@ def main():
                 return 0
 
         # BLOCKED_ENV runtime_verdict permits a legitimate paused-with-blocker
-        # stop ONLY when fresh. The stop-judge agent
-        # (plugin/agents/stop-judge.md) records this transition through
+        # stop. The stop-judge agent records this transition through
         # task_blocked.
-        #
-        # Staleness check (AC-001 of TASK__stop-gate-stale-blocked-env-fix):
-        # if any touched_paths file has mtime > CRITIC__qa.md mtime, the
-        # BLOCKED_ENV verdict is historical, not current. Activity continued
-        # after the env blocker was recorded — fall through to the block
-        # payload so the orchestrator must re-verify (via task_verify ->
-        # spawn stop-judge again, or task_close on PASS) before stopping.
         ctx = None
         if td and os.path.isdir(td):
             try:
@@ -224,19 +218,14 @@ def main():
 
         # Cancel-push escape removed. The stop-judge agent is the only
         # legitimate non-PASS escape path — it transitions runtime_verdict to
-        # BLOCKED_ENV via task_blocked; older task states may still have a
-        # stop-judge CRITIC__qa.md section, so stale handling remains here.
-        #
-        # If we reach here with verdict == "BLOCKED_ENV" the verdict is stale
-        # (touched_paths activity post-dates CRITIC__qa.md). Surface that in
-        # the reason so the orchestrator routes to a fresh stop-judge spawn.
+        # BLOCKED_ENV via task_blocked.
         stale = bool(ctx and ctx.get("stale"))
         stale_path = (ctx or {}).get("stale_path", "")
         stale_note = ""
         if stale and (ctx or {}).get("runtime_verdict") == "BLOCKED_ENV":
             stale_note = (
                 " Note: the existing BLOCKED_ENV verdict is STALE — activity"
-                f" on {stale_path or '<touched path>'} post-dates CRITIC__qa.md."
+                f" on {stale_path or '<touched path>'} post-dates the verification signal."
                 " Spawn stop-judge again to re-assess current state, or run"
                 " task_verify after QA to transition toward PASS."
             )

@@ -1,10 +1,10 @@
 ---
 name: ux-cli
-description: harness CLI UX review methodology — judges command discoverability, output actionability, and error recovery. Complements qa-cli; writes CRITIC__ux.md.
+description: harness CLI UX review methodology — judges command discoverability, output actionability, and error recovery. Complements qa-cli.
 ---
 
 Codex uses bare MCP tool names. Follow the CLI UX methodology and call
-`write_critic_ux` with `lens="cli"`.
+Return PASS/FAIL/BLOCKED_ENV findings in your final response.
 
 You are not qa-cli. Exercise enough command paths to experience the changed
 flow: help, happy path, invalid input, empty/missing config, and repeat or

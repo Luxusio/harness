@@ -6,8 +6,8 @@ description: harness API QA agent — verifies operation, intent adequacy, API d
 ## Codex runtime notes
 
 This file is an inline role/methodology reference. Codex uses bare MCP tool
-names such as `write_critic_qa`; Claude `mcp__plugin_harness_harness__*` names
-do not apply. Use `${HARNESS_PLUGIN_ROOT}` for plugin scripts.
+names such as `task_verify`; do not call critic writer tools. Codex hooks
+record subagent starts automatically. Use `${HARNESS_PLUGIN_ROOT}` for plugin scripts.
 
 Mission: verify every PLAN.md AC with concrete API evidence. Do not accept
 implementation claims or CI as evidence for this host.
@@ -99,7 +99,7 @@ All four roles must pass:
    invalid-input paths. Validate status, JSON shape, error body, and leaked internals.
 5. Evaluate API design: consistency, actionable errors, docs usability,
    concurrency, large payloads, unicode/special characters.
-6. Call `write_critic_qa`.
+6. Return the verdict and evidence in your final response. Do not write critic artifacts.
 
 **PASS requires:** operation OK + intent adequate + API design OK + runtime
 correct. For externally consumed API changes, prefer `live-http` evidence. If
@@ -115,8 +115,8 @@ log useful friction signals to `doc/harness/learnings.jsonl`.
 ## Self-Healing Candidates for HANDOFF
 
 When QA discovers recurring harness/project friction that should be prevented
-next time, add a short `Self-Healing Candidates for HANDOFF` note to the
-`write_critic_qa` transcript. Include server setup drift, missing seed/auth
+next time, add a short `Self-Healing Candidates for HANDOFF` note to your
+final response. Include server setup drift, missing seed/auth
 scripts, manifest base URL gaps, CI/test command mismatch, brittle fixtures, or
 manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
 when obvious; Phase 8 writes the final HANDOFF `Self-Healing Candidates` section.

@@ -42,7 +42,7 @@ def _build_scratch_repo(base: Path, *,
                         task_state: str | None = None,
                         plan: bool = True,
                         checks_yaml: str | None = None,
-                        write_critic: bool = False,
+                        write_receipt: bool = False,
                         touched_paths: list[str] | None = None,
                         suspect_notes: dict[str, str] | None = None,
                         ignored_note: bool = False) -> Path:
@@ -70,8 +70,11 @@ def _build_scratch_repo(base: Path, *,
                 f"updated: 2026-04-19T00:00:00Z\n",
                 encoding="utf-8",
             )
-        if write_critic:
-            (task_dir / "CRITIC__qa.md").write_text("# critic\n", encoding="utf-8")
+        if write_receipt:
+            (task_dir / "SUBAGENT_RECEIPTS.jsonl").write_text(
+                '{"source":"subagent_start_hook","status":"started","agent_id":"agent-1","agent_type":"harness:qa-cli"}\n',
+                encoding="utf-8",
+            )
         if checks_yaml is not None:
             (task_dir / "CHECKS.yaml").write_text(checks_yaml, encoding="utf-8")
         (tasks / ".active").write_text(str(task_dir), encoding="utf-8")
@@ -346,30 +349,27 @@ class TestPromptMemory(unittest.TestCase):
         self.assertNotIn("strategy", record)
         self.assertIn("특정 페이지", record["objective"])
 
-    # ---- AC-003: verdict + stale ----
-    def test_stale_flag_when_touched_newer_than_critic(self):
+    # ---- AC-003: receipt-backed verification ----
+    def test_receipt_backed_verification_does_not_report_stale(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(
                 Path(tmp), active_task_id="TASK__stale",
-                write_critic=True,
+                write_receipt=True,
                 touched_paths=["src/foo.py"],
             )
-            # CRITIC older than touched source
             (base / "src").mkdir()
             src = base / "src" / "foo.py"
             src.write_text("pass\n")
             now = time.time()
             os.utime(src, (now, now))
-            critic = base / "doc" / "harness" / "tasks" / "TASK__stale" / "CRITIC__qa.md"
-            os.utime(critic, (100, 100))
             r = _invoke(str(base))
-        self.assertIn(" stale", r.stdout)
+        self.assertNotIn(" stale", r.stdout)
 
     def test_stale_skip_list_ignores_pyc(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(
                 Path(tmp), active_task_id="TASK__pyc",
-                write_critic=True,
+                write_receipt=True,
                 touched_paths=["src/__pycache__/foo.cpython-311.pyc"],
             )
             (base / "src" / "__pycache__").mkdir(parents=True)
@@ -377,8 +377,6 @@ class TestPromptMemory(unittest.TestCase):
             pyc.write_text("x")
             now = time.time()
             os.utime(pyc, (now, now))
-            critic = base / "doc" / "harness" / "tasks" / "TASK__pyc" / "CRITIC__qa.md"
-            os.utime(critic, (100, 100))
             r = _invoke(str(base))
         self.assertNotIn(" stale", r.stdout,
                          f"pyc path should be skip-listed: {r.stdout!r}")

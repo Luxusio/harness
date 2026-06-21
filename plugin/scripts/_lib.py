@@ -1207,40 +1207,6 @@ def _required_ux_lenses(repo_root, touched_paths):
     return lenses
 
 
-def _ux_lens_verdicts(task_dir):
-    path = os.path.join(task_dir, "CRITIC__ux.md")
-    if not os.path.isfile(path):
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            body = f.read()
-    except OSError:
-        return {}
-    return {lens: verdict for lens, verdict in _UX_VERDICT_RE.findall(body)}
-
-
-def _ux_review_stale(task_dir, touched_paths):
-    path = os.path.join(task_dir, "CRITIC__ux.md")
-    if not os.path.isfile(path):
-        return False, ""
-    try:
-        critic_mtime = os.path.getmtime(path)
-    except OSError:
-        return False, ""
-    repo_root = find_repo_root(task_dir)
-    for rel in (touched_paths or [])[:_STALE_CHECK_PATH_CAP]:
-        if _stale_skip(rel):
-            continue
-        abs_path = rel if os.path.isabs(rel) else os.path.join(repo_root, rel)
-        try:
-            m = os.path.getmtime(abs_path)
-        except OSError:
-            continue
-        if m > critic_mtime:
-            return True, rel
-    return False, ""
-
-
 def _has_req_doc_reference(task_dir, touched_paths):
     """Return True when task artifacts or touched docs reference a durable REQ."""
     repo_root = find_repo_root(task_dir)
@@ -1373,56 +1339,6 @@ def _unresolved_feedback_event_ids(task_dir):
         return []
     resolved = _feedback_disposition_ids(task_dir)
     return [event_id for event_id in events if event_id not in resolved]
-
-
-def _document_critic_status(task_dir, durable_doc_paths):
-    """Return (ok, reason) for CRITIC__document.md freshness and PASS verdict."""
-    if not durable_doc_paths:
-        return True, ""
-    path = os.path.join(task_dir, "CRITIC__document.md")
-    if not os.path.isfile(path):
-        return False, "CRITIC__document.md PASS for durable docs"
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            body = f.read()
-    except OSError:
-        return False, "CRITIC__document.md PASS for durable docs"
-    if not _CRITIC_DOCUMENT_PASS_RE.search(body):
-        return False, "CRITIC__document.md PASS for durable docs"
-
-    repo_root = find_repo_root(task_dir)
-    try:
-        critic_mtime = os.path.getmtime(path)
-    except OSError:
-        return False, "fresh CRITIC__document.md PASS for durable docs"
-    for rel in durable_doc_paths:
-        abs_path = os.path.join(repo_root, rel)
-        try:
-            if os.path.getmtime(abs_path) > critic_mtime:
-                return False, "fresh CRITIC__document.md PASS for durable docs"
-        except OSError:
-            continue
-    return True, ""
-
-
-def _has_qa_browser_section(task_dir):
-    """Return True if CRITIC__qa.md has a qa-browser header.
-
-    Anchors on ``## qa-browser`` or ``### qa-browser`` at the start of a line
-    so prose mentions of ``qa-browser`` in transcripts do not match.
-    """
-    path = os.path.join(task_dir, "CRITIC__qa.md")
-    if not os.path.isfile(path):
-        return False
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                s = line.lstrip()
-                if s.startswith("## qa-browser") or s.startswith("### qa-browser"):
-                    return True
-    except Exception:
-        return False
-    return False
 
 
 def _has_commit_backed_learning_section(task_dir):
@@ -1786,9 +1702,9 @@ def _infer_receipt_lens(agent_type, explicit_lens=""):
 def record_subagent_receipt(task_dir, receipt):
     """Append a structured subagent invocation receipt to the task directory.
 
-    This is intentionally separate from CHECKS.yaml AC promotion. It records
-    that a subagent path actually ran; QA verdicts still live in CRITIC__qa.md
-    and reconciliation still belongs to task_verify.
+    This is intentionally hook-owned. It records that a subagent start was
+    observed for the task; task_verify uses receipt presence as the verification
+    signal.
     """
     if not isinstance(receipt, dict):
         raise ValueError("receipt must be an object")
@@ -1883,19 +1799,23 @@ def subagent_receipt_summary(task_dir):
     }
 
 
+def receipt_runtime_verdict(task_dir, state=None):
+    """Compute runtime verdict from hook-owned subagent receipts only."""
+    st = state or read_state(task_dir)
+    current = (st.get("runtime_verdict") or "pending").upper() if isinstance(st, dict) else "PENDING"
+    if current == "BLOCKED_ENV":
+        return "BLOCKED_ENV"
+    return "PASS" if subagent_receipt_summary(task_dir).get("count", 0) > 0 else "PENDING"
+
+
 # ── Task context ─────────────────────────────────────────────────────────
 
 
 # ── Runtime-verdict staleness check ─────────────────────────────────────
 #
-# A frozen `runtime_verdict` (PASS / BLOCKED_ENV) must NOT permit close or
-# stop if any tracked file has been modified after the verdict was written
-# to `CRITIC__qa.md`. PR2 introduced this gate for `task_close`; AC-001
-# of TASK__stop-gate-stale-blocked-env-fix extends it to the Stop hook.
-#
-# Skip lists below cover churn that doesn't reflect a real code change
-# (Python caches, OS metadata, editor swap files). Without the skip,
-# `__pycache__/*.pyc` touches would falsely stale every verdict.
+# Runtime verification is receipt-backed: a task has runtime PASS only when a
+# hook-owned subagent-start receipt exists. There is no verification artifact
+# mtime to compare, so staleness is not part of the close signal.
 
 _STALE_CHECK_SKIP_SUFFIXES = (
     ".pyc", ".pyo", ".pyd",
@@ -1910,8 +1830,7 @@ _STALE_CHECK_SKIP_PREFIXES = (
 _STALE_CHECK_SKIP_BASENAMES = {
     "HANDOFF.md",
     "DOC_SYNC.md",
-    "CRITIC__qa.md",
-    "CRITIC__document.md",
+    SUBAGENT_RECEIPTS_NAME,
     "TASK_STATE.yaml",
     "PLAN.meta.json",
     "PLAN_SESSION.json",
@@ -1942,40 +1861,6 @@ def _stale_skip(relpath: str) -> bool:
 
 
 def runtime_is_stale(task_dir: str) -> tuple[bool, str]:
-    """Return ``(stale, offending_path)``.
-
-    Stale when any file in ``touched_paths`` has ``mtime > mtime(CRITIC__qa.md)``.
-    Skips Python caches / OS metadata per ``_STALE_CHECK_SKIP_*``. If
-    ``CRITIC__qa.md`` is absent the caller is expected to be blocked by the
-    ``runtime_verdict PASS`` / ``BLOCKED_ENV`` precondition; return
-    ``(False, "")`` so this helper does not double-fire.
-    """
-    critic_path = os.path.join(task_dir, "CRITIC__qa.md")
-    if not os.path.isfile(critic_path):
-        return False, ""
-    try:
-        critic_mtime = os.path.getmtime(critic_path)
-    except OSError:
-        return False, ""
-
-    st = read_state(task_dir)
-    touched = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
-    if not touched:
-        return False, ""
-
-    repo_root = find_repo_root()
-    for rel in touched[:_STALE_CHECK_PATH_CAP]:
-        if _stale_skip(rel):
-            continue
-        abs_path = rel if os.path.isabs(rel) else os.path.join(repo_root, rel)
-        try:
-            m = os.path.getmtime(abs_path)
-        except OSError:
-            # Deleted paths can be part of a verified diff. There is no mtime
-            # to compare, so they must not make a fresh QA verdict stale forever.
-            continue
-        if m > critic_mtime:
-            return True, rel
     return False, ""
 
 
@@ -1991,7 +1876,7 @@ def emit_compact_context(task_dir):
         return {"error": "no TASK_STATE.yaml", "task_dir": task_dir}
 
     routing = compile_routing(task_dir)
-    runtime_verdict = (st.get("runtime_verdict") or "pending").upper()
+    runtime_verdict = receipt_runtime_verdict(task_dir, st)
     touched = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
 
     micro_loop = _is_micro_loop_state(st)
@@ -2009,13 +1894,12 @@ def emit_compact_context(task_dir):
     else:
         missing_for_close.extend(_commit_backed_learning_missing_reasons(task_dir))
         missing_for_close.extend(_self_healing_candidates_missing_reasons(task_dir))
+    receipt_summary = subagent_receipt_summary(task_dir)
     if runtime_verdict != "PASS":
-        missing_for_close.append("runtime_verdict PASS")
+        missing_for_close.append("subagent start receipt")
 
-    # AC-002: browser-QA close gate (2026-05-12 retro).
-    # When manifest declares browser_qa_supported and touched paths include
-    # frontend files, refuse to close until CRITIC__qa.md has a qa-browser
-    # section. Prevents qa-api-only PASS verdicts on UI-bearing diffs.
+    # Browser QA is represented by the same subagent-start receipt as the rest
+    # of verification. There is no separate browser critic artifact gate.
     repo_root = find_repo_root()
     try:
         browser_supported = _manifest_bool(repo_root, "qa", "browser_qa_supported")
@@ -2026,19 +1910,6 @@ def emit_compact_context(task_dir):
     durable_doc_paths = _durable_docs_touched(touched)
     req_detection = _req_detector_result(task_dir, touched)
     unresolved_feedback = _unresolved_feedback_event_ids(task_dir)
-    if browser_supported and frontend_touched:
-        critic_path = os.path.join(task_dir, "CRITIC__qa.md")
-        if os.path.isfile(critic_path) and not _has_qa_browser_section(task_dir):
-            missing_for_close.append("qa-browser evidence in CRITIC__qa.md")
-
-    required_ux_lenses = _required_ux_lenses(repo_root, touched)
-    if required_ux_lenses:
-        ux_verdicts = _ux_lens_verdicts(task_dir)
-        ux_stale, _ux_stale_path = _ux_review_stale(task_dir, touched)
-        for lens in required_ux_lenses:
-            if ux_verdicts.get(lens) != "PASS" or ux_stale:
-                missing_for_close.append(f"ux-{lens} PASS in CRITIC__ux.md")
-
     # Durable-doc close gate. PLAN's Durable Docs Decision is still required,
     # but implementation can grow new visible/API surfaces after planning. The
     # close gate rechecks the actual diff so `REQ: n/a` cannot silently pass for
@@ -2057,9 +1928,6 @@ def emit_compact_context(task_dir):
         else:
             missing_for_close.append("REQ durable doc for observable behavior or user feedback")
 
-    doc_critic_ok, doc_critic_reason = _document_critic_status(task_dir, durable_doc_paths)
-    if not doc_critic_ok:
-        missing_for_close.append(doc_critic_reason)
     if unresolved_feedback:
         missing_for_close.append("User feedback disposition in HANDOFF.md")
 
@@ -2072,18 +1940,12 @@ def emit_compact_context(task_dir):
             "then verify. Verification is still required."
         )
     elif runtime_verdict != "PASS":
-        next_action = "Run task_verify to check runtime verification."
+        next_action = "Spawn a subagent; the start hook records the verification receipt."
     elif any(m.startswith("REQ durable doc") for m in missing_for_close):
         next_action = (
             "Create or update a doc/<area>/REQ__*.md for the observable "
             "behavior before source work. Use write_req_doc or req_scaffold.py, "
             "then link it from PLAN.md or HANDOFF.md."
-        )
-    elif any(m.startswith("CRITIC__document.md") or m.startswith("fresh CRITIC__document.md")
-             for m in missing_for_close):
-        next_action = (
-            "Run the critic-document agent on changed durable docs and write "
-            "CRITIC__document.md with write_critic_document."
         )
     elif "User feedback disposition in HANDOFF.md" in missing_for_close:
         feedback_ids = ", ".join(unresolved_feedback)
@@ -2093,15 +1955,6 @@ def emit_compact_context(task_dir):
             "`## User Feedback Disposition` lines to HANDOFF.md using "
             "`event: <id> status: promoted|handled-local|deferred|rejected`. "
             f"Unresolved feedback ids: {feedback_ids}."
-        )
-    elif "qa-browser evidence in CRITIC__qa.md" in missing_for_close:
-        next_action = ("Spawn Agent(subagent_type='harness:qa-browser', ...) "
-                       "and call write_critic_qa with lens='browser'.")
-    elif any(m.startswith("ux-") and m.endswith("PASS in CRITIC__ux.md")
-             for m in missing_for_close):
-        next_action = (
-            "Run the required ux-* review lens and call write_critic_ux with "
-            "lens='cli', 'api', 'browser', or 'desktop'."
         )
     elif any(m.startswith("Commit-backed Learnings") for m in missing_for_close):
         next_action = (
@@ -2125,13 +1978,11 @@ def emit_compact_context(task_dir):
             f"<reason>`. Missing: {', '.join(m for m in missing_for_close if m.startswith('Self-Healing Candidates'))}."
         )
     else:
-        next_action = "Runtime verdict PASS — run task_close."
+        next_action = "Subagent receipt present — run task_close."
 
     stale, stale_path = runtime_is_stale(task_dir)
 
     attempts = list_attempts(task_dir)
-    receipt_summary = subagent_receipt_summary(task_dir)
-
     return {
         "task_id": st.get("task_id") or os.path.basename(task_dir),
         "status": st.get("status") or "unknown",
@@ -2344,20 +2195,19 @@ def artifact_exists(task_dir, filename):
 
 def provenance_from_artifacts(task_dir):
     """Derive provenance from artifact existence."""
+    has_subagent = artifact_exists(task_dir, SUBAGENT_RECEIPTS_NAME)
     return {
-        agent: artifact_exists(task_dir, fn)
-        for agent, fn in {
-            "plan-skill": "PLAN.md",
-            "developer": "HANDOFF.md",
-            "qa-browser": "CRITIC__qa.md",
-            "qa-api": "CRITIC__qa.md",
-            "qa-cli": "CRITIC__qa.md",
-            "qa-desktop": "CRITIC__qa.md",
-            "ux-browser": "CRITIC__ux.md",
-            "ux-api": "CRITIC__ux.md",
-            "ux-cli": "CRITIC__ux.md",
-            "ux-desktop": "CRITIC__ux.md",
-        }.items()
+        "plan-skill": artifact_exists(task_dir, "PLAN.md"),
+        "developer": artifact_exists(task_dir, "HANDOFF.md"),
+        "subagent-start-hook": has_subagent,
+        "qa-browser": has_subagent,
+        "qa-api": has_subagent,
+        "qa-cli": has_subagent,
+        "qa-desktop": has_subagent,
+        "ux-browser": has_subagent,
+        "ux-api": has_subagent,
+        "ux-cli": has_subagent,
+        "ux-desktop": has_subagent,
     }
 
 

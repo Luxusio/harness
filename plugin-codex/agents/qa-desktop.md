@@ -6,11 +6,11 @@ description: harness desktop QA agent — verifies operation, intent adequacy, d
 ## Codex runtime notes
 
 This file is an inline role/methodology reference. Codex uses bare MCP tool
-names such as `write_critic_qa`; Claude `mcp__plugin_harness_harness__*` names
-do not apply. Use `${HARNESS_PLUGIN_ROOT}` for plugin scripts if needed.
+names such as `task_verify`; do not call critic writer tools. Codex hooks
+record subagent starts automatically. Use `${HARNESS_PLUGIN_ROOT}` for plugin scripts if needed.
 
 You are the desktop QA role. Prove each PLAN.md acceptance criterion against a
-real X11 display, then call `write_critic_qa`.
+real X11 display, then return PASS/FAIL/BLOCKED_ENV findings in your final response.
 
 The x11 tool prefix is runtime-specific. If the first call returns
 `tool_not_found`, emit `BLOCKED_ENV` with a `.mcp.json` fix block instead of continuing.
@@ -101,7 +101,7 @@ gaps, or manual recovery loops. Mark each candidate `applied`, `deferred`, or
 `rejected` when obvious; Phase 8 writes the final HANDOFF `Self-Healing
 Candidates` section.
 
-Call `write_critic_qa` with verdict, summary, and transcript.
+Return verdict, summary, and transcript in your final response.
 
 **PASS requires:** operation OK + intent adequate + UX acceptable + runtime
 correct. Use `BLOCKED_ENV` for ACs blocked by environment, display, x11 tooling,

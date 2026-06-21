@@ -26,8 +26,7 @@ the agreed bar.
 > - AskUserQuestion is conversational on Codex. Ask the same questions in prose
 >   with clear options and wait for the user's reply.
 > - Use bare MCP tool names on Codex: `task_start`, `task_context`,
->   `task_verify`, `task_close`, `write_critic_qa`, `write_critic_ux`,
->   `write_handoff`, and `write_doc_sync`.
+>   `task_verify`, `task_close`, `write_handoff`, and `write_doc_sync`.
 > - If `spawn_agent` is available, use it for independent QA/UX/review voices.
 >   If not, run the methodology inline and record the same harness artifacts.
 
@@ -194,7 +193,7 @@ For each MVP and hardening slice:
 3. Let harness perform plan -> develop -> verify -> close.
 4. If QA returns FAIL, send the findings back through harness develop. Keep the
    retry loop active until PASS, BLOCKED_ENV, or the run skill's retry limit.
-5. If UX returns FAIL or `task_close` reports `ux-* PASS in CRITIC__ux.md`,
+5. If UX returns FAIL or `task_close` reports a missing subagent start receipt,
    treat the UX finding as required product work for that slice. Fix it and
    re-run the relevant UX/QA verification.
 6. If harness discovers missing durable docs, REQ gaps, tests, or product

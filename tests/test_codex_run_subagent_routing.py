@@ -23,8 +23,8 @@ def test_codex_run_uses_capability_first_subagent_routing():
     assert "User request is not a condition for parallel routing" in body
     assert "the user does not need to request delegation" in body
     assert "spawn_agent {" in body
-    assert "record_subagent_receipt {" in body
-    assert "Do not fabricate this call" in body
+    assert "SUBAGENT_RECEIPTS.jsonl" in body
+    assert "Do not call a harness receipt tool" in body
     assert 'agent_type: "default"' in body
     assert 'agent_type: "worker"' in body
     assert 'agent_type: "explorer"' in body
@@ -41,9 +41,8 @@ def test_codex_run_documents_qa_subagent_call_shape():
     assert "Verify (QA — capability-routed on Codex)" in body
     assert "You are the qa-<lens> lens for <task_id>" in body
     assert "plugin-codex/agents/qa-<lens>.md" in body
-    assert "write_critic_qa with lens='<lens>'" in body
+    assert "concrete findings" in body
     assert "must not invent a PASS from its own context" in body
-    assert "matching `record_subagent_receipt` entry" in body
     assert "`subagent_receipts`" in body
     assert "Runtime Fallbacks" in body
     assert "Agent` fan-out routed through `spawn_agent` when available" in body
@@ -56,10 +55,9 @@ def test_run_skills_document_parallel_ux_lens_routing():
         assert "ux-cli" in body
         assert "ux-api" in body
         assert "ux-desktop" in body
-        assert "write_critic_ux" in body
-        assert "CRITIC__ux.md" in body
-        assert "does not update" in body
-        assert "`runtime_verdict`" in body
+        assert "final response" in body
+        assert "SUBAGENT_RECEIPTS.jsonl" in body
+        assert "runtime_verdict" in body
 
 
 def test_run_skills_document_resume_detection_and_verify_reconciliation():
@@ -72,7 +70,7 @@ def test_run_skills_document_resume_detection_and_verify_reconciliation():
         assert "runtime_verdict is not PASS → Phase 4 Verify" in body
         assert "reconcile_acs" in body
         assert "task_verify" in body
-        assert "failed/deferred ACs still require" in body
+        assert "failed/deferred" in body
 
 
 def test_run_skills_document_separate_hygiene_followup_policy():

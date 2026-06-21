@@ -22,20 +22,17 @@ No step skipped. Smallest coherent diff per step.
 **Core (task driver — main session or run skill):**
 - `task_start` — create/resume task, return fresh context
 - `task_context` — refresh task state (only when needed)
-- `task_verify` — sync changed paths + check verification; optionally reconcile ACs from QA PASS evidence
+- `task_verify` — sync changed paths + compute verification from hook-recorded subagent starts; optionally reconcile ACs when a subagent start receipt exists
 - `task_close` — gate: runtime verdict PASS → close
 - `task_blocked` — park unfinished work on a real environment blocker; writes BLOCKED.md and clears this session's active marker
 
 **Artifact writes (role-owned):**
 - `write_plan_artifact` → PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md (plan-skill)
-- `write_critic_qa` → CRITIC__qa.md + runtime_verdict evidence ledger (qa-* agents)
-- `write_critic_ux` → CRITIC__ux.md (ux-* agents; no runtime_verdict mutation)
-- `write_critic_document` → CRITIC__document.md (critic-document agent; fires at close when durable docs change OR `<task_dir>/USER_FEEDBACK.jsonl` is non-empty, per C-101)
 - `write_req_doc` → doc/<area>/REQ__*.md scaffold for observable behavior (accepts optional `status: accepted|candidate`; critic-document retrospective writes use `candidate`)
 - `write_handoff` → HANDOFF.md (develop coordinator or dedicated developer role)
 - `write_doc_sync` → DOC_SYNC.md (develop coordinator)
 
-Provenance = artifact existence. No counters.
+Verification provenance = `SUBAGENT_RECEIPTS.jsonl` written by Codex/Claude hooks when a subagent starts. The main session never writes verification receipts or critic verdicts.
 
 ## 3. TASK_STATE (7 fields only)
 
@@ -84,8 +81,7 @@ Turn 종결 정당 사유 (runtime_verdict 기반):
 | PLAN.md / PLAN.meta.json / AUDIT_TRAIL.md | plan-skill via `write_plan_artifact` MCP |
 | CHECKS.yaml | plan-skill (create) + update_checks.py CLI (develop/qa updates) |
 | source + HANDOFF.md + DOC_SYNC.md + distilled change doc | developer |
-| CRITIC__qa.md | qa-browser / qa-api / qa-cli / qa-desktop |
-| CRITIC__ux.md | ux-browser / ux-api / ux-cli / ux-desktop |
+| SUBAGENT_RECEIPTS.jsonl | Codex/Claude subagent-start hooks |
 
 Do not write another role's artifact. Prewrite gate enforces this.
 
@@ -110,13 +106,16 @@ discovered.
 
 ## 7. Verification
 
-`task_verify` syncs paths and checks verification state.
+`task_verify` syncs paths and checks for hook-recorded subagent starts.
 Do not claim success from static inspection when runtime verification is required.
 
 ## 8. Finish cleanly
 
-Runtime verdict must be PASS before close.
+Runtime verdict becomes PASS only when `SUBAGENT_RECEIPTS.jsonl` contains at least one hook-recorded subagent start for the task.
 Use `task_close`. If blocked, fix the stated gate.
+Captured user feedback is stored in task-local `USER_FEEDBACK.jsonl`; close
+requires each event to be dispositioned in HANDOFF.md. Missing entries surface
+as `User feedback disposition in HANDOFF.md`.
 
 ## 8a. Note freshness
 
@@ -162,9 +161,9 @@ delegated to the `harness:qa-browser` subagent. The browser MCP surface
 is the actual context-bloat source — DOM snapshots, screenshots, and
 evaluate output add thousands of structured tokens per call.
 
-Why: qa-browser runs browser verification in an isolated context and
-writes structured findings to `CRITIC__qa.md`; the orchestrator reads
-only the verdict (`PASS` / `FAIL` / `BLOCKED_ENV`).
+Why: qa-browser runs browser verification in an isolated context. The start
+hook writes `SUBAGENT_RECEIPTS.jsonl`; the orchestrator reads the subagent's
+final response for findings and uses `task_verify` to compute the close signal.
 
 Allowed inline:
 - **Bash test runners** (`pytest`, `npm test`, `pnpm test`, `yarn test`, `bun test`, `vitest`, `jest`, `mocha`, `cargo test`, `go test`, `mvn test`, `gradle test`, `rspec`, `phpunit`, `rake test`) — single PASS/FAIL lines do not bloat context; inline use is legitimate. For heavy full-suite runs, spawning `harness:qa-cli` (or `qa-api` / `qa-desktop` per project) keeps the main lane clean as a convention, not a gate.

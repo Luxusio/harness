@@ -59,9 +59,7 @@ PROTECTED_ARTIFACTS = {
     "PLAN.meta.json": "plan-skill",
     "CHECKS.yaml": "plan-skill-or-update_checks",
     "AUDIT_TRAIL.md": "plan-skill",
-    "CRITIC__qa.md": "qa-agent",
-    "CRITIC__ux.md": "ux-agent",
-    "CRITIC__document.md": "critic-document",
+    "SUBAGENT_RECEIPTS.jsonl": "subagent-start-hook",
     "HANDOFF.md": "developer",
     "DOC_SYNC.md": "developer",
 }
@@ -72,9 +70,7 @@ PROTECTED_ARTIFACT_HUMAN = {
     "PLAN.meta.json": "plan-skill",
     "CHECKS.yaml": "plan-skill (initial) + scripts/update_checks.py (updates)",
     "AUDIT_TRAIL.md": "plan-skill",
-    "CRITIC__qa.md": "qa-browser / qa-api / qa-cli / qa-desktop",
-    "CRITIC__ux.md": "ux-browser / ux-api / ux-cli / ux-desktop",
-    "CRITIC__document.md": "critic-document",
+    "SUBAGENT_RECEIPTS.jsonl": "Codex/Claude subagent-start hook",
     "HANDOFF.md": "developer",
     "DOC_SYNC.md": "developer",
 }
@@ -381,14 +377,8 @@ def _owner_to_next_action(owner: str) -> str:
                 "python3 plugin/scripts/update_checks.py for AC updates")
     if "plan-skill" in o:
         return _tool_hint("write_plan_artifact", _runtime_name())
-    if "qa-agent" in o:
-        tool = _tool_hint("write_critic_qa", runtime)
-        return ("Spawn Agent(subagent_type='harness:qa-browser' | 'harness:qa-api' | "
-                f"'harness:qa-cli' | 'harness:qa-desktop', ...) and call {tool}")
-    if "ux-agent" in o:
-        tool = _tool_hint("write_critic_ux", runtime)
-        return ("Spawn Agent(subagent_type='harness:ux-browser' | 'harness:ux-api' | "
-                f"'harness:ux-cli' | 'harness:ux-desktop', ...) and call {tool}")
+    if "subagent-start-hook" in o:
+        return "Spawn the required subagent; the runtime hook records SUBAGENT_RECEIPTS.jsonl"
     if "developer" in o:
         return ("Spawn Agent(subagent_type='harness:developer', ...) and call "
                 f"{_tool_hint('write_handoff', runtime)} or {_tool_hint('write_doc_sync', runtime)}")
@@ -410,7 +400,6 @@ def _tool_hint(tool: str, runtime: str | None = None) -> str:
     args = {
         "write_handoff": "task_id=..., summary=..., verification=...",
         "write_doc_sync": "task_id=..., summary=...",
-        "write_critic_qa": "task_id=..., verdict=..., summary=..., transcript=..., lens=...",
         "write_plan_artifact": "task_id=..., artifact=plan|plan-meta|checks|audit, content=...",
     }.get(tool, "...")
     if runtime == "codex":

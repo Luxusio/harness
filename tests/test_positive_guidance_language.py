@@ -45,9 +45,9 @@ def test_positive_guidance_replacements_are_present():
     combined = "\n".join(path.read_text(encoding="utf-8") for path in OPERATIONAL_DOCS)
 
     expected = [
-        "Preserve browser-required tasks with browser-lens evidence",
-        "Keep browser-required close evidence on the browser lens",
-        "close with browser-lens PASS evidence or browser-lens `BLOCKED_ENV`",
+        "Verification is recognized by hook-recorded subagent starts",
+        "The hook-recorded subagent start is the close-gate verification",
+        "SUBAGENT_RECEIPTS.jsonl",
         "Reserve this protocol for high-stakes ambiguity",
         "Surface the discovery through the EUREKA path",
         "Log only concrete, reusable facts at discovery time",

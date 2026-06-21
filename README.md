@@ -50,7 +50,7 @@ plan → develop → verify → close
 |------|-------------|
 | **plan** | 7-phase dual-voice review pipeline writes PLAN.md + CHECKS.yaml |
 | **develop** | Implement per-AC, checkpoint progress, run quality audit, dogfood |
-| **verify** | QA agent(s) write CRITIC__runtime.md with runtime_verdict |
+| **verify** | QA/UX subagent starts are hook-recorded in SUBAGENT_RECEIPTS.jsonl |
 | **close** | Gate: PLAN.md + HANDOFF.md exist + runtime_verdict = PASS |
 
 After close, the Goal child-task executor performs a self-improvement pass — surfaces friction signals into `learnings.jsonl`, promotes recurring keys into Tier 2 patterns, and prunes stale entries.
@@ -108,10 +108,11 @@ All under `plugin/agents/`. Narrow tool surface — each agent gets only what it
 | `qa-desktop` | Native GUI runtime QA via X11 tooling |
 | `ux-browser` / `ux-api` / `ux-cli` / `ux-desktop` | Surface-specific UX review; judges whether the implemented experience is shippable |
 
-QA agents write evidence and the runtime verdict via the harness MCP `write_critic_qa` tool. CHECKS.yaml reconciliation belongs to `task_verify(reconcile_acs=true)`, which promotes open ACs only from fresh QA PASS evidence. On Codex the MCP tool names are bare (`write_critic_qa`, `task_verify`); on Claude they may be displayed with a runtime prefix. QA agents never hold `Edit`/`Write` on source files.
-UX agents write `CRITIC__ux.md` via `write_critic_ux`; they do not update
-`runtime_verdict` or auto-promote functional ACs. Dogfooder remains a
-non-gating backlog pass after QA/UX.
+QA/UX agents return findings in their final response. Codex and Claude hooks
+record subagent starts to `SUBAGENT_RECEIPTS.jsonl`; `task_verify(reconcile_acs=true)`
+uses that hook-owned receipt to set runtime verification and promote open
+CHECKS.yaml entries. QA agents never hold `Edit`/`Write` on source files.
+Dogfooder remains a non-gating backlog pass after QA/UX.
 
 ## Quality scripts
 
@@ -188,22 +189,18 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 
 ## MCP tools
 
-14 tools via `plugin/mcp/harness_server.py`:
+10 tools via `plugin/mcp/harness_server.py`:
 
 | Tool | Purpose |
 |------|---------|
 | `task_start` | Create/resume task, return context |
 | `task_context` | Refresh task state |
-| `task_verify` | Sync paths, check verification, optionally reconcile ACs from QA PASS evidence |
+| `task_verify` | Sync paths, compute verification from subagent-start receipts, optionally reconcile ACs |
 | `task_close` | Gate: all verdicts PASS → close |
 | `task_blocked` | Park a task on a genuine environment blocker |
-| `record_subagent_receipt` | Capture structured subagent invocation receipts without promoting ACs |
 | `record_attempt` | Record retry attempt evidence under `attempts/attempt-NNN/` |
-| `write_critic_qa` | QA agent writes evidence + runtime verdict |
-| `write_critic_ux` | UX agent writes lens-aware UX review verdict |
 | `write_req_doc` | Auto-author durable REQ scaffold before observable source work |
 | `write_plan_artifact` | Plan skill writes PLAN.md / PLAN.meta.json / CHECKS.yaml / AUDIT_TRAIL.md |
-| `write_critic_document` | Document critic writes DOC_SYNC + durable-doc quality verdict |
 | `write_handoff` | Developer writes HANDOFF.md |
 | `write_doc_sync` | Developer writes DOC_SYNC.md |
 

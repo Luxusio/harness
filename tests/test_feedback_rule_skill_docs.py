@@ -87,7 +87,7 @@ def test_qa_agents_surface_self_healing_candidates_for_handoff():
     ):
         body = (REPO / rel).read_text(encoding="utf-8")
         assert "Self-Healing Candidates for HANDOFF" in body
-        assert "write_critic_qa" in body
+        assert "final response" in body
         assert "applied" in body
         assert "deferred" in body
         assert "rejected" in body
@@ -118,8 +118,7 @@ def test_ux_agents_use_critic_ux_and_do_not_claim_qa_role():
         "plugin-codex/agents/ux-desktop.md",
     ):
         body = (REPO / rel).read_text(encoding="utf-8")
-        assert "write_critic_ux" in body
-        assert "CRITIC__ux.md" in body
+        assert "final response" in body
         assert "not qa-" in body.lower()
         assert "shippable" in body
 

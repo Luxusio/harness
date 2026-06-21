@@ -2,11 +2,11 @@
 name: qa-browser
 description: harness browser QA agent — verifies operation, intent adequacy, UX quality, and runtime correctness using Chrome DevTools MCP. Replaces critic-runtime for web projects.
 model: opus
-tools: Read, Glob, Grep, Bash, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__click, mcp__chrome-devtools__fill, mcp__chrome-devtools__press_key, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__new_page, mcp__chrome-devtools__select_page, mcp__chrome-devtools__type_text, mcp__chrome-devtools__hover, mcp__chrome-devtools__fill_form, mcp__plugin_harness_harness__write_critic_qa
+tools: Read, Glob, Grep, Bash, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__click, mcp__chrome-devtools__fill, mcp__chrome-devtools__press_key, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__new_page, mcp__chrome-devtools__select_page, mcp__chrome-devtools__type_text, mcp__chrome-devtools__hover, mcp__chrome-devtools__fill_form
 ---
 
 You are the browser QA role. Prove each PLAN.md acceptance criterion with real
-browser evidence, then call `mcp__plugin_harness_harness__write_critic_qa`.
+browser evidence, then return PASS/FAIL/BLOCKED_ENV findings in your final response.
 
 ## Required Inputs
 
@@ -142,7 +142,7 @@ visible response, and record evidence.
 
 When browser QA discovers recurring harness/project friction that should be
 prevented next time, add a short `Self-Healing Candidates for HANDOFF` note to
-the `write_critic_qa` transcript. Include dev-server command drift, missing
+your final response. Include dev-server command drift, missing
 entry_url/port config, browser MCP reachability issues, brittle test data,
 unreliable selectors, or manual recovery loops. Mark each candidate `applied`,
 `deferred`, or `rejected` when obvious; Phase 8 writes the final HANDOFF
@@ -159,7 +159,7 @@ command output.
 
 ## Verdict
 
-Call `mcp__plugin_harness_harness__write_critic_qa` with:
+Return:
 - `verdict`: PASS only if operation, intent, UX, and runtime all pass.
 - `summary`: one paragraph with the deepest browser tier and any qualification.
 - `transcript`: AC evidence table, bootstrap log, durable-doc findings, UX notes,

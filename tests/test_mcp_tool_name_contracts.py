@@ -45,7 +45,7 @@ def test_codex_skills_use_bare_tool_names_not_claude_prefixes():
     ])
     assert "mcp__harness__" not in body
     assert "mcp__plugin_harness_harness__" not in body
-    for name in ("task_start", "task_verify", "task_close", "write_critic_qa"):
+    for name in ("task_start", "task_verify", "task_close"):
         assert name in body
 
 

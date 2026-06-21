@@ -160,7 +160,7 @@ def test_document_critic_checks_req_quality():
     for path in (CRITIC_DOCUMENT, CODEX_CRITIC_DOCUMENT):
         body = _text(path)
         assert "critic-document" in body
-        assert "write_critic_document" in body
+        assert "final response" in body
         assert "`REQ__*.md` that is too vague for future implementation or QA" in body
         assert "Observable behavior introduced by the diff but missing from the REQ" in body
         assert "Documentation impact judgment" in body

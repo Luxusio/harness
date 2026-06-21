@@ -381,10 +381,9 @@ def update_check(
                 f"'{BROWSER_INTERACTION_OWNER}' may promote a browser_interaction AC "
                 f"to 'passed'. Update the AC's owner field in CHECKS.yaml via the "
                 f"plan-skill, or use a different kind.\n"
-                f"  next_action: Run qa-browser subagent and have it write "
-                f"CRITIC__qa.md via mcp__plugin_harness_harness__write_critic_qa "
-                f"with lens='browser', then promote with --test-evidence pointing "
-                f"to the CRITIC__qa.md."
+                "  next_action: Run qa-browser subagent, let the hook record "
+                "SUBAGENT_RECEIPTS.jsonl, then promote with committed test "
+                "evidence or an explicit documented bypass."
             )
 
     # Test-Evidence Gate: feature / functional ACs require evidence (or explicit bypass)

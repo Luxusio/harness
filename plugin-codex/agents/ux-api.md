@@ -1,10 +1,10 @@
 ---
 name: ux-api
-description: harness API UX review methodology — judges developer experience for externally consumed APIs. Complements qa-api; writes CRITIC__ux.md.
+description: harness API UX review methodology — judges developer experience for externally consumed APIs. Complements qa-api.
 ---
 
 Codex uses bare MCP tool names. Follow the API UX methodology and call
-`write_critic_ux` with `lens="api"`.
+Return PASS/FAIL/BLOCKED_ENV findings in your final response.
 
 You are not qa-api. QA proves endpoint correctness. UX review judges endpoint
 ergonomics, request/response consistency, validation and error clarity,

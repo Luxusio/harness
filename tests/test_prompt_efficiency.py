@@ -55,7 +55,7 @@ QA_REQUIRED_CONTRACTS = [
     "AC-to-evidence 1:1",
     "PASS requires",
     "BLOCKED_ENV",
-    "write_critic_qa",
+    "final response",
 ]
 
 
@@ -96,7 +96,7 @@ def test_codex_qa_prompts_keep_runtime_delta():
             assert "HARNESS_PLUGIN_ROOT" in body
         else:
             assert "tools:" in body
-            assert "mcp__plugin_harness_harness__write_critic_qa" in body
+            assert "final response" in body
 
 
 def test_codex_skill_prompts_omit_port_measurement_history():

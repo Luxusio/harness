@@ -56,9 +56,9 @@ def test_subagent_start_and_stop_updates_registry(tmp_path):
     assert background_registry.active_records(repo, task_id="TASK__bg", session_id="sess-1") == []
 
 
-def test_subagent_stop_records_task_local_receipt(tmp_path):
+def test_subagent_start_records_task_local_receipt(tmp_path):
     repo, task_dir = _repo(tmp_path)
-    background_registry.register_subagent_start(
+    started = background_registry.register_subagent_start(
         repo,
         {
             "session_id": "sess-1",
@@ -67,6 +67,20 @@ def test_subagent_stop_records_task_local_receipt(tmp_path):
         },
         task_dir=task_dir,
     )
+
+    receipt_path = os.path.join(task_dir, "SUBAGENT_RECEIPTS.jsonl")
+    assert started["subagent_receipt_id"].startswith("subagent-")
+    assert os.path.isfile(receipt_path)
+    with open(receipt_path, encoding="utf-8") as f:
+        lines = f.readlines()
+    assert len(lines) == 1
+    receipt = json.loads(lines[0])
+    assert receipt["source"] == "subagent_start_hook"
+    assert receipt["status"] == "started"
+    assert receipt["agent_id"] == "agent-qa"
+    assert receipt["agent_type"] == "harness:qa-cli"
+    assert receipt["lens"] == "qa-cli"
+    assert receipt["summary"] == "subagent start hook observed"
 
     stopped = background_registry.mark_subagent_stop(
         repo,
@@ -78,16 +92,9 @@ def test_subagent_stop_records_task_local_receipt(tmp_path):
         },
     )
 
-    receipt_path = os.path.join(task_dir, "SUBAGENT_RECEIPTS.jsonl")
-    assert stopped["subagent_receipt_id"].startswith("subagent-")
-    assert os.path.isfile(receipt_path)
+    assert stopped["status"] == "done"
     with open(receipt_path, encoding="utf-8") as f:
-        receipt = json.loads(f.readline())
-    assert receipt["source"] == "claude_subagent_hook"
-    assert receipt["agent_id"] == "agent-qa"
-    assert receipt["agent_type"] == "harness:qa-cli"
-    assert receipt["lens"] == "qa-cli"
-    assert receipt["summary"] == "PASS focused checks"
+        assert len(f.readlines()) == 1
 
 
 def test_background_hook_skips_non_harness_repo(tmp_path):

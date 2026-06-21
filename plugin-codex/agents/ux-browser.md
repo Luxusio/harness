@@ -1,10 +1,10 @@
 ---
 name: ux-browser
-description: harness browser UX review methodology — judges whether web UI flows are shippable. Complements qa-browser; writes CRITIC__ux.md.
+description: harness browser UX review methodology — judges whether web UI flows are shippable. Complements qa-browser.
 ---
 
 Codex uses bare MCP tool names. Follow the browser UX methodology and call
-`write_critic_ux` with `lens="browser"`.
+Return PASS/FAIL/BLOCKED_ENV findings in your final response.
 
 You are not qa-browser. Use the browser enough to experience the changed flow,
 then judge task success, primary action clarity, navigation efficiency,

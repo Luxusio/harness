@@ -8,10 +8,10 @@ Implement the plan for a harness task. Reads PLAN.md, implements changes, verifi
 
 > **Codex runtime notes** (delta from Claude develop skill — read these first):
 > - **No `Skill()` chain.** Where Claude invokes `Skill("harness:plan", task_id)` etc., Codex orchestrator reads the relevant SKILL.md inline and executes its phases as part of the same conversation. The plan / verify / close transitions still happen — they're just prose flow, not tool calls.
-> - **Agent fan-out is capability-gated, not user-request-gated.** Where Claude spawns `oh-my-claudecode:executor` (per-AC parallel implementation), `harness:qa-*` (verification), `harness:dogfooder` (post-PASS dogfooding), or haiku sub-agents (test-coverage trace, adversarial review, edge-case scan), Codex should use `spawn_agent` when the current session exposes it. The user does not need to ask for delegation. `user did not ask for delegation`, `delegation was not requested`, and equivalent rationale are invalid skip reasons. QA/review must not be self-authored when `spawn_agent` is available: capture the returned agent id with `record_subagent_receipt` before or alongside the verdict artifact. If `spawn_agent` is unavailable, run the equivalent role methodology inline in the orchestrator's own context and record a short `Runtime Fallbacks` note only when that fallback replaces expected independent QA/review. Multi-AC implementation can remain sequential only when `spawn_agent` is unavailable, ACs are dependent or file-conflicting, or the documented `sequential-small-task` threshold applies; preserve independent QA/review by routing from current session capability.
+> - **Agent fan-out is capability-gated, not user-request-gated.** Where Claude spawns `oh-my-claudecode:executor` (per-AC parallel implementation), `harness:qa-*` (verification), `harness:dogfooder` (post-PASS dogfooding), or haiku sub-agents (test-coverage trace, adversarial review, edge-case scan), Codex should use `spawn_agent` when the current session exposes it. The user does not need to ask for delegation. `user did not ask for delegation`, `delegation was not requested`, and equivalent rationale are invalid skip reasons. QA/review must not be self-authored when `spawn_agent` is available: Codex hooks record each subagent start in `SUBAGENT_RECEIPTS.jsonl`; do not write receipt or critic artifacts yourself. If `spawn_agent` is unavailable, run the equivalent role methodology inline in the orchestrator's own context and record a short `Runtime Fallbacks` note only when that fallback replaces expected independent QA/review. Multi-AC implementation can remain sequential only when `spawn_agent` is unavailable, ACs are dependent or file-conflicting, or the documented `sequential-small-task` threshold applies; preserve independent QA/review by routing from current session capability.
 > - **No `AskUserQuestion` structured tool.** Where Claude emits an AskUserQuestion with labeled options, Codex emits the question + options as plain prose and reads the user's reply on the next turn. Options stay numbered/lettered so the user can pick them by short response (e.g. "A", "B", "1", "2").
-> - **Browser tools are availability-gated on Codex.** The Claude `qa_delegation_gate.py` blocks main-session `mcp__chrome-devtools__*` calls and redirects them to `harness:qa-browser`; Codex routes by available tools. Use `spawn_agent` for the qa-browser lens when available, or run `plugin-codex/agents/qa-browser.md` inline when browser tools are present but no subagent path exists. If browser verification is required and tools or a reachable app are missing, write `write_critic_qa(lens="browser", verdict="BLOCKED_ENV", ...)` with the blocker. Preserve browser-required tasks with browser-lens evidence.
-> - **MCP tool names are bare** on Codex (`task_start`, `task_verify`, `task_close`, `write_critic_qa`, `write_handoff`, `write_doc_sync`, `update_checks`). The Claude long-form (Claude-prefixed) does not apply.
+> - **Browser tools are availability-gated on Codex.** The Claude `qa_delegation_gate.py` blocks main-session `mcp__chrome-devtools__*` calls and redirects them to `harness:qa-browser`; Codex routes by available tools. Use `spawn_agent` for the qa-browser lens when available, or run `plugin-codex/agents/qa-browser.md` inline when browser tools are present but no subagent path exists. If browser verification is required and tools or a reachable app are missing, record the blocker in HANDOFF instead of fabricating a PASS.
+> - **MCP tool names are bare** on Codex (`task_start`, `task_verify`, `task_close`, `write_handoff`, `write_doc_sync`, `update_checks`). The Claude long-form (Claude-prefixed) does not apply.
 > - **Env var is `HARNESS_PLUGIN_ROOT`**, not `CLAUDE_PLUGIN_ROOT`. The Codex plugin install sets it; Bash blocks below use this variant.
 > - **Sub-file fallback.** This SKILL.md does NOT ship Codex-native sub-files in v1.5 (browser-verification.md, fix-first-pattern.md, parallel-fanout.md, quality-audit-pipeline.md, runtime-smoke.md, test-failure-triage.md, verification-gate.md). Where the Claude flow loads a sub-file, the Codex flow reads the same sub-file at `plugin/skills/develop/<name>.md` (Claude tree) and applies the sub-file's methodology with the runtime-substitution rules above. Codex-native sub-files are a v2 ergonomics improvement; v1.5 ships methodology parity by reference.
 
@@ -395,28 +395,15 @@ judge shippability without reverse-engineering the change.
 ```text
 spawn_agent {
   agent_type: "default",
-  message: "You are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, HANDOFF.md, CHECKS.yaml, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence. If you can write the verdict, call write_critic_qa with lens='<lens>'; otherwise return the transcript for the orchestrator to write.",
+  message: "You are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, HANDOFF.md, CHECKS.yaml, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence and concrete findings.",
   fork_context: true
 }
 ```
 
-After the QA subagent returns, call `record_subagent_receipt` with the concrete
-agent id/type, lens, verdict, and summary returned by the runtime. If no
-concrete agent id exists, do not record a receipt; use the inline fallback path
-and document `Runtime Fallbacks`.
-
-If no subagent path exists, run the lens's methodology in-conversation, then call `write_critic_qa` with `verdict`, `summary`, `transcript`, and optionally `lens="<lens>"`:
-
-```
-write_critic_qa {
-  task_id: "<task_id>",
-  verdict: "PASS" | "FAIL" | "BLOCKED_ENV",
-  summary: "<one-line>",
-  transcript: "<full evidence>",
-  lens: "cli"   # or "api" / "desktop" / "browser"
-  manual_ux_verification: "<required and non-empty when lens is browser>"
-}
-```
+After spawning QA/UX, run `task_verify` with `reconcile_acs: true`. The Codex
+hook records the subagent start automatically. If no subagent path exists, run
+the lens methodology in-conversation and document `Runtime Fallbacks`; do not
+call a critic writer.
 
 Multi-lens concurrency uses `spawn_agent` when available; otherwise run required lenses sequentially. If browser QA is required, close with browser-lens PASS evidence or browser-lens `BLOCKED_ENV`.
 
@@ -609,7 +596,7 @@ Classify whether this task revealed a recurring failure mode that the harness or
 project can prevent next time. This includes development friction, QA-discovered
 verification gaps, tool/schema drift, CI command drift, brittle setup commands,
 and repeated manual recovery steps. QA lenses should surface candidates in their
-`CRITIC__qa.md` transcript; Phase 8 owns the final HANDOFF classification.
+final response; Phase 8 owns the final HANDOFF classification.
 
 For harness-improvement candidates, treat dogfood feedback and agent retros as
 hypotheses until checked against the repo. Before marking a candidate `applied`
@@ -671,9 +658,8 @@ Mechanical. Read HANDOFF.md (changed file list) + `doc/CLAUDE.md` (registered ro
 
 When the task changes `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or
 `POLICY__*.md`, run the `critic-document` methodology after DOC_SYNC. It
-verifies both DOC_SYNC consistency and durable doc quality. The task cannot
-close until `CRITIC__document.md` has a fresh `PASS`; a changed REQ with vague
-or missing observable behavior is a FAIL, not a warning.
+verifies both DOC_SYNC consistency and durable doc quality. A changed REQ with
+vague or missing observable behavior is a FAIL, not a warning.
 
 ### Phase 8.7: Distilled Change Doc
 

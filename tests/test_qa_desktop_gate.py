@@ -1,15 +1,4 @@
-"""Regression tests for TASK__add-qa-desktop-agent.
-
-Locks in three changes:
-  1. prewrite_gate.PROTECTED_ARTIFACTS["CRITIC__qa.md"] == "qa-agent"
-     (was "qa-cli" — stale single-agent token)
-  2. prewrite_gate.PROTECTED_ARTIFACT_HUMAN["CRITIC__qa.md"] names qa-desktop
-  3. _lib.provenance_from_artifacts() returns "qa-desktop" key when
-     CRITIC__qa.md exists in the task dir.
-
-Also closes the pre-existing coverage gap: CRITIC__qa.md was in
-PROTECTED_ARTIFACTS but had no deny-decision test.
-"""
+"""Regression tests for hook-owned subagent receipt provenance."""
 from __future__ import annotations
 
 import importlib
@@ -19,7 +8,6 @@ import tempfile
 import unittest
 
 from conftest import (  # type: ignore
-    REPO_ROOT,
     SCRIPTS_DIR,
     invoke_hook,
     parse_decision,
@@ -30,7 +18,6 @@ sys.path.insert(0, SCRIPTS_DIR)
 import _lib  # type: ignore
 import prewrite_gate  # type: ignore
 
-# Re-import to get fresh module state if test_prewrite_gate_* ran first.
 importlib.reload(prewrite_gate)
 importlib.reload(_lib)
 
@@ -38,77 +25,52 @@ GATE = os.path.join(SCRIPTS_DIR, "prewrite_gate.py")
 
 
 class TestOwnerTokens(unittest.TestCase):
-    def test_critic_qa_owner_token_is_qa_agent(self):
-        """Machine owner= field in deny-reason tail must be 'qa-agent'."""
-        self.assertEqual(prewrite_gate.PROTECTED_ARTIFACTS["CRITIC__qa.md"], "qa-agent")
+    def test_subagent_receipt_owner_token_is_hook(self):
+        self.assertEqual(
+            prewrite_gate.PROTECTED_ARTIFACTS["SUBAGENT_RECEIPTS.jsonl"],
+            "subagent-start-hook",
+        )
 
-    def test_critic_qa_human_text_includes_qa_desktop(self):
-        """Human deny text for CRITIC__qa.md must name qa-desktop."""
-        human = prewrite_gate.PROTECTED_ARTIFACT_HUMAN["CRITIC__qa.md"]
-        self.assertIn("qa-desktop", human)
-        for agent in ("qa-browser", "qa-api", "qa-cli", "qa-desktop"):
-            self.assertIn(agent, human)
+    def test_subagent_receipt_human_text_names_hooks(self):
+        human = prewrite_gate.PROTECTED_ARTIFACT_HUMAN["SUBAGENT_RECEIPTS.jsonl"]
+        self.assertIn("subagent-start hook", human)
 
 
 class TestProvenance(unittest.TestCase):
-    def test_provenance_includes_qa_desktop_key(self):
-        """provenance_from_artifacts must return a 'qa-desktop' key."""
+    def test_provenance_includes_qa_and_ux_keys_from_subagent_receipt(self):
         with tempfile.TemporaryDirectory() as td:
             prov = _lib.provenance_from_artifacts(td)
-            self.assertIn("qa-desktop", prov)
-            self.assertFalse(prov["qa-desktop"], "no CRITIC__qa.md → qa-desktop=False")
-
-    def test_provenance_qa_desktop_true_with_critic_qa(self):
-        with tempfile.TemporaryDirectory() as td:
-            open(os.path.join(td, "CRITIC__qa.md"), "w").close()
-            prov = _lib.provenance_from_artifacts(td)
-            self.assertTrue(prov["qa-desktop"])
-            for agent in ("qa-browser", "qa-api", "qa-cli", "qa-desktop"):
-                self.assertTrue(prov[agent], f"{agent} provenance must be True")
-
-    def test_provenance_includes_ux_keys(self):
-        with tempfile.TemporaryDirectory() as td:
-            prov = _lib.provenance_from_artifacts(td)
-            for agent in ("ux-browser", "ux-api", "ux-cli", "ux-desktop"):
+            for agent in (
+                "qa-browser",
+                "qa-api",
+                "qa-cli",
+                "qa-desktop",
+                "ux-browser",
+                "ux-api",
+                "ux-cli",
+                "ux-desktop",
+            ):
                 self.assertIn(agent, prov)
                 self.assertFalse(prov[agent])
 
-    def test_provenance_ux_true_with_critic_ux(self):
-        with tempfile.TemporaryDirectory() as td:
-            open(os.path.join(td, "CRITIC__ux.md"), "w").close()
+            open(os.path.join(td, "SUBAGENT_RECEIPTS.jsonl"), "w").close()
             prov = _lib.provenance_from_artifacts(td)
-            for agent in ("ux-browser", "ux-api", "ux-cli", "ux-desktop"):
+            self.assertTrue(prov["subagent-start-hook"])
+            for agent in ("qa-browser", "qa-api", "qa-cli", "qa-desktop"):
                 self.assertTrue(prov[agent], f"{agent} provenance must be True")
 
 
-class TestDenyDecisionCriticQa(unittest.TestCase):
-    def test_write_critic_qa_md_denies_with_qa_agent_owner(self):
-        """Direct Write to CRITIC__qa.md denies; structured tail owner=qa-agent."""
-        with scratch_task_in_real_repo("qa-desktop-critic") as task_dir:
-            critic = os.path.join(task_dir, "CRITIC__qa.md")
-            r = invoke_hook(GATE, "Write", {"file_path": critic})
+class TestDenyDecisionSubagentReceipt(unittest.TestCase):
+    def test_write_subagent_receipt_denies_with_hook_owner(self):
+        with scratch_task_in_real_repo("subagent-receipt") as task_dir:
+            receipt = os.path.join(task_dir, "SUBAGENT_RECEIPTS.jsonl")
+            r = invoke_hook(GATE, "Write", {"file_path": receipt})
             self.assertEqual(r.returncode, 0)
             decision, reason = parse_decision(r.stdout)
             self.assertEqual(decision, "deny")
             self.assertIsNotNone(reason)
             self.assertIn("C-05-protected-artifact", reason)
-            self.assertIn("owner=qa-agent", reason)
-            for agent in ("qa-browser", "qa-api", "qa-cli", "qa-desktop"):
-                self.assertIn(agent, reason, f"{agent} missing from deny reason")
-
-    def test_write_critic_ux_md_denies_with_ux_agent_owner(self):
-        """Direct Write to CRITIC__ux.md denies; structured tail owner=ux-agent."""
-        with scratch_task_in_real_repo("ux-critic") as task_dir:
-            critic = os.path.join(task_dir, "CRITIC__ux.md")
-            r = invoke_hook(GATE, "Write", {"file_path": critic})
-            self.assertEqual(r.returncode, 0)
-            decision, reason = parse_decision(r.stdout)
-            self.assertEqual(decision, "deny")
-            self.assertIsNotNone(reason)
-            self.assertIn("C-05-protected-artifact", reason)
-            self.assertIn("owner=ux-agent", reason)
-            for agent in ("ux-browser", "ux-api", "ux-cli", "ux-desktop"):
-                self.assertIn(agent, reason, f"{agent} missing from deny reason")
+            self.assertIn("owner=subagent-start-hook", reason)
 
 
 if __name__ == "__main__":

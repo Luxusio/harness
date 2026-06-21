@@ -4,7 +4,6 @@
 No plugin-legacy dependency. All operations are direct file I/O.
 MCP tools: goal_start, goal_context, goal_add_task, goal_next_task, goal_finish,
            task_start, task_context, task_verify, task_close, task_blocked,
-           write_critic_qa, write_critic_ux, write_critic_document,
            write_req_doc, write_handoff, write_doc_sync.
 """
 
@@ -50,11 +49,10 @@ def _initialize_instructions(runtime: str) -> str:
         "for native /goal orchestration. A Goal owns a child task queue; create "
         "or attach child tasks as scope expands. "
         "Protocol tool names are bare: task_start, task_verify, task_close, "
-        "task_blocked, write_plan_artifact, write_critic_qa, "
-        "write_critic_ux, write_critic_document, write_req_doc, "
+        "task_blocked, write_plan_artifact, write_req_doc, "
         "write_handoff, write_doc_sync, goal_start, goal_context, "
         "goal_add_task, goal_next_task, goal_finish, "
-        "record_subagent_receipt, and record_attempt. "
+        "and record_attempt. "
         "write_plan_artifact is the canonical PLAN/CHECKS/AUDIT writer and "
         "replaces the legacy Python shim. "
     )
@@ -71,9 +69,8 @@ def _initialize_instructions(runtime: str) -> str:
     if runtime == "claude":
         return (
             base
-            + "Claude Code may display callable tools with a runtime prefix such "
-            "as mcp__plugin_harness_harness__write_critic_qa; that prefix is a "
-            "Claude UI naming convention over the same shared MCP server."
+            + "Claude Code may display callable tools with a runtime prefix; "
+            "that prefix is a Claude UI naming convention over the same shared MCP server."
         )
     return (
         base
@@ -88,7 +85,7 @@ from _lib import (  # type: ignore
     artifact_exists, canonical_task_dir, canonical_task_id,
     find_repo_root, runtime_is_stale as _runtime_is_stale,
     write_active_marker, clear_active_marker, record_attempt,
-    record_subagent_receipt, subagent_receipt_summary,
+    receipt_runtime_verdict, subagent_receipt_summary,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
 )
@@ -297,31 +294,6 @@ def handle_record_attempt(args: dict) -> dict:
     return _ok({"task_dir": td, "attempt": meta})
 
 
-def handle_record_subagent_receipt(args: dict) -> dict:
-    ti = _req(args, "task_id")
-    td = canonical_task_dir(task_id=ti)
-    receipt = {
-        "source": _opt(args, "source") or "spawn_agent",
-        "agent_id": _req(args, "agent_id"),
-        "agent_type": _opt(args, "agent_type") or "",
-        "lens": _opt(args, "lens") or "",
-        "verdict": _opt(args, "verdict") or "",
-        "status": _opt(args, "status") or "done",
-        "summary": _opt(args, "summary") or "",
-        "prompt": _opt(args, "prompt") or "",
-        "transcript_path": _opt(args, "transcript_path") or "",
-    }
-    try:
-        entry = record_subagent_receipt(td, receipt)
-    except ValueError as exc:
-        return _err("record_subagent_receipt failed", data={"task_dir": td, "error_detail": str(exc)})
-    return _ok({
-        "task_dir": td,
-        "receipt": entry,
-        "subagent_receipts": subagent_receipt_summary(td),
-    })
-
-
 def _run_verify_runner(td: str, parallel: bool = True, max_workers: int | None = None) -> dict:
     script = SCRIPTS_DIR / "verify_runner.py"
     cmd = [sys.executable, str(script), "--json"]
@@ -419,7 +391,7 @@ def _auto_promote_open_acs(td: str, evidence: str) -> list[str]:
 
     promoted: list[str] = []
     new_blocks: list[str] = []
-    safe_evidence = (evidence or "CRITIC__qa.md").replace("\n", " ").strip()
+    safe_evidence = (evidence or "SUBAGENT_RECEIPTS.jsonl").replace("\n", " ").strip()
     if len(safe_evidence) > 240:
         safe_evidence = safe_evidence[:237].rstrip() + "..."
     for block in blocks:
@@ -442,38 +414,19 @@ def _auto_promote_open_acs(td: str, evidence: str) -> list[str]:
     return promoted
 
 
-def _critic_qa_has_pass(td: str) -> bool:
-    """Return true when CRITIC__qa.md contains current PASS evidence."""
-    path = os.path.join(td, "CRITIC__qa.md")
-    if not os.path.isfile(path):
-        return False
-    try:
-        content = Path(path).read_text(encoding="utf-8")
-    except OSError:
-        return False
-    if re.search(r"^## qa-[^\n]+ verdict: PASS\s*$", content, flags=re.MULTILINE):
-        return True
-    return bool(re.search(r"^## Verdict\s*\nPASS\s*$", content, flags=re.MULTILINE))
-
-
 def _reconcile_acs_from_qa(td: str) -> dict:
-    """Promote open ACs from fresh QA PASS evidence during task_verify."""
+    """Promote open ACs from hook-owned subagent-start receipts during task_verify."""
     st = read_state(td)
-    runtime_verdict = (st.get("runtime_verdict") or "pending").upper()
+    runtime_verdict = receipt_runtime_verdict(td, st)
     if runtime_verdict != "PASS":
         return {
             "promoted_acs": [],
-            "reason": f"runtime_verdict is {runtime_verdict}, not PASS",
+            "reason": "no subagent start receipt",
         }
-    if not _critic_qa_has_pass(td):
-        return {
-            "promoted_acs": [],
-            "reason": "CRITIC__qa.md has no PASS evidence",
-        }
-    promoted = _auto_promote_open_acs(td, "CRITIC__qa.md task_verify PASS")
+    promoted = _auto_promote_open_acs(td, "SUBAGENT_RECEIPTS.jsonl task_verify PASS")
     return {
         "promoted_acs": promoted,
-        "reason": "promoted open ACs from QA PASS evidence" if promoted else "no open ACs to promote",
+        "reason": "promoted open ACs from subagent start receipt" if promoted else "no open ACs to promote",
     }
 
 
@@ -642,35 +595,25 @@ def handle_task_verify(args: dict) -> dict:
             max_workers=max_workers,
         )
 
-    # Stale check: if any touched path is newer than CRITIC__qa.md,
-    # revert the stored verdict to pending so task_close won't accept a
-    # frozen PASS. task_verify is the natural place to clear the bit —
-    # re-running QA re-writes CRITIC__qa.md with a fresh mtime.
     stale, stale_path = _runtime_is_stale(td)
-    if stale:
-        st = read_state(td)
-        if (st.get("runtime_verdict") or "").upper() == "PASS":
-            set_state_field(td, "runtime_verdict", "pending")
+    st = read_state(td)
+    effective_verdict = receipt_runtime_verdict(td, st)
+    if (st.get("runtime_verdict") or "pending").upper() != effective_verdict:
+        set_state_field(td, "runtime_verdict", effective_verdict if effective_verdict != "PENDING" else "pending")
 
     ac_reconcile = {"promoted_acs": [], "reason": "not requested"}
     if _truthy(args.get("reconcile_acs")):
-        if stale:
-            ac_reconcile = {
-                "promoted_acs": [],
-                "reason": "runtime_verdict is stale; rerun QA before AC reconciliation",
-            }
-        else:
-            ac_reconcile = _reconcile_acs_from_qa(td)
+        ac_reconcile = _reconcile_acs_from_qa(td)
 
     st = read_state(td)
-    rv = (st.get("runtime_verdict") or "pending").upper()
+    rv = receipt_runtime_verdict(td, st)
     ctx = emit_compact_context(td)
     payload = {
         "task_dir": td, "runtime_verdict": rv,
         "touched_paths": st.get("touched_paths") or [],
         "next_action": ctx.get("next_action", ""),
         "missing_for_close": ctx.get("missing_for_close", []),
-        "report_path": _task_artifact_rel(td, "CRITIC__qa.md"),
+        "report_path": _task_artifact_rel(td, "SUBAGENT_RECEIPTS.jsonl"),
         "stale": stale,
         "stale_path": stale_path,
         "ac_reconcile": ac_reconcile,
@@ -698,11 +641,8 @@ def handle_task_close(args: dict) -> dict:
             data["blocking_acs"] = blocking
         return _err("task_close blocked", data=data)
 
-    # PR2 runtime-stale gate: refuse close when a touched path is newer
-    # than CRITIC__qa.md. Caller must re-run task_verify so QA can
-    # re-issue a fresh PASS.
     if stale:
-        return _err("task_close blocked: runtime_verdict stale — re-run task_verify", data={
+        return _err("task_close blocked: runtime verification stale — re-run task_verify", data={
             "task_dir": td, "stale_path": stale_path,
         })
 
@@ -812,14 +752,7 @@ def _augment_handoff_text(td: str, text: str) -> str:
 
 def _write_artifact(args: dict, filename: str, verdict_field: str | None = None,
                     verdict_value: str | None = None) -> dict:
-    """Common artifact write: create file, optionally update verdict. Atomic.
-
-    AC-006 (2026-05-12 retro): when called for CRITIC__qa.md, append a
-    `## Manual UX verification` section after the standard content. The section
-    content is taken from ``args["manual_ux_verification"]``; an empty value
-    renders a `_NOT SUPPLIED_` placeholder (handled by handle_write_critic_qa
-    so the placeholder text is lens-aware).
-    """
+    """Common artifact write: create file, optionally update verdict. Atomic."""
     td = _opt(args, "task_dir")
     ti = _opt(args, "task_id") or (os.path.basename(td.rstrip("/")) if td else None)
     if not ti:
@@ -830,9 +763,6 @@ def _write_artifact(args: dict, filename: str, verdict_field: str | None = None,
         val = _opt(args, key)
         if val:
             content_parts.append(f"\n## {key.title()}\n{val}\n")
-    manual_ux = args.get("_rendered_manual_ux_section")
-    if manual_ux and filename == "CRITIC__qa.md":
-        content_parts.append(manual_ux)
     path = os.path.join(td, filename)
     os.makedirs(td, exist_ok=True)
     import tempfile
@@ -856,254 +786,6 @@ def _write_artifact(args: dict, filename: str, verdict_field: str | None = None,
         set_state_field(td, verdict_field, verdict)
         result["verdict"] = verdict
     return _ok(result)
-
-
-_QA_SEVERITY = {"PENDING": 0, "PASS": 1, "BLOCKED_ENV": 2, "FAIL": 3}
-
-
-def _worst_verdict(current: str, new: str) -> str:
-    """Severity ordering: PENDING < PASS < BLOCKED_ENV < FAIL. Returns the worst.
-
-    Both inputs are normalized to uppercase canonical form before comparison;
-    the returned value is also uppercase. The state file may previously have
-    stored ``pending`` lowercase — we normalize on read to avoid same-severity
-    case-only differences being treated as "no change".
-    """
-    cur_up = (current or "PENDING").upper()
-    new_up = (new or "PENDING").upper()
-    return new_up if _QA_SEVERITY.get(new_up, 0) >= _QA_SEVERITY.get(cur_up, 0) else cur_up
-
-
-def _render_manual_ux_section(lens: str, manual_ux: str) -> tuple[str, str]:
-    """Compute (section_markdown, effective_verdict_override).
-
-    AC-006 (2026-05-12 retro): the CRITIC__qa.md template always includes a
-    `## Manual UX verification` section. Behavior depends on lens + arg presence:
-
-      - arg provided + non-empty → render content verbatim. No verdict override.
-      - lens == 'browser' + arg empty → render placeholder + force PENDING.
-      - lens != 'browser' + arg empty → render `_n/a — non-browser lens_`.
-        No verdict override.
-
-    Returns the section markdown (including the heading and trailing newline)
-    and the effective verdict override ('' = no override; 'PENDING' = downgrade).
-    """
-    body = (manual_ux or "").strip()
-    if body:
-        return (f"\n## Manual UX verification\n{body}\n", "")
-    if lens == "browser":
-        return (
-            "\n## Manual UX verification\n"
-            "_NOT SUPPLIED — agent must supply manual_ux_verification arg. "
-            "runtime_verdict downgraded to PENDING until provided._\n",
-            "PENDING",
-        )
-    return ("\n## Manual UX verification\n_n/a — non-browser lens_\n", "")
-
-
-def _lens_merge_critic_qa(td: str, lens: str, verdict: str,
-                          summary: str, transcript: str,
-                          manual_ux: str = "",
-                          auto_promote_open_acs: bool = False) -> dict:
-    """Lens-aware merge for CRITIC__qa.md. Worst-wins runtime_verdict.
-
-    First lens writer creates the file with a global header and one section.
-    Subsequent writes replace that lens's previous section. runtime_verdict is
-    recomputed from the latest section per lens so stale FAILs cannot poison a
-    later PASS from the same verifier.
-
-    AC-006: the Manual UX verification section is rendered per-lens; the
-    browser lens with empty manual_ux forces PENDING (worst-wins still applies).
-    """
-    os.makedirs(td, exist_ok=True)
-    path = os.path.join(td, "CRITIC__qa.md")
-    manual_ux_md, verdict_override = _render_manual_ux_section(lens, manual_ux)
-    if verdict_override:
-        verdict = verdict_override
-    section = (
-        f"\n## qa-{lens} verdict: {verdict}\n\n"
-        f"### summary\n{summary}\n\n"
-        f"### transcript\n{transcript}\n"
-        f"{manual_ux_md}"
-    )
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            existing = f.read()
-        pattern = (
-            rf"\n## qa-{re.escape(lens)} verdict: "
-            r"(?:PASS|FAIL|BLOCKED_ENV|PENDING)\n.*?(?=\n## qa-[^\n]+ verdict: |\Z)"
-        )
-        content = re.sub(pattern, "", existing, flags=re.DOTALL)
-        if not content.strip():
-            content = "# CRITIC — qa\n"
-        if "# CRITIC" not in content.splitlines()[0]:
-            content = "# CRITIC — qa\n" + content
-        content = content.rstrip() + section
-    else:
-        content = f"# CRITIC — qa\n{section}"
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
-    verdicts = re.findall(r"^## qa-[^\n]+ verdict: (PASS|FAIL|BLOCKED_ENV|PENDING)\s*$",
-                          content, flags=re.MULTILINE)
-    current = "PENDING"
-    for v in verdicts:
-        current = _worst_verdict(current, v)
-    # Compatibility for older stop-judge prompts: stop-judge lens has
-    # OVERRIDE authority — it is the only authorized writer of blocker
-    # transitions per CONTRACTS § C-17, which means it must also be able to
-    # CLEAR a prior BLOCKED_ENV when the blocker condition resolves. Without
-    # this exemption, a stale stop-judge BLOCKED_ENV from an earlier session
-    # phase permanently traps the task at BLOCKED_ENV via worst-wins merge,
-    # blocking task_close even after the situation that produced the verdict
-    # has resolved. The Stop hook got a staleness check on 2026-05-14; this
-    # mirrors that fix at the lens-merge layer for the task_close gate.
-    if lens == "stop-judge":
-        final = (verdict or "PENDING").upper()
-    else:
-        final = current
-    set_state_field(td, "runtime_verdict", final)
-    attempt = None
-    if final in {"FAIL", "BLOCKED_ENV"}:
-        attempt = record_attempt(td, f"qa-{lens}", final, summary, transcript)
-    legacy_reconcile_note = ""
-    if auto_promote_open_acs:
-        legacy_reconcile_note = (
-            "auto_promote_open_acs is deprecated and no longer mutates CHECKS.yaml; "
-            "run task_verify with reconcile_acs=true after QA PASS."
-        )
-    return _ok({"artifact": "CRITIC__qa.md", "task_dir": td,
-                "lens": lens, "verdict": final, "merged": True,
-                "subagent_receipts": subagent_receipt_summary(td),
-                "promoted_acs": [],
-                "ac_reconcile_next_action": legacy_reconcile_note,
-                "attempt": attempt or {}})
-
-
-def _lens_merge_critic_ux(td: str, lens: str, verdict: str,
-                          summary: str, transcript: str) -> dict:
-    """Lens-aware merge for CRITIC__ux.md.
-
-    UX verdicts gate close for applicable user-facing surfaces, but they do not
-    update TASK_STATE.runtime_verdict and never auto-promote functional ACs.
-    """
-    lens = lens.strip().lower()
-    if lens not in {"cli", "api", "browser", "desktop"}:
-        return _err("invalid lens — must be cli, api, browser, or desktop")
-    os.makedirs(td, exist_ok=True)
-    path = os.path.join(td, "CRITIC__ux.md")
-    section = (
-        f"\n## ux-{lens} verdict: {verdict}\n\n"
-        f"### summary\n{summary}\n\n"
-        f"### transcript\n{transcript}\n"
-    )
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            existing = f.read()
-        pattern = (
-            rf"\n## ux-{re.escape(lens)} verdict: "
-            r"(?:PASS|FAIL|BLOCKED_ENV|PENDING)\n.*?(?=\n## ux-[^\n]+ verdict: |\Z)"
-        )
-        content = re.sub(pattern, "", existing, flags=re.DOTALL)
-        if not content.strip():
-            content = "# CRITIC — ux\n"
-        if "# CRITIC" not in content.splitlines()[0]:
-            content = "# CRITIC — ux\n" + content
-        content = content.rstrip() + section
-    else:
-        content = f"# CRITIC — ux\n{section}"
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
-    verdicts = re.findall(r"^## ux-[^\n]+ verdict: (PASS|FAIL|BLOCKED_ENV|PENDING)\s*$",
-                          content, flags=re.MULTILINE)
-    merged = "PENDING"
-    for v in verdicts:
-        merged = _worst_verdict(merged, v)
-    attempt = None
-    if verdict in {"FAIL", "BLOCKED_ENV"}:
-        attempt = record_attempt(td, f"ux-{lens}", verdict, summary, transcript)
-    return _ok({"artifact": "CRITIC__ux.md", "task_dir": td,
-                "lens": lens, "verdict": verdict, "ux_verdict": merged,
-                "merged": True, "attempt": attempt or {}})
-
-
-def handle_write_critic_qa(args: dict) -> dict:
-    verdict = _req(args, "verdict")
-    if verdict not in ("PASS", "FAIL", "BLOCKED_ENV"):
-        return _err(f"invalid verdict '{verdict}' — must be PASS, FAIL, or BLOCKED_ENV")
-    lens = _opt(args, "lens")
-    manual_ux = _opt(args, "manual_ux_verification") or ""
-    auto_promote = _truthy(args.get("auto_promote_open_acs"))
-    if lens:
-        td = _opt(args, "task_dir")
-        ti = _opt(args, "task_id") or (os.path.basename(td.rstrip("/")) if td else None)
-        if not ti:
-            return _err("task_id or task_dir required")
-        td = td or canonical_task_dir(task_id=ti)
-        summary = _opt(args, "summary") or ""
-        transcript = _opt(args, "transcript") or ""
-        return _lens_merge_critic_qa(
-            td, lens, verdict, summary, transcript, manual_ux,
-            auto_promote_open_acs=auto_promote,
-        )
-    # Legacy single-lens (no lens arg). Treat as non-browser by default for the
-    # Manual UX rendering — the agent's lens identity is unknown, so we err on
-    # the side of not forcing PENDING.
-    manual_ux_md, verdict_override = _render_manual_ux_section("", manual_ux)
-    if verdict_override:
-        verdict = verdict_override
-    args = dict(args)  # don't mutate caller's dict
-    args["_rendered_manual_ux_section"] = manual_ux_md
-    result = _write_artifact(args, "CRITIC__qa.md", "runtime_verdict", verdict_value=verdict)
-    if verdict in {"FAIL", "BLOCKED_ENV"}:
-        td = _opt(args, "task_dir")
-        ti = _opt(args, "task_id") or (os.path.basename(td.rstrip("/")) if td else None)
-        if ti and isinstance(result.get("structuredContent"), dict):
-            td = td or canonical_task_dir(task_id=ti)
-            result["structuredContent"]["attempt"] = record_attempt(
-                td,
-                "qa",
-                verdict,
-                _opt(args, "summary") or "",
-                _opt(args, "transcript") or "",
-            )
-    if isinstance(result.get("structuredContent"), dict):
-        td = _opt(args, "task_dir")
-        ti = _opt(args, "task_id") or (os.path.basename(td.rstrip("/")) if td else None)
-        if ti:
-            result["structuredContent"]["subagent_receipts"] = subagent_receipt_summary(td or canonical_task_dir(task_id=ti))
-        result["structuredContent"]["promoted_acs"] = []
-        if auto_promote:
-            result["structuredContent"]["ac_reconcile_next_action"] = (
-                "auto_promote_open_acs is deprecated and no longer mutates CHECKS.yaml; "
-                "run task_verify with reconcile_acs=true after QA PASS."
-            )
-        try:
-            result["content"][0]["text"] = json.dumps(result["structuredContent"], indent=2, ensure_ascii=False)
-        except Exception:
-            pass
-    return result
-
-
-def handle_write_critic_ux(args: dict) -> dict:
-    verdict = _req(args, "verdict")
-    if verdict not in ("PASS", "FAIL", "BLOCKED_ENV"):
-        return _err(f"invalid verdict '{verdict}' — must be PASS, FAIL, or BLOCKED_ENV")
-    lens = _req(args, "lens").lower()
-    td = _opt(args, "task_dir")
-    ti = _opt(args, "task_id") or (os.path.basename(td.rstrip("/")) if td else None)
-    if not ti:
-        return _err("task_id or task_dir required")
-    td = td or canonical_task_dir(task_id=ti)
-    summary = _opt(args, "summary") or ""
-    transcript = _opt(args, "transcript") or ""
-    return _lens_merge_critic_ux(td, lens, verdict, summary, transcript)
-
-
-def handle_write_critic_document(args: dict) -> dict:
-    verdict = _req(args, "verdict")
-    if verdict not in ("PASS", "FAIL"):
-        return _err(f"invalid verdict '{verdict}' — must be PASS or FAIL")
-    return _write_artifact(args, "CRITIC__document.md")
 
 
 def handle_write_req_doc(args: dict) -> dict:
@@ -1355,11 +1037,11 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id"], "additionalProperties": False},
      "handler": handle_task_context},
     {"name": "task_verify", "title": "Run task verification",
-     "description": "Sync changed paths and check verification state. Optional run_commands executes manifest verify_commands through the parallel verify runner. Optional reconcile_acs promotes open CHECKS.yaml ACs from fresh QA PASS evidence.",
+     "description": "Sync changed paths and compute verification state from hook-owned subagent start receipts. Optional reconcile_acs promotes open CHECKS.yaml ACs when a subagent start receipt exists.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"},
          "run_commands": {"type": "boolean"},
-         "reconcile_acs": {"type": "boolean", "description": "Optional. When true, promote open CHECKS.yaml ACs using fresh CRITIC__qa.md PASS evidence. Failed/deferred ACs are never promoted."},
+         "reconcile_acs": {"type": "boolean", "description": "Optional. When true, promote open CHECKS.yaml ACs using SUBAGENT_RECEIPTS.jsonl presence. Failed/deferred ACs are never promoted."},
          "parallel": {"type": "boolean"},
          "max_workers": {"type": "integer"}},
          "required": ["task_id"], "additionalProperties": False},
@@ -1379,22 +1061,6 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id", "blocked_reason", "unblock_condition"],
          "additionalProperties": False},
      "handler": handle_task_blocked},
-    {"name": "record_subagent_receipt", "title": "Record subagent invocation receipt",
-     "description": "Capture a structured receipt for an actual subagent invocation. Use after Codex spawn_agent/wait_agent returns, or from lifecycle hooks. This does not promote ACs or set runtime_verdict.",
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"},
-         "agent_id": {"type": "string"},
-         "agent_type": {"type": "string"},
-         "lens": {"type": "string"},
-         "verdict": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED_ENV", "PENDING", "UNKNOWN"]},
-         "status": {"type": "string"},
-         "source": {"type": "string", "enum": ["spawn_agent", "claude_subagent_hook", "manual_import"]},
-         "summary": {"type": "string"},
-         "prompt": {"type": "string"},
-         "transcript_path": {"type": "string"}},
-         "required": ["task_id", "agent_id"],
-         "additionalProperties": False},
-     "handler": handle_record_subagent_receipt},
     {"name": "record_attempt", "title": "Record retry attempt evidence",
      "description": "Create attempts/attempt-NNN with summary metadata and optional transcript for failed develop/verify retries.",
      "inputSchema": {"type": "object", "properties": {
@@ -1406,29 +1072,6 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id", "summary"],
          "additionalProperties": False},
      "handler": handle_record_attempt},
-    {"name": "write_critic_qa", "title": "Write runtime verdict — QA agents only",
-     "description": "Write CRITIC__qa.md and set runtime_verdict. Called by qa-browser, qa-api, qa-cli, or qa-desktop. Pass `lens` (e.g. \"cli\", \"browser\") when multiple QA agents run in parallel — the handler keeps the latest section per lens and computes worst-wins runtime_verdict across current lens verdicts. Without `lens`, legacy full-overwrite behavior is preserved. Pass `manual_ux_verification` with a non-empty description of the manual UX verification performed; when lens='browser' and this field is empty, runtime_verdict is forced to PENDING (AC-006).",
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"},
-         "verdict": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED_ENV"]},
-         "summary": {"type": "string"}, "transcript": {"type": "string"},
-         "lens": {"type": "string", "description": "Optional QA lens identifier (cli, api, browser, desktop). When set, replaces that lens's prior section + worst-wins merges current lens verdicts."},
-         "manual_ux_verification": {"type": "string", "description": "Optional. Description of manual UX checks performed (browser lens). Empty + lens=browser → verdict forced to PENDING (AC-006)."},
-         "auto_promote_open_acs": {"type": "boolean", "description": "Deprecated compatibility no-op. QA tools only write evidence/runtime verdict; run task_verify with reconcile_acs=true to update CHECKS.yaml from QA PASS evidence."}},
-         "required": ["task_id", "verdict", "summary", "transcript"],
-         "additionalProperties": False},
-     "handler": handle_write_critic_qa},
-    {"name": "write_critic_ux", "title": "Write UX review verdict — UX agents only",
-     "description": "Write lens-aware CRITIC__ux.md. Called by ux-cli, ux-api, ux-browser, or ux-desktop. Does not update runtime_verdict and does not auto-promote CHECKS functional ACs.",
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"}, "task_dir": {"type": "string"},
-         "verdict": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED_ENV"]},
-         "summary": {"type": "string"}, "transcript": {"type": "string"},
-         "lens": {"type": "string", "enum": ["cli", "api", "browser", "desktop"],
-                  "description": "UX lens identifier. Replaces that lens's prior section and recomputes the merged UX verdict."}},
-         "required": ["task_id", "verdict", "summary", "transcript", "lens"],
-         "additionalProperties": False},
-     "handler": handle_write_critic_ux},
     {"name": "write_plan_artifact", "title": "Write plan-owned artifacts",
      "description": "Write PLAN.md, PLAN.meta.json, CHECKS.yaml, or AUDIT_TRAIL.md through MCP. Replaces scripts/write_plan_artifact.py and does not require PLAN_SESSION.json handshakes.",
      "inputSchema": {"type": "object", "properties": {
@@ -1440,15 +1083,6 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["artifact"],
          "additionalProperties": False},
      "handler": handle_write_plan_artifact},
-    {"name": "write_critic_document", "title": "Write document critic verdict",
-     "description": "Write CRITIC__document.md after critic-document reviews DOC_SYNC and durable doc quality.",
-     "inputSchema": {"type": "object", "properties": {
-         "task_id": {"type": "string"}, "task_dir": {"type": "string"},
-         "verdict": {"type": "string", "enum": ["PASS", "FAIL"]},
-         "summary": {"type": "string"}, "transcript": {"type": "string"}},
-         "required": ["task_id", "verdict", "summary", "transcript"],
-         "additionalProperties": False},
-     "handler": handle_write_critic_document},
     {"name": "write_req_doc", "title": "Create or update durable REQ doc",
      "description": "Auto-author a doc/<area>/REQ__<slug>.md scaffold before observable source work. The scaffold is reviewed by critic-document when durable docs change. task_id is optional — when omitted, source defaults to adhoc:<ISO8601> and task_dir is empty. status is optional — defaults to 'accepted'; critic-document retrospective writes use 'candidate' so the REQ lands for user review without claiming acceptance.",
      "inputSchema": {"type": "object", "properties": {

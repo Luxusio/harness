@@ -12,7 +12,7 @@ Skip if the plan has zero new trust boundaries AND zero new writes (pure prose r
 
 S1. **Spoofing / Auth boundary** — does any new codepath cross a trust boundary (user→service, service→DB, external→internal, LLM-output→executor)? If yes, how is the identity or source verified?
 
-S2. **Tampering / Data integrity** — does any new write mutate a protected artifact (PLAN.md, CHECKS.yaml, HANDOFF.md, DOC_SYNC.md, CRITIC__qa.md)? Is the owning skill or CLI the only writer (C-05 enforced by `prewrite_gate.py` and `mcp_bash_guard.py`)? Any Bash pattern that could slip past the guard?
+S2. **Tampering / Data integrity** — does any new write mutate a protected artifact (PLAN.md, CHECKS.yaml, HANDOFF.md, DOC_SYNC.md, SUBAGENT_RECEIPTS.jsonl)? Is the owning skill, CLI, or hook the only writer (C-05 enforced by `prewrite_gate.py` and `mcp_bash_guard.py`)? Any Bash pattern that could slip past the guard?
 
 S3. **Information disclosure** — does any new log, error message, prompt, or artifact leak secrets, PII, absolute paths with usernames, internal infra names, or task-specific data that should stay private to the task directory?
 

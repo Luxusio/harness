@@ -16,7 +16,7 @@ You are the harness developer agent.
 4. Write HANDOFF.md via `write_handoff` when done
 
 **Never do:**
-- Write PLAN.md, DOC_SYNC.md, or CRITIC__*.md
+- Write PLAN.md, DOC_SYNC.md, or verification receipt artifacts
 - Exceed PLAN.md scope
 - Claim completion without running verification
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import hashlib
 import tempfile
 import threading
 import time
@@ -190,7 +191,18 @@ def _diagnostic_record(
     return record
 
 
-def register_subagent_start(repo_root: str, payload: dict[str, Any], *, task_dir: str | None = None) -> dict[str, Any]:
+def _generated_agent_id(payload: dict[str, Any]) -> str:
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    return "hook-spawn-" + hashlib.sha256(f"{now_iso()}|{raw}".encode("utf-8")).hexdigest()[:16]
+
+
+def register_subagent_start(
+    repo_root: str,
+    payload: dict[str, Any],
+    *,
+    task_dir: str | None = None,
+    allow_generated_id: bool = False,
+) -> dict[str, Any]:
     """Record an active subagent. Returns the record or {} on no active task."""
     task_dir = task_dir or resolve_active_task_dir(repo_root)
     if not task_dir:
@@ -198,21 +210,24 @@ def register_subagent_start(repo_root: str, payload: dict[str, Any], *, task_dir
     sid = _session_id(payload)
     aid = _agent_id(payload)
     if not aid:
-        # Official Claude Code SubagentStart input includes agent_id. Without it,
-        # any generated fallback id would be impossible for SubagentStop to match
-        # reliably and would create a durable false-active record.
-        record = _diagnostic_record(
-            payload,
-            status="ignored_start_missing_agent_id",
-            reason="SubagentStart payload did not include official agent_id field.",
-            task_dir=task_dir,
-        )
+        if allow_generated_id:
+            aid = _generated_agent_id(payload)
+        else:
+            # Official Claude Code SubagentStart input includes agent_id. Without it,
+            # any generated fallback id would be impossible for SubagentStop to match
+            # reliably and would create a durable false-active record.
+            record = _diagnostic_record(
+                payload,
+                status="ignored_start_missing_agent_id",
+                reason="SubagentStart payload did not include official agent_id field.",
+                task_dir=task_dir,
+            )
 
-        def add_diag(data: dict[str, Any]):
-            data["records"].append(record)
-            return record
+            def add_diag(data: dict[str, Any]):
+                data["records"].append(record)
+                return record
 
-        return _with_registry_lock(repo_root, add_diag)
+            return _with_registry_lock(repo_root, add_diag)
     ts = _now()
     record = {
         "id": aid,
@@ -236,7 +251,24 @@ def register_subagent_start(repo_root: str, payload: dict[str, Any], *, task_dir
         data["records"] = records
         return record
 
-    return _with_registry_lock(repo_root, upsert)
+    result = _with_registry_lock(repo_root, upsert)
+    try:
+        receipt = record_subagent_receipt(
+            task_dir,
+            {
+                "source": "subagent_start_hook",
+                "status": "started",
+                "agent_id": aid,
+                "agent_type": _agent_type(payload),
+                "summary": "subagent start hook observed",
+                "transcript_path": _payload_value(payload, "agent_transcript_path", "transcript_path"),
+            },
+        )
+        if receipt.get("receipt_id"):
+            result["subagent_receipt_id"] = receipt["receipt_id"]
+    except Exception:
+        pass
+    return result
 
 
 def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -274,25 +306,7 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
         target["stop_hook_active"] = bool(payload.get("stop_hook_active"))
         return target
 
-    result = _with_registry_lock(repo_root, mark)
-    if result.get("status") == "done" and result.get("task_dir"):
-        try:
-            receipt = record_subagent_receipt(
-                result["task_dir"],
-                {
-                    "source": "claude_subagent_hook",
-                    "status": "done",
-                    "agent_id": result.get("id") or result.get("agent_id") or aid,
-                    "agent_type": result.get("agent_type") or _agent_type(payload),
-                    "summary": result.get("last_assistant_message") or "",
-                    "transcript_path": result.get("transcript_path") or "",
-                },
-            )
-            if receipt.get("receipt_id"):
-                result["subagent_receipt_id"] = receipt["receipt_id"]
-        except Exception:
-            pass
-    return result
+    return _with_registry_lock(repo_root, mark)
 
 
 def prune(repo_root: str, *, keep: int = MAX_RECORDS, stale_secs: float = DEFAULT_STALE_SECS) -> None:

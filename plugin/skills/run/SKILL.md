@@ -96,11 +96,13 @@ to interpret user intent.
 
 Read `doc/harness/manifest.yaml` for project type. Spawn appropriate QA agent(s).
 Also spawn applicable UX review agents for user-facing surfaces. UX review is
-not a replacement for QA: qa-* writes `CRITIC__qa.md` and proves correctness;
-ux-* writes `CRITIC__ux.md` and judges whether the experience is shippable.
+not a replacement for QA: qa-* proves correctness; ux-* judges whether the
+experience is shippable. Claude hooks record each subagent start in
+`SUBAGENT_RECEIPTS.jsonl`; `task_verify` uses that hook-owned receipt as the
+verification signal.
 
 **Strategy selection:**
-- **MUST spawn qa-browser when** `manifest.qa.browser_qa_supported: true` AND the diff contains any frontend file (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). Skipping is **blocked by task_close** (see `plugin/scripts/_lib.py:emit_compact_context` — `"qa-browser evidence in CRITIC__qa.md"` lands in `missing_for_close` and task_close refuses).
+- **MUST spawn qa-browser when** `manifest.qa.browser_qa_supported: true` AND the diff contains any frontend file (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). Skipping leaves no subagent-start receipt and is blocked by `task_close`.
 - `desktop_qa_supported: true` → qa-desktop
 - `type: api` or diff contains route/endpoint files → qa-api
 - `type: cli` or `type: library` → qa-cli
@@ -113,20 +115,17 @@ ux-* writes `CRITIC__ux.md` and judges whether the experience is shippable.
 - desktop GUI diff with `desktop_qa_supported: true` or `ux_review_supported: true` → ux-desktop
 
 When QA and UX lenses both apply, spawn them in the same parallel batch when
-available. QA calls `write_critic_qa`; UX calls `write_critic_ux` with
-`lens="cli|api|browser|desktop"`. `task_close` blocks applicable UX work until
-the required `CRITIC__ux.md` lens section is PASS. Claude SubagentStart/Stop
-hooks record completed subagent invocations to `<task_dir>/SUBAGENT_RECEIPTS.jsonl`;
-`task_verify` surfaces the `subagent_receipts` summary so missing independent
-QA/review calls are visible instead of being replaced by self-authored PASS
-claims.
+available. Agents return PASS/FAIL/BLOCKED_ENV findings in their final
+response. Do not ask them to write critic artifacts. `task_verify` surfaces the
+`subagent_receipts` summary so missing independent QA/review calls are visible
+instead of being replaced by self-authored PASS claims.
 
 Order matters: the desktop branch is evaluated before the `type: cli` / `type: library`
 fallback so a desktop app declared as `type: cli` still routes to qa-desktop.
 
 Agent spawn template (substitute `<lens>` ∈ {browser, desktop, api, cli}):
 
-**Single lens** (one type matches) — legacy path, omit `lens=`:
+**Single lens** (one type matches):
 
 ```
 Agent(
@@ -136,40 +135,30 @@ Agent(
 Task dir: <task_dir>
 Read ${CLAUDE_PLUGIN_ROOT}/agents/qa-<lens>.md for your full role definition.
 Follow it exactly — all four roles (operation, intent, UX/design, runtime).
-Call mcp__plugin_harness_harness__write_critic_qa with verdict, summary, and full transcript. QA records evidence only; the orchestrator reconciles CHECKS during task_verify."
+Return PASS/FAIL/BLOCKED_ENV with concrete findings and evidence. Do not modify files and do not write critic artifacts."
 )
 ```
 
-**Multi-lens fullstack** (two or more types match) — spawn ALL agents in a single assistant message AND pass `lens="<lens>"` to `write_critic_qa` so the MCP handler merges per-lens sections + computes worst-wins runtime_verdict:
+**Multi-lens fullstack** (two or more types match) — spawn ALL agents in a single assistant message so all starts are hook-recorded:
 
 ```
 # Issue these N Agent calls in ONE assistant message
 Agent(
   name="<task_id>:qa-cli",
   subagent_type="oh-my-claudecode:executor",
-  prompt="You are the cli QA agent for <task_id>. ... Call write_critic_qa with verdict, summary, transcript, AND lens=\"cli\"."
+  prompt="You are the cli QA agent for <task_id>. ... Return PASS/FAIL/BLOCKED_ENV with findings."
 )
 Agent(
   name="<task_id>:qa-browser",
   subagent_type="oh-my-claudecode:executor",
-  prompt="You are the browser QA agent for <task_id>. ... Call write_critic_qa with verdict, summary, transcript, AND lens=\"browser\"."
+  prompt="You are the browser QA agent for <task_id>. ... Return PASS/FAIL/BLOCKED_ENV with findings."
 )
 ```
 
-When QA records PASS for the task as a whole, run `task_verify` with
+After spawning QA/UX, run `task_verify` with
 `reconcile_acs=true`. The verify step promotes only CHECKS.yaml entries with
-`status: open` and only when fresh `CRITIC__qa.md` PASS evidence is present;
-failed/deferred ACs still require explicit `update_checks.py` handling. Check
-the returned `subagent_receipts`; if the expected QA/UX subagent is absent,
-run the missing agent instead of treating an orchestrator-written summary as
-the verification source.
-
-When `lens` is set, the handler keeps the latest section for that lens in `CRITIC__qa.md` and updates `runtime_verdict` via worst-wins across current lens verdicts (severity: `PENDING < PASS < BLOCKED_ENV < FAIL`). Without `lens`, the legacy full-overwrite path is taken — keep single-lens calls unchanged.
-
-`write_critic_ux` uses the same lens merge shape for `CRITIC__ux.md`, but it
-does not update `runtime_verdict` and does not auto-promote functional ACs.
-
-> **Note (MCP reload).** MCP server changes activate on the next session restart per the 2026-05-08 learning. Until the next restart, the new `lens` argument lands but the handler still runs the old code; concurrent calls without lens-routing still race. After restart, multi-lens spawns become safe to issue in parallel. See `plugin/skills/develop/parallel-fanout.md` for the spawn-all-in-one-message convention.
+`status: open` when `SUBAGENT_RECEIPTS.jsonl` contains a hook-recorded start;
+failed/deferred ACs still require explicit `update_checks.py` handling.
 
 After completion, check runtime_verdict:
 - **PASS**: proceed to Phase 5.

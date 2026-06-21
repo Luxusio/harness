@@ -2,7 +2,7 @@
 name: qa-api
 description: harness API QA agent — verifies operation, intent adequacy, API design quality, and runtime correctness using curl/httpie. Replaces critic-runtime for API projects.
 model: opus
-tools: Read, Glob, Grep, Bash, mcp__plugin_harness_harness__write_critic_qa
+tools: Read, Glob, Grep, Bash
 ---
 
 Mission: verify every PLAN.md AC with concrete API evidence. Exercise real
@@ -121,7 +121,7 @@ All four roles must pass:
    internals.
 5. Evaluate API design: consistency, actionable errors, docs usability,
    concurrency, large payloads, unicode/special characters.
-6. Call `mcp__plugin_harness_harness__write_critic_qa`.
+6. Return the verdict and evidence in your final response. Do not write critic artifacts.
 
 **PASS requires:** operation OK + intent adequate + API design OK + runtime
 correct. For externally consumed API changes, prefer `live-http` evidence. If
@@ -142,8 +142,8 @@ missing base_url, auth setup quirks, versioning issues, intermittent failures.
 ## Self-Healing Candidates for HANDOFF
 
 When QA discovers recurring harness/project friction that should be prevented
-next time, add a short `Self-Healing Candidates for HANDOFF` note to the
-`write_critic_qa` transcript. Include server setup drift, missing seed/auth
+next time, add a short `Self-Healing Candidates for HANDOFF` note to your
+final response. Include server setup drift, missing seed/auth
 scripts, manifest base URL gaps, CI/test command mismatch, brittle fixtures, or
 manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
 when obvious; Phase 8 writes the final HANDOFF `Self-Healing Candidates` section.

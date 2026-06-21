@@ -274,7 +274,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
 
 **Per-AC test run:** each executor runs its own targeted tests for the AC it owns. `git diff --name-only HEAD~1` → for each changed source, find test files that import/reference it (mirror path or import search) → run only those. If no tests exist for changed module, write one (Phase 3.5 rule). If PLAN.md specifies per-AC verify commands, prefer those. For parallel AC batches, targeted tests run inside the sibling executor contexts before the coordinator touches PROGRESS.md or CHECKS.yaml.
 
-**Delegation rule (C-18 / Verification delegation).** Browser MCP tools (`mcp__chrome-devtools__*`) MUST be delegated to `harness:qa-browser` — the gate blocks main-session calls. Bash test runners (`pytest`, `npm test`, `pnpm test`, `vitest`, `cargo test`, `go test`, …) are allowed inline only for small targeted per-AC runs; full-suite verification MUST be delegated to qa-* agents. Spawn every applicable lens (`qa-cli`, `qa-api`, `qa-browser`, `qa-desktop`) in one assistant message and let each lens run its commands in its own context. Read the verdict from `CRITIC__qa.md`. See `plugin/CLAUDE.md` § 8c.
+**Delegation rule (C-18 / Verification delegation).** Browser MCP tools (`mcp__chrome-devtools__*`) MUST be delegated to `harness:qa-browser` — the gate blocks main-session calls. Bash test runners (`pytest`, `npm test`, `pnpm test`, `vitest`, `cargo test`, `go test`, …) are allowed inline only for small targeted per-AC runs; full-suite verification MUST be delegated to qa-* agents. Spawn every applicable lens (`qa-cli`, `qa-api`, `qa-browser`, `qa-desktop`) in one assistant message and let each lens run its commands in its own context. Claude/Codex hooks record each subagent start in `SUBAGENT_RECEIPTS.jsonl`; `task_verify` reads that receipt as the verification signal. See `plugin/CLAUDE.md` § 8c.
 
 Per-AC test failures → fix immediately. These are free; only Phase 7 full-suite failures count toward the 3-cycle limit.
 
@@ -315,11 +315,8 @@ Runs continuously during Phase 3.
   ```
   Allowlist (no evidence required): `kind in {bugfix, doc, verification}`. Bugfix is gated separately by Iron Law (`--root-cause`). Missing `kind:` field defaults to `unknown` and skips the gate (backward-compat).
 
-  *QA codifier* (after Phase 7 PASS, before Phase 8 HANDOFF) captures structured regression tests from CRITIC__qa.md:
-  ```bash
-  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/qa_codifier.py --task-dir <task_dir> 2>/dev/null || true
-  ```
-  The codifier parses `codifiable:` YAML blocks emitted by qa-cli/qa-api agents and stages validated tests to `tests/regression/<sanitized-task-id>/`. Output filenames are prefixed `test_<ac_NNN>__<behavior>.{ext}` so pytest's default discovery picks them up automatically — no project-side conftest changes required. Never blocks task close.
+  QA agents may include `codifiable:` YAML blocks in their final response for
+  future regression-test extraction. Do not write critic artifacts for this.
 	- **3.6 Fix-first pattern** — see `fix-first-pattern.md`. Classify AUTO-FIX (dead code, magic numbers, stale comments, missing guards) and ASK (API design, architecture, security, DRY extractions). Auto-fix immediately; flag ASK in HANDOFF "Judgment Items". The **3-attempt escalation rule** also lives in this sub-file and applies to every fix loop (per-AC, Phase 7, browser debug).
 	- **3.6.1 Durable docs (REQ/GUIDE/ADR/POLICY)** — read PLAN.md `Durable Docs Decision` before implementation. Treat it as a documentation-impact judgment: `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`. Create or update each selected `doc/<area>/<TYPE>__<name>.md` file; selected REQ docs must be written before source implementation, not after code is done. Use `write_req_doc` / `req_scaffold.py` as the happy path when observable behavior is detected and no existing REQ fits. Use DDD-style areas or bounded contexts such as `ui`, `api`, `auth`, `billing`, `catalog`, `runtime`, `verification`, or `common`. Use `REQ` for user-visible behavior, externally consumed API contracts, constraints, and observable bugfixes; write intended observable behavior plus verification cues. Existing-screen state changes count: filters, search, sorting, loading, empty/error states, visibility, labels, native navigation/back-stack behavior, and click/input behavior. New pages, admin/backoffice screens, routes, controllers, and endpoints require a REQ even when additive. PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`. Recheck the actual diff after implementation: if you added observable UI/API behavior that PLAN marked `REQ: n/a`, create the missing REQ, link it from HANDOFF, and record the correction in DOC_SYNC. If the diff instead changed harness process, agent instructions, testing guidance, or implementation patterns, update the relevant `GUIDE`, skill, pattern doc, or tests rather than inventing a REQ. Use `GUIDE` for reusable coding, design, testing, or implementation guidance. Use `ADR` for significant technical choices with alternatives, reasons, consequences, and tradeoffs. Use `POLICY` only for external security, legal, data-handling, approval, licensing, or organizational constraints that harness cannot fully enforce by itself; keep harness-internal execution rules in skills, agents, scripts, and tests. Link each updated durable doc from HANDOFF. For internal-only refactors, one-off tests, or non-observable maintenance, record `Durable docs: not needed — <specific non-observable reason>` in HANDOFF; the reason must say which durable knowledge surfaces remain unchanged.
 
@@ -396,18 +393,18 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 
 Read `verification-gate.md` in full. Delegates full-suite test commands from PLAN.md to all applicable qa-* agents in parallel, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit with investigate-skill escalation on cycle 3.
 
-**Main session MUST spawn the appropriate qa-* lens for full-suite verification (Verification delegation, C-18).** The gate hard-enforces browser MCP calls and the develop contract hard-enforces full-suite delegation. Bash test runners remain allowed inline only for targeted per-AC runs and debug reruns. Heavy full-suite execution and background process state belong in qa-* isolated contexts. Let the qa-* lens execute and consume the verdict via `task_verify` / `CRITIC__qa.md`.
+**Main session MUST spawn the appropriate qa-* lens for full-suite verification (Verification delegation, C-18).** The gate hard-enforces browser MCP calls and the develop contract hard-enforces full-suite delegation. Bash test runners remain allowed inline only for targeted per-AC runs and debug reruns. Heavy full-suite execution and background process state belong in qa-* isolated contexts. Let the qa-* lens execute, then run `task_verify`; the hook-recorded `SUBAGENT_RECEIPTS.jsonl` entry is the verification signal.
 
 For user-facing changes, also spawn the applicable ux-* lens (`ux-cli`,
 `ux-api`, `ux-browser`, or `ux-desktop`) when manifest support and touched-path
-rules require it. UX writes `CRITIC__ux.md` via `write_critic_ux`; close blocks
-until required UX lens sections are PASS.
+rules require it. UX agents return findings in their final response; no
+critic artifact is written.
 
 **No verification opt-in prompt.** If Phase 7 reveals a now-available live/API/browser/CLI verification route, run it through the appropriate qa-* lens. Do not ask the user whether to perform the verification. A rebuild, local service restart, local seed, or dev-only token generation is normal verification work unless it crosses the destructive/external boundary above.
 
 When durable docs are linked in HANDOFF or changed under `doc/<area>/<TYPE>__*.md`, pass those paths to the QA lens as intent evidence. QA uses `REQ` as behavior/contract verification criteria, `GUIDE` as implementation quality and consistency criteria, `ADR` as architecture intent and tradeoff criteria, and `POLICY` as external constraint criteria.
 
-**Multi-lens QA spawns follow `parallel-fanout.md` Parallelization Triggers — when two or more QA lenses apply (e.g., `qa-browser` + `qa-api` for a fullstack diff), issue ALL agent calls in a single assistant message with `lens="<lens>"` so `write_critic_qa` replaces that lens's prior section and worst-wins merges current lens verdicts.
+**Multi-lens QA spawns follow `parallel-fanout.md` Parallelization Triggers — when two or more QA lenses apply (e.g., `qa-browser` + `qa-api` for a fullstack diff), issue ALL agent calls in a single assistant message so the hooks record each subagent start.
 
 **Also implements:**
 - **Transience filter** — a failure must reproduce on 2 consecutive runs to count as `failed`. Single-run failures are logged as `transient` in `learnings.jsonl` and not counted toward the 3-cycle limit.
@@ -633,7 +630,7 @@ Classify whether this task revealed a recurring failure mode that the harness or
 project can prevent next time. This includes development friction, QA-discovered
 verification gaps, tool/schema drift, CI command drift, brittle setup commands,
 and repeated manual recovery steps. QA lenses should surface candidates in their
-`CRITIC__qa.md` transcript; Phase 8 owns the final HANDOFF classification.
+final response; Phase 8 owns the final HANDOFF classification.
 
 For harness-improvement candidates, treat dogfood feedback and agent retros as
 hypotheses until checked against the repo. Before marking a candidate `applied`
@@ -699,10 +696,10 @@ When the task changes `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or
 DOC_SYNC. It verifies both DOC_SYNC consistency and durable doc quality, and
 runs the Retrospective REQ pass over USER_FEEDBACK.jsonl to catch user-stated
 requirements that closed without becoming durable REQ docs. The task cannot
-close until `CRITIC__document.md` has a fresh `PASS`; a changed REQ with vague
-or missing observable behavior is a FAIL, not a warning. Candidate REQs written
-by the Retrospective pass land with `status: candidate` frontmatter and do not
-block close on their own.
+close with unresolved durable-doc gaps; a changed REQ with vague or missing
+observable behavior is a FAIL, not a warning. Candidate REQs written by the
+Retrospective pass land with `status: candidate` frontmatter and do not block
+close on their own.
 
 ### Phase 8.7: Distilled Change Doc
 

@@ -5,8 +5,8 @@ description: harness document critic — verifies DOC_SYNC and durable doc quali
 
 > **Codex runtime notes:**
 > - This file is a role/methodology reference. On Codex, run the methodology
->   inline and write the verdict with `write_critic_document`.
-> - MCP tool names are bare: `write_critic_document`.
+>   inline and return findings in the final response.
+> - Do not call critic writer tools.
 
 You are the harness document critic agent.
 
@@ -48,7 +48,7 @@ REQ quality checklist:
 - Includes verification cues that a QA agent can execute or inspect
 - States out-of-scope boundaries when likely to be misread
 
-Write `CRITIC__document.md` with `write_critic_document`.
+Return PASS/FAIL findings in your final response. Do not write critic artifacts.
 
 Verdict rules:
 - `PASS` only when DOC_SYNC is accurate and all changed durable docs meet the

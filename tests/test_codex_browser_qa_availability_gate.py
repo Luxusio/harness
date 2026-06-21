@@ -24,9 +24,9 @@ def test_codex_run_browser_qa_is_availability_gated():
         assert phrase not in body
 
     assert "browser tools are available" in body
-    assert 'lens: "browser"' in body
-    assert "manual_ux_verification" in body
-    assert "Keep browser-required close evidence on the browser lens" in body
+    assert "qa-browser" in body
+    assert "SUBAGENT_RECEIPTS.jsonl" in body
+    assert "hook-recorded subagent starts" in body
 
 
 def test_codex_develop_browser_visual_phases_are_not_blanket_deferred():
@@ -45,8 +45,8 @@ def test_codex_develop_browser_visual_phases_are_not_blanket_deferred():
 
     assert "Browser tools are availability-gated on Codex" in body
     assert "run the qa-browser methodology inline" in body
-    assert 'lens: "cli"   # or "api" / "desktop" / "browser"' in body
-    assert "Browser QA: `done`" in body
+    assert "task_verify" in body
+    assert "Runtime Fallbacks" in body
 
 
 def test_claude_policy_still_requires_qa_browser_delegation():
@@ -54,6 +54,6 @@ def test_claude_policy_still_requires_qa_browser_delegation():
     develop_body = _text(CLAUDE_DEVELOP)
 
     assert "MUST spawn qa-browser" in run_body
-    assert "Skipping is **blocked by task_close**" in run_body
+    assert "Skipping leaves no subagent-start receipt" in run_body
     assert "Browser MCP tools (`mcp__chrome-devtools__*`) MUST be delegated" in develop_body
     assert "harness:qa-browser" in develop_body

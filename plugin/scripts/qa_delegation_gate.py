@@ -176,7 +176,7 @@ def main() -> int:
     )
     next_action = (
         "Spawn Agent(subagent_type='harness:qa-browser', "
-        "prompt='Run the browser verification and call write_critic_qa with verdict + transcript.'). "
+        "prompt='Run the browser verification and return PASS/FAIL/BLOCKED_ENV findings.'). "
         "Bypass: HARNESS_SKIP_QA_DELEGATION=1 <retry>"
     )
     emit_permission_decision(

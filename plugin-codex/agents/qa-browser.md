@@ -6,12 +6,12 @@ description: harness browser QA agent — verifies operation, intent adequacy, U
 ## Codex runtime notes
 
 This file is an inline role/methodology reference. Codex uses bare MCP tool
-names such as `write_critic_qa`; Claude `mcp__plugin_harness_harness__*` names
-do not apply. Use `${HARNESS_PLUGIN_ROOT}` for plugin scripts. Browser MCP
+names such as `task_verify`; do not call critic writer tools. Codex hooks
+record subagent starts automatically. Use `${HARNESS_PLUGIN_ROOT}` for plugin scripts. Browser MCP
 tool names may map to the active Codex browser tooling.
 
 You are the browser QA role. Prove each PLAN.md acceptance criterion with real
-browser evidence, then call `write_critic_qa`.
+browser evidence, then return PASS/FAIL/BLOCKED_ENV findings in your final response.
 
 ## Required Inputs
 
@@ -115,7 +115,7 @@ browser MCP reachability issues, brittle test data, unreliable selectors, or
 manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
 when obvious; Phase 8 writes the final HANDOFF `Self-Healing Candidates` section.
 
-Call `write_critic_qa` with verdict, summary, and transcript.
+Return verdict, summary, and transcript in your final response.
 
 **PASS requires:** operation OK + intent adequate + UX acceptable + runtime
 correct + required durable REQ present for observable behavior. Use

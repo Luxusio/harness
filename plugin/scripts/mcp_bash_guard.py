@@ -71,8 +71,7 @@ _PY_PATTERNS = [
 
 # Protected-artifact → owning MCP/CLI tool (for human-text fix hint).
 _ARTIFACT_TOOL_HINT = {
-    "CRITIC__qa.md": "mcp__plugin_harness_harness__write_critic_qa",
-    "CRITIC__document.md": "mcp__plugin_harness_harness__write_critic_document",
+    "SUBAGENT_RECEIPTS.jsonl": "runtime subagent-start hook",
     "HANDOFF.md": "mcp__plugin_harness_harness__write_handoff",
     "DOC_SYNC.md": "mcp__plugin_harness_harness__write_doc_sync",
     "PLAN.md": "mcp__plugin_harness_harness__write_plan_artifact",
@@ -279,8 +278,7 @@ def _deny(target, command):
         "PLAN.meta.json": "mcp__plugin_harness_harness__write_plan_artifact artifact=plan-meta",
         "CHECKS.yaml": "python3 plugin/scripts/update_checks.py --task-dir <td> --ac <id> --status <s>",
         "AUDIT_TRAIL.md": "mcp__plugin_harness_harness__write_plan_artifact artifact=audit",
-        "CRITIC__qa.md": "Spawn Agent(subagent_type='harness:qa-*', ...) + write_critic_qa MCP",
-        "CRITIC__document.md": "Spawn Agent(subagent_type='harness:critic-document', ...) + write_critic_document MCP",
+        "SUBAGENT_RECEIPTS.jsonl": "Spawn the required subagent; the runtime hook records this file",
         "HANDOFF.md": "Spawn Agent(subagent_type='harness:developer', ...) + write_handoff MCP",
         "DOC_SYNC.md": "Spawn Agent(subagent_type='harness:developer', ...) + write_doc_sync MCP",
     }

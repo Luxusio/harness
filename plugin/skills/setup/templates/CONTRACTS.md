@@ -33,7 +33,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 | 상황 | 적용 규약 | 수준 |
 |------|---------|------|
 | Repo-mutating 태스크 시작 | [C-01](#c-01), [C-02](#c-02), [C-09](#c-09) | hard |
-| 보호 아티팩트 쓰기 (PLAN/CHECKS/HANDOFF/DOC_SYNC/CRITIC__qa) | [C-03](#c-03), [C-05](#c-05) | hard |
+| 보호 아티팩트 쓰기 (PLAN/CHECKS/HANDOFF/DOC_SYNC/SUBAGENT_RECEIPTS) | [C-03](#c-03), [C-05](#c-05) | hard |
 | `task_close` 시점 | [C-01](#c-01), [C-04](#c-04), [C-14](#c-14) | hard |
 | 짧은 승인 (`ㅇㅇ`, `ㄱ`) 수신 | [C-07](#c-07) | soft |
 | 답변 레인 → mutation 레인 전환 | [C-07](#c-07), [C-08](#c-08) | hard |
@@ -98,7 +98,7 @@ state of the repo.
 
 **Title:** Protected artifact ownership.
 **When:** Any `Write`/`Edit` to PLAN.md, CHECKS.yaml, HANDOFF.md,
-DOC_SYNC.md, or CRITIC__qa.md — and any `Bash` mutation (sed -i,
+DOC_SYNC.md, or SUBAGENT_RECEIPTS.jsonl — and any `Bash` mutation (sed -i,
 redirect, cp, mv, tee, python -c open(…,'w'), …) targeting the same basenames.
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`
 (Write/Edit/MultiEdit surface) + `plugin/scripts/mcp_bash_guard.py`
@@ -196,12 +196,12 @@ extra phase is a new failure point.
 
 ### C-14
 
-**Title:** PASS verdicts require structured evidence.
+**Title:** PASS verdicts require a hook-owned subagent start receipt.
 **When:** `runtime_verdict` transitions to `PASS`.
-**Enforced by:** `CRITIC__qa.md` schema — must contain specific
-test/screenshot/log references, not a bare verdict.
-**On violation:** soft-warn. `task_close` additionally demands the file
-exists and is fresh (C-04).
+**Enforced by:** `SUBAGENT_RECEIPTS.jsonl` presence, written by runtime hooks
+when a subagent starts.
+**On violation:** `task_close` blocks until a subagent is spawned and
+`task_verify` observes the receipt.
 **Why:** A PASS without evidence is indistinguishable from hallucination.
 
 ### C-15

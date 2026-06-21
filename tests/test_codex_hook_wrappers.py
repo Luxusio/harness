@@ -80,6 +80,39 @@ class TestCodexHookWrappers(unittest.TestCase):
                 self.assertTrue(calls, name)
                 self.assertTrue(all(call.get("cwd") == repo for call in calls), name)
 
+    def test_pre_tool_use_records_codex_subagent_start_receipt(self):
+        mod = _load("hook_pre_tool_use")
+
+        def fake_run(*args, **kwargs):
+            return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as repo:
+            root = Path(repo)
+            (root / ".git").mkdir()
+            tasks_dir = root / "doc" / "harness" / "tasks"
+            task_dir = tasks_dir / "TASK__codex-subagent"
+            task_dir.mkdir(parents=True)
+            (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
+            payload = {
+                "cwd": repo,
+                "tool_name": "multi_agent_v1.spawn_agent",
+                "tool_call_id": "call-123",
+                "tool_input": {"agent_type": "harness:qa-cli"},
+            }
+            with mock.patch("subprocess.run", side_effect=fake_run):
+                with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(payload))):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(mod.main(), 0)
+
+            receipt_path = task_dir / "SUBAGENT_RECEIPTS.jsonl"
+            self.assertTrue(receipt_path.is_file())
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(receipt["source"], "subagent_start_hook")
+            self.assertEqual(receipt["status"], "started")
+            self.assertEqual(receipt["agent_id"], "call-123")
+            self.assertEqual(receipt["agent_type"], "harness:qa-cli")
+            self.assertEqual(receipt["lens"], "qa-cli")
+
 
 if __name__ == "__main__":
     unittest.main()

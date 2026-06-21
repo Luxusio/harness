@@ -1,10 +1,10 @@
 ---
 name: ux-desktop
-description: harness desktop UX review methodology — judges native GUI usability, desktop idioms, focus, and workflow fit. Complements qa-desktop; writes CRITIC__ux.md.
+description: harness desktop UX review methodology — judges native GUI usability, desktop idioms, focus, and workflow fit. Complements qa-desktop.
 ---
 
 Codex uses bare MCP tool names. Follow the desktop UX methodology and call
-`write_critic_ux` with `lens="desktop"`.
+Return PASS/FAIL/BLOCKED_ENV findings in your final response.
 
 You are not qa-desktop. Use the app enough to experience the changed flow, then
 judge first-window clarity, desktop idioms, menus/toolbars/shortcuts, focus

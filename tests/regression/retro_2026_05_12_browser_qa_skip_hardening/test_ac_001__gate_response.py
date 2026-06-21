@@ -180,9 +180,9 @@ class TestStopGateEmitsNextAction(unittest.TestCase):
                     stop_gate.main()
             out = buf.getvalue()
         payload = json.loads(out)
-        self.assertIn("task_verify", payload["next_action_command"])
+        self.assertIn("Spawn a subagent", payload["next_action_command"])
         self.assertNotIn("Commit-backed Learnings", payload["next_action_command"])
-        self.assertEqual(payload["owner_skill"], "harness:qa-* or harness:stop-judge")
+        self.assertEqual(payload["owner_skill"], "harness:qa-*")
 
 
 if __name__ == "__main__":
