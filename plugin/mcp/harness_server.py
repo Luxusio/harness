@@ -54,7 +54,7 @@ def _initialize_instructions(runtime: str) -> str:
         "write_critic_ux, write_critic_document, write_req_doc, "
         "write_handoff, write_doc_sync, goal_start, goal_context, "
         "goal_add_task, goal_next_task, goal_finish, "
-        "record_ac_evidence, and record_attempt. "
+        "record_subagent_receipt, and record_attempt. "
         "write_plan_artifact is the canonical PLAN/CHECKS/AUDIT writer and "
         "replaces the legacy Python shim. "
     )
@@ -88,6 +88,7 @@ from _lib import (  # type: ignore
     artifact_exists, canonical_task_dir, canonical_task_id,
     find_repo_root, runtime_is_stale as _runtime_is_stale,
     write_active_marker, clear_active_marker, record_attempt,
+    record_subagent_receipt, subagent_receipt_summary,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
 )
@@ -285,67 +286,6 @@ def _yaml_quote(value: str) -> str:
     return f'"{escaped}"'
 
 
-def _append_ac_evidence(td: str, ac_id: str, evidence: str, source: str = "verification") -> dict:
-    checks_path = os.path.join(td, "CHECKS.yaml")
-    if not os.path.isfile(checks_path):
-        return {"ok": False, "error": "CHECKS.yaml not found"}
-    try:
-        text = Path(checks_path).read_text(encoding="utf-8")
-    except OSError as exc:
-        return {"ok": False, "error": str(exc)}
-
-    blocks = _split_checks_blocks(text)
-    if len(blocks) <= 1:
-        return {"ok": False, "error": "CHECKS.yaml has no AC blocks"}
-
-    entry = f"{now_iso()} | {source or 'verification'} | {(evidence or '').replace(chr(10), ' ').strip()}"
-    changed = False
-    for idx in range(1, len(blocks)):
-        block = blocks[idx]
-        m_id = re.match(r"^\s*-\s+id:\s*(\S+)", block)
-        if not m_id or m_id.group(1).strip().strip('"').strip("'") != ac_id:
-            continue
-
-        if re.search(r"^\s+evidence_log:\s*$", block, flags=re.MULTILINE):
-            lines = block.splitlines(keepends=True)
-            insert_at = len(lines)
-            in_log = False
-            for line_idx, line in enumerate(lines):
-                if re.match(r"^\s+evidence_log:\s*$", line):
-                    in_log = True
-                    insert_at = line_idx + 1
-                    continue
-                if in_log and re.match(r"^\s{2}\w+:", line):
-                    insert_at = line_idx
-                    break
-                if in_log and re.match(r"^\s{4}-\s+", line):
-                    insert_at = line_idx + 1
-            lines.insert(insert_at, f"    - {_yaml_quote(entry)}\n")
-            blocks[idx] = "".join(lines)
-        else:
-            suffix = "\n" if block.endswith("\n") else ""
-            blocks[idx] = block.rstrip("\n") + f"\n  evidence_log:\n    - {_yaml_quote(entry)}" + suffix
-        changed = True
-        break
-
-    if not changed:
-        return {"ok": False, "error": f"AC not found: {ac_id}"}
-    _atomic_write_text(checks_path, "".join(blocks))
-    return {"ok": True, "ac_id": ac_id, "evidence": entry}
-
-
-def handle_record_ac_evidence(args: dict) -> dict:
-    ti = _req(args, "task_id")
-    ac_id = _req(args, "ac_id")
-    evidence = _req(args, "evidence")
-    source = _opt(args, "source") or "verification"
-    td = canonical_task_dir(task_id=ti)
-    result = _append_ac_evidence(td, ac_id, evidence, source)
-    if not result.get("ok"):
-        return _err("record_ac_evidence failed", data={"task_dir": td, **result})
-    return _ok({"task_dir": td, **result})
-
-
 def handle_record_attempt(args: dict) -> dict:
     ti = _req(args, "task_id")
     kind = _opt(args, "kind") or "retry"
@@ -355,6 +295,31 @@ def handle_record_attempt(args: dict) -> dict:
     td = canonical_task_dir(task_id=ti)
     meta = record_attempt(td, kind, verdict, summary, transcript)
     return _ok({"task_dir": td, "attempt": meta})
+
+
+def handle_record_subagent_receipt(args: dict) -> dict:
+    ti = _req(args, "task_id")
+    td = canonical_task_dir(task_id=ti)
+    receipt = {
+        "source": _opt(args, "source") or "spawn_agent",
+        "agent_id": _req(args, "agent_id"),
+        "agent_type": _opt(args, "agent_type") or "",
+        "lens": _opt(args, "lens") or "",
+        "verdict": _opt(args, "verdict") or "",
+        "status": _opt(args, "status") or "done",
+        "summary": _opt(args, "summary") or "",
+        "prompt": _opt(args, "prompt") or "",
+        "transcript_path": _opt(args, "transcript_path") or "",
+    }
+    try:
+        entry = record_subagent_receipt(td, receipt)
+    except ValueError as exc:
+        return _err("record_subagent_receipt failed", data={"task_dir": td, "error_detail": str(exc)})
+    return _ok({
+        "task_dir": td,
+        "receipt": entry,
+        "subagent_receipts": subagent_receipt_summary(td),
+    })
 
 
 def _run_verify_runner(td: str, parallel: bool = True, max_workers: int | None = None) -> dict:
@@ -660,7 +625,7 @@ def handle_task_context(args: dict) -> dict:
     ctx = emit_compact_context(td)
     if "error" in ctx:
         return _err("task_context failed", data=ctx)
-    return _ok({"task_dir": td, "task_context": ctx})
+    return _ok({"task_dir": td, "task_context": ctx, "subagent_receipts": subagent_receipt_summary(td)})
 
 
 def handle_task_verify(args: dict) -> dict:
@@ -709,6 +674,7 @@ def handle_task_verify(args: dict) -> dict:
         "stale": stale,
         "stale_path": stale_path,
         "ac_reconcile": ac_reconcile,
+        "subagent_receipts": subagent_receipt_summary(td),
     }
     if verify_run is not None:
         payload["verify_run"] = verify_run
@@ -1007,6 +973,7 @@ def _lens_merge_critic_qa(td: str, lens: str, verdict: str,
         )
     return _ok({"artifact": "CRITIC__qa.md", "task_dir": td,
                 "lens": lens, "verdict": final, "merged": True,
+                "subagent_receipts": subagent_receipt_summary(td),
                 "promoted_acs": [],
                 "ac_reconcile_next_action": legacy_reconcile_note,
                 "attempt": attempt or {}})
@@ -1100,6 +1067,10 @@ def handle_write_critic_qa(args: dict) -> dict:
                 _opt(args, "transcript") or "",
             )
     if isinstance(result.get("structuredContent"), dict):
+        td = _opt(args, "task_dir")
+        ti = _opt(args, "task_id") or (os.path.basename(td.rstrip("/")) if td else None)
+        if ti:
+            result["structuredContent"]["subagent_receipts"] = subagent_receipt_summary(td or canonical_task_dir(task_id=ti))
         result["structuredContent"]["promoted_acs"] = []
         if auto_promote:
             result["structuredContent"]["ac_reconcile_next_action"] = (
@@ -1408,16 +1379,22 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id", "blocked_reason", "unblock_condition"],
          "additionalProperties": False},
      "handler": handle_task_blocked},
-    {"name": "record_ac_evidence", "title": "Append incremental AC evidence",
-     "description": "Append timestamped evidence to one CHECKS.yaml AC without changing its status. Use during develop or focused verification before final QA PASS.",
+    {"name": "record_subagent_receipt", "title": "Record subagent invocation receipt",
+     "description": "Capture a structured receipt for an actual subagent invocation. Use after Codex spawn_agent/wait_agent returns, or from lifecycle hooks. This does not promote ACs or set runtime_verdict.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"},
-         "ac_id": {"type": "string"},
-         "evidence": {"type": "string"},
-         "source": {"type": "string"}},
-         "required": ["task_id", "ac_id", "evidence"],
+         "agent_id": {"type": "string"},
+         "agent_type": {"type": "string"},
+         "lens": {"type": "string"},
+         "verdict": {"type": "string", "enum": ["PASS", "FAIL", "BLOCKED_ENV", "PENDING", "UNKNOWN"]},
+         "status": {"type": "string"},
+         "source": {"type": "string", "enum": ["spawn_agent", "claude_subagent_hook", "manual_import"]},
+         "summary": {"type": "string"},
+         "prompt": {"type": "string"},
+         "transcript_path": {"type": "string"}},
+         "required": ["task_id", "agent_id"],
          "additionalProperties": False},
-     "handler": handle_record_ac_evidence},
+     "handler": handle_record_subagent_receipt},
     {"name": "record_attempt", "title": "Record retry attempt evidence",
      "description": "Create attempts/attempt-NNN with summary metadata and optional transcript for failed develop/verify retries.",
      "inputSchema": {"type": "object", "properties": {

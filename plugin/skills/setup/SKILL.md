@@ -176,8 +176,7 @@ After the call, apply per-question:
   Section 3.4 (marker: `harness:routing-injected`) into CLAUDE.md, then
   `touch "$_MARKER_DIR/routing-injected"`. Before injection, run the
   Goal queue migration from §3.4 to migrate legacy queue state and replace
-  stale routing blocks. The emitted block includes the Durable Decision
-  Documentation Gate:
+  stale routing blocks. The emitted block includes the Durable Decision Documentation Gate:
   user-stated durable product/design/architecture/domain/workflow/implementation
   decisions are not handled until documented under `doc/` or recorded with a
   no-doc rationale in DOC_SYNC/HANDOFF.

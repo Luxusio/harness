@@ -31,7 +31,7 @@ EXPECTED_TOOLS = {
     "task_verify",
     "task_close",
     "task_blocked",
-    "record_ac_evidence",
+    "record_subagent_receipt",
     "record_attempt",
     "write_critic_qa",
     "write_critic_ux",
@@ -654,32 +654,52 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertTrue(result.get("isError"))
         self.assertIn("invalid lens", result["structuredContent"]["error"])
 
-    def test_record_ac_evidence_appends_log_without_promoting(self):
+    def test_record_ac_evidence_is_not_exposed(self):
+        result = harness_server.call_tool(
+            "record_ac_evidence",
+            {
+                "task_id": "TASK__removed",
+                "ac_id": "AC-001",
+                "evidence": "self-authored claim",
+            },
+        )
+        self.assertTrue(result.get("isError"))
+        self.assertIn("Unknown tool", result["structuredContent"]["error"])
+
+    def test_record_subagent_receipt_writes_jsonl_and_task_verify_surfaces_summary(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__acevidence")
-            (Path(task_dir) / "CHECKS.yaml").write_text(
-                '- id: AC-001\n  title: "one"\n  status: open\n  kind: functional\n',
-                encoding="utf-8",
-            )
+            task_dir = self._make_task(tmp, "TASK__subagentreceipt")
             original_ctd = harness_server.canonical_task_dir
             harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
             try:
                 result = harness_server.call_tool(
-                    "record_ac_evidence",
+                    "record_subagent_receipt",
                     {
-                        "task_id": "TASK__acevidence",
-                        "ac_id": "AC-001",
-                        "source": "focused-test",
-                        "evidence": "uv run pytest tests/test_x.py::test_y",
+                        "task_id": "TASK__subagentreceipt",
+                        "source": "spawn_agent",
+                        "agent_id": "agent-123",
+                        "agent_type": "harness:qa-cli",
+                        "verdict": "PASS",
+                        "summary": "qa-cli passed focused checks",
                     },
                 )
+                verify = harness_server.call_tool(
+                    "task_verify",
+                    {"task_id": "TASK__subagentreceipt"},
+                )
+                receipt_path = Path(task_dir) / "SUBAGENT_RECEIPTS.jsonl"
+                receipt_exists = receipt_path.is_file()
+                receipt = json.loads(receipt_path.read_text(encoding="utf-8").splitlines()[0]) if receipt_exists else {}
             finally:
                 harness_server.canonical_task_dir = original_ctd
-            body = (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8")
         self.assertNotIn("isError", result)
-        self.assertIn("status: open", body)
-        self.assertIn("evidence_log:", body)
-        self.assertIn("focused-test", body)
+        self.assertTrue(receipt_exists)
+        self.assertEqual(receipt["agent_id"], "agent-123")
+        self.assertEqual(receipt["lens"], "qa-cli")
+        self.assertEqual(verify["structuredContent"]["subagent_receipts"]["count"], 1)
+        self.assertEqual(verify["structuredContent"]["subagent_receipts"]["by_lens"]["qa-cli"], 1)
+        self.assertEqual(verify["structuredContent"]["subagent_receipts"]["by_agent_type"]["harness:qa-cli"], 1)
+        self.assertEqual(verify["structuredContent"]["subagent_receipts"]["by_source"]["spawn_agent"], 1)
 
     def test_record_attempt_creates_attempt_dir_and_context_surfaces_latest(self):
         with tempfile.TemporaryDirectory() as tmp:

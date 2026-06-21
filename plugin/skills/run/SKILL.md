@@ -115,7 +115,11 @@ ux-* writes `CRITIC__ux.md` and judges whether the experience is shippable.
 When QA and UX lenses both apply, spawn them in the same parallel batch when
 available. QA calls `write_critic_qa`; UX calls `write_critic_ux` with
 `lens="cli|api|browser|desktop"`. `task_close` blocks applicable UX work until
-the required `CRITIC__ux.md` lens section is PASS.
+the required `CRITIC__ux.md` lens section is PASS. Claude SubagentStart/Stop
+hooks record completed subagent invocations to `<task_dir>/SUBAGENT_RECEIPTS.jsonl`;
+`task_verify` surfaces the `subagent_receipts` summary so missing independent
+QA/review calls are visible instead of being replaced by self-authored PASS
+claims.
 
 Order matters: the desktop branch is evaluated before the `type: cli` / `type: library`
 fallback so a desktop app declared as `type: cli` still routes to qa-desktop.
@@ -155,7 +159,10 @@ Agent(
 When QA records PASS for the task as a whole, run `task_verify` with
 `reconcile_acs=true`. The verify step promotes only CHECKS.yaml entries with
 `status: open` and only when fresh `CRITIC__qa.md` PASS evidence is present;
-failed/deferred ACs still require explicit `update_checks.py` handling.
+failed/deferred ACs still require explicit `update_checks.py` handling. Check
+the returned `subagent_receipts`; if the expected QA/UX subagent is absent,
+run the missing agent instead of treating an orchestrator-written summary as
+the verification source.
 
 When `lens` is set, the handler keeps the latest section for that lens in `CRITIC__qa.md` and updates `runtime_verdict` via worst-wins across current lens verdicts (severity: `PENDING < PASS < BLOCKED_ENV < FAIL`). Without `lens`, the legacy full-overwrite path is taken — keep single-lens calls unchanged.
 

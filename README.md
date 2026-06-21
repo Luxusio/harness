@@ -197,7 +197,7 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 | `task_verify` | Sync paths, check verification, optionally reconcile ACs from QA PASS evidence |
 | `task_close` | Gate: all verdicts PASS → close |
 | `task_blocked` | Park a task on a genuine environment blocker |
-| `record_ac_evidence` | Append incremental evidence to one CHECKS.yaml AC without changing status |
+| `record_subagent_receipt` | Capture structured subagent invocation receipts without promoting ACs |
 | `record_attempt` | Record retry attempt evidence under `attempts/attempt-NNN/` |
 | `write_critic_qa` | QA agent writes evidence + runtime verdict |
 | `write_critic_ux` | UX agent writes lens-aware UX review verdict |

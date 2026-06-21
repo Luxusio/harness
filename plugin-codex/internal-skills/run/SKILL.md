@@ -14,7 +14,7 @@ Orchestrate the full harness development cycle for a task.
 
 > **Codex runtime notes** (delta from Claude):
 > - Claude's `Skill("harness:plan", task_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. Effect is identical (plan -> develop -> verify -> close), but the chain is sequential prose, not tool calls.
-> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. If `spawn_agent` is unavailable, run the role methodology inline, call the same MCP artifact writer, and record a short `Runtime Fallbacks` note only when that fallback replaces an expected independent QA/review path.
+> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. For QA/review, `spawn_agent` is mandatory when available: the orchestrator must not self-author a PASS while skipping an available independent subagent. After the subagent returns, call `record_subagent_receipt` with the returned agent id/type/lens/verdict before or alongside `write_critic_qa`. If `spawn_agent` is unavailable, run the role methodology inline, call the same MCP artifact writer, and record a short `Runtime Fallbacks` note only when that fallback replaces an expected independent QA/review path.
 > - MCP tool names on Codex use bare form (`task_start`, `task_verify`, `task_close`, `write_critic_qa`) — not Claude-prefixed form. Where this skill mentions a prefixed name, read it as the bare form.
 > - `${CLAUDE_PLUGIN_ROOT}` is not injected on Codex. Use `${HARNESS_PLUGIN_ROOT}` (set by the Codex plugin install).
 > - AskUserQuestion (Phase 4 FAIL retry) is conversational prose on Codex — emit the question + options, read the reply from the next user turn.
@@ -58,6 +58,26 @@ spawn_agent {
   fork_context: false
 }
 ```
+
+After each `spawn_agent`/`wait_agent` completion, immediately capture the
+invocation as structured harness evidence:
+
+```text
+record_subagent_receipt {
+  task_id: "<task_id>",
+  source: "spawn_agent",
+  agent_id: "<agent id returned by spawn_agent/wait_agent>",
+  agent_type: "default|worker|explorer",
+  lens: "cli|api|browser|desktop|ux-<lens>|review",
+  verdict: "PASS|FAIL|BLOCKED_ENV|PENDING|UNKNOWN",
+  summary: "<one-line result>",
+  transcript_path: "<artifact path when available>"
+}
+```
+
+Do not fabricate this call. If the runtime did not return a concrete agent id
+or no subagent was spawned, use the inline fallback path and document
+`Runtime Fallbacks` instead of recording a subagent receipt.
 
 Use inline execution as the fallback for roles that normally benefit from independence only when `spawn_agent` is unavailable or the work is not actually independent. If independent work runs sequentially, record `parallel-trigger-skipped` evidence with the concrete reason, affected lanes, and compensating check; vague reasons such as lack of user request are invalid. Add a short `Runtime Fallbacks` section when an expected independent QA/review path was replaced by inline verification or a required tool was unavailable. Keep it to: reason, risk, compensating check.
 
@@ -145,7 +165,7 @@ to interpret user intent.
 
 ### Phase 4: Verify (QA — capability-routed on Codex)
 
-Read `doc/harness/manifest.yaml` for project type. On Codex, choose the appropriate QA lens and route it by current capability: `spawn_agent` when available, inline methodology only as fallback. Also route applicable UX review lenses for user-facing surfaces. QA proves correctness in `CRITIC__qa.md`; UX review judges shippability in `CRITIC__ux.md`.
+Read `doc/harness/manifest.yaml` for project type. On Codex, choose the appropriate QA lens and route it by current capability: `spawn_agent` when available, inline methodology only as fallback. If `spawn_agent` is available, the QA lens MUST run as a subagent; the orchestrator may relay the returned transcript into `write_critic_qa`, but it must not invent a PASS from its own context. Also route applicable UX review lenses for user-facing surfaces. QA proves correctness in `CRITIC__qa.md`; UX review judges shippability in `CRITIC__ux.md`.
 
 **Strategy selection:**
 - **qa-browser** — required when `manifest.qa.browser_qa_supported: true` AND the diff contains frontend files (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). On Codex, check the actual session tool surface first. If browser tools are available, route the qa-browser lens through `spawn_agent` when available; otherwise read `plugin-codex/agents/qa-browser.md` and run that methodology inline, including real page navigation/interactions/screenshots where the tools support it. Call:
@@ -195,7 +215,10 @@ spawn_agent {
 ```
 
 When the QA lens returns PASS for the task as a whole, call `write_critic_qa`
-to record evidence/runtime verdict, then run `task_verify` with
+to record evidence/runtime verdict. Also ensure the completed subagent has a
+matching `record_subagent_receipt` entry; `task_verify` returns
+`subagent_receipts` so missing receipts are visible before close. Then run
+`task_verify` with
 `reconcile_acs: true` so open CHECKS.yaml items are promoted with
 CRITIC__qa.md evidence. The verify step only promotes `status: open` and only
 when the effective merged verdict is PASS; failed/deferred ACs still require

@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[1]
-CODEX_RUN = REPO / "plugin-codex" / "skills" / "run" / "SKILL.md"
+CODEX_RUN = REPO / "plugin-codex" / "internal-skills" / "run" / "SKILL.md"
 CLAUDE_RUN = REPO / "plugin" / "skills" / "run" / "SKILL.md"
 CODEX_DEVELOP = REPO / "plugin-codex" / "internal-skills" / "develop" / "SKILL.md"
 GENERAL_PATTERNS = REPO / "doc" / "harness" / "patterns" / "general.md"
@@ -23,6 +23,8 @@ def test_codex_run_uses_capability_first_subagent_routing():
     assert "User request is not a condition for parallel routing" in body
     assert "the user does not need to request delegation" in body
     assert "spawn_agent {" in body
+    assert "record_subagent_receipt {" in body
+    assert "Do not fabricate this call" in body
     assert 'agent_type: "default"' in body
     assert 'agent_type: "worker"' in body
     assert 'agent_type: "explorer"' in body
@@ -40,6 +42,9 @@ def test_codex_run_documents_qa_subagent_call_shape():
     assert "You are the qa-<lens> lens for <task_id>" in body
     assert "plugin-codex/agents/qa-<lens>.md" in body
     assert "write_critic_qa with lens='<lens>'" in body
+    assert "must not invent a PASS from its own context" in body
+    assert "matching `record_subagent_receipt` entry" in body
+    assert "`subagent_receipts`" in body
     assert "Runtime Fallbacks" in body
     assert "Agent` fan-out routed through `spawn_agent` when available" in body
 

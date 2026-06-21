@@ -20,7 +20,13 @@ except Exception:  # pragma: no cover - non-POSIX fallback
     fcntl = None
 
 try:
-    from _lib import TASK_DIR, current_session_id, now_iso, resolve_active_task_dir  # type: ignore
+    from _lib import (  # type: ignore
+        TASK_DIR,
+        current_session_id,
+        now_iso,
+        record_subagent_receipt,
+        resolve_active_task_dir,
+    )
 except Exception:  # pragma: no cover - imported only inside harness scripts
     TASK_DIR = "doc/harness/tasks"
 
@@ -32,6 +38,9 @@ except Exception:  # pragma: no cover - imported only inside harness scripts
 
     def resolve_active_task_dir(repo_root: str | None = None, session_id: str | None = None) -> str:
         return ""
+
+    def record_subagent_receipt(task_dir: str, receipt: dict[str, Any]) -> dict[str, Any]:
+        return {}
 
 
 RUNTIME_DIR = "doc/harness/runtime"
@@ -265,7 +274,25 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
         target["stop_hook_active"] = bool(payload.get("stop_hook_active"))
         return target
 
-    return _with_registry_lock(repo_root, mark)
+    result = _with_registry_lock(repo_root, mark)
+    if result.get("status") == "done" and result.get("task_dir"):
+        try:
+            receipt = record_subagent_receipt(
+                result["task_dir"],
+                {
+                    "source": "claude_subagent_hook",
+                    "status": "done",
+                    "agent_id": result.get("id") or result.get("agent_id") or aid,
+                    "agent_type": result.get("agent_type") or _agent_type(payload),
+                    "summary": result.get("last_assistant_message") or "",
+                    "transcript_path": result.get("transcript_path") or "",
+                },
+            )
+            if receipt.get("receipt_id"):
+                result["subagent_receipt_id"] = receipt["receipt_id"]
+        except Exception:
+            pass
+    return result
 
 
 def prune(repo_root: str, *, keep: int = MAX_RECORDS, stale_secs: float = DEFAULT_STALE_SECS) -> None:

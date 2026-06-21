@@ -2,7 +2,7 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[1]
-CODEX_RUN = REPO / "plugin-codex" / "skills" / "run" / "SKILL.md"
+CODEX_RUN = REPO / "plugin-codex" / "internal-skills" / "run" / "SKILL.md"
 CODEX_DEVELOP = REPO / "plugin-codex" / "internal-skills" / "develop" / "SKILL.md"
 CLAUDE_RUN = REPO / "plugin" / "skills" / "run" / "SKILL.md"
 CLAUDE_DEVELOP = REPO / "plugin" / "skills" / "develop" / "SKILL.md"

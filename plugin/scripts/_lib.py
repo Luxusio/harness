@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 TASK_DIR = "doc/harness/tasks"
 MANIFEST_PATH = "doc/harness/manifest.yaml"
 TASK_BASELINE_NAME = "TASK_BASELINE.json"
+SUBAGENT_RECEIPTS_NAME = "SUBAGENT_RECEIPTS.jsonl"
 
 SCHEMA_FIELDS = (
     "task_id", "status", "runtime_verdict",
@@ -1747,6 +1748,141 @@ def _atomic_json_write(path, data):
         raise
 
 
+def _subagent_receipts_path(task_dir):
+    return os.path.join(task_dir, SUBAGENT_RECEIPTS_NAME)
+
+
+def _hash_file(path):
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+
+def _receipt_short(value, limit=2000):
+    text = str(value or "").strip()
+    return text[:limit]
+
+
+def _infer_receipt_lens(agent_type, explicit_lens=""):
+    lens = _receipt_short(explicit_lens, 80).lower()
+    if lens:
+        return lens
+    kind = _receipt_short(agent_type, 300).lower()
+    match = re.search(r"(?:^|[:/_-])(qa|ux)[-_:](cli|api|browser|desktop)(?:$|[:/_-])", kind)
+    if match:
+        return f"{match.group(1)}-{match.group(2)}"
+    match = re.search(r"(?:^|[:/_-])(cli|api|browser|desktop)(?:$|[:/_-])", kind)
+    if match and ("qa" in kind or "ux" in kind):
+        prefix = "ux" if "ux" in kind else "qa"
+        return f"{prefix}-{match.group(1)}"
+    return ""
+
+
+def record_subagent_receipt(task_dir, receipt):
+    """Append a structured subagent invocation receipt to the task directory.
+
+    This is intentionally separate from CHECKS.yaml AC promotion. It records
+    that a subagent path actually ran; QA verdicts still live in CRITIC__qa.md
+    and reconciliation still belongs to task_verify.
+    """
+    if not isinstance(receipt, dict):
+        raise ValueError("receipt must be an object")
+    agent_id = _receipt_short(receipt.get("agent_id") or receipt.get("id"), 300)
+    if not agent_id:
+        raise ValueError("agent_id required")
+    source = _receipt_short(receipt.get("source") or "spawn_agent", 100)
+    agent_type = _receipt_short(receipt.get("agent_type"), 300)
+    verdict = _receipt_short(receipt.get("verdict") or "", 40).upper()
+    if verdict and verdict not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING", "UNKNOWN"}:
+        verdict = "UNKNOWN"
+    transcript_path = _receipt_short(receipt.get("transcript_path"), 1000)
+    entry = {
+        "receipt_id": "",
+        "ts": now_iso(),
+        "kind": "subagent",
+        "source": source,
+        "status": _receipt_short(receipt.get("status") or "done", 80),
+        "task_id": os.path.basename(os.path.normpath(task_dir)),
+        "agent_id": agent_id,
+        "agent_type": agent_type,
+        "lens": _infer_receipt_lens(agent_type, receipt.get("lens")),
+        "verdict": verdict,
+        "summary": _receipt_short(receipt.get("summary"), 1000),
+        "transcript_path": transcript_path,
+        "transcript_sha256": _hash_file(transcript_path) if transcript_path else "",
+        "prompt_hash": hashlib.sha256(
+            _receipt_short(receipt.get("prompt"), 10000).encode("utf-8")
+        ).hexdigest() if receipt.get("prompt") else "",
+    }
+    seed = "|".join([entry["ts"], entry["source"], entry["agent_id"], entry["agent_type"], entry["lens"]])
+    entry["receipt_id"] = "subagent-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+    path = _subagent_receipts_path(task_dir)
+    os.makedirs(task_dir, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+    return entry
+
+
+def list_subagent_receipts(task_dir):
+    path = _subagent_receipts_path(task_dir)
+    if not os.path.isfile(path):
+        return []
+    receipts = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    item = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(item, dict) and item.get("kind") == "subagent":
+                    receipts.append(item)
+    except Exception:
+        return []
+    return receipts
+
+
+def subagent_receipt_summary(task_dir):
+    receipts = list_subagent_receipts(task_dir)
+    by_lens = {}
+    by_agent_type = {}
+    by_source = {}
+    by_verdict = {}
+    for item in receipts:
+        lens = item.get("lens") or "unknown"
+        agent_type = item.get("agent_type") or "unknown"
+        source = item.get("source") or "unknown"
+        verdict = item.get("verdict") or "UNKNOWN"
+        by_lens[lens] = by_lens.get(lens, 0) + 1
+        by_agent_type[agent_type] = by_agent_type.get(agent_type, 0) + 1
+        by_source[source] = by_source.get(source, 0) + 1
+        by_verdict[verdict] = by_verdict.get(verdict, 0) + 1
+    latest = receipts[-1] if receipts else {}
+    if latest:
+        latest = {
+            "receipt_id": latest.get("receipt_id", ""),
+            "ts": latest.get("ts", ""),
+            "source": latest.get("source", ""),
+            "agent_id": latest.get("agent_id", ""),
+            "agent_type": latest.get("agent_type", ""),
+            "lens": latest.get("lens", ""),
+            "verdict": latest.get("verdict", ""),
+        }
+    return {
+        "count": len(receipts),
+        "by_lens": by_lens,
+        "by_agent_type": by_agent_type,
+        "by_source": by_source,
+        "by_verdict": by_verdict,
+        "latest": latest,
+    }
+
+
 # ── Task context ─────────────────────────────────────────────────────────
 
 
@@ -1994,6 +2130,7 @@ def emit_compact_context(task_dir):
     stale, stale_path = runtime_is_stale(task_dir)
 
     attempts = list_attempts(task_dir)
+    receipt_summary = subagent_receipt_summary(task_dir)
 
     return {
         "task_id": st.get("task_id") or os.path.basename(task_dir),
@@ -2007,6 +2144,7 @@ def emit_compact_context(task_dir):
         "path_count": len(touched),
         "attempt_count": len(attempts),
         "latest_attempt": attempts[-1] if attempts else {},
+        "subagent_receipts": receipt_summary,
         "missing_for_close": missing_for_close,
         "next_action": next_action,
         "unresolved_feedback_count": len(unresolved_feedback),
