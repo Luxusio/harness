@@ -394,7 +394,7 @@ judge shippability without reverse-engineering the change.
 
 ```text
 spawn_agent {
-  agent_type: "default",
+  agent_type: "harness:qa-<lens>",
   message: "You are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, HANDOFF.md, CHECKS.yaml, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence and concrete findings.",
   fork_context: true
 }

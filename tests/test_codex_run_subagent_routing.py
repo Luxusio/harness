@@ -25,7 +25,7 @@ def test_codex_run_uses_capability_first_subagent_routing():
     assert "spawn_agent {" in body
     assert "SUBAGENT_RECEIPTS.jsonl" in body
     assert "Do not call a harness receipt tool" in body
-    assert 'agent_type: "default"' in body
+    assert 'agent_type: "harness:qa-cli"' in body
     assert 'agent_type: "worker"' in body
     assert 'agent_type: "explorer"' in body
     assert "When `spawn_agent` is available and work is independent, use it" in body
@@ -41,6 +41,7 @@ def test_codex_run_documents_qa_subagent_call_shape():
     assert "Verify (QA — capability-routed on Codex)" in body
     assert "You are the qa-<lens> lens for <task_id>" in body
     assert "plugin-codex/agents/qa-<lens>.md" in body
+    assert 'agent_type: "harness:qa-<lens>"' in body
     assert "concrete findings" in body
     assert "must not invent a PASS from its own context" in body
     assert "`subagent_receipts`" in body

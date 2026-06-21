@@ -33,7 +33,7 @@ that can run without touching the same files. Use concrete Codex calls like:
 
 ```text
 spawn_agent {
-  agent_type: "default",
+  agent_type: "harness:qa-cli",
   message: "You are the qa-cli lens for <task_id>. Read <task_dir>/PLAN.md, HANDOFF.md, CHECKS.yaml, and changed files. Run focused verification. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with concrete findings and evidence.",
   fork_context: true
 }
@@ -177,7 +177,7 @@ QA subagent pattern on Codex:
 
 ```text
 spawn_agent {
-  agent_type: "default",
+  agent_type: "harness:qa-<lens>",
   message: "You are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, HANDOFF.md, CHECKS.yaml, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with command/browser evidence and concrete findings.",
   fork_context: true
 }

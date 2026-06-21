@@ -113,6 +113,37 @@ class TestCodexHookWrappers(unittest.TestCase):
             self.assertEqual(receipt["agent_type"], "harness:qa-cli")
             self.assertEqual(receipt["lens"], "qa-cli")
 
+    def test_pre_tool_use_infers_harness_agent_type_from_message(self):
+        mod = _load("hook_pre_tool_use")
+
+        def fake_run(*args, **kwargs):
+            return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as repo:
+            root = Path(repo)
+            (root / ".git").mkdir()
+            tasks_dir = root / "doc" / "harness" / "tasks"
+            task_dir = tasks_dir / "TASK__codex-infer"
+            task_dir.mkdir(parents=True)
+            (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
+            payload = {
+                "cwd": repo,
+                "tool_name": "spawn_agent",
+                "tool_call_id": "call-browser",
+                "tool_input": {
+                    "agent_type": "default",
+                    "message": "You are the qa-browser lens for TASK__codex-infer.",
+                },
+            }
+            with mock.patch("subprocess.run", side_effect=fake_run):
+                with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(payload))):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(mod.main(), 0)
+
+            receipt = json.loads((task_dir / "SUBAGENT_RECEIPTS.jsonl").read_text(encoding="utf-8").splitlines()[0])
+            self.assertEqual(receipt["agent_type"], "harness:qa-browser")
+            self.assertEqual(receipt["lens"], "qa-browser")
+
 
 if __name__ == "__main__":
     unittest.main()

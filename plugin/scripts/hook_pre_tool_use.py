@@ -53,6 +53,31 @@ def _is_subagent_spawn_tool(tool_name: str) -> bool:
     )
 
 
+def _text_field(data: dict, *keys: str) -> str:
+    for key in keys:
+        val = data.get(key)
+        if isinstance(val, str) and val.strip():
+            return val
+    return ""
+
+
+def _infer_harness_agent_type(tool_input: dict) -> str:
+    explicit = str(tool_input.get("agent_type") or tool_input.get("type") or "").strip()
+    if explicit and explicit.lower() not in {"default", "agent"}:
+        return explicit
+    text = _text_field(tool_input, "message", "prompt", "instructions", "task")
+    lowered = text.lower()
+    for family in ("qa", "ux"):
+        for lens in ("browser", "desktop", "api", "cli"):
+            token = f"{family}-{lens}"
+            if token in lowered:
+                return f"harness:{token}"
+    for role in ("critic-document", "dogfooder", "developer", "stop-judge"):
+        if role in lowered:
+            return f"harness:{role}"
+    return explicit or "default"
+
+
 def _record_codex_subagent_start(payload: bytes) -> None:
     if register_subagent_start is None or find_repo_root is None:
         return
@@ -64,7 +89,7 @@ def _record_codex_subagent_start(payload: bytes) -> None:
         tool_input = data.get("tool_input") or data.get("input") or data.get("arguments") or {}
         if isinstance(tool_input, dict):
             payload_for_registry = dict(data)
-            payload_for_registry["agent_type"] = str(tool_input.get("agent_type") or tool_input.get("type") or "default")
+            payload_for_registry["agent_type"] = _infer_harness_agent_type(tool_input)
             payload_for_registry["agent_id"] = str(
                 data.get("tool_call_id")
                 or data.get("call_id")
