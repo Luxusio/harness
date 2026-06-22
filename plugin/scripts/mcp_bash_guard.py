@@ -76,6 +76,7 @@ _ARTIFACT_TOOL_HINT = {
     "PLAN.meta.json": "mcp__plugin_harness_harness__write_plan",
     "CHECKS.yaml": "plan-skill + scripts/update_checks.py",
     "AUDIT_TRAIL.md": "mcp__plugin_harness_harness__write_plan",
+    "CONVERSATION.md": "runtime conversation hook",
 }
 
 RULE_DOCS = {
@@ -277,6 +278,7 @@ def _deny(target, command):
         "CHECKS.yaml": "python3 plugin/scripts/update_checks.py --task-dir <td> --ac <id> --status <s>",
         "AUDIT_TRAIL.md": "mcp__plugin_harness_harness__write_plan",
         "SUBAGENT_RECEIPTS.jsonl": "Spawn the required subagent; the runtime hook records this file",
+        "CONVERSATION.md": "Let the runtime hooks record conversation history",
     }
     next_action = _NEXT.get(base, "")
     if not next_action and category == "workflow-control-surface":

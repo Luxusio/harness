@@ -40,6 +40,7 @@ try:
         next_goal_task,
         start_harness_goal,
         write_goal_payload_probe,
+        append_conversation_entry,
     )
 except Exception:
     sys.exit(0)
@@ -392,8 +393,9 @@ def _append_feedback_event(task_dir: str, repo_root: str, data: dict) -> bool:
         for p in (st.get("touched_paths") or [])[:FEEDBACK_TOUCHED_CAP]
         if str(p).strip()
     ]
+    event_id = _feedback_event_id(str(task_id), prompt)
     event = {
-        "id": _feedback_event_id(str(task_id), prompt),
+        "id": event_id,
         "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "task_id": task_id,
         "status": st.get("status") or "unknown",
@@ -412,6 +414,13 @@ def _append_feedback_event(task_dir: str, repo_root: str, data: dict) -> bool:
     try:
         with open(path, "a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+        append_conversation_entry(
+            task_dir,
+            role="user",
+            text=prompt,
+            source="user_prompt_hook",
+            event_id=event_id,
+        )
         return True
     except OSError:
         return False

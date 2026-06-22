@@ -151,7 +151,7 @@ class TestFailSafe(unittest.TestCase):
 class TestReasonFormat(unittest.TestCase):
     def test_every_deny_has_structured_tail(self):
         with scratch_task_in_real_repo("pr1-tail") as task_dir:
-            for basename in ("PLAN.md", "CHECKS.yaml", "SUBAGENT_RECEIPTS.jsonl"):
+            for basename in ("PLAN.md", "CHECKS.yaml", "SUBAGENT_RECEIPTS.jsonl", "CONVERSATION.md"):
                 target = os.path.join(task_dir, basename)
                 r = invoke_hook(GATE, "Write", {"file_path": target})
                 decision, reason = parse_decision(r.stdout)

@@ -31,9 +31,19 @@ class TestOwnerTokens(unittest.TestCase):
             "subagent-start-hook",
         )
 
+    def test_conversation_owner_token_is_hook(self):
+        self.assertEqual(
+            prewrite_gate.PROTECTED_ARTIFACTS["CONVERSATION.md"],
+            "conversation-hook",
+        )
+
     def test_subagent_receipt_human_text_names_hooks(self):
         human = prewrite_gate.PROTECTED_ARTIFACT_HUMAN["SUBAGENT_RECEIPTS.jsonl"]
         self.assertIn("subagent-start hook", human)
+
+    def test_conversation_human_text_names_hooks(self):
+        human = prewrite_gate.PROTECTED_ARTIFACT_HUMAN["CONVERSATION.md"]
+        self.assertIn("conversation hooks", human)
 
 
 class TestProvenance(unittest.TestCase):

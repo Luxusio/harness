@@ -23,6 +23,7 @@ except Exception:  # pragma: no cover - non-POSIX fallback
 try:
     from _lib import (  # type: ignore
         TASK_DIR,
+        append_conversation_entry,
         current_session_id,
         now_iso,
         record_subagent_receipt,
@@ -42,6 +43,9 @@ except Exception:  # pragma: no cover - imported only inside harness scripts
 
     def record_subagent_receipt(task_dir: str, receipt: dict[str, Any]) -> dict[str, Any]:
         return {}
+
+    def append_conversation_entry(task_dir: str, **kwargs: Any) -> bool:
+        return False
 
 
 RUNTIME_DIR = "doc/harness/runtime"
@@ -306,7 +310,20 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
         target["stop_hook_active"] = bool(payload.get("stop_hook_active"))
         return target
 
-    return _with_registry_lock(repo_root, mark)
+    result = _with_registry_lock(repo_root, mark)
+    try:
+        if result.get("status") == "done" and result.get("last_assistant_message"):
+            append_conversation_entry(
+                result.get("task_dir") or "",
+                role="subagent",
+                text=result.get("last_assistant_message") or "",
+                source="subagent_stop_hook",
+                event_id=result.get("id") or "",
+                agent_type=result.get("agent_type") or "",
+            )
+    except Exception:
+        pass
+    return result
 
 
 def prune(repo_root: str, *, keep: int = MAX_RECORDS, stale_secs: float = DEFAULT_STALE_SECS) -> None:

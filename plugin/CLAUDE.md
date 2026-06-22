@@ -80,6 +80,7 @@ Turn 종결 정당 사유 (runtime_verdict 기반):
 | CHECKS.yaml | plan-skill (create) + update_checks.py CLI (develop/qa updates) |
 | source + durable docs | developer |
 | SUBAGENT_RECEIPTS.jsonl | Codex/Claude subagent-start hooks |
+| CONVERSATION.md | Codex/Claude UserPromptSubmit/Subagent hooks |
 
 Do not write another role's artifact. Prewrite gate enforces this.
 
@@ -112,6 +113,9 @@ Do not claim success from static inspection when runtime verification is require
 Runtime verdict becomes PASS only when `SUBAGENT_RECEIPTS.jsonl` contains at least one hook-recorded subagent start for the task.
 Use `task_close`. If blocked, fix the stated gate.
 Captured user feedback is stored in task-local `USER_FEEDBACK.jsonl`; it is prompt context, not a close-gate evidence document.
+Task-local `CONVERSATION.md` is human-readable history. The close gate reads
+only explicit item markers such as `<!-- item: type=requirement status=open -->`
+and never infers requirements from prose.
 
 ## 8a. Note freshness
 

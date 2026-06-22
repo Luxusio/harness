@@ -37,7 +37,8 @@ repo-mutating requests through legacy `run` / `autopilot` commands.
 - Protected artifacts (enforced by `plugin/scripts/prewrite_gate.py`):
   PLAN.md/PLAN.meta.json/AUDIT_TRAIL.md via `write_plan`, CHECKS.yaml via
   `write_plan` or `update_checks.py`, and SUBAGENT_RECEIPTS.jsonl via
-  Codex/Claude subagent-start hooks.
+  Codex/Claude subagent-start hooks. CONVERSATION.md is append-only runtime
+  history owned by UserPromptSubmit/Subagent hooks.
 - Pre-plan source writes are blocked until PLAN.md exists on the active task (plan-first rule).
 - Only one repo-mutating task may hold write focus at a time. A second mutating request creates or resumes a separate task that stays queued until the user switches focus or the current task closes.
 - Short approvals such as `ㅇㅇ ㄱ` approve only the last explicit transition the harness proposed; they never authorize skipping task creation, planning, or verify gates.

@@ -60,6 +60,7 @@ PROTECTED_ARTIFACTS = {
     "CHECKS.yaml": "plan-skill-or-update_checks",
     "AUDIT_TRAIL.md": "plan-skill",
     "SUBAGENT_RECEIPTS.jsonl": "subagent-start-hook",
+    "CONVERSATION.md": "conversation-hook",
 }
 
 # Human-readable owner description (used in deny message text, not in the tail).
@@ -69,6 +70,7 @@ PROTECTED_ARTIFACT_HUMAN = {
     "CHECKS.yaml": "plan-skill (initial) + scripts/update_checks.py (updates)",
     "AUDIT_TRAIL.md": "plan-skill",
     "SUBAGENT_RECEIPTS.jsonl": "Codex/Claude subagent-start hook",
+    "CONVERSATION.md": "Codex/Claude conversation hooks",
 }
 
 SOURCE_EXTENSIONS = {

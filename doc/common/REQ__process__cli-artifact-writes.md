@@ -18,6 +18,7 @@ provenance.
 | `PLAN.md` / `PLAN.meta.json` / optional `CHECKS.yaml` / optional `AUDIT_TRAIL.md` | MCP `write_plan` |
 | `CHECKS.yaml` status transitions after plan | `plugin/scripts/update_checks.py` |
 | `SUBAGENT_RECEIPTS.jsonl` | Codex/Claude subagent-start hooks |
+| `CONVERSATION.md` | Codex/Claude UserPromptSubmit/Subagent hooks |
 | `TASK_STATE.yaml` lifecycle fields | harness MCP task tools and runtime scripts |
 | `doc/<area>/REQ__*.md` and other durable docs | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
 
@@ -27,6 +28,9 @@ provenance.
   handoff writers, or REQ writers.
 - A PASS verdict must be backed by hook-observed subagent start receipts, not by
   a narrative critic file.
+- Task-local conversation history is human-readable Markdown. Close gates may
+  read only explicit `<!-- item: ... status=open -->` markers from it, never
+  infer requirements from free-form prose.
 - Durable user requirements and reusable discoveries must be promoted to
   committed docs, skills, patterns, scripts, or tests. Task-local notes and
   transient `learnings.jsonl` rows are staging only.

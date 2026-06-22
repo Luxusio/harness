@@ -813,6 +813,57 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         self.assertNotIn("User feedback disposition", ctx["missing_for_close"])
         self.assertNotIn("ufe-needed", ctx["next_action"])
 
+    def test_conversation_open_item_blocks_close(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp,
+                "TASK__conversation-open",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+            )
+            Path(td, "CONVERSATION.md").write_text(
+                "# Conversation\n\n"
+                "<!-- harness:conversation-log v1 -->\n\n"
+                "## 2026-06-23T00:00:00Z - User\n"
+                "사용자가 새 요구사항을 말했다.\n"
+                "<!-- item: type=requirement status=open key=reader-back-stack -->\n",
+                encoding="utf-8",
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__conversation-open"}
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        ctx = result["structuredContent"]["task_context"]
+        self.assertIn("CONVERSATION.md open items", ctx["missing_for_close"])
+        self.assertEqual(ctx["conversation_open_items"][0]["key"], "reader-back-stack")
+        self.assertIn("CONVERSATION.md open item markers", ctx["next_action"])
+
+    def test_conversation_captured_item_does_not_block_close(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp,
+                "TASK__conversation-captured",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+            )
+            Path(td, "CONVERSATION.md").write_text(
+                "# Conversation\n\n"
+                "<!-- harness:conversation-log v1 -->\n\n"
+                "<!-- item: type=requirement status=captured key=reader-back-stack ref=doc/ui/REQ__reader.md -->\n",
+                encoding="utf-8",
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__conversation-captured"}
+                )
+            finally:
+                self._unpatch()
+        self.assertNotIn("isError", result)
+        self.assertTrue(result["structuredContent"]["closed"])
+
     # ---- AC-001: failed AC blocks close ----
     def test_close_rejects_failed_ac(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -21,6 +21,9 @@ TASK_DIR = "doc/harness/tasks"
 MANIFEST_PATH = "doc/harness/manifest.yaml"
 TASK_BASELINE_NAME = "TASK_BASELINE.json"
 SUBAGENT_RECEIPTS_NAME = "SUBAGENT_RECEIPTS.jsonl"
+CONVERSATION_NAME = "CONVERSATION.md"
+CONVERSATION_TEXT_CAP = 2000
+CONVERSATION_READ_CAP = 256 * 1024
 
 SCHEMA_FIELDS = (
     "task_id", "status", "runtime_verdict",
@@ -79,6 +82,124 @@ def plugin_root_env_pair(value: str) -> dict[str, str]:
 
 def now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+_CONVERSATION_CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+_CONVERSATION_REMINDER_RE = re.compile(r"</?system-reminder[^>]*>", re.IGNORECASE)
+_CONVERSATION_ITEM_RE = re.compile(r"<!--\s*item:\s*(.*?)-->", re.IGNORECASE | re.DOTALL)
+_CONVERSATION_ATTR_RE = re.compile(r"([A-Za-z0-9_-]+)=((?:\"[^\"]*\")|(?:'[^']*')|[^\s]+)")
+
+
+def _conversation_sanitize_text(value, limit=CONVERSATION_TEXT_CAP):
+    text = str(value or "")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = _CONVERSATION_CONTROL_RE.sub("", text)
+    text = _CONVERSATION_REMINDER_RE.sub("[SANITIZED]", text)
+    text = text.strip()
+    if len(text) > limit:
+        text = text[: limit - 12].rstrip() + "\n...truncated"
+    return text
+
+
+def _conversation_attr(value, limit=160):
+    text = _conversation_sanitize_text(value, limit=limit)
+    text = re.sub(r"\s+", "-", text).strip("-")
+    return re.sub(r"[^A-Za-z0-9_.:/@-]", "_", text)[:limit]
+
+
+def _conversation_path(task_dir):
+    return os.path.join(task_dir, CONVERSATION_NAME)
+
+
+def append_conversation_entry(
+    task_dir,
+    *,
+    role,
+    text,
+    source="",
+    event_id="",
+    agent_type="",
+):
+    """Append a human-readable task-local conversation entry.
+
+    This is hook/script-owned operational history. Close gates must only inspect
+    machine markers such as ``<!-- item: type=requirement status=open -->``;
+    they must never infer requirements from free-form Markdown prose.
+    """
+    body = _conversation_sanitize_text(text)
+    if not body:
+        return False
+    label = {
+        "user": "User",
+        "assistant": "Assistant",
+        "subagent": "Subagent",
+        "system": "System",
+    }.get(str(role or "").lower(), _conversation_sanitize_text(role, limit=80) or "Entry")
+    if str(role or "").lower() == "subagent" and agent_type:
+        label = f"Subagent: {_conversation_sanitize_text(agent_type, limit=80)}"
+
+    meta = []
+    if source:
+        meta.append(f"source={_conversation_attr(source)}")
+    if event_id:
+        meta.append(f"id={_conversation_attr(event_id)}")
+    if agent_type:
+        meta.append(f"agent_type={_conversation_attr(agent_type)}")
+
+    path = _conversation_path(task_dir)
+    try:
+        if not task_dir:
+            return False
+        os.makedirs(task_dir, exist_ok=True)
+        needs_header = not os.path.isfile(path) or os.path.getsize(path) == 0
+        with open(path, "a", encoding="utf-8") as f:
+            if needs_header:
+                f.write("# Conversation\n\n<!-- harness:conversation-log v1 -->\n")
+            f.write(f"\n## {now_iso()} - {label}\n")
+            if meta:
+                f.write(f"<!-- event: {' '.join(meta)} -->\n")
+            f.write("\n")
+            f.write(body)
+            f.write("\n")
+        return True
+    except OSError:
+        return False
+
+
+def _conversation_marker_attrs(blob):
+    attrs = {}
+    for key, raw in _CONVERSATION_ATTR_RE.findall(blob or ""):
+        value = raw.strip()
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+            value = value[1:-1]
+        attrs[key.lower()] = value
+    return attrs
+
+
+def conversation_open_items(task_dir):
+    """Return unresolved machine-readable items from CONVERSATION.md."""
+    path = _conversation_path(task_dir)
+    if not os.path.isfile(path):
+        return []
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - CONVERSATION_READ_CAP))
+            text = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return []
+    items = []
+    for match in _CONVERSATION_ITEM_RE.finditer(text):
+        attrs = _conversation_marker_attrs(match.group(1))
+        if str(attrs.get("status") or "").lower() != "open":
+            continue
+        items.append({
+            "type": attrs.get("type", "unknown"),
+            "key": attrs.get("key", ""),
+            "summary": attrs.get("summary", ""),
+        })
+    return items
 
 
 # ── Hook I/O + gate signalling ───────────────────────────────────────────
@@ -1572,6 +1693,9 @@ def emit_compact_context(task_dir):
     durable_doc_paths = _durable_docs_touched(touched)
     req_detection = _req_detector_result(task_dir, touched)
     unresolved_feedback = _unresolved_feedback_event_ids(task_dir)
+    open_conversation_items = conversation_open_items(task_dir)
+    if open_conversation_items:
+        missing_for_close.append("CONVERSATION.md open items")
     # Durable-doc close gate. PLAN's Durable Docs Decision is still required,
     # but implementation can grow new visible/API surfaces after planning. The
     # close gate rechecks the actual diff so `REQ: n/a` cannot silently pass for
@@ -1594,6 +1718,11 @@ def emit_compact_context(task_dir):
         next_action = "Create PLAN.md via plan skill before source writes."
     elif runtime_verdict != "PASS":
         next_action = "Spawn a subagent; the start hook records the verification receipt."
+    elif open_conversation_items:
+        next_action = (
+            "Resolve CONVERSATION.md open item markers as captured, rejected, "
+            "or deferred before task_close."
+        )
     elif any(m.startswith("REQ durable doc") for m in missing_for_close):
         next_action = (
             "Create or update a doc/<area>/REQ__*.md for the observable "
@@ -1620,6 +1749,7 @@ def emit_compact_context(task_dir):
         "subagent_receipts": receipt_summary,
         "missing_for_close": missing_for_close,
         "next_action": next_action,
+        "conversation_open_items": open_conversation_items[:10],
         "unresolved_feedback_count": len(unresolved_feedback),
         "unresolved_feedback_ids": unresolved_feedback[:5],
         "effective_close_gate": "micro" if micro_loop else "standard",

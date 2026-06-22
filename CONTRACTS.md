@@ -35,7 +35,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 | 상황 | 적용 규약 | 수준 |
 |------|---------|------|
 | Repo-mutating 태스크 시작 | [C-01](#c-01), [C-02](#c-02), [C-09](#c-09) | hard |
-| 보호 아티팩트 쓰기 (PLAN/CHECKS/SUBAGENT_RECEIPTS) | [C-03](#c-03), [C-05](#c-05) | hard |
+| 보호 아티팩트 쓰기 (PLAN/CHECKS/SUBAGENT_RECEIPTS/CONVERSATION) | [C-03](#c-03), [C-05](#c-05) | hard |
 | `task_close` 시점 | [C-01](#c-01), [C-04](#c-04), [C-14](#c-14) | hard |
 | 짧은 승인 (`ㅇㅇ`, `ㄱ`) 수신 | [C-07](#c-07) | soft |
 | 답변 레인 → mutation 레인 전환 | [C-07](#c-07), [C-08](#c-08) | hard |
@@ -103,14 +103,14 @@ state of the repo.
 
 **Title:** Protected artifact ownership.
 **When:** Any `Write`/`Edit` to PLAN.md, CHECKS.yaml,
-AUDIT_TRAIL.md, PLAN.meta.json, or SUBAGENT_RECEIPTS.jsonl — and any `Bash` mutation (sed -i,
+AUDIT_TRAIL.md, PLAN.meta.json, SUBAGENT_RECEIPTS.jsonl, or CONVERSATION.md — and any `Bash` mutation (sed -i,
 redirect, cp, mv, tee, python -c open(…,'w'), …) targeting the same basenames.
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`
 (Write/Edit/MultiEdit surface) + `plugin/scripts/mcp_bash_guard.py`
 (Bash surface; same helper classifiers).
 **On violation:** hard-block. Agent must route through `write_plan`,
 the hook-owned subagent receipt path, or the post-plan `update_checks.py`
-status updater.
+status updater. CONVERSATION.md is written by runtime conversation hooks.
 **Why:** Provenance is derived from artifact existence. Wrong writer = wrong
 provenance = broken audit chain. The Bash surface was added in PR1
 (`TASK__gate-reliability-pr1`) to close the `sed -i PLAN.md` / `echo >> CHECKS.yaml` bypass.

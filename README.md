@@ -51,7 +51,7 @@ plan → develop → verify → close
 | **plan** | 7-phase dual-voice review pipeline writes PLAN.md + CHECKS.yaml |
 | **develop** | Implement per-AC, checkpoint progress, run quality audit, dogfood |
 | **verify** | QA/UX subagent starts are hook-recorded in SUBAGENT_RECEIPTS.jsonl |
-| **close** | Gate: PLAN.md exists + runtime_verdict = PASS + CHECKS terminal |
+| **close** | Gate: PLAN.md exists + runtime_verdict = PASS + CHECKS terminal + no open CONVERSATION.md items |
 
 After close, the Goal child-task executor performs a self-improvement pass — surfaces friction signals into `learnings.jsonl`, promotes recurring keys into Tier 2 patterns, and prunes stale entries.
 

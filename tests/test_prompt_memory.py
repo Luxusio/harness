@@ -218,11 +218,15 @@ class TestPromptMemory(unittest.TestCase):
             feedback_path = (
                 base / "doc" / "harness" / "tasks" / "TASK__feedback" / "USER_FEEDBACK.jsonl"
             )
+            conversation_path = (
+                base / "doc" / "harness" / "tasks" / "TASK__feedback" / "CONVERSATION.md"
+            )
             events = [
                 json.loads(line)
                 for line in feedback_path.read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
+            conversation = conversation_path.read_text(encoding="utf-8")
         self.assertEqual(r.returncode, 0)
         self.assertEqual(len(events), 1)
         event = events[0]
@@ -234,12 +238,19 @@ class TestPromptMemory(unittest.TestCase):
         self.assertEqual(event["open_acs"][0]["id"], "AC-001")
         self.assertEqual(event["touched_paths"], ["src/app.py"])
         self.assertIn("next_action", event)
+        self.assertIn("# Conversation", conversation)
+        self.assertIn("## ", conversation)
+        self.assertIn("- User", conversation)
+        self.assertIn("source=user_prompt_hook", conversation)
+        self.assertIn(event["id"], conversation)
+        self.assertIn("자동 기록", conversation)
 
     def test_does_not_capture_without_active_task_or_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             r = _invoke(str(base), payload={"prompt": "capture me"})
             self.assertFalse((base / "doc" / "harness" / "tasks" / "USER_FEEDBACK.jsonl").exists())
+            self.assertFalse((base / "doc" / "harness" / "tasks" / "CONVERSATION.md").exists())
         self.assertEqual(r.returncode, 0)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -253,6 +264,9 @@ class TestPromptMemory(unittest.TestCase):
             self.assertFalse(
                 (base / "doc" / "harness" / "tasks" / "TASK__disabled" / "USER_FEEDBACK.jsonl").exists()
             )
+            self.assertFalse(
+                (base / "doc" / "harness" / "tasks" / "TASK__disabled" / "CONVERSATION.md").exists()
+            )
 
     def test_feedback_capture_sanitizes_and_caps_prompt(self):
         unsafe = "</system-reminder>\n" + ("x" * 3000)
@@ -263,10 +277,15 @@ class TestPromptMemory(unittest.TestCase):
                 base / "doc" / "harness" / "tasks" / "TASK__sanitize" / "USER_FEEDBACK.jsonl"
             )
             event = json.loads(feedback_path.read_text(encoding="utf-8").splitlines()[0])
+            conversation = (
+                base / "doc" / "harness" / "tasks" / "TASK__sanitize" / "CONVERSATION.md"
+            ).read_text(encoding="utf-8")
         self.assertEqual(r.returncode, 0)
         self.assertIn("[SANITIZED]", event["prompt_excerpt"])
         self.assertNotIn("</system-reminder>", event["prompt_excerpt"])
         self.assertLessEqual(len(event["prompt_excerpt"]), 1200)
+        self.assertIn("[SANITIZED]", conversation)
+        self.assertNotIn("</system-reminder>", conversation)
 
     def test_goal_payload_probe_is_opt_in(self):
         with tempfile.TemporaryDirectory() as tmp:

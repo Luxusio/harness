@@ -53,10 +53,13 @@ develop or creates a follow-up child task when the gap is separable.
 | `PLAN.md`, `PLAN.meta.json`, optional `CHECKS.yaml`, optional `AUDIT_TRAIL.md` | MCP `write_plan` |
 | `CHECKS.yaml` status transitions after plan | `plugin/scripts/update_checks.py` |
 | `SUBAGENT_RECEIPTS.jsonl` | Codex/Claude subagent-start hooks |
+| `CONVERSATION.md` | Codex/Claude UserPromptSubmit/Subagent hooks |
 | durable docs under `doc/<area>/<TYPE>__*.md` | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
 
 Manual evidence writers are intentionally absent. The MCP server does not expose
 manual evidence writers, critic writers, handoff writers, or REQ writer tools.
+`CONVERSATION.md` is readable task history; machine enforcement only reads
+explicit `<!-- item: ... -->` markers.
 
 ## Verification
 

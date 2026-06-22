@@ -95,6 +95,14 @@ def test_subagent_start_records_task_local_receipt(tmp_path):
     assert stopped["status"] == "done"
     with open(receipt_path, encoding="utf-8") as f:
         assert len(f.readlines()) == 1
+    conversation = os.path.join(task_dir, "CONVERSATION.md")
+    assert os.path.isfile(conversation)
+    with open(conversation, encoding="utf-8") as f:
+        body = f.read()
+    assert "# Conversation" in body
+    assert "Subagent: harness:qa-cli" in body
+    assert "source=subagent_stop_hook" in body
+    assert "PASS focused checks" in body
 
 
 def test_background_hook_skips_non_harness_repo(tmp_path):

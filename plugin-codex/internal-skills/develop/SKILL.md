@@ -489,8 +489,9 @@ Before `task_close`, verify these are true:
 2. `task_verify` reports a fresh PASS after the last edit.
 3. Required QA/UX subagents were spawned when the runtime exposed them; hook-owned `SUBAGENT_RECEIPTS.jsonl` proves the start.
 4. User feedback events have terminal disposition in task state: `promoted`, `handled-local`, `deferred`, or `rejected`.
-5. Durable docs are updated when the task changed user-visible behavior, externally consumed API contracts, reusable guidance, significant decisions, external constraints, user-stated durable rules, or reusable implementation knowledge.
-6. Reusable EUREKA discoveries, user corrections, dogfood findings, setup recipes, and repeated friction are either promoted to committed artifacts or explicitly rejected/deferred with a concrete reason.
+5. `CONVERSATION.md` has no open `<!-- item: ... status=open -->` markers; captured items name a durable ref, rejected items name a reason, deferred items name a follow-up task/goal.
+6. Durable docs are updated when the task changed user-visible behavior, externally consumed API contracts, reusable guidance, significant decisions, external constraints, user-stated durable rules, or reusable implementation knowledge.
+7. Reusable EUREKA discoveries, user corrections, dogfood findings, setup recipes, and repeated friction are either promoted to committed artifacts or explicitly rejected/deferred with a concrete reason.
 
 Call `task_close`, then provide a concise final response with:
 
