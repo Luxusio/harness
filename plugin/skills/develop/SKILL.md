@@ -428,7 +428,7 @@ Run health score and compare it to the Phase 0 baseline if still available in
 context:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/health.py || true
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/health.py --dry-run || true
 ```
 
 ### Phase 7.7: Dogfood (post-QA, pre-close)

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Generic categorized audit framework (CSO-derived, domain-agnostic).
+"""Generic categorized audit framework (CSO-derived, domain-agnostic), stdout-only.
 
 Categories are user-defined under `audit_categories:` in manifest.yaml. Each
 category lists checks; each check has a name, command, severity (low/med/high),
-and confidence threshold (0-10). Findings are appended to per-category JSONL
-files at `doc/harness/audits/<category>-history.jsonl`.
+and confidence threshold (0-10). Findings are printed to stdout.
 
 Manifest example:
   audit_categories:
@@ -26,35 +25,24 @@ NOTE: In each check entry, `name` MUST be the first field on the `- ` line.
 The YAML mini-parser is order-dependent — subsequent fields (command, severity,
 min_confidence) are parsed from indented continuation lines.
 
-Findings JSONL line:
-  {ts, category, check, severity, confidence, evidence_tail, branch}
-
 Invocation:
   python3 audit.py --category security
   python3 audit.py --list                    # list configured categories
-  python3 audit.py --recent security 5
 
 Stdlib only.
 """
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import find_repo_root
 
 MANIFEST = "doc/harness/manifest.yaml"
-DIR = "doc/harness/audits"
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _parse_categories(repo_root: str) -> dict[str, list[dict]]:
@@ -131,19 +119,6 @@ def run_category(repo_root: str, category: str) -> int:
         print(f"NOTE: category '{category}' has no checks")
         return 0
 
-    branch = ""
-    try:
-        r = subprocess.run(
-            ["git", "branch", "--show-current"], cwd=repo_root,
-            capture_output=True, text=True, timeout=3,
-        )
-        branch = r.stdout.strip() if r.returncode == 0 else ""
-    except (subprocess.SubprocessError, OSError):
-        pass
-
-    out_path = os.path.join(repo_root, DIR, f"{category}-history.jsonl")
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
-
     findings = 0
     print(f"audit category: {category}")
     for c in checks:
@@ -162,14 +137,10 @@ def run_category(repo_root: str, category: str) -> int:
         print(f"  {name:30s} sev={sev:4s} conf>={conf}  {status}")
         if not clean:
             findings += 1
-            line = {
-                "ts": _now(), "branch": branch or "unknown",
-                "category": category, "check": name,
-                "severity": sev, "confidence": conf,
-                "evidence_tail": tail,
-            }
-            with open(out_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(line, ensure_ascii=False) + "\n")
+            if tail:
+                print("    tail:")
+                for line in tail.splitlines():
+                    print(f"      {line}")
 
     print(f"findings: {findings}")
     return 0 if findings == 0 else 2
@@ -186,34 +157,14 @@ def list_categories(repo_root: str) -> None:
             print(f"  - {c.get('name', '<unnamed>')} (sev={c.get('severity', 'med')})")
 
 
-def show_recent(repo_root: str, category: str, n: int) -> None:
-    path = os.path.join(repo_root, DIR, f"{category}-history.jsonl")
-    if not os.path.isfile(path):
-        print(f"(no history for category '{category}')")
-        return
-    with open(path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-    for ln in lines[-n:]:
-        try:
-            obj = json.loads(ln)
-            print(f"{obj['ts']}  sev={obj['severity']:4s}  {obj['check']}")
-        except (json.JSONDecodeError, KeyError):
-            print(ln.rstrip())
-
-
 def main() -> int:
     p = argparse.ArgumentParser(description="Generic categorized audit")
     p.add_argument("--category", help="Category to audit")
     p.add_argument("--list", action="store_true", help="List configured categories")
-    p.add_argument("--recent", nargs=2, metavar=("CATEGORY", "N"),
-                   help="Show last N entries for a category")
     args = p.parse_args()
     repo_root = find_repo_root()
     if args.list:
         list_categories(repo_root)
-        return 0
-    if args.recent:
-        show_recent(repo_root, args.recent[0], int(args.recent[1]))
         return 0
     if args.category:
         return run_category(repo_root, args.category)

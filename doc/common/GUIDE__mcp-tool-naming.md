@@ -2,12 +2,12 @@
 type: GUIDE
 area: common
 title: Harness MCP tool naming across runtimes
-freshness: suspect
+freshness: current
 invalidated_by_paths:
   - plugin/.mcp.json
   - tests/test_mcp_tool_name_contracts.py
-updated: 2026-06-02
-freshness_updated: 2026-06-21T10:59:33Z
+updated: 2026-06-22
+freshness_updated: 2026-06-22T00:00:00Z
 ---
 
 # Harness MCP tool naming across runtimes
@@ -21,9 +21,9 @@ available") but is usually a runtime-naming mismatch. Read this before
 
 | Runtime | Tool name shape | Example | Where |
 |---------|-----------------|---------|-------|
-| Claude plugin (marketplace) | `mcp__plugin_<plugin>_<server>__<tool>` | `mcp__plugin_harness_harness__write_critic_qa` | `plugin/` agent grants + skill prose |
-| Codex | bare name, no prefix | `write_critic_qa` | `plugin-codex/skills/` |
-| Legacy / banned in `plugin/` | `mcp__harness__<tool>` | `mcp__harness__write_critic_qa` | must not appear under `plugin/` |
+| Claude plugin (marketplace) | `mcp__plugin_<plugin>_<server>__<tool>` | `mcp__plugin_harness_harness__task_verify` | `plugin/` agent grants + skill prose |
+| Codex | bare name, no prefix | `task_verify` | `plugin-codex/skills/` |
+| Legacy / banned in `plugin/` | `mcp__harness__<tool>` | `mcp__harness__task_verify` | must not appear under `plugin/` |
 
 - The Claude plugin tree (`plugin/`) uses `mcp__plugin_harness_harness__<tool>`
   exclusively. The plugin is named `harness` and its MCP server (in
@@ -44,8 +44,7 @@ name), and the main session calls them under that name.
 But the `plugin/` agents grant the marketplace name
 `mcp__plugin_harness_harness__<tool>`. When the main session spawns a `harness:qa-*`
 or `harness:ux-*` agent in this dev mode, the granted name does not match the
-exposed `mcp__harness__` name, so the agent reports "No such tool available" and
-cannot persist its own `CRITIC__qa.md` / `CRITIC__ux.md`.
+exposed `mcp__harness__` name, so the agent reports "No such tool available".
 
 This is expected dev-session behavior, not a product bug. In the shipped
 marketplace install the tools are exposed as `mcp__plugin_harness_harness__` and
@@ -53,14 +52,15 @@ the agent grants resolve correctly.
 
 ## What to do (and not do)
 
-- In a dev session where a spawned QA/UX agent cannot call its writer, the
-  orchestrator relays the verdict: it calls `write_critic_qa` / `write_critic_ux`
-  itself using the agent's returned findings. This keeps the gate honest while
-  staying inside the contract.
+- For QA/review proof, spawn the required subagent. The Codex/Claude hook records
+  the start in `SUBAGENT_RECEIPTS.jsonl`; do not call a receipt writer or critic
+  writer yourself.
+- For task-local plan artifacts, call `write_plan`. For REQ docs, edit the
+  committed `doc/<area>/REQ__*.md` directly or use `plugin/scripts/req_scaffold.py`.
 - Do NOT "fix" the dev artifact by adding `mcp__harness__` to `plugin/` agent
   grants. That violates the contract above and breaks the guard test, and it does
   nothing for the marketplace install (which already works).
-- If you genuinely need spawned agents to call their writers directly in dev,
+- If you genuinely need spawned agents to call MCP tools directly in dev,
   the correct lever is the dev MCP exposure (how this session registers the
   server), not the `plugin/` agent grants.
 

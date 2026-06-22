@@ -44,23 +44,6 @@ created: {date}
 #   - name: test
 #     command: "{test_command}"
 #     weight: 0.30
-
-# --- Benchmark (optional) ---
-# Each component: name, command (prints one numeric value), unit, lower_is_better.
-# benchmark_components:
-#   - name: build_time_ms
-#     command: "{build_command} 2>&1 | tail -1"
-#     unit: ms
-#     lower_is_better: true
-
-# --- Audit categories (optional, CSO-style) ---
-# Each category lists checks: name, command (exit 0=clean, non-0=finding), severity, min_confidence.
-# audit_categories:
-#   security:
-#     - name: secrets-scan
-#       command: "git secrets --scan || true"
-#       severity: high
-#       min_confidence: 8
 ```
 
 `dev_command`, `entry_url`, `api_base_url` are optional — only include the ones relevant to the project type.

@@ -7,9 +7,9 @@ checkpoint for the same task (one checkpoint per task — latest wins).
 
 The directory doc/harness/checkpoints/ is gitignored (see setup/bootstrap.md).
 
-Purpose: fill the gap between timeline.jsonl (append-only event log) and
-HANDOFF.md (close-time). Survives compaction / session resume so the next
-session can recover where a task left off mid-implementation.
+Purpose: provide a compact resume snapshot. Survives compaction / session
+resume so the next session can recover where a task left off
+mid-implementation.
 
 Invocation:
   python3 write_checkpoint.py --task-dir doc/harness/tasks/TASK__xxx/ [--note "..."]

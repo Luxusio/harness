@@ -46,10 +46,10 @@ def render_req_doc(title: str, intent: str, observable_behaviors: str,
     )
 
 
-def write_req_doc(repo_root: str, area: str, slug: str, intent: str,
-                  observable_behaviors: str, verification_cues: str,
-                  non_goals: str = "", source: str = "",
-                  append: bool = True, status: str = "accepted") -> str:
+def create_req_doc(repo_root: str, area: str, slug: str, intent: str,
+                   observable_behaviors: str, verification_cues: str,
+                   non_goals: str = "", source: str = "",
+                   append: bool = True, status: str = "accepted") -> str:
     area = _slugify(area)
     slug = _slugify(slug)
     rel = os.path.join("doc", area, f"REQ__{slug}.md")
@@ -105,7 +105,7 @@ def main() -> int:
     area = args.area or detected.get("suggested_area") or "ui"
     slug = args.slug or detected.get("suggested_slug") or "observable-behavior"
     source = args.source or (f"task: {args.task_id}" if args.task_id else "harness auto REQ scaffold")
-    rel = write_req_doc(
+    rel = create_req_doc(
         args.repo_root,
         area,
         slug,

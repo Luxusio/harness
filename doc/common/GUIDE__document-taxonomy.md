@@ -58,7 +58,8 @@ Start with a documentation impact decision, not a default-to-REQ reflex:
 - `No durable doc needed` when the change is internal-only, test-only,
   mechanical, or one-off maintenance and no durable knowledge surface changes.
 
-Record the decision in PLAN/HANDOFF/DOC_SYNC with a concrete reason. The reason
+Record the decision in the task PLAN durable-doc decision with a concrete
+reason, then commit the selected durable doc when one is needed. The reason
 should explain which durable knowledge surface is affected, or why none is.
 
 Create or update `REQ` when a task changes observable behavior: visible screen

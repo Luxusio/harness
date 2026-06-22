@@ -1,32 +1,43 @@
-# REQ process cli-artifact-writes
-summary: Agents must use CLI tool for all protected artifact writes
-status: active
-updated: 2026-03-31
+# REQ process controlled artifact writes
+summary: Agents must use the owning control surface for protected task artifacts
+status: accepted
+updated: 2026-06-22
 freshness: current
-verified_at: 2026-04-11T00:00:00Z
-derived_from:
-  - plugin/scripts/write_artifact.py
-  - plugin/CLAUDE.md
 confidence: high
 kind: process
-source: User directive stated 2026-03-31 — "harness문서를 agent가 직접 write하는게 있다면 그건 전부 cli tool로 밀어넣어. 직접 write하는건 너무 토큰낭비가 심해" (All harness document writes by agents should go through CLI tool. Direct writes waste too many tokens.)
+source: User directive stated 2026-03-31; updated 2026-06-22 after removal of manual evidence writers.
 
-All protected artifacts (CRITIC__*.md, HANDOFF.md, DOC_SYNC.md) must be written via the CLI tool:
+Protected harness artifacts must be written only by their owning control
+surface. Agents must not hand-author files that the close gate treats as
+provenance.
 
-```bash
-HARNESS_SKIP_PREWRITE=1 python3 plugin/scripts/write_artifact.py <subcommand> \
-  --task-dir <path> [options]
-```
+## Current Ownership
 
-Subcommands: `critic-runtime`, `critic-plan`, `critic-document`, `handoff`, `doc-sync`.
+| Artifact | Owner |
+|---|---|
+| `PLAN.md` / `PLAN.meta.json` / optional `CHECKS.yaml` / optional `AUDIT_TRAIL.md` | MCP `write_plan` |
+| `CHECKS.yaml` status transitions after plan | `plugin/scripts/update_checks.py` |
+| `SUBAGENT_RECEIPTS.jsonl` | Codex/Claude subagent-start hooks |
+| `TASK_STATE.yaml` lifecycle fields | harness MCP task tools and runtime scripts |
+| `doc/<area>/REQ__*.md` and other durable docs | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
 
-Agents must NOT output artifact file content inline in their responses. Inline writes cost 500-2000 tokens per artifact; CLI calls cost ~50-100 tokens.
+## Requirements
 
-| Subcommand | Artifact | Caller |
-|---|---|---|
-| `critic-runtime` | CRITIC__runtime.md + meta.json | critic-runtime |
-| `critic-plan` | CRITIC__plan.md + meta.json | critic-plan |
-| `critic-document` | CRITIC__document.md + meta.json | critic-document |
-| `handoff` | HANDOFF.md + meta.json | developer |
-| `doc-sync` | DOC_SYNC.md + meta.json | writer |
-| `plan` | PLAN.md + PLAN.meta.json + CHECKS.yaml + AUDIT_TRAIL.md | plan-skill |
+- The MCP server must not expose manual evidence writers, critic writers,
+  handoff writers, or REQ writers.
+- A PASS verdict must be backed by hook-observed subagent start receipts, not by
+  a narrative critic file.
+- Durable user requirements and reusable discoveries must be promoted to
+  committed docs, skills, patterns, scripts, or tests. Task-local notes and
+  transient `learnings.jsonl` rows are staging only.
+- Agents must not output protected artifact file bodies inline in chat when a
+  tool/script owner exists.
+
+## Verification
+
+- `tests/test_harness_mcp_server.py` checks the exposed MCP tool set and asserts
+  removed writer tools are not callable.
+- `plugin/scripts/prewrite_gate.py` blocks direct writes to protected task
+  artifacts.
+- `plugin/scripts/mcp_bash_guard.py` blocks shell mutation bypasses for the same
+  protected task artifacts.

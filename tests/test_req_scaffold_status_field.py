@@ -49,11 +49,11 @@ def test_render_req_doc_status_default_accepted(tmp_path):
     assert "status: accepted" in body, body[:400]
 
 
-def test_write_req_doc_status_lands_on_disk(tmp_path):
+def test_create_req_doc_status_lands_on_disk(tmp_path):
     mod = _load_req_scaffold()
     repo = tmp_path / "repo"
     repo.mkdir()
-    rel = mod.write_req_doc(
+    rel = mod.create_req_doc(
         repo_root=str(repo),
         area="common",
         slug="status-disk",
@@ -66,11 +66,11 @@ def test_write_req_doc_status_lands_on_disk(tmp_path):
     assert "status: candidate" in written
 
 
-def test_write_req_doc_status_default_accepted(tmp_path):
+def test_create_req_doc_status_default_accepted(tmp_path):
     mod = _load_req_scaffold()
     repo = tmp_path / "repo"
     repo.mkdir()
-    rel = mod.write_req_doc(
+    rel = mod.create_req_doc(
         repo_root=str(repo),
         area="common",
         slug="status-default",

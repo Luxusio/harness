@@ -35,7 +35,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 | 상황 | 적용 규약 | 수준 |
 |------|---------|------|
 | Repo-mutating 태스크 시작 | [C-01](#c-01), [C-02](#c-02), [C-09](#c-09) | hard |
-| 보호 아티팩트 쓰기 (PLAN/CHECKS/HANDOFF/DOC_SYNC/CRITIC__qa) | [C-03](#c-03), [C-05](#c-05) | hard |
+| 보호 아티팩트 쓰기 (PLAN/CHECKS/SUBAGENT_RECEIPTS) | [C-03](#c-03), [C-05](#c-05) | hard |
 | `task_close` 시점 | [C-01](#c-01), [C-04](#c-04), [C-14](#c-14) | hard |
 | 짧은 승인 (`ㅇㅇ`, `ㄱ`) 수신 | [C-07](#c-07) | soft |
 | 답변 레인 → mutation 레인 전환 | [C-07](#c-07), [C-08](#c-08) | hard |
@@ -205,13 +205,16 @@ extra phase is a new failure point.
 
 ### C-14
 
-**Title:** PASS verdicts require structured evidence.
+**Title:** PASS verdicts require hook-owned subagent receipt.
 **When:** `runtime_verdict` transitions to `PASS`.
-**Enforced by:** `CRITIC__qa.md` schema — must contain specific
-test/screenshot/log references, not a bare verdict.
-**On violation:** soft-warn. `task_close` additionally demands the file
-exists and is fresh (C-04).
-**Why:** A PASS without evidence is indistinguishable from hallucination.
+**Enforced by:** `SUBAGENT_RECEIPTS.jsonl` presence, written only by
+Codex/Claude subagent-start hooks. `task_verify` computes runtime verification
+from that hook-owned receipt and may reconcile open CHECKS.yaml entries.
+**On violation:** soft-warn. `task_close` refuses when no subagent start
+receipt exists for the task.
+**Why:** A self-authored PASS is indistinguishable from hallucination. A
+hook-owned subagent start proves that an independent QA/review/worker lens was
+actually invoked.
 
 ### C-14a
 
@@ -283,13 +286,19 @@ Archive commit message always embeds the copy-pasteable restore command.
 
 **Title:** Task in_progress 동안 turn 종결 사유는 **fresh** verified runtime_verdict 또는 사용자 명시 cancel 뿐.
 **When:** Stop event with `.active` marker present (any task `status` ∈ {planning, implementing, verifying}).
-**Enforced by:** `plugin/scripts/stop_gate.py` (gate-blocks unless `runtime_verdict ∈ {PASS, BLOCKED_ENV}` AND the verdict is FRESH per `_lib.runtime_is_stale`); `plugin/agents/stop-judge.md` (the only authorized BLOCKED_ENV pause path, via `task_blocked`); MCP `write_critic_qa` (QA verdict enum gate, current-lens worst-wins merge) + MCP `task_close` (PASS-only gate, plus staleness gate).
+**Enforced by:** `plugin/scripts/stop_gate.py` (gate-blocks unless `runtime_verdict ∈ {PASS, BLOCKED_ENV}`); `plugin/agents/stop-judge.md` (the only authorized BLOCKED_ENV pause path, via `task_blocked`); MCP `task_verify` (receipt-backed runtime verdict) + MCP `task_close` (PASS-only gate).
 **On violation:** hard-block (Stop hook refuses turn-end). Claude must call `task_verify`/`task_close` for PASS or spawn `Agent(subagent_type='harness:stop-judge')` for BLOCKED_ENV. Cancel options must never be surfaced to the user inside AskUserQuestion; cancel is recognized only as an explicit user word.
 
-**Staleness clause (2026-05-14 fix):** a frozen `BLOCKED_ENV` verdict permits stop ONLY when no `touched_paths` file has `mtime > mtime(CRITIC__qa.md)`. If activity post-dates the verdict, the verdict is stale and the Stop hook MUST fall through to the block payload — the orchestrator must spawn a fresh `harness:stop-judge` (which re-assesses current state and calls `task_blocked` when the blocker still holds) or run `task_verify` toward PASS. Staleness is computed once in `_lib.emit_compact_context` via `_lib.runtime_is_stale` and surfaced as `ctx["stale"]` / `ctx["stale_path"]`; both `stop_gate.py` and the MCP `task_close` gate read this field. The 2026-05-14 bug: a stale `BLOCKED_ENV` from codex-auth-blocked earlier in a session permitted stops AFTER develop made `implemented_candidate` progress on 3 ACs — that loophole is now closed.
+**Receipt clause:** PASS is derived from hook-owned subagent starts, not from
+critic files. If the task changed after prior inline checks, the orchestrator
+must spawn the required QA/review subagent and run `task_verify` before
+`task_close`. `BLOCKED_ENV` still requires a current stop-judge assessment via
+`task_blocked`.
 
 **Why:** 회고 #1 silent-scope-kill — `stop_gate.py:97-99` 의 "AskUserQuestion 으로 cancel 묻기" 안내가 모호한 종결 지시를 task cancel 로 변환시키던 메커니즘 제거. Stop-judge 의 의미 판단이 runtime_verdict machine gate 의 input — prose-only 룰의 commentary 화 위험 (§0) 회피. 모델 회귀로 인한 조기 종결 시도도 runtime_verdict gate 가 무력화.
-Staleness gate (2026-05-14) closes the second loophole: a verdict from an EARLIER state of the session continuing to permit stops on a LATER state. C-17 enforcement is now anchored to "what the touched_paths look like right now", not "what verdict was historically written".
+Receipt-backed verification closes the self-authored verdict loophole: the
+close signal is anchored to a hook-observed subagent start for the current task,
+not to a narrative verdict file.
 
 ### C-18
 
@@ -297,7 +306,13 @@ Staleness gate (2026-05-14) closes the second loophole: a verdict from an EARLIE
 **When:** Any `mcp__chrome-devtools__*` tool invocation from the main (orchestrator) session (e.g. `take_snapshot`, `take_screenshot`, `evaluate_script`, `navigate_page`, `click`, `fill`), or Phase 7 full-suite verification.
 **Enforced by:** `plugin/scripts/qa_delegation_gate.py` (PreToolUse, no matcher — script self-filters by `tool_name` prefix `mcp__chrome-devtools__`). The gate allows delegated `harness:qa-browser` calls, then emits a deny envelope whose `permissionDecisionReason` surfaces as a system-reminder so non-delegated callers self-redirect to `Agent(subagent_type='harness:qa-browser')`. qa-browser detection prefers explicit agent fields when the runtime exposes them and falls back to a capped `transcript_path` prologue check for the qa-browser agent prompt. Bypass: `HARNESS_SKIP_QA_DELEGATION=1` one-shot. Bash test runners (`pytest`, `npm test`, `vitest`, `pnpm test`, `cargo test`, `go test`, `jest`, `mocha`, `rspec`, `phpunit`, …) are not hook-blocked because targeted per-AC and debug reruns are legitimate inline use; Phase 7 full-suite runs MUST be delegated to qa-* lenses and spawned in parallel when multiple lenses apply. Network probes (`curl`, `wget`, `httpie`) and DB probes (`psql -c`, `mysql -e`, `alembic`) also remain unblocked for targeted diagnostics.
 **On violation:** soft-warn. WARN logs to `learnings.jsonl` `type=qa-delegation-warn` each fire; weekly retro reads frequency to decide v2 escalation.
-**Why:** Browser MCP payloads (DOM snapshots, screenshots, evaluate output) bloat main context with thousands of structured tokens per call. qa-browser isolates browser verification and writes structured findings to `CRITIC__qa.md` — the orchestrator reads only the verdict. Evidence: 2026-05-13 user-observed catchy-secrets session where main agent ran `chrome-devtools` inline and stalled mid-task; user feedback 2026-05-14 narrowed scope to MCP-only after the Bash matcher fired on legitimate `pytest`/`vitest` use.
+**Why:** Browser MCP payloads (DOM snapshots, screenshots, evaluate output)
+bloat main context with thousands of structured tokens per call. qa-browser
+isolates browser verification and returns findings in its final response while
+the hook records the subagent start receipt. Evidence: 2026-05-13
+user-observed catchy-secrets session where main agent ran `chrome-devtools`
+inline and stalled mid-task; user feedback 2026-05-14 narrowed scope to
+MCP-only after the Bash matcher fired on legitimate `pytest`/`vitest` use.
 
 <!-- harness:managed-end -->
 

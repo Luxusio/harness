@@ -424,7 +424,7 @@ python3 ${HARNESS_PLUGIN_ROOT}/scripts/write_checkpoint.py \
 ### Phase 7.6: Health score capture
 
 ```bash
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/health.py || true
+python3 ${HARNESS_PLUGIN_ROOT}/scripts/health.py --dry-run || true
 ```
 
 ### Phase 7.7: Dogfood (post-QA, pre-close)

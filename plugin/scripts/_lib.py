@@ -1499,8 +1499,6 @@ _STALE_CHECK_SKIP_PREFIXES = (
     "doc/changes/",
 )
 _STALE_CHECK_SKIP_BASENAMES = {
-    "HANDOFF.md",
-    "DOC_SYNC.md",
     SUBAGENT_RECEIPTS_NAME,
     "TASK_STATE.yaml",
     "PLAN.meta.json",

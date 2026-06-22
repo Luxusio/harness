@@ -33,7 +33,7 @@ If the user establishes, corrects, or confirms a lasting product, design,
 architecture, domain, workflow, or implementation rule, update the matching
 `doc/` file before finalizing. Conversation history is not durable memory. If
 no matching document exists, create one under the appropriate `doc/` area; if no
-doc is needed, record the no-doc rationale in DOC_SYNC/HANDOFF.
+doc is needed, keep the no-doc rationale in the plan/task rationale.
 """
 
 

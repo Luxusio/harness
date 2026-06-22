@@ -118,26 +118,26 @@ Dogfooder remains a non-gating backlog pass after QA/UX.
 
 All under `plugin/scripts/`. Stdlib only.
 
-| Script | Purpose | State file |
-|--------|---------|------------|
-| `health.py` | Weighted composite 0-10 score | `doc/harness/health-history.jsonl` |
-| `benchmark.py` | Numeric metrics vs baseline, WARN/REGR thresholds | `doc/harness/benchmark/` |
-| `audit.py` | Generic categorized audit (CSO-style) | `doc/harness/audits/` |
+| Script | Purpose | Output |
+|--------|---------|--------|
+| `health.py` | Weighted composite 0-10 score | stdout |
+| `benchmark.py` | Numeric metric snapshot | stdout |
+| `audit.py` | Generic categorized audit (CSO-style) | stdout |
 | `canary.py` | Visual regression baseline + sha/pixel diff | `doc/harness/visual-baselines/` |
 | `search_learnings.py` | Keyword/filter search over Tier 3 learnings | reads `learnings.jsonl` |
 | `promote_learnings.py` | Tier 3 → Tier 2 promotion + stale pruning | `doc/harness/patterns/` |
 | `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/` |
 | `inject_checkpoint.py` | Manual resume helper for latest checkpoint context | `doc/harness/checkpoints/` |
-| `retro.py` | Weekly retrospective (git + learnings + health) | `doc/harness/retros/` |
+| `retro.py` | Weekly retrospective (git + tasks + learnings) | stdout; `--save` writes `doc/harness/retros/` |
 | `qa_codifier.py` | Parses QA transcripts → regression tests under `tests/regression/` | — |
 | `golden_replay.py` | Record/replay runtime smoke runs for deterministic regression | `doc/harness/replays/` |
 | `contract_lint.py` | CONTRACTS.md managed-block lint and skill weight checks | — |
-| `runtime_services.py` | Start/status/log helper for manifest-declared runtime services | task-local audit evidence |
+| `runtime_services.py` | Start/status/log helper for manifest-declared runtime services | `doc/harness/runtime/` |
 | `goal_queue_runner.py` | Persistent Goal child-task queue runner with heartbeat, recover, event log, failure policy, and optional harness-close verification | `doc/harness/goal-queue.json` |
 | `goal_queue_migrate.py` | Existing-repo migration for pre-native Goal queue state and stale CLAUDE routing blocks | `doc/harness/goal-queue.json` |
 | `task_pack_runner.py` | Ordered task-pack state for multi-step harness requests; records the user's known ordered work and makes the next task deterministic after each close | task pack state files |
-| `verify_runner.py` | Deterministic manifest `verify_commands` runner with optional parallel execution | task/task_verify evidence |
-| `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | plan/develop/close evidence |
+| `verify_runner.py` | Deterministic manifest `verify_commands` runner with optional parallel execution | stdout |
+| `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | stdout |
 | `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |
 | `update_checks.py` | Atomic CHECKS.yaml AC status transitions (plan-first) | task-local |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
@@ -153,7 +153,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `verification_gap_check.py` | Resume-time warning for missing verification evidence | — |
 | `drift_warn.py` | SessionStart drift detector: reminds dev-of-harness users when installed plugin lags source (silent in non-dev / non-harness repos) | — |
 
-Activated via optional manifest keys: `health_components`, `benchmark_components`, `audit_categories`. Health falls back to `test_command` when no components declared.
+Activated via optional manifest keys: `health_components`, `benchmark_components`, `audit_categories`. These scripts print their results; durable follow-up belongs in REQ/GUIDE/ADR/POLICY, skills, patterns, or tests.
 
 ## Tiered learning
 

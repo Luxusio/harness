@@ -23,8 +23,8 @@ committed artifact: a runbook, `doc/harness/patterns/*.md`,
 
 Approved runbooks are shown by `prompt_memory.py` in a capped
 `[harness-runbooks]` reminder. Candidates are only reminders for the
-active/next harness task; they are not trusted until reviewed and recorded in
-close-time Self-Healing Candidates.
+active/next harness task; they are not trusted until reviewed and promoted into
+a committed artifact.
 
 ## Workflow
 
@@ -51,8 +51,9 @@ secrets in a runbook. Redact the command first.
 
 ## Commit-backed learning rule
 
-At task handoff, classify reusable learning as `none`, `captured`, or
-`rejected`. `captured` means the lesson now appears in a committed artifact and
-the HANDOFF names that path. `rejected` means the agent considered the lesson
-but kept it local because it was task-specific, noisy, or not reusable. A raw
-`learnings.jsonl` row alone is never enough for `captured`.
+At task close, classify reusable learning as `none`, `captured`, or `rejected`.
+`captured` means the lesson now appears in a committed artifact such as a
+runbook, pattern, guide, skill, script, or regression test. `rejected` means the
+agent considered the lesson but kept it local because it was task-specific,
+noisy, or not reusable. A raw `learnings.jsonl` row alone is never enough for
+`captured`.

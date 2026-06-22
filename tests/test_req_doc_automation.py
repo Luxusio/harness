@@ -7,7 +7,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "plugin" / "scripts"))
 
 from req_detector import detect_req_need  # type: ignore
-from req_scaffold import write_req_doc  # type: ignore
+from req_scaffold import create_req_doc  # type: ignore
 from conftest import SCRIPTS_DIR, invoke_hook, parse_decision, scratch_task_in_real_repo  # type: ignore
 
 
@@ -27,7 +27,7 @@ def test_req_detector_flags_mobile_reader_back_stack_feedback():
 
 
 def test_req_scaffold_writes_observable_behavior_and_verification_cues(tmp_path):
-    rel = write_req_doc(
+    rel = create_req_doc(
         str(tmp_path),
         "ui",
         "mobile-reader-navigation",

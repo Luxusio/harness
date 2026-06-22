@@ -379,14 +379,14 @@ If non-Linux host: inform that qa-desktop v1 is Linux-only and offer `A) Skip �
 
 ```
 AskUserQuestion:
-  "harness can track project health (0-10 composite), benchmark perf regressions, and run categorized audits (security, a11y, etc.) across tasks. All optional, configurable later."
+  "harness can compute a project health score (0-10 composite) from configured commands. This is optional and prints to stdout."
   RECOMMENDATION: Choose A. Near-zero setup cost — harness auto-detects test_command as the default health component.
   Completeness: A=8/10, B=5/10
   A) Enable health scoring (recommended — uses test_command as default, extend with health_components later)
   B) Skip for now — I'll configure manually
 ```
 
-If A: manifest gets `health_components` uncommenting the default entry that wraps `test_command`. Benchmark and audit stay commented — user activates by uncommenting and filling in `benchmark_components` / `audit_categories`.
+If A: manifest gets `health_components` uncommenting the default entry that wraps `test_command`.
 
 ## Phase 2.5: Health Stack Auto-Detection
 

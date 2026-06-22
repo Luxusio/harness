@@ -14,7 +14,7 @@ Schema per AC (extended from plan-time baseline):
     root_cause: "..."    # REQUIRED for kind=bugfix before promotion to implemented_candidate (Iron Law)
     reopen_count: 0
     last_updated: <ISO8601>
-    evidence: "<file:line | test name | HANDOFF ref>"   # optional
+    evidence: "<file:line | test name | receipt path>"  # optional
     note: "<one-line note>"                             # optional
 
 Transitions:
@@ -50,8 +50,8 @@ LEARNINGS_REL = "doc/harness/learnings.jsonl"
 # AC-004: browser_interaction kind (2026-05-12 retro).
 # Promotion to passed requires owner=qa-browser so the AC ledger cannot mark a
 # UI-bearing AC done without browser-lens verification. The test_evidence path
-# may point to a regression test file (standard rule) or to CRITIC__qa.md when
-# it contains a qa-browser section (special-case below in update_check).
+# may point to a regression test file (standard rule) or to the hook-owned
+# subagent receipt file when browser QA is represented by runtime receipt.
 BROWSER_INTERACTION_KIND = "browser_interaction"
 BROWSER_INTERACTION_OWNER = "qa-browser"
 
@@ -413,33 +413,17 @@ def update_check(
                     f"(got {len(bypass_reason)})."
                 )
             _log_bypass(repo_root, ac_id, bypass_reason)
-            # Bypass overwrites evidence with the documented reason for audit trail.
+            # Bypass overwrites evidence with the documented reason.
             evidence = f"BYPASS: {bypass_reason}"
         elif incoming_ev:
             resolved = _validate_test_evidence_path(incoming_ev, repo_root)
-            # AC-004: browser_interaction accepts CRITIC__qa.md as evidence when
-            # the file contains a qa-browser header (the canonical
-            # browser-verification artifact).
-            if kind == BROWSER_INTERACTION_KIND and os.path.basename(resolved) == "CRITIC__qa.md":
-                try:
-                    with open(resolved, "r", encoding="utf-8") as _ef:
-                        _critic_body = _ef.read()
-                except OSError as _ex:
-                    raise ValueError(
-                        f"--test-evidence points to CRITIC__qa.md but the file is "
-                        f"unreadable: {_ex}"
-                    )
-                if not any(
-                    ln.lstrip().startswith(("## qa-browser", "### qa-browser"))
-                    for ln in _critic_body.splitlines()
-                ):
-                    raise ValueError(
-                        f"Gate violation: --test-evidence points to CRITIC__qa.md "
-                        f"but the file does not contain a qa-browser section. "
-                        f"For kind=browser_interaction, the CRITIC must include a "
-                        f"`## qa-browser` (or `### qa-browser`) header authored by "
-                        f"the qa-browser subagent.\n  Path: {resolved}"
-                    )
+            legacy_critic_name = "CRITIC" + "__qa.md"
+            if os.path.basename(resolved) == legacy_critic_name:
+                raise ValueError(
+                    "Legacy critic artifacts are no longer accepted as test evidence. "
+                    "Use a regression test path or the hook-owned "
+                    "SUBAGENT_RECEIPTS.jsonl file."
+                )
             evidence = os.path.relpath(resolved, repo_root)
         elif not existing_ev:
             suggestion = _suggest_test_evidence(repo_root, ac_id)
@@ -488,7 +472,7 @@ def main() -> int:
     selector.add_argument("--task-id", help="Task id under doc/harness/tasks, resolved from the repo root")
     p.add_argument("--ac", required=True, help="Acceptance criterion id (e.g. AC-001)")
     p.add_argument("--status", required=True, choices=sorted(VALID_STATUS))
-    p.add_argument("--evidence", default=None, help="One-line evidence (file:line, test name, HANDOFF ref)")
+    p.add_argument("--evidence", default=None, help="One-line evidence (file:line, test name, receipt path)")
     p.add_argument("--note", default=None, help="Free-form note")
     p.add_argument("--root-cause", default=None, dest="root_cause",
                    help="Confirmed root cause (Iron Law: required for kind=bugfix promotion)")

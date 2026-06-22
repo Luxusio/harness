@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""QA Codifier — parse codifiable: YAML blocks from CRITIC__qa.md and emit regression tests.
+"""QA Codifier — parse codifiable YAML blocks from a QA transcript and emit regression tests.
 
-Reads CRITIC__qa.md from a task dir, extracts codifiable: YAML blocks,
-templates them into project-native test format, compile-checks, and moves
-validated files to tests/regression/<sanitized-task-id>/<behavior>.<ext>.
+Reads an explicit transcript path, extracts codifiable: YAML blocks, templates
+them into project-native test format, compile-checks, and moves validated files
+to tests/regression/<sanitized-task-id>/<behavior>.<ext>.
 
 Stdlib only. Never blocks task close (always exits 0).
 
@@ -290,7 +290,7 @@ def _unique_behavior_name(target_dir: str, behavior: str, ext: str) -> str:
 # Pattern 1: bare echo with no pipe/ampersand/semicolon/subshell chars after first space.
 #   Rejects: "echo hello"
 #   Accepts: "echo hello | grep x", "echo $(date)", "echo `date`"
-# Note: pattern 2 rejects "myapp --version > /dev/null" as an accepted cost (documented in HANDOFF).
+# Note: pattern 2 rejects "myapp --version > /dev/null" as an accepted cost.
 _RE_TRIVIAL_ECHO = re.compile(r"^echo\s+[^|&;$`()]*$")
 _RE_TRIVIAL_VERSION = re.compile(r"^[\w/.-]+\s*--version\s*$")
 _RE_TRIVIAL_TRUE = re.compile(r"^(true|:)\s*$")
@@ -324,7 +324,9 @@ def codify(task_dir: str, transcript_path: str | None = None, target_root: str |
 
         # Read transcript
         if transcript_path is None:
-            transcript_path = os.path.join(task_dir, "CRITIC__qa.md")
+            _log(repo_root, "codifier-empty", "codifier-empty",
+                 "no transcript path provided", task_id)
+            return 0
         if not os.path.isfile(transcript_path):
             _log(repo_root, "codifier-empty", "codifier-empty",
                  f"no transcript at {transcript_path}", task_id)

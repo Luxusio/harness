@@ -1,37 +1,56 @@
 # REQ - Req Capture With Or Without Task
 
+status: accepted
+
 ## Intent
-REQ capture must remain available regardless of whether a harness task is open. The mechanism comprises four surfaces: (1) an always-on SessionStart banner line reminding the operator of the REQ capture path, (2) the write_req_doc MCP tool accepting calls with or without task_id, (3) the prewrite_gate allowing doc/<area>/REQ__*.md writes outside an active task, and (4) the scripts/req_scaffold.py CLI as a task-free entry point. The bug this REQ captures is the user-observed friction ("REQ를 적는걸 까먹는다") that occurred whenever the user did not invoke harness:run before stating an observable requirement (resolved by this task, 2026-05-31).
+REQ capture must remain available regardless of whether a harness task is open.
+User-stated durable requirements must not live only in chat history, task-local
+state, or transient hook logs. The current mechanism is direct committed REQ
+updates under `doc/<area>/REQ__*.md`, with `plugin/scripts/req_scaffold.py` as
+the low-friction CLI helper when no existing REQ fits.
+
+This supersedes the older MCP REQ-writer flow. The MCP server no longer exposes
+a REQ writer; `write_plan` owns task-local plan artifacts, while REQ documents
+are normal committed repo docs.
 
 ## Observable Behavior
-- Every SessionStart prints exactly one banner line containing the substring 'REQ:' and the literal path placeholder 'doc/<area>/REQ__<slug>.md' and the cue 'write_req_doc'.
-- mcp__harness__write_req_doc accepts calls with task_id omitted or set to the empty string. In that case the response source field starts with 'adhoc:' followed by an ISO 8601 UTC timestamp; the response task_dir is the empty string; the REQ file is written to doc/<area>/REQ__<slug>.md.
-- mcp__harness__write_req_doc with task_id supplied retains identical legacy behavior — response source is 'task: <task_id>', response task_dir is the canonical task directory path.
-- prewrite_gate.py allows Write/Edit/MultiEdit of any path matching doc/**/REQ__*.md outside an active harness task; the gate exits 0 and prints nothing.
-- plugin/scripts/req_scaffold.py is invokable from the command line with --task-id omitted and writes the same REQ file format the MCP handler produces.
-- The MCP tool JSON schema for write_req_doc does not list task_id in the required array.
+- A REQ can be created or updated while no harness task is active by editing
+  `doc/<area>/REQ__*.md` directly or by running `plugin/scripts/req_scaffold.py`
+  with `--task-id` omitted.
+- A REQ can be linked to a task by including a source line such as
+  `- source: task: TASK__example`; `prewrite_gate.py` accepts that back-link as
+  a valid task-to-REQ reference.
+- `prewrite_gate.py` allows Write/Edit/MultiEdit of paths matching
+  `doc/**/REQ__*.md` outside an active harness task.
+- The harness MCP tool list does not include a REQ writer.
+- When task feedback reveals an uncaptured durable requirement, the resolving
+  task creates or updates the REQ directly or through `req_scaffold.py`.
 
 ## Acceptance Signals
-- Every SessionStart prints exactly one banner line containing the substring 'REQ:' and the literal path placeholder 'doc/<area>/REQ__<slug>.md' and the cue 'write_req_doc'.
-- mcp__harness__write_req_doc accepts calls with task_id omitted or set to the empty string. In that case the response source field starts with 'adhoc:' followed by an ISO 8601 UTC timestamp; the response task_dir is the empty string; the REQ file is written to doc/<area>/REQ__<slug>.md.
-- mcp__harness__write_req_doc with task_id supplied retains identical legacy behavior — response source is 'task: <task_id>', response task_dir is the canonical task directory path.
-- prewrite_gate.py allows Write/Edit/MultiEdit of any path matching doc/**/REQ__*.md outside an active harness task; the gate exits 0 and prints nothing.
-- plugin/scripts/req_scaffold.py is invokable from the command line with --task-id omitted and writes the same REQ file format the MCP handler produces.
-- The MCP tool JSON schema for write_req_doc does not list task_id in the required array.
+- `tests/test_req_doc_automation.py` covers REQ detection and scaffold output.
+- `tests/test_req_scaffold_status_field.py` covers accepted/candidate status
+  rendering for scaffolded REQ docs.
+- `tests/test_prewrite_gate_req_doc_outside_task.py` covers direct REQ writes
+  outside active tasks.
+- `tests/test_prewrite_gate_req_back_reference.py` covers task source back-links.
+- `tests/test_harness_mcp_server.py` asserts the MCP tool list does not expose a
+  REQ writer.
 
 ## Verification Cues
-- tests/test_session_start_req_reminder.py — banner contents and drift_warn entry registration.
-- tests/test_write_req_doc_task_optional.py — four cases: missing task_id, empty task_id, supplied task_id, schema required array.
-- tests/test_prewrite_gate_req_doc_outside_task.py — gate behavior under doc/ui/REQ__*.md and doc/harness/REQ__*.md outside a task.
-- Manual smoke: python3 plugin/scripts/req_scaffold.py --area common --slug smoke --intent ... should write the file with no harness task open.
-- After install.py --force on the next session, calling mcp__harness__write_req_doc without task_id from an MCP client should return ok with adhoc: source.
+- Manual smoke: run `python3 plugin/scripts/req_scaffold.py --area common
+  --slug smoke --intent ... --observable-behavior ... --verification-cues ...`
+  with no active harness task; it writes `doc/common/REQ__smoke.md`.
+- Manual MCP check: `tools/list` for the harness server includes `write_plan`
+  and excludes the old REQ writer.
 
 ## Non-Goals
-- Automated detection of when the user has stated a requirement is explicitly out of scope (user rejected keyword/contains heuristics).
-- This REQ does not require write_req_doc to function without an MCP server present; the standalone CLI covers that case.
-- It does not promise that capturing a REQ outside a task automatically links the REQ to the task that resolves the underlying request; provenance for adhoc REQs is the source field's adhoc:<ISO8601> timestamp only.
-- The banner line is not promised to be the only or final REQ-related reminder surface — additional reminders may be added later if usage data warrants.
+- This REQ does not require keyword-only automatic requirement detection.
+- This REQ does not require a task-local evidence artifact for REQ capture.
+- This REQ does not promise that an ad-hoc REQ is automatically assigned to a
+  future goal; provenance is the committed doc content until a task links it.
 
 ## Source
 - created: 2026-05-31
-- source: C-100 (CONTRACTS.local.md): bug report -> REQ doc for expected normal behavior. Bug: REQ-forgetting friction when harness:run is not invoked. Resolved by this task (TASK__session-start-req-reminder-and-drift-warn). Captured ad-hoc via req_scaffold.py CLI which dogfoods the same task-optional write path the loosened MCP handler now exposes.
+- updated: 2026-06-22
+- source: C-100/C-101 durable requirement capture, updated for the goal-based
+  MCP surface that removed the old REQ writer.

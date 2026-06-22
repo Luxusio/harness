@@ -71,7 +71,7 @@ def _request_text(items: list[dict[str, Any]]) -> str:
         "For each item, inspect the document and choose exactly one disposition: "
         "keep/update/archive/defer/reject. Apply low-risk documentation fixes "
         "directly; defer ambiguous product or historical decisions with a clear "
-        "reason in HANDOFF.\n\n"
+        "reason in the plan/task rationale.\n\n"
         "Pending items at task creation:\n"
         f"{listed}\n"
     )
@@ -91,12 +91,12 @@ def _plan_text(items: list[dict[str, Any]]) -> str:
         "1. Read `doc/harness/.hygiene-pending.json` and each listed document.\n"
         "2. For each item, classify it as keep, update, archive, defer, or reject.\n"
         "3. Apply only low-risk documentation hygiene changes in this task.\n"
-        "4. Record every disposition in HANDOFF and clear or shrink the pending queue "
+        "4. Record every disposition in the plan/task rationale and clear or shrink the pending queue "
         "only for items that were actually resolved.\n"
         "5. Verify with the focused hygiene tests and a final queue check.\n\n"
         "## Verification\n"
         "- `uv run pytest tests/test_hygiene_contracts.py tests/test_prompt_memory.py -x --tb=short`\n"
-        "- Inspect `doc/harness/.hygiene-pending.json` and HANDOFF dispositions.\n"
+        "- Inspect `doc/harness/.hygiene-pending.json` and recorded dispositions.\n"
     )
 
 

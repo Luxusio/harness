@@ -1,11 +1,11 @@
 """AC-001: prewrite_gate._task_has_req_reference accepts REQ-doc back-link.
 
-A REQ created via `write_req_doc(task_id=...)` records a body line
+A REQ created by req_scaffold.py with a task source records a body line
 `- source: task: <task_id>` in the REQ doc (see plugin/scripts/req_scaffold.py).
 Before this change, prewrite_gate's REQ-presence check only grepped
-PLAN.md/HANDOFF.md/DOC_SYNC.md bodies for a REQ path string, so a task that
-correctly registered its REQ via write_req_doc still had to mirror the REQ
-path into PLAN.md before the first source Edit was allowed.
+PLAN.md bodies for a REQ path string, so a task that correctly registered its
+REQ by source back-link still had to mirror the REQ path into PLAN.md before
+the first source Edit was allowed.
 
 This test pins the new behavior: the gate must follow the back-link.
 """
@@ -42,7 +42,7 @@ def test_back_link_in_req_doc_counts_as_reference(tmp_path):
         "- source: task: TASK__example\n",
         encoding="utf-8",
     )
-    # No PLAN.md / HANDOFF.md / DOC_SYNC.md mirror.
+    # No PLAN.md mirror.
     assert _task_has_req_reference(str(task_dir), str(repo)) is True
 
 

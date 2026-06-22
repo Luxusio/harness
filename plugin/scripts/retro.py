@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Weekly engineering retrospective from harness state.
+"""Weekly engineering retrospective from durable harness state.
 
-Combines git log, learnings.jsonl, health-history.jsonl, and timeline.jsonl
-over a configurable period (default 7 days) into a structured report.
+Combines git log, task directories, and learnings.jsonl over a configurable
+period (default 7 days) into a structured report.
 
 Sections:
   1. Commits — count, authors, top changed files
-  2. Tasks — completed tasks from timeline (skill=run, event=completed)
+  2. Tasks — task directories touched in the period
   3. Learnings — new entries by type, key highlights
-  4. Health trend — score trajectory from health-history.jsonl
-  5. Patterns — what repeated, what improved, what regressed
+  4. Patterns — what repeated, what improved, what regressed
 
 Output: stdout (markdown). Optionally append to doc/harness/retros/<date>.md.
 
@@ -34,8 +33,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import find_repo_root
 
 LEARNINGS = "doc/harness/learnings.jsonl"
-HEALTH = "doc/harness/health-history.jsonl"
-TIMELINE = "doc/harness/timeline.jsonl"
+TASKS = "doc/harness/tasks"
 RETROS = "doc/harness/retros"
 
 
@@ -103,20 +101,29 @@ def _section_commits(repo_root: str, days: int) -> str:
     return "\n".join(parts) + "\n"
 
 
-def _section_tasks(entries: list[dict]) -> str:
-    completed = [
-        e for e in entries
-        if e.get("event") == "completed" and e.get("skill") in ("run", "develop")
-    ]
-    if not completed:
-        return "## Tasks\n\n(no completed tasks in this period)\n"
+def _section_tasks(repo_root: str, days: int) -> str:
+    root = os.path.join(repo_root, TASKS)
+    if not os.path.isdir(root):
+        return "## Tasks\n\n(no task directory yet)\n"
+    cutoff_ts = datetime.now(timezone.utc).timestamp() - (days * 86400)
+    tasks: list[tuple[float, str]] = []
+    for name in os.listdir(root):
+        path = os.path.join(root, name)
+        if not name.startswith("TASK__") or not os.path.isdir(path):
+            continue
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        if mtime >= cutoff_ts:
+            tasks.append((mtime, name))
+    tasks.sort()
+    if not tasks:
+        return "## Tasks\n\n(no task directories touched in this period)\n"
 
-    parts = [f"## Tasks\n\n- **{len(completed)}** task cycle(s) completed"]
-    for e in completed[-5:]:
-        outcome = e.get("outcome", "?")
-        branch = e.get("branch", "?")
-        dur = e.get("duration_s", "?")
-        parts.append(f"  - branch={branch} outcome={outcome} duration={dur}s")
+    parts = [f"## Tasks\n\n- **{len(tasks)}** task directories touched"]
+    for _, name in tasks[-5:]:
+        parts.append(f"  - `{name}`")
     return "\n".join(parts) + "\n"
 
 
@@ -144,39 +151,16 @@ def _section_learnings(entries: list[dict]) -> str:
     return "\n".join(parts) + "\n"
 
 
-def _section_health(entries: list[dict]) -> str:
-    if not entries:
-        return "## Health Trend\n\n(no health data in this period)\n"
-
-    scores = [e.get("score") for e in entries if e.get("score") is not None]
-    if not scores:
-        return "## Health Trend\n\n(no valid scores)\n"
-
-    first, last = scores[0], scores[-1]
-    delta = last - first
-    arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
-    parts = [
-        f"## Health Trend\n",
-        f"- **{len(scores)}** measurements",
-        f"- First: {first}/10 → Last: {last}/10 ({delta:+.1f} {arrow})",
-        f"- Range: {min(scores):.1f} – {max(scores):.1f}",
-    ]
-    return "\n".join(parts) + "\n"
-
-
 def generate(repo_root: str, days: int) -> str:
     since = _cutoff(days)
-    timeline = _load_jsonl_since(os.path.join(repo_root, TIMELINE), since)
     learnings = _load_jsonl_since(os.path.join(repo_root, LEARNINGS), since)
-    health = _load_jsonl_since(os.path.join(repo_root, HEALTH), since)
 
     header = f"# Retro — {datetime.now(timezone.utc).strftime('%Y-%m-%d')} (last {days} days)\n"
     sections = [
         header,
         _section_commits(repo_root, days),
-        _section_tasks(timeline),
+        _section_tasks(repo_root, days),
         _section_learnings(learnings),
-        _section_health(health),
     ]
     return "\n".join(sections)
 

@@ -84,12 +84,9 @@ EXEMPT_PREFIXES = (
     "doc/harness/learnings.jsonl",
     "doc/harness/qa",
     "doc/harness/checkpoints",
-    "doc/harness/health-history.jsonl",
     "doc/harness/patterns",
     "doc/harness/retros",
     "doc/harness/visual-baselines",
-    "doc/harness/benchmark",
-    "doc/harness/audits",
 )
 
 # Workflow control surfaces (relative to repo root). Direct writes are only
@@ -200,7 +197,7 @@ def _task_has_req_reference(task_dir: str, repo_root: str = "") -> bool:
     doc_root = os.path.join(repo_root, "doc")
     if not os.path.isdir(doc_root):
         return False
-    # REQ docs always live at doc/<area>/REQ__*.md per req_scaffold.write_req_doc
+    # REQ docs always live at doc/<area>/REQ__*.md per req_scaffold.create_req_doc
     # (req_scaffold.py:55 — `rel = os.path.join("doc", area, f"REQ__{slug}.md")`).
     # Depth-2 scan instead of os.walk keeps gate latency O(area-dirs × REQs-per-area)
     # so this back-link path doesn't dominate every source-edit gate call.

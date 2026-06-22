@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Compatibility wrapper for hygiene_restore.py.
 
-Existing handoffs and commit messages may still reference:
+Older docs and commit messages may still reference:
   python3 plugin/scripts/maintain_restore.py <archive-path>
 
 Keep this wrapper until at least one compatibility release after the canonical

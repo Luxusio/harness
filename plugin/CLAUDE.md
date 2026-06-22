@@ -244,12 +244,12 @@ All scripts under `plugin/scripts/`. Stdlib only (PIL optional for canary).
 | `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/<task-id>.md` |
 | `inject_checkpoint.py` | Manual resume helper — surface latest checkpoint | reads `doc/harness/checkpoints/` |
 | `promote_learnings.py` | Tier 3→2 promotion + stale pruning | `doc/harness/patterns/<topic>.md` |
-| `retro.py` | Weekly retrospective (git + learnings + health) | `doc/harness/retros/<date>.md` |
+| `retro.py` | Weekly retrospective (git + tasks + learnings) | stdout; `--save` writes `doc/harness/retros/<date>.md` |
 | `hygiene_scan.py` | Close-time hygiene scan (contract drift + doc classification) | `doc/harness/.hygiene-last-run` + `doc/harness/.hygiene-session-count` |
 
-All activated via manifest optional keys: `health_components`, `benchmark_components`,
-`audit_categories`. Health falls back to `test_command` when no components declared.
-Benchmark and audit are inactive until their manifest keys exist.
+Health is activated via the manifest optional key `health_components` and falls
+back to `test_command` when no components are declared. Benchmark and audit are
+stdout-only helpers for explicit diagnostics; they do not write history files.
 
 ## 11. Tiered Learning
 
