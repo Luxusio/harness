@@ -11,13 +11,14 @@ Both are skipped for non-browser projects (when `browser_qa_supported` is not `t
 
 ## Phase 2: Baseline Screenshot (browser projects only)
 
-If `browser_qa_supported: true` in manifest, capture the current state of affected pages
-before any implementation changes. This creates a visual baseline for comparison:
+If `browser_qa_supported: true` in manifest, inspect the current state of
+affected pages before any implementation changes. This creates an in-context
+visual baseline for comparison:
 
 1. Verify dev server is running. If not, start it.
 2. For each page that will be modified (identified from PLAN.md target files):
    a. Navigate to the page.
-   b. Take screenshot → `<task_dir>/audit/screenshots/baseline-<page-slug>.png`
+   b. Take screenshot and inspect it in the current browser tool response.
    c. Take snapshot for element inventory.
 3. If the page does not exist yet (new page): skip baseline, note "new page — no baseline."
 
@@ -35,21 +36,17 @@ Do NOT modify any files during baseline capture. Read-only.
 If `browser_qa_supported: true` in manifest AND the AC touches UI files
 (templates, components, styles, layouts, pages):
 
-```bash
-mkdir -p <task_dir>/audit/screenshots
-```
-
 1. Verify dev server is running (`curl -s -o /dev/null -w '%{http_code}' <entry_url>`).
    If not running: start `dev_command` (background), wait up to 15s.
 2. Navigate to the relevant page for this AC.
-3. Take snapshot + screenshot → save to `<task_dir>/audit/screenshots/AC-NNN-after.png`.
+3. Take snapshot + screenshot and inspect both in the current browser tool response.
 4. Verify expected elements exist (from AC description). Check snapshot for:
    - Missing components or empty containers
    - Error overlays or crash screens
    - Broken layout (elements outside viewport)
 5. Check console errors via evaluate_script. If critical JS errors: fix immediately.
 6. If the AC involves interaction: perform it, wait for response,
-   take screenshot → `AC-NNN-after-interaction.png`.
+   take and inspect another screenshot.
 
 This catches visual/layout issues while implementation context is fresh — before
 they compound into expensive QA cycles. Skip for non-UI ACs (data logic, config, backend).
@@ -70,7 +67,7 @@ toggle, drag-and-drop, modal open/close), verify the interaction actually works:
    - Toggle/checkbox: `click(uid)`
    - Dropdown/select: `fill(uid, value)`
 4. `wait_for` the expected result (success message, page change, element appear).
-5. Take screenshot → `<task_dir>/audit/screenshots/AC-NNN-interaction.png`.
+5. Take and inspect a screenshot.
 6. Verify the result matches the AC description:
    - Expected element visible?
    - No error message appeared?

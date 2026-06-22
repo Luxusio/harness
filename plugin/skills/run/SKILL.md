@@ -85,9 +85,11 @@ Before entering develop, re-entering develop after QA/UX FAIL, entering verify,
 or closing, check `<task_dir>/USER_FEEDBACK.jsonl` when present. This file is
 automatic evidence from UserPromptSubmit, not durable truth by itself. If a
 feedback event changes what should be built, tested, or judged, reflect it
-before the next dependent action. The final HANDOFF must include
-`## User Feedback Disposition` with one terminal line per event:
-`event: <id> status: promoted|handled-local|deferred|rejected ...`.
+before the next dependent action. Each event must end in one terminal state:
+`promoted`, `handled-local`, `deferred`, or `rejected`. Use `promoted` only
+when the feedback became a committed durable artifact such as a typed doc,
+skill, pattern, test, or script. Do not write a handoff artifact for this;
+`task_verify` and `task_close` surface unresolved feedback from task state.
 Close-time checking only catches missed feedback; it is not the primary moment
 to interpret user intent.
 
@@ -181,10 +183,10 @@ echo '{"ts":"'"$_TS"'","type":"qa-failure-pattern","source":"run-retry","key":"F
 Before closing, capture the final project health score:
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/health.py 2>&1 || true
+python3 ${CLAUDE_PLUGIN_ROOT}/scripts/health.py --dry-run 2>&1 || true
 ```
 
-Store the printed score for inclusion in the completion report. The script auto-appends to `doc/harness/health-history.jsonl`.
+Store the printed score for inclusion in the completion report.
 
 ### Phase 5: Close
 

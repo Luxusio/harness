@@ -14,7 +14,7 @@ Orchestrate the full harness development cycle for a task.
 
 > **Codex runtime notes** (delta from Claude):
 > - Claude's `Skill("harness:plan", task_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. Effect is identical (plan -> develop -> verify -> close), but the chain is sequential prose, not tool calls.
-> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. For QA/review, `spawn_agent` is mandatory when available: the orchestrator must not self-author a PASS while skipping an available independent subagent. Codex PreToolUse hooks record subagent starts in `SUBAGENT_RECEIPTS.jsonl`; do not call a receipt writer or critic writer yourself. If `spawn_agent` is unavailable, run the role methodology inline and record a short `Runtime Fallbacks` note only when that fallback replaces an expected independent QA/review path.
+> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. For QA/review, `spawn_agent` is mandatory when available: the orchestrator must not self-author a PASS while skipping an available independent subagent. Codex PreToolUse hooks record subagent starts in `SUBAGENT_RECEIPTS.jsonl`; do not call a receipt writer or critic writer yourself. If `spawn_agent` is unavailable, run the role methodology inline and state the fallback in task state or final response only when it affects verification.
 > - MCP tool names on Codex use bare form (`task_start`, `task_verify`, `task_close`) — not Claude-prefixed form. Where this skill mentions a prefixed name, read it as the bare form.
 > - `${CLAUDE_PLUGIN_ROOT}` is not injected on Codex. Use `${HARNESS_PLUGIN_ROOT}` (set by the Codex plugin install).
 > - AskUserQuestion (Phase 4 FAIL retry) is conversational prose on Codex — emit the question + options, read the reply from the next user turn.
@@ -62,10 +62,11 @@ spawn_agent {
 The Codex PreToolUse hook records each `spawn_agent` start automatically in
 `SUBAGENT_RECEIPTS.jsonl`. Do not call a harness receipt tool and do not write
 critic verdict artifacts. If no subagent was spawned, use the inline fallback
-path and document `Runtime Fallbacks`; `task_close` will still require a real
-subagent-start receipt for verification-gated work.
+path and keep the fallback reason in task state or the final response;
+`task_close` will still require a real subagent-start receipt for
+verification-gated work when `spawn_agent` was available.
 
-Use inline execution as the fallback for roles that normally benefit from independence only when `spawn_agent` is unavailable or the work is not actually independent. If independent work runs sequentially, record `parallel-trigger-skipped` evidence with the concrete reason, affected lanes, and compensating check; vague reasons such as lack of user request are invalid. Add a short `Runtime Fallbacks` section when an expected independent QA/review path was replaced by inline verification or a required tool was unavailable. Keep it to: reason, risk, compensating check.
+Use inline execution as the fallback for roles that normally benefit from independence only when `spawn_agent` is unavailable or the work is not actually independent. If independent work runs sequentially, state the concrete blocker and affected lanes in the lane table or final response; vague reasons such as lack of user request are invalid. Do not create a runtime fallback document just to record routing history.
 
 ## Sub-file
 
@@ -128,7 +129,7 @@ task_start { slug: "<ARGUMENTS>" }
 
 Read `plugin-codex/internal-skills/plan/SKILL.md` (the v1.5 hand-port; AC-003 spike target) and execute its phases inline, passing `task_id`. The plan skill writes PLAN.md to the task_dir. On BLOCKED: stop and report.
 
-On Codex side the plan skill uses the available runtime surface. When `spawn_agent` or external model routes are available, use them for independent review voices; otherwise run the review methodology inline and record `Runtime Fallbacks` if expected independence was lost. The premise gate becomes a conversational ask.
+On Codex side the plan skill uses the available runtime surface. When `spawn_agent` or external model routes are available, use them for independent review voices; otherwise run the review methodology inline and state the fallback in task state or final response if expected independence was lost. The premise gate becomes a conversational ask.
 
 ### Phase 3: Develop
 
@@ -142,9 +143,11 @@ Before entering develop, re-entering develop after QA/UX FAIL, entering verify,
 or closing, check `<task_dir>/USER_FEEDBACK.jsonl` when present. This file is
 automatic evidence from UserPromptSubmit, not durable truth by itself. If a
 feedback event changes what should be built, tested, or judged, reflect it
-before the next dependent action. The final HANDOFF must include
-`## User Feedback Disposition` with one terminal line per event:
-`event: <id> status: promoted|handled-local|deferred|rejected ...`.
+before the next dependent action. Each event must end in one terminal state:
+`promoted`, `handled-local`, `deferred`, or `rejected`. Use `promoted` only
+when the feedback became a committed durable artifact such as a typed doc,
+skill, pattern, test, or script. Do not write a handoff artifact for this;
+`task_verify` and `task_close` surface unresolved feedback from task state.
 Close-time checking only catches missed feedback; it is not the primary moment
 to interpret user intent.
 
@@ -153,7 +156,7 @@ to interpret user intent.
 Read `doc/harness/manifest.yaml` for project type. On Codex, choose the appropriate QA lens and route it by current capability: `spawn_agent` when available, inline methodology only as fallback. If `spawn_agent` is available, the QA lens MUST run as a subagent; the orchestrator must not invent a PASS from its own context. Also route applicable UX review lenses for user-facing surfaces. Verification is recognized by hook-recorded subagent starts in `SUBAGENT_RECEIPTS.jsonl`; findings come from the subagent final response.
 
 **Strategy selection:**
-- **qa-browser** — required when `manifest.qa.browser_qa_supported: true` AND the diff contains frontend files (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). On Codex, check the actual session tool surface first. If browser tools are available, route the qa-browser lens through `spawn_agent` when available; otherwise read `plugin-codex/agents/qa-browser.md` and run that methodology inline, including real page navigation/interactions/screenshots where the tools support it. If browser QA is required but no browser tool is available, the dev server cannot be reached, or a required browser setup is impossible, return/record the blocker in HANDOFF instead of fabricating a PASS.
+- **qa-browser** — required when `manifest.qa.browser_qa_supported: true` AND the diff contains frontend files (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). On Codex, check the actual session tool surface first. If browser tools are available, route the qa-browser lens through `spawn_agent` when available; otherwise read `plugin-codex/agents/qa-browser.md` and run that methodology inline, including real page navigation/interactions/screenshots where the tools support it. If browser QA is required but no browser tool is available, the dev server cannot be reached, or a required browser setup is impossible, return `BLOCKED_ENV` with the exact blocker instead of fabricating a PASS.
 - `desktop_qa_supported: true` → qa-desktop via `spawn_agent` when available; otherwise run the methodology inline only if desktop tools are available, or write `BLOCKED_ENV` with the missing tool/display condition.
 - `type: api` or diff contains route/endpoint files → qa-api via `spawn_agent` when available; otherwise inline fallback.
 - `type: cli` or `type: library` → qa-cli via `spawn_agent` when available; otherwise inline fallback.
@@ -189,10 +192,9 @@ subagent-start receipt exists, and leaves failed/deferred ACs to explicit
 so missing independent QA/UX calls are visible before close.
 
 QA inline fallback on Codex reads the relevant qa-* prompt, follows the same
-methodology in-conversation, and records the fallback in HANDOFF. It does not
-write a critic artifact.
-
-When inline fallback replaces expected independent QA, add `Runtime Fallbacks` to HANDOFF with reason, risk, and compensating check.
+methodology in-conversation. It does not write a critic artifact or handoff
+artifact. If the fallback means verification is incomplete, return
+`BLOCKED_ENV`; otherwise report the concrete commands/interactions used.
 
 After `task_verify`, check the returned `runtime_verdict`:
 - **PASS**: proceed to Phase 5.
@@ -215,10 +217,10 @@ echo '{"ts":"'"$_TS"'","type":"qa-failure-pattern","source":"run-retry","runtime
 Before closing, capture the final project health score:
 
 ```bash
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/health.py 2>&1 || true
+python3 ${HARNESS_PLUGIN_ROOT}/scripts/health.py --dry-run 2>&1 || true
 ```
 
-Store the printed score for inclusion in the completion report. The script auto-appends to `doc/harness/health-history.jsonl`.
+Store the printed score for inclusion in the completion report.
 
 ### Phase 5: Close
 

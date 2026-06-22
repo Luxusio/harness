@@ -155,18 +155,16 @@ find doc/ -name "*design*.md" -newer doc/harness/tasks/TASK__*/TASK_STATE.yaml 2
 
 If a design doc exists, read it. Use it as the source of truth for the problem statement, constraints, and chosen approach.
 
-### Handoff note check
+### Prior decision check
 
-If a prior plan-ceo-review or `Skill(harness:setup)` session paused partway through, it may have left a HANDOFF note. Read it before re-asking premise questions:
+If a prior plan-ceo-review or `Skill(harness:setup)` session paused partway through, resume from task-local PLAN/AUDIT_TRAIL/TASK_STATE data before re-asking premise questions:
 
 ```bash
 _TASK_DIR="doc/harness/tasks/$(ls doc/harness/tasks/ 2>/dev/null | grep TASK__ | head -1)"
-if [ -f "$_TASK_DIR/HANDOFF.md" ]; then
-  grep -A3 "CEO Review Handoff\|setup Handoff\|paused at\|resume from" "$_TASK_DIR/HANDOFF.md" 2>/dev/null | head -20
-fi
+grep -A3 "CEO Review\|setup\|paused at\|resume from" "$_TASK_DIR"/{PLAN.md,AUDIT_TRAIL.md,TASK_STATE.yaml} 2>/dev/null | head -20
 ```
 
-If a handoff is found: extract the prior premises, scope decisions, and any user answers. Do NOT re-ask questions that were already answered in the prior session. Only ask what is genuinely new or changed since the handoff. Scope HANDOFF.md reads to the current `TASK__<id>` directory — never cross tasks.
+If prior decisions are found: extract the premises, scope decisions, and any user answers. Do NOT re-ask questions that were already answered in the prior session. Only ask what is genuinely new or changed since the recorded decision. Scope reads to the current `TASK__<id>` directory — never cross tasks.
 
 ## Landscape Check
 
@@ -255,21 +253,12 @@ If the subagent fails, times out, or is unavailable — skip the review loop. Te
 
 After the loop: "Your doc survived N rounds of adversarial review. M issues caught and fixed. Quality score: X/10."
 
-## Handoff Notes
+## Pause/Resume State
 
-If this review pauses mid-session (e.g. to run another skill), capture a handoff note:
-
-```markdown
-# CEO Review Handoff Note
-Date: {date}
-Branch: {branch}
-Progress: Step {N} of review
-Key decisions so far: {list}
-Pending questions: {list}
-Next step: {what to resume with}
-```
-
-Write to `doc/harness/tasks/<task-id>/ceo-handoff.md`. On resume, read this note first to pick up where you left off.
+Do not write a separate narrative pause note. If the review pauses, rely on the
+native conversation state and task-local PLAN/TASK_STATE data that already
+exists. Any durable decision or unresolved concern must be represented in the
+reviewed document itself, not in another file.
 
 ## Cross-project Learnings
 

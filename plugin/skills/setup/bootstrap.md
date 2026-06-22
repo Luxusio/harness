@@ -64,7 +64,7 @@ created: {date}
 ```
 
 `dev_command`, `entry_url`, `api_base_url` are optional — only include the ones relevant to the project type.
-`health_components`, `benchmark_components`, `audit_categories` are optional — omit to use defaults (health falls back to `test_command`; benchmark/audit are inactive until declared).
+`health_components` is optional — omit to use defaults (health falls back to `test_command`).
 
 ### Browser project fields (required when browser_qa_supported: true)
 
@@ -188,7 +188,8 @@ If the user establishes, corrects, or confirms a lasting product, design,
 architecture, domain, workflow, or implementation rule, update the matching
 `doc/` file before finalizing. Conversation history is not durable memory. If
 no matching document exists, create one under the appropriate `doc/` area; if no
-doc is needed, record the no-doc rationale in DOC_SYNC/HANDOFF.
+doc is needed, record the specific no-doc rationale in the PLAN durable-doc
+decision.
 """
 lines = [line for line in text.splitlines() if line.strip() != "- Default agent is harness"]
 start = None
@@ -225,7 +226,9 @@ Note: no `Default agent is X` line. The harness routes via skills, not agent swi
 
 **doc/harness/critics/runtime.md:** commands run without error, outputs match expectations, ACs met, implementation satisfies user intent (not just literal spec). PASS when evidence bundle proves operation AND intent adequacy.
 
-**doc/harness/critics/document.md:** DOC_SYNC.md covers all changed files, HANDOFF.md accurate. PASS when doc artifacts consistent with reality on disk.
+Documentation review is performed by the documentation-review subagent and
+`task_verify`. It reads typed durable docs, PLAN/CHECKS/TASK_STATE, and touched
+paths. It does not require legacy document-sync artifacts.
 
 ## 3.6 doc/harness/ directory
 
@@ -256,17 +259,12 @@ _HARNESS_IGNORES=(
   "doc/harness/goal-queue-events.jsonl"
   "doc/harness/legacy/goal-queue-pre-native-state.*.json"
   "doc/harness/learnings.jsonl"
-  "doc/harness/timeline.jsonl"
   "doc/harness/checkpoints/"
-  "doc/harness/health-history.jsonl"
-  "doc/harness/benchmark/"
-  "doc/harness/audits/"
   "doc/harness/visual-baselines/"
   "doc/harness/local.yaml"
   "doc/harness/.markers/"
   "doc/harness/.interview-answers.json"
   "doc/harness/retros/"
-  "doc/harness/quality-trend.jsonl"
   "doc/harness/runtime/"
   "doc/harness/hygiene.yaml"
   "doc/harness/.hygiene-last-run"

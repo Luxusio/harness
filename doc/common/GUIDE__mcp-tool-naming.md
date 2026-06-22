@@ -2,11 +2,12 @@
 type: GUIDE
 area: common
 title: Harness MCP tool naming across runtimes
-freshness: current
+freshness: suspect
 invalidated_by_paths:
   - plugin/.mcp.json
   - tests/test_mcp_tool_name_contracts.py
 updated: 2026-06-02
+freshness_updated: 2026-06-21T10:59:33Z
 ---
 
 # Harness MCP tool naming across runtimes

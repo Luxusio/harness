@@ -20,7 +20,7 @@ ls -d test/ tests/ spec/ __tests__/ cypress/ e2e/ 2>/dev/null
 ```
 
 If framework found: read 2-3 existing test files to learn conventions (naming, imports, assertion style, setup patterns).
-If no framework: skip test generation. Note in HANDOFF.md: "No test framework detected — coverage audit ran without test generation."
+If no framework: skip test generation. Mention in final response: "No test framework detected — coverage audit ran without test generation."
 
 ## 2. Trace every changed codepath
 
@@ -99,4 +99,5 @@ For uncovered paths:
 4. Run each test. Passes → commit as `test: coverage for {feature}`.
 5. Fails → fix once. Still fails → revert, note gap in diagram.
 
-Include the final coverage diagram in HANDOFF.md under the "Test Coverage" section.
+Include the final coverage diagram in PLAN.md's Test Plan section when useful,
+or summarize the coverage result in the final response.

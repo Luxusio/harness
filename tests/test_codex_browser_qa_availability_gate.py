@@ -46,7 +46,7 @@ def test_codex_develop_browser_visual_phases_are_not_blanket_deferred():
     assert "Browser tools are availability-gated on Codex" in body
     assert "run the qa-browser methodology inline" in body
     assert "task_verify" in body
-    assert "Runtime Fallbacks" in body
+    assert "state the fallback in task state or final response" in body
 
 
 def test_claude_policy_still_requires_qa_browser_delegation():

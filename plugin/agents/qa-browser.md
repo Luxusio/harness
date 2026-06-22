@@ -145,8 +145,8 @@ prevented next time, add a short `Self-Healing Candidates` note to
 your final response. Include dev-server command drift, missing
 entry_url/port config, browser MCP reachability issues, brittle test data,
 unreliable selectors, or manual recovery loops. Mark each candidate `applied`,
-`deferred`, or `rejected` when obvious; Phase 8 writes the final HANDOFF
-`Self-Healing Candidates` section.
+`deferred`, or `rejected` when obvious; the orchestrator decides whether to
+promote, defer, or reject them before close.
 
 ## Codifiable block contract
 

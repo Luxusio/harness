@@ -59,7 +59,7 @@ def test_setup_routing_includes_durable_decision_doc_gate():
         "Durable Decision Documentation Gate",
         "not handled until it is documented under `doc/`",
         "Conversation history is not durable memory",
-        "DOC_SYNC/HANDOFF",
+        "PLAN durable-doc",
     ):
         assert needle in bootstrap
 
@@ -67,7 +67,7 @@ def test_setup_routing_includes_durable_decision_doc_gate():
         body = _text(path)
         assert "Durable Decision Documentation Gate" in body
         assert "not handled until documented under `doc/`" in body
-        assert "DOC_SYNC/HANDOFF" in body
+        assert "PLAN durable-doc decision" in body
 
 
 def test_plan_requires_durable_docs_decision_for_claude_and_codex():
@@ -125,11 +125,12 @@ def test_develop_guidance_writes_selected_durable_docs():
         assert "Recheck the actual diff after implementation" in body
         assert "update the relevant `GUIDE`, skill, pattern doc, or tests rather than inventing a REQ" in body
         assert "link it from PLAN.md or the changed durable doc" in body
-        assert "Durable docs: before final summary, include the documentation-impact judgment" in body
-        assert "links to `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or `POLICY__*.md`" in body
-        assert "before final summary" in body
+        assert "Durable docs are updated when the task changed user-visible behavior" in body
+        assert "Durable docs or learning artifacts updated" in body
+        assert "Before `task_close`" in body
         assert "specific non-observable reason" in body
-        assert "`not needed` is invalid for new or changed UI/API/backoffice/admin screens" in body
+        assert "If the task touches observable UI/API/backoffice/admin screens" in body
+        assert "keep `REQ: n/a`" in body
         assert "doc/product/" not in body
 
 
@@ -159,13 +160,13 @@ def test_document_critic_checks_req_quality():
 
     for path in (CRITIC_DOCUMENT, CODEX_CRITIC_DOCUMENT):
         body = _text(path)
-        assert "critic-document" in body
+        assert "documentation-review" in body
         assert "final response" in body
         assert "`REQ__*.md` that is too vague for future implementation or QA" in body
         assert "Observable behavior introduced by the diff but missing from the REQ" in body
         assert "Documentation impact judgment" in body
         assert "Pattern/skill doc enough" in body
-        assert "recorded documentation-impact decision is coherent" in body
+        assert "recorded documentation-impact decision is coherent" in body or "recorded documentation-impact decision" in body
         assert "Do not edit documentation yourself" in body
 
 

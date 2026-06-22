@@ -17,8 +17,8 @@ For every failing test, classify into one of four categories:
 |-------|-------|---------|--------|
 | **T1** | In-branch, caused by our changes | Test was passing on base, our diff broke it | Fix our code, re-verify |
 | **T2** | In-branch, new test is wrong | New test we wrote has a bug | Fix the test, re-verify |
-| **T3** | Pre-existing, unrelated | Test was already failing on base branch | Document, do not fix in this task |
-| **T4** | Pre-existing, exposed by our changes | Test was latent-failing, our changes made it visible | Document, assess if fix is in scope |
+| **T3** | Pre-existing, unrelated | Test was already failing on base branch | Create follow-up or mention in final response, do not fix in this task |
+| **T4** | Pre-existing, exposed by our changes | Test was latent-failing, our changes made it visible | Assess if fix is in scope; otherwise create follow-up |
 
 ### Step 3: Verify pre-existing classification
 
@@ -33,7 +33,7 @@ git checkout <feature-branch>
 git stash pop
 ```
 
-If the test fails on base: confirmed T3/T4. Document in HANDOFF.md.
+If the test fails on base: confirmed T3/T4. Create a follow-up or mention it in final response.
 If the test passes on base: it is T1/T2, NOT pre-existing. Fix it.
 
 ### Step 4: Handle by classification
@@ -51,18 +51,18 @@ If the test passes on base: it is T1/T2, NOT pre-existing. Fix it.
 4. This counts against the 3-cycle limit in Phase 7.
 
 **T3 (pre-existing, unrelated):**
-1. Document in HANDOFF.md under "Pre-existing Failures".
+1. Create a follow-up or mention it in final response as a pre-existing failure.
 2. Do NOT fix in this task — it is out of scope.
 3. Continue. T3 failures do not block this task.
 
 **T4 (pre-existing, exposed by our changes):**
 1. Assess: is the fix trivial (one line, obvious cause)? If yes, fix it.
-2. If the fix is non-trivial or risks scope creep: document in HANDOFF.md.
+2. If the fix is non-trivial or risks scope creep: create a follow-up or mark the AC deferred with reason.
 3. Ask user via AskUserQuestion if unsure whether to fix.
 
-### Step 5: Document triage results
+### Step 5: Report triage results
 
-Add to HANDOFF.md:
+Include this in final response or the follow-up task:
 
 ```
 ## Test Failure Triage
@@ -79,6 +79,6 @@ Add to HANDOFF.md:
 
 1. **Always verify on base branch** before claiming T3/T4.
 2. **If you cannot verify** (base branch unavailable, test takes too long):
-   say "unverified — may or may not be related" in HANDOFF.md.
+   say "unverified — may or may not be related" in final response.
 3. **Never dismiss a failure** as pre-existing without evidence.
 4. **If the test was added by this branch**, it is always T1 or T2, never T3.

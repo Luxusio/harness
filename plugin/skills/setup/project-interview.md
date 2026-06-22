@@ -177,20 +177,11 @@ In this order (each uses Edit/Write with the appropriate gate):
    Q2-Q5
 4. `CONTRACTS.local.md` — append C-100 (Q6) and, if needed, C-101/C-102
 
-### Step 3 — Record in AUDIT_TRAIL
+### Step 3 — Durable project memory
 
-Append to `doc/harness/AUDIT_TRAIL.md` (create if missing):
-
-```markdown
-## <ISO timestamp> — project-interview
-
-Q1 (purpose): <answer>
-Q2 (audience): <answer>
-Q3 (status quo): <answer>
-Q4 (wedge): <answer>
-Q5 (verify today): <answer>
-Q6 (failure to avoid): <answer>
-```
+Do not append a full interview transcript. Persist only the durable outcomes:
+`doc/common/REQ__project__primary-goals.md`, `doc/common/CLAUDE.md`,
+`doc/harness/manifest.yaml`, and any CONTRACTS.local.md rules from the answers.
 
 ### Step 4 — Log re-interview trigger for continuous maintenance
 

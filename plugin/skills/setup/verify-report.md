@@ -14,7 +14,6 @@ grep -q "harness:routing-injected" CLAUDE.md 2>/dev/null && echo "  Harness rout
 [ -d doc/harness ] && echo "doc/harness/: OK" || echo "doc/harness/: MISSING"
 [ -f doc/harness/critics/plan.md ] && echo "critics/plan.md: OK" || echo "critics/plan.md: MISSING"
 [ -f doc/harness/critics/runtime.md ] && echo "critics/runtime.md: OK" || echo "critics/runtime.md: MISSING"
-[ -f doc/harness/critics/document.md ] && echo "critics/document.md: OK" || echo "critics/document.md: MISSING"
 ```
 
 ### Runtime deps (test runner)

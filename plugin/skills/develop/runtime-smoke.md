@@ -61,13 +61,10 @@ Steps:
    ```
    Flag: 404 (missing asset/route), 5xx (server error), CORS errors.
    If any request fails: investigate — likely a missing route or broken import.
-7. **Performance baseline capture:** Record navigation timing for later comparison:
-   ```bash
-   mkdir -p <task_dir>/audit
-   ```
-   Use `performance_start_trace` with `autoStop: true, reload: true` to capture
-   a page load trace. Save to `<task_dir>/audit/perf-baseline.json.gz`.
-   Extract key metrics via evaluate_script after trace:
+7. **Performance baseline capture:** record navigation timing in the phase
+   result for later comparison. Use `performance_start_trace` with
+   `autoStop: true, reload: true` when available, then extract key metrics via
+   evaluate_script:
    ```javascript
    () => {
      const [nav] = performance.getEntriesByType('navigation');
@@ -79,15 +76,13 @@ Steps:
      }
    }
    ```
-   Save metrics to `<task_dir>/audit/perf-baseline.json`. qa-browser will compare
-   against this baseline after implementation to detect regressions.
+   Include these metrics in the phase result. qa-browser can compare against
+   them after implementation when the values remain in context.
 8. **Keep dev server running** — Phase 4 visual smoke agent will reuse it.
 
 **API projects (`project_type: api` or API endpoints in diff):**
 
 ```bash
-mkdir -p <task_dir>/audit
-
 # Check if API server is running
 _API_URL=$(grep "^api_base_url:" doc/harness/manifest.yaml 2>/dev/null | awk '{print $2}')
 [ -z "$_API_URL" ] && _API_URL="http://localhost:3000"
@@ -122,10 +117,8 @@ Steps:
    - Response matches expected schema (fields exist, types correct)
    - No internal error details leaked in response body
 
-4. **Save API smoke results:**
-   ```bash
-   echo "API Smoke: <N> endpoints tested, <N> passed" > <task_dir>/audit/api-smoke.md
-   ```
+4. **Report API smoke results:** summarize endpoints tested, passed count, and
+   any failing URL/status in the phase result.
 
 **CLI projects (`project_type: cli` or `project_type: library`):**
 
@@ -149,10 +142,7 @@ Steps:
    ```
    Verify: command runs without crash, output is sensible.
 
-4. **Save CLI smoke results:**
-   ```bash
-   echo "CLI Smoke: <N> commands tested, <N> passed" > <task_dir>/audit/cli-smoke.md
-   ```
+4. **Report CLI smoke results:** summarize commands tested, passed count, and
+   any failing command/exit code in the phase result.
 
-**Logging:** Regardless of project type, log `"phase_start/phase_end": "3.9"` in timeline.
 Report: "Runtime smoke: PASS (<type>: <N> checks)" or "Runtime smoke: FAIL (<details>)".

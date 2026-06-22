@@ -30,7 +30,7 @@ def test_codex_run_uses_capability_first_subagent_routing():
     assert 'agent_type: "explorer"' in body
     assert "When `spawn_agent` is available and work is independent, use it" in body
     assert "Use inline execution as the fallback" in body
-    assert "record `parallel-trigger-skipped` evidence" in body
+    assert "state the concrete blocker and affected lanes" in body
     assert "vague reasons such as lack of user request are invalid" in body
 
 
@@ -45,7 +45,7 @@ def test_codex_run_documents_qa_subagent_call_shape():
     assert "concrete findings" in body
     assert "must not invent a PASS from its own context" in body
     assert "`subagent_receipts`" in body
-    assert "Runtime Fallbacks" in body
+    assert "state the fallback in task state or final response" in body
     assert "Agent` fan-out routed through `spawn_agent` when available" in body
 
 
@@ -129,14 +129,14 @@ def test_codex_develop_no_longer_says_agent_absence_is_absolute():
 
     assert "Agent fan-out is capability-gated" in body
     assert "spawn_agent {" in body
-    assert "Runtime Fallbacks" in body
+    assert "state the fallback in task state or final response" in body
 
 
 def test_runtime_fallback_notes_are_exception_only():
     combined = _text(CODEX_RUN) + "\n" + _text(CODEX_DEVELOP)
 
     assert "keep routine work free of runtime routing notes" in combined
-    assert "Add a short `Runtime Fallbacks` section when" in combined
+    assert "Do not write a fallback artifact just to record routing history" in combined
     noisy_phrases = [
         "always log routing",
         "runtime routing log",

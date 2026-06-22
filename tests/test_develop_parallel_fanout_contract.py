@@ -42,7 +42,7 @@ def test_parallel_fanout_small_task_skip_requires_evidence_and_coordinator_merge
     assert "Mandatory parallel delegation is" in body
     assert "User request is not a condition\nfor parallel routing" in body
     assert "do not reduce worker count for independent ACs" in body
-    assert "Executors write per-AC result files under `<task_dir>/audit/`" in body
+    assert "Executors return status, changed paths, and blockers in their final response" in body
     assert "coordinator" in body and "only writer to PROGRESS.md and CHECKS.yaml" in body
     assert "Merge cost controls batch size only" in body
     assert "does not justify collapsing two or more" in body
@@ -91,7 +91,7 @@ def test_codex_develop_uses_spawn_agent_lane_analysis_not_sequential_default():
     assert "spawn one worker per" in body
     assert "Use one worker per independent AC" in body
     assert "Do not assign multiple independent ACs to one" in body
-    assert "Runtime Fallbacks" in body
+    assert "state the fallback in task state or final response" in body
     assert "For sequential batches, work **one AC at a time**" in body
     assert "1. **One AC at a time**, in order." not in body
 
@@ -112,7 +112,7 @@ def test_codex_develop_sequential_fallback_requires_skip_evidence_payload():
     body = _text(CODEX_DEVELOP)
 
     assert "Sequential fallback must" in body
-    assert "record `parallel-trigger-skipped` with `ac_count`" in body
+    assert "state `ac_count`" in body
     assert "`conflict` (specific" in body
     assert "`estimated_lines`, `estimated_seconds`" in body
     assert "Valid reasons are only `spawn_agent-unavailable`" in body

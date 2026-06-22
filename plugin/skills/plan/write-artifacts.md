@@ -83,14 +83,8 @@ durable contract.
 
 ### Review Status table (end of PLAN.md)
 
-Assemble from phase-transition summaries and `REVIEW_LOG.jsonl`:
-```bash
-_RL="doc/harness/tasks/TASK__<id>/REVIEW_LOG.jsonl"
-_RL1=$(grep '"phase":"1"' "$_RL" 2>/dev/null | tail -1 || echo "")
-_RL2=$(grep '"phase":"2"' "$_RL" 2>/dev/null | tail -1 || echo "")
-_RL3=$(grep '"phase":"3"' "$_RL" 2>/dev/null | tail -1 || echo "")
-_RL4=$(grep '"phase":"4"' "$_RL" 2>/dev/null | tail -1 || echo "")
-```
+Assemble from phase-transition summaries and AUDIT_TRAIL rows already produced
+by the plan review phases. Do not create another chronological file.
 
 ```
 ## Review Status
@@ -174,7 +168,7 @@ Write `/tmp/checks_content.yaml` with all acceptance criteria from PLAN.md.
   root_cause: ""                  # REQUIRED when kind=bugfix. One-line confirmed cause (Iron Law). Update_checks blocks promotion to implemented_candidate without it.
   reopen_count: 0                 # auto-increments on transition into 'failed'
   last_updated: <ISO8601>
-  evidence: ""                    # file:line | test name | HANDOFF section (filled by develop)
+  evidence: ""                    # file:line | test name | command/browser artifact
   note: ""                        # optional free-form
 ```
 
@@ -266,7 +260,7 @@ Auto-decided:      <N> decisions
 Taste surfaced:    <N> items
 User Challenges:   <N> items
 Deferred scope:    <N> items (see deferred-scope.md)
-Review log:        <N> entries (see REVIEW_LOG.jsonl)
+Review summary:    <N> phase-summary rows
 Lake Score:        <avg>/10 (from <N> ACs)   ← from the computation above; emit "n/a" if CHECKS.yaml absent or empty
 ```
 

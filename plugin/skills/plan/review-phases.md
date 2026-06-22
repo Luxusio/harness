@@ -98,14 +98,10 @@ Also append a phase-summary JSON row to AUDIT_TRAIL.md:
 | <#> | <N> | phase-summary | log | - | {"phase":"<N>","confirmed":<count>,"disagree":<count>,"adversarial":<count>,"taste":<count>,"challenge":<count>} | - |
 ```
 
-### 5. REVIEW_LOG append
+### 5. No separate chronological artifact
 
-```bash
-_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-cat >> doc/harness/tasks/TASK__<id>/REVIEW_LOG.jsonl << EOF
-{"ts":"$_TS","skill":"plan","phase":"<N>","phase_name":"<LENS>","status":"complete","confirmed":<X>,"disagree":<Y>,"adversarial":<Z>,"taste":<T>,"challenge":<C>,"mode":"<MODE>","execution_mode":"<MODE>","via":"plan-skill"}
-EOF
-```
+Do not create another chronological file. PLAN.md and AUDIT_TRAIL
+phase-summary rows are the durable review record.
 
 ### Degradation matrix (apply per phase)
 
@@ -198,7 +194,7 @@ Methodology: `plugin/skills/plan-eng-review/SKILL.md`. Conflict priority: **P5 +
 
 - [ ] ASCII dependency graph (new components → existing code)
 - [ ] Test diagram (every new codepath/branch → coverage)
-- [ ] Test plan artifact written to `test-plan.md`
+- [ ] PLAN.md contains a Test Plan section
 - [ ] "NOT in scope" section
 - [ ] "What already exists" section
 - [ ] Completion Summary

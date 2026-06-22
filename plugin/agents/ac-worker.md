@@ -1,6 +1,6 @@
 ---
 name: ac-worker
-description: harness AC worker — implements one assigned AC or worker lane, runs scoped tests, and writes an audit result for the develop coordinator.
+description: harness AC worker — implements one assigned AC or worker lane, runs scoped tests, and returns structured status for the develop coordinator.
 model: sonnet
 tools: Read, Write, Bash, Glob, Grep, LS
 ---
@@ -15,7 +15,7 @@ the assigned AC, lane, and file ownership from the prompt.
 
 Implement only the assigned AC or lane. If the prompt assigns `AC-003`, do not
 touch `AC-001`, `AC-002`, or unrelated cleanup. If a dependency is missing,
-write it as a blocker in your audit result instead of expanding scope.
+return it as a blocker instead of expanding scope.
 
 ## Understand your slice before you edit
 
@@ -26,8 +26,8 @@ through your slice end to end.
 
 You own one slice. Go deep on that slice. Do not try to re-derive the whole
 system; the plan already decomposed it and other workers own adjacent pieces. If
-the real code contradicts your assignment, record it as a blocker in your audit
-and stop. Do not silently diverge and do not expand scope to fix it.
+the real code contradicts your assignment, return it as a blocker and stop. Do
+not silently diverge and do not expand scope to fix it.
 
 Write the smallest coherent diff that satisfies the AC. No speculative features,
 no single-use abstractions, no handling for cases that cannot happen. If a line
@@ -48,7 +48,7 @@ clear to you, it does not go in.
 2. Implement the smallest coherent diff for your AC.
 3. Run scoped tests for the changed paths, plus any per-AC verification command
    named in `PLAN.md`.
-4. Write `<task_dir>/audit/<AC-id>.executor.md` with:
+4. Return a structured final response with:
    - AC id and files changed
    - what changed
    - tests run and exact result
@@ -67,10 +67,11 @@ clear to you, it does not go in.
 
 ## Output Contract
 
-End with the path to your audit result and a concise status:
+End with a concise status:
 
 ```
 AC-003: implemented | blocked | needs-coordinator-review
-Audit: doc/harness/tasks/<task_id>/audit/AC-003.executor.md
+Changed: <paths>
 Tests: <commands and PASS/FAIL/BLOCKED_ENV>
+Blockers: <none or concrete blocker>
 ```

@@ -12,7 +12,7 @@ Skip if the plan has zero new trust boundaries AND zero new writes (pure prose r
 
 S1. **Spoofing / Auth boundary** — does any new codepath cross a trust boundary (user→service, service→DB, external→internal, LLM-output→executor)? If yes, how is the identity or source verified?
 
-S2. **Tampering / Data integrity** — does any new write mutate a protected artifact (PLAN.md, CHECKS.yaml, HANDOFF.md, DOC_SYNC.md, SUBAGENT_RECEIPTS.jsonl)? Is the owning skill, CLI, or hook the only writer (C-05 enforced by `prewrite_gate.py` and `mcp_bash_guard.py`)? Any Bash pattern that could slip past the guard?
+S2. **Tampering / Data integrity** — does any new write mutate a protected artifact (PLAN.md, CHECKS.yaml, SUBAGENT_RECEIPTS.jsonl)? Is the owning skill, CLI, or hook the only writer (C-05 enforced by `prewrite_gate.py` and `mcp_bash_guard.py`)? Any Bash pattern that could slip past the guard?
 
 S3. **Information disclosure** — does any new log, error message, prompt, or artifact leak secrets, PII, absolute paths with usernames, internal infra names, or task-specific data that should stay private to the task directory?
 
@@ -20,13 +20,13 @@ S3. **Information disclosure** — does any new log, error message, prompt, or a
 
 H1. **Audit-trail preservation** — does any step risk breaking the PLAN.md → CHECKS.yaml → AUDIT_TRAIL.md provenance chain? Append-only for AUDIT_TRAIL, `reopen_count` preserved, artifact-owner rule respected on every write?
 
-H2. **Protected-artifact provenance** — does develop/verify touch any file in `PROTECTED_ARTIFACTS` without routing through the owning skill/CLI? Any Bash step that writes CHECKS.yaml / HANDOFF / DOC_SYNC via `sed -i`, `>`, `>>`, `tee`, or `python -c open(...,'w')`?
+H2. **Protected-artifact provenance** — does develop/verify touch any file in `PROTECTED_ARTIFACTS` without routing through the owning skill/CLI? Any Bash step that writes CHECKS.yaml or SUBAGENT_RECEIPTS.jsonl via `sed -i`, `>`, `>>`, `tee`, or `python -c open(...,'w')`?
 
 H3. **Contract-bypass vector** — does the plan assume `HARNESS_SKIP_PREWRITE` or `HARNESS_SKIP_MCP_GUARD` is set as a normal flow? Each bypass must be one-shot, logged as `gate-bypass` in learnings.jsonl, and justified. Flag any session-wide bypass as critical.
 
 ## Rollback depth (plan-level revert-safety)
 
-Skip if the plan makes zero mutations to repo state (review-only, advisory-only, read-only). Otherwise answer all 4. Scope is plan-level (what reverts if develop halts mid-task) — not artifact-level, because harness has no rollback primitive for CHECKS.yaml / AUDIT_TRAIL.md / HANDOFF.md / DOC_SYNC.md beyond PLAN.md restore-points.
+Skip if the plan makes zero mutations to repo state (review-only, advisory-only, read-only). Otherwise answer all 4. Scope is plan-level (what reverts if develop halts mid-task) — not artifact-level, because harness has no rollback primitive for CHECKS.yaml / AUDIT_TRAIL.md beyond PLAN.md restore-points.
 
 R1. **Blast radius (develop-fail)** — if implementation halts at AC-N where N < last, which ACs already reached `implemented_candidate` in CHECKS.yaml? Which file edits are already on disk? What touched_paths are already stamped in TASK_STATE.yaml? Zero is the target answer; list all non-zero mutations.
 

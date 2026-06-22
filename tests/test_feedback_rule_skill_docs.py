@@ -15,11 +15,11 @@ def test_develop_skills_require_feedback_rule_judgment():
         assert "Write behavior rules for Tier 2 docs" in body
         assert "incident-shaped lessons" in body
         assert "Commit-backed Learnings" in body
-        assert "learnings.jsonl` is gitignored staging" in body
+        assert "gitignored staging" in body
         assert "committed artifact" in body
         assert "changed a committed" in body
         assert "Self-Healing Candidates" in body
-        assert "development, QA, dogfood, and close-gate discoveries" in body
+        assert "development friction, QA-discovered" in body
         assert "hypotheses until checked against the repo" in body
         assert "partially-confirmed" in body
         assert "needs-runtime-check" in body
@@ -34,9 +34,8 @@ def test_develop_skills_require_feedback_rule_judgment():
         assert "durable source of truth" in body
         assert "by itself" in body
         assert "before the next action that depends on it" in body
-        assert "User Feedback Disposition" in body
-        assert "promoted|handled-local|deferred|rejected" in body
-        assert "needs-user-decision` is not a closeable disposition" in body
+        assert "promoted`, `handled-local`, `deferred`, or `rejected`" in body
+        assert "User feedback events have terminal disposition" in body
 
 
 def test_developer_prompts_do_not_reference_handoff_close_gate_guide():
@@ -57,7 +56,7 @@ def test_run_skills_check_feedback_events_before_dependent_actions():
         assert "USER_FEEDBACK.jsonl" in body
         assert "automatic evidence from UserPromptSubmit" in body
         assert "before the next dependent action" in body
-        assert "User Feedback Disposition" in body
+        assert "`promoted`, `handled-local`, `deferred`, or `rejected`" in body
         assert "Close-time checking only catches missed feedback" in body
 
 

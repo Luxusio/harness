@@ -1,8 +1,8 @@
 # Confidence-Rated Changes
 
 Rate each change in the diff on a 1-10 confidence scale. Low-confidence changes
-are flagged explicitly in HANDOFF.md so the runtime critic knows where to focus
-verification effort.
+are flagged explicitly in the QA/UX subagent prompt or final response so
+verification effort focuses where it matters.
 
 ## Confidence Scale
 
@@ -51,10 +51,10 @@ For each change unit, assign a confidence score. Consider:
 Any change rated 6 or below MUST include:
 
 1. **Specific risk** — What exactly might go wrong
-2. **Suggested verification** — What the critic should check
+2. **Suggested verification** — What QA/UX should check
 3. **Fallback plan** — What to do if the change is wrong
 
-Write these as explicit items in HANDOFF.md under "Low-Confidence Changes":
+Pass these as explicit items to QA/UX or include them in final response under "Low-Confidence Changes":
 
 ```
 ## Low-Confidence Changes
@@ -68,5 +68,5 @@ Write these as explicit items in HANDOFF.md under "Low-Confidence Changes":
 ### Step 5: Do not artificially inflate scores
 
 A 5 is a 5. Do not round up to make the report look better. Accurate low scores
-help the runtime critic focus where it matters. An honest 5 with clear risk
+help QA focus where it matters. An honest 5 with clear risk
 description is more valuable than an inflated 8 with no detail.

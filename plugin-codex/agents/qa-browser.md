@@ -113,7 +113,7 @@ when browser QA discovers recurring harness/project friction that should be
 prevented next time: dev-server command drift, missing entry_url/port config,
 browser MCP reachability issues, brittle test data, unreliable selectors, or
 manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
-when obvious; Phase 8 writes the final summary.
+when obvious; the orchestrator decides whether to promote, defer, or reject them before close.
 
 Return verdict, summary, and transcript in your final response.
 

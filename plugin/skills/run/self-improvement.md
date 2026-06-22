@@ -160,16 +160,15 @@ signal as one of:
 - `captured` — promoted in this task to a committed artifact such as
   `plugin/skills/**`, `plugin/scripts/**`, `tests/**`,
   `doc/harness/patterns/*.md`, `doc/common/GUIDE__*.md`, or another durable
-  doc. The HANDOFF must list the committed path.
+  doc. The final response should list the committed path when relevant.
 - `rejected` — considered but intentionally not shared because it is
   task-local, noisy, outdated, personal preference, or lacks a trigger/action/
-  verification rule. The HANDOFF must give the reason.
+  verification rule. Record the reason in task state or final response.
 - `none` — no reusable learning occurred.
 
 `doc/harness/learnings.jsonl` by itself is never enough for `captured`; it is
-only the staging queue. The close gate requires HANDOFF to include
-`## Commit-backed Learnings` with `Status: none`, `Status: captured`, or
-`Status: rejected` so local-only learnings cannot disappear silently.
+only the staging queue. Before close, reusable learnings must either be promoted
+to a committed artifact or explicitly rejected/deferred with a concrete reason.
 
 ## Feedback-derived rules (user correction → readable behavior)
 
@@ -190,10 +189,10 @@ Good Tier 2 entry:
 
 When changing runtime-specific harness plugin behavior, review both the canonical `plugin/` tree and the runtime-specific tree such as `plugin-codex/`.
 
-Verify by explaining in `HANDOFF.md` which side changed and why any other side was left unchanged.
+Verify by explaining in the final response which side changed and why any other side was left unchanged.
 ```
 
-Reject feedback-derived entries when they lack a trigger, action, or verification step; when they only describe blame; or when they are task-local preferences. The close-time requirement is judgment, not forced documentation: HANDOFF records `none`, `captured`, or `rejected`. Reusable feedback that should affect all future agents must be captured in a committed artifact, not only in `learnings.jsonl`.
+Reject feedback-derived entries when they lack a trigger, action, or verification step; when they only describe blame; or when they are task-local preferences. The close-time requirement is judgment, not forced documentation. Reusable feedback that should affect all future agents must be captured in a committed artifact, not only in `learnings.jsonl`.
 
 ---
 
@@ -248,27 +247,18 @@ After promote_learnings.py, check if a retro should fire (>=3 tasks closed since
 _LAST_RETRO=$(ls -t doc/harness/retros/*.md 2>/dev/null | head -1)
 _LAST_RETRO_TS=$(stat -c %Y "$_LAST_RETRO" 2>/dev/null || echo 0)
 _TASKS_SINCE=$(python3 -c "
-import json, sys, os
-tl = 'doc/harness/timeline.jsonl'
+import os
 last_ts = int('$_LAST_RETRO_TS')
 count = 0
-if os.path.isfile(tl):
-    with open(tl) as f:
-        for ln in f:
+root = 'doc/harness/tasks'
+if os.path.isdir(root):
+    for name in os.listdir(root):
+        path = os.path.join(root, name)
+        if name.startswith('TASK__') and os.path.isdir(path):
             try:
-                e = json.loads(ln)
-                if e.get('event') == 'completed' and e.get('skill') == 'run':
-                    import datetime
-                    ts_str = e.get('ts','')
-                    if ts_str:
-                        try:
-                            from datetime import datetime, timezone
-                            t = datetime.strptime(ts_str, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
-                            if int(t.timestamp()) > last_ts:
-                                count += 1
-                        except Exception:
-                            pass
-            except Exception:
+                if int(os.path.getmtime(path)) > last_ts:
+                    count += 1
+            except OSError:
                 pass
 print(count)
 " 2>/dev/null || echo 0)
@@ -282,13 +272,9 @@ if [ "\${_TASKS_SINCE:-0}" -ge 3 ] && [ "\${HARNESS_DISABLE_RETRO:-}" != "1" ]; 
 fi
 ```
 
-**HANDOFF Auto-ran section:** Developer Phase 8 must include a section:
-```
-## Auto-ran
-- retro: <path or "(none, threshold not met)">
-- hygiene: <N warnings or "(none)">
-```
-If pipeline output is empty, emit `Auto-ran: (none, threshold not met)`.
+Report auto-run output only when it changed a committed artifact, queued a
+follow-up, or needs user attention. Do not create a handoff section just to say
+that no threshold was met.
 
 
 The script:

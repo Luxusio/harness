@@ -7,14 +7,10 @@ Loaded during Phase 4 after the plan completion audit.
 
 ## Phase 4.5–4.7: Parallel Quality Audit
 
-Create an audit directory for crash-safe agent results:
-
-```bash
-mkdir -p <task_dir>/audit
-```
-
 Spawn three agents **in parallel** — each analyzes the full diff independently
-and writes results to the audit directory (atomic write: write .tmp, then rename).
+and returns a structured final response. Do not ask audit agents to write
+extra files; subagent start receipts are hook-owned, and the agent
+final response is the only review payload the orchestrator should consume.
 Issue all three Agent calls in a single message.
 
 **Agent A: Test Coverage Audit (haiku)**
@@ -63,10 +59,12 @@ Steps:
    - **Flaky patterns**: Time-dependent assertions (Date.now, sleep), random values without seeds, order-dependent array comparisons, network calls not mocked
    - **Security enforcement**: No tests for auth guards, input sanitization, rate limiting, or permission boundaries on protected endpoints
    For each anti-pattern found: flag the test file, category, and recommended fix.
-CRITICAL: Write your full results (diagram + generated test code + anti-patterns) to:
-  <task_dir>/audit/test-coverage.md
-Use atomic write: write to test-coverage.md.tmp first, then rename to test-coverage.md.
-Return: 'Results written to <task_dir>/audit/test-coverage.md' plus a 3-line summary."
+Return a structured final response with:
+- Verdict: PASS/FAIL
+- Coverage diagram summary
+- Generated tests, with target file paths and code blocks, or NONE
+- Anti-pattern findings with severity, file:line, and recommended fix
+- Three-line summary."
 )
 ```
 
@@ -83,10 +81,11 @@ Steps:
 2. For each change unit, rate 1-10 based on complexity, testing, familiarity, integration, edge cases
 3. Build the confidence table with columns: Change, Files, Score, Risk, Mitigation
 4. For any change rated 6 or below: add specific risk, suggested verification, fallback plan
-CRITICAL: Write your full results (confidence table + low-confidence details) to:
-  <task_dir>/audit/confidence-ratings.md
-Use atomic write: write to confidence-ratings.md.tmp first, then rename.
-Return: 'Results written to <task_dir>/audit/confidence-ratings.md' plus a 3-line summary."
+Return a structured final response with:
+- Verdict: PASS/FAIL
+- Confidence table
+- Low-confidence changes with risk, suggested verification, fallback plan
+- Three-line summary."
 )
 ```
 
@@ -133,26 +132,17 @@ Format each finding as:
   Fix: recommended fix
 
 For critical/high with confidence 7+: provide regression test outline.
-For medium/low: document for HANDOFF.
+For medium/low: defer with reason in final response or create follow-up.
 For confidence 5-6: add caveat 'Medium confidence — verify this is actually an issue'.
 For confidence 3-4: only include if severity is critical/high.
 
 Time budget: 2-5 minutes.
-CRITICAL: Write your full results (findings table + fixes) to:
-  <task_dir>/audit/adversarial-findings.md
-Use atomic write: write to adversarial-findings.md.tmp first, then rename.
-
-ALSO append each CRITICAL/HIGH finding as a structured JSON line to:
-  <task_dir>/audit/adversarial-findings.jsonl
-One JSON object per line, schema:
-  {\"ts\":\"<ISO8601>\",\"severity\":\"critical|high\",\"confidence\":N,
-   \"category\":\"<taxonomy>\",\"file\":\"<path>\",\"line\":N,
-   \"pattern\":\"<one-line signature of the bug class>\",
-   \"snippet\":\"<the exact offending code line>\",
-   \"fix\":\"<one-line fix summary>\",\"task\":\"<task_id>\"}
-This evidence log feeds Tier 2 pattern promotion and cross-task reuse.
-
-Return: 'Results written to <task_dir>/audit/adversarial-findings.md' plus a 3-line summary."
+Return a structured final response with:
+- Verdict: PASS/FAIL
+- Findings table with severity, confidence, category, file:line, description, fix
+- Regression test outlines for critical/high confidence 7+ findings
+- LEARNING_CANDIDATE entries for reusable surprising patterns, or NONE
+- Three-line summary."
 )
 ```
 
@@ -211,10 +201,12 @@ Steps:
      return { unlabeledInputs: unlabeled.length, imagesWithoutAlt: noAlt.length, duplicateIds: dupIds.length };
    }
 9. Summarize: pages visited, console errors, accessibility score, network issues, visual anomalies (desktop + mobile + dark mode).
-CRITICAL: Write your full results to:
-  <task_dir>/audit/visual-smoke.md
-Use atomic write: write to visual-smoke.md.tmp first, then rename.
-Return: 'Results written to <task_dir>/audit/visual-smoke.md' plus a 3-line summary."
+Return a structured final response with:
+- Verdict: PASS/FAIL/BLOCKED_ENV
+- Pages and states checked
+- Console/network/accessibility findings with severity and file/route when known
+- Visual anomalies with screenshot references if the tool produced them
+- Three-line summary."
 )
 ```
 
@@ -256,8 +248,7 @@ Read the diff and check for OWASP Top 10 patterns:
 5. CSRF — missing anti-CSRF tokens on state-changing requests
 6. Access control — privilege escalation, IDOR, missing authorization checks
 For each finding: severity (critical/high/medium/low), file:line, remediation.
-CRITICAL: Write results to <task_dir>/audit/security-review.md
-Use atomic write. Return 3-line summary."
+Return structured findings plus a 3-line summary."
 )
 ```
 
@@ -279,8 +270,7 @@ Read the diff and check for performance anti-patterns:
 5. Memory leaks — event listeners/timers not cleaned up, closures holding references
 6. Unnecessary re-renders — React components re-rendering without prop changes
 For each finding: severity, file:line, estimated impact, fix suggestion.
-CRITICAL: Write results to <task_dir>/audit/perf-review.md
-Use atomic write. Return 3-line summary."
+Return structured findings plus a 3-line summary."
 )
 ```
 
@@ -302,8 +292,7 @@ Read the diff and check for migration safety:
 5. API contract breaks — removed fields, changed types, removed endpoints
 6. Dependency conflicts — version pin changes, peer dependency updates
 For each finding: severity, rollback strategy, safe migration approach.
-CRITICAL: Write results to <task_dir>/audit/migration-review.md
-Use atomic write. Return 3-line summary."
+Return structured findings plus a 3-line summary."
 )
 ```
 
@@ -326,8 +315,7 @@ Read the diff and check for AI-specific safety patterns:
 6. Prompt text referencing tools/capabilities that don't match actual wired-up tools
 7. Token/character limits stated in multiple places that could drift
 For each finding: severity, confidence (1-10), file:line, remediation.
-CRITICAL: Write results to <task_dir>/audit/llm-trust-review.md
-Use atomic write. Return 3-line summary."
+Return structured findings plus a 3-line summary."
 )
 ```
 
@@ -343,7 +331,8 @@ Agent(
   subagent_type="oh-my-claudecode:executor",
   prompt="You are the Red Team reviewer for <task_id>.
 Your job is NOT to re-find what other agents found. Your job is to find what they MISSED.
-Read <task_dir>/audit/ to see what was already reported. Then read the full diff.
+Use the prior audit agent summaries provided in this prompt, then read the full diff.
+If no prior summaries are provided, state that limitation and continue.
 
 Look specifically for:
 1. Issues in files that had NO findings (other agents may have skimmed them)
@@ -353,14 +342,16 @@ Look specifically for:
 5. Assumptions about data shape/size that would break at scale
 
 For each finding: severity, file:line, description, why other agents likely missed it.
-CRITICAL: Write results to <task_dir>/audit/red-team.md
-Use atomic write. Return 3-line summary."
+Return structured findings plus a 3-line summary."
 )
 ```
 
 Skip Red Team for small diffs with no critical findings — it would add latency without value.
 
-The quality synthesis agent reads all available audit files, including specialist and Red Team reports.
+The quality synthesis agent consumes the final responses from the audit,
+specialist, and Red Team agents. The orchestrator must paste or summarize those
+responses into the synthesis prompt; it must not rely on task-local report
+files.
 
 **After all agents complete — spawn quality synthesis agent:**
 
@@ -373,20 +364,18 @@ Agent(
   model="haiku",
   subagent_type="oh-my-claudecode:executor",
   prompt="You are the quality synthesis agent for <task_id>.
-Your job is to read three independent audit reports, merge them, deduplicate findings,
-and produce a unified quality assessment.
+Your job is to merge the audit agent final responses provided in this prompt,
+deduplicate findings, and produce a unified quality assessment.
 
 Steps:
-1. Read these files from <task_dir>/audit/:
-   - test-coverage.md (from test-coverage agent)
-   - confidence-ratings.md (from confidence-ratings agent)
-   - adversarial-findings.md (from adversarial-check agent)
-   - visual-smoke.md (from visual-smoke agent, if browser project)
-   - security-review.md (from security specialist, if spawned)
-   - perf-review.md (from performance specialist, if spawned)
-   - migration-review.md (from migration specialist, if spawned)
-   - llm-trust-review.md (from LLM trust specialist, if spawned)
-   If any file is missing: note the gap, continue with available results.
+1. Use the pasted final responses from:
+   - test-coverage agent
+   - confidence-ratings agent
+   - adversarial-check agent
+   - visual-smoke agent, if browser project
+   - security/performance/migration/LLM-trust specialists, if spawned
+   - Red Team, if spawned
+   If any expected response is missing: note the gap, continue with available results.
 
 2. Extract all findings from each report. For each finding, compute a fingerprint:
    {file}:{line}:{category} (or {file}:{category} if no line number).
@@ -450,20 +439,17 @@ Steps:
    - Recurring bug patterns (if any)
    - Actions: list critical/high findings that need immediate fix
 
-CRITICAL: Write your full results to:
-  <task_dir>/audit/quality-synthesis.md
-Use atomic write: write to quality-synthesis.md.tmp first, then rename.
-Return: 'Results written to <task_dir>/audit/quality-synthesis.md' plus a 3-line summary."
+Return the structured report directly."
 )
 ```
 
 **After quality synthesis completes:**
 
-1. Read `<task_dir>/audit/quality-synthesis.md`.
+1. Read the synthesis agent final response.
 2. If critical/high findings exist: fix immediately with regression tests.
-3. If test code was generated in test-coverage.md: write the test files, run tests, commit.
-4. If visual issues found in visual-smoke.md: fix critical ones (broken layout, blank page),
-   note non-critical in HANDOFF. Re-verify fixed pages in browser.
+3. If test code was generated by the test-coverage agent or synthesis response: write the test files, run tests, commit.
+4. If visual issues were reported by the visual-smoke agent or synthesis response: fix critical ones (broken layout, blank page),
+   defer non-critical items with reason in final response or follow-up. Re-verify fixed pages in browser.
 5. **Aggregate adversarial patterns:** If the synthesis found 2+ issues of the same category
    (e.g., "null input", "resource leak"), log the recurring pattern to learnings:
 
@@ -501,4 +487,4 @@ Return: list of all gaps with classification and fixes for trivial/quick items."
 )
 ```
 
-Apply trivial/quick fixes from the haiku agent. Flag judgment items in HANDOFF.md.
+Apply trivial/quick fixes from the haiku agent. Ask, defer, or create follow-ups for judgment items.

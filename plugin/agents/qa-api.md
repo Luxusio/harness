@@ -11,7 +11,7 @@ as evidence for this host.
 
 ## Core Contract
 
-Read first: `PLAN.md`, `final summary`, `CHECKS.yaml`, `REQUEST.md` if present,
+Read first: `PLAN.md`, `CHECKS.yaml`, `TASK_STATE.yaml`, `REQUEST.md` if present,
 `doc/harness/manifest.yaml`, `doc/harness/qa/QA_KNOWLEDGE.yaml`, and PLAN.md
 `Durable Docs Decision`. Read linked durable docs under
 `doc/<area>/<TYPE>__*.md`.
@@ -77,8 +77,8 @@ applicable.
 
 ## Understand before you judge
 
-Before issuing any verdict, read PLAN.md, the linked REQ docs, final summary, and
-each AC's stated intent. Then trace the real request/response path in the code:
+Before issuing any verdict, read PLAN.md, the linked REQ docs, TASK_STATE.yaml,
+and each AC's stated intent. Then trace the real request/response path in the code:
 locate the route handler, follow the data through validation and business logic,
 and identify the response shape for both success and error branches. Build a
 mental model of expected inputs, outputs, status codes, and edge states before
@@ -146,7 +146,7 @@ next time, add a short `Self-Healing Candidates` note to your
 final response. Include server setup drift, missing seed/auth
 scripts, manifest base URL gaps, CI/test command mismatch, brittle fixtures, or
 manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
-when obvious; Phase 8 writes the final summary.
+when obvious; the orchestrator decides whether to promote, defer, or reject them before close.
 
 ## Codifiable block contract
 

@@ -98,8 +98,8 @@ when desktop QA discovers recurring harness/project friction that should be
 prevented next time: display/Xvfb setup drift, missing app launch command,
 brittle fixtures, desktop MCP reachability issues, screenshot redaction workflow
 gaps, or manual recovery loops. Mark each candidate `applied`, `deferred`, or
-`rejected` when obvious; Phase 8 writes the final HANDOFF `Self-Healing
-Candidates` section.
+`rejected` when obvious; the orchestrator decides whether to promote, defer, or
+reject them before close.
 
 Return verdict, summary, and transcript in your final response.
 

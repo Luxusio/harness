@@ -3,7 +3,6 @@
 Tests the threshold check logic directly since self-improvement.md is prose/bash.
 We validate the Python logic embedded in the bash script.
 """
-import json
 import os
 import sys
 import tempfile
@@ -13,27 +12,21 @@ from datetime import datetime, timezone, timedelta
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
-def _count_tasks_since(timeline_path: str, last_retro_ts: float) -> int:
-    """Count event:completed skill:run entries in timeline newer than last_retro_ts.
+def _count_tasks_since(tasks_root: str, last_retro_ts: float) -> int:
+    """Count task directories newer than last_retro_ts.
 
     Mirrors the Python embedded in self-improvement.md retro trigger.
     """
     count = 0
-    if not os.path.isfile(timeline_path):
+    if not os.path.isdir(tasks_root):
         return 0
-    with open(timeline_path) as f:
-        for ln in f:
+    for name in os.listdir(tasks_root):
+        path = os.path.join(tasks_root, name)
+        if name.startswith("TASK__") and os.path.isdir(path):
             try:
-                e = json.loads(ln)
-                if e.get("event") == "completed" and e.get("skill") == "run":
-                    ts_str = e.get("ts", "")
-                    if ts_str:
-                        t = datetime.strptime(ts_str, "%Y-%m-%dT%H:%M:%SZ").replace(
-                            tzinfo=timezone.utc
-                        )
-                        if int(t.timestamp()) > last_retro_ts:
-                            count += 1
-            except Exception:
+                if int(os.path.getmtime(path)) > last_retro_ts:
+                    count += 1
+            except OSError:
                 pass
     return count
 
@@ -41,23 +34,18 @@ def _count_tasks_since(timeline_path: str, last_retro_ts: float) -> int:
 class TestRetroTriggerThreshold(unittest.TestCase):
     """AC-007: retro fires at >= 3 tasks since last retro."""
 
-    def _make_timeline(self, d, n_completed, days_ago_each=None):
-        """Write timeline.jsonl with n completed run events."""
-        lines = []
+    def _make_tasks(self, d, n_completed, days_ago_each=None):
+        """Create task directories with mtimes."""
+        tasks_root = os.path.join(d, "tasks")
+        os.makedirs(tasks_root)
         now = datetime.now(timezone.utc)
         for i in range(n_completed):
             offset = days_ago_each[i] if days_ago_each else i
-            ts = (now - timedelta(days=offset)).strftime("%Y-%m-%dT%H:%M:%SZ")
-            lines.append(json.dumps({
-                "skill": "run",
-                "event": "completed",
-                "ts": ts,
-                "branch": "main",
-            }))
-        path = os.path.join(d, "timeline.jsonl")
-        with open(path, "w") as f:
-            f.write("\n".join(lines) + "\n")
-        return path
+            ts = (now - timedelta(days=offset)).timestamp()
+            path = os.path.join(tasks_root, f"TASK__{i:03d}")
+            os.makedirs(path)
+            os.utime(path, (ts, ts))
+        return tasks_root
 
     def test_3_tasks_triggers_retro(self):
         """3 completed tasks since last retro should trigger."""
@@ -65,24 +53,24 @@ class TestRetroTriggerThreshold(unittest.TestCase):
             # Last retro was 10 days ago
             last_retro_ts = (datetime.now(timezone.utc) - timedelta(days=10)).timestamp()
             # 3 tasks completed in last 5 days
-            tl = self._make_timeline(d, 3, days_ago_each=[1, 2, 3])
-            count = _count_tasks_since(tl, last_retro_ts)
+            tasks_root = self._make_tasks(d, 3, days_ago_each=[1, 2, 3])
+            count = _count_tasks_since(tasks_root, last_retro_ts)
             self.assertGreaterEqual(count, 3, "Should count 3 tasks since last retro")
 
     def test_2_tasks_does_not_trigger(self):
         """Only 2 completed tasks since last retro should not trigger."""
         with tempfile.TemporaryDirectory() as d:
             last_retro_ts = (datetime.now(timezone.utc) - timedelta(days=10)).timestamp()
-            tl = self._make_timeline(d, 2, days_ago_each=[1, 2])
-            count = _count_tasks_since(tl, last_retro_ts)
+            tasks_root = self._make_tasks(d, 2, days_ago_each=[1, 2])
+            count = _count_tasks_since(tasks_root, last_retro_ts)
             self.assertLess(count, 3, "2 tasks should not trigger retro")
 
     def test_zero_tasks_no_trigger(self):
         """Zero completed tasks should not trigger."""
         with tempfile.TemporaryDirectory() as d:
             last_retro_ts = (datetime.now(timezone.utc) - timedelta(days=10)).timestamp()
-            tl = self._make_timeline(d, 0)
-            count = _count_tasks_since(tl, last_retro_ts)
+            tasks_root = self._make_tasks(d, 0)
+            count = _count_tasks_since(tasks_root, last_retro_ts)
             self.assertEqual(count, 0)
 
     def test_tasks_before_last_retro_not_counted(self):
@@ -91,21 +79,21 @@ class TestRetroTriggerThreshold(unittest.TestCase):
             # Last retro was 5 days ago
             last_retro_ts = (datetime.now(timezone.utc) - timedelta(days=5)).timestamp()
             # 5 tasks: 3 before retro (8, 9, 10 days ago), 2 after (1, 2 days ago)
-            tl = self._make_timeline(d, 5, days_ago_each=[1, 2, 8, 9, 10])
-            count = _count_tasks_since(tl, last_retro_ts)
+            tasks_root = self._make_tasks(d, 5, days_ago_each=[1, 2, 8, 9, 10])
+            count = _count_tasks_since(tasks_root, last_retro_ts)
             self.assertEqual(count, 2, "Only tasks after retro should count")
 
     def test_no_prior_retros_seeds_from_zero(self):
         """No prior retros: last_retro_ts=0 means all tasks count."""
         with tempfile.TemporaryDirectory() as d:
             last_retro_ts = 0  # No prior retros
-            tl = self._make_timeline(d, 4, days_ago_each=[1, 2, 3, 100])
-            count = _count_tasks_since(tl, last_retro_ts)
+            tasks_root = self._make_tasks(d, 4, days_ago_each=[1, 2, 3, 100])
+            count = _count_tasks_since(tasks_root, last_retro_ts)
             self.assertEqual(count, 4, "All tasks should count when no prior retro")
 
-    def test_missing_timeline_returns_zero(self):
-        """Missing timeline.jsonl should return 0."""
-        count = _count_tasks_since("/nonexistent/timeline.jsonl", 0)
+    def test_missing_tasks_root_returns_zero(self):
+        """Missing task directory root should return 0."""
+        count = _count_tasks_since("/nonexistent/tasks", 0)
         self.assertEqual(count, 0)
 
 

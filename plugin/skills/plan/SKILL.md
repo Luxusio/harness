@@ -34,7 +34,7 @@ Phase 5 (user-facing gate) stays inline below.
 - **Read actual code.** Review phases MUST read source files, diffs, and referenced code. Reasoning from plan text alone is insufficient.
 - **Never abort.** Both-voices-fail surfaces as a finding and continues. Blocked is terminal only for premise gate refusal. Never silently redirect to a shorter path. Auto-decide never redirects to interactive mid-pipeline.
 - **Auto-decide mode.** When active, resolves intermediate AskUserQuestion except premise gate and User Challenge items via the 6 Decision Principles. Replaces judgment, not analysis depth.
-- **Spawned session.** `spawned_session: true` or `HARNESS_SPAWNED=1` → force auto-decide, auto-resolve ALL AskUserQuestion (including premise gate), suppress upgrade/telemetry prompts, emit prose completion instead of waiting.
+- **Spawned session.** `spawned_session: true` or `HARNESS_SPAWNED=1` → force auto-decide, auto-resolve ALL AskUserQuestion (including premise gate), suppress upgrade/usage-stats prompts, emit prose completion instead of waiting.
 - **Sequential execution.** 0 → 1 → 2 → 3 → 4 → 5 → 6. Never parallel. Each phase completes fully before next.
 
 ## Voice

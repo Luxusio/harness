@@ -80,12 +80,6 @@ _LAKE_SEEN=$([ -f "$_MARKER_DIR/lake-intro-seen" ] && echo "yes" || echo "no")
 _ROUTING_INJECTED=$([ -f "$_MARKER_DIR/routing-injected" ] && echo "yes" || echo "no")
 _PROACTIVE_PROMPTED=$([ -f "$_MARKER_DIR/proactive-prompted" ] && echo "yes" || echo "no")
 
-# Session timeline
-_TIMELINE="$_ROOT/doc/harness/timeline.jsonl"
-_SESSION_ID="$$-$(date +%s)"
-_TEL_START=$(date +%s)
-echo '{"skill":"setup","event":"started","branch":"'"$_BRANCH"'","session":"'"$_SESSION_ID"'","runtime":"codex","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' >> "$_TIMELINE" 2>/dev/null || true
-
 # Repo mode
 _CONTRIBUTORS=$(git log --oneline --format='%ae' 2>/dev/null | sort -u | wc -l | tr -d ' ')
 [ "$_CONTRIBUTORS" -le 1 ] 2>/dev/null && _REPO_MODE="solo" || _REPO_MODE="collaborative"
@@ -178,7 +172,7 @@ After the reply, apply per-question:
   line. The emitted block includes the Durable Decision Documentation Gate:
   user-stated durable product/design/architecture/domain/workflow/implementation
   decisions are not handled until documented under `doc/` or recorded with a
-  no-doc rationale in DOC_SYNC/HANDOFF.
+  specific no-doc rationale in the PLAN durable-doc decision.
 - Routing B: `_harness_config_set routing_declined true`.
 
 Lake Intro stays a standalone information-only message above — never
@@ -213,9 +207,6 @@ if [ -d "$_ROOT/doc/harness" ]; then
   ls -t "$_ROOT/doc/changes/"*.md 2>/dev/null | head -3
   ls -dt "$_ROOT/doc/harness/tasks/TASK__"* 2>/dev/null | head -3
   [ -f "$_ROOT/doc/harness/learnings.jsonl" ] && echo "LEARNINGS: $(wc -l < "$_ROOT/doc/harness/learnings.jsonl" | tr -d ' ')"
-fi
-if [ -f "$_ROOT/doc/harness/timeline.jsonl" ]; then
-  grep '"event":"completed"' "$_ROOT/doc/harness/timeline.jsonl" 2>/dev/null | tail -1
 fi
 ```
 
@@ -444,14 +435,5 @@ Before completing, log genuine operational discoveries (would save 5+ min in fut
 mkdir -p doc/harness
 echo '{"skill":"setup","runtime":"codex","type":"operational","key":"SHORT_KEY","insight":"DESCRIPTION","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' >> doc/harness/learnings.jsonl
 ```
-
-## Telemetry
-
-```bash
-_TEL_END=$(date +%s)
-_TEL_DUR=$(( _TEL_END - _TEL_START ))
-echo '{"skill":"setup","event":"completed","runtime":"codex","branch":"'"$_BRANCH"'","outcome":"OUTCOME","duration_s":"'"$_TEL_DUR"'","session":"'"$_SESSION_ID"'","ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"}' >> "$_TIMELINE" 2>/dev/null || true
-```
-Replace `OUTCOME` with success/error/abort.
 
 ---

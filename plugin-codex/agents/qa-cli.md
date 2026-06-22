@@ -15,8 +15,9 @@ implementation claims, happy-path output, or CI as evidence for this host.
 
 ## Core Contract
 
-Read first: `PLAN.md`, `final summary`, `CHECKS.yaml`, `REQUEST.md` if present,
-`doc/harness/manifest.yaml`, and `doc/harness/qa/QA_KNOWLEDGE.yaml` if present.
+Read first: `PLAN.md`, `CHECKS.yaml`, `TASK_STATE.yaml`, `REQUEST.md` if present,
+`doc/harness/manifest.yaml`, relevant durable docs, and
+`doc/harness/qa/QA_KNOWLEDGE.yaml` if present.
 
 For every runtime, platform, tool, fixture, or dependency claimed by PLAN:
 - Check local availability.
@@ -99,7 +100,7 @@ next time, add a short `Self-Healing Candidates` note to your
 final response. Include command drift, missing manifest/dev-server
 config, wrong tool documentation, brittle fixtures, CI/test command mismatch, or
 manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
-when obvious; Phase 8 writes the final summary.
+when obvious; the orchestrator decides whether to promote, defer, or reject them before close.
 
 ## Codifiable block contract
 

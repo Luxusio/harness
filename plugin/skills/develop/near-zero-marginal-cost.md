@@ -32,7 +32,7 @@ Read every file in the diff. For each changed function/method:
 |----------|---------------|--------|
 | **Trivial** (<1 min) | Add null check, add catch, add empty guard | Fix immediately |
 | **Quick** (1-5 min) | Add error path handling, add boundary check | Fix immediately |
-| **Judgment** (>5 min or design decision) | Architectural change, API redesign | Flag in HANDOFF |
+| **Judgment** (>5 min or design decision) | Architectural change, API redesign | Ask the user, defer with reason, or create follow-up |
 
 ### Step 3: Fix trivial and quick items
 
@@ -56,9 +56,9 @@ For items that would take more than 5 minutes or require design decisions:
 | No retry on transient DB errors | db/client.ts:18 | Retry strategy decision needed | 20min |
 ```
 
-### Step 5: Record results in HANDOFF
+### Step 5: Report results
 
-Add to HANDOFF.md:
+Include this in final response when relevant:
 
 ```
 ## Near-Zero Marginal Cost Check

@@ -15,7 +15,7 @@ capability/task-shape routing; the user does not need to request delegation.
 "User did not ask for delegation" is an invalid skip rationale. Sequential
 execution needs a declared dependency, unavailable Agent tool, or the narrow
 small-task exception below, and any sequential fallback after a matched fanout
-trigger must be backed by `parallel-trigger-skipped` evidence.
+trigger must be stated in the lane table before editing.
 Do not wait for the user to request delegation. User request is not a condition
 for parallel routing.
 
@@ -39,8 +39,8 @@ Whenever two or more verification, judgment, or executor calls have no dependenc
 Concretely:
 - Issue every parallel `Agent(...)` call as a separate tool-use block in one assistant turn.
 - Collect every return value before mutating shared state (PROGRESS.md, CHECKS.yaml).
-  Executors write per-AC result files under `<task_dir>/audit/`; the coordinator
-  is the only writer to PROGRESS.md and CHECKS.yaml.
+  Executors return status, changed paths, and blockers in their final response;
+  the coordinator is the only writer to PROGRESS.md and CHECKS.yaml.
 - A `TeamCreate` + N `Task` worker spawns: emit `TeamCreate` in turn 1; emit all N `Task` calls in turn 2 — never split worker spawns across multiple turns.
 
 **Inline spawn template** (copyable):
@@ -87,10 +87,9 @@ Component-independence is a property of the PLAN AC matrix, not of the diff. The
 ### Small-task edge case
 
 If the matrix says fanout but total edit volume is trivial (<10 lines combined,
-~15s total work), sequential is acceptable only with a concrete skip record:
-AC ids, estimated lines, estimated runtime, and `parallel-trigger-skipped` with
-`reason:"small-task"`. The default is still parallel — sequential is the
-evidenced opt-out, not the default. If the user explicitly asks for aggressive
+~15s total work), sequential is acceptable only with a concrete lane-table
+reason: AC ids, estimated lines, estimated runtime, and `reason:"small-task"`.
+The default is still parallel. If the user explicitly asks for aggressive
 subagent use or faster parallel execution, this opt-out is disabled.
 
 ### Invalid skip rationales
@@ -100,8 +99,8 @@ capability plus task shape: available `Agent(...)`, independent ACs, applicable
 QA lenses, or independent audit workers. Do not use `user-did-not-ask`, "user
 did not ask for delegation", "not requested", or equivalent wording to justify
 inline execution. If the trigger matches and the run goes sequential, record
-`parallel-trigger-skipped` with the concrete blocker: declared dependency,
-unavailable Agent tool, or small-task estimate.
+the concrete blocker in the lane table: declared dependency, unavailable Agent
+tool, or small-task estimate.
 
 ### Lane table requirement
 
@@ -112,9 +111,8 @@ Before implementation, emit this table and use it as the routing contract:
 
 `Route` is `Agent(...)`, `sequential-prelude`, `sequential-dependent`, or
 `sequential-small-task`. Two or more independent `Agent(...)` rows trigger one
-parallel spawn batch. `sequential-small-task` requires logged evidence:
-`parallel-trigger-skipped` with `reason:"small-task"`, `estimated_lines`, and
-`estimated_seconds`.
+parallel spawn batch. `sequential-small-task` requires lane-table values:
+`reason:"small-task"`, `estimated_lines`, and `estimated_seconds`.
 
 ---
 
@@ -138,33 +136,19 @@ The OMC source for this pattern lives at `/tmp/omc-research/skills/team/SKILL.md
 
 ---
 
-## Audit hook
+## Learning capture
 
-Every fanout decision MUST log one row to `doc/harness/learnings.jsonl` so the rule's 6-month value is verifiable post hoc. Prose triggers rot — instrumentation is the only honest signal that the new threshold earns its keep.
+Do not log per-call routing history. `learnings.jsonl` is for reusable facts,
+surprising discoveries, user corrections, and repeated friction, not usage stats
+that a fanout trigger fired or was skipped. If fanout behavior reveals a durable
+threshold problem, capture the smallest reusable lesson with observed impact and
+promote it to a committed skill, test, or pattern doc before close.
 
-```bash
-_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
-echo '{"ts":"'"$_TS"'","type":"parallel-trigger","source":"develop","trigger":"<row from Parallelization Triggers table>","ac_count":<N>,"phase":"<phase>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
-```
-
-Also log skips:
-- `parallel-trigger-skipped` with reason `small-task` for the volume edge case,
-  including AC ids, `estimated_lines`, and `estimated_seconds`.
-- `parallel-trigger-skipped` with reason `declared-dependency` when an apparent
-  fanout lane is blocked by an explicit PLAN matrix dependency, including AC ids
-  and the dependency edge.
-- `parallel-trigger-skipped` with reason `agent-tool-unavailable` when the
-  runtime lacks the required Agent primitive, including the missing primitive and
-  affected lanes.
-- `helper-extract-guard-fired` when the extract trigger would have fired but the extract AC was missing from PLAN.
-
-Never log or accept `parallel-trigger-skipped` with a user-request reason.
-Whether the user asked for delegation is not evidence.
-
-The retro skill (and any future 6-month audit) reads these rows to decide whether the trigger threshold is still right — too many fires with low per-fire savings means narrow the threshold; too few fires means broaden further or rebalance the cap.
+Never accept a user-request reason for skipping delegation. Whether the user
+asked for delegation is not evidence.
 
 ---
 
 ## Failure-mode recap
 
-Documented in `SKILL.md` Phase 3.0 (rollback protocol) and in `quality-audit-pipeline.md` (atomic-write pattern for parallel audit results). The conventions above assume both are honored — this sub-file does NOT restate them.
+Documented in `SKILL.md` Phase 3.0 (rollback protocol) and in `quality-audit-pipeline.md` (parallel audit agents return structured final responses). The conventions above assume both are honored — this sub-file does NOT restate them.

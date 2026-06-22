@@ -236,11 +236,9 @@ from a bare rejection into a helpful nudge.
 
 All scripts under `plugin/scripts/`. Stdlib only (PIL optional for canary).
 
-| Script | Purpose | State file (gitignored) |
-|--------|---------|------------------------|
-| `health.py` | Weighted composite 0–10 score | `doc/harness/health-history.jsonl` |
-| `benchmark.py` | Numeric metrics vs baseline, WARN/REGR thresholds | `doc/harness/benchmark/{baseline.json,history.jsonl}` |
-| `audit.py` | Generic categorized audit (CSO-style) | `doc/harness/audits/<category>-history.jsonl` |
+| Script | Purpose | Output |
+|--------|---------|--------|
+| `health.py --dry-run` | Weighted composite 0–10 score | stdout |
 | `canary.py` | Visual regression baseline + sha/pixel diff | `doc/harness/visual-baselines/<task-id>/` |
 | `search_learnings.py` | Keyword/type/skill/since search over Tier 3 | reads `doc/harness/learnings.jsonl` |
 | `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/<task-id>.md` |

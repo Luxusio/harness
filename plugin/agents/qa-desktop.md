@@ -38,7 +38,7 @@ ACs `BLOCKED_ENV` with the exact missing display/tool/command/data/token/platfor
 
 ## Understand before you judge
 
-Read PLAN.md, the linked REQ/AC docs, final summary, and REQUEST.md before forming
+Read PLAN.md, the linked REQ/AC docs, TASK_STATE.yaml, and REQUEST.md before forming
 any verdict. Know what the change is supposed to do at the GUI level: which
 windows are expected, what widget states should appear, what the user interaction
 path is, and what the error states look like. Then drive the real GUI and trace
@@ -136,7 +136,7 @@ your final response. Include display/Xvfb setup drift, missing app
 launch command, brittle fixtures, desktop MCP reachability issues, screenshot
 redaction workflow gaps, or manual recovery loops. Mark each candidate
 `applied`, `deferred`, or `rejected` when obvious; Phase 8 writes the final
-final summary.
+final response.
 
 ## Verdict
 

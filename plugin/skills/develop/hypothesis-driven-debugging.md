@@ -63,9 +63,11 @@ Once a hypothesis is confirmed:
 3. If it passes, re-run the full verification suite.
 4. If new failures appear, start a new hypothesis cycle for those.
 
-### Step 5: Document the finding
+### Step 5: Report reusable findings
 
-Add to HANDOFF.md under "Debugging Notes":
+If the finding is useful beyond the current fix, capture it in `learnings.jsonl`
+or a committed durable artifact. Otherwise mention the root cause in the final
+response:
 
 ```
 ## Debugging Notes

@@ -14,7 +14,7 @@ fi
 [ "${HARNESS_SPAWNED:-}" = "1" ] && _SPAWNED="true"
 ```
 
-If spawned: set `auto_decide: true` in `PLAN_SESSION.json`, auto-resolve ALL AskUserQuestion (including premise gate), suppress upgrade/telemetry prompts, emit prose completion at end. Log: `[spawned-mode] Auto-decide ON.`
+If spawned: set `auto_decide: true` in `PLAN_SESSION.json`, auto-resolve ALL AskUserQuestion (including premise gate), suppress upgrade/usage-stats prompts, emit prose completion at end. Log: `[spawned-mode] Auto-decide ON.`
 
 ## Phase 0.0: Session Recovery (resume case)
 

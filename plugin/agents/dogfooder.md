@@ -148,12 +148,12 @@ High-impact + small-effort items first. This becomes input for the next plan cyc
 ### Step 7: Trigger re-planning (if high-impact findings exist)
 
 If any finding is `impact: high`:
-- Write the suggestion list to `<task_dir>/DOGFOOD.md`
+- Return the suggestion list in your final response.
 - In the summary, recommend: "High-impact findings detected. Consider running
   `Skill(harness:plan)` to address items #1, #2, ... before shipping."
 
 If all findings are medium/low:
-- Write to `<task_dir>/DOGFOOD.md`
+- Return the suggestion list in your final response.
 - Summary: "Product is usable. Suggestions logged for future iteration."
 
 ## What you do NOT do

@@ -14,7 +14,7 @@ implementation claims or CI as evidence for this host.
 
 ## Core Contract
 
-Read first: `PLAN.md`, `final summary`, `CHECKS.yaml`, `REQUEST.md` if present,
+Read first: `PLAN.md`, `CHECKS.yaml`, `TASK_STATE.yaml`, `REQUEST.md` if present,
 `doc/harness/manifest.yaml`, `doc/harness/qa/QA_KNOWLEDGE.yaml`, and PLAN.md
 `Durable Docs Decision`. Read linked durable docs under
 `doc/<area>/<TYPE>__*.md`.
@@ -119,7 +119,7 @@ next time, add a short `Self-Healing Candidates` note to your
 final response. Include server setup drift, missing seed/auth
 scripts, manifest base URL gaps, CI/test command mismatch, brittle fixtures, or
 manual recovery loops. Mark each candidate `applied`, `deferred`, or `rejected`
-when obvious; Phase 8 writes the final summary.
+when obvious; the orchestrator decides whether to promote, defer, or reject them before close.
 
 ## Codifiable block contract
 

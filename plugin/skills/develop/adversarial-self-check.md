@@ -35,8 +35,8 @@ For each issue found, classify severity:
 |----------|----------|--------|
 | **Critical** | Security hole, data loss, crash in production path | Fix immediately, add regression test |
 | **High** | Error path that produces wrong result silently | Fix immediately, add regression test |
-| **Medium** | Edge case with degraded behavior | Fix if trivial, otherwise flag in HANDOFF |
-| **Low** | Cosmetic, unlikely scenario | Flag in HANDOFF only |
+| **Medium** | Edge case with degraded behavior | Fix if trivial, otherwise defer with reason or create follow-up |
+| **Low** | Cosmetic, unlikely scenario | Final response or follow-up only |
 
 ### Step 3: Fix critical and high findings
 
@@ -45,7 +45,7 @@ test. Do NOT defer critical or high findings — they are bugs you just introduc
 
 ### Step 4: Document remaining findings
 
-For medium/low findings not fixed, add to HANDOFF.md under "Adversarial Review":
+For medium/low findings not fixed, include them in final response or a follow-up:
 
 ```
 ## Adversarial Review Findings
@@ -61,5 +61,4 @@ For medium/low findings not fixed, add to HANDOFF.md under "Adversarial Review":
 This entire check should take 2-5 minutes. It is NOT a full security audit — it is
 a quick sanity pass to catch obvious issues that fresh eyes on the diff can spot.
 
-If no findings: write "Adversarial review: clean — no critical/high findings" in
-HANDOFF.md and move on.
+If no findings: move on without writing an artifact.

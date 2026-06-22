@@ -26,7 +26,7 @@ These are mechanical issues with objectively correct fixes:
 | Duplicate logic | Same validation in 3 places | Extract to shared function |
 | Missing cleanup | Temp file created but never deleted | Add cleanup in finally block |
 
-### ASK (requires human judgment, flag in HANDOFF)
+### ASK (requires human judgment, ask/defer/follow-up)
 
 These need design decisions — reasonable developers disagree:
 
@@ -63,7 +63,7 @@ Rules for auto-fixes:
 
 ### Step 3: Flag judgment items
 
-For each ASK item, add to HANDOFF.md under "Judgment Items":
+For each ASK item, ask the user when it blocks the task, defer it with reason, or create a follow-up:
 
 ```
 ## Judgment Items (not auto-fixed)
@@ -119,7 +119,7 @@ AskUserQuestion:
                     widen scope, re-examine the test, etc.>
   Options:
     - A) Invoke investigate skill for structured root-cause analysis
-    - B) Defer — mark AC/test as DEFERRED in HANDOFF with details
+    - B) Defer — mark AC/test as deferred with details
     - C) Extend budget (allow 2 more attempts — user must explicitly approve)
     - D) Revert the changes and re-plan
 ```

@@ -43,7 +43,7 @@ If tests fail:
    | Tier | Criteria | Action |
    |------|----------|--------|
    | **GATE** (blocks completion) | Regression tests, core functionality tests, tests covering changed codepaths | Must fix. Counts toward 3-cycle limit. |
-   | **PERIODIC** (log only) | Style/lint tests on unrelated code, slow E2E for unrelated features, known-flaky tests | Log in HANDOFF. Don't block. Don't count toward fix limit. |
+   | **PERIODIC** (log only) | Style/lint tests on unrelated code, slow E2E for unrelated features, known-flaky tests | Note in final response or follow-up task. Don't block. Don't count toward fix limit. |
 
    To determine tier: does the failing test cover code that this task changed?
    - Yes → GATE. No → PERIODIC (unless it's a new test we wrote — then GATE).
@@ -54,7 +54,7 @@ If tests fail:
    | Ownership | Criteria | Action |
    |-----------|----------|--------|
    | **OWN** (our code broke it) | Failing test covers codepaths modified by this task's diff | Fix within 3-cycle limit. Uses investigate skill if needed. |
-   | **PRE-EXISTING** (was broken before) | Failing test covers code NOT touched by this task, AND the same test fails on the base branch | Log in HANDOFF. Do NOT count toward fix limit. Do NOT invoke investigate. |
+   | **PRE-EXISTING** (was broken before) | Failing test covers code NOT touched by this task, AND the same test fails on the base branch | Note in final response or follow-up task. Do NOT count toward fix limit. Do NOT invoke investigate. |
 
    To determine ownership:
    - Get changed files: `git diff --name-only <base>...HEAD`
@@ -76,9 +76,9 @@ For each confirmed PRE-EXISTING failure:
    git log --format="%an (%ae)" -1 -- <source-file-under-test>
    ```
    If different people, prefer the production code author — they likely introduced the regression.
-   Note the author in HANDOFF for awareness.
+   Note the author in the final response or follow-up task for awareness.
 2. Log to learnings: `{"type":"pre-existing-failure","key":"TEST_NAME","insight":"Fails on base branch: <reason>","task":"<task_id>"}`
-2. Note in HANDOFF under "Pre-existing Failures" with: test name, base branch result, suspected cause.
+2. Note the test name, base branch result, and suspected cause in the final response or a follow-up task.
 3. If the pre-existing failure is in a module this task also touches: note the interaction risk.
    "Pre-existing test X fails in billing module. Our change touches billing — verify our change doesn't worsen it."
 4. Recommend: "Consider a separate task to fix pre-existing failure in {module}. Run `Skill(harness:plan)` to create one."
@@ -111,7 +111,7 @@ This closes the loop: Phase 7 discovers flaky tests, learnings stores them, Phas
    git log --oneline -10 -- <affected-files>
    ```
    If the same file has 3+ fix commits in recent history, this is an **architectural smell**,
-   not a simple bug. Flag in HANDOFF: "Recurring failures in <file> — consider architectural review."
+   not a simple bug. Flag in final response or a follow-up task: "Recurring failures in <file> — consider architectural review."
    Recurring bugs in the same area indicate the root cause is likely a layer above the symptom.
 
    **External pattern search:** If the failure doesn't match any known pattern above,
@@ -134,7 +134,7 @@ This closes the loop: Phase 7 discovers flaky tests, learnings stores them, Phas
    1. Ensure dev server is running (`curl -s -o /dev/null -w '%{http_code}' <entry_url>`).
    2. Navigate to the failing page/route.
    3. Capture failure state:
-      - Screenshot → `<task_dir>/audit/screenshots/debug-failure-<N>.png`
+      - Screenshot, inspected in the current browser tool response
       - Console errors via evaluate_script
       - Network requests via list_network_requests (check for 4xx/5xx)
    4. DOM inspection:
@@ -163,7 +163,7 @@ This closes the loop: Phase 7 discovers flaky tests, learnings stores them, Phas
      Options:
        - A) Re-examine the failing test itself (maybe the test is wrong)
        - B) Invoke investigate skill for structured root-cause analysis
-       - C) Skip this test, mark as known issue in HANDOFF
+      - C) Skip this test, create a follow-up or mark the AC deferred with reason
      Context:
        - Hypotheses tested: <list>
        - Evidence: <summary>
@@ -181,7 +181,7 @@ This closes the loop: Phase 7 discovers flaky tests, learnings stores them, Phas
      Options:
        - A) Proceed anyway (user accepts wider scope)
        - B) Narrow the fix to <=5 files and re-attempt
-       - C) Defer fix, document in HANDOFF as known issue
+      - C) Defer fix, create a follow-up or mark the AC deferred with reason
      Context: files affected: <list>
    ```
 
@@ -205,7 +205,7 @@ AskUserQuestion:
   Options:
     - A) Re-examine from scratch with fresh eyes (re-read error, ignore prior assumptions)
     - B) Invoke investigate skill for structured root-cause analysis
-    - C) Skip this test, document in HANDOFF as unresolved
+    - C) Skip this test, create a follow-up or mark the AC deferred with reason
 ```
 Before asking, do this prep:
 1. Re-read the error output from scratch (ignore prior assumptions).
@@ -234,13 +234,13 @@ Use the investigate results for the final (3rd) fix attempt. If still failing: u
 AskUserQuestion:
   Question: "All 3 fix cycles exhausted for <test name>. How should we proceed?"
   Options:
-    - A) Close task with DONE_WITH_CONCERNS, document failure in HANDOFF
+    - A) Close task with DONE_WITH_CONCERNS, mark the AC deferred or create a follow-up
     - B) Create a new investigate task for this specific failure
     - C) Extend fix budget (allow 2 more cycles)
   Context: <triage table summary>
 ```
 
-Include the triage table in HANDOFF.md under "Test Failure Triage". Note whether investigate was invoked.
+Include the triage table in the final response or follow-up task. Note whether investigate was invoked.
 
 ## Step 2.5: Plan Verification Auto-Run
 
@@ -255,7 +255,7 @@ browser-based checks, and `browser_qa_supported: true` in manifest, auto-run tho
    - Verify expected elements exist (from PLAN.md verification description).
    - Check for console errors.
    - If interaction steps specified (click, fill, submit): execute them.
-4. **Log results** in HANDOFF under "Plan Verification Results":
+4. **Report results** in final response under "Plan Verification Results":
    ```
    | Step | Expected | Actual | Status |
    |------|----------|--------|--------|
@@ -311,12 +311,12 @@ close-gate rule before task_close is allowed:
 |----------|-----------|--------|
 | critical | ≥ 7 | **hard-block close.** Must fix or defer via `AskUserQuestion`. |
 | high | ≥ 8 | **hard-block close.** Must fix or defer via `AskUserQuestion`. |
-| high | 5–7 | WARN — record in HANDOFF "Adversarial Findings"; close allowed. |
-| medium / low | any | log in HANDOFF; close allowed. |
+| high | 5–7 | WARN — report as deferred or follow-up; close allowed. |
+| medium / low | any | final response or follow-up only; close allowed. |
 | any | < 5 | appendix only; do not surface at gate. |
 
 A blocking finding can be cleared by either (a) fixing it (re-run gate) or
-(b) explicit user deferral with justification captured in HANDOFF. Silent
+(b) explicit user deferral with justification captured in task state or final response. Silent
 deferral is not permitted.
 
 ## Step 4: Acceptance Ledger — promote or reopen
@@ -330,7 +330,7 @@ directly — always call the CLI:
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
   --task-dir doc/harness/tasks/<task_id>/ \
   --ac AC-00X --status passed \
-  --evidence "<test name | file:line | HANDOFF ref>"
+  --evidence "<test name | file:line>"
 
 # AC's own-code tests failed under verification — reopen
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
@@ -345,9 +345,9 @@ Transition rules:
   auto-increments. Loop back to Phase 7 fix cycle; re-promote to
   `implemented_candidate` after a successful fix, then `passed` on next gate.
 - `open -> deferred` only when the user has explicitly deferred an AC — record
-  the reason in `--note` and list it in HANDOFF.
+  the reason in `--note` and mention it in final response.
 
 **Close gate:** The task MUST NOT close while any AC remains in
 `open | implemented_candidate | failed`. Every AC must be `passed` or
 `deferred` before `task_close`. High-reopen ACs (`reopen_count >= 3`) should
-surface in HANDOFF under a "Reopened ACs" section so the user sees churn.
+surface in final response so the user sees churn.
