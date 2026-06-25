@@ -73,6 +73,13 @@ path and keep the fallback reason in task state or the final response;
 `task_close` will still require a real subagent-start receipt for
 verification-gated work when `spawn_agent` was available.
 
+Subagent lifecycle cleanup: track every `agent_id` returned by `spawn_agent`.
+After a spawned agent completes, fails, is cancelled, or is no longer needed,
+call `close_agent` when that tool is available. Before final response,
+`task_close`, or handoff, close every agent this workflow spawned unless the
+user explicitly asked to leave a still-running agent open. Completed agents can
+continue to count toward the concurrency limit until closed.
+
 Use inline execution as the fallback for roles that normally benefit from independence only when `spawn_agent` is unavailable or the work is not actually independent. If independent work runs sequentially, state the concrete blocker and affected lanes in the lane table or final response; vague reasons such as lack of user request are invalid. Do not create a runtime fallback document just to record routing history.
 
 ## Sub-file

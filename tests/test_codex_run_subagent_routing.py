@@ -29,6 +29,9 @@ def test_codex_run_uses_capability_first_subagent_routing():
     assert "spawn_agent {" in body
     assert "SUBAGENT_RECEIPTS.jsonl" in body
     assert "Do not call a harness receipt tool" in body
+    assert "track every `agent_id` returned by `spawn_agent`" in body
+    assert "`close_agent`" in body
+    assert "Completed agents can\ncontinue to count toward the concurrency limit until closed" in body
     assert 'agent_type: "harness:qa-cli"' in body
     assert 'agent_type: "worker"' in body
     assert 'agent_type: "explorer"' in body
@@ -53,6 +56,16 @@ def test_claude_run_and_develop_document_workflow_subagent_authorization():
         assert "Explicit user invocation or approval of this harness repo-mutating workflow" in body
         assert "authorizes the subagents required by the workflow" in body
         assert "ordinary non-harness work" in body
+
+
+def test_run_and_develop_document_subagent_lifecycle_cleanup():
+    for path in (CODEX_RUN, CODEX_DEVELOP, CLAUDE_RUN, CLAUDE_DEVELOP):
+        body = _text(path)
+        assert "`close_agent`" in body
+        assert "final response" in body
+        assert "`task_close`" in body
+        assert "Completed agents can" in body
+        assert "count toward the concurrency limit until closed" in body
 
 
 def test_codex_run_documents_qa_subagent_call_shape():

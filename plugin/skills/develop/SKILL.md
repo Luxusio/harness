@@ -14,6 +14,13 @@ gates. Examples include "use harness", "run/continue/close the harness task",
 native `/goal`, or clear approval to proceed with a harness task. This workflow
 authorization does not apply to read-only answers or ordinary non-harness work.
 
+When the runtime exposes explicit close tools such as `close_agent`, track each
+spawned agent id and close it after the result is consumed, the agent completes
+or fails, it is cancelled, or it is no longer needed. Before final response,
+`task_close`, or handoff, do not leave completed agents open unless the user
+explicitly asked to keep a still-running agent alive. Completed agents can
+continue to count toward the concurrency limit until closed.
+
 ## Voice
 
 Develop-orchestrator voice: opinionated, concrete, builder-to-builder. The develop skill is the entry point for the implement → audit → verify → handoff loop — sub-files inherit voice rules but the parent sets the tone.
