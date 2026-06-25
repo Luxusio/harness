@@ -136,7 +136,7 @@ Run the native Goal queue migration before routing-block injection. This
 migrates pre-native queue state from `doc/harness/autopilot.yaml` to
 `doc/harness/goal-queue.json`, archives the legacy state file, removes stale
 `Default agent is harness` lines, and replaces any old marked `## Harness
-routing` block with the current Goal child-task queue block.
+routing` block with the current Goal-or-direct-task routing block.
 
 ```bash
 python3 "${CLAUDE_PLUGIN_ROOT}/scripts/goal_queue_migrate.py" --repo "$(pwd)"
@@ -157,7 +157,7 @@ text = path.read_text(encoding="utf-8") if path.exists() else ""
 block = """\
 ## Harness routing
 <!-- harness:routing-injected -->
-- Run the full cycle (plan → develop → verify → close) → native `/goal`, then start or resume the next Goal child task
+- Run the full cycle (plan → develop → verify → close) → native `/goal` for explicit goals, or let the agent open/resume a harness task for plain repo-mutating requests
 - Bootstrap harness in a new project / repair existing → `Skill(harness:setup)`
 - Plan-only requests → sync/create Goal and stop after the internal plan phase if the user explicitly asks not to implement
 - Implement an approved PLAN.md / develop only → resume the active Goal child task through the internal develop path

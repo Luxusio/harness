@@ -113,7 +113,8 @@ def _build_goal_block(repo_root: str, synced_goal: dict | None = None) -> str:
             status += f" objective={objective[:80]}"
     return (
         "[harness-goal] native goal? get_goal->goal_start; "
-        "no child: task_start->goal_add_task; next: goal_next_task."
+        "plain mutating request? task_start; no child: task_start->goal_add_task; "
+        "next: goal_next_task."
         + status
     )
 

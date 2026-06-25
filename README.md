@@ -210,7 +210,7 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 |-------|-------------|
 | `/harness:setup` | Bootstrap harness in target project |
 
-Normal usage is `/harness:setup` once per repository, then native `/goal` for both bounded work and broad product-building work. Goal owns child tasks directly: focused work can stay as one child task, while broad work grows the Goal queue as bugs, pages, domains, or follow-up gaps are discovered. `run`, `plan`, `develop`, `goal-queue`, and the four review sub-skills (`plan-ceo-review`, `plan-design-review`, `plan-eng-review`, `plan-devex-review`) are internal orchestration details and are not invoked directly.
+Normal usage is `/harness:setup` once per repository, then either native `/goal` for explicit/broad objectives or a plain repo-mutating request that the agent routes into a harness task. Goal owns child tasks directly when a Goal is active: focused work can stay as one child task, while broad work grows the Goal queue as bugs, pages, domains, or follow-up gaps are discovered. `run`, `plan`, `develop`, `goal-queue`, and the four review sub-skills (`plan-ceo-review`, `plan-design-review`, `plan-eng-review`, `plan-devex-review`) are internal orchestration details and are not invoked directly.
 
 Existing repositories from the pre-native Goal queue model should run setup
 Repair/Upgrade, or run the migration directly:
@@ -222,8 +222,8 @@ python3 "${CLAUDE_PLUGIN_ROOT}/scripts/goal_queue_migrate.py" --repo "$(pwd)"
 The migration is idempotent. It converts `doc/harness/autopilot.yaml` into
 `doc/harness/goal-queue.json`, archives the legacy state under
 `doc/harness/legacy/`, removes stale `Default agent is harness` lines, and
-replaces old marked `## Harness routing` blocks with the Goal child-task queue
-block.
+replaces old marked `## Harness routing` blocks with the Goal-or-direct-task
+routing block.
 
 ## Plugin structure
 

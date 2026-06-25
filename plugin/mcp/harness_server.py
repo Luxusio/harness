@@ -48,6 +48,9 @@ def _initialize_instructions(runtime: str) -> str:
         "Use goal_start/goal_context/goal_add_task/goal_next_task/goal_finish "
         "for native /goal orchestration. A Goal owns a child task queue; create "
         "or attach child tasks as scope expands. "
+        "When no native goal context is active, a plain repo-mutating request "
+        "may open or resume a harness task directly with task_start/task_context; "
+        "hooks do not create tasks automatically. "
         "Protocol tool names are bare: goal_start, goal_context, "
         "goal_add_task, goal_next_task, goal_finish, task_start, "
         "task_context, task_verify, task_close, task_blocked, and write_plan. "
@@ -817,7 +820,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "additionalProperties": False},
      "handler": handle_goal_finish},
     {"name": "task_start", "title": "Create or resume a task",
-     "description": "Create task scaffolding (7-field TASK_STATE) and return fresh context. Pass execution_mode='micro' for explicit no-plan develop->verify->close mode; verification remains mandatory.",
+     "description": "Create task scaffolding (7-field TASK_STATE) and return fresh context. Use directly for plain repo-mutating requests when no native goal context is active. Pass execution_mode='micro' for explicit no-plan develop->verify->close mode; verification remains mandatory.",
      "inputSchema": {"type": "object", "properties": {
          "task_dir": {"type": "string"}, "task_id": {"type": "string"},
          "slug": {"type": "string"}, "request_file": {"type": "string"},

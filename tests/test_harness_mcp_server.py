@@ -197,6 +197,8 @@ class HarnessMcpServerTests(unittest.TestCase):
         instructions = response["result"]["instructions"]
         self.assertIn("Goal-first control plane", instructions)
         self.assertIn("goal_start", instructions)
+        self.assertIn("plain repo-mutating request", instructions)
+        self.assertIn("hooks do not create tasks automatically", instructions)
         self.assertIn("bare tool names", instructions)
         self.assertIn("Codex callers should use these bare tool names directly", instructions)
         self.assertIn("get_goal", instructions)
@@ -235,6 +237,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         instructions = response["result"]["instructions"]
         self.assertIn("Goal-first control plane", instructions)
         self.assertIn("goal_context", instructions)
+        self.assertIn("plain repo-mutating request", instructions)
         self.assertIn("Protocol tool names are bare", instructions)
         self.assertIn("Claude Code may display callable tools with a runtime prefix", instructions)
         self.assertNotIn("7 tools", instructions)

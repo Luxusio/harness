@@ -6,10 +6,12 @@ owner: harness
 
 # Native Goals
 
-Harness treats native `/goal` as the user-facing orchestration entry point.
-Users do not choose orchestration modes; Goal owns the request and the harness
-state decides whether one child task is enough or whether the child-task queue
-must grow.
+Harness treats native `/goal` as the explicit-goal orchestration entry point.
+Users do not choose orchestration modes; Goal owns explicit broad requests and
+the harness state decides whether one child task is enough or whether the
+child-task queue must grow. Plain repo-mutating requests do not need to be
+re-issued as `/goal`; the agent may open or resume a harness task directly when
+the canonical loop is needed.
 
 ## Model
 
@@ -21,6 +23,10 @@ or follow-up slices are discovered.
 The Goal state and child tasks are the durable source of truth. The optional
 Goal queue runner is an implementation helper for long-running child-task
 queues; it is not a separate user-facing mode.
+
+When no native Goal is active, task state is still valid for plain requests.
+Those tasks follow the same plan, develop, verify, and close gates, but are not
+attached to a Goal unless the user or agent later establishes one.
 
 ## Runtime Split
 
@@ -54,5 +60,5 @@ repositories:
   `TASK__goal-queue-*`. Migration metadata records which policy was used, and
   the old state file is archived under `doc/harness/legacy/`.
 - A marked `## Harness routing` block in `CLAUDE.md` is replaced with the
-  current native Goal child-task queue block. Stale `Default agent is harness`
+  current Goal-or-direct-task routing block. Stale `Default agent is harness`
   lines are removed.

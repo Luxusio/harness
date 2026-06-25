@@ -67,6 +67,8 @@ def test_readme_user_skill_table_excludes_internal_skills():
     legacy_command = "| `/harness:" + "".join(map(chr, [97, 117, 116, 111, 112, 105, 108, 111, 116])) + "` |"
     assert legacy_command not in readme
     assert "native `/goal`" in readme
+    assert "plain repo-mutating request" in readme
+    assert "agent routes into a harness task" in readme
     assert "| `/harness:plan` |" not in readme
     assert "| `/harness:develop` |" not in readme
     assert "internal orchestration details" in readme
@@ -93,4 +95,7 @@ def test_claude_routing_does_not_expose_internal_skills_directly():
 
     claude = routing_docs[0].read_text(encoding="utf-8")
     assert "native `/goal`" in claude
+    assert "plain repo-mutating requests" in claude
+    assert "open or resume a harness task directly" in claude
+    assert "authorizes the subagents required by that workflow" in claude
     assert "review lenses are internal sub-skills" in claude

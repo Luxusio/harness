@@ -10,12 +10,14 @@ updated: 2026-04-15
 ## Harness routing
 <!-- harness:routing-injected -->
 
-**Default = native Goal.** User-facing `/goal` owns the work. Harness hooks and
-MCP sync the native goal to a harness Goal and child tasks; do not route normal
+**Default = harness task routing.** Native `/goal` owns explicit goals and broad
+work. Plain repo-mutating requests are also valid task intake: the agent opens
+or resumes a harness task when the canonical loop is needed. Hooks inject
+context; they do not create tasks automatically. Do not route normal
 repo-mutating requests through legacy `run` / `autopilot` commands.
 
-- Repo-mutating intent (feature, fix, refactor, behavior change) → native Goal
-  plus harness child task flow.
+- Repo-mutating intent (feature, fix, refactor, behavior change) → sync native
+  Goal when present, otherwise open/resume a harness task directly.
 - Broad goals grow child tasks as bugs, pages, domains, or follow-up gaps are
   discovered.
 - Focused goals can remain a single child task.
@@ -43,7 +45,8 @@ repo-mutating requests through legacy `run` / `autopilot` commands.
 - Only one repo-mutating task may hold write focus at a time. A second mutating request creates or resumes a separate task that stays queued until the user switches focus or the current task closes.
 - Short approvals such as `ㅇㅇ ㄱ` approve only the last explicit transition the harness proposed; they never authorize skipping task creation, planning, or verify gates.
 - When an answer-lane exchange turns into repo mutation, make the lane switch
-  explicit and sync/open the native Goal child task before implementation.
+  explicit and sync/open the native Goal child task or a direct harness task
+  before implementation.
 
 # Template sync rule (CRITICAL)
 - This repo IS the harness plugin source. Runtime lives under `plugin/`. Every change to runtime behavior (paths, hook schemas, agent definitions, skill logic, script APIs) MUST stay internally consistent across `plugin/` — grep for the constant/path before landing the change.

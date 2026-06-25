@@ -8,6 +8,12 @@ allowed-tools: Read, Glob, Grep, Bash, Edit, Write, Agent, Skill, AskUserQuestio
 
 Implement the plan for a harness task. Reads PLAN.md, implements changes, verifies completeness, captures durable learnings, and closes through MCP.
 
+Explicit user invocation or approval of this harness repo-mutating workflow
+authorizes the subagents required by the workflow's verification and review
+gates. Examples include "use harness", "run/continue/close the harness task",
+native `/goal`, or clear approval to proceed with a harness task. This workflow
+authorization does not apply to read-only answers or ordinary non-harness work.
+
 ## Voice
 
 Develop-orchestrator voice: opinionated, concrete, builder-to-builder. The develop skill is the entry point for the implement → audit → verify → handoff loop — sub-files inherit voice rules but the parent sets the tone.

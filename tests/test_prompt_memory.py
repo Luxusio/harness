@@ -106,6 +106,7 @@ class TestPromptMemory(unittest.TestCase):
         self.assertIn("PLAN durable-doc rationale", r.stdout)
         self.assertIn("[harness-goal]", r.stdout)
         self.assertIn("get_goal->goal_start", r.stdout)
+        self.assertIn("plain mutating request? task_start", r.stdout)
 
     def test_non_harness_repo_is_silent(self):
         with tempfile.TemporaryDirectory() as tmp:

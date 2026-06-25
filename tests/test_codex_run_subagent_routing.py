@@ -5,6 +5,7 @@ REPO = Path(__file__).resolve().parents[1]
 CODEX_RUN = REPO / "plugin-codex" / "internal-skills" / "run" / "SKILL.md"
 CLAUDE_RUN = REPO / "plugin" / "skills" / "run" / "SKILL.md"
 CODEX_DEVELOP = REPO / "plugin-codex" / "internal-skills" / "develop" / "SKILL.md"
+CLAUDE_DEVELOP = REPO / "plugin" / "skills" / "develop" / "SKILL.md"
 GENERAL_PATTERNS = REPO / "doc" / "harness" / "patterns" / "general.md"
 
 
@@ -16,6 +17,9 @@ def test_codex_run_uses_capability_first_subagent_routing():
     body = _text(CODEX_RUN)
 
     assert "Codex Subagent Routing" in body
+    assert "Treat explicit user invocation or approval of a harness repo-mutating workflow" in body
+    assert "authorization to use the subagents required by that workflow" in body
+    assert "ordinary\nnon-harness work" in body
     assert "Route from the current session tools and the task shape" in body
     assert "not from whether the\nuser explicitly requested delegation" in body
     assert '"The user did not ask for parallel\nagents" is not a valid reason' in body
@@ -32,6 +36,23 @@ def test_codex_run_uses_capability_first_subagent_routing():
     assert "Use inline execution as the fallback" in body
     assert "state the concrete blocker and affected lanes" in body
     assert "vague reasons such as lack of user request are invalid" in body
+
+
+def test_codex_develop_documents_workflow_subagent_authorization():
+    body = _text(CODEX_DEVELOP)
+
+    assert "Harness workflow authorization covers required subagents" in body
+    assert "explicit user invocation or approval of a harness repo-mutating workflow" in body
+    assert "authorization to use the subagents required by that workflow" in body
+    assert "ordinary non-harness work" in body
+
+
+def test_claude_run_and_develop_document_workflow_subagent_authorization():
+    for path in (CLAUDE_RUN, CLAUDE_DEVELOP):
+        body = _text(path)
+        assert "Explicit user invocation or approval of this harness repo-mutating workflow" in body
+        assert "authorizes the subagents required by the workflow" in body
+        assert "ordinary non-harness work" in body
 
 
 def test_codex_run_documents_qa_subagent_call_shape():

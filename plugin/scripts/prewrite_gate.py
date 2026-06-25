@@ -345,7 +345,7 @@ _RULE_NEXT_ACTION = {
     "C-02-plan-first": ("Skill('harness:plan', '<task_id>')",
                         "plan-skill",
                         "plugin/CLAUDE.md § 4 Plan-first rule"),
-    "invalid-active": ("Start a native /goal to create or resume a Goal child task",
+    "invalid-active": ("Open or resume a harness task; use native /goal when an explicit Goal is intended",
                        "harness-goal",
                        "plugin/CLAUDE.md § 6 Auto-routing"),
     "C-05-protected-artifact": ("",  # populated dynamically by callers via owner
@@ -590,13 +590,13 @@ def main():
             return 0
         human = (
             "No active task. Source writes require the canonical loop. "
-            "Start a native /goal and let harness create or resume a Goal child task first."
+            "Open or resume a harness task first; use native /goal when an explicit Goal is intended."
         )
         _deny("no-active-task", file_path, "plan-skill", human, repo_root)
         return 0
 
     if not (active_dir and os.path.isdir(active_dir) and active_dir.startswith(tasks_dir)):
-        human = "Active task points to invalid path. Start a native /goal to create a new Goal child task."
+        human = "Active task points to invalid path. Open or resume a harness task before source writes."
         _deny("invalid-active", file_path, "plan-skill", human, repo_root)
         return 0
 

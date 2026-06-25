@@ -21,6 +21,13 @@ Orchestrate the full harness development cycle for a task.
 
 ## Codex Subagent Routing
 
+Treat explicit user invocation or approval of a harness repo-mutating workflow
+as authorization to use the subagents required by that workflow's verification
+and review gates. Examples include "use harness", "run/continue/close the
+harness task", native `/goal`, or clear approval to proceed with a harness task.
+This workflow authorization does not apply to read-only answers or ordinary
+non-harness work.
+
 Route from the current session tools and the task shape, not from whether the
 user explicitly requested delegation. "The user did not ask for parallel
 agents" is not a valid reason to skip `spawn_agent`. Do not wait for the user
@@ -79,6 +86,11 @@ Direct, terse. Status updates, not narration. "Phase N done." not "I have comple
 ## Flow
 
 Execute phases in strict order. Each phase must complete before the next begins. On any phase failure: stop, report, ask how to proceed.
+
+Plain repo-mutating requests are valid task intake. Do not require the user to
+re-issue a clear feature, fix, refactor, behavior change, or durable process/doc
+request as `/goal`. If no active task can be resolved, create or resume the
+harness task yourself and continue through this flow.
 
 ### Task-pack continuation
 

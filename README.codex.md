@@ -42,7 +42,7 @@ See [`doc/harness/runtime-matrix.md`](doc/harness/runtime-matrix.md) for the ful
 - Core loop: `plan → develop → verify → close`
 - Shared MCP server (same `harness_server.py` as Claude)
 - Shared Python scripts via `HARNESS_PLUGIN_ROOT` env
-- `setup`, native `/goal` orchestration, Goal child-task queues, `plan` (degraded), `develop` (sequential), `qa-cli`, `qa-api` (after AC-003 ports land in your install)
+- `setup`, plain repo-mutating request routing, native `/goal` orchestration, Goal child-task queues, `plan` (degraded), `develop` (sequential), `qa-cli`, `qa-api` (after AC-003 ports land in your install)
 - Hooks (prompt/context/safety only; Codex does not use Stop hooks for loop control)
 
 ## First-run walkthrough
@@ -50,7 +50,10 @@ See [`doc/harness/runtime-matrix.md`](doc/harness/runtime-matrix.md) for the ful
 ```bash
 cd <your project>
 
-# Start a Goal. Codex reads native goal context, then syncs it through harness goal_start.
+# Plain request: the agent recognizes repo mutation and opens/resumes a task.
+codex exec 'fix the flaky test in tests/auth/' < /dev/null
+
+# Or start an explicit Goal. Codex reads native goal context, then syncs it through harness goal_start.
 codex exec '/goal fix the flaky test in tests/auth/' < /dev/null
 
 # Watch it walk plan -> develop -> verify -> close.

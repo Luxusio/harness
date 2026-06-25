@@ -8,7 +8,7 @@ updated: 2026-06-12
 # Auto-loop primitive — native `/goal`과 harness `stop_gate.py`
 
 ## 한 줄 요약
-**현재 사용자-facing 진입점은 native `/goal`이다.** Harness는 Goal을 durable state에 동기화하고, 각 Goal child task의 plan → develop → verify → close 루프는 `plugin/scripts/stop_gate.py`가 close-gate를 감지해 자동 재개시킨다.
+**native `/goal`은 명시적 Goal 진입점이고, plain mutating request는 agent가 task로 열 수 있다.** Harness는 Goal을 durable state에 동기화하고, 각 Goal child task 또는 direct task의 plan → develop → verify → close 루프는 `plugin/scripts/stop_gate.py`가 close-gate를 감지해 자동 재개시킨다.
 
 ## 동작 메커니즘 비교
 
@@ -27,7 +27,7 @@ updated: 2026-06-12
 7. `/goal clear` 또는 `/clear`로 취소.
 
 ### harness `stop_gate.py`
-1. 사용자가 native `/goal <objective>` 입력 → harness Goal state가 생성/동기화되고, 필요한 경우 `task_start` + `goal_add_task`가 `doc/harness/tasks/.active` 마커를 만든다.
+1. 사용자가 native `/goal <objective>` 입력 → hook이 harness Goal state를 생성/동기화한다. 이후 agent가 Goal context를 보고 필요한 경우 `task_start` + `goal_add_task`로 `doc/harness/tasks/.active` 마커를 만든다. Plain repo-mutating request에서도 hook이 task를 자동 생성하지 않으며, agent가 필요성을 판단해 `task_start`로 direct task를 연다.
 2. `plugin/hooks/hooks.json` Stop 엔트리에 등록된 `python3 plugin/scripts/stop_gate.py`가 매 turn 종료 시 실행.
 3. `stop_gate.py:77-151`이 active task 마커 확인 → `emit_compact_context`로 `missing_for_close` 계산:
    - PLAN.md 없음, HANDOFF.md 없음, qa-browser evidence 없음, `runtime_verdict ≠ PASS` 등.

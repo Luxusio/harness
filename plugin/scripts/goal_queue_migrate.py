@@ -19,7 +19,7 @@ DEFAULT_AGENT_RE = re.compile(r"^- Default (agent|operating agent) is harness\s*
 
 ROUTING_BLOCK = """## Harness routing
 <!-- harness:routing-injected -->
-- Run the full cycle (plan -> develop -> verify -> close) -> native `/goal`, then start or resume the next Goal child task
+- Run the full cycle (plan -> develop -> verify -> close) -> native `/goal` for explicit goals, or let the agent open/resume a harness task for plain repo-mutating requests
 - Bootstrap harness in a new project / repair existing -> `Skill(harness:setup)`
 - Plan-only requests -> sync/create Goal and stop after the internal plan phase if the user explicitly asks not to implement
 - Implement an approved PLAN.md / develop only -> resume the active Goal child task through the internal develop path
