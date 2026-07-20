@@ -27,6 +27,8 @@ try:
         current_session_id,
         now_iso,
         record_subagent_receipt,
+        extract_qa_verdict,
+        review_diff_fingerprint,
         resolve_active_task_dir,
     )
 except Exception:  # pragma: no cover - imported only inside harness scripts
@@ -43,6 +45,12 @@ except Exception:  # pragma: no cover - imported only inside harness scripts
 
     def record_subagent_receipt(task_dir: str, receipt: dict[str, Any]) -> dict[str, Any]:
         return {}
+
+    def extract_qa_verdict(value: str) -> str:
+        return ""
+
+    def review_diff_fingerprint(task_dir: str, state=None) -> str:
+        return ""
 
     def append_conversation_entry(task_dir: str, **kwargs: Any) -> bool:
         return False
@@ -188,6 +196,7 @@ def _diagnostic_record(
         "payload_keys": keys,
         "updated_at": now_iso(),
         "updated_ts": ts,
+        "diff_fingerprint": review_diff_fingerprint(task_dir),
     }
     transcript = _payload_value(payload, "agent_transcript_path", "transcript_path")
     if transcript:
@@ -244,6 +253,7 @@ def register_subagent_start(
         "started_at": now_iso(),
         "updated_at": now_iso(),
         "updated_ts": ts,
+        "diff_fingerprint": review_diff_fingerprint(task_dir),
     }
 
     def upsert(data: dict[str, Any]):
@@ -265,6 +275,7 @@ def register_subagent_start(
                 "agent_id": aid,
                 "agent_type": _agent_type(payload),
                 "summary": "subagent start hook observed",
+                "diff_fingerprint": result.get("diff_fingerprint") or "",
                 "transcript_path": _payload_value(payload, "agent_transcript_path", "transcript_path"),
             },
         )
@@ -311,6 +322,35 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
         return target
 
     result = _with_registry_lock(repo_root, mark)
+    try:
+        final_message = result.get("last_assistant_message") or ""
+        verdict = extract_qa_verdict(final_message)
+        if result.get("status") == "done" and result.get("task_dir"):
+            started_fingerprint = result.get("diff_fingerprint") or ""
+            if (
+                str(result.get("agent_type") or "").lower().replace("_", "-").find("review") >= 0
+                and started_fingerprint
+                and started_fingerprint != review_diff_fingerprint(result.get("task_dir") or "")
+            ):
+                verdict = "PENDING"
+                final_message = (final_message + "\nReview invalidated: source changed while reviewer was running.").strip()
+            completion = record_subagent_receipt(
+                result.get("task_dir") or "",
+                {
+                    "source": "subagent_stop_hook",
+                    "status": "completed",
+                    "agent_id": result.get("id") or aid,
+                    "agent_type": result.get("agent_type") or _agent_type(payload),
+                    "verdict": verdict or "UNKNOWN",
+                    "summary": final_message,
+                    "diff_fingerprint": started_fingerprint,
+                    "transcript_path": result.get("transcript_path") or "",
+                },
+            )
+            if completion.get("receipt_id"):
+                result["completion_receipt_id"] = completion["receipt_id"]
+    except Exception:
+        pass
     try:
         if result.get("status") == "done" and result.get("last_assistant_message"):
             append_conversation_entry(

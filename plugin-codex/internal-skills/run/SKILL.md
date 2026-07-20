@@ -14,7 +14,7 @@ Orchestrate the full harness development cycle for a task.
 
 > **Codex runtime notes** (delta from Claude):
 > - Claude's `Skill("harness:plan", task_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. Effect is identical (plan -> develop -> verify -> close), but the chain is sequential prose, not tool calls.
-> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. For QA/review, `spawn_agent` is mandatory when available: the orchestrator must not self-author a PASS while skipping an available independent subagent. Codex PreToolUse hooks record subagent starts in `SUBAGENT_RECEIPTS.jsonl`; do not call a receipt writer or critic writer yourself. If `spawn_agent` is unavailable, run the role methodology inline and state the fallback in task state or final response only when it affects verification.
+> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. Check the deferred tool catalog (for example `ALL_TOOLS`) before declaring `spawn_agent` unavailable. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. For QA/review, `spawn_agent` is mandatory when available: the orchestrator must not self-author a PASS while skipping an available independent subagent. Codex lifecycle hooks record starts and observed completions in `SUBAGENT_RECEIPTS.jsonl`; do not call a receipt writer or critic writer yourself. If `spawn_agent` is unavailable after discovery, run the role methodology inline and state the fallback in task state or final response only when it affects verification.
 > - MCP tool names on Codex use bare form (`task_start`, `task_verify`, `task_close`) — not Claude-prefixed form. Where this skill mentions a prefixed name, read it as the bare form.
 > - `${CLAUDE_PLUGIN_ROOT}` is not injected on Codex. Use `${HARNESS_PLUGIN_ROOT}` (set by the Codex plugin install).
 > - AskUserQuestion (Phase 4 FAIL retry) is conversational prose on Codex — emit the question + options, read the reply from the next user turn.
@@ -70,7 +70,7 @@ The Codex PreToolUse hook records each `spawn_agent` start automatically in
 `SUBAGENT_RECEIPTS.jsonl`. Do not call a harness receipt tool and do not write
 critic verdict artifacts. If no subagent was spawned, use the inline fallback
 path and keep the fallback reason in task state or the final response;
-`task_close` will still require a real subagent-start receipt for
+`task_close` will still require a real completed QA PASS receipt for
 verification-gated work when `spawn_agent` was available.
 
 Subagent lifecycle cleanup: track every `agent_id` returned by `spawn_agent`.
@@ -172,7 +172,7 @@ to interpret user intent.
 
 ### Phase 4: Verify (QA — capability-routed on Codex)
 
-Read `doc/harness/manifest.yaml` for project type. On Codex, choose the appropriate QA lens and route it by current capability: `spawn_agent` when available, inline methodology only as fallback. If `spawn_agent` is available, the QA lens MUST run as a subagent; the orchestrator must not invent a PASS from its own context. Also route applicable UX review lenses for user-facing surfaces. Verification is recognized by hook-recorded subagent starts in `SUBAGENT_RECEIPTS.jsonl`; findings come from the subagent final response.
+Read `doc/harness/manifest.yaml` for project type. On Codex, choose the appropriate QA lens and route it by current capability: discover deferred tools first, use `spawn_agent` when available, and use inline methodology only as fallback. If `spawn_agent` is available, the QA lens MUST run as a subagent; the orchestrator must not invent a PASS from its own context. Also route applicable UX review lenses for user-facing surfaces. Verification is recognized by fresh hook-recorded QA completions in `SUBAGENT_RECEIPTS.jsonl`; findings and the explicit verdict come from the subagent final response. A start entry alone cannot pass verification.
 
 **Strategy selection:**
 - **qa-browser** — required when `manifest.qa.browser_qa_supported: true` AND the diff contains frontend files (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). On Codex, check the actual session tool surface first. If browser tools are available, route the qa-browser lens through `spawn_agent` when available; otherwise read `plugin-codex/agents/qa-browser.md` and run that methodology inline, including real page navigation/interactions/screenshots where the tools support it. If browser QA is required but no browser tool is available, the dev server cannot be reached, or a required browser setup is impossible, return `BLOCKED_ENV` with the exact blocker instead of fabricating a PASS.
@@ -189,8 +189,8 @@ Read `doc/harness/manifest.yaml` for project type. On Codex, choose the appropri
 When QA and UX lenses both apply, use `spawn_agent` to run them in parallel
 where available; otherwise run the UX methodology inline after QA. UX lenses
 read `plugin-codex/agents/ux-<lens>.md` and return findings in their final
-response. The hook-recorded subagent start is the close-gate verification
-signal; no UX critic artifact is written.
+response. QA completion receipts are the close-gate verification signal; no
+UX critic artifact is written.
 
 Order: desktop branch before `type: cli` fallback so a desktop app declared as `type: cli` still routes to qa-desktop.
 
@@ -204,9 +204,9 @@ spawn_agent {
 }
 ```
 
-After spawning QA/UX, run `task_verify` with `reconcile_acs: true`. The verify
-step reads `SUBAGENT_RECEIPTS.jsonl`, promotes only `status: open` checks when a
-subagent-start receipt exists, and leaves failed/deferred ACs to explicit
+After awaiting QA/UX, run `task_verify` with `reconcile_acs: true`. The verify
+step reads `SUBAGENT_RECEIPTS.jsonl`, promotes only `status: open` checks when
+all required QA completion receipts report PASS, and leaves failed/deferred ACs to explicit
 `update_checks.py` handling. `task_verify` returns a `subagent_receipts` summary
 so missing independent QA/UX calls are visible before close.
 
@@ -251,6 +251,13 @@ If blocked: report `missing_for_close`, fix the stated gate, retry.
 If success: run self-improvement pipeline (see `self-improvement.md` in the
 Claude tree) before emitting the completion report.
 
+For harness-source changes, develop Phase 7.8 installs the verified payload
+before this close attempt. Do not defer installation until after close. If the
+already-running MCP/hook process still reports a pre-install receipt gap, keep
+the task pending and request a new thread; do not write receipts by hand. On
+resume, the root installer is idempotent and may be run again after confirming
+the diff still has fresh review+QA PASS.
+
 If this run belongs to an active task pack, mark the item closed with
 `python3 ${HARNESS_PLUGIN_ROOT}/scripts/task_pack_runner.py close --task <slug>`.
 If the runner prints another `next:` item, start or queue that task before a
@@ -265,10 +272,11 @@ slice unless the Goal is done, blocked/stopped by user or environment, or the
 Goal queue budget/cap has been reached.
 
 For this harness plugin source repo, successful repo-mutating development is
-not complete at task close. After post-close self-improvement returns `none` or
-`queued`, commit the completed diff and run `python3 install.py --force` before
-the final response, unless the user explicitly says not to. Include the commit
-hash and force-install result in the completion report.
+not complete at task close. Phase 7.8 must already have run the verified
+auto-install helper after the last source edit and fresh QA. After
+post-close self-improvement returns `none` or `queued`, commit the completed diff
+before the final response unless the user explicitly says not to. Include
+the commit hash and pre-close force-install result in the completion report.
 
 ## Mandatory Follow-up Continuation
 

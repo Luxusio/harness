@@ -79,9 +79,9 @@ Route work to the cheapest sufficient model. Inline below; full rationale in sub
 | Work | Model |
 |------|-------|
 | Implementation (Phase 3) | inherit |
-| Confidence ratings (4.6) | inherit |
-| Adversarial review (4.7) | **cross-model** — Opus→Sonnet, Sonnet→Haiku (different blind spots) |
-| Everything else mechanical | haiku (test-coverage tracing, edge-case scan, completion audit, runtime smoke, visual smoke) |
+| Balanced code review (6.6) | independent highest-available reviewer |
+| Conditional security review (6.6) | independent security reviewer |
+| Everything else mechanical | haiku (test-coverage tracing, completion audit, runtime smoke, visual smoke) |
 
 ## Flow
 
@@ -236,6 +236,12 @@ Declare allowed / test / forbidden paths in PROGRESS.md. Before each file edit:
    batches, wait for all sibling executor result files, then merge progress once.
    Skip ACs in `completed_acs`.
 2. **Follow existing patterns.** Smallest coherent diff. No speculative features.
+   Every sequential implementation and `harness:ac-worker` follows the
+   minimum-sufficient ladder from `plugin/agents/developer.md`: trace first,
+   then no change → reuse → stdlib → platform/framework → installed dependency
+   → smallest clear local expression → minimum new code. Never trade away
+   current validation, auth, transactions, concurrency safety, cleanup,
+   security, accessibility, tests, or requested behavior for fewer lines.
 
 **PROGRESS.md after each AC:**
 
@@ -282,7 +288,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
 
 **Per-AC test run:** each executor runs its own targeted tests for the AC it owns. `git diff --name-only HEAD~1` → for each changed source, find test files that import/reference it (mirror path or import search) → run only those. If no tests exist for changed module, write one (Phase 3.5 rule). If PLAN.md specifies per-AC verify commands, prefer those. For parallel AC batches, targeted tests run inside the sibling executor contexts before the coordinator touches PROGRESS.md or CHECKS.yaml.
 
-**Delegation rule (C-18 / Verification delegation).** Browser MCP tools (`mcp__chrome-devtools__*`) MUST be delegated to `harness:qa-browser` — the gate blocks main-session calls. Bash test runners (`pytest`, `npm test`, `pnpm test`, `vitest`, `cargo test`, `go test`, …) are allowed inline only for small targeted per-AC runs; full-suite verification MUST be delegated to qa-* agents. Spawn every applicable lens (`qa-cli`, `qa-api`, `qa-browser`, `qa-desktop`) in one assistant message and let each lens run its commands in its own context. Claude/Codex hooks record each subagent start in `SUBAGENT_RECEIPTS.jsonl`; `task_verify` reads that receipt as the verification signal. See `plugin/CLAUDE.md` § 8c.
+**Delegation rule (C-18 / Verification delegation).** Browser MCP tools (`mcp__chrome-devtools__*`) MUST be delegated to `harness:qa-browser` — the gate blocks main-session calls. Bash test runners (`pytest`, `npm test`, `pnpm test`, `vitest`, `cargo test`, `go test`, …) are allowed inline only for small targeted per-AC runs; full-suite verification MUST be delegated to qa-* agents. Spawn every applicable lens (`qa-cli`, `qa-api`, `qa-browser`, `qa-desktop`) in one assistant message, let each lens run its commands in its own context, and await every lens. Claude/Codex hooks record lifecycle events in `SUBAGENT_RECEIPTS.jsonl`; `task_verify` requires fresh completed explicit PASS verdicts. See `plugin/CLAUDE.md` § 8c.
 
 Per-AC test failures → fix immediately. These are free; only Phase 7 full-suite failures count toward the 3-cycle limit.
 
@@ -344,23 +350,12 @@ For PARTIAL / NOT DONE, classify cause: scope-cut / context-exhaustion / misunde
 
 ### Phase 4.5–4.8: Quality Audit Pipeline
 
-Read `quality-audit-pipeline.md` in full. Runs parallel agents (test-coverage haiku, confidence-ratings inherit, adversarial cross-model, visual-smoke haiku browser-only) + conditional specialists (security / perf / migration / LLM-trust) based on diff scope, then a quality synthesis agent that deduplicates and scores.
-
-**Diff scope detection** (routes specialists):
-```bash
-git diff --name-only | while read f; do
-  case "$f" in
-    *.tsx|*.jsx|*.css|*.scss|*.html|*.vue|*.svelte) echo "SCOPE_FRONTEND=true" ;;
-    *auth*|*session*|*token*|*password*|*permission*|*guard*) echo "SCOPE_AUTH=true" ;;
-    *migration*|*schema*|*db/*|*migrate*) echo "SCOPE_MIGRATIONS=true" ;;
-    *api*|*endpoint*|*graphql*|*rest*|*openapi*) echo "SCOPE_API=true" ;;
-  esac
-done | sort -u
-```
-
-**Adaptive gating:** if a specialist has been dispatched 3+ times with 0 findings, auto-skip. Security and migration are never gated (insurance). Only gate performance.
-
-**Red Team (conditional):** spawned only when diff ≥ 200 lines or any specialist reported critical. Job: find what the first pass MISSED.
+Read `quality-audit-pipeline.md` in full. Phase 4.5 gathers coverage, visual,
+migration/contract, LLM-trust, and proportional performance inputs before the
+final checkpoint. The old generic adversarial, line-count Red Team, and quality
+synthesis agents are replaced by the mandatory balanced review gate in Phase
+6.6. Canonical code/security routing comes from `task_context`
+`required_review_lenses`, which checks paths and diff content.
 
 **Phase 4.85 Coverage Synthesis** — use the coverage diagram from the audit
 agent final response to update tests directly. Do not create a separate test
@@ -400,11 +395,23 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 - Use the current quality score to decide whether to continue fixing or proceed.
   Do not write a project stats series for per-task scores.
 
+### Phase 6.6: Independent Code Review Gate
+
+Read `quality-audit-pipeline.md` § Phase 6.6. Call `task_context`, spawn every
+required read-only review lens in parallel, await explicit verdicts, and require
+fresh `REVIEW_RECEIPTS.jsonl` PASS for the current HEAD and worktree
+fingerprint. Send only `FIX_NOW` findings to the original minimum-sufficient
+implementer. Any edit loops through focused tests/checkpoint and all required
+reviewers again. Do not start Phase 7 QA until review PASS.
+
 ### Phase 7: Verification Gate
 
 Read `verification-gate.md` in full. Delegates full-suite test commands from PLAN.md to all applicable qa-* agents in parallel, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit with investigate-skill escalation on cycle 3.
 
 **Main session MUST spawn the appropriate qa-* lens for full-suite verification (Verification delegation, C-18).** The gate hard-enforces browser MCP calls and the develop contract hard-enforces full-suite delegation. Bash test runners remain allowed inline only for targeted per-AC runs and debug reruns. Heavy full-suite execution and background process state belong in qa-* isolated contexts. Let the qa-* lens execute, then run `task_verify`; the hook-recorded `SUBAGENT_RECEIPTS.jsonl` entry is the verification signal.
+
+QA must be spawned after Phase 6.6 PASS; a QA run started before the latest
+review PASS is stale evidence and cannot close the task.
 
 For user-facing changes, also spawn the applicable ux-* lens (`ux-cli`,
 `ux-api`, `ux-browser`, or `ux-desktop`) when manifest support and touched-path
@@ -505,6 +512,29 @@ PY
 ```
 
 `SKIP_DOGFOOD` short-circuits the spawn; `RUN_DOGFOOD` proceeds to the Agent call above. The predicate intentionally errs toward running the dogfooder when the intersection is non-empty even by one file — a false positive is cheaper than a missed user-facing regression. On TASK_STATE.yaml missing or parse error, the predicate emits empty → SKIP_DOGFOOD (safe default; a dogfooder skip is recoverable, a wrong-files dogfood run is noise).
+
+### Phase 7.8: Harness source auto-install (post-QA, pre-close)
+
+When the repository being changed is the harness plugin source itself (root
+`install.py` plus `plugin/` and `plugin-codex/` are present), a terminal fresh
+review+QA PASS MUST immediately run:
+
+```bash
+python3 plugin/scripts/install_verified.py \
+  --task-dir doc/harness/tasks/<task_id>
+```
+
+This is part of completion, not a suggestion. Run it after the last source
+edit and verification, before `task_close`, so stale installed hooks cannot
+prevent the task from reaching the close gate. Capture the installer exit code
+and runtime summaries. The trusted helper verifies canonical harness identity,
+fresh review+QA receipts, HEAD/worktree freshness, and a fingerprint-scoped
+success marker before it invokes `python3 install.py --force`. A failed install blocks completion; never claim the
+source is deployed. Do not rerun installation for docs-only edits after this
+step. The current process may retain already-loaded MCP/hooks, so report when a
+new session is required without forging receipts. The same successful
+fingerprint is skipped under a task-local lock. Skip only when the user
+explicitly opts out of installation.
 
 ### Phase 8: Close and final response
 

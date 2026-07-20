@@ -13,9 +13,9 @@ Signalling contract:
     a broken ``_lib`` cannot freeze the session.
 
 Escape hatch: ``HARNESS_SKIP_PREWRITE=1`` → one-shot allow + log ``gate-bypass``.
-Dormant-repo fail-open: if no .active pointer exists AND tasks_dir has no
-  open (non-closed/stale/archived) task, the gate returns 0 silently.
-  Users who have harness residue but aren't mid-flow are not blocked.
+Dormant-repo behavior follows manifest strictness. Strict-compliance repos
+  deny source writes until task_start establishes the canonical loop. Other
+  repos remain fail-open when no task is active.
 """
 from __future__ import annotations
 
@@ -43,6 +43,7 @@ try:
         read_state,
         current_session_id,
         is_harness_enabled_repo,
+        _manifest_bool,
     )
 except Exception:
     # _lib unavailable: fail-open. `|| true` would mask an ImportError exit
@@ -60,6 +61,8 @@ PROTECTED_ARTIFACTS = {
     "CHECKS.yaml": "plan-skill-or-update_checks",
     "AUDIT_TRAIL.md": "plan-skill",
     "SUBAGENT_RECEIPTS.jsonl": "subagent-start-hook",
+    "REVIEW_RECEIPTS.jsonl": "review-lifecycle-hook",
+    "INSTALL_RECEIPT.json": "verified-install-helper",
     "CONVERSATION.md": "conversation-hook",
 }
 
@@ -70,6 +73,8 @@ PROTECTED_ARTIFACT_HUMAN = {
     "CHECKS.yaml": "plan-skill (initial) + scripts/update_checks.py (updates)",
     "AUDIT_TRAIL.md": "plan-skill",
     "SUBAGENT_RECEIPTS.jsonl": "Codex/Claude subagent-start hook",
+    "REVIEW_RECEIPTS.jsonl": "Codex/Claude review lifecycle hooks",
+    "INSTALL_RECEIPT.json": "scripts/install_verified.py",
     "CONVERSATION.md": "Codex/Claude conversation hooks",
 }
 
@@ -370,6 +375,8 @@ def _owner_to_next_action(owner: str) -> str:
         return _tool_hint("write_plan", _runtime_name())
     if "subagent-start-hook" in o:
         return "Spawn the required subagent; the runtime hook records SUBAGENT_RECEIPTS.jsonl"
+    if "review-lifecycle-hook" in o:
+        return "Spawn and await the required reviewer; lifecycle hooks record REVIEW_RECEIPTS.jsonl"
     return ""
 
 
@@ -584,9 +591,12 @@ def main():
 
     active_dir = resolve_active_task_dir(repo_root)
     if not active_dir:
-        # Dormant-repo guard: if no open tasks exist, the repo isn't mid-flow
-        # (only harness residue) — fail-open rather than deny every source edit.
-        if not _has_open_tasks(tasks_dir):
+        # Strict-compliance repositories cannot bypass the task/QA close gate
+        # merely because this is the first write of a new request.
+        strict = _manifest_bool(
+            repo_root, "capabilities", "strict_compliance_requires_delegation"
+        )
+        if not strict and not _has_open_tasks(tasks_dir):
             return 0
         human = (
             "No active task. Source writes require the canonical loop. "

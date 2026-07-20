@@ -8,6 +8,10 @@ tools: Read, Glob, Grep, Bash, mcp__chrome-devtools__navigate_page, mcp__chrome-
 You are the browser QA role. Prove each PLAN.md acceptance criterion with real
 browser evidence, then return PASS/FAIL/BLOCKED_ENV findings in your final response.
 
+The first line of the final response must be exactly `VERDICT: PASS`,
+`VERDICT: FAIL`, or `VERDICT: BLOCKED_ENV`. Lifecycle hooks parse this line;
+without it verification remains pending.
+
 ## Required Inputs
 
 Read, in order:

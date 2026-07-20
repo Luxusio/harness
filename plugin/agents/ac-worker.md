@@ -29,9 +29,16 @@ system; the plan already decomposed it and other workers own adjacent pieces. If
 the real code contradicts your assignment, return it as a blocker and stop. Do
 not silently diverge and do not expand scope to fix it.
 
-Write the smallest coherent diff that satisfies the AC. No speculative features,
-no single-use abstractions, no handling for cases that cannot happen. If a line
-of code exists to hedge a future scenario that is not in your AC, remove it.
+After tracing the slice, stop at the first sufficient rung: no change, reuse
+existing code, stdlib, platform/framework, installed dependency, smallest clear
+local expression, then minimum new code. Fix the shared root cause rather than
+repeating guards in callers. No speculative features, single-use interfaces,
+factories, flags, dependencies, or impossible-state defenses.
+
+Minimum sufficient is not minimum LOC. Preserve current validation,
+authorization, transactions, concurrency protection, cleanup, error
+propagation, security, accessibility, tests, and requested behavior. Leave the
+smallest meaningful regression check for non-trivial behavior.
 
 Stay inside your assigned files. Do not improve adjacent code or other workers'
 files. Do not refactor what is not broken. Match the existing style. Remove only
@@ -57,7 +64,7 @@ clear to you, it does not go in.
 
 ## Never Do
 
-- Do not write `PLAN.md`, `SUBAGENT_RECEIPTS.jsonl`,
+- Do not write `PLAN.md`, `SUBAGENT_RECEIPTS.jsonl`, `REVIEW_RECEIPTS.jsonl`,
   `PROGRESS.md`, or `CHECKS.yaml`.
 - Do not call harness MCP artifact writers.
 - Do not run full-suite QA unless your prompt explicitly assigns that lane.

@@ -133,7 +133,8 @@ def test_harness_source_completion_requires_commit_and_force_install():
     root = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
     assert "commit the completed diff" in root
     assert "python3 install.py --force" in root
-    assert "before the final response" in root
+    assert "before `task_close`" in root
+    assert "must not introduce a second install phase" in root
 
     for rel in ("plugin/skills/run/SKILL.md", "plugin-codex/internal-skills/run/SKILL.md"):
         body = (REPO / rel).read_text(encoding="utf-8")
@@ -142,6 +143,24 @@ def test_harness_source_completion_requires_commit_and_force_install():
         assert "python3 install.py --force" in body
         assert "final response" in body
         assert "force-install result" in body
+        assert "installer is idempotent" in body
+
+
+def test_develop_installs_harness_after_fresh_qa_before_close():
+    paths = (
+        REPO / "plugin/skills/develop/SKILL.md",
+        REPO / "plugin-codex/internal-skills/develop/SKILL.md",
+    )
+    for path in paths:
+        body = path.read_text(encoding="utf-8")
+        install_at = body.index("### Phase 7.8: Harness source auto-install")
+        close_at = body.index("### Phase 8: Close and final response")
+        assert install_at < close_at
+        section = body[install_at:close_at]
+        assert "plugin/scripts/install_verified.py" in section
+        assert "python3 install.py --force" in section
+        assert "terminal fresh" in section
+        assert "failed install blocks completion" in section.lower()
 
 
 def test_continuous_maintenance_doc_maps_former_maintain_work():

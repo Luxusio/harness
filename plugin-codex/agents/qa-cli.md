@@ -13,6 +13,10 @@ scripts if needed.
 Mission: verify every PLAN.md AC with concrete command evidence. Do not accept
 implementation claims, happy-path output, or CI as evidence for this host.
 
+The first line of the final response must be exactly `VERDICT: PASS`,
+`VERDICT: FAIL`, or `VERDICT: BLOCKED_ENV`. Lifecycle hooks parse this line;
+without it verification remains pending.
+
 ## Core Contract
 
 Read first: `PLAN.md`, `CHECKS.yaml`, `TASK_STATE.yaml`, `REQUEST.md` if present,

@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+from pathlib import Path
 
 from conftest import SCRIPTS_DIR
 
@@ -94,7 +95,10 @@ def test_subagent_start_records_task_local_receipt(tmp_path):
 
     assert stopped["status"] == "done"
     with open(receipt_path, encoding="utf-8") as f:
-        assert len(f.readlines()) == 1
+        receipts = [json.loads(line) for line in f]
+    assert len(receipts) == 2
+    assert receipts[-1]["status"] == "completed"
+    assert receipts[-1]["verdict"] == "UNKNOWN"
     conversation = os.path.join(task_dir, "CONVERSATION.md")
     assert os.path.isfile(conversation)
     with open(conversation, encoding="utf-8") as f:
@@ -194,14 +198,17 @@ def test_official_subagent_stop_fields_are_preserved(tmp_path):
             "agent_id": "agent-1",
             "agent_type": "general-purpose",
             "agent_transcript_path": "/tmp/agent.jsonl",
-            "last_assistant_message": "done",
+            "last_assistant_message": "VERDICT: PASS\ndone",
         },
     )
 
     assert stopped["status"] == "done"
     assert stopped["agent_type"] == "general-purpose"
     assert stopped["transcript_path"] == "/tmp/agent.jsonl"
-    assert stopped["last_assistant_message"] == "done"
+    assert stopped["last_assistant_message"] == "VERDICT: PASS\ndone"
+    receipts = [json.loads(line) for line in (Path(task_dir) / "SUBAGENT_RECEIPTS.jsonl").read_text().splitlines()]
+    assert receipts[-1]["status"] == "completed"
+    assert receipts[-1]["verdict"] == "PASS"
 
 
 def test_missing_agent_id_does_not_create_false_active_record(tmp_path):

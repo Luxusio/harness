@@ -97,7 +97,7 @@ The plan skill runs its full review pipeline and writes PLAN.md. On completion: 
 Skill("harness:develop", "<task_id>")
 ```
 
-The develop skill reads PLAN.md, implements changes, runs plan completion audit, scope drift detection, bisectable commits, verification gate, runtime QA subagents, and any needed durable-doc updates. On completion, a hook-owned subagent start receipt exists and `task_verify` reports PASS. If BLOCKED: stop, report, ask user.
+The develop skill reads PLAN.md, implements changes, runs plan completion audit, scope drift detection, bisectable commits, verification gate, runtime QA subagents, and any needed durable-doc updates. On completion, fresh hook-owned QA completion receipts exist and `task_verify` reports PASS. If BLOCKED: stop, report, ask user.
 
 Before entering develop, re-entering develop after QA/UX FAIL, entering verify,
 or closing, check `<task_dir>/USER_FEEDBACK.jsonl` when present. This file is
@@ -116,12 +116,12 @@ to interpret user intent.
 Read `doc/harness/manifest.yaml` for project type. Spawn appropriate QA agent(s).
 Also spawn applicable UX review agents for user-facing surfaces. UX review is
 not a replacement for QA: qa-* proves correctness; ux-* judges whether the
-experience is shippable. Claude hooks record each subagent start in
-`SUBAGENT_RECEIPTS.jsonl`; `task_verify` uses that hook-owned receipt as the
-verification signal.
+experience is shippable. Claude hooks record subagent lifecycle events in
+`SUBAGENT_RECEIPTS.jsonl`; `task_verify` requires a fresh completed explicit
+PASS for every applicable QA lens. A start entry proves delegation only.
 
 **Strategy selection:**
-- **MUST spawn qa-browser when** `manifest.qa.browser_qa_supported: true` AND the diff contains any frontend file (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). Skipping leaves no subagent-start receipt and is blocked by `task_close`.
+- **MUST spawn qa-browser when** `manifest.qa.browser_qa_supported: true` AND the diff contains any frontend file (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). Skipping leaves no completed qa-browser receipt and is blocked by `task_close`.
 - `desktop_qa_supported: true` → qa-desktop
 - `type: api` or diff contains route/endpoint files → qa-api
 - `type: cli` or `type: library` → qa-cli
@@ -174,9 +174,9 @@ Agent(
 )
 ```
 
-After spawning QA/UX, run `task_verify` with
+After awaiting every QA/UX subagent, run `task_verify` with
 `reconcile_acs=true`. The verify step promotes only CHECKS.yaml entries with
-`status: open` when `SUBAGENT_RECEIPTS.jsonl` contains a hook-recorded start;
+`status: open` only when the required QA completion receipts report PASS;
 failed/deferred ACs still require explicit `update_checks.py` handling.
 
 After completion, check runtime_verdict:
@@ -216,6 +216,13 @@ If blocked: report `missing_for_close`, fix the stated gate, retry.
 If success: run self-improvement pipeline (see `self-improvement.md`) before
 emitting the completion report.
 
+For harness-source changes, develop Phase 7.8 installs the verified payload
+before this close attempt. Do not defer installation until after close. If the
+already-running MCP/hook process still reports a pre-install receipt gap, keep
+the task pending and request a new session; do not write receipts by hand. On
+resume, the root installer is idempotent and may be run again after confirming
+the diff still has fresh review+QA PASS.
+
 If this run belongs to an active task pack, mark the item closed with
 `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/task_pack_runner.py close --task <slug>`.
 If the runner prints another `next:` item, start or queue that task before a
@@ -230,10 +237,11 @@ slice unless the Goal is done, blocked/stopped by user or environment, or the
 Goal queue budget/cap has been reached.
 
 For this harness plugin source repo, successful repo-mutating development is
-not complete at task close. After post-close self-improvement returns `none` or
-`queued`, commit the completed diff and run `python3 install.py --force` before
-the final response, unless the user explicitly says not to. Include the commit
-hash and force-install result in the completion report.
+not complete at task close. Phase 7.8 must already have run the verified
+auto-install helper after the last source edit and fresh QA. After
+post-close self-improvement returns `none` or `queued`, commit the completed diff
+before the final response unless the user explicitly says not to. Include
+the commit hash and pre-close force-install result in the completion report.
 
 ## Mandatory Follow-up Continuation
 

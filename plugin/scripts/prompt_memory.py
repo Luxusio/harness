@@ -34,6 +34,9 @@ try:
         _log_gate_error,
         resolve_active_task_dir,
         runtime_is_stale,
+        receipt_runtime_verdict,
+        receipt_review_verdict,
+        required_review_lenses,
         emit_compact_context,
         goal_command_objective,
         read_current_goal,
@@ -58,6 +61,13 @@ DOC_GATE = (
     "[harness-doc-gate] Durable decisions require doc/ update before final; "
     "if no doc applies, keep the PLAN durable-doc rationale specific."
 )
+QA_GATE = (
+    "[harness-qa] PENDING: ALL_TOOLS→spawn_agent(QA lenses)→await→list_agents "
+    "→explicit VERDICT→task_verify; start≠PASS."
+)
+REVIEW_GATE = (
+    "[harness-review] PENDING: spawn+await→list_agents required reviewers; fresh PASS before QA; start≠PASS."
+)
 GOAL_QUEUE_GATE = (
     "[harness-goal-queue] Child task close is not final; review gaps and "
     "start/queue the next child task unless the Goal is done, blocked, "
@@ -70,7 +80,7 @@ TASK_PACK_GATE = (
 RESTORE_INJECT_CAP = 1400
 RESTORE_TOUCHED_CAP = 5
 RESTORE_COMMIT_CAP = 3
-RESTORE_ARTIFACTS = ("SUBAGENT_RECEIPTS.jsonl", "BLOCKED.md")
+RESTORE_ARTIFACTS = ("REVIEW_RECEIPTS.jsonl", "SUBAGENT_RECEIPTS.jsonl", "BLOCKED.md")
 FEEDBACK_FILE = "USER_FEEDBACK.jsonl"
 FEEDBACK_PROMPT_CAP = 1200
 FEEDBACK_TOUCHED_CAP = 5
@@ -229,6 +239,24 @@ def _build_block(task_dir: str, repo_root: str) -> str:
 
     block = " ".join(pieces)
     return _truncate(block)
+
+
+def _build_qa_gate(task_dir: str) -> str:
+    try:
+        st = read_state(task_dir)
+        return "" if receipt_runtime_verdict(task_dir, st) == "PASS" else QA_GATE
+    except Exception:
+        return QA_GATE
+
+
+def _build_review_gate(task_dir: str) -> str:
+    try:
+        st = read_state(task_dir)
+        if not required_review_lenses(task_dir, st):
+            return ""
+        return "" if receipt_review_verdict(task_dir, st) == "PASS" else REVIEW_GATE
+    except Exception:
+        return REVIEW_GATE
 
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -455,6 +483,13 @@ def main() -> int:
     # Harness context block (existing behavior)
     if task_dir:
         _append_feedback_event(task_dir, repo_root, data)
+        review_gate = _build_review_gate(task_dir)
+        if review_gate:
+            output_parts.append(review_gate)
+        else:
+            qa_gate = _build_qa_gate(task_dir)
+            if qa_gate:
+                output_parts.append(qa_gate)
         block = _build_block(task_dir, repo_root)
         if block:
             output_parts.append(block)

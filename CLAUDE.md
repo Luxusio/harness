@@ -27,7 +27,7 @@ repo-mutating requests through legacy `run` / `autopilot` commands.
 # Operating mode
 - `doc/harness/manifest.yaml` is the initialization marker.
 - Canonical loop for every repo-mutating child task: **plan when needed → develop → verify → close**. Smallest coherent diff per step. No verification skipped. See `plugin/CLAUDE.md` for the authoritative runtime rules.
-- In this harness plugin source repo, a successful repo-mutating development task is not finished at close: after post-close self-improvement, commit the completed diff and run `python3 install.py --force` before the final response, unless the user explicitly says not to. Report the commit hash and install result.
+- In this harness plugin source repo, a successful repo-mutating development task runs `python3 plugin/scripts/install_verified.py --task-dir doc/harness/tasks/<task_id>` automatically after the final fresh review+QA PASS and before `task_close`, unless the user explicitly opts out. The helper securely invokes `python3 install.py --force` once per verified fingerprint. Post-close self-improvement may then commit the completed diff; it must not introduce a second install phase. Report the commit hash when applicable and the pre-close install result.
 - The only hard gate at task completion is `runtime_verdict: PASS`. Stale PASS (after touched-path changes) does not count — `task_verify` re-syncs and re-gates.
 - Durable user requirements and reusable discoveries must be promoted to the
   right committed surface: REQ/GUIDE/ADR/POLICY, skill/pattern docs, or tests.

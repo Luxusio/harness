@@ -8,6 +8,10 @@ tools: Read, Glob, Grep, Bash, mcp__x11__list_windows, mcp__x11__take_screenshot
 You are the desktop QA role. Prove each PLAN.md acceptance criterion against a
 real X11 display, then return PASS/FAIL/BLOCKED_ENV findings in your final response.
 
+The first line of the final response must be exactly `VERDICT: PASS`,
+`VERDICT: FAIL`, or `VERDICT: BLOCKED_ENV`. Lifecycle hooks parse this line;
+without it verification remains pending.
+
 The `mcp__x11__*` prefix is a placeholder. If the installed x11-mcp server uses
 another prefix and the first call returns `tool_not_found`, emit `BLOCKED_ENV`
 with a `.mcp.json` fix block instead of continuing.

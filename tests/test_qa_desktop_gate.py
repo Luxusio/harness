@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import os
 import sys
 import tempfile
@@ -67,7 +68,20 @@ class TestProvenance(unittest.TestCase):
             prov = _lib.provenance_from_artifacts(td)
             self.assertTrue(prov["subagent-start-hook"])
             for agent in ("qa-browser", "qa-api", "qa-cli", "qa-desktop"):
-                self.assertTrue(prov[agent], f"{agent} provenance must be True")
+                self.assertFalse(prov[agent], f"empty receipt stream cannot prove {agent}")
+
+            receipt = {
+                "kind": "subagent",
+                "status": "completed",
+                "lens": "qa-cli",
+                "verdict": "PASS",
+            }
+            with open(os.path.join(td, "SUBAGENT_RECEIPTS.jsonl"), "w") as f:
+                f.write(json.dumps(receipt) + "\n")
+            prov = _lib.provenance_from_artifacts(td)
+            self.assertTrue(prov["qa-cli"])
+            for agent in ("qa-browser", "qa-api", "qa-desktop"):
+                self.assertFalse(prov[agent], f"qa-cli cannot prove {agent}")
 
 
 class TestDenyDecisionSubagentReceipt(unittest.TestCase):

@@ -70,13 +70,13 @@ class HarnessMcpServerTests(unittest.TestCase):
             "ts": "2026-01-01T00:00:01Z",
             "kind": "subagent",
             "source": source,
-            "status": "started",
+            "status": "completed",
             "task_id": Path(task_dir).name,
             "agent_id": agent_id,
             "agent_type": agent_type,
             "lens": "qa-cli",
-            "verdict": "",
-            "summary": "subagent start hook observed",
+            "verdict": "PASS",
+            "summary": "VERDICT: PASS",
             "transcript_path": "",
             "transcript_sha256": "",
             "prompt_hash": "",
@@ -100,6 +100,54 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("description", tool)
             self.assertIn("inputSchema", tool)
             self.assertTrue(tool["description"], f"{tool['name']} missing description")
+
+    def test_start_only_receipt_does_not_produce_runtime_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__start-only")
+            receipt = {
+                "kind": "subagent",
+                "status": "started",
+                "task_id": "TASK__start-only",
+                "agent_id": "qa-1",
+                "agent_type": "harness:qa-cli",
+                "lens": "qa-cli",
+                "verdict": "",
+                "ts": "2099-01-01T00:00:00Z",
+            }
+            (Path(task_dir) / "SUBAGENT_RECEIPTS.jsonl").write_text(
+                json.dumps(receipt) + "\n", encoding="utf-8"
+            )
+            self.assertEqual(harness_server.receipt_runtime_verdict(task_dir), "PENDING")
+
+    def test_completed_qa_fail_controls_runtime_verdict(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__qa-fail")
+            harness_server.record_subagent_receipt(
+                task_dir,
+                {
+                    "agent_id": "qa-1",
+                    "agent_type": "harness:qa-cli",
+                    "status": "completed",
+                    "verdict": "FAIL",
+                    "summary": "VERDICT: FAIL",
+                },
+            )
+            self.assertEqual(harness_server.receipt_runtime_verdict(task_dir), "FAIL")
+
+    def test_new_qa_start_invalidates_older_completed_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__qa-restarted")
+            self._write_subagent_receipt(task_dir, agent_id="qa-old")
+            harness_server.record_subagent_receipt(
+                task_dir,
+                {
+                    "agent_id": "qa-new",
+                    "agent_type": "harness:qa-cli",
+                    "status": "started",
+                    "summary": "rerun started",
+                },
+            )
+            self.assertEqual(harness_server.receipt_runtime_verdict(task_dir), "PENDING")
 
     def test_unknown_tool_returns_error_payload(self):
         result = harness_server.call_tool("does_not_exist", {})
@@ -433,7 +481,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             body = (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8")
         self.assertNotIn("isError", result)
         self.assertEqual(result["structuredContent"]["ac_reconcile"]["promoted_acs"], [])
-        self.assertIn("no subagent start receipt", result["structuredContent"]["ac_reconcile"]["reason"])
+        self.assertIn("QA completion", result["structuredContent"]["ac_reconcile"]["reason"])
         self.assertEqual(body.count("status: open"), 2)
 
     def test_task_verify_reconcile_promotes_open_acs_from_subagent_start_receipt(self):
@@ -485,7 +533,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 harness_server.canonical_task_dir = original_ctd
             body = (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8")
         self.assertEqual(verify["structuredContent"]["ac_reconcile"]["promoted_acs"], [])
-        self.assertIn("no subagent start receipt", verify["structuredContent"]["ac_reconcile"]["reason"])
+        self.assertIn("QA completion", verify["structuredContent"]["ac_reconcile"]["reason"])
         self.assertIn("status: open", body)
         self.assertIn("status: failed", body)
         self.assertIn("status: deferred", body)
@@ -590,7 +638,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertNotIn("PLAN.md", ctx["missing_for_close"])
         self.assertIn("subagent", ctx["next_action"])
         self.assertTrue(close.get("isError"))
-        self.assertIn("subagent start receipt", close["structuredContent"]["missing_for_close"])
+        self.assertIn("completed QA verdict: qa-cli", close["structuredContent"]["missing_for_close"])
 
     def test_task_blocked_records_pause_state_and_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -738,26 +786,28 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 encoding="utf-8",
             )
         if write_receipt:
-            receipt = {
-                "receipt_id": f"subagent-{task_id}",
-                "ts": "2026-01-01T00:00:01Z",
-                "kind": "subagent",
-                "source": "subagent_start_hook",
-                "status": "started",
-                "task_id": task_id,
-                "agent_id": f"agent-{task_id}",
-                "agent_type": "harness:qa-cli",
-                "lens": "qa-cli",
-                "verdict": "",
-                "summary": "subagent start hook observed",
-                "transcript_path": "",
-                "transcript_sha256": "",
-                "prompt_hash": "",
-            }
-            (task_dir / "SUBAGENT_RECEIPTS.jsonl").write_text(
-                json.dumps(receipt, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
+            for status, verdict in (("started", ""), ("completed", "PASS")):
+                harness_server.record_subagent_receipt(task_dir, {
+                    "source": "subagent_start_hook" if status == "started" else "subagent_stop_hook",
+                    "status": status,
+                    "agent_id": f"review-{task_id}",
+                    "agent_type": "harness:code-reviewer",
+                    "verdict": verdict,
+                    "summary": (
+                        "VERDICT: PASS\n"
+                        "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+                        if verdict else "review started"
+                    ),
+                })
+            for status, verdict in (("started", ""), ("completed", "PASS")):
+                harness_server.record_subagent_receipt(task_dir, {
+                    "source": "subagent_start_hook" if status == "started" else "subagent_stop_hook",
+                    "status": status,
+                    "agent_id": f"agent-{task_id}",
+                    "agent_type": "harness:qa-cli",
+                    "verdict": verdict,
+                    "summary": f"VERDICT: {verdict}" if verdict else "qa started",
+                })
         if checks_yaml is not None:
             (task_dir / "CHECKS.yaml").write_text(checks_yaml, encoding="utf-8")
         return str(task_dir)
@@ -1054,8 +1104,10 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
                 touched_paths=["src/cli/main.py"],
             )
+            critic = Path(td) / "CRITIC__ux.md"
+            critic.write_text("stale legacy critic\n", encoding="utf-8")
             future = os.path.getmtime(Path(td) / "SUBAGENT_RECEIPTS.jsonl") + 10
-            os.utime(source, (future, future))
+            os.utime(critic, (future, future))
             self._patch(td)
             self._patch_repo_root_for_context(tmp)
             try:
@@ -1103,21 +1155,27 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         self.assertNotIn("isError", result)
         self.assertTrue(result["structuredContent"]["closed"])
 
-    # ---- AC-004: subagent receipt, not stale CRITIC__qa, controls close ----
-    def test_close_accepts_receipt_even_when_touched_path_is_newer(self):
+    # ---- AC-004: completed QA must be newer than touched source ----
+    def test_close_rejects_receipt_when_touched_path_is_newer(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(
                 tmp, "TASK__pr2-004",
                 checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
                 touched_paths=["plugin/scripts/health.py"],
             )
+            receipt_path = Path(td) / "SUBAGENT_RECEIPTS.jsonl"
+            receipts = [json.loads(line) for line in receipt_path.read_text(encoding="utf-8").splitlines()]
+            receipts[-1]["ts"] = "2000-01-01T00:00:01Z"
+            receipt_path.write_text(
+                "".join(json.dumps(item) + "\n" for item in receipts), encoding="utf-8"
+            )
             self._patch(td)
             try:
                 result = harness_server.call_tool("task_close", {"task_id": "TASK__pr2-004"})
             finally:
                 self._unpatch()
-        self.assertNotIn("isError", result)
-        self.assertTrue(result["structuredContent"]["closed"])
+        self.assertTrue(result.get("isError"))
+        self.assertIn("stale", result["content"][0]["text"])
 
     # ---- AC-006: task_verify derives PASS from subagent receipt ----
     def test_verify_reports_receipt_pass_without_stale(self):

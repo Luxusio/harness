@@ -40,7 +40,7 @@ and pending user feedback.
 Every repo-mutating child task follows this loop:
 
 ```text
-plan when needed -> develop -> verify -> close
+plan when needed -> minimum-sufficient develop -> independent review -> runtime QA -> verify -> close
 ```
 
 No verification is skipped. If verification finds a gap, the task returns to
@@ -52,7 +52,8 @@ develop or creates a follow-up child task when the gap is separable.
 |---|---|
 | `PLAN.md`, `PLAN.meta.json`, optional `CHECKS.yaml`, optional `AUDIT_TRAIL.md` | MCP `write_plan` |
 | `CHECKS.yaml` status transitions after plan | `plugin/scripts/update_checks.py` |
-| `SUBAGENT_RECEIPTS.jsonl` | Codex/Claude subagent-start hooks |
+| `SUBAGENT_RECEIPTS.jsonl` | Codex/Claude subagent lifecycle hooks |
+| `REVIEW_RECEIPTS.jsonl` | Codex/Claude reviewer lifecycle hooks |
 | `CONVERSATION.md` | Codex/Claude UserPromptSubmit/Subagent hooks |
 | durable docs under `doc/<area>/<TYPE>__*.md` | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
 
@@ -69,10 +70,20 @@ Verification has two responsibilities:
 - intent adequacy check: the result satisfies the user's request and durable
   requirements
 
-A PASS verdict requires a hook-owned subagent start receipt for the task.
-Self-authored PASS notes, summaries, or narrative evidence do not close the
-task. Commands and inline checks may still help the agent debug, but close
-authority comes from `task_verify` reading task state and subagent receipts.
+A source-changing task first requires the always-on read-only code reviewer and,
+when path or diff-content signals identify a security-sensitive boundary, the
+read-only security reviewer. Their hook-owned `REVIEW_RECEIPTS.jsonl`
+completions must explicitly PASS the current HEAD and uncommitted worktree
+fingerprint. Docs-only/non-code tasks receive an explicit routing exemption.
+
+Only QA started after the latest review PASS is eligible for runtime PASS. Every
+applicable QA lens then needs a hook-owned `SUBAGENT_RECEIPTS.jsonl` completion
+with explicit `VERDICT: PASS`. A start receipt proves delegation only. FAIL,
+BLOCKED_ENV, missing verdicts, missing lenses, unmatched lifecycle events, and
+source edits after review or QA prevent close. Self-authored PASS notes,
+summaries, or narrative evidence do not close the task. Commands and inline
+checks may still help debugging, but close authority comes from `task_verify`
+reading task state and the two lifecycle streams.
 
 ## Durable Knowledge
 

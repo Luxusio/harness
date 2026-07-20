@@ -88,6 +88,49 @@ class TestTouchedPathBaseline(unittest.TestCase):
             touched = lib.sync_from_git_diff(str(td))
         self.assertIn("existing.txt", touched)
 
+    def test_required_qa_lenses_ignore_unchanged_pre_task_dirty_api_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            manifest = repo / "doc" / "harness" / "manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("type: library\n", encoding="utf-8")
+            api_path = repo / "src" / "api" / "route.py"
+            api_path.parent.mkdir(parents=True)
+            api_path.write_text("dirty before task\n", encoding="utf-8")
+            td = _task_dir(repo)
+            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+
+            lenses = lib._required_qa_lenses(str(td))
+
+        self.assertEqual(lenses, ["qa-cli"])
+
+    def test_completion_timestamp_does_not_stale_same_second_prior_edit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            manifest = repo / "doc" / "harness" / "manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("type: library\n", encoding="utf-8")
+            td = _task_dir(repo)
+            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+            source = repo / "src" / "main.py"
+            source.parent.mkdir(parents=True)
+            source.write_text("changed during task\n", encoding="utf-8")
+            lib.sync_from_git_diff(str(td))
+            lib.record_subagent_receipt(
+                str(td),
+                {
+                    "agent_id": "qa-cli-1",
+                    "agent_type": "harness:qa-cli",
+                    "status": "completed",
+                    "verdict": "PASS",
+                    "summary": "VERDICT: PASS",
+                },
+            )
+
+            stale, stale_path = lib.runtime_is_stale(str(td))
+
+        self.assertFalse(stale, stale_path)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -12,6 +12,10 @@ record subagent starts automatically. Use `${HARNESS_PLUGIN_ROOT}` for plugin sc
 Mission: verify every PLAN.md AC with concrete API evidence. Do not accept
 implementation claims or CI as evidence for this host.
 
+The first line of the final response must be exactly `VERDICT: PASS`,
+`VERDICT: FAIL`, or `VERDICT: BLOCKED_ENV`. Lifecycle hooks parse this line;
+without it verification remains pending.
+
 ## Core Contract
 
 Read first: `PLAN.md`, `CHECKS.yaml`, `TASK_STATE.yaml`, `REQUEST.md` if present,

@@ -80,9 +80,15 @@ def _next_action_for_missing(missing_item: str) -> tuple[str, str]:
     if "plan.md" in item:
         return ("Skill('harness:plan', '<task_id>')",
                 "plan-skill")
+    if "review-security" in item:
+        return ("Spawn Agent(subagent_type='harness:security-reviewer', ...); await an explicit PASS for the current diff",
+                "harness:security-reviewer")
+    if "review" in item:
+        return ("Spawn Agent(subagent_type='harness:code-reviewer', ...); await an explicit PASS for the current diff",
+                "harness:code-reviewer")
     if "qa-browser" in item:
         return ("Spawn Agent(subagent_type='harness:qa-browser', ...); the hook "
-                "records the subagent start receipt",
+                "records lifecycle receipts; await an explicit PASS",
                 "harness:qa-browser")
     if "runtime_verdict" in item or "pass" in item:
         return ("mcp__plugin_harness_harness__task_verify { task_id: '<task_id>' } "
@@ -99,7 +105,13 @@ def _owner_for_context_next_action(next_action: str) -> str:
         return ""
     if "plan.md" in action or "plan skill" in action:
         return "plan-skill"
-    if "spawn a subagent" in action or "subagent" in action and "receipt" in action:
+    if "review subagent" in action or "read-only review" in action:
+        return "harness:code-reviewer or harness:security-reviewer"
+    if (
+        "spawn a subagent" in action
+        or "qa subagent" in action
+        or "subagent" in action and "receipt" in action
+    ):
         return "harness:qa-*"
     if "task_verify" in action or "runtime verdict" in action:
         return "harness:qa-* or harness:stop-judge"
@@ -214,7 +226,7 @@ def main():
             )
         reason = (
             f"Active harness task {task_id} is open. Do not stop — finish the "
-            "plan -> develop -> verify -> close loop. Legitimate exits: "
+            "plan -> develop -> review -> QA -> verify -> close loop. Legitimate exits: "
             "(1) run task_verify until runtime_verdict=PASS, then call task_close; "
             "or (2) spawn Agent(subagent_type='harness:stop-judge') to assess "
             "whether the current state is a genuine pause-with-blocker. Stop-judge "

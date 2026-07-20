@@ -75,7 +75,12 @@ def _record_codex_subagent_start(payload: bytes) -> None:
                 if os.path.basename(os.path.normpath(active_task_dir or "")) != expected_task_id:
                     return
             payload_for_registry = dict(data)
-            payload_for_registry["agent_type"] = str(tool_input.get("agent_type") or tool_input.get("type") or "default")
+            payload_for_registry["agent_type"] = str(
+                tool_input.get("agent_type")
+                or tool_input.get("type")
+                or tool_input.get("task_name")
+                or "default"
+            )
             payload_for_registry["agent_id"] = str(
                 data.get("tool_call_id")
                 or data.get("call_id")
@@ -108,7 +113,10 @@ def _run(script: str, payload: bytes) -> bytes:
 
 def main() -> int:
     payload = sys.stdin.buffer.read()
-    _record_codex_subagent_start(payload)
+    # Codex exposes the durable runtime agent id only in the spawn result. The
+    # post-tool hook records that correlated start; registering the pre-call's
+    # tool_call_id here would create an active record that no completion event
+    # can safely close.
     scripts = ["prewrite_gate.py", "qa_delegation_gate.py"]
     if _tool_name(payload) == "Bash":
         scripts.append("mcp_bash_guard.py")

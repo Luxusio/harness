@@ -85,7 +85,8 @@ from _lib import (  # type: ignore
     artifact_exists, canonical_task_dir, canonical_task_id,
     find_repo_root, runtime_is_stale as _runtime_is_stale,
     write_active_marker, clear_active_marker,
-    receipt_runtime_verdict, subagent_receipt_summary,
+    receipt_runtime_verdict, subagent_receipt_summary, record_subagent_receipt,
+    receipt_review_verdict, review_receipt_summary, required_review_lenses,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
 )
@@ -399,18 +400,18 @@ def _auto_promote_open_acs(td: str, evidence: str) -> list[str]:
 
 
 def _reconcile_acs_from_qa(td: str) -> dict:
-    """Promote open ACs from hook-owned subagent-start receipts during task_verify."""
+    """Promote open ACs after all required QA completion receipts pass."""
     st = read_state(td)
     runtime_verdict = receipt_runtime_verdict(td, st)
     if runtime_verdict != "PASS":
         return {
             "promoted_acs": [],
-            "reason": "no subagent start receipt",
+            "reason": "required QA completion verdicts have not passed",
         }
     promoted = _auto_promote_open_acs(td, "SUBAGENT_RECEIPTS.jsonl task_verify PASS")
     return {
         "promoted_acs": promoted,
-        "reason": "promoted open ACs from subagent start receipt" if promoted else "no open ACs to promote",
+        "reason": "promoted open ACs from completed QA PASS receipts" if promoted else "no open ACs to promote",
     }
 
 
@@ -562,7 +563,12 @@ def handle_task_context(args: dict) -> dict:
     ctx = emit_compact_context(td)
     if "error" in ctx:
         return _err("task_context failed", data=ctx)
-    return _ok({"task_dir": td, "task_context": ctx, "subagent_receipts": subagent_receipt_summary(td)})
+    return _ok({
+        "task_dir": td,
+        "task_context": ctx,
+        "subagent_receipts": subagent_receipt_summary(td),
+        "review_receipts": review_receipt_summary(td),
+    })
 
 
 def handle_task_verify(args: dict) -> dict:
@@ -591,6 +597,7 @@ def handle_task_verify(args: dict) -> dict:
 
     st = read_state(td)
     rv = receipt_runtime_verdict(td, st)
+    review_verdict = receipt_review_verdict(td, st)
     ctx = emit_compact_context(td)
     payload = {
         "task_dir": td, "runtime_verdict": rv,
@@ -598,10 +605,14 @@ def handle_task_verify(args: dict) -> dict:
         "next_action": ctx.get("next_action", ""),
         "missing_for_close": ctx.get("missing_for_close", []),
         "report_path": _task_artifact_rel(td, "SUBAGENT_RECEIPTS.jsonl"),
+        "review_verdict": review_verdict,
+        "required_review_lenses": required_review_lenses(td, st),
+        "review_report_path": _task_artifact_rel(td, "REVIEW_RECEIPTS.jsonl"),
         "stale": stale,
         "stale_path": stale_path,
         "ac_reconcile": ac_reconcile,
         "subagent_receipts": subagent_receipt_summary(td),
+        "review_receipts": review_receipt_summary(td),
     }
     if verify_run is not None:
         payload["verify_run"] = verify_run
@@ -834,11 +845,11 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id"], "additionalProperties": False},
      "handler": handle_task_context},
     {"name": "task_verify", "title": "Run task verification",
-     "description": "Sync changed paths and compute verification state from hook-owned subagent start receipts. Optional reconcile_acs promotes open CHECKS.yaml ACs when a subagent start receipt exists.",
+     "description": "Sync changed paths and compute verification state from fresh hook-owned review completion receipts followed by QA completion receipts. Optional reconcile_acs promotes open CHECKS.yaml ACs only after ordered review and QA gates pass.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"},
          "run_commands": {"type": "boolean"},
-         "reconcile_acs": {"type": "boolean", "description": "Optional. When true, promote open CHECKS.yaml ACs using SUBAGENT_RECEIPTS.jsonl presence. Failed/deferred ACs are never promoted."},
+         "reconcile_acs": {"type": "boolean", "description": "Optional. When true, promote open CHECKS.yaml ACs only after all required QA completion receipts report a fresh PASS. Failed/deferred ACs are never promoted."},
          "parallel": {"type": "boolean"},
          "max_workers": {"type": "integer"}},
          "required": ["task_id"], "additionalProperties": False},

@@ -19,12 +19,28 @@ You are the harness developer agent.
 4. Return concise changed paths, verification, durable-doc updates, and remaining risk when done
 
 **Never do:**
-- Write PLAN.md or verification receipt artifacts
+- Write PLAN.md or hook-owned QA/review receipt artifacts
 - Exceed PLAN.md scope
 - Claim completion without running verification
 
 **After implementation:** return a concise final response with changed paths,
 verification performed, durable-doc updates, and remaining risk.
+
+## Minimum-sufficient implementation
+
+Read and trace the actual callers, data flow, and nearby project pattern before
+editing. Then stop at the first sufficient rung: no change, reuse existing
+project code, stdlib, platform/framework, installed dependency, smallest clear
+local expression, then minimum new code. Fix a root cause at the shared
+boundary instead of adding repeated symptom guards. Do not add speculative
+single-consumer interfaces, factories, flags, extension points, dependencies,
+or impossible-state defenses.
+
+Minimum sufficient is not minimum LOC. Preserve current validation,
+authorization, transactionality, concurrency protection, cleanup, error
+propagation, security, accessibility, tests, and requested behavior. Leave the
+smallest meaningful regression check for non-trivial behavior. Report skipped
+complexity only with the concrete current condition that would justify it.
 
 ## Self-improvement
 

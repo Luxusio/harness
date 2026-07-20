@@ -70,12 +70,14 @@ def _parse_decision(stdout: str):
         return None, None
 
 
-def _scaffold(tmpdir: str) -> str:
+def _scaffold(tmpdir: str, *, strict: bool = False) -> str:
     """Create minimal harness scaffold; return absolute path to tasks_dir."""
     manifest_dir = os.path.join(tmpdir, "doc", "harness")
     os.makedirs(manifest_dir, exist_ok=True)
     # Touch manifest.yaml so find_repo_root recognises tmpdir as repo root.
-    open(os.path.join(manifest_dir, "manifest.yaml"), "w").close()
+    with open(os.path.join(manifest_dir, "manifest.yaml"), "w") as f:
+        if strict:
+            f.write("capabilities:\n  strict_compliance_requires_delegation: true\n")
     tasks_dir = os.path.join(manifest_dir, "tasks")
     os.makedirs(tasks_dir, exist_ok=True)
     return tasks_dir
@@ -130,6 +132,15 @@ class TestDormantRepoFailsOpen(unittest.TestCase):
             decision, _ = _parse_decision(r.stdout)
             self.assertNotEqual(decision, "deny",
                                 f"stale task should fail-open. stdout={r.stdout!r}")
+
+    def test_strict_repo_requires_task_before_first_source_write(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            _scaffold(tmpdir, strict=True)
+            target = os.path.join(tmpdir, "foo.py")
+            r = _invoke(tmpdir, target)
+            decision, reason = _parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("no-active-task", reason or "")
 
 
 class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):

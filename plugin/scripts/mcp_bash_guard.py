@@ -72,6 +72,8 @@ _PY_PATTERNS = [
 # Protected-artifact → owning MCP/CLI tool (for human-text fix hint).
 _ARTIFACT_TOOL_HINT = {
     "SUBAGENT_RECEIPTS.jsonl": "runtime subagent-start hook",
+    "REVIEW_RECEIPTS.jsonl": "runtime review lifecycle hook",
+    "INSTALL_RECEIPT.json": "scripts/install_verified.py",
     "PLAN.md": "mcp__plugin_harness_harness__write_plan",
     "PLAN.meta.json": "mcp__plugin_harness_harness__write_plan",
     "CHECKS.yaml": "plan-skill + scripts/update_checks.py",
@@ -278,6 +280,7 @@ def _deny(target, command):
         "CHECKS.yaml": "python3 plugin/scripts/update_checks.py --task-dir <td> --ac <id> --status <s>",
         "AUDIT_TRAIL.md": "mcp__plugin_harness_harness__write_plan",
         "SUBAGENT_RECEIPTS.jsonl": "Spawn the required subagent; the runtime hook records this file",
+        "REVIEW_RECEIPTS.jsonl": "Spawn and await the required reviewer; lifecycle hooks record this file",
         "CONVERSATION.md": "Let the runtime hooks record conversation history",
     }
     next_action = _NEXT.get(base, "")

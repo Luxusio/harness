@@ -207,6 +207,28 @@ class TestPromptMemory(unittest.TestCase):
         self.assertNotIn("open=", r.stdout)
         self.assertNotIn("suspect=", r.stdout)
 
+    def test_pending_verification_injects_automatic_qa_sequence(self):
+        state = (
+            "task_id: TASK__qa-prompt\nstatus: implementing\n"
+            "runtime_verdict: pending\ntouched_paths: []\n"
+            "plan_session_state: closed\nclosed_at: null\n"
+            "updated: 2026-07-20T00:00:00Z\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(
+                Path(tmp), active_task_id="TASK__qa-prompt", task_state=state,
+            )
+            r = _invoke(str(base))
+
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("[harness-qa]", r.stdout)
+        self.assertIn("ALL_TOOLS", r.stdout)
+        self.assertIn("spawn_agent", r.stdout)
+        self.assertIn("await→list_agents", r.stdout)
+        self.assertIn("explicit VERDICT", r.stdout)
+        self.assertIn("task_verify", r.stdout)
+        self.assertIn("start≠PASS", r.stdout)
+
     def test_captures_user_prompt_event_for_active_task(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(

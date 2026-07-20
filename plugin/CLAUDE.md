@@ -13,7 +13,7 @@ workflow; skills and MCP tools are the sole runtime surface.
 
 Every repo-mutating task:
 ```
-plan → develop → verify → close
+plan → minimum-sufficient develop → independent review → runtime QA → verify → close
 ```
 No step skipped. Smallest coherent diff per step.
 
@@ -22,7 +22,7 @@ No step skipped. Smallest coherent diff per step.
 **Core (task driver — main session or run skill):**
 - `task_start` — create/resume task, return fresh context
 - `task_context` — refresh task state (only when needed)
-- `task_verify` — sync changed paths + compute verification from hook-recorded subagent starts; optionally reconcile ACs when a subagent start receipt exists
+- `task_verify` — sync changed paths + compute verification from fresh review completions followed by fresh QA completions
 - `task_close` — gate: runtime verdict PASS → close
 - `task_blocked` — park unfinished work on a real environment blocker; writes BLOCKED.md and clears this session's active marker
 
@@ -30,7 +30,9 @@ No step skipped. Smallest coherent diff per step.
 - `write_plan` → PLAN.md / PLAN.meta.json / optional CHECKS.yaml / optional AUDIT_TRAIL.md (plan-skill)
 - durable docs such as `doc/<area>/REQ__*.md` are normal repo docs, not MCP evidence tools
 
-Verification provenance = `SUBAGENT_RECEIPTS.jsonl` written by Codex/Claude hooks when a subagent starts. The main session never writes verification receipts or critic verdicts.
+Static review provenance = `REVIEW_RECEIPTS.jsonl`; runtime QA provenance =
+`SUBAGENT_RECEIPTS.jsonl`. Codex/Claude lifecycle hooks own both. Starts prove
+delegation only; fresh matched completions with explicit PASS drive the gates.
 
 ## 3. TASK_STATE (7 fields only)
 
@@ -80,6 +82,7 @@ Turn 종결 정당 사유 (runtime_verdict 기반):
 | CHECKS.yaml | plan-skill (create) + update_checks.py CLI (develop/qa updates) |
 | source + durable docs | developer |
 | SUBAGENT_RECEIPTS.jsonl | Codex/Claude subagent-start hooks |
+| REVIEW_RECEIPTS.jsonl | Codex/Claude reviewer lifecycle hooks |
 | CONVERSATION.md | Codex/Claude UserPromptSubmit/Subagent hooks |
 
 Do not write another role's artifact. Prewrite gate enforces this.
@@ -112,12 +115,15 @@ apply to read-only answers or ordinary non-harness work.
 
 ## 7. Verification
 
-`task_verify` syncs paths and checks for hook-recorded subagent starts.
+`task_verify` syncs paths and checks hook-recorded review and QA lifecycles.
 Do not claim success from static inspection when runtime verification is required.
 
 ## 8. Finish cleanly
 
-Runtime verdict becomes PASS only when `SUBAGENT_RECEIPTS.jsonl` contains at least one hook-recorded subagent start for the task.
+Source changes require fresh `REVIEW_RECEIPTS.jsonl` PASS for the always-on code
+reviewer and any conditionally routed security reviewer. Runtime verdict becomes
+PASS only when every applicable QA lens then starts and completes with explicit
+PASS after the latest review PASS.
 Use `task_close`. If blocked, fix the stated gate.
 Captured user feedback is stored in task-local `USER_FEEDBACK.jsonl`; it is prompt context, not a close-gate evidence document.
 Task-local `CONVERSATION.md` is human-readable history. The close gate reads
@@ -169,8 +175,9 @@ is the actual context-bloat source — DOM snapshots, screenshots, and
 evaluate output add thousands of structured tokens per call.
 
 Why: qa-browser runs browser verification in an isolated context. The start
-hook writes `SUBAGENT_RECEIPTS.jsonl`; the orchestrator reads the subagent's
-final response for findings and uses `task_verify` to compute the close signal.
+hooks write start and completion entries to `SUBAGENT_RECEIPTS.jsonl`; the
+orchestrator reads the subagent's final response for findings and uses
+`task_verify` to compute the close signal.
 
 Allowed inline:
 - **Bash test runners** (`pytest`, `npm test`, `pnpm test`, `yarn test`, `bun test`, `vitest`, `jest`, `mocha`, `cargo test`, `go test`, `mvn test`, `gradle test`, `rspec`, `phpunit`, `rake test`) — single PASS/FAIL lines do not bloat context; inline use is legitimate. For heavy full-suite runs, spawning `harness:qa-cli` (or `qa-api` / `qa-desktop` per project) keeps the main lane clean as a convention, not a gate.

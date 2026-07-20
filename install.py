@@ -373,13 +373,13 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
             ],
             "PostToolUse": [
                 {
-                    "matcher": "Bash",
+                    "matcher": "Bash|.*spawn_agent|.*wait_agent|.*list_agents",
                     "hooks": [
                         {
                             "type": "command",
                             "command": f"{shlex.quote(_python_cmd())} {shlex.quote(str(hooks['PostToolUse']))}",
                             "timeout": 3,
-                            "statusMessage": "Checking harness routing",
+                            "statusMessage": "Checking harness routing and QA completion",
                         }
                     ],
                 }

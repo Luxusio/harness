@@ -9,7 +9,7 @@ Implement the plan for a harness task. Reads PLAN.md, implements changes, verifi
 > **Codex runtime notes** (delta from Claude develop skill — read these first):
 > - **No `Skill()` chain.** Where Claude invokes `Skill("harness:plan", task_id)` etc., Codex orchestrator reads the relevant SKILL.md inline and executes its phases as part of the same conversation. The plan / verify / close transitions still happen — they're just prose flow, not tool calls.
 > - **Harness workflow authorization covers required subagents.** Treat explicit user invocation or approval of a harness repo-mutating workflow as authorization to use the subagents required by that workflow's verification and review gates. Examples include "use harness", "run/continue/close the harness task", native `/goal`, or clear approval to proceed with a harness task. This does not apply to read-only answers or ordinary non-harness work.
-> - **Agent fan-out is capability-gated, not user-request-gated.** Where Claude spawns `oh-my-claudecode:executor` (per-AC parallel implementation), `harness:qa-*` (verification), `harness:dogfooder` (post-PASS dogfooding), or haiku sub-agents (test-coverage trace, adversarial review, edge-case scan), Codex should use `spawn_agent` when the current session exposes it. The user does not need to ask for delegation. `user did not ask for delegation`, `delegation was not requested`, and equivalent rationale are invalid skip reasons. QA/review must not be self-authored when `spawn_agent` is available: Codex hooks record each subagent start in `SUBAGENT_RECEIPTS.jsonl`; do not write receipt or critic artifacts yourself. If `spawn_agent` is unavailable, run the equivalent role methodology inline in the orchestrator's own context and state the fallback in task state or final response only when it affects verification. Multi-AC implementation can remain sequential only when `spawn_agent` is unavailable, ACs are dependent or file-conflicting, or the documented `sequential-small-task` threshold applies; preserve independent QA/review by routing from current session capability.
+> - **Agent fan-out is capability-gated, not user-request-gated.** Where Claude spawns `oh-my-claudecode:executor` (per-AC parallel implementation), `harness:qa-*` (verification), `harness:dogfooder` (post-PASS dogfooding), or haiku sub-agents (test-coverage trace, adversarial review, edge-case scan), Codex should check the deferred tool catalog (for example `ALL_TOOLS`) and use `spawn_agent` when exposed. The user does not need to ask for delegation. `user did not ask for delegation`, `delegation was not requested`, and equivalent rationale are invalid skip reasons. QA/review must not be self-authored when `spawn_agent` is available: Codex hooks record lifecycle receipts in `SUBAGENT_RECEIPTS.jsonl`; only fresh completed explicit QA PASS entries satisfy verification. Do not write receipt or critic artifacts yourself. If `spawn_agent` is unavailable after discovery, run the equivalent role methodology inline in the orchestrator's own context and state the fallback in task state or final response only when it affects verification. Multi-AC implementation can remain sequential only when `spawn_agent` is unavailable, ACs are dependent or file-conflicting, or the documented `sequential-small-task` threshold applies; preserve independent QA/review by routing from current session capability.
 > - **Subagent lifecycle cleanup.** Track every `agent_id` returned by `spawn_agent`. After a spawned agent completes, fails, is cancelled, or is no longer needed, call `close_agent` when that tool is available. Before final response, `task_close`, or handoff, close every agent this workflow spawned unless the user explicitly asked to leave a still-running agent open. Completed agents can continue to count toward the concurrency limit until closed.
 > - **No `AskUserQuestion` structured tool.** Where Claude emits an AskUserQuestion with labeled options, Codex emits the question + options as plain prose and reads the user's reply on the next turn. Options stay numbered/lettered so the user can pick them by short response (e.g. "A", "B", "1", "2").
 > - **Browser tools are availability-gated on Codex.** The Claude `qa_delegation_gate.py` blocks main-session `mcp__chrome-devtools__*` calls and redirects them to `harness:qa-browser`; Codex routes by available tools. Use `spawn_agent` for the qa-browser lens when available, or run `plugin-codex/agents/qa-browser.md` inline when browser tools are present but no subagent path exists. If browser verification is required and tools or a reachable app are missing, return `BLOCKED_ENV` with the exact blocker instead of fabricating a PASS.
@@ -201,6 +201,9 @@ Declare allowed / test / forbidden paths in PROGRESS.md. Before each file edit:
    batches, wait for all sibling worker results, then merge progress once. Skip
    ACs in `completed_acs`.
 2. **Follow existing patterns.** Smallest coherent diff. No speculative features.
+   Apply `plugin-codex/agents/developer.md` minimum-sufficient ladder in the
+   coordinator and every spawned worker. A generic worker prompt must tell the
+   worker to read that file before editing; parent context is not sufficient.
 3. **Codex tool surface:** use `read_file` for reads, `apply_patch` for edits/writes (Codex envelope-oriented), `shell` for Bash commands. Multi-edit is one `apply_patch` envelope per file. Where the Claude flow says `Edit`/`Write`/`MultiEdit`, read it as `apply_patch`.
 
 **PROGRESS.md after each AC:**
@@ -313,32 +316,12 @@ For PARTIAL / NOT DONE, classify cause: scope-cut / context-exhaustion / misunde
 
 ### Phase 4.5-4.8: Quality Audit
 
-Read `plugin/skills/develop/quality-audit-pipeline.md` (Claude tree fallback) for the full methodology. On Codex, dispatch independent audit lenses with `spawn_agent` when available; otherwise run the same checks sequentially in the orchestrator context and state the fallback in task state or final response if expected independence was lost:
-
-1. **Test-coverage trace** — for each changed source, identify which test path exercises it; flag uncovered branches.
-2. **Confidence ratings** — per-AC confidence 0-10 (different axis than completeness — covers "does it work" not "did we cover the surface"). Highlight any AC <=6.
-3. **Adversarial review** — read the diff with a fresh adversarial framing: what would break this? What edge case did we miss? What contract did we silently change? Prefer a subagent for independence when available; inline adversarial re-read is fallback.
-4. **Visual-smoke** — browser-only; run with available browser tools or record browser-lens `BLOCKED_ENV` when required and unavailable.
-
-**Diff scope detection** (routes specialists):
-```bash
-git diff --name-only | while read f; do
-  case "$f" in
-    *.tsx|*.jsx|*.css|*.scss|*.html|*.vue|*.svelte) echo "SCOPE_FRONTEND=true" ;;
-    *auth*|*session*|*token*|*password*|*permission*|*guard*) echo "SCOPE_AUTH=true" ;;
-    *migration*|*schema*|*db/*|*migrate*) echo "SCOPE_MIGRATIONS=true" ;;
-    *api*|*endpoint*|*graphql*|*rest*|*openapi*) echo "SCOPE_API=true" ;;
-  esac
-done | sort -u
-```
-
-**Specialists** (use `spawn_agent` when available; otherwise run in sequence):
-- Security review for SCOPE_AUTH or SCOPE_API. Never gated.
-- Migration safety for SCOPE_MIGRATIONS. Never gated.
-- Performance for SCOPE_API or large diffs. Gated (skip after 3+ dispatches with 0 findings).
-- LLM-trust review for SKILL.md or agent.md changes.
-
-**Red Team (conditional):** when diff >= 200 lines OR any specialist reported critical. Job: find what the first pass MISSED. Prefer `spawn_agent` for an independent adversarial pass when available; inline re-frame is fallback.
+Read `plugin/skills/develop/quality-audit-pipeline.md`. Phase 4.5 gathers
+coverage, visual, migration/contract, LLM-trust, and proportional performance
+inputs. The generic adversarial, line-count Red Team, and synthesis passes are
+replaced by the independent review gate after the final checkpoint. Canonical
+code/security routing comes from `task_context.required_review_lenses`, using
+both changed paths and diff content.
 
 **Phase 4.85 Coverage Synthesis** — use the coverage diagram from the audit
 agent final response to update tests directly. Do not create a separate test
@@ -378,9 +361,24 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 - Use the current quality score to decide whether to continue fixing or proceed.
   Do not write a project stats series for per-task scores.
 
+### Phase 6.6: Independent Code Review Gate
+
+Call `task_context` and read `required_review_lenses`. Discover deferred
+`spawn_agent` in `ALL_TOOLS`. Spawn `code_review` for every source diff and
+`security_review` when routed, in one message; each reads its matching
+`plugin-codex/agents/*-reviewer.md`, stays read-only, and returns exact VERDICT.
+Await all reviewers, then call `list_agents` to expose each runtime agent name
+and final response to the completion hook. Hook-owned `REVIEW_RECEIPTS.jsonl` must show fresh PASS for
+the current HEAD/worktree fingerprint. Send only FIX_NOW to the implementer;
+after any edit rerun focused tests/checkpoint and all routed reviews. Inline
+self-review is not a strict-compliance fallback.
+
 ### Phase 7: Verification Gate
 
 Read `plugin/skills/develop/verification-gate.md` (Claude tree fallback) for the full gate methodology. Runs test commands from PLAN.md, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit.
+
+Only begin this QA phase after Phase 6.6 review PASS. QA started before the
+latest review PASS is stale evidence and must be rerun.
 
 **On Codex:** pick the required lens for the diff (qa-cli for libraries, qa-api for endpoints, qa-desktop for native GUI, qa-browser for frontend/browser work when `browser_qa_supported: true`). Use `spawn_agent` for independent QA when available:
 
@@ -398,8 +396,9 @@ spawn_agent {
 }
 ```
 
-After spawning QA/UX, run `task_verify` with `reconcile_acs: true`. The Codex
-hook records the subagent start automatically. If no subagent path exists, run
+After awaiting QA/UX, call `list_agents` to collect targetless completion
+results, then run `task_verify` with `reconcile_acs: true`. The Codex
+hooks record observed lifecycle events automatically. If no subagent path exists, run
 the lens methodology in-conversation and state the fallback in task state or final response; do not
 call a critic writer.
 
@@ -480,6 +479,29 @@ suggested follow-ups in the dogfooder final response. The dogfooder does NOT
 gate task completion.
 
 Visual dogfooder browser screenshots follow the same availability gate: capture them when browser tools are present; otherwise return `BLOCKED_ENV` for the missing browser tool/app condition when visual dogfood is required.
+
+### Phase 7.8: Harness source auto-install (post-QA, pre-close)
+
+When the repository being changed is the harness plugin source itself (root
+`install.py` plus `plugin/` and `plugin-codex/` are present), a terminal fresh
+review+QA PASS MUST immediately run:
+
+```bash
+python3 plugin/scripts/install_verified.py \
+  --task-dir doc/harness/tasks/<task_id>
+```
+
+This is part of completion, not a suggestion. Run it after the last source
+edit and verification, before `task_close`, so stale installed hooks cannot
+prevent the task from reaching the close gate. Capture the installer exit code
+and runtime summaries. The trusted helper verifies canonical harness identity,
+fresh review+QA receipts, HEAD/worktree freshness, and a fingerprint-scoped
+success marker before it invokes `python3 install.py --force`. A failed install blocks completion; never claim the
+source is deployed. Do not rerun installation for docs-only edits after this
+step. The current process may retain already-loaded MCP/hooks, so report when a
+new thread is required without forging receipts. The same successful
+fingerprint is skipped under a task-local lock. Skip only when the user
+explicitly opts out of installation.
 
 ### Phase 8: Close and final response
 

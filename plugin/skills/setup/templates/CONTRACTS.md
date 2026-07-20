@@ -196,12 +196,13 @@ extra phase is a new failure point.
 
 ### C-14
 
-**Title:** PASS verdicts require a hook-owned subagent start receipt.
+**Title:** PASS verdicts require fresh hook-owned QA completion receipts.
 **When:** `runtime_verdict` transitions to `PASS`.
-**Enforced by:** `SUBAGENT_RECEIPTS.jsonl` presence, written by runtime hooks
-when a subagent starts.
-**On violation:** `task_close` blocks until a subagent is spawned and
-`task_verify` observes the receipt.
+**Enforced by:** `SUBAGENT_RECEIPTS.jsonl` lifecycle entries, written by
+runtime hooks when QA subagents start and complete.
+**On violation:** `task_close` blocks until every applicable QA lens completes
+with an explicit `VERDICT: PASS` after the latest source edit and
+`task_verify` observes those receipts. A start-only receipt never passes.
 **Why:** A PASS without evidence is indistinguishable from hallucination.
 
 ### C-15

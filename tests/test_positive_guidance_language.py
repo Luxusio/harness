@@ -45,8 +45,8 @@ def test_positive_guidance_replacements_are_present():
     combined = "\n".join(path.read_text(encoding="utf-8") for path in OPERATIONAL_DOCS)
 
     expected = [
-        "Verification is recognized by hook-recorded subagent starts",
-        "The hook-recorded subagent start is the close-gate verification",
+        "Verification is recognized by fresh hook-recorded QA completions",
+        "QA completion receipts are the close-gate verification signal",
         "SUBAGENT_RECEIPTS.jsonl",
         "Reserve this protocol for high-stakes ambiguity",
         "Surface the discovery through the EUREKA path",

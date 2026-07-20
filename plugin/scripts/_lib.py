@@ -21,6 +21,7 @@ TASK_DIR = "doc/harness/tasks"
 MANIFEST_PATH = "doc/harness/manifest.yaml"
 TASK_BASELINE_NAME = "TASK_BASELINE.json"
 SUBAGENT_RECEIPTS_NAME = "SUBAGENT_RECEIPTS.jsonl"
+REVIEW_RECEIPTS_NAME = "REVIEW_RECEIPTS.jsonl"
 CONVERSATION_NAME = "CONVERSATION.md"
 CONVERSATION_TEXT_CAP = 2000
 CONVERSATION_READ_CAP = 256 * 1024
@@ -1317,11 +1318,12 @@ def _durable_docs_touched(touched_paths):
 
 
 def _effective_touched_paths(task_dir, touched_paths):
-    """Merge task state paths with current git diff as a close-gate fallback."""
+    """Merge task paths with task-baseline-filtered current git changes."""
     out = set(touched_paths or [])
     try:
         repo_root = find_repo_root(task_dir)
-        out.update(_git_changed_paths(repo_root))
+        changed = _git_changed_paths(repo_root)
+        out.update(_filter_baseline_unchanged(task_dir, repo_root, changed))
     except Exception:
         pass
     return sorted(p for p in out if isinstance(p, str))
@@ -1460,6 +1462,10 @@ def _subagent_receipts_path(task_dir):
     return os.path.join(task_dir, SUBAGENT_RECEIPTS_NAME)
 
 
+def _review_receipts_path(task_dir):
+    return os.path.join(task_dir, REVIEW_RECEIPTS_NAME)
+
+
 def _hash_file(path):
     try:
         h = hashlib.sha256()
@@ -1476,6 +1482,161 @@ def _receipt_short(value, limit=2000):
     return text[:limit]
 
 
+def _receipt_now_iso():
+    return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+_QA_VERDICT_RE = re.compile(r"^VERDICT: (PASS|FAIL|BLOCKED_ENV)$")
+_FINDING_COUNTS_RE = re.compile(
+    r"^FINDING_COUNTS: FIX_NOW=(\d+) INVESTIGATE=(\d+) OPTIONAL=(\d+)$"
+)
+
+
+def extract_qa_verdict(value):
+    """Accept only the exact, unique first-line verdict contract."""
+    lines = str(value or "").splitlines()
+    if not lines:
+        return ""
+    matches = [_QA_VERDICT_RE.fullmatch(line.strip()) for line in lines]
+    verdicts = [match.group(1) for match in matches if match]
+    return verdicts[0] if matches[0] and len(verdicts) == 1 else ""
+
+
+def _git_head_for_receipt(task_dir):
+    try:
+        repo_root = find_repo_root(task_dir)
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo_root,
+            capture_output=True, text=True, timeout=2,
+        )
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+_DEPENDENCY_REVIEW_FILES = {
+    "composer.json", "composer.lock", "gemfile", "gemfile.lock", "go.mod", "go.sum",
+    "package-lock.json", "package.json", "pipfile", "pipfile.lock", "poetry.lock",
+    "pyproject.toml", "cargo.lock", "cargo.toml",
+}
+
+
+def _is_dependency_manifest(path):
+    basename = os.path.basename(str(path or "").lower())
+    return basename in _DEPENDENCY_REVIEW_FILES or bool(
+        re.fullmatch(r"(?:requirements|constraints)(?:[-_.][a-z0-9_-]+)?\.txt", basename)
+    )
+
+
+def _reviewable_source_paths(task_dir, state=None):
+    """Return task paths whose behavior merits independent static review."""
+    st = state or read_state(task_dir)
+    repo_root = find_repo_root(task_dir)
+    candidates = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
+    candidates = _filter_baseline_unchanged(task_dir, repo_root, candidates)
+    paths = []
+    executable_suffixes = {
+        ".c", ".cc", ".conf", ".config", ".cpp", ".cs", ".css", ".go", ".h",
+        ".hpp", ".html", ".ini", ".java", ".js", ".json", ".jsx", ".kt", ".lock",
+        ".php", ".pl", ".properties", ".py", ".rb", ".rs", ".sh", ".sql", ".swift",
+        ".toml", ".ts", ".tsx", ".vue", ".xml", ".yaml", ".yml",
+    }
+    for raw in candidates:
+        rel = str(raw or "").replace("\\", "/").lstrip("./")
+        if not rel:
+            continue
+        lower = rel.lower()
+        basename = os.path.basename(lower)
+        suffix = os.path.splitext(lower)[1]
+        is_reviewable_artifact = suffix in executable_suffixes or _is_dependency_manifest(lower)
+        if lower.startswith("doc/") and not is_reviewable_artifact:
+            continue
+        if lower.endswith((".pyc", ".pyo", ".pyd")) or "__pycache__/" in lower:
+            continue
+        if lower.endswith((".md", ".rst", ".txt")) and not (
+            lower.startswith(("plugin/", "plugin-codex/")) or _is_dependency_manifest(lower)
+        ):
+            continue
+        if basename in {"readme", "readme.md", "changelog", "changelog.md", "license"}:
+            continue
+        paths.append(rel)
+    return sorted(set(paths))
+
+
+_SECURITY_REVIEW_SIGNAL_RE = re.compile(
+    r"(?i)(?:auth(?:entication|orization)?|session|token|secret|password|permission|"
+    r"credential|oauth|jwt|csrf|cors|xss|injection|encrypt|crypto|payment|pii|"
+    r"upload|file.?path|subprocess|shell|command|sql|database|migration|transaction|"
+    r"concurren|race|lock|serialize|deserializ|external.?url|ssrf|dependency|"
+    r"tls|ssl|certificate|cookie|rbac|acl|sanitize|verify[_-]?ssl|verify\s*=\s*false|"
+    r"requirements|package(?:-lock)?\.json|pyproject|poetry\.lock|pipfile|cargo\.(?:toml|lock)|"
+    r"gemfile|go\.(?:mod|sum)|composer\.(?:json|lock)|admin|privilege|"
+    r"access[_-]?(?:control|policy)|user[_-]?role|role[_-]?(?:id|name|check))"
+)
+
+
+def _path_has_security_signal(repo_root, relpath):
+    if _is_dependency_manifest(relpath) or _SECURITY_REVIEW_SIGNAL_RE.search(relpath):
+        return True
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--unified=0", "HEAD", "--", relpath],
+            cwd=repo_root, capture_output=True, text=True, timeout=3,
+        )
+        if result.returncode == 0 and result.stdout and _SECURITY_REVIEW_SIGNAL_RE.search(result.stdout):
+            return True
+    except Exception:
+        pass
+    path = os.path.join(repo_root, relpath)
+    try:
+        if os.path.isfile(path):
+            overlap = ""
+            with open(path, encoding="utf-8", errors="replace") as f:
+                while True:
+                    chunk = f.read(65536)
+                    if not chunk:
+                        break
+                    text = overlap + chunk
+                    if _SECURITY_REVIEW_SIGNAL_RE.search(text):
+                        return True
+                    overlap = text[-512:]
+    except OSError:
+        pass
+    return False
+
+
+def required_review_lenses(task_dir, state=None):
+    """Route always-on code review plus conditional deep security review."""
+    st = state or read_state(task_dir)
+    paths = _reviewable_source_paths(task_dir, st)
+    if not paths:
+        return []
+    lenses = ["review-code"]
+    repo_root = find_repo_root(task_dir)
+    for relpath in paths:
+        if _path_has_security_signal(repo_root, relpath):
+            lenses.append("review-security")
+            break
+    return lenses
+
+
+def review_diff_fingerprint(task_dir, state=None):
+    """Hash the current task source snapshot, including uncommitted files."""
+    st = state or read_state(task_dir)
+    repo_root = find_repo_root(task_dir)
+    h = hashlib.sha256()
+    for relpath in _reviewable_source_paths(task_dir, st):
+        path = os.path.join(repo_root, relpath)
+        h.update(relpath.encode("utf-8", errors="replace"))
+        h.update(b"\0")
+        if os.path.isfile(path):
+            h.update(_hash_file(path).encode("ascii"))
+        else:
+            h.update(b"<missing>")
+        h.update(b"\0")
+    return "sha256:" + h.hexdigest()
+
+
 def _infer_receipt_lens(agent_type, explicit_lens=""):
     lens = _receipt_short(explicit_lens, 80).lower()
     if lens:
@@ -1488,15 +1649,18 @@ def _infer_receipt_lens(agent_type, explicit_lens=""):
     if match and ("qa" in kind or "ux" in kind):
         prefix = "ux" if "ux" in kind else "qa"
         return f"{prefix}-{match.group(1)}"
+    if re.search(r"(?:^|[:/_-])(?:code[-_ ]?reviewer|code[-_ ]?review)(?:$|[:/_-])", kind):
+        return "review-code"
+    if re.search(r"(?:^|[:/_-])(?:security[-_ ]?reviewer|security[-_ ]?review)(?:$|[:/_-])", kind):
+        return "review-security"
     return ""
 
 
 def record_subagent_receipt(task_dir, receipt):
     """Append a structured subagent invocation receipt to the task directory.
 
-    This is intentionally hook-owned. It records that a subagent start was
-    observed for the task; task_verify uses receipt presence as the verification
-    signal.
+    This is intentionally hook-owned. Start entries prove delegation;
+    completed QA entries with explicit verdicts drive task verification.
     """
     if not isinstance(receipt, dict):
         raise ValueError("receipt must be an object")
@@ -1509,30 +1673,77 @@ def record_subagent_receipt(task_dir, receipt):
     if verdict and verdict not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING", "UNKNOWN"}:
         verdict = "UNKNOWN"
     transcript_path = _receipt_short(receipt.get("transcript_path"), 1000)
+    lens = _infer_receipt_lens(agent_type, receipt.get("lens"))
+    is_review = lens.startswith("review-")
+    status = _receipt_short(receipt.get("status") or "done", 80)
+    is_completed = status.lower() in {"completed", "done"}
+    now = _receipt_now_iso()
+    finding_counts = {"fix_now": 0, "investigate": 0, "optional": 0}
+    raw_summary = str(receipt.get("summary") or "")
+    summary = _receipt_short(raw_summary, 1000)
+    summary_lines = raw_summary.splitlines()
+    counts_match = _FINDING_COUNTS_RE.fullmatch(summary_lines[1]) if len(summary_lines) > 1 else None
+    counts_reported = bool(counts_match) and sum(
+        "FINDING_COUNTS:" in line for line in summary_lines
+    ) == 1
+    if counts_match:
+        finding_counts = {
+            "fix_now": int(counts_match.group(1)),
+            "investigate": int(counts_match.group(2)),
+            "optional": int(counts_match.group(3)),
+        }
+    if is_review and is_completed and not counts_reported:
+        verdict = "PENDING"
+    if is_review and is_completed and counts_reported:
+        if verdict == "PASS" and (finding_counts["fix_now"] or finding_counts["investigate"]):
+            verdict = "PENDING"
+        if verdict == "FAIL" and not finding_counts["fix_now"]:
+            verdict = "PENDING"
+        if verdict == "BLOCKED_ENV" and not finding_counts["investigate"]:
+            verdict = "PENDING"
     entry = {
         "receipt_id": "",
-        "ts": now_iso(),
-        "kind": "subagent",
+        "ts": now,
+        "kind": "review" if is_review else "subagent",
+        "event": ("review_completed" if is_completed else "review_started") if is_review else (
+            "subagent_completed" if is_completed else "subagent_started"
+        ),
         "source": source,
-        "status": _receipt_short(receipt.get("status") or "done", 80),
+        "status": status,
         "task_id": os.path.basename(os.path.normpath(task_dir)),
         "agent_id": agent_id,
         "agent_type": agent_type,
-        "lens": _infer_receipt_lens(agent_type, receipt.get("lens")),
+        "lens": lens,
         "verdict": verdict,
-        "summary": _receipt_short(receipt.get("summary"), 1000),
+        "summary": summary,
         "transcript_path": transcript_path,
         "transcript_sha256": _hash_file(transcript_path) if transcript_path else "",
         "prompt_hash": hashlib.sha256(
             _receipt_short(receipt.get("prompt"), 10000).encode("utf-8")
         ).hexdigest() if receipt.get("prompt") else "",
+        "head_sha": _receipt_short(
+            receipt.get("head_sha") or receipt.get("commit_sha") or _git_head_for_receipt(task_dir),
+            80,
+        ),
+        "diff_fingerprint": _receipt_short(
+            receipt.get("diff_fingerprint") or review_diff_fingerprint(task_dir), 100
+        ),
+        "base_sha": _receipt_short(receipt.get("base_sha") or _git_head_for_receipt(task_dir), 80),
+        "started_at": "" if is_completed else now,
+        "finished_at": now if is_completed else "",
+        "finding_counts": finding_counts,
+        "finding_counts_reported": counts_reported,
     }
     seed = "|".join([entry["ts"], entry["source"], entry["agent_id"], entry["agent_type"], entry["lens"]])
     entry["receipt_id"] = "subagent-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
-    path = _subagent_receipts_path(task_dir)
+    path = _review_receipts_path(task_dir) if is_review else _subagent_receipts_path(task_dir)
     os.makedirs(task_dir, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+    payload = (json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+    fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+    try:
+        os.write(fd, payload)
+    finally:
+        os.close(fd)
     return entry
 
 
@@ -1555,6 +1766,25 @@ def list_subagent_receipts(task_dir):
     return receipts
 
 
+def list_review_receipts(task_dir):
+    path = _review_receipts_path(task_dir)
+    if not os.path.isfile(path):
+        return []
+    receipts = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    item = json.loads(line)
+                except Exception:
+                    continue
+                if isinstance(item, dict) and item.get("kind") == "review":
+                    receipts.append(item)
+    except Exception:
+        return []
+    return receipts
+
+
 def subagent_receipt_summary(task_dir):
     receipts = list_subagent_receipts(task_dir)
     by_lens = {}
@@ -1570,6 +1800,10 @@ def subagent_receipt_summary(task_dir):
         by_agent_type[agent_type] = by_agent_type.get(agent_type, 0) + 1
         by_source[source] = by_source.get(source, 0) + 1
         by_verdict[verdict] = by_verdict.get(verdict, 0) + 1
+    completed = [
+        item for item in receipts
+        if str(item.get("status") or "").lower() in {"completed", "done"}
+    ]
     latest = receipts[-1] if receipts else {}
     if latest:
         latest = {
@@ -1583,6 +1817,7 @@ def subagent_receipt_summary(task_dir):
         }
     return {
         "count": len(receipts),
+        "completed_count": len(completed),
         "by_lens": by_lens,
         "by_agent_type": by_agent_type,
         "by_source": by_source,
@@ -1591,13 +1826,171 @@ def subagent_receipt_summary(task_dir):
     }
 
 
+def review_receipt_summary(task_dir):
+    receipts = list_review_receipts(task_dir)
+    by_lens = {}
+    by_verdict = {}
+    for item in receipts:
+        lens = item.get("lens") or "unknown"
+        verdict = item.get("verdict") or "UNKNOWN"
+        by_lens[lens] = by_lens.get(lens, 0) + 1
+        by_verdict[verdict] = by_verdict.get(verdict, 0) + 1
+    return {
+        "count": len(receipts),
+        "completed_count": sum(
+            str(item.get("status") or "").lower() in {"completed", "done"}
+            for item in receipts
+        ),
+        "by_lens": by_lens,
+        "by_verdict": by_verdict,
+        "latest": receipts[-1] if receipts else {},
+    }
+
+
+def _completed_review_by_lens(task_dir):
+    receipts = list_review_receipts(task_dir)
+    latest_events = {}
+    for item in receipts:
+        lens = str(item.get("lens") or "").lower()
+        if lens.startswith("review-"):
+            latest_events[lens] = item
+    completed = {}
+    for lens, item in latest_events.items():
+        if str(item.get("status") or "").lower() not in {"completed", "done"}:
+            continue
+        if str(item.get("verdict") or "").upper() not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING"}:
+            continue
+        matching_starts = [
+            prior for prior in receipts
+            if prior is not item
+            and prior.get("lens") == lens
+            and prior.get("agent_id") == item.get("agent_id")
+            and str(prior.get("status") or "").lower() == "started"
+        ]
+        if not matching_starts:
+            continue
+        start = matching_starts[-1]
+        if start.get("diff_fingerprint") != item.get("diff_fingerprint"):
+            continue
+        if start.get("head_sha") != item.get("head_sha"):
+            continue
+        completed[lens] = item
+    return completed
+
+
+def _receipt_timestamp(item):
+    try:
+        return datetime.fromisoformat(str(item.get("ts") or "").replace("Z", "+00:00")).timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _latest_review_pass_timestamp(task_dir, state=None):
+    st = state or read_state(task_dir)
+    if receipt_review_verdict(task_dir, st) != "PASS":
+        return 0.0
+    completed = _completed_review_by_lens(task_dir)
+    return max((_receipt_timestamp(completed[lens]) for lens in required_review_lenses(task_dir, st)), default=0.0)
+
+
+def _qa_started_after_review(task_dir, lens, completion, review_ts):
+    if review_ts <= 0:
+        return True
+    agent_id = completion.get("agent_id")
+    return any(
+        item.get("lens") == lens
+        and item.get("agent_id") == agent_id
+        and str(item.get("status") or "").lower() == "started"
+        and _receipt_timestamp(item) >= review_ts
+        for item in list_subagent_receipts(task_dir)
+    )
+
+
+def receipt_review_verdict(task_dir, state=None):
+    st = state or read_state(task_dir)
+    required = required_review_lenses(task_dir, st)
+    if not required:
+        return "NOT_APPLICABLE"
+    completed = _completed_review_by_lens(task_dir)
+    current_fingerprint = review_diff_fingerprint(task_dir, st)
+    current_head = _git_head_for_receipt(task_dir)
+    verdicts = []
+    for lens in required:
+        item = completed.get(lens)
+        if (
+            not item
+            or item.get("diff_fingerprint") != current_fingerprint
+            or item.get("head_sha") != current_head
+        ):
+            return "PENDING"
+        verdicts.append(str(item.get("verdict") or "").upper())
+    if any(verdict == "FAIL" for verdict in verdicts):
+        return "FAIL"
+    if any(verdict == "BLOCKED_ENV" for verdict in verdicts):
+        return "BLOCKED_ENV"
+    return "PASS" if all(verdict == "PASS" for verdict in verdicts) else "PENDING"
+
+
+def _required_qa_lenses(task_dir, state=None):
+    st = state or read_state(task_dir)
+    touched = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
+    repo_root = find_repo_root(task_dir)
+    project_type = (_read_top_manifest_field(repo_root, "type") or "").lower()
+    lenses = []
+    if _manifest_bool(repo_root, "qa", "desktop_qa_supported") or _desktop_touched(touched):
+        lenses.append("qa-desktop")
+    if _manifest_bool(repo_root, "qa", "browser_qa_supported") and _frontend_touched(touched):
+        lenses.append("qa-browser")
+    if project_type == "api" or _api_touched(touched):
+        lenses.append("qa-api")
+    if project_type in {"cli", "library"}:
+        lenses.append("qa-cli")
+    return list(dict.fromkeys(lenses or ["qa-cli"]))
+
+
+def _completed_qa_by_lens(task_dir):
+    latest_events = {}
+    for item in list_subagent_receipts(task_dir):
+        lens = str(item.get("lens") or "").lower()
+        if not lens.startswith("qa-"):
+            continue
+        latest_events[lens] = item
+    latest = {}
+    for lens, item in latest_events.items():
+        status = str(item.get("status") or "").lower()
+        verdict = str(item.get("verdict") or "").upper()
+        if status not in {"completed", "done"}:
+            continue
+        if verdict not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING"}:
+            continue
+        latest[lens] = item
+    return latest
+
+
 def receipt_runtime_verdict(task_dir, state=None):
-    """Compute runtime verdict from hook-owned subagent receipts only."""
+    """Compute runtime verdict from completed, explicit QA receipts only."""
     st = state or read_state(task_dir)
     current = (st.get("runtime_verdict") or "pending").upper() if isinstance(st, dict) else "PENDING"
     if current == "BLOCKED_ENV":
         return "BLOCKED_ENV"
-    return "PASS" if subagent_receipt_summary(task_dir).get("count", 0) > 0 else "PENDING"
+    review_verdict = receipt_review_verdict(task_dir, st)
+    if review_verdict not in {"PASS", "NOT_APPLICABLE"}:
+        return "PENDING"
+    required = _required_qa_lenses(task_dir, st)
+    completed = _completed_qa_by_lens(task_dir)
+    review_ts = _latest_review_pass_timestamp(task_dir, st)
+    valid = {
+        lens: completed[lens] for lens in required
+        if lens in completed and _qa_started_after_review(task_dir, lens, completed[lens], review_ts)
+    }
+    verdicts = [str(valid[lens].get("verdict") or "").upper() for lens in required if lens in valid]
+    if any(verdict == "FAIL" for verdict in verdicts):
+        return "FAIL"
+    if any(verdict == "BLOCKED_ENV" for verdict in verdicts):
+        return "BLOCKED_ENV"
+    if len(verdicts) == len(required) and all(verdict == "PASS" for verdict in verdicts):
+        return "PASS"
+    return "PENDING"
 
 
 # ── Task context ─────────────────────────────────────────────────────────
@@ -1605,9 +1998,8 @@ def receipt_runtime_verdict(task_dir, state=None):
 
 # ── Runtime-verdict staleness check ─────────────────────────────────────
 #
-# Runtime verification is receipt-backed: a task has runtime PASS only when a
-# hook-owned subagent-start receipt exists. There is no verification artifact
-# mtime to compare, so staleness is not part of the close signal.
+# Runtime verification is receipt-backed. Completion timestamps are compared
+# with touched paths so edits made after QA invalidate the close signal.
 
 _STALE_CHECK_SKIP_SUFFIXES = (
     ".pyc", ".pyo", ".pyd",
@@ -1621,6 +2013,7 @@ _STALE_CHECK_SKIP_PREFIXES = (
 )
 _STALE_CHECK_SKIP_BASENAMES = {
     SUBAGENT_RECEIPTS_NAME,
+    REVIEW_RECEIPTS_NAME,
     "TASK_STATE.yaml",
     "PLAN.meta.json",
     "PLAN_SESSION.json",
@@ -1651,6 +2044,30 @@ def _stale_skip(relpath: str) -> bool:
 
 
 def runtime_is_stale(task_dir: str) -> tuple[bool, str]:
+    st = read_state(task_dir)
+    required = _required_qa_lenses(task_dir, st)
+    completed = _completed_qa_by_lens(task_dir)
+    passing = [completed.get(lens) for lens in required]
+    if not passing or any(not item or item.get("verdict") != "PASS" for item in passing):
+        return False, ""
+    try:
+        completed_at = min(
+            datetime.fromisoformat(str(item.get("ts") or "").replace("Z", "+00:00")).timestamp()
+            for item in passing if item
+        )
+    except (TypeError, ValueError):
+        return True, SUBAGENT_RECEIPTS_NAME
+    repo_root = find_repo_root(task_dir)
+    touched = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
+    for relpath in touched[:_STALE_CHECK_PATH_CAP]:
+        if _stale_skip(relpath):
+            continue
+        path = os.path.join(repo_root, relpath)
+        try:
+            if os.path.getmtime(path) > completed_at:
+                return True, relpath
+        except OSError:
+            continue
     return False, ""
 
 
@@ -1678,11 +2095,27 @@ def emit_compact_context(task_dir):
     if not has_plan and not micro_loop:
         missing_for_close.append("PLAN.md")
     receipt_summary = subagent_receipt_summary(task_dir)
+    review_summary = review_receipt_summary(task_dir)
+    required_reviews = required_review_lenses(task_dir, st)
+    review_verdict = receipt_review_verdict(task_dir, st)
+    completed_reviews = _completed_review_by_lens(task_dir)
+    missing_reviews = [lens for lens in required_reviews if lens not in completed_reviews]
+    if review_verdict not in {"PASS", "NOT_APPLICABLE"}:
+        if missing_reviews:
+            missing_for_close.append("completed review verdict: " + ", ".join(missing_reviews))
+        else:
+            missing_for_close.append("completed review verdict PASS for current diff")
+    required_qa_lenses = _required_qa_lenses(task_dir, st)
+    completed_qa = _completed_qa_by_lens(task_dir)
+    missing_qa_lenses = [lens for lens in required_qa_lenses if lens not in completed_qa]
     if runtime_verdict != "PASS":
-        missing_for_close.append("subagent start receipt")
+        if missing_qa_lenses:
+            missing_for_close.append("completed QA verdict: " + ", ".join(missing_qa_lenses))
+        else:
+            missing_for_close.append("completed QA verdict PASS")
 
-    # Browser QA is represented by the same subagent-start receipt as the rest
-    # of verification. There is no separate browser critic artifact gate.
+    # Browser QA uses the same lifecycle receipt stream as other QA lenses.
+    # There is no separate browser critic artifact gate.
     repo_root = find_repo_root()
     try:
         browser_supported = _manifest_bool(repo_root, "qa", "browser_qa_supported")
@@ -1716,8 +2149,16 @@ def emit_compact_context(task_dir):
 
     if not has_plan and not micro_loop:
         next_action = "Create PLAN.md via plan skill before source writes."
+    elif review_verdict not in {"PASS", "NOT_APPLICABLE"}:
+        next_action = (
+            "Run and await the required read-only review subagent(s); completion hooks "
+            "must record an explicit PASS for the current diff before QA."
+        )
     elif runtime_verdict != "PASS":
-        next_action = "Spawn a subagent; the start hook records the verification receipt."
+        next_action = (
+            "Run and await the required QA subagent(s); completion hooks must record "
+            "an explicit PASS verdict."
+        )
     elif open_conversation_items:
         next_action = (
             "Resolve CONVERSATION.md open item markers as captured, rejected, "
@@ -1729,7 +2170,7 @@ def emit_compact_context(task_dir):
             "behavior before source work, then link it from PLAN.md."
         )
     else:
-        next_action = "Subagent receipt present — run task_close."
+        next_action = "Completed QA verdicts present — run task_close."
 
     stale, stale_path = runtime_is_stale(task_dir)
 
@@ -1747,6 +2188,10 @@ def emit_compact_context(task_dir):
         "attempt_count": len(attempts),
         "latest_attempt": attempts[-1] if attempts else {},
         "subagent_receipts": receipt_summary,
+        "review_receipts": review_summary,
+        "review_verdict": review_verdict,
+        "required_review_lenses": required_reviews,
+        "required_qa_lenses": required_qa_lenses,
         "missing_for_close": missing_for_close,
         "next_action": next_action,
         "conversation_open_items": open_conversation_items[:10],
@@ -1948,13 +2393,17 @@ def artifact_exists(task_dir, filename):
 def provenance_from_artifacts(task_dir):
     """Derive provenance from artifact existence."""
     has_subagent = artifact_exists(task_dir, SUBAGENT_RECEIPTS_NAME)
+    completed = _completed_qa_by_lens(task_dir)
+    reviews = _completed_review_by_lens(task_dir)
     return {
         "plan-skill": artifact_exists(task_dir, "PLAN.md"),
         "subagent-start-hook": has_subagent,
-        "qa-browser": has_subagent,
-        "qa-api": has_subagent,
-        "qa-cli": has_subagent,
-        "qa-desktop": has_subagent,
+        "code-reviewer": reviews.get("review-code", {}).get("verdict") == "PASS",
+        "security-reviewer": reviews.get("review-security", {}).get("verdict") == "PASS",
+        "qa-browser": completed.get("qa-browser", {}).get("verdict") == "PASS",
+        "qa-api": completed.get("qa-api", {}).get("verdict") == "PASS",
+        "qa-cli": completed.get("qa-cli", {}).get("verdict") == "PASS",
+        "qa-desktop": completed.get("qa-desktop", {}).get("verdict") == "PASS",
         "ux-browser": has_subagent,
         "ux-api": has_subagent,
         "ux-cli": has_subagent,

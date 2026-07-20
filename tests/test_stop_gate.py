@@ -211,7 +211,7 @@ def test_stale_background_record_does_not_mask_normal_stop_gate(tmp_path):
 
     payload = json.loads(result.stdout)
     assert payload["decision"] == "block"
-    assert "plan -> develop -> verify -> close" in payload["reason"]
+    assert "plan -> develop -> review -> QA -> verify -> close" in payload["reason"]
     assert "background subagent work still running" not in payload["reason"]
 
 
@@ -255,5 +255,5 @@ def test_stop_hook_active_without_active_background_still_blocks_open_task(tmp_p
 
     payload = json.loads(result.stdout)
     assert payload["decision"] == "block"
-    assert "plan -> develop -> verify -> close" in payload["reason"]
+    assert "plan -> develop -> review -> QA -> verify -> close" in payload["reason"]
     assert "background subagent work still running" not in payload["reason"]

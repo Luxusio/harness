@@ -227,6 +227,8 @@ def test_sync_codex_payload_produces_complete_plugin_bundle(tmp_path):
     assert str(plugin_root) in mcp_text
     assert (codex_plugin / "scripts" / "hook_pre_tool_use.py").is_file()
     assert (codex_plugin / "mcp" / "harness_server.py").is_file()
+    assert (codex_plugin / "agents" / "code-reviewer.md").is_file()
+    assert (codex_plugin / "agents" / "security-reviewer.md").is_file()
     assert not list((codex_plugin / "scripts").glob("hook_*.sh"))
 
 
@@ -269,7 +271,9 @@ def test_codex_hooks_config_uses_absolute_cache_python_and_reviews_all_events(tm
         assert hook["command"].startswith("/")
         assert hook["timeout"] > 0
         assert hook["statusMessage"]
-    assert hooks["PostToolUse"][0]["matcher"] == "Bash"
+    assert hooks["PostToolUse"][0]["matcher"] == (
+        "Bash|.*spawn_agent|.*wait_agent|.*list_agents"
+    )
 
 
 def test_codex_hook_trust_state_matches_normalized_codex_identity(tmp_path):
