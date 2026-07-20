@@ -37,13 +37,14 @@ try:
         receipt_runtime_verdict,
         receipt_review_verdict,
         required_review_lenses,
-        emit_compact_context,
         goal_command_objective,
         read_current_goal,
         next_goal_task,
         start_harness_goal,
         write_goal_payload_probe,
         append_conversation_entry,
+        git_changed_paths_request_cache,
+        _goal_probe_runtime,
     )
 except Exception:
     sys.exit(0)
@@ -412,10 +413,6 @@ def _append_feedback_event(task_dir: str, repo_root: str, data: dict) -> bool:
     if not st:
         return False
     task_id = st.get("task_id") or os.path.basename(task_dir)
-    try:
-        ctx = emit_compact_context(task_dir)
-    except Exception:
-        ctx = {}
     open_acs, _reopen_total = _open_acs(task_dir)
     touched = [
         _sanitize_path(str(p))
@@ -430,7 +427,10 @@ def _append_feedback_event(task_dir: str, repo_root: str, data: dict) -> bool:
         "status": st.get("status") or "unknown",
         "plan_session_state": st.get("plan_session_state") or "",
         "runtime_verdict": (st.get("runtime_verdict") or "pending").upper(),
-        "next_action": _sanitize_prompt_text(str(ctx.get("next_action") or ""))[:240],
+        # Keep UserPromptSubmit read-only and fast. The canonical next action
+        # remains available through task_context; recomputing its full receipt
+        # and Git-freshness graph here can consume the hook timeout.
+        "next_action": "Refresh task_context before the next phase transition.",
         "open_acs": [
             {"id": ac_id, "title": title}
             for ac_id, title in open_acs
@@ -469,7 +469,7 @@ def main() -> int:
                 repo_root,
                 objective,
                 source={
-                    "runtime": "claude",
+                    "runtime": _goal_probe_runtime(data),
                     "hook_event": "UserPromptSubmit",
                     "session_id": data.get("session_id") if isinstance(data, dict) else "",
                     "transcript_path": data.get("transcript_path") if isinstance(data, dict) else "",
@@ -480,22 +480,26 @@ def main() -> int:
     task_dir = _find_active_task_dir(repo_root)
 
     output_parts = [DOC_GATE]
-    # Harness context block (existing behavior)
-    if task_dir:
-        _append_feedback_event(task_dir, repo_root, data)
-        review_gate = _build_review_gate(task_dir)
-        if review_gate:
-            output_parts.append(review_gate)
-        else:
-            qa_gate = _build_qa_gate(task_dir)
-            if qa_gate:
-                output_parts.append(qa_gate)
-        block = _build_block(task_dir, repo_root)
-        if block:
-            output_parts.append(block)
-        restore_block = _build_restore_block(task_dir, repo_root)
-        if restore_block:
-            output_parts.append(restore_block)
+    # All freshness checks in one prompt observe the same read-only Git
+    # snapshot. This prevents repeated git diff/ls-files calls from consuming
+    # the entire Codex UserPromptSubmit timeout.
+    with git_changed_paths_request_cache():
+        # Harness context block (existing behavior)
+        if task_dir:
+            _append_feedback_event(task_dir, repo_root, data)
+            review_gate = _build_review_gate(task_dir)
+            if review_gate:
+                output_parts.append(review_gate)
+            else:
+                qa_gate = _build_qa_gate(task_dir)
+                if qa_gate:
+                    output_parts.append(qa_gate)
+            block = _build_block(task_dir, repo_root)
+            if block:
+                output_parts.append(block)
+            restore_block = _build_restore_block(task_dir, repo_root)
+            if restore_block:
+                output_parts.append(restore_block)
 
     # Approved runbooks + pending candidates are repo-local execution memory.
     # They are advisory and capped inside runbook_memory.py.

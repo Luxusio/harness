@@ -181,7 +181,7 @@ The post-close self-improvement pass in the Goal child-task executor auto-promot
 | UserPromptSubmit | `prompt_memory.py` | Inject `[harness-context]` block on each prompt (active task + verdict + open ACs) |
 | UserPromptSubmit | `hook_user_prompt_submit.py` | Codex plugin wrapper for prompt memory |
 | PostToolUse (Bash) | `tool_routing.py` | Emit `[harness-hint]` on known failures (wrong test command, missing script) |
-| PostToolUse (Bash) | `hook_post_tool_use.py` | Codex plugin wrapper for tool routing |
+| PostToolUse (Bash/Goal/agent lifecycle) | `hook_post_tool_use.py` | Route Bash failures, native `create_goal` synchronization, and Codex reviewer/QA receipts |
 | SessionStart | `hook_session_start.py` | Codex plugin wrapper for startup context |
 | Stop | `hook_stop.py` | Codex plugin wrapper for stop gating |
 | (task_start) | `environment_snapshot.py` | One-shot probe invoked from `task_start`; writes `ENVIRONMENT_SNAPSHOT.md` into the task dir |

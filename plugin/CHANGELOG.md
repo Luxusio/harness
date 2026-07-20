@@ -13,6 +13,9 @@ All notable changes to the harness Claude Code plugin.
 - Routing migration and verification target `AGENTS.md` on Codex and `CLAUDE.md` on Claude Code.
 - Setup validation now rejects future/ambiguous manifests, ineffective or tracked operational ignores, managed-path symlinks, placeholder critics, missing contracts, and unstated QA/runtime completion.
 - Plugin payload updates are staged before activation, and setup writes preserve permissions and roll back on failure.
+- Codex native `create_goal` calls now receive an immediate harness synchronization reminder through PostToolUse.
+- UserPromptSubmit reuses one request-scoped Git snapshot, labels its child as Codex, and keeps the outer hook timeout above the child deadline so load spikes do not silently discard context.
+- Goal prompt metadata now records the actual runtime instead of labeling Codex events as Claude.
 
 ## [2.2.0] — 2026-04-16
 

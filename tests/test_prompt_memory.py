@@ -20,6 +20,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "plugin" / "scripts"
 PROMPT = SCRIPTS / "prompt_memory.py"
+PROMPT_WRAPPER = SCRIPTS / "hook_user_prompt_submit.py"
 
 
 def _invoke(repo_root: str, *, env_extra=None, payload: dict | None = None) -> subprocess.CompletedProcess:
@@ -415,6 +416,26 @@ class TestPromptMemory(unittest.TestCase):
         self.assertEqual(record["objective"], "Fix login bug cleanly")
         self.assertNotIn("strategy", record)
         self.assertEqual(record["source"]["hook_event"], "UserPromptSubmit")
+
+    def test_codex_goal_prompt_records_codex_runtime(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp))
+            payload = {
+                "cwd": str(base),
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "codex-goal",
+                "prompt": "/goal Fix setup routing",
+            }
+            r = subprocess.run(
+                [sys.executable, str(PROMPT_WRAPPER)],
+                input=json.dumps(payload), capture_output=True, text=True,
+                cwd=str(base), timeout=5,
+            )
+            record = json.loads(
+                (base / "doc/harness/goals/current.json").read_text(encoding="utf-8")
+            )
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(record["source"]["runtime"], "codex")
 
     def test_claude_korean_goal_prompt_syncs_harness_goal(self):
         with tempfile.TemporaryDirectory() as tmp:

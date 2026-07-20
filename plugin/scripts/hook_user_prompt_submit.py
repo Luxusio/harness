@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+CHILD_TIMEOUT_SECONDS = 6
 
 
 def _payload_cwd(payload: bytes) -> str | None:
@@ -27,8 +28,9 @@ def main() -> int:
             input=payload,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=3,
+            timeout=CHILD_TIMEOUT_SECONDS,
             cwd=_payload_cwd(payload),
+            env={**os.environ, "HARNESS_RUNTIME": "codex"},
         )
         context = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
         if context:

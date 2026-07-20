@@ -15,16 +15,20 @@ try:
     from _lib import (  # type: ignore
         extract_qa_verdict,
         find_repo_root,
+        is_harness_enabled_repo,
         list_review_receipts,
         list_subagent_receipts,
         record_subagent_receipt,
+        read_current_goal,
         review_diff_fingerprint,
         resolve_active_task_dir,
     )
 except Exception:  # pragma: no cover - hook must fail open
     extract_qa_verdict = None
     find_repo_root = None
+    is_harness_enabled_repo = None
     record_subagent_receipt = None
+    read_current_goal = None
     resolve_active_task_dir = None
     list_subagent_receipts = None
     list_review_receipts = None
@@ -69,6 +73,57 @@ def _is_list_agents_tool(tool_name: str) -> bool:
 def _is_spawn_agent_tool(tool_name: str) -> bool:
     name = (tool_name or "").lower().replace("-", "_")
     return name == "spawn_agent" or name.endswith(".spawn_agent") or name.endswith("__spawn_agent")
+
+
+def _is_create_goal_tool(tool_name: str) -> bool:
+    name = (tool_name or "").lower().replace("-", "_")
+    return name == "create_goal" or name.endswith(".create_goal") or name.endswith("__create_goal")
+
+
+def _goal_routing_hint(payload: bytes) -> str:
+    """Return the native-Goal → harness synchronization reminder.
+
+    ``create_goal`` is an agent-only Codex tool, so this hook cannot invoke
+    ``get_goal`` itself. PostToolUse is the first reliable point at which the
+    goal exists and the agent can be told to synchronize it through harness.
+    """
+    if find_repo_root is None or is_harness_enabled_repo is None or read_current_goal is None:
+        return ""
+    data = _json_payload(payload)
+    if not _is_create_goal_tool(str(data.get("tool_name") or data.get("tool") or "")):
+        return ""
+    try:
+        repo_root = find_repo_root(_payload_cwd(payload) or os.getcwd())
+        if not is_harness_enabled_repo(repo_root):
+            return ""
+        response = data.get("tool_response", data.get("tool_result", data.get("toolResult")))
+        if isinstance(response, dict):
+            status = str(response.get("status") or "").strip().lower()
+            if response.get("success") is False or response.get("error") or status in {"error", "failed"}:
+                return ""
+        elif isinstance(response, str) and re.match(r"(?is)^\s*(?:error|failed)\b", response):
+            return ""
+
+        tool_input = data.get("tool_input") or data.get("input") or data.get("arguments") or {}
+        objective = ""
+        if isinstance(tool_input, dict):
+            objective = " ".join(str(tool_input.get("objective") or "").split())
+        current = read_current_goal(repo_root)
+        current_objective = " ".join(str(current.get("objective") or "").split())
+        if (
+            objective
+            and current.get("status") == "active"
+            and objective == current_objective
+        ):
+            return ""
+    except Exception:
+        return ""
+    return (
+        "[harness-goal] Native Goal was created. Before implementation: call "
+        "get_goal, then harness goal_start with that objective; call goal_context; "
+        "if no child task exists, call task_start then goal_add_task. Continue with "
+        "goal_next_task. Do not treat create_goal alone as harness activation."
+    )
 
 
 def _response_text(value) -> str:
@@ -242,6 +297,15 @@ def main() -> int:
     tool_name = _tool_name(payload)
     _record_codex_spawn_result(payload)
     _record_codex_subagent_completion(payload)
+    goal_hint = _goal_routing_hint(payload)
+    if goal_hint:
+        sys.stdout.write(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "PostToolUse",
+                "additionalContext": goal_hint,
+            }
+        }))
+        return 0
     if tool_name != "Bash":
         return 0
     try:

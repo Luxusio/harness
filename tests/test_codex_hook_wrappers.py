@@ -31,6 +31,103 @@ class _BytesStdin:
 
 
 class TestCodexHookWrappers(unittest.TestCase):
+    def test_post_tool_use_routes_native_create_goal_into_harness(self):
+        mod = _load("hook_post_tool_use")
+
+        with tempfile.TemporaryDirectory() as repo:
+            root = Path(repo)
+            (root / ".git").mkdir()
+            manifest = root / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("type: cli\n", encoding="utf-8")
+            payload = {
+                "cwd": repo,
+                "tool_name": "functions.create_goal",
+                "tool_input": {"objective": "Fix every setup-flow bug"},
+                "tool_response": {"status": "active"},
+            }
+            output = io.StringIO()
+            with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(payload))):
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(mod.main(), 0)
+
+        data = json.loads(output.getvalue())
+        context = data["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(data["hookSpecificOutput"]["hookEventName"], "PostToolUse")
+        self.assertIn("[harness-goal]", context)
+        self.assertIn("get_goal", context)
+        self.assertIn("goal_start", context)
+        self.assertIn("task_start", context)
+        self.assertIn("goal_add_task", context)
+
+    def test_post_tool_use_create_goal_is_silent_outside_harness_repo(self):
+        mod = _load("hook_post_tool_use")
+
+        with tempfile.TemporaryDirectory() as repo:
+            payload = {
+                "cwd": repo,
+                "tool_name": "create_goal",
+                "tool_response": {"status": "active"},
+            }
+            output = io.StringIO()
+            with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(payload))):
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(mod.main(), 0)
+
+        self.assertEqual(output.getvalue(), "")
+
+    def test_post_tool_use_create_goal_is_silent_on_failure(self):
+        mod = _load("hook_post_tool_use")
+
+        with tempfile.TemporaryDirectory() as repo:
+            root = Path(repo)
+            (root / ".git").mkdir()
+            manifest = root / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("type: cli\n", encoding="utf-8")
+            payload = {
+                "cwd": repo,
+                "tool_name": "create_goal",
+                "tool_input": {"objective": "Will fail"},
+                "tool_response": {"status": "failed", "error": "goal already active"},
+            }
+            output = io.StringIO()
+            with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(payload))):
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(mod.main(), 0)
+
+        self.assertEqual(output.getvalue(), "")
+
+    def test_post_tool_use_create_goal_is_silent_when_harness_goal_is_already_linked(self):
+        mod = _load("hook_post_tool_use")
+
+        with tempfile.TemporaryDirectory() as repo:
+            root = Path(repo)
+            (root / ".git").mkdir()
+            manifest = root / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("type: cli\n", encoding="utf-8")
+            goals = root / "doc/harness/goals"
+            goals.mkdir(parents=True)
+            (goals / "current.json").write_text(json.dumps({
+                "goal_id": "GOAL__linked",
+                "objective": "Fix setup routing",
+                "status": "active",
+                "tasks": [],
+            }), encoding="utf-8")
+            payload = {
+                "cwd": repo,
+                "tool_name": "functions.create_goal",
+                "tool_input": {"objective": "Fix   setup routing"},
+                "tool_response": {"status": "active"},
+            }
+            output = io.StringIO()
+            with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(payload))):
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(mod.main(), 0)
+
+        self.assertEqual(output.getvalue(), "")
+
     def test_session_start_runs_children_from_payload_cwd(self):
         mod = _load("hook_session_start")
         calls: list[dict] = []
@@ -79,6 +176,23 @@ class TestCodexHookWrappers(unittest.TestCase):
 
                 self.assertTrue(calls, name)
                 self.assertTrue(all(call.get("cwd") == repo for call in calls), name)
+
+    def test_codex_prompt_wrapper_sets_runtime_for_child(self):
+        mod = _load("hook_user_prompt_submit")
+        calls: list[dict] = []
+
+        def fake_run(*args, **kwargs):
+            calls.append(kwargs)
+            return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as repo:
+            with mock.patch("subprocess.run", side_effect=fake_run):
+                with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps({"cwd": repo}))):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(mod.main(), 0)
+
+        self.assertEqual(calls[0]["env"]["HARNESS_RUNTIME"], "codex")
+        self.assertEqual(calls[0]["timeout"], mod.CHILD_TIMEOUT_SECONDS)
 
     def test_pre_tool_use_does_not_register_uncorrelatable_codex_agent_id(self):
         mod = _load("hook_pre_tool_use")

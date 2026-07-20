@@ -410,7 +410,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
                         {
                             "type": "command",
                             "command": f"{shlex.quote(_python_cmd())} {shlex.quote(str(hooks['UserPromptSubmit']))}",
-                            "timeout": 3,
+                            "timeout": 8,
                             "statusMessage": "Loading harness memory",
                         }
                     ]
@@ -418,7 +418,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
             ],
             "PostToolUse": [
                 {
-                    "matcher": "Bash|.*spawn_agent|.*wait_agent|.*list_agents",
+                    "matcher": "Bash|.*create_goal|.*spawn_agent|.*wait_agent|.*list_agents",
                     "hooks": [
                         {
                             "type": "command",
