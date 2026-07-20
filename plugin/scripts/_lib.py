@@ -15,7 +15,6 @@ import subprocess
 import tempfile
 import json
 import hashlib
-from contextlib import contextmanager
 from datetime import datetime, timezone
 
 TASK_DIR = "doc/harness/tasks"
@@ -32,26 +31,6 @@ SCHEMA_FIELDS = (
     "touched_paths", "plan_session_state",
     "closed_at", "updated",
 )
-
-
-# Hook scripts may ask several receipt/freshness helpers about the same Git
-# snapshot.  Each helper eventually calls ``_git_changed_paths``; without a
-# request-scoped cache a UserPromptSubmit hook can run the same three Git
-# commands many times and exceed Codex's hook timeout.  The cache is opt-in so
-# long-lived MCP server calls never observe stale repository state.
-_GIT_CHANGED_PATHS_REQUEST_CACHE: dict | None = None
-
-
-@contextmanager
-def git_changed_paths_request_cache():
-    """Reuse Git changed-path snapshots within one read-only hook request."""
-    global _GIT_CHANGED_PATHS_REQUEST_CACHE
-    previous = _GIT_CHANGED_PATHS_REQUEST_CACHE
-    _GIT_CHANGED_PATHS_REQUEST_CACHE = {}
-    try:
-        yield
-    finally:
-        _GIT_CHANGED_PATHS_REQUEST_CACHE = previous
 
 
 # ── Plugin-root env var (AC-006 of TASK__dual-runtime-plugin-claude-codex) ─
@@ -2300,25 +2279,6 @@ def _fingerprint_path(repo_root, relpath):
 
 
 def _git_changed_paths(repo_root, prefix="", with_fingerprints=False):
-    cache_key = (os.path.abspath(repo_root), prefix, bool(with_fingerprints))
-    if _GIT_CHANGED_PATHS_REQUEST_CACHE is not None:
-        cached = _GIT_CHANGED_PATHS_REQUEST_CACHE.get(cache_key)
-        if cached is not None:
-            return dict(cached) if with_fingerprints else set(cached)
-        alternate = _GIT_CHANGED_PATHS_REQUEST_CACHE.get(
-            (cache_key[0], prefix, not bool(with_fingerprints))
-        )
-        if alternate is not None:
-            if with_fingerprints:
-                changed = {
-                    rel: _fingerprint_path(repo_root, rel[len(prefix):] if prefix else rel)
-                    for rel in alternate
-                }
-                _GIT_CHANGED_PATHS_REQUEST_CACHE[cache_key] = dict(changed)
-                return changed
-            changed = set(alternate)
-            _GIT_CHANGED_PATHS_REQUEST_CACHE[cache_key] = set(changed)
-            return changed
     changed = {} if with_fingerprints else set()
     commands = (
         ["git", "-c", f"safe.directory={repo_root}", "diff", "--name-only", "HEAD"],
@@ -2336,10 +2296,6 @@ def _git_changed_paths(repo_root, prefix="", with_fingerprints=False):
                         changed[rel] = _fingerprint_path(repo_root, path)
                     else:
                         changed.add(rel)
-    if _GIT_CHANGED_PATHS_REQUEST_CACHE is not None:
-        _GIT_CHANGED_PATHS_REQUEST_CACHE[cache_key] = (
-            dict(changed) if with_fingerprints else set(changed)
-        )
     return changed
 
 
@@ -2423,20 +2379,12 @@ def _filter_baseline_unchanged(task_dir, repo_root, changed):
 
 
 def _initialized_submodule_paths(repo_root):
-    cache_key = (os.path.abspath(repo_root), "__initialized_submodules__")
-    if _GIT_CHANGED_PATHS_REQUEST_CACHE is not None:
-        cached = _GIT_CHANGED_PATHS_REQUEST_CACHE.get(cache_key)
-        if cached is not None:
-            return list(cached)
     r = subprocess.run(
         ["git", "submodule", "status", "--recursive"],
         capture_output=True, text=True, cwd=repo_root,
     )
     if r.returncode != 0:
-        out = []
-        if _GIT_CHANGED_PATHS_REQUEST_CACHE is not None:
-            _GIT_CHANGED_PATHS_REQUEST_CACHE[cache_key] = out
-        return out
+        return []
     out = []
     for line in r.stdout.splitlines():
         # Leading '-' means registered but not initialized.
@@ -2447,8 +2395,6 @@ def _initialized_submodule_paths(repo_root):
             path = parts[1].strip()
             if path and not path.startswith("-"):
                 out.append(path.rstrip("/"))
-    if _GIT_CHANGED_PATHS_REQUEST_CACHE is not None:
-        _GIT_CHANGED_PATHS_REQUEST_CACHE[cache_key] = list(out)
     return out
 
 

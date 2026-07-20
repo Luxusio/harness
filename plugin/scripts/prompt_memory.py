@@ -33,17 +33,13 @@ try:
         TASK_DIR,
         _log_gate_error,
         resolve_active_task_dir,
-        runtime_is_stale,
-        receipt_runtime_verdict,
-        receipt_review_verdict,
-        required_review_lenses,
+        list_review_receipts,
         goal_command_objective,
         read_current_goal,
         next_goal_task,
         start_harness_goal,
         write_goal_payload_probe,
         append_conversation_entry,
-        git_changed_paths_request_cache,
         _goal_probe_runtime,
     )
 except Exception:
@@ -69,6 +65,10 @@ QA_GATE = (
 REVIEW_GATE = (
     "[harness-review] PENDING: spawn+await→list_agents required reviewers; fresh PASS before QA; start≠PASS."
 )
+REVIEW_RECORDED_GATE = (
+    "[harness-review/qa] RECORDED review PASS only; task_verify must validate "
+    "lenses/freshness, then run required QA. Do not respawn solely from this hint."
+)
 GOAL_QUEUE_GATE = (
     "[harness-goal-queue] Child task close is not final; review gaps and "
     "start/queue the next child task unless the Goal is done, blocked, "
@@ -80,18 +80,21 @@ TASK_PACK_GATE = (
 )
 RESTORE_INJECT_CAP = 1400
 RESTORE_TOUCHED_CAP = 5
-RESTORE_COMMIT_CAP = 3
 RESTORE_ARTIFACTS = ("REVIEW_RECEIPTS.jsonl", "SUBAGENT_RECEIPTS.jsonl", "BLOCKED.md")
 FEEDBACK_FILE = "USER_FEEDBACK.jsonl"
 FEEDBACK_PROMPT_CAP = 1200
 FEEDBACK_TOUCHED_CAP = 5
 
-_STALE_SKIP_SUFFIXES = (".pyc", ".pyo", ".pyd")
-_STALE_SKIP_FRAGMENTS = ("__pycache__/", "/.DS_Store", ".swp", ".swo")
-_STALE_PATH_CAP = 50   # bound mtime scan cost on the hook hot path
 _AC_CAP = 3
 _AC_TERMINAL = {"passed", "deferred"}
 _TITLE_MAX = 24
+_REVIEWABLE_SUFFIXES = {
+    ".c", ".cc", ".conf", ".config", ".cpp", ".cs", ".css", ".go", ".h",
+    ".hpp", ".html", ".ini", ".java", ".js", ".json", ".jsx", ".kt",
+    ".lock", ".php", ".pl", ".properties", ".py", ".rb", ".rs", ".sh",
+    ".sql", ".swift", ".toml", ".ts", ".tsx", ".vue", ".xml", ".yaml",
+    ".yml",
+}
 
 
 def _build_goal_block(repo_root: str, synced_goal: dict | None = None) -> str:
@@ -130,25 +133,9 @@ def _build_goal_block(repo_root: str, synced_goal: dict | None = None) -> str:
     )
 
 
-def _stale_skip(rel: str) -> bool:
-    if not rel:
-        return True
-    for suf in _STALE_SKIP_SUFFIXES:
-        if rel.endswith(suf):
-            return True
-    for frag in _STALE_SKIP_FRAGMENTS:
-        if frag in rel:
-            return True
-    return False
-
-
 def _find_active_task_dir(repo_root: str) -> str:
     td = resolve_active_task_dir(repo_root)
     return td if td and os.path.isdir(td) else ""
-
-
-def _runtime_is_stale(task_dir: str, touched: list, repo_root: str) -> bool:
-    return runtime_is_stale(task_dir)[0]
 
 
 _CHECKS_ID_RE = re.compile(r"^-\s+id:\s*(\S+)", re.MULTILINE)
@@ -214,21 +201,16 @@ def _truncate_output(output: str) -> str:
     return output[: MAX_OUTPUT_CHARS - 2].rstrip() + " …"
 
 
-def _build_block(task_dir: str, repo_root: str) -> str:
+def _build_block(task_dir: str) -> str:
     st = read_state(task_dir)
     if not st:
         return ""
     task_id = st.get("task_id") or os.path.basename(task_dir)
     status = st.get("status") or "unknown"
     verdict = (st.get("runtime_verdict") or "pending").upper()
-    touched = st.get("touched_paths") or []
-    stale = _runtime_is_stale(task_dir, touched, repo_root) and verdict == "PASS"
 
     pieces: list = [PREFIX, f"task={task_id}", f"status={status}"]
-    verdict_piece = f"verdict={verdict}"
-    if stale:
-        verdict_piece += " stale"
-    pieces.append(verdict_piece)
+    pieces.append(f"recorded_verdict={verdict}")
 
     acs, reopen_total = _open_acs(task_dir)
     if acs:
@@ -243,19 +225,69 @@ def _build_block(task_dir: str, repo_root: str) -> str:
 
 
 def _build_qa_gate(task_dir: str) -> str:
+    """Use the last persisted task verdict; task_verify remains authoritative."""
     try:
         st = read_state(task_dir)
-        return "" if receipt_runtime_verdict(task_dir, st) == "PASS" else QA_GATE
+        return "" if str(st.get("runtime_verdict") or "").upper() == "PASS" else QA_GATE
     except Exception:
         return QA_GATE
 
 
+def _has_reviewable_touched_path(state: dict) -> bool:
+    for raw in state.get("touched_paths") or []:
+        rel = str(raw or "").replace("\\", "/").lower()
+        if not rel or "__pycache__/" in rel or rel.endswith((".pyc", ".pyo", ".pyd")):
+            continue
+        suffix = os.path.splitext(rel)[1]
+        if suffix == ".md" and rel.startswith(("plugin/", "plugin-codex/")):
+            return True
+        if suffix in _REVIEWABLE_SUFFIXES:
+            if rel.startswith("doc/"):
+                continue
+            return True
+    return False
+
+
 def _build_review_gate(task_dir: str) -> str:
+    """Keep source review advisory until the persisted runtime verdict passes.
+
+    Without Git, prompt-time code cannot prove receipt freshness or discover a
+    newly-required security lens. It therefore never treats review receipts as
+    authoritative; task_verify/task_close make that decision.
+    """
     try:
         st = read_state(task_dir)
-        if not required_review_lenses(task_dir, st):
+        if not _has_reviewable_touched_path(st):
             return ""
-        return "" if receipt_review_verdict(task_dir, st) == "PASS" else REVIEW_GATE
+        if str(st.get("runtime_verdict") or "").upper() == "PASS":
+            return ""
+        receipts = list_review_receipts(task_dir)
+        latest = {}
+        for index, item in enumerate(receipts):
+            lens = str(item.get("lens") or "").lower()
+            if lens.startswith("review-"):
+                latest[lens] = (index, item)
+
+        def has_valid_pass(pair: tuple[int, dict]) -> bool:
+            completion_index, completion = pair
+            return (
+                str(completion.get("status") or "").lower() in {"completed", "done"}
+                and str(completion.get("verdict") or "").upper() == "PASS"
+                and any(
+                    str(start.get("status") or "").lower() == "started"
+                    and start.get("lens") == completion.get("lens")
+                    and start.get("agent_id") == completion.get("agent_id")
+                    and start.get("head_sha") == completion.get("head_sha")
+                    and start.get("diff_fingerprint") == completion.get("diff_fingerprint")
+                    and start.get("head_sha")
+                    and start.get("diff_fingerprint")
+                    for start in receipts[:completion_index]
+                )
+            )
+
+        if "review-code" in latest and all(has_valid_pass(pair) for pair in latest.values()):
+            return REVIEW_RECORDED_GATE
+        return REVIEW_GATE
     except Exception:
         return REVIEW_GATE
 
@@ -295,21 +327,7 @@ def _first_meaningful_line(path: str, cap: int = 180) -> str:
     return ""
 
 
-def _recent_commits(repo_root: str) -> list[str]:
-    import subprocess
-    try:
-        r = subprocess.run(
-            ["git", "log", f"-{RESTORE_COMMIT_CAP}", "--oneline"],
-            cwd=repo_root, capture_output=True, text=True, timeout=2,
-        )
-    except Exception:
-        return []
-    if r.returncode != 0:
-        return []
-    return [_sanitize_prompt_text(line)[:120] for line in r.stdout.splitlines() if line.strip()]
-
-
-def _build_restore_block(task_dir: str, repo_root: str) -> str:
+def _build_restore_block(task_dir: str) -> str:
     """Build a capped resume digest for the active task."""
     st = read_state(task_dir)
     if not st:
@@ -330,11 +348,6 @@ def _build_restore_block(task_dir: str, repo_root: str) -> str:
     if artifact_lines:
         lines.append("latest artifacts:")
         lines.extend(f"  - {line}" for line in artifact_lines[:3])
-
-    commits = _recent_commits(repo_root)
-    if commits:
-        lines.append("recent commits:")
-        lines.extend(f"  - {line}" for line in commits)
 
     if len(lines) == 1:
         return ""
@@ -480,26 +493,23 @@ def main() -> int:
     task_dir = _find_active_task_dir(repo_root)
 
     output_parts = [DOC_GATE]
-    # All freshness checks in one prompt observe the same read-only Git
-    # snapshot. This prevents repeated git diff/ls-files calls from consuming
-    # the entire Codex UserPromptSubmit timeout.
-    with git_changed_paths_request_cache():
-        # Harness context block (existing behavior)
-        if task_dir:
-            _append_feedback_event(task_dir, repo_root, data)
-            review_gate = _build_review_gate(task_dir)
-            if review_gate:
-                output_parts.append(review_gate)
-            else:
-                qa_gate = _build_qa_gate(task_dir)
-                if qa_gate:
-                    output_parts.append(qa_gate)
-            block = _build_block(task_dir, repo_root)
-            if block:
-                output_parts.append(block)
-            restore_block = _build_restore_block(task_dir, repo_root)
-            if restore_block:
-                output_parts.append(restore_block)
+    # Prompt submission is advisory and deliberately performs no Git queries.
+    # Authoritative freshness/fingerprint checks remain in task_verify/task_close.
+    if task_dir:
+        _append_feedback_event(task_dir, repo_root, data)
+        review_gate = _build_review_gate(task_dir)
+        if review_gate:
+            output_parts.append(review_gate)
+        else:
+            qa_gate = _build_qa_gate(task_dir)
+            if qa_gate:
+                output_parts.append(qa_gate)
+        block = _build_block(task_dir)
+        if block:
+            output_parts.append(block)
+        restore_block = _build_restore_block(task_dir)
+        if restore_block:
+            output_parts.append(restore_block)
 
     # Approved runbooks + pending candidates are repo-local execution memory.
     # They are advisory and capped inside runbook_memory.py.

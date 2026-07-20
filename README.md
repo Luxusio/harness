@@ -178,7 +178,7 @@ The post-close self-improvement pass in the Goal child-task executor auto-promot
 | PreToolUse | `prewrite_gate.py` | Artifact ownership + plan-first rule |
 | PreToolUse | `hook_pre_tool_use.py` | Codex plugin wrapper for PreToolUse gates |
 | PreToolUse (Bash) | `mcp_bash_guard.py` | Block Bash-layer mutations of source / protected / workflow-control paths |
-| UserPromptSubmit | `prompt_memory.py` | Inject `[harness-context]` block on each prompt (active task + verdict + open ACs) |
+| UserPromptSubmit | `prompt_memory.py` | Inject stored `[harness-context]` state without Git; authoritative freshness stays in verify/close gates |
 | UserPromptSubmit | `hook_user_prompt_submit.py` | Codex plugin wrapper for prompt memory |
 | PostToolUse (Bash) | `tool_routing.py` | Emit `[harness-hint]` on known failures (wrong test command, missing script) |
 | PostToolUse (Bash/Goal/agent lifecycle) | `hook_post_tool_use.py` | Route Bash failures, native `create_goal` synchronization, and Codex reviewer/QA receipts |

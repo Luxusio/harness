@@ -10,7 +10,6 @@ import os
 import sys
 import tempfile
 import unittest
-from unittest import mock
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPTS = os.path.join(REPO_ROOT, "plugin", "scripts")
@@ -129,44 +128,6 @@ class TestReadHookInput(unittest.TestCase):
             self.assertFalse(_lib.is_harness_enabled_repo(td))
             _mark_harness_enabled(td)
             self.assertTrue(_lib.is_harness_enabled_repo(td))
-
-
-class TestGitChangedPathsRequestCache(unittest.TestCase):
-    def test_cache_is_scoped_and_returns_defensive_copies(self):
-        completed = type("Result", (), {"returncode": 0, "stdout": "src/app.py\n"})()
-        with mock.patch.object(_lib.subprocess, "run", return_value=completed) as run:
-            with _lib.git_changed_paths_request_cache():
-                first = _lib._git_changed_paths("/repo")
-                first.add("mutated-locally.py")
-                second = _lib._git_changed_paths("/repo")
-            third = _lib._git_changed_paths("/repo")
-
-        self.assertEqual(second, {"src/app.py"})
-        self.assertEqual(third, {"src/app.py"})
-        self.assertEqual(run.call_count, 6)
-
-    def test_plain_and_fingerprinted_views_share_one_git_snapshot(self):
-        completed = type("Result", (), {"returncode": 0, "stdout": "src/app.py\n"})()
-        with mock.patch.object(_lib.subprocess, "run", return_value=completed) as run:
-            with mock.patch.object(_lib, "_fingerprint_path", return_value="sha256:test"):
-                with _lib.git_changed_paths_request_cache():
-                    plain = _lib._git_changed_paths("/repo")
-                    fingerprints = _lib._git_changed_paths("/repo", with_fingerprints=True)
-
-        self.assertEqual(plain, {"src/app.py"})
-        self.assertEqual(fingerprints, {"src/app.py": "sha256:test"})
-        self.assertEqual(run.call_count, 3)
-
-    def test_submodule_lookup_is_request_cached(self):
-        completed = type("Result", (), {"returncode": 0, "stdout": " abc123 libs/x (heads/main)\n"})()
-        with mock.patch.object(_lib.subprocess, "run", return_value=completed) as run:
-            with _lib.git_changed_paths_request_cache():
-                first = _lib._initialized_submodule_paths("/repo")
-                second = _lib._initialized_submodule_paths("/repo")
-
-        self.assertEqual(first, ["libs/x"])
-        self.assertEqual(second, ["libs/x"])
-        self.assertEqual(run.call_count, 1)
 
 
 class TestLogGateError(unittest.TestCase):

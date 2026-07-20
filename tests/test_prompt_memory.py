@@ -230,6 +230,120 @@ class TestPromptMemory(unittest.TestCase):
         self.assertIn("task_verify", r.stdout)
         self.assertIn("start≠PASS", r.stdout)
 
+    def test_prompt_hook_never_invokes_git(self):
+        state = (
+            "task_id: TASK__no-git\nstatus: implementing\n"
+            "runtime_verdict: pending\ntouched_paths:\n  - src/app.py\n"
+            "plan_session_state: closed\nclosed_at: null\nupdated: now\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(
+                Path(tmp), active_task_id="TASK__no-git", task_state=state,
+            )
+            fake_bin = base / "fake-bin"
+            fake_bin.mkdir()
+            marker = base / "git-was-called"
+            fake_git = fake_bin / "git"
+            fake_git.write_text(
+                f"#!/bin/sh\nprintf called > '{marker}'\nexit 99\n",
+                encoding="utf-8",
+            )
+            fake_git.chmod(0o755)
+            r = _invoke(str(base), env_extra={"PATH": str(fake_bin)})
+            git_was_called = marker.exists()
+
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("[harness-review]", r.stdout)
+        self.assertFalse(git_was_called)
+
+    def test_matched_review_pass_emits_neutral_verify_then_qa_hint(self):
+        state = (
+            "task_id: TASK__recorded-review\nstatus: implementing\n"
+            "runtime_verdict: pending\ntouched_paths:\n  - src/app.py\n"
+            "plan_session_state: closed\nclosed_at: null\nupdated: now\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(
+                Path(tmp), active_task_id="TASK__recorded-review", task_state=state,
+            )
+            task_dir = base / "doc/harness/tasks/TASK__recorded-review"
+            common = {
+                "kind": "review", "lens": "review-code", "agent_id": "reviewer-1",
+                "head_sha": "abc", "diff_fingerprint": "sha256:abc",
+            }
+            start = {**common, "status": "started", "verdict": ""}
+            completion = {**common, "status": "completed", "verdict": "PASS"}
+            (task_dir / "REVIEW_RECEIPTS.jsonl").write_text(
+                json.dumps(start) + "\n" + json.dumps(completion) + "\n",
+                encoding="utf-8",
+            )
+            r = _invoke(str(base))
+
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("[harness-review/qa]", r.stdout)
+        self.assertIn("RECORDED review PASS", r.stdout)
+        self.assertIn("task_verify", r.stdout)
+        self.assertIn("required QA", r.stdout)
+        self.assertNotIn("spawn+await", r.stdout)
+
+    def test_recorded_security_failure_keeps_review_pending(self):
+        state = (
+            "task_id: TASK__security-fail\nstatus: implementing\n"
+            "runtime_verdict: pending\ntouched_paths:\n  - src/auth.py\n"
+            "plan_session_state: closed\nclosed_at: null\nupdated: now\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(
+                Path(tmp), active_task_id="TASK__security-fail", task_state=state,
+            )
+            task_dir = base / "doc/harness/tasks/TASK__security-fail"
+            events = []
+            for lens, agent, verdict in (
+                ("review-code", "code-1", "PASS"),
+                ("review-security", "security-1", "FAIL"),
+            ):
+                common = {
+                    "kind": "review", "lens": lens, "agent_id": agent,
+                    "head_sha": "abc", "diff_fingerprint": "sha256:abc",
+                }
+                events.extend((
+                    {**common, "status": "started", "verdict": ""},
+                    {**common, "status": "completed", "verdict": verdict},
+                ))
+            (task_dir / "REVIEW_RECEIPTS.jsonl").write_text(
+                "".join(json.dumps(item) + "\n" for item in events), encoding="utf-8",
+            )
+            r = _invoke(str(base))
+
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("[harness-review] PENDING", r.stdout)
+        self.assertNotIn("RECORDED review PASS", r.stdout)
+
+    def test_stored_review_pass_cannot_hide_review_before_verified_runtime_pass(self):
+        state = (
+            "task_id: TASK__stored-review\nstatus: implementing\n"
+            "runtime_verdict: pending\ntouched_paths:\n  - src/app.py\n"
+            "plan_session_state: closed\nclosed_at: null\nupdated: now\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(
+                Path(tmp), active_task_id="TASK__stored-review", task_state=state,
+            )
+            task_dir = base / "doc/harness/tasks/TASK__stored-review"
+            (task_dir / "REVIEW_RECEIPTS.jsonl").write_text(json.dumps({
+                "kind": "review",
+                "status": "completed",
+                "lens": "review-code",
+                "verdict": "PASS",
+                "head_sha": "stale",
+                "diff_fingerprint": "stale",
+            }) + "\n", encoding="utf-8")
+            r = _invoke(str(base))
+
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("[harness-review]", r.stdout)
+        self.assertNotIn("[harness-qa]", r.stdout)
+
     def test_captures_user_prompt_event_for_active_task(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(
@@ -454,38 +568,6 @@ class TestPromptMemory(unittest.TestCase):
         self.assertNotIn("strategy", record)
         self.assertIn("특정 페이지", record["objective"])
 
-    # ---- AC-003: receipt-backed verification ----
-    def test_receipt_backed_verification_does_not_report_stale(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            base = _build_scratch_repo(
-                Path(tmp), active_task_id="TASK__stale",
-                write_receipt=True,
-                touched_paths=["src/foo.py"],
-            )
-            (base / "src").mkdir()
-            src = base / "src" / "foo.py"
-            src.write_text("pass\n")
-            now = time.time()
-            os.utime(src, (now, now))
-            r = _invoke(str(base))
-        self.assertNotIn(" stale", r.stdout)
-
-    def test_stale_skip_list_ignores_pyc(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            base = _build_scratch_repo(
-                Path(tmp), active_task_id="TASK__pyc",
-                write_receipt=True,
-                touched_paths=["src/__pycache__/foo.cpython-311.pyc"],
-            )
-            (base / "src" / "__pycache__").mkdir(parents=True)
-            pyc = base / "src" / "__pycache__" / "foo.cpython-311.pyc"
-            pyc.write_text("x")
-            now = time.time()
-            os.utime(pyc, (now, now))
-            r = _invoke(str(base))
-        self.assertNotIn(" stale", r.stdout,
-                         f"pyc path should be skip-listed: {r.stdout!r}")
-
     # ---- AC-004: AC summary ----
     def test_open_ac_summary(self):
         checks = (
@@ -691,7 +773,7 @@ class TestPromptMemory(unittest.TestCase):
             r = _invoke(str(base))
             elapsed = time.time() - t0
         self.assertEqual(r.returncode, 0)
-        self.assertLess(elapsed, 2.5, f"hook took {elapsed}s (budget 3s)")
+        self.assertLess(elapsed, 1.5, f"hook took {elapsed}s (zero-Git budget 1.5s)")
 
 
 if __name__ == "__main__":

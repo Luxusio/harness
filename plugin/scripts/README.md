@@ -8,7 +8,7 @@ Minimal harness scripts. Self-contained — no plugin-legacy dependency.
 - `update_checks.py` — post-plan AC status updater (develop/qa use this, not Edit)
 - `note_freshness.py` — flips `freshness: current -> suspect` on invalidated notes
 - `environment_snapshot.py` — task_start snapshot with manifest, tool manager, and tool version probes
-- `prompt_memory.py` — UserPromptSubmit context injection, including request-cached Git freshness checks, active-task restore digest, Goal routing, and runbook reminders
+- `prompt_memory.py` — zero-Git UserPromptSubmit context injection from stored task/receipt state, including active-task restore digest, Goal routing, and runbook reminders
 - `hook_post_tool_use.py` — Codex PostToolUse adapter; reminds native `create_goal` callers to synchronize through harness and records reviewer/QA lifecycle evidence
 - `task_pack_runner.py` — ordered multi-task queue state for roadmap/stage requests that should continue without asking users to choose internal task sequence
 - `setup_finalize.py` — applies canonical operational ignores, migrates legacy manifests to schema v5, verifies setup resources and routing, and stamps `.version` only after success
