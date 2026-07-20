@@ -360,6 +360,9 @@ def test_install_codex_plugin_cache_uses_manifest_version_not_codex_suffix(tmp_p
     assert (cached / ".mcp.json").is_file()
     assert (cached / "scripts" / "hook_pre_tool_use.py").is_file()
     assert (cached / "mcp" / "harness_server.py").is_file()
+    assert (cached / "skills" / "setup" / "bootstrap.md").is_file()
+    assert (cached / "skills" / "setup" / "verify-report.md").is_file()
+    assert (cached / "skills" / "setup" / "templates" / "CONTRACTS.md").is_file()
     assert str(cached / "scripts" / "hook_pre_tool_use.py") in (cached / "hooks.json").read_text()
     assert str(cached / "mcp" / "harness_server.py") in (cached / ".mcp.json").read_text()
 
@@ -650,6 +653,54 @@ def test_sync_codex_payload_removes_legacy_top_level_plugin_shapes(tmp_path):
     assert not (install_root / ".codex-plugin").exists()
     assert not (install_root / "marketplace.json").exists()
     assert (install_root / "plugins" / "harness" / ".codex-plugin" / "plugin.json").is_file()
+
+
+def test_sync_codex_payload_keeps_previous_tree_when_staging_fails(tmp_path, monkeypatch):
+    module = _load_install_module()
+    install_root = tmp_path / "codex" / "harness"
+    current = install_root / "plugins" / "harness"
+    current.mkdir(parents=True)
+    (current / "sentinel.txt").write_text("previous")
+    legacy = install_root / "plugin"
+    legacy.mkdir(parents=True)
+    (legacy / "sentinel.txt").write_text("legacy")
+
+    def fail_build(*_args, **_kwargs):
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(module, "_build_codex_payload", fail_build)
+    try:
+        module.sync_codex_payload(install_root)
+    except OSError as exc:
+        assert "copy failed" in str(exc)
+    else:
+        raise AssertionError("staging failure should propagate")
+
+    assert (current / "sentinel.txt").read_text() == "previous"
+    assert (legacy / "sentinel.txt").read_text() == "legacy"
+
+
+def test_sync_claude_payload_keeps_previous_tree_when_staging_fails(tmp_path, monkeypatch):
+    module = _load_install_module()
+    install_root = tmp_path / "claude" / "harness-dev"
+    install_root.mkdir(parents=True)
+    (install_root / "sentinel.txt").write_text("previous")
+    original = module.shutil.copytree
+
+    def fail_first(src, dst, *args, **kwargs):
+        if Path(src) == module.REPO_ROOT / ".claude-plugin":
+            raise OSError("copy failed")
+        return original(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(module.shutil, "copytree", fail_first)
+    try:
+        module.sync_claude_payload(install_root)
+    except OSError as exc:
+        assert "copy failed" in str(exc)
+    else:
+        raise AssertionError("staging failure should propagate")
+
+    assert (install_root / "sentinel.txt").read_text() == "previous"
 
 
 def test_codex_plugin_cache_removes_all_stale_versions(tmp_path):

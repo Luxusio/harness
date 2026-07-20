@@ -362,8 +362,33 @@ def write_goal_payload_probe(repo_root: str, data: dict, *, source: str = "") ->
     if not isinstance(data, dict) or not _goal_probe_capture_enabled(repo_root):
         return False
     try:
-        out_dir = os.environ.get("HARNESS_GOAL_PAYLOAD_DIR") or os.path.join(repo_root, GOAL_PAYLOAD_DEBUG_DIR)
-        os.makedirs(out_dir, exist_ok=True)
+        override_dir = os.environ.get("HARNESS_GOAL_PAYLOAD_DIR")
+        out_dir = override_dir or os.path.join(repo_root, GOAL_PAYLOAD_DEBUG_DIR)
+        if not override_dir:
+            repo_abs = os.path.abspath(repo_root)
+            out_abs = os.path.abspath(out_dir)
+            if os.path.commonpath((repo_abs, out_abs)) != repo_abs:
+                return False
+            current = repo_abs
+            parts = os.path.relpath(out_abs, repo_abs).split(os.sep)
+        else:
+            out_abs = os.path.abspath(out_dir)
+            current = os.path.sep
+            parts = out_abs.strip(os.sep).split(os.sep)
+        for part in parts:
+            current = os.path.join(current, part)
+            if os.path.islink(current):
+                return False
+        existed = os.path.isdir(out_abs)
+        os.makedirs(out_abs, mode=0o700, exist_ok=True)
+        if os.path.islink(out_abs):
+            return False
+        if existed:
+            if os.stat(out_abs).st_mode & 0o077:
+                return False
+        else:
+            os.chmod(out_abs, 0o700)
+        out_dir = out_abs
         ts = now_iso().replace("-", "").replace(":", "")
         runtime = _goal_probe_runtime(data)
         event = str(data.get("hook_event_name") or data.get("hookEventName") or source or "hook")
@@ -381,8 +406,21 @@ def write_goal_payload_probe(repo_root: str, data: dict, *, source: str = "") ->
             "envelope": data if len(raw) <= GOAL_PAYLOAD_RAW_CAP else {"_raw_head": raw[:GOAL_PAYLOAD_RAW_CAP]},
         }
         path = os.path.join(out_dir, f"{runtime}_{event_safe}__{ts}__{session}.json")
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+        fd, tmp = tempfile.mkstemp(dir=out_dir, prefix=".goal-payload.", suffix=".tmp")
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+            os.chmod(path, 0o600)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
         return True
     except OSError:
         return False
@@ -1187,7 +1225,9 @@ def _read_top_manifest_field(repo_root, key):
     try:
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
-                stripped = line.strip()
+                # Only column-zero keys are top-level. Stripping leading
+                # whitespace let nested metadata.type override QA routing.
+                stripped = line.rstrip("\n")
                 if stripped.startswith(prefix):
                     val = stripped[len(prefix):].strip()
                     if val in ("null", "~", "", "[]"):

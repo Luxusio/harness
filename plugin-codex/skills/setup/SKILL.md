@@ -8,10 +8,8 @@ description: |
 user-invocable: true
 ---
 
-# GENERATED-CANDIDATE — hand-ported v1.5 spike from plugin/skills/setup/SKILL.md (469L source).
-# Source is canonical at plugin/skills/setup/SKILL.md. v1.5 AC-005 sync engine will replace this
-# hand-port with mechanical emission. Hand-port lives here ONLY to measure the porting friction
-# for AC-001 of TASK__dual-runtime-v1.5-spike-and-sync.
+# Codex-authored orchestration with runtime-neutral setup sub-files packaged
+# beside this SKILL.md.
 
 
 > **Codex runtime notes** (delta from Claude Code):
@@ -19,11 +17,12 @@ user-invocable: true
 >   a structured `AskUserQuestion` primitive — emit the question + options to the user
 >   conversationally and read the reply from the next user turn. Honor the same Re-ground / Simplify
 >   / Recommend / Options structure in plain prose.
-> - `${CLAUDE_PLUGIN_ROOT}` is not injected on Codex. The harness env wires `${HARNESS_PLUGIN_ROOT}`
->   instead (Codex install via `codex plugin marketplace add plugin-codex/` sets it).
+> - Codex does not inject plugin-root variables into ordinary shell commands.
+>   The adjacent bootstrap/verify sub-files discover the installed
+>   `~/.codex/harness/plugins/harness` mirror and infer Codex from its manifest.
 > - Browser-QA prerequisite probes (Chrome DevTools MCP) — Codex CAN register Playwright/chrome-
 >   devtools MCP servers, but the qa-browser agent prompt is Claude-coupled in v1. Treat
->   `browser_qa_supported: false` as the v1 default on Codex side; v2 will lift this.
+>   `qa.browser_qa_supported: false` as the v1 default on Codex side; v2 will lift this.
 >   Setup reads MCP availability from current session tools or Codex/global runtime
 >   config. Project-root `.mcp.json` remains user-owned configuration.
 > - `Skill()` chaining and `Agent()` fan-out have no Codex equivalent. setup contains zero such
@@ -40,9 +39,9 @@ user-invocable: true
 
 Phase 2 (interactive Q1-Q3) stays inline below.
 
-> v1.5 has NOT ported the sub-files yet — only the main SKILL.md is in this spike. Sub-files
-> remain at `plugin/skills/setup/<file>.md` and any Codex run that needs them today reads the
-> Claude originals. AC-005 sync engine output will regenerate sub-files alongside main SKILL.md.
+All listed sub-files and templates ship under this installed `skills/setup/`
+directory. Resolve them relative to this SKILL.md, never through a source
+checkout path.
 
 ---
 
@@ -122,6 +121,7 @@ A/B: skip to Phase 3 preserving existing manifest values; first re-run Phase 4.2
 
 | Issue | Auto-fix? | Action |
 |-------|-----------|--------|
+| legacy `project_type`/flat QA manifest schema | Yes | Run `setup_finalize.py`; migrate to v5 while preserving unknown fields |
 | dev_command missing from manifest | Yes | Detect from package.json, add |
 | entry_url missing from manifest | Yes | Default from framework port table |
 | Test command wrong in manifest | Yes | Re-detect and update |
@@ -210,7 +210,7 @@ if [ -d "$_ROOT/doc/harness" ]; then
 fi
 ```
 
-If artifacts found: synthesize one-paragraph welcome-back briefing. If manifest exists: "harness is already set up. Manifest shows {project_type} project." → offer repair/upgrade/fresh.
+If artifacts found: synthesize one-paragraph welcome-back briefing. If manifest exists: "harness is already set up. Manifest shows {type} project." → offer repair/upgrade/fresh.
 
 ## Prior Learnings
 
@@ -269,13 +269,16 @@ RECOMMENDATION: [what user should do next]
 
 ## Phase 1: Repo Census
 
-Non-destructive detection. See `repo-census.md` (Claude-side at `plugin/skills/setup/repo-census.md` until v1.5 sub-file porting lands) for full detection bash, build/test command sniffing, and summary format.
+Non-destructive detection. Read the adjacent `repo-census.md` for full
+detection bash, build/test command sniffing, and summary format.
 
 ## Phase 2: Interactive Configuration
 
 ### Phase 2.0: Project interview
 
-Read `project-interview.md` and follow in full. Six forcing questions capture WHY before configuring HOW. Answers feed `doc/common/CLAUDE.md summary:`, `manifest.yaml` defaults, and `CONTRACTS.local.md` C-100+.
+Read the adjacent `project-interview.md` and follow in full. Six forcing
+questions capture WHY before configuring HOW. Stage answers until the
+canonical manifest exists, then apply them in Phase 3.5.
 
 **Skip detection (evaluate in order; any match skips the interview):**
 
@@ -346,7 +349,7 @@ If B: follow up with two free-text asks (build, test) in subsequent turns.
 
 Branch by project type. Check prerequisites before asking. If all met, auto-enable and inform.
 
-**Web frontend (browser_qa_supported):** On Codex side, route MCP availability from current session tools or Codex/global runtime config. Keep project `.mcp.json` as user-owned configuration. Default to `browser_qa_supported: false` in manifest unless browser tools are already available and the user explicitly wants browser QA.
+**Web frontend (`qa.browser_qa_supported`):** On Codex side, route MCP availability from current session tools or Codex/global runtime config. Keep project `.mcp.json` as user-owned configuration. Default to `qa.browser_qa_supported: false` in manifest unless browser tools are already available and the user explicitly wants browser QA.
 
 **Desktop / native GUI (desktop_qa_supported):** Same config ownership on Codex side: setup reports missing desktop MCP tools and preserves project `.mcp.json` as user-owned configuration. Default to `desktop_qa_supported: false` unless the required desktop tools are already available and the user explicitly wants desktop QA.
 
@@ -371,7 +374,10 @@ If A: manifest gets `health_components` uncommenting the default entry that wrap
 
 ## Phase 2.5: Health Stack Auto-Detection
 
-Run after project interview, before bootstrap. Idempotent: if `health_components:` key is already present in manifest.yaml (content or empty list), skip with log line and proceed.
+Run detection after the project interview, before bootstrap. Do not write a
+fresh manifest here. Stage the result in `_PENDING_HEALTH_COMPONENTS`; apply it
+only after Phase 3 creates the canonical manifest. Existing
+`health_components:` remains the repair/upgrade idempotency marker.
 
 ```bash
 # Idempotent check
@@ -406,11 +412,21 @@ If signals detected, ask (or auto-accept if `HARNESS_SPAWNED=1`):
 > A) Yes, write detected components (recommended)
 > B) No, skip
 
-If user accepts (or HARNESS_SPAWNED=1): write `health_components:` block to manifest with one entry per detected signal. If user declines or no signals detected: write `health_components: []` as explicit opt-out marker so this step is skipped on re-run.
+If the user accepts (or `HARNESS_SPAWNED=1`), stage one entry per detected
+signal. If declined or none are detected, stage an empty list. Never create a
+partial manifest during this phase.
+The persisted opt-out marker is exactly `health_components: []`.
 
 ## Phase 3: Bootstrap Core Structure
 
 See `bootstrap.md` — directory creation, manifest.yaml (with smart-defaults table and setup-time MCP reporting), AGENTS.md (or CLAUDE.md fallback via `project_doc_fallback_filenames` in `~/.codex/config.toml`), critic playbooks, doc/harness/ directory + gitignore, non-destructive contracts installation (CONTRACTS.md + CONTRACTS.local.md + @import line + lint check). On Codex, project setup preserves project-root `.mcp.json` as user-owned configuration.
+
+## Phase 3.5: Apply staged configuration
+
+After the canonical manifest exists, apply staged interview fields and
+`_PENDING_HEALTH_COMPONENTS` with targeted edits. Do not bulk-rewrite an
+existing manifest. Then run the adjacent `verify-report.md` preparation
+command (`setup_finalize.py --prepare`) before QA infrastructure checks.
 
 Codex-specific bootstrap steps (delta from Claude):
 - Emit `[mcp_servers.harness]` block into `~/.codex/config.toml` via `plugin-codex/config.toml.example` (additive merge with timestamped backup).

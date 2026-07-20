@@ -2,6 +2,18 @@
 
 All notable changes to the harness Claude Code plugin.
 
+## [Unreleased]
+
+### Fixed
+
+- Setup now emits the runtime manifest schema (`version: 5`, `type`, nested `qa`) used by QA routing.
+- Codex installs include every setup sub-file and template referenced by the setup skill.
+- Setup finalization gitignores Goal, task-pack, review, runtime, and opt-in goal-payload artifacts from one canonical list.
+- Repair/Upgrade migrates legacy flat manifests without dropping unknown fields and stamps `.version` only after verification passes.
+- Routing migration and verification target `AGENTS.md` on Codex and `CLAUDE.md` on Claude Code.
+- Setup validation now rejects future/ambiguous manifests, ineffective or tracked operational ignores, managed-path symlinks, placeholder critics, missing contracts, and unstated QA/runtime completion.
+- Plugin payload updates are staged before activation, and setup writes preserve permissions and roll back on failure.
+
 ## [2.2.0] — 2026-04-16
 
 ### Removed

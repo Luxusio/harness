@@ -334,12 +334,16 @@ class TestPromptMemory(unittest.TestCase):
             debug_dir = base / "doc" / "harness" / "debug" / "goal-hook-payloads"
             files = sorted(debug_dir.glob("codex_UserPromptSubmit__*__goal-session.json"))
             record = json.loads(files[0].read_text(encoding="utf-8"))
+            directory_mode = debug_dir.stat().st_mode & 0o777
+            file_mode = files[0].stat().st_mode & 0o777
         self.assertEqual(r.returncode, 0)
         self.assertEqual(len(files), 1)
         self.assertEqual(record["_event_inferred"], "UserPromptSubmit")
         self.assertIn("prompt", record["_keys_at_top_level"])
         self.assertEqual(record["prompt_candidates"][0]["field"], "prompt")
         self.assertTrue(record["prompt_candidates"][0]["looks_like_goal_command"])
+        self.assertEqual(directory_mode, 0o700)
+        self.assertEqual(file_mode, 0o600)
 
     def test_goal_payload_probe_can_be_enabled_by_repo_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -352,6 +356,44 @@ class TestPromptMemory(unittest.TestCase):
             files = sorted(debug_dir.glob("*_UserPromptSubmit__*.json"))
         self.assertEqual(r.returncode, 0)
         self.assertEqual(len(files), 1)
+
+    def test_goal_payload_probe_rejects_symlinked_default_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp))
+            outside = Path(tmp) / "outside"
+            outside.mkdir()
+            debug = base / "doc" / "harness" / "debug"
+            debug.mkdir(parents=True, exist_ok=True)
+            (debug / "goal-hook-payloads").symlink_to(outside, target_is_directory=True)
+            r = _invoke(
+                str(base),
+                env_extra={"HARNESS_CAPTURE_GOAL_PAYLOADS": "1"},
+                payload={"prompt": "/goal do not escape"},
+            )
+            outside_files = list(outside.iterdir())
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(outside_files, [])
+
+    def test_goal_payload_probe_rejects_symlinked_override_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp))
+            outside = Path(tmp) / "outside"
+            outside.mkdir(mode=0o700)
+            override = Path(tmp) / "override"
+            override.symlink_to(outside, target_is_directory=True)
+            r = _invoke(
+                str(base),
+                env_extra={
+                    "HARNESS_CAPTURE_GOAL_PAYLOADS": "1",
+                    "HARNESS_GOAL_PAYLOAD_DIR": str(override),
+                },
+                payload={"prompt": "/goal do not escape"},
+            )
+            outside_files = list(outside.iterdir())
+            outside_mode = outside.stat().st_mode & 0o777
+        self.assertEqual(r.returncode, 0)
+        self.assertEqual(outside_files, [])
+        self.assertEqual(outside_mode, 0o700)
 
     def test_claude_goal_prompt_syncs_harness_goal(self):
         with tempfile.TemporaryDirectory() as tmp:

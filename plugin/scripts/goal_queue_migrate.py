@@ -147,10 +147,10 @@ def routing_block_bounds(lines: list[str]) -> tuple[int, int] | None:
     return start, end
 
 
-def migrate_claude_routing(repo_root: Path) -> str:
-    path = repo_root / "CLAUDE.md"
+def migrate_project_routing(repo_root: Path, project_doc: str = "CLAUDE.md") -> str:
+    path = repo_root / project_doc
     if not path.exists():
-        return "routing: CLAUDE.md absent"
+        return f"routing: {project_doc} absent"
     original = path.read_text(encoding="utf-8")
     lines = [
         line
@@ -176,7 +176,12 @@ def migrate_claude_routing(repo_root: Path) -> str:
     if migrated == original:
         return "routing: already current"
     atomic_write(path, migrated)
-    return "routing: updated CLAUDE.md"
+    return f"routing: updated {project_doc}"
+
+
+def migrate_claude_routing(repo_root: Path) -> str:
+    """Backward-compatible wrapper for callers that target Claude Code."""
+    return migrate_project_routing(repo_root, "CLAUDE.md")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -186,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--keep-legacy-state", action="store_true")
     parser.add_argument("--state-only", action="store_true")
     parser.add_argument("--routing-only", action="store_true")
+    parser.add_argument("--project-doc", choices=("CLAUDE.md", "AGENTS.md"), default="CLAUDE.md")
     args = parser.parse_args(argv)
 
     repo = args.repo.resolve()
@@ -195,7 +201,7 @@ def main(argv: list[str] | None = None) -> int:
             migrate_state(repo, force=args.force, archive=not args.keep_legacy_state)
         )
     if not args.state_only:
-        messages.append(migrate_claude_routing(repo))
+        messages.append(migrate_project_routing(repo, args.project_doc))
     for message in messages:
         print(message)
     return 0

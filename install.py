@@ -41,6 +41,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -324,6 +325,50 @@ def _copytree_clean(src: Path, dst: Path) -> None:
     )
 
 
+def _activate_staged_tree(staged: Path, target: Path) -> None:
+    """Activate a fully-built tree while retaining the prior tree on failure."""
+    backup = target.with_name(f".{target.name}.previous")
+    if backup.exists():
+        shutil.rmtree(backup)
+    had_target = target.exists()
+    if had_target:
+        os.replace(target, backup)
+    try:
+        os.replace(staged, target)
+    except BaseException:
+        if had_target and backup.exists():
+            os.replace(backup, target)
+        raise
+    if backup.exists():
+        shutil.rmtree(backup)
+
+
+def _build_codex_payload(target: Path, final_root: Path) -> None:
+    _copytree_clean(PLUGIN_CODEX_ROOT, target)
+    _copytree_clean(PLUGIN_ROOT / "scripts", target / "scripts")
+    _copytree_clean(PLUGIN_ROOT / "mcp", target / "mcp")
+    codex_setup = target / "skills" / "setup"
+    claude_setup = PLUGIN_ROOT / "skills" / "setup"
+    for name in ("repo-census.md", "project-interview.md", "bootstrap.md", "verify-report.md"):
+        shutil.copy2(claude_setup / name, codex_setup / name)
+    _copytree_clean(claude_setup / "templates", codex_setup / "templates")
+    (target / "hooks.json").write_text(
+        json.dumps(_codex_hooks_config(final_root), indent=2) + "\n"
+    )
+    (target / ".mcp.json").write_text(
+        json.dumps(_codex_mcp_config(final_root), indent=2) + "\n"
+    )
+    for rel in (
+        "skills/setup/bootstrap.md",
+        "skills/setup/verify-report.md",
+        "skills/setup/templates/CONTRACTS.md",
+        "scripts/setup_finalize.py",
+        "mcp/harness_server.py",
+    ):
+        if not (target / rel).is_file():
+            raise RuntimeError(f"incomplete Codex payload: {rel}")
+
+
 def _codex_hooks_config(plugin_root: Path) -> dict:
     root = plugin_root.resolve()
     hooks = {
@@ -570,22 +615,26 @@ def _codex_mcp_config(shared_plugin_root: Path) -> dict:
 def sync_claude_payload(install_root: Path | None = None) -> Path:
     """Copy the Claude plugin payload under ~/.claude and return plugin/ root."""
     target = install_root or Path(os.environ.get("HARNESS_DEST", DEFAULT_CLAUDE_INSTALL_ROOT))
-    if target.exists():
-        shutil.rmtree(target)
-    target.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(REPO_ROOT / ".claude-plugin", target / ".claude-plugin")
-    plugin_target = target / "plugin"
-    shutil.copytree(
-        PLUGIN_ROOT,
-        plugin_target,
-        ignore=shutil.ignore_patterns(
-            ".git",
-            "__pycache__",
-            "*.pyc",
-            ".pytest_cache",
-        ),
-    )
-    return plugin_target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staged = Path(tempfile.mkdtemp(dir=target.parent, prefix=".harness-claude-staging-"))
+    try:
+        shutil.copytree(REPO_ROOT / ".claude-plugin", staged / ".claude-plugin")
+        shutil.copytree(
+            PLUGIN_ROOT,
+            staged / "plugin",
+            ignore=shutil.ignore_patterns(
+                ".git",
+                "__pycache__",
+                "*.pyc",
+                ".pytest_cache",
+            ),
+        )
+        _activate_staged_tree(staged, target)
+    except BaseException:
+        if staged.exists():
+            shutil.rmtree(staged)
+        raise
+    return target / "plugin"
 
 
 def sync_codex_payload(install_root: Path | None = None) -> Path:
@@ -593,27 +642,28 @@ def sync_codex_payload(install_root: Path | None = None) -> Path:
     if install_root is None:
         install_root = CODEX_INSTALL_ROOT
     install_root.mkdir(parents=True, exist_ok=True)
-    for legacy_path in (
+    legacy_paths = (
         install_root / "plugin-codex",
         install_root / "plugin",
         install_root / ".codex-plugin",
         install_root / "marketplace.json",
-    ):
+    )
+    codex_plugin_root = install_root / "plugins" / "harness"
+    codex_plugin_root.parent.mkdir(parents=True, exist_ok=True)
+    staged = Path(tempfile.mkdtemp(dir=codex_plugin_root.parent, prefix=".harness-staging-"))
+    try:
+        _build_codex_payload(staged, codex_plugin_root)
+        _activate_staged_tree(staged, codex_plugin_root)
+    except BaseException:
+        if staged.exists():
+            shutil.rmtree(staged)
+        raise
+    for legacy_path in legacy_paths:
         if legacy_path.exists():
             if legacy_path.is_dir():
                 shutil.rmtree(legacy_path)
             else:
                 legacy_path.unlink()
-    _copytree_clean(PLUGIN_CODEX_ROOT, install_root / "plugins" / "harness")
-    codex_plugin_root = install_root / "plugins" / "harness"
-    _copytree_clean(PLUGIN_ROOT / "scripts", codex_plugin_root / "scripts")
-    _copytree_clean(PLUGIN_ROOT / "mcp", codex_plugin_root / "mcp")
-    (codex_plugin_root / "hooks.json").write_text(
-        json.dumps(_codex_hooks_config(codex_plugin_root), indent=2) + "\n"
-    )
-    (codex_plugin_root / ".mcp.json").write_text(
-        json.dumps(_codex_mcp_config(codex_plugin_root), indent=2) + "\n"
-    )
     marketplace_dir = install_root / ".agents" / "plugins"
     marketplace_dir.mkdir(parents=True, exist_ok=True)
     marketplace = {
@@ -660,16 +710,24 @@ def install_codex_plugin_cache(source_root: Path, codex_home: Path) -> Path:
         / CODEX_PLUGIN_NAME
         / version
     )
-    if target.parent.exists():
-        shutil.rmtree(target.parent)
     target.parent.mkdir(parents=True, exist_ok=True)
-    _copytree_clean(source_root, target)
-    (target / "hooks.json").write_text(
-        json.dumps(_codex_hooks_config(target), indent=2) + "\n"
-    )
-    (target / ".mcp.json").write_text(
-        json.dumps(_codex_mcp_config(target), indent=2) + "\n"
-    )
+    staged = Path(tempfile.mkdtemp(dir=target.parent, prefix=".cache-staging-"))
+    try:
+        _copytree_clean(source_root, staged)
+        (staged / "hooks.json").write_text(
+            json.dumps(_codex_hooks_config(target), indent=2) + "\n"
+        )
+        (staged / ".mcp.json").write_text(
+            json.dumps(_codex_mcp_config(target), indent=2) + "\n"
+        )
+        _activate_staged_tree(staged, target)
+    except BaseException:
+        if staged.exists():
+            shutil.rmtree(staged)
+        raise
+    for sibling in target.parent.iterdir():
+        if sibling != target and sibling.is_dir() and not sibling.name.startswith("."):
+            shutil.rmtree(sibling)
     return target
 
 

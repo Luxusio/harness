@@ -134,8 +134,9 @@ All under `plugin/scripts/`. Stdlib only.
 | `contract_lint.py` | CONTRACTS.md managed-block lint and skill weight checks | — |
 | `runtime_services.py` | Start/status/log helper for manifest-declared runtime services | `doc/harness/runtime/` |
 | `goal_queue_runner.py` | Persistent Goal child-task queue runner with heartbeat, recover, event log, failure policy, and optional harness-close verification | `doc/harness/goal-queue.json` |
-| `goal_queue_migrate.py` | Existing-repo migration for pre-native Goal queue state and stale CLAUDE routing blocks | `doc/harness/goal-queue.json` |
+| `goal_queue_migrate.py` | Existing-repo migration for pre-native Goal queue state and stale AGENTS/CLAUDE routing blocks | `doc/harness/goal-queue.json` |
 | `task_pack_runner.py` | Ordered task-pack state for multi-step harness requests; records the user's known ordered work and makes the next task deterministic after each close | task pack state files |
+| `setup_finalize.py` | Canonical setup validation, legacy manifest migration, operational ignores, and success-only version stamping | `.gitignore`, `doc/harness/manifest.yaml`, `doc/harness/.version` |
 | `verify_runner.py` | Deterministic manifest `verify_commands` runner with optional parallel execution | stdout |
 | `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | stdout |
 | `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |

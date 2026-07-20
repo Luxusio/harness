@@ -145,6 +145,18 @@ def test_routing_migration_is_idempotent(tmp_path):
     assert claude.read_text(encoding="utf-8") == current
 
 
+def test_routing_migration_supports_codex_agents_md(tmp_path):
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text("# Project\n", encoding="utf-8")
+
+    result = run_migrate(tmp_path, "--routing-only", "--project-doc", "AGENTS.md")
+
+    assert result.returncode == 0
+    assert "routing: updated AGENTS.md" in result.stdout
+    assert "<!-- harness:routing-injected -->" in agents.read_text(encoding="utf-8")
+    assert not (tmp_path / "CLAUDE.md").exists()
+
+
 def test_setup_docs_reference_existing_repo_migration():
     bootstrap = (REPO / "plugin" / "skills" / "setup" / "bootstrap.md").read_text(encoding="utf-8")
     setup = (REPO / "plugin" / "skills" / "setup" / "SKILL.md").read_text(encoding="utf-8")
@@ -153,9 +165,7 @@ def test_setup_docs_reference_existing_repo_migration():
     assert "goal_queue_migrate.py" in bootstrap
     assert "doc/harness/autopilot.yaml" in bootstrap
     assert "doc/harness/goal-queue.json" in bootstrap
-    assert '"doc/harness/goals/"' in bootstrap
-    assert '"doc/harness/goal-queue-events.jsonl"' in bootstrap
-    assert '"doc/harness/legacy/goal-queue-pre-native-state.*.json"' in bootstrap
+    assert "setup_finalize.py" in bootstrap
     assert "already present — skipping" not in bootstrap
     assert "idempotent replace/append" in bootstrap
     assert "Goal queue migration from §3.4" in setup

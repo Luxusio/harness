@@ -41,7 +41,7 @@ ls .github/workflows/*.yml 2>/dev/null && echo "HAS_CI: yes"
 
 # Browser testing infra
 which chromium 2>/dev/null && echo "BROWSER: chromium" || which google-chrome 2>/dev/null && echo "BROWSER: chrome" || which chromium-browser 2>/dev/null && echo "BROWSER: chromium-browser" || echo "BROWSER: none"
-[ -f .mcp.json ] && echo "HAS_MCP_CONFIG: yes" && cat .mcp.json || echo "HAS_MCP_CONFIG: no"
+[ -f .mcp.json ] && echo "HAS_MCP_CONFIG: yes" || echo "HAS_MCP_CONFIG: no"
 grep -q "chrome-devtools" .mcp.json 2>/dev/null && echo "CHROME_MCP: configured" || echo "CHROME_MCP: not_configured"
 
 # API testing infra

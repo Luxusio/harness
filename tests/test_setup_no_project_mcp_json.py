@@ -62,3 +62,16 @@ def test_setup_verify_report_points_to_global_runtime_mcp_config():
     assert "global/runtime MCP settings" in body
     assert "Re-run setup and select" not in body
     assert ".mcp.json — Chrome DevTools MCP configured" not in body
+
+
+def test_shared_setup_files_discover_codex_install_without_shell_env_injection():
+    bootstrap = _text(BOOTSTRAP)
+    verify = _text(VERIFY_REPORT)
+    codex = _text(CODEX_SETUP_SKILL)
+
+    for body in (bootstrap, verify):
+        assert '$HOME/.codex/harness/plugins/harness' in body
+        assert '$_PLUGIN_ROOT/.codex-plugin/plugin.json' in body
+        assert '_PROJECT_DOC="AGENTS.md"' in body
+    assert "does not inject plugin-root variables into ordinary shell commands" in codex
+    assert "The harness env wires `${HARNESS_PLUGIN_ROOT}`" not in codex

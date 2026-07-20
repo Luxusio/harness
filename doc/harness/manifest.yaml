@@ -37,6 +37,7 @@ verify_commands:
 
 # --- QA ---
 qa:
+  desktop_qa_supported: false
   default_mode: cli
   browser_qa_supported: false
   # Opt-in close gate for surface-specific UX review. When true, touched CLI,

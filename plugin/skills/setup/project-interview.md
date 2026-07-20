@@ -110,7 +110,7 @@ AskUserQuestion:
 
 **Maps to:**
 - `manifest.yaml` `verify_commands:` (A 선택 시 명령어 배열)
-- `manifest.yaml` `browser_qa_supported: true` (C 선택 시)
+- `manifest.yaml` `qa.browser_qa_supported: true` (C 선택 시)
 - E 선택 시: `CONTRACTS.local.md` C-102 — "verify 규율 없음, 하네스가 강제" 경고성 규약
 
 ### Q6 — Failure mode to avoid
@@ -166,14 +166,18 @@ setup or active harness task replay the config without re-asking the user.
 `schema_version` bump on breaking changes — setup/continuous maintenance refuses
 to apply unknown versions and prompts user.
 
-### Step 2 — Apply to target files
+### Step 2 — Apply to target files after bootstrap
+
+On a fresh setup, keep these edits staged until setup Phase 3 creates the
+canonical files. On Repair/Upgrade, the files already exist and targeted edits
+may run immediately. Never create a partial manifest before bootstrap.
 
 In this order (each uses Edit/Write with the appropriate gate):
 
 1. `doc/common/CLAUDE.md` — insert `summary:` (Q1) if missing
 2. `doc/common/REQ__project__primary-goals.md` — seed with Q1 + Q2
 3. `doc/harness/manifest.yaml` — set `audience`, `execution_mode_default`,
-   `maintenance_default`, `verify_commands`, `browser_qa_supported` per
+   `maintenance_default`, `verify_commands`, `qa.browser_qa_supported` per
    Q2-Q5
 4. `CONTRACTS.local.md` — append C-100 (Q6) and, if needed, C-101/C-102
 

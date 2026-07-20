@@ -1,179 +1,149 @@
 # Phase 4: Verify & Report
 
-Sub-file for setup/SKILL.md.
+Sub-file for setup/SKILL.md. Verification is runtime-neutral and fail-closed:
+do not report DONE or stamp a version until the shared finalizer passes.
 
----
-
-## 4.1 Verify created files
-
-```bash
-echo "--- SETUP VERIFICATION ---"
-[ -f doc/harness/manifest.yaml ] && echo "manifest.yaml: OK" || echo "manifest.yaml: MISSING"
-[ -f CLAUDE.md ] && echo "CLAUDE.md: OK" || echo "CLAUDE.md: MISSING"
-grep -q "harness:routing-injected" CLAUDE.md 2>/dev/null && echo "  Harness routing block: present" || echo "  Harness routing block: MISSING — run setup routing-injection"
-[ -d doc/harness ] && echo "doc/harness/: OK" || echo "doc/harness/: MISSING"
-[ -f doc/harness/critics/plan.md ] && echo "critics/plan.md: OK" || echo "critics/plan.md: MISSING"
-[ -f doc/harness/critics/runtime.md ] && echo "critics/runtime.md: OK" || echo "critics/runtime.md: MISSING"
-```
-
-### Runtime deps (test runner)
-
-For library/CLI projects with a pytest-based `test_command`, confirm pytest is importable. Setup should surface a missing test runner here rather than letting future verify gates FAIL cryptically.
+## 4.1 Resolve runtime paths
 
 ```bash
-_TEST_CMD=$(grep -E "^test_command:" doc/harness/manifest.yaml 2>/dev/null | cut -d'"' -f2)
-if echo "$_TEST_CMD" | grep -q "pytest"; then
-  if ! python3 -m pytest --version >/dev/null 2>&1; then
-    echo "  pytest: MISSING — install via one of:"
-    echo "    pip install --user pytest"
-    echo "    pip install --user --break-system-packages pytest   # if PEP 668 blocks"
-    echo "    pipx install pytest"
-    echo "  Note: test_command is '$_TEST_CMD' but pytest is not importable. verify gate will FAIL."
-  else
-    echo "  pytest: $(python3 -m pytest --version 2>&1 | head -1)"
-  fi
+_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+_PLUGIN_ROOT="${HARNESS_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
+if [ -z "$_PLUGIN_ROOT" ]; then
+  for _CANDIDATE in "$HOME/.codex/harness/plugins/harness" "$HOME/.claude/harness-dev/plugin"; do
+    if [ -f "$_CANDIDATE/scripts/setup_finalize.py" ]; then _PLUGIN_ROOT="$_CANDIDATE"; break; fi
+  done
 fi
-```
-
-## 4.2 QA infrastructure verification
-
-```bash
-_PROJECT_TYPE=$(grep "^project_type:" doc/harness/manifest.yaml 2>/dev/null | awk '{print $2}')
-_BROWSER_QA=$(grep "^browser_qa_supported:" doc/harness/manifest.yaml 2>/dev/null | awk '{print $2}')
-
-if [ "$_BROWSER_QA" = "true" ]; then
-  echo "QA Strategy: browser"
-
-  _BROWSER_BIN=$(which chromium 2>/dev/null || which google-chrome 2>/dev/null || which chromium-browser 2>/dev/null)
-  [ -n "$_BROWSER_BIN" ] && echo "  Browser: OK ($_BROWSER_BIN)" || echo "  Browser: MISSING — install Chromium or Chrome"
-
-  if [ -f ~/.claude/mcp.json ] && grep -q "chrome-devtools" ~/.claude/mcp.json 2>/dev/null; then
-    echo "  Chrome MCP: OK (global)"
-  elif [ -f .mcp.json ] && grep -q "chrome-devtools" .mcp.json 2>/dev/null; then
-    echo "  Chrome MCP: OK (existing project config; setup leaves it unchanged)"
-  else
-    echo "  Chrome MCP: MISSING"
-  fi
-
-  _DEV_CMD=$(grep "^dev_command:" doc/harness/manifest.yaml 2>/dev/null | awk '{print $2}')
-  [ -n "$_DEV_CMD" ] && [ "$_DEV_CMD" != "null" ] && echo "  Dev command: OK ($_DEV_CMD)" || echo "  Dev command: MISSING"
-
-  _ENTRY_URL=$(grep "^entry_url:" doc/harness/manifest.yaml 2>/dev/null | awk '{print $2}')
-  [ -n "$_ENTRY_URL" ] && [ "$_ENTRY_URL" != "null" ] && echo "  Entry URL: OK ($_ENTRY_URL)" || echo "  Entry URL: MISSING"
-
-elif [ "$_PROJECT_TYPE" = "api" ]; then
-  echo "QA Strategy: API"
-  which curl 2>/dev/null && echo "  HTTP client: OK (curl)" || echo "  HTTP client: MISSING"
+if [ -z "$_PLUGIN_ROOT" ]; then
+  echo "BLOCKED: installed harness plugin root not found"
+  return 1 2>/dev/null || exit 1
+fi
+_SETUP_RUNTIME="${HARNESS_RUNTIME:-}"
+if [ -z "$_SETUP_RUNTIME" ]; then
+  [ -f "$_PLUGIN_ROOT/.codex-plugin/plugin.json" ] && _SETUP_RUNTIME="codex" || _SETUP_RUNTIME="claude"
+fi
+if [ "$_SETUP_RUNTIME" = "codex" ]; then
+  _PROJECT_DOC="AGENTS.md"
 else
-  echo "QA Strategy: CLI/tests only"
+  _PROJECT_DOC="CLAUDE.md"
 fi
 ```
 
-**Failure reporting:** every gap gets a fix action.
-```
-QA INFRASTRUCTURE ISSUES:
-  - Browser binary: MISSING
-    FIX: sudo apt install chromium-browser  /  brew install chromium
-  - Chrome MCP: MISSING
-    FIX: Configure Chrome DevTools MCP in your global/runtime MCP settings, then re-run setup
-  - Dev command: MISSING
-    FIX: Add "dev_command: npm run dev" to doc/harness/manifest.yaml
+`_PLUGIN_ROOT` must point at the installed plugin, not a development checkout.
+
+## 4.2 Prepare the mechanical setup contract
+
+```bash
+python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
+  --repo "$_ROOT" --plugin-root "$_PLUGIN_ROOT" \
+  --project-doc "$_PROJECT_DOC" --prepare
 ```
 
-Stop on verification failures, report the failed check, and offer auto-fix via AskUserQuestion when possible (MCP config, manifest fields).
+This command prepares the canonical manifest and operational ignores but does
+not stamp a version. It also verifies:
 
-## 4.3 Completion report
+1. Adds every operational harness artifact to `.gitignore` idempotently.
+2. Requires manifest schema `version: 5`, top-level `name` and `type`, and
+   nested `qa.browser_qa_supported`.
+3. Requires the runtime project document and routing marker.
+4. Requires contracts, the `@CONTRACTS.md` import, all three critic files,
+   a verification command, and every packaged setup sub-file/template.
 
-**MCP config notice:**
+Any `SETUP_ERROR` is blocking. Fix it and rerun the command.
+
+## 4.3 QA infrastructure verification
+
+Read project type and nested QA flags from the canonical schema. A stdlib-only
+probe avoids relying on optional YAML packages:
+
+```bash
+python3 - "$_ROOT/doc/harness/manifest.yaml" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+top = {}
+qa = {}
+section = None
+for raw in path.read_text(encoding="utf-8").splitlines():
+    if raw == "qa:":
+        section = "qa"
+        continue
+    if raw and not raw[0].isspace() and not raw.startswith("#"):
+        section = None
+        if ":" in raw:
+            key, value = raw.split(":", 1)
+            top[key] = value.strip().strip('"').strip("'")
+    elif section == "qa" and raw.startswith("  ") and ":" in raw:
+        key, value = raw.strip().split(":", 1)
+        qa[key] = value.strip().strip('"').strip("'")
+
+project_type = top.get("type", "")
+browser = qa.get("browser_qa_supported", "false").lower() == "true"
+desktop = qa.get("desktop_qa_supported", "false").lower() == "true"
+if browser:
+    print("QA Strategy: browser")
+elif desktop:
+    print("QA Strategy: desktop")
+elif project_type == "api":
+    print("QA Strategy: API")
+elif project_type in {"cli", "library"}:
+    print("QA Strategy: CLI")
+else:
+    print("QA Strategy: tests only")
+PY
 ```
-Setup reads MCP availability from global/runtime settings and preserves
-project-root .mcp.json as user-owned configuration. If you changed global or
-runtime MCP settings yourself, restart the client so the server loads.
-```
-Surface this notice when browser or desktop QA depends on a newly configured MCP server.
 
-### Report format
+For browser/desktop QA, verify required tools from the current session or
+global runtime configuration. Setup reads MCP availability from global/runtime settings
+and preserves project-root .mcp.json as user-owned configuration. Any missing
+server is fixed in global/runtime MCP settings, not by editing the project file.
+For pytest-based `test_command`, also run
+`python3 -m pytest --version` and report a missing runner as blocking.
 
+## 4.4 Runtime-specific checks
+
+Codex:
+
+- `codex --version` satisfies the installed `.codex-version` pin.
+- Harness MCP is registered in global Codex configuration.
+- Installed hooks have current trust hashes.
+- `AGENTS.md` contains `<!-- harness:routing-injected -->`.
+
+Claude Code:
+
+- Harness plugin is enabled.
+- Required MCP tools are reachable when browser/desktop QA is enabled.
+- `CLAUDE.md` contains `<!-- harness:routing-injected -->`.
+
+## 4.5 Finalize after QA and runtime checks pass
+
+Only after Sections 4.3 and 4.4 pass, run:
+
+```bash
+python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
+  --repo "$_ROOT" --plugin-root "$_PLUGIN_ROOT" \
+  --project-doc "$_PROJECT_DOC" \
+  --qa-verified --runtime-verified
 ```
+
+This final validation writes `doc/harness/.version`. Never write the stamp
+manually or run this command before QA/runtime prerequisites pass.
+
+## 4.6 Completion report
+
+```text
 STATUS: DONE
 
 harness is set up for {project}.
 
-Created:
-  - doc/harness/manifest.yaml — {project_type}, harness v2
-  - doc/harness/critics/ — plan, runtime, document playbooks
-  - doc/harness/ — harness state directory
-  - CLAUDE.md — {created|updated} with harness section
-
-QA Strategy: {browser|api|cli|tests_only}
-  {browser: "Browser QA enabled. Dev server: {dev_command} → {entry_url}"}
-  {api: "API QA enabled."}
-  {cli: "CLI QA enabled."}
-  {tests_only: "Tests only — no runtime QA configured."}
-
-QA Infrastructure: {all checks passed | ISSUES (see below)}
+Verified:
+  - manifest schema: v5 ({type})
+  - operational artifacts: gitignored
+  - setup resources: packaged
+  - routing: {AGENTS.md|CLAUDE.md}
+  - installed version: 2.3.0
+  - QA strategy: {browser|desktop|api|cli|tests_only}
 ```
 
-### Next-step branches
-
-All checks passed:
-```
-You're ready. Try: "I want to build [feature]" or "there's a bug in [area]".
-```
-
-MCP config changed outside setup:
-```
-ACTION REQUIRED: Restart Claude Code.
-  1. /exit
-  2. Start a new session
-  3. Come back and start building
-```
-
-Browser binary missing:
-```
-ACTION REQUIRED: Install Chrome/Chromium.
-  1. sudo apt install chromium-browser (Linux) / brew install chromium (macOS)
-  2. Restart Claude Code
-  3. Run "setup harness" again
-```
-
-dev_command or entry_url missing:
-```
-ACTION REQUIRED: Browser QA needs dev server config.
-  Edit doc/harness/manifest.yaml:
-    dev_command: {suggested}
-    entry_url: {suggested}
-  Then run "setup harness" to verify.
-```
-
-Multiple issues:
-```
-ACTION REQUIRED: Fix these before browser QA works:
-  1. [issue with fix]
-  2. [issue with fix]
-  After fixing, run "setup harness" to verify.
-```
-
-### Smoke test offer (optional, browser projects with all checks passing)
-
-```
-Want me to verify browser QA works right now?
-  A) Yes — spin up dev server, take a screenshot
-  B) No — I'll trust the setup
-```
-
-If A: run `dev_command` in background, wait for `entry_url`, screenshot via Chrome DevTools MCP. Show user. Success → "Browser QA verified. You're ready." Failure → specific error + fix instructions.
-
-### Missing-file path
-
-```
-STATUS: DONE_WITH_CONCERNS
-
-Created: [list]
-Missing: [list]
-
-CONCERNS:
-  - {file}: {what went wrong}
-
-RECOMMENDATION: {what to try}
-```
+If any check fails, report `STATUS: BLOCKED`, the exact `SETUP_ERROR`, and the
+next repair action. Do not downgrade a blocking setup failure to a warning.

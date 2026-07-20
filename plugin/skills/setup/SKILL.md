@@ -73,7 +73,7 @@ _CONTRIBUTORS=$(git log --oneline --format='%ae' 2>/dev/null | sort -u | wc -l |
 [ "$_CONTRIBUTORS" -le 1 ] 2>/dev/null && _REPO_MODE="solo" || _REPO_MODE="collaborative"
 
 # Version check
-_HARNESS_VERSION="2.2.0"
+_HARNESS_VERSION="2.3.0"
 _INSTALLED_VERSION=$(cat "$_ROOT/doc/harness/.version" 2>/dev/null || echo "")
 [ -n "$_INSTALLED_VERSION" ] && [ "$_INSTALLED_VERSION" != "$_HARNESS_VERSION" ] && echo "UPGRADE_AVAILABLE: $_INSTALLED_VERSION -> $_HARNESS_VERSION" || echo "UPGRADE_AVAILABLE: no"
 ```
@@ -109,6 +109,7 @@ A/B: skip to Phase 3 preserving existing manifest values; first re-run Phase 4.2
 
 | Issue | Auto-fix? | Action |
 |-------|-----------|--------|
+| legacy `project_type`/flat QA manifest schema | Yes | Run `setup_finalize.py`; migrate to v5 while preserving unknown fields |
 | Chrome DevTools MCP missing | No | Report global/session setup requirement; preserve project `.mcp.json` as user-owned configuration |
 | dev_command missing from manifest | Yes | Detect from package.json, add |
 | entry_url missing from manifest | Yes | Default from framework port table |
@@ -211,7 +212,7 @@ if [ -d "$_ROOT/doc/harness" ]; then
 fi
 ```
 
-If artifacts found: synthesize one-paragraph welcome-back briefing. If manifest exists: "harness is already set up. Manifest shows {project_type} project." → offer repair/upgrade/fresh.
+If artifacts found: synthesize one-paragraph welcome-back briefing. If manifest exists: "harness is already set up. Manifest shows {type} project." → offer repair/upgrade/fresh.
 
 ## Prior Learnings
 
@@ -390,7 +391,11 @@ If A: manifest gets `health_components` uncommenting the default entry that wrap
 
 ## Phase 2.5: Health Stack Auto-Detection
 
-Run after project interview, before bootstrap. Idempotent: if `health_components:` key is already present in manifest.yaml (content or empty list), skip with log line and proceed.
+Run detection after the project interview, before bootstrap. Do not write the
+manifest yet on a fresh setup. Keep accepted results in
+`_PENDING_HEALTH_COMPONENTS`; apply them only after Phase 3 creates the
+canonical manifest. On repair/upgrade, an existing `health_components:` key
+(content or empty list) remains an idempotent opt-out/acceptance marker.
 
 ```bash
 # Idempotent check
@@ -428,11 +433,23 @@ AskUserQuestion:
   B) No, skip
 ```
 
-If user accepts (or HARNESS_SPAWNED=1): write `health_components:` block to manifest with one entry per detected signal. If user declines or no signals detected: write `health_components: []` as explicit opt-out marker so this step is skipped on re-run.
+If the user accepts (or `HARNESS_SPAWNED=1`), stage one entry per detected
+signal in `_PENDING_HEALTH_COMPONENTS`. If the user declines or no signals are
+detected, stage an empty list. Apply the staged value after Phase 3; never
+create a partial manifest during Phase 2.5.
+The persisted opt-out marker is exactly `health_components: []`.
 
 ## Phase 3: Bootstrap Core Structure
 
 See `bootstrap.md` — directory creation, manifest.yaml (with smart-defaults table and MCP config), CLAUDE.md, critic playbooks, doc/harness/ directory + gitignore, non-destructive contracts installation (CONTRACTS.md + CONTRACTS.local.md + @import line + lint check).
+
+## Phase 3.5: Apply staged configuration
+
+After the canonical manifest exists, apply staged interview fields and
+`_PENDING_HEALTH_COMPONENTS` with targeted edits. Fresh, Repair, and Upgrade
+all use this ordering. Do not bulk-rewrite an existing manifest. Then run the
+adjacent `verify-report.md` preparation command (`setup_finalize.py --prepare`)
+before QA infrastructure checks.
 
 ## Phase 4: Verify & Report
 

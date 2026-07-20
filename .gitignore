@@ -9,36 +9,37 @@ __MACOSX/
 .pytest_cache/
 .harness-replay-fixtures/
 
-# harness — operational artifacts (ephemeral, not durable knowledge)
+# harness - operational artifacts (ephemeral, not durable knowledge)
 doc/harness/tasks/
 doc/harness/goals/
 doc/harness/goal-queue.json
 doc/harness/goal-queue-events.jsonl
 doc/harness/legacy/goal-queue-pre-native-state.*.json
+doc/harness/task-packs/
+doc/harness/reviews/
+doc/harness/debug/goal-hook-payloads/
+doc/harness/learnings.jsonl
+doc/harness/checkpoints/
+doc/harness/visual-baselines/
+doc/harness/local.yaml
+doc/harness/.markers/
+doc/harness/.interview-answers.json
+doc/harness/retros/
+doc/harness/runtime/
 doc/harness/maintenance/
 doc/harness/archive/
 doc/harness/.routing-state.json
-doc/harness/local.yaml
-doc/harness/.markers/
 doc/harness/timeline.jsonl
-doc/harness/learnings.jsonl
-doc/harness/checkpoints/
 doc/harness/health-history.jsonl
 doc/harness/benchmark/
 doc/harness/audits/
-doc/harness/visual-baselines/
-doc/harness/retros/
 doc/harness/quality-trend.jsonl
-doc/harness/.interview-answers.json
-doc/harness/runtime/
-
-# auto-hygiene runtime state (per-user; template at plugin/skills/setup/templates/hygiene.yaml)
 doc/harness/hygiene.yaml
-doc/harness/.maintain-last-run
-doc/harness/.maintain-observe.log
-doc/harness/.maintain-pending.json
 doc/harness/.hygiene-last-run
 doc/harness/.hygiene-observe.log
 doc/harness/.hygiene-pending.json
 doc/harness/.hygiene.lock
 doc/harness/.hygiene-session-count
+doc/harness/.maintain-last-run
+doc/harness/.maintain-observe.log
+doc/harness/.maintain-pending.json

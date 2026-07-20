@@ -2,12 +2,42 @@
 
 Sub-file for setup/SKILL.md. Creates harness scaffolding from census + user answers. Skip existing files unless Fresh start.
 
+Resolve runtime-specific paths once and reuse them throughout this file:
+
+```bash
+_PLUGIN_ROOT="${HARNESS_PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
+if [ -z "$_PLUGIN_ROOT" ]; then
+  for _CANDIDATE in \
+    "$HOME/.codex/harness/plugins/harness" \
+    "$HOME/.claude/harness-dev/plugin"; do
+    if [ -f "$_CANDIDATE/scripts/setup_finalize.py" ]; then
+      _PLUGIN_ROOT="$_CANDIDATE"
+      break
+    fi
+  done
+fi
+if [ -z "$_PLUGIN_ROOT" ]; then
+  echo "BLOCKED: installed harness plugin root not found"
+  return 1 2>/dev/null || exit 1
+fi
+_SETUP_RUNTIME="${HARNESS_RUNTIME:-}"
+if [ -z "$_SETUP_RUNTIME" ]; then
+  [ -f "$_PLUGIN_ROOT/.codex-plugin/plugin.json" ] && _SETUP_RUNTIME="codex" || _SETUP_RUNTIME="claude"
+fi
+if [ "$_SETUP_RUNTIME" = "codex" ]; then
+  _PROJECT_DOC="AGENTS.md"
+else
+  _PROJECT_DOC="CLAUDE.md"
+fi
+export _PROJECT_DOC
+```
+
 ---
 
 ## 3.1 Directory structure
 
 ```
-CLAUDE.md                        # root entrypoint (create or append)
+AGENTS.md or CLAUDE.md           # runtime-specific entrypoint
 doc/harness/                     # harness state directory
 doc/harness/manifest.yaml        # initialization marker + runtime config
 doc/harness/critics/
@@ -20,17 +50,25 @@ doc/<area>/<TYPE>__<name>.md     # durable knowledge by area / bounded context
 ## 3.2 manifest.yaml
 
 ```yaml
-project: {project_name}
-project_type: {detected_or_chosen}
-harness_version: 2
-browser_qa_supported: {true|false}
-desktop_qa_supported: {true|false}   # true for native GUI apps (Qt/GTK/Tauri/Electron-headless). Linux-only in v1.
+version: 5
+initialized_at: {date}
+name: {project_name}
+type: {detected_or_chosen}
+languages: [{detected_languages}]
 build_command: {cmd}
 test_command: {cmd}
 dev_command: {cmd or omit}       # browser: dev server start command
 entry_url: {url or omit}        # browser: URL after dev server starts
 api_base_url: {url or omit}     # API: endpoint base URL
-created: {date}
+
+verify_commands:
+  - {test_command}
+
+qa:
+  default_mode: {browser|api|cli}
+  browser_qa_supported: {true|false}
+  desktop_qa_supported: {true|false}
+  ux_review_supported: false
 
 # --- Health scoring (optional) ---
 # Override default (test_command only). Each component: name, command, weight.
@@ -103,7 +141,7 @@ command -v Xvfb >/dev/null 2>&1 || {
 
 If your x11-mcp server publishes tools under a different MCP name (e.g.
 `mcp__x11-mcp__*`, `mcp__xdotool__*`), update the `tools:` list in
-`${CLAUDE_PLUGIN_ROOT}/agents/qa-desktop.md` frontmatter to match.
+`${_PLUGIN_ROOT}/agents/qa-desktop.md` frontmatter to match.
 
 ## 3.3 Smart defaults
 
@@ -126,9 +164,10 @@ If your x11-mcp server publishes tools under a different MCP name (e.g.
 
 Match → apply without asking. Only confirm if ambiguous or no match.
 
-## 3.4 CLAUDE.md
+## 3.4 Runtime project document
 
-Create if absent; append harness section if present. Under 40 lines. Include: harness mode declaration, manifest.yaml link, canonical loop (plan→develop→verify→close), the harness-routing block below, and "just describe what you want — auto-routing is on". Don't dump full runtime rules — those live in `plugin/CLAUDE.md`.
+Create `$_PROJECT_DOC` if absent; append the harness section if present. Codex
+uses `AGENTS.md`; Claude Code uses `CLAUDE.md`. Keep it under 40 lines.
 
 ### Legacy line cleanup (migration)
 
@@ -139,10 +178,11 @@ migrates pre-native queue state from `doc/harness/autopilot.yaml` to
 routing` block with the current Goal-or-direct-task routing block.
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/goal_queue_migrate.py" --repo "$(pwd)"
+python3 "${_PLUGIN_ROOT}/scripts/goal_queue_migrate.py" \
+  --repo "$(pwd)" --project-doc "$_PROJECT_DOC"
 ```
 
-### Harness routing block (emit into user's CLAUDE.md)
+### Harness routing block (emit into the runtime project document)
 
 The migration script above is the preferred path because it can also migrate
 legacy queue state. If a setup environment cannot run it, fall back to the
@@ -150,9 +190,10 @@ idempotent replace/append below. Marker: `<!-- harness:routing-injected -->`.
 
 ```bash
 python3 - <<'PY'
+import os
 from pathlib import Path
 
-path = Path("CLAUDE.md")
+path = Path(os.environ.get("_PROJECT_DOC", "CLAUDE.md"))
 text = path.read_text(encoding="utf-8") if path.exists() else ""
 block = """\
 ## Harness routing
@@ -209,6 +250,11 @@ Note: no `Default agent is X` line. The harness routes via skills, not agent swi
 
 **doc/harness/critics/runtime.md:** commands run without error, outputs match expectations, ACs met, implementation satisfies user intent (not just literal spec). PASS when evidence bundle proves operation AND intent adequacy.
 
+**doc/harness/critics/document.md:** identify itself as the document critic
+playbook and include at least one bullet requiring durable docs to match code,
+tests, and observable behavior. PASS when changed durable knowledge is accurate,
+discoverable, and non-contradictory.
+
 Documentation review is performed by the documentation-review subagent and
 `task_verify`. It reads typed durable docs, PLAN/CHECKS/TASK_STATE, and touched
 paths. It does not require legacy document-sync artifacts.
@@ -229,49 +275,17 @@ decisions and tradeoffs, `POLICY` for external security/legal/data/approval
 constraints, and `OBS`/`INF` for facts and inferences. Keep harness-internal
 execution rules in skills, agents, scripts, and tests.
 
-Append harness operational paths to `.gitignore` (idempotent — skips lines already present):
+Install the canonical operational ignore list. The shared finalizer owns this
+list so runtime writers and setup cannot drift apart:
 
 ```bash
-_GITIGNORE="${_ROOT}/.gitignore"
-touch "$_GITIGNORE"
-
-_HARNESS_IGNORES=(
-  "doc/harness/tasks/"
-  "doc/harness/goals/"
-  "doc/harness/goal-queue.json"
-  "doc/harness/goal-queue-events.jsonl"
-  "doc/harness/legacy/goal-queue-pre-native-state.*.json"
-  "doc/harness/learnings.jsonl"
-  "doc/harness/checkpoints/"
-  "doc/harness/visual-baselines/"
-  "doc/harness/local.yaml"
-  "doc/harness/.markers/"
-  "doc/harness/.interview-answers.json"
-  "doc/harness/retros/"
-  "doc/harness/runtime/"
-  "doc/harness/hygiene.yaml"
-  "doc/harness/.hygiene-last-run"
-  "doc/harness/.hygiene-observe.log"
-  "doc/harness/.hygiene-pending.json"
-  "doc/harness/.hygiene.lock"
-  "doc/harness/.hygiene-session-count"
-)
-
-_NEEDS_HEADER=true
-if grep -qF "# harness" "$_GITIGNORE" 2>/dev/null; then
-  _NEEDS_HEADER=false
-fi
-for _ENTRY in "${_HARNESS_IGNORES[@]}"; do
-  if ! grep -qxF "$_ENTRY" "$_GITIGNORE" 2>/dev/null; then
-    if [ "$_NEEDS_HEADER" = true ]; then
-      echo "" >> "$_GITIGNORE"
-      echo "# harness — operational artifacts (ephemeral, not durable knowledge)" >> "$_GITIGNORE"
-      _NEEDS_HEADER=false
-    fi
-    echo "$_ENTRY" >> "$_GITIGNORE"
-  fi
-done
+python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
+  --repo "$_ROOT" --plugin-root "$_PLUGIN_ROOT" \
+  --project-doc "$_PROJECT_DOC" --gitignore-only
 ```
+
+This early call applies ignores without validating or stamping a version.
+Phase 4 runs the full finalizer after every required artifact exists.
 
 ## 3.7 Contracts installation (non-destructive)
 
@@ -280,7 +294,7 @@ Every decision that could touch existing files uses AskUserQuestion. Never overw
 ### 3.7.1 CONTRACTS.md (harness-managed)
 
 ```bash
-_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/CONTRACTS.md"
+_TEMPLATE="${_PLUGIN_ROOT}/skills/setup/templates/CONTRACTS.md"
 if [ ! -f CONTRACTS.md ]; then
   cp "$_TEMPLATE" CONTRACTS.md
 elif grep -q "harness:managed-begin" CONTRACTS.md; then
@@ -303,17 +317,17 @@ AskUserQuestion:
 ### 3.7.2 CONTRACTS.local.md (user's project-specific stub)
 
 ```bash
-_LOCAL_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/CONTRACTS.local.md"
+_LOCAL_TEMPLATE="${_PLUGIN_ROOT}/skills/setup/templates/CONTRACTS.local.md"
 if [ ! -f CONTRACTS.local.md ]; then
   cp "$_LOCAL_TEMPLATE" CONTRACTS.local.md
 fi
 ```
 Never touched by harness after creation.
 
-### 3.7.3 CLAUDE.md import line
+### 3.7.3 Runtime project-document import line
 
 ```bash
-if grep -qF "@CONTRACTS.md" CLAUDE.md 2>/dev/null; then
+if grep -qF "@CONTRACTS.md" "$_PROJECT_DOC" 2>/dev/null; then
   echo "@CONTRACTS.md import already present"
 else
   # ask user
@@ -323,7 +337,7 @@ fi
 If missing:
 ```
 AskUserQuestion:
-  Question: "Add '@CONTRACTS.md' import to your CLAUDE.md? (one line at top, existing content preserved)"
+  Question: "Add '@CONTRACTS.md' import to your runtime project document? (one line at top, existing content preserved)"
   Options:
     - A) Yes — insert after frontmatter / first heading
     - B) Skip — I will add it manually
@@ -335,7 +349,7 @@ On A, Edit tool inserts `@CONTRACTS.md` as a new line immediately after the firs
 ### 3.7.4 Verify contract lint
 
 ```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/contract_lint.py" \
+python3 "${_PLUGIN_ROOT}/scripts/contract_lint.py" \
   --path CONTRACTS.md --repo-root . --quick || \
   echo "WARN: contract_lint reported issues — handle in the active/next harness task"
 ```
@@ -356,7 +370,7 @@ Run as a single logical transaction (all-or-nothing):
 
 ```bash
 _HYGIENE_YAML="${_ROOT}/doc/harness/hygiene.yaml"
-_HYGIENE_TEMPLATE="${CLAUDE_PLUGIN_ROOT}/skills/setup/templates/hygiene.yaml"
+_HYGIENE_TEMPLATE="${_PLUGIN_ROOT}/skills/setup/templates/hygiene.yaml"
 if [ ! -f "$_HYGIENE_YAML" ]; then
   cp "$_HYGIENE_TEMPLATE" "$_HYGIENE_YAML"
   echo "hygiene.yaml installed"
@@ -391,7 +405,7 @@ Only after CONTRACTS.md has C-16 (step B verified), confirm that the run skill
 invokes hygiene from `self-improvement.md`:
 
 ```bash
-if grep -q "hygiene_scan.py --apply-safe" "${CLAUDE_PLUGIN_ROOT}/skills/run/self-improvement.md" 2>/dev/null; then
+if grep -q "hygiene_scan.py --apply-safe" "${_PLUGIN_ROOT}/skills/run/self-improvement.md" 2>/dev/null; then
   echo "hygiene_scan.py close-time invocation present"
 else
   echo "WARN: self-improvement.md missing hygiene_scan.py close-time invocation"
@@ -400,3 +414,10 @@ fi
 
 **Invariant:** If step B fails or is skipped, step C must NOT claim hygiene is
 enabled. Hygiene runs after close, never as a SessionStart reminder.
+
+## 3.8 Finalize only after verification
+
+Phase 4 invokes `setup_finalize.py` without `--check`. The command applies the
+canonical `.gitignore`, verifies the manifest and packaged setup resources,
+and writes `doc/harness/.version` only when every required check passes. Never
+write the version stamp earlier.
