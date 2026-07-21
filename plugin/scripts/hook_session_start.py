@@ -8,13 +8,24 @@ import subprocess
 import sys
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPTS_DIR)
+
+try:
+    from codex_hook_registration import restore_watcher_registration  # type: ignore
+except Exception:  # pragma: no cover - hook must fail open
+    restore_watcher_registration = None
 
 
-def _payload_cwd(payload: bytes) -> str | None:
+def _payload_data(payload: bytes) -> dict:
     try:
         data = json.loads(payload.decode("utf-8") or "{}")
     except Exception:
-        return None
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _payload_cwd(payload: bytes) -> str | None:
+    data = _payload_data(payload)
     cwd = data.get("cwd")
     return cwd if isinstance(cwd, str) and os.path.isdir(cwd) else None
 
@@ -37,19 +48,8 @@ def _run(args: list[str], payload: bytes) -> bytes:
 def main() -> int:
     payload = sys.stdin.buffer.read()
     chunks: list[str] = []
-    cwd = _payload_cwd(payload)
-    if cwd and os.environ.get("CODEX_THREAD_ID"):
-        _run(
-            [
-                "codex_lifecycle_watcher.py",
-                "--ensure",
-                "--repo-root",
-                cwd,
-                "--thread-id",
-                os.environ["CODEX_THREAD_ID"],
-            ],
-            payload,
-        )
+    if restore_watcher_registration is not None:
+        restore_watcher_registration(payload, retry_seconds=1.0)
     commands = [
         ["note_freshness.py", "--from-git", "1", "--quiet"],
         ["verification_gap_check.py"],

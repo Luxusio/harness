@@ -94,6 +94,10 @@ try:
     from environment_snapshot import snapshot as _env_snapshot  # type: ignore
 except Exception:
     _env_snapshot = None
+try:
+    from codex_lifecycle_watcher import WatcherManager as _WatcherManager  # type: ignore
+except Exception:
+    _WatcherManager = None
 
 # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -473,6 +477,17 @@ def handle_task_start(args: dict) -> dict:
                 pass
 
     ensure_task_scaffold(task_dir, tid, request_text=request_text)
+    resumed = read_state(task_dir)
+    if str(resumed.get("status") or "").lower() == "blocked":
+        resumed["status"] = "created"
+        resumed["runtime_verdict"] = "pending"
+        resumed["closed_at"] = None
+        resumed["updated"] = now_iso()
+        write_state(task_dir, resumed)
+        try:
+            os.unlink(os.path.join(task_dir, "BLOCKED.md"))
+        except FileNotFoundError:
+            pass
     execution_mode = _opt(args, "execution_mode")
     if execution_mode:
         mode = execution_mode.strip().lower()
@@ -908,6 +923,26 @@ class McpServer:
         self.initialized = False
         self.protocol_version = SUPPORTED_PROTOCOLS[0]
         self.framed_stdio = False
+        self.watcher_manager = None
+
+    def _start_codex_watchers(self) -> None:
+        if self.watcher_manager is not None or _WatcherManager is None:
+            return
+        try:
+            self.watcher_manager = _WatcherManager(find_repo_root()).start()
+        except Exception:
+            # Lifecycle attestation is fail-closed.  A watcher failure must not
+            # take down task_context or other MCP control-plane operations.
+            self.watcher_manager = None
+
+    def close(self) -> None:
+        manager = self.watcher_manager
+        self.watcher_manager = None
+        if manager is not None:
+            try:
+                manager.stop()
+            except Exception:
+                pass
 
     def _read(self) -> dict | None:
         """Read either MCP stdio frames or newline-delimited JSON.
@@ -965,6 +1000,8 @@ class McpServer:
             pv = params.get("protocolVersion")
             self.protocol_version = pv if isinstance(pv, str) and pv in SUPPORTED_PROTOCOLS else SUPPORTED_PROTOCOLS[0]
             runtime = _runtime_from_initialize(params)
+            if runtime == "codex":
+                self._start_codex_watchers()
             self._reply(msg_id, {
                 "protocolVersion": self.protocol_version,
                 "capabilities": {"tools": {"listChanged": False}},
@@ -988,11 +1025,14 @@ class McpServer:
             self._error(msg_id, -32601, f"Method not found: {method}")
 
     def serve_forever(self) -> None:
-        while True:
-            req = self._read()
-            if req is None:
-                return
-            self.handle_request(req)
+        try:
+            while True:
+                req = self._read()
+                if req is None:
+                    return
+                self.handle_request(req)
+        finally:
+            self.close()
 
 
 def main() -> int:

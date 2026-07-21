@@ -60,6 +60,17 @@ def test_run_skills_check_feedback_events_before_dependent_actions():
         assert "Close-time checking only catches missed feedback" in body
 
 
+def test_codex_subagent_waiting_avoids_rapid_polling_noise():
+    run = (REPO / "plugin-codex/internal-skills/run/SKILL.md").read_text(encoding="utf-8")
+    develop = (REPO / "plugin-codex/internal-skills/develop/SKILL.md").read_text(encoding="utf-8")
+    assert "Subagent wait UX" in run
+    assert "rapid 10/20/30-second wait loops" in run
+    assert "one compact status update" in run
+    assert "Call `list_agents` once" in run
+    assert "never use rapid short polling" in develop
+    assert "one final `list_agents`" in develop
+
+
 def test_qa_agents_surface_self_healing_candidates():
     for rel in (
         "plugin/agents/qa-cli.md",

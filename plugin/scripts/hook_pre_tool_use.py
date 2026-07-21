@@ -11,6 +11,11 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
 try:
+    from codex_hook_registration import restore_watcher_registration  # type: ignore
+except Exception:  # pragma: no cover - registration recovery is best effort
+    restore_watcher_registration = None
+
+try:
     from _lib import find_repo_root, resolve_active_task_dir  # type: ignore
     from background_registry import register_subagent_start  # type: ignore
 except Exception:  # pragma: no cover - hook must fail open
@@ -113,6 +118,8 @@ def _run(script: str, payload: bytes) -> bytes:
 
 def main() -> int:
     payload = sys.stdin.buffer.read()
+    if restore_watcher_registration is not None:
+        restore_watcher_registration(payload)
     # Codex exposes the durable runtime agent id only in the spawn result. The
     # post-tool hook records that correlated start; registering the pre-call's
     # tool_call_id here would create an active record that no completion event

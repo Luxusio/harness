@@ -373,12 +373,21 @@ the current HEAD/worktree fingerprint. Send only FIX_NOW to the implementer;
 after any edit rerun focused tests/checkpoint and all routed reviews. Inline
 self-review is not a strict-compliance fallback.
 
-The Codex SessionStart hook also runs a thread-scoped lifecycle watcher for
-runtimes that omit collaboration events from PostToolUse. Use structured
+Apply the parent run skill's subagent wait UX rule: finish useful local work,
+then wait in one interval of up to 60 seconds; never use rapid short polling or
+`list_agents` as a progress poll. After a timeout, emit one compact user status
+before waiting again. Call `list_agents` once after the whole review batch is
+complete.
+
+For runtimes that omit collaboration events from PostToolUse, Codex
+SessionStart creates the exact root-rollout registration, every installed root
+hook idempotently restores it, and the Harness MCP server hosts the lifecycle
+watcher as a daemon thread. Receipt ownership stays with the
+hook/runtime path; no model-callable MCP receipt writer exists. Use structured
 `task_name` values containing `code_review` or `security_review`; do not use a
-generic worker name for a required reviewer. The watcher must observe the
-spawn while the child is still running to bind the start-time fingerprint.
-Starting the watcher after a reviewer finishes cannot recover a PASS.
+generic worker name for a required reviewer. The watcher must observe the spawn
+while the child is still running to bind the start-time fingerprint.
+Registration after a reviewer finishes cannot recover a PASS.
 
 ### Phase 7: Verification Gate
 
@@ -408,6 +417,10 @@ results, then run `task_verify` with `reconcile_acs: true`. The Codex
 hooks record observed lifecycle events automatically. If no subagent path exists, run
 the lens methodology in-conversation and state the fallback in task state or final response; do not
 call a critic writer.
+
+Use the same wait UX for QA/UX: useful local work first, one wait interval of
+up to 60 seconds, one status update after timeout, and one final `list_agents`
+call after the batch completes.
 
 Use structured QA/UX `task_name` values such as `qa_cli`, `qa_browser`, or
 `ux_browser`. These names are the runtime-visible lens binding when delegated

@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Observe Codex subagent lifecycle events that plugin PostToolUse omits.
 
-The watcher is started by the trusted SessionStart hook.  It tails only the
-current root rollout from the launch offset, captures the source fingerprint
+Trusted Codex root hooks register or restore the current root rollout. The Harness
+MCP server hosts the watcher as daemon threads, captures the source fingerprint
 before a child finishes, and accepts a completion only when root delivery and
-the child rollout agree.  It never reconstructs a PASS from historical finals.
+the child rollout agree.  It never reconstructs a PASS from historical finals
+and never launches a detached operating-system process.
 """
 from __future__ import annotations
 
 import argparse
-import errno
+import hashlib
 try:
     import fcntl
 except ImportError:  # pragma: no cover - Codex currently ships POSIX hooks
@@ -18,11 +19,10 @@ import json
 import os
 from pathlib import Path
 import re
-import signal
 import stat
-import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Any
 
@@ -48,7 +48,13 @@ MAX_LINE_BYTES = 2 * 1024 * 1024
 MAX_CHILD_BYTES = 64 * 1024 * 1024
 POLL_SECONDS = 0.20
 IDLE_SECONDS = 8 * 60 * 60
-RUNTIME_SUBDIR = os.path.join("doc", "harness", "runtime", "codex-watchers")
+REGISTRATION_TTL_SECONDS = IDLE_SECONDS
+MAX_WATCHER_THREADS = 16
+RUNTIME_SUBDIR = os.path.join("harness", "codex-watchers")
+REGISTRATION_VERSION = 3
+REGISTRATION_OWNER = "codex_root_hook"
+LEGACY_REGISTRATION_VERSION = 2
+LEGACY_REGISTRATION_OWNER = "session_start_hook"
 
 
 def _codex_home() -> Path:
@@ -59,27 +65,97 @@ def _sessions_root() -> Path:
     return (_codex_home() / "sessions").resolve()
 
 
-def _safe_regular_file(path: Path, root: Path, *, max_size: int | None = None) -> bool:
+def _trusted_parent_tree(path: Path, root: Path) -> bool:
+    """Require an owner-controlled, non-symlink directory chain below root."""
     try:
         root = root.resolve(strict=True)
         absolute = path.absolute()
         relative = absolute.relative_to(root)
         cursor = root
-        for part in relative.parts:
-            cursor = cursor / part
-            mode = os.lstat(cursor).st_mode
-            if stat.S_ISLNK(mode):
+        root_info = os.lstat(cursor)
+        if (
+            stat.S_ISLNK(root_info.st_mode)
+            or not stat.S_ISDIR(root_info.st_mode)
+            or root_info.st_uid != os.getuid()
+            or root_info.st_mode & 0o022
+        ):
+            return False
+        for part in relative.parts[:-1]:
+            if part:
+                cursor = cursor / part
+            info = os.lstat(cursor)
+            if (
+                stat.S_ISLNK(info.st_mode)
+                or not stat.S_ISDIR(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_mode & 0o022
+            ):
                 return False
-        candidate = absolute.resolve(strict=True)
-        candidate.relative_to(root)
-        info = os.stat(candidate, follow_symlinks=False)
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
-            return False
-        if max_size is not None and info.st_size > max_size:
-            return False
         return True
     except (OSError, ValueError):
         return False
+
+
+def _open_trusted_file(
+    path: Path,
+    root: Path,
+    *,
+    max_size: int | None = None,
+) -> tuple[Any, os.stat_result] | None:
+    """Open one trusted file and bind validation to the returned descriptor."""
+    if not _trusted_parent_tree(path, root):
+        return None
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+        info = os.fstat(fd)
+        path_info = os.lstat(path)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_nlink != 1
+            or info.st_mode & 0o022
+            or stat.S_ISLNK(path_info.st_mode)
+            or (path_info.st_dev, path_info.st_ino) != (info.st_dev, info.st_ino)
+            or (max_size is not None and info.st_size > max_size)
+        ):
+            os.close(fd)
+            return None
+        return os.fdopen(fd, "rb"), info
+    except OSError:
+        try:
+            os.close(fd)
+        except (OSError, UnboundLocalError):
+            pass
+        return None
+
+
+def _path_matches_handle(
+    path: Path,
+    root: Path,
+    handle: Any,
+    *,
+    max_size: int | None = None,
+) -> bool:
+    """Reject pathname replacement after a trusted descriptor was opened."""
+    current = _open_trusted_file(path, root, max_size=max_size)
+    if current is None:
+        return False
+    current_handle, current_info = current
+    try:
+        original = os.fstat(handle.fileno())
+        return (current_info.st_dev, current_info.st_ino) == (original.st_dev, original.st_ino)
+    finally:
+        current_handle.close()
+
+
+def _safe_regular_file(path: Path, root: Path, *, max_size: int | None = None) -> bool:
+    opened = _open_trusted_file(path, root, max_size=max_size)
+    if opened is None:
+        return False
+    handle, _ = opened
+    handle.close()
+    return True
 
 
 def _find_rollout(thread_id: str) -> Path | None:
@@ -104,31 +180,50 @@ def _load_json_line(raw: bytes) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _root_meta(path: Path, thread_id: str, repo_root: str) -> bool:
-    try:
-        with path.open("rb") as handle:
-            for _ in range(8):
-                raw = handle.readline(MAX_LINE_BYTES + 1)
-                if not raw:
-                    break
-                event = _load_json_line(raw)
-                if not event or event.get("type") != "session_meta":
-                    continue
-                payload = event.get("payload") or {}
-                if (
-                    str(payload.get("id") or "") == thread_id
-                    and str(payload.get("session_id") or "") == thread_id
-                    and os.path.realpath(str(payload.get("cwd") or "")) == repo_root
-                    and payload.get("thread_source") != "subagent"
-                ):
-                    return True
-    except OSError:
-        return False
+def _root_meta_from_handle(handle: Any, thread_id: str, repo_root: str) -> bool:
+    handle.seek(0)
+    for _ in range(8):
+        raw = handle.readline(MAX_LINE_BYTES + 1)
+        if not raw:
+            break
+        event = _load_json_line(raw)
+        if not event or event.get("type") != "session_meta":
+            continue
+        payload = event.get("payload") or {}
+        if (
+            str(payload.get("id") or "") == thread_id
+            and str(payload.get("session_id") or "") == thread_id
+            and os.path.realpath(str(payload.get("cwd") or "")) == repo_root
+            and payload.get("thread_source") != "subagent"
+        ):
+            return True
     return False
 
 
+def _root_meta(path: Path, thread_id: str, repo_root: str) -> bool:
+    trust_root = _sessions_root()
+    opened = _open_trusted_file(path, trust_root)
+    if opened is None:
+        return False
+    handle, _ = opened
+    try:
+        return _root_meta_from_handle(handle, thread_id, repo_root) and _path_matches_handle(
+            path, trust_root, handle
+        )
+    finally:
+        handle.close()
+
+
 def _runtime_dir(repo_root: str) -> Path:
-    return Path(repo_root) / RUNTIME_SUBDIR
+    repo_key = hashlib.sha256(os.path.realpath(repo_root).encode("utf-8")).hexdigest()
+    if os.environ.get("CODEX_HOME"):
+        base = _codex_home() / "harness-runtime" / "codex-watchers"
+    else:
+        state_home = Path(
+            os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state"
+        ).resolve()
+        base = state_home / RUNTIME_SUBDIR
+    return base / repo_key
 
 
 def _state_path(repo_root: str, thread_id: str) -> Path:
@@ -139,46 +234,60 @@ def _lock_path(repo_root: str, thread_id: str) -> Path:
     return _runtime_dir(repo_root) / f"{thread_id}.lock"
 
 
-def _pid_alive(pid: int) -> bool:
-    if pid <= 1:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError as exc:
-        return exc.errno == errno.EPERM
+def _lease_path(repo_root: str, thread_id: str) -> Path:
+    return _runtime_dir(repo_root) / f"{thread_id}.lease"
 
 
-def _process_identity(pid: int) -> tuple[str, str] | None:
+def _acquire_registration_lease(repo_root: str, thread_id: str) -> Any | None:
+    """Hold one cross-process watcher lease for a root registration."""
+    if fcntl is None:
+        return None
+    runtime = _trusted_runtime_dir(repo_root)
+    if runtime is None:
+        return None
+    path = _lease_path(repo_root, thread_id)
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     try:
-        cmdline = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode()
-        fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()
-        return cmdline, fields[21]
-    except (OSError, IndexError, UnicodeDecodeError):
+        fd = os.open(path, flags, 0o600)
+        info = os.fstat(fd)
+        path_info = os.lstat(path)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_nlink != 1
+            or info.st_mode & 0o022
+            or stat.S_ISLNK(path_info.st_mode)
+            or (path_info.st_dev, path_info.st_ino) != (info.st_dev, info.st_ino)
+        ):
+            os.close(fd)
+            return None
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return os.fdopen(fd, "a+", encoding="utf-8")
+    except OSError:
+        try:
+            os.close(fd)
+        except (OSError, UnboundLocalError):
+            pass
         return None
 
 
-def _watcher_process_matches(state: dict[str, Any]) -> bool:
-    try:
-        pid = int(state.get("pid") or 0)
-    except (TypeError, ValueError):
-        return False
-    identity = _process_identity(pid)
-    if not _pid_alive(pid) or identity is None:
-        return False
-    cmdline, started = identity
-    required = (
-        os.path.abspath(__file__), "--watch", str(state.get("thread_id") or ""),
-        str(state.get("repo_root") or ""),
-    )
-    return bool(state.get("process_start") == started and all(value in cmdline for value in required))
-
-
 def _trusted_runtime_dir(repo_root: str) -> Path | None:
-    root = Path(repo_root).resolve()
-    cursor = root
+    runtime = _runtime_dir(repo_root)
+    anchor = (_codex_home().parent if os.environ.get("CODEX_HOME") else Path.home()).resolve()
     try:
-        for part in Path(RUNTIME_SUBDIR).parts[:-1]:
+        relative = runtime.relative_to(anchor)
+    except ValueError:
+        return None
+    cursor = anchor
+    try:
+        anchor_info = os.lstat(anchor)
+        if (
+            stat.S_ISLNK(anchor_info.st_mode) or not stat.S_ISDIR(anchor_info.st_mode)
+            or anchor_info.st_uid != os.getuid() or anchor_info.st_mode & 0o022
+        ):
+            return None
+        for part in relative.parts:
             cursor = cursor / part
             if cursor.exists():
                 info = os.lstat(cursor)
@@ -188,18 +297,9 @@ def _trusted_runtime_dir(repo_root: str) -> Path | None:
                 ):
                     return None
             else:
-                cursor.mkdir(mode=0o755)
-        runtime = cursor / Path(RUNTIME_SUBDIR).parts[-1]
-        if runtime.exists():
-            info = os.lstat(runtime)
-            if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
-                return None
-            if info.st_mode & 0o022:
-                return None
-            os.chmod(runtime, 0o700)
-        else:
-            runtime.mkdir(mode=0o700)
-        return runtime
+                cursor.mkdir(mode=0o700)
+        os.chmod(cursor, 0o700)
+        return cursor
     except OSError:
         return None
 
@@ -235,9 +335,30 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def ensure(repo_root: str, thread_id: str) -> bool:
+    """Register a root rollout for the MCP-hosted watcher manager.
+
+    This entry point is owned by trusted Codex root hooks. It performs only
+    validation and an atomic registry write; it never forks or writes a review
+    or QA receipt. Existing valid registration offsets are immutable.
+    """
     repo_root = os.path.realpath(find_repo_root(repo_root))
     rollout = _find_rollout(thread_id)
-    if rollout is None or not _root_meta(rollout, thread_id, repo_root):
+    if rollout is None:
+        return False
+    trust_root = _sessions_root()
+    opened = _open_trusted_file(rollout, trust_root)
+    if opened is None:
+        return False
+    rollout_handle, rollout_info = opened
+    try:
+        if not _root_meta_from_handle(rollout_handle, thread_id, repo_root):
+            return False
+        if not _path_matches_handle(rollout, trust_root, rollout_handle):
+            return False
+        offset = rollout_info.st_size
+    finally:
+        rollout_handle.close()
+    if offset < 0:
         return False
     runtime = _trusted_runtime_dir(repo_root)
     if runtime is None:
@@ -261,46 +382,140 @@ def ensure(repo_root: str, thread_id: str) -> bool:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
         state_path = _state_path(repo_root, thread_id)
         state = _read_owned_json(state_path, runtime)
-        if (
+        state_offset = state.get("offset")
+        registered_at = state.get("registered_at")
+        tuple_valid = (
             state.get("thread_id") == thread_id
             and state.get("repo_root") == repo_root
-            and _watcher_process_matches(state)
+            and state.get("rollout") == str(rollout)
+            and isinstance(state_offset, int)
+            and not isinstance(state_offset, bool)
+            and 0 <= state_offset <= rollout_info.st_size
+            and isinstance(registered_at, (int, float))
+            and not isinstance(registered_at, bool)
+        )
+        if tuple_valid and (
+            state.get("version") == REGISTRATION_VERSION
+            and state.get("owner") == REGISTRATION_OWNER
         ):
             return True
-        offset = rollout.stat().st_size
-        process = subprocess.Popen(
-            [
-                sys.executable,
-                os.path.abspath(__file__),
-                "--watch",
-                "--repo-root", repo_root,
-                "--thread-id", thread_id,
-                "--rollout", str(rollout),
-                "--offset", str(offset),
-            ],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            close_fds=True,
-        )
-        identity = None
-        for _ in range(10):
-            identity = _process_identity(process.pid)
-            if identity is not None:
-                break
-            time.sleep(0.01)
+        if tuple_valid and (
+            state.get("version") == LEGACY_REGISTRATION_VERSION
+            and state.get("owner") == LEGACY_REGISTRATION_OWNER
+        ):
+            offset = state_offset
+        else:
+            registered_at = time.time()
         _atomic_json(state_path, {
-            "version": 1,
-            "pid": process.pid,
+            "version": REGISTRATION_VERSION,
             "repo_root": repo_root,
             "thread_id": thread_id,
             "rollout": str(rollout),
             "offset": offset,
-            "started_at": time.time(),
-            "process_start": identity[1] if identity else "",
+            "registered_at": registered_at,
+            "owner": REGISTRATION_OWNER,
         })
         return True
+
+
+def registrations(repo_root: str) -> list[dict[str, Any]]:
+    """Return safe, exact registrations for one repository."""
+    repo_root = os.path.realpath(find_repo_root(repo_root))
+    runtime = _trusted_runtime_dir(repo_root)
+    if runtime is None:
+        return []
+    found: list[dict[str, Any]] = []
+    now = time.time()
+    try:
+        candidates = list(runtime.glob("*.json"))
+    except OSError:
+        return []
+    for path in candidates:
+        state = _read_owned_json(path, runtime)
+        thread_id = str(state.get("thread_id") or "")
+        rollout = _find_rollout(thread_id)
+        offset = state.get("offset")
+        registered_at = state.get("registered_at")
+        if (
+            state.get("version") != REGISTRATION_VERSION
+            or state.get("owner") != REGISTRATION_OWNER
+            or state.get("repo_root") != repo_root
+            or path.name != f"{thread_id}.json"
+            or rollout is None
+            or state.get("rollout") != str(rollout)
+            or not _root_meta(rollout, thread_id, repo_root)
+            or not isinstance(offset, int)
+            or isinstance(offset, bool)
+            or offset < 0
+            or not isinstance(registered_at, (int, float))
+            or isinstance(registered_at, bool)
+        ):
+            continue
+        trust_root = _sessions_root()
+        opened = _open_trusted_file(rollout, trust_root)
+        if opened is None:
+            continue
+        rollout_handle, rollout_info = opened
+        try:
+            if offset > rollout_info.st_size or not _path_matches_handle(
+                rollout, trust_root, rollout_handle
+            ):
+                continue
+        finally:
+            rollout_handle.close()
+        activity = max(float(registered_at), rollout_info.st_mtime)
+        if now - activity > REGISTRATION_TTL_SECONDS:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            continue
+        item = dict(state)
+        item["activity_at"] = activity
+        found.append(item)
+    found.sort(key=lambda item: float(item["activity_at"]), reverse=True)
+    return found[:MAX_WATCHER_THREADS]
+
+
+def _validated_task_dir(repo_root: str, task_id: str) -> str:
+    if not re.fullmatch(r"TASK__[A-Za-z0-9_.-]{1,180}", task_id):
+        return ""
+    try:
+        canonical_repo = Path(repo_root).resolve(strict=True)
+        tasks_root = canonical_repo
+        for part in ("doc", "harness", "tasks"):
+            tasks_root = tasks_root / part
+            component = os.lstat(tasks_root)
+            if (
+                stat.S_ISLNK(component.st_mode)
+                or not stat.S_ISDIR(component.st_mode)
+                or component.st_uid != os.getuid()
+            ):
+                return ""
+        if tasks_root.resolve(strict=True) != tasks_root.absolute():
+            return ""
+        raw_task_dir = (tasks_root / task_id).absolute()
+        raw_info = os.lstat(raw_task_dir)
+        if stat.S_ISLNK(raw_info.st_mode):
+            return ""
+        task_dir = raw_task_dir.resolve(strict=True)
+        if (
+            task_dir.parent != tasks_root
+            or task_dir.name != task_id
+            or canonical_repo not in task_dir.parents
+        ):
+            return ""
+        info = os.lstat(task_dir)
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+            return ""
+    except (OSError, ValueError):
+        return ""
+    if not _safe_regular_file(task_dir / "TASK_STATE.yaml", task_dir, max_size=256 * 1024):
+        return ""
+    state = read_state(str(task_dir))
+    if state.get("task_id") != task_id or str(state.get("status") or "").lower() in {"closed", "blocked"}:
+        return ""
+    return str(task_dir)
 
 
 def _active_task_for_session(repo_root: str, root_id: str) -> str:
@@ -312,27 +527,11 @@ def _active_task_for_session(repo_root: str, root_id: str) -> str:
     resolved = resolve_active_task_dir(repo_root, session_id=root_id)
     if not resolved or marker_data.get("task_dir") != resolved:
         return ""
-    try:
-        raw_task_dir = Path(resolved).absolute()
-        raw_info = os.lstat(raw_task_dir)
-        if stat.S_ISLNK(raw_info.st_mode):
-            return ""
-        task_dir = raw_task_dir.resolve(strict=True)
-        if task_dir.parent != tasks_root or not task_dir.name.startswith("TASK__"):
-            return ""
-        info = os.lstat(task_dir)
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
-            return ""
-    except (OSError, ValueError):
+    task_id = str(marker_data.get("task_id") or "")
+    task_dir = _validated_task_dir(repo_root, task_id)
+    if not task_dir or os.path.realpath(resolved) != task_dir:
         return ""
-    if not _safe_regular_file(task_dir / "TASK_STATE.yaml", task_dir, max_size=256 * 1024):
-        return ""
-    state = read_state(str(task_dir))
-    if state.get("task_id") != task_dir.name or str(state.get("status") or "").lower() in {"closed", "blocked"}:
-        return ""
-    if marker_data.get("task_id") != task_dir.name:
-        return ""
-    return str(task_dir)
+    return task_dir
 
 
 def _event_payload(event: dict[str, Any], expected_type: str) -> dict[str, Any] | None:
@@ -412,6 +611,44 @@ def _root_delivery(event: dict[str, Any]) -> tuple[str, str] | None:
     return author, final.strip()
 
 
+def _task_binding(event: dict[str, Any], repo_root: str) -> str:
+    """Return a task named by this root's successful Harness MCP event."""
+    payload = _event_payload(event, "event_msg")
+    if not payload or payload.get("type") != "mcp_tool_call_end":
+        return ""
+    invocation = payload.get("invocation")
+    result = payload.get("result")
+    if not isinstance(invocation, dict) or not isinstance(result, dict):
+        return ""
+    ok = result.get("Ok")
+    if not isinstance(ok, dict):
+        return ""
+    if invocation.get("server") != "harness" or invocation.get("tool") not in {"task_start", "task_context"}:
+        return ""
+    arguments = invocation.get("arguments")
+    if not isinstance(arguments, dict):
+        return ""
+    structured = ok.get("structuredContent") or ok.get("structured_content")
+    if not isinstance(structured, dict):
+        return ""
+    context = structured.get("task_context")
+    context_task_id = context.get("task_id") if isinstance(context, dict) else ""
+    result_ids = {
+        str(value) for value in (structured.get("task_id"), context_task_id) if value
+    }
+    if len(result_ids) != 1:
+        return ""
+    task_id = next(iter(result_ids))
+    argument_task_id = str(arguments.get("task_id") or "")
+    if argument_task_id and argument_task_id != task_id:
+        return ""
+    task_dir = _validated_task_dir(repo_root, task_id)
+    result_task_dir = structured.get("task_dir")
+    if not task_dir or not isinstance(result_task_dir, str):
+        return ""
+    return task_dir if os.path.realpath(result_task_dir) == task_dir else ""
+
+
 def _child_status(
     child_id: str,
     root_id: str,
@@ -419,60 +656,68 @@ def _child_status(
     repo_root: str,
 ) -> tuple[str, Path | None, str]:
     path = _find_rollout(child_id)
-    sessions = _sessions_root()
-    if path is None or not _safe_regular_file(path, sessions, max_size=MAX_CHILD_BYTES):
+    trust_root = _sessions_root()
+    if path is None:
         return "pending", None, ""
+    opened = _open_trusted_file(path, trust_root, max_size=MAX_CHILD_BYTES)
+    if opened is None:
+        return "pending", None, ""
+    handle, _ = opened
     matching_meta = 0
     child_boundaries = 0
     child_turn = False
     finals: list[str] = []
     completes: list[str] = []
     try:
-        with path.open("rb") as handle:
-            while True:
-                raw = handle.readline(MAX_LINE_BYTES + 1)
-                if not raw:
-                    break
-                if len(raw) > MAX_LINE_BYTES:
-                    return "invalid", path, ""
-                if not raw.endswith(b"\n"):
-                    return "pending", path, ""
-                event = _load_json_line(raw)
-                if event is None:
-                    return "invalid", path, ""
-                payload = event.get("payload") or {}
-                if event.get("type") == "session_meta" and payload.get("id") == child_id:
-                    source = payload.get("source") or {}
-                    spawn = source.get("subagent", {}).get("thread_spawn", {}) if isinstance(source, dict) else {}
-                    if (
-                        payload.get("session_id") == root_id
-                        and payload.get("parent_thread_id") == root_id
-                        and os.path.realpath(str(payload.get("cwd") or "")) == repo_root
-                        and payload.get("agent_path") == agent_path
-                        and spawn.get("parent_thread_id") == root_id
-                        and spawn.get("agent_path") == agent_path
-                        and spawn.get("depth") == 1
-                    ):
-                        matching_meta += 1
-                if event.get("type") == "response_item" and payload.get("type") == "agent_message":
-                    if payload.get("author") == "/root" and payload.get("recipient") == agent_path:
-                        content = payload.get("content") or []
-                        texts = [
-                            str(item.get("text") or "") for item in content
-                            if isinstance(item, dict) and item.get("type") == "input_text"
-                        ]
-                        if any("Message Type: NEW_TASK" in text for text in texts):
-                            child_boundaries += 1
-                            child_turn = True
-                            finals.clear()
-                            completes.clear()
-                            continue
-                if child_turn and event.get("type") == "event_msg" and payload.get("type") == "agent_message" and payload.get("phase") == "final_answer":
-                    finals.append(str(payload.get("message") or "").strip())
-                if child_turn and event.get("type") == "event_msg" and payload.get("type") == "task_complete":
-                    completes.append(str(payload.get("last_agent_message") or "").strip())
+        while True:
+            raw = handle.readline(MAX_LINE_BYTES + 1)
+            if not raw:
+                break
+            if len(raw) > MAX_LINE_BYTES:
+                return "invalid", path, ""
+            if not raw.endswith(b"\n"):
+                return "pending", path, ""
+            event = _load_json_line(raw)
+            if event is None:
+                return "invalid", path, ""
+            payload = event.get("payload") or {}
+            if event.get("type") == "session_meta" and payload.get("id") == child_id:
+                source = payload.get("source") or {}
+                spawn = source.get("subagent", {}).get("thread_spawn", {}) if isinstance(source, dict) else {}
+                if (
+                    payload.get("session_id") == root_id
+                    and payload.get("parent_thread_id") == root_id
+                    and os.path.realpath(str(payload.get("cwd") or "")) == repo_root
+                    and payload.get("agent_path") == agent_path
+                    and spawn.get("parent_thread_id") == root_id
+                    and spawn.get("agent_path") == agent_path
+                    and spawn.get("depth") == 1
+                ):
+                    matching_meta += 1
+            if event.get("type") == "response_item" and payload.get("type") == "agent_message":
+                if payload.get("author") == "/root" and payload.get("recipient") == agent_path:
+                    content = payload.get("content") or []
+                    texts = [
+                        str(item.get("text") or "") for item in content
+                        if isinstance(item, dict) and item.get("type") == "input_text"
+                    ]
+                    if any("Message Type: NEW_TASK" in text for text in texts):
+                        child_boundaries += 1
+                        child_turn = True
+                        finals.clear()
+                        completes.clear()
+                        continue
+            if child_turn and event.get("type") == "event_msg" and payload.get("type") == "agent_message" and payload.get("phase") == "final_answer":
+                finals.append(str(payload.get("message") or "").strip())
+            if child_turn and event.get("type") == "event_msg" and payload.get("type") == "task_complete":
+                completes.append(str(payload.get("last_agent_message") or "").strip())
     except OSError:
         return "pending", path, ""
+    finally:
+        identity_matches = _path_matches_handle(path, trust_root, handle, max_size=MAX_CHILD_BYTES)
+        handle.close()
+    if not identity_matches:
+        return "invalid", path, ""
     if matching_meta == 0 and child_boundaries == 0:
         return "pending", path, ""
     if matching_meta != 1:
@@ -514,10 +759,34 @@ def _matching_receipt(
     return None
 
 
+def _exact_receipt(
+    task_dir: str,
+    event_id: str,
+    status: str,
+    *,
+    root_id: str,
+    child_id: str,
+    agent_path: str,
+    lens: str,
+) -> dict[str, Any] | None:
+    for item in list_review_receipts(task_dir) + list_subagent_receipts(task_dir):
+        if (
+            item.get("runtime_event_id") == event_id
+            and item.get("status") == status
+            and item.get("runtime_session_id") == root_id
+            and item.get("runtime_thread_id") == child_id
+            and item.get("runtime_agent_path") == agent_path
+            and item.get("lens") == lens
+        ):
+            return item
+    return None
+
+
 class Watcher:
     def __init__(self, repo_root: str, root_id: str):
         self.repo_root = repo_root
         self.root_id = root_id
+        self.task_dir = ""
         self.calls: dict[str, dict[str, Any]] = {}
         self.by_path: dict[str, dict[str, Any]] = {}
 
@@ -565,40 +834,55 @@ class Watcher:
             return
         if item.get("invalid") or item.get("started"):
             return
-        child_status, _, _ = _child_status(
-            item["child_id"], self.root_id, item["activity_path"], self.repo_root
-        )
-        if child_status == "pending":
-            return
-        # A child that is invalid or already complete cannot establish a
-        # trustworthy start-time snapshot.
-        if child_status != "running":
-            self._invalidate(item, "child evidence was invalid or already complete at start capture")
-            return
-        task_dir = _active_task_for_session(self.repo_root, self.root_id)
+        task_dir = self.task_dir or _active_task_for_session(self.repo_root, self.root_id)
         lens = _infer_receipt_lens(item["task_name"])
         if not task_dir or not lens.startswith(("review-", "qa-", "ux-")):
             item["invalid"] = True
             return
         event_id = f"{self.root_id}:{call_id}:{item['child_id']}"
+        exact_existing = _exact_receipt(
+            task_dir,
+            event_id,
+            "started",
+            root_id=self.root_id,
+            child_id=item["child_id"],
+            agent_path=item["activity_path"],
+            lens=lens,
+        )
         existing = _matching_receipt(
             task_dir, event_id, "started", agent_path=item["activity_path"], lens=lens
         )
-        if existing is None:
-            receipt = record_subagent_receipt(task_dir, {
-                "source": "codex_session_watcher",
-                "status": "started",
-                "agent_id": item["activity_path"],
-                "agent_type": item["task_name"],
-                "lens": lens,
-                "summary": "Codex runtime spawn observed before child completion",
-                "runtime_event_id": event_id,
-                "runtime_session_id": self.root_id,
-                "runtime_thread_id": item["child_id"],
-                "runtime_agent_path": item["activity_path"],
-            })
+        if (
+            existing is not None
+            and existing.get("runtime_event_id") == event_id
+            and exact_existing is None
+        ):
+            existing = None
+        if exact_existing is not None:
+            receipt = exact_existing
         else:
-            receipt = existing
+            child_status, _, _ = _child_status(
+                item["child_id"], self.root_id, item["activity_path"], self.repo_root
+            )
+            if child_status == "pending":
+                return
+            # Without an earlier trusted start receipt, a child that is invalid
+            # or already complete cannot establish a start-time snapshot.
+            if child_status != "running":
+                self._invalidate(item, "child evidence was invalid or already complete at start capture")
+                return
+            receipt = existing or record_subagent_receipt(task_dir, {
+                    "source": "codex_session_watcher",
+                    "status": "started",
+                    "agent_id": item["activity_path"],
+                    "agent_type": item["task_name"],
+                    "lens": lens,
+                    "summary": "Codex runtime spawn observed before child completion",
+                    "runtime_event_id": event_id,
+                    "runtime_session_id": self.root_id,
+                    "runtime_thread_id": item["child_id"],
+                    "runtime_agent_path": item["activity_path"],
+                })
         item.update({
             "started": True,
             "task_dir": task_dir,
@@ -659,6 +943,11 @@ class Watcher:
             self._maybe_complete(item)
 
     def feed(self, event: dict[str, Any]) -> None:
+        task_dir = _task_binding(event, self.repo_root)
+        if task_dir:
+            self.task_dir = task_dir
+            self.retry()
+            return
         spawn = _spawn_call(event)
         if spawn:
             call_id, task_name = spawn
@@ -695,42 +984,56 @@ class Watcher:
         self._maybe_complete(item)
 
 
-def watch(repo_root: str, thread_id: str, rollout: str, offset: int) -> int:
+def watch(
+    repo_root: str,
+    thread_id: str,
+    rollout: str,
+    offset: int,
+    *,
+    stop_event: threading.Event | None = None,
+    idle_seconds: float = IDLE_SECONDS,
+) -> int:
+    """Tail one registered root rollout inside an MCP-owned thread."""
     repo_root = os.path.realpath(find_repo_root(repo_root))
     path = Path(rollout)
-    if _find_rollout(thread_id) != path or not _root_meta(path, thread_id, repo_root):
+    trust_root = _sessions_root()
+    if _find_rollout(thread_id) != path:
+        return 2
+    opened = _open_trusted_file(path, trust_root)
+    if opened is None:
+        return 2
+    handle, rollout_info = opened
+    if not _root_meta_from_handle(handle, thread_id, repo_root) or not _path_matches_handle(
+        path, trust_root, handle
+    ):
+        handle.close()
         return 2
     watcher = Watcher(repo_root, thread_id)
-    running = True
-
-    def stop(*_args: Any) -> None:
-        nonlocal running
-        running = False
-
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGINT, stop)
-    last_data = time.monotonic()
-    with path.open("rb") as handle:
+    stop_event = stop_event or threading.Event()
+    rollout_age = max(0.0, time.time() - rollout_info.st_mtime)
+    last_data = time.monotonic() - min(rollout_age, idle_seconds)
+    try:
         handle.seek(max(0, offset))
-        while running and time.monotonic() - last_data < IDLE_SECONDS:
+        while not stop_event.is_set() and time.monotonic() - last_data < idle_seconds:
             position = handle.tell()
             raw = handle.readline(MAX_LINE_BYTES + 1)
             if not raw:
                 try:
-                    if path.stat().st_size < position:
+                    current = os.fstat(handle.fileno())
+                    if current.st_size < position or not _path_matches_handle(path, trust_root, handle):
                         return 3
                 except OSError:
                     return 3
                 handle.seek(position)
                 watcher.retry()
-                time.sleep(POLL_SECONDS)
+                stop_event.wait(POLL_SECONDS)
                 continue
             if len(raw) > MAX_LINE_BYTES or not raw.endswith(b"\n"):
                 # Partial tails are retried. Oversized complete records stop the
                 # watcher rather than skipping evidence in the candidate chain.
                 if not raw.endswith(b"\n"):
                     handle.seek(position)
-                    time.sleep(POLL_SECONDS)
+                    stop_event.wait(POLL_SECONDS)
                     continue
                 return 3
             event = _load_json_line(raw)
@@ -738,26 +1041,121 @@ def watch(repo_root: str, thread_id: str, rollout: str, offset: int) -> int:
                 return 3
             last_data = time.monotonic()
             watcher.feed(event)
+    finally:
+        handle.close()
     return 0
+
+
+class WatcherManager:
+    """Host registered Codex rollout watchers inside the MCP server process."""
+
+    def __init__(
+        self,
+        repo_root: str,
+        *,
+        scan_seconds: float = 0.5,
+        max_workers: int = MAX_WATCHER_THREADS,
+    ):
+        self.repo_root = os.path.realpath(find_repo_root(repo_root))
+        self.scan_seconds = max(0.05, float(scan_seconds))
+        self.max_workers = max(1, min(int(max_workers), MAX_WATCHER_THREADS))
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+        self.workers: dict[str, threading.Thread] = {}
+        self.seen: set[str] = set()
+        self.worker_results: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    def _worker(self, registration: dict[str, Any], lease: Any) -> None:
+        thread_id = str(registration["thread_id"])
+        try:
+            result = watch(
+                self.repo_root,
+                thread_id,
+                str(registration["rollout"]),
+                int(registration["offset"]),
+                stop_event=self.stop_event,
+            )
+        except Exception:
+            result = 4
+        finally:
+            lease.close()
+        with self._lock:
+            self.worker_results[thread_id] = result
+
+    def scan_once(self) -> int:
+        """Start one daemon worker for every newly registered root thread."""
+        started = 0
+        try:
+            items = registrations(self.repo_root)
+        except Exception:
+            return 0
+        with self._lock:
+            for item in items:
+                active = sum(1 for worker in self.workers.values() if worker.is_alive())
+                if active >= self.max_workers:
+                    break
+                thread_id = str(item.get("thread_id") or "")
+                if thread_id in self.seen:
+                    continue
+                lease = _acquire_registration_lease(self.repo_root, thread_id)
+                if lease is None:
+                    continue
+                self.seen.add(thread_id)
+                worker = threading.Thread(
+                    target=self._worker,
+                    args=(item, lease),
+                    name=f"harness-codex-watcher-{thread_id[-8:]}",
+                    daemon=True,
+                )
+                self.workers[thread_id] = worker
+                worker.start()
+                started += 1
+        return started
+
+    def _run(self) -> None:
+        while not self.stop_event.is_set():
+            self.scan_once()
+            self.stop_event.wait(self.scan_seconds)
+
+    def start(self) -> "WatcherManager":
+        if self.thread is not None and self.thread.is_alive():
+            return self
+        self.thread = threading.Thread(
+            target=self._run,
+            name="harness-codex-watcher-manager",
+            daemon=True,
+        )
+        self.thread.start()
+        return self
+
+    def stop(self, timeout: float = 2.0) -> None:
+        self.stop_event.set()
+        if self.thread is not None:
+            self.thread.join(timeout=max(0.0, timeout))
+        deadline = time.monotonic() + max(0.0, timeout)
+        with self._lock:
+            workers = list(self.workers.values())
+        for worker in workers:
+            worker.join(timeout=max(0.0, deadline - time.monotonic()))
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--ensure", action="store_true")
-    mode.add_argument("--watch", action="store_true")
+    parser.add_argument("--ensure", action="store_true", required=True)
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--thread-id", default=os.environ.get("CODEX_THREAD_ID", ""))
-    parser.add_argument("--rollout")
-    parser.add_argument("--offset", type=int, default=0)
+    parser.add_argument("--retry-seconds", type=float, default=0.0)
     args = parser.parse_args(argv)
     if not THREAD_RE.fullmatch(args.thread_id or ""):
-        return 0 if args.ensure else 2
-    if args.ensure:
-        return 0 if ensure(args.repo_root, args.thread_id) else 0
-    if not args.rollout:
-        return 2
-    return watch(args.repo_root, args.thread_id, args.rollout, args.offset)
+        return 0
+    deadline = time.monotonic() + max(0.0, min(args.retry_seconds, 2.0))
+    while True:
+        if ensure(args.repo_root, args.thread_id):
+            return 0
+        if time.monotonic() >= deadline:
+            return 1
+        time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
 
 
 if __name__ == "__main__":

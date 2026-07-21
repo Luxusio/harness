@@ -12,6 +12,11 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
 try:
+    from codex_hook_registration import restore_watcher_registration  # type: ignore
+except Exception:  # pragma: no cover - registration recovery is best effort
+    restore_watcher_registration = None
+
+try:
     from _lib import (  # type: ignore
         extract_qa_verdict,
         find_repo_root,
@@ -294,6 +299,8 @@ def _record_codex_subagent_completion(payload: bytes) -> None:
 
 def main() -> int:
     payload = sys.stdin.buffer.read()
+    if restore_watcher_registration is not None:
+        restore_watcher_registration(payload)
     tool_name = _tool_name(payload)
     _record_codex_spawn_result(payload)
     _record_codex_subagent_completion(payload)

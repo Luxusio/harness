@@ -52,8 +52,8 @@ develop or creates a follow-up child task when the gap is separable.
 |---|---|
 | `PLAN.md`, `PLAN.meta.json`, optional `CHECKS.yaml`, optional `AUDIT_TRAIL.md` | MCP `write_plan` |
 | `CHECKS.yaml` status transitions after plan | `plugin/scripts/update_checks.py` |
-| `SUBAGENT_RECEIPTS.jsonl` | Codex/Claude subagent lifecycle hooks, including the Codex SessionStart watcher |
-| `REVIEW_RECEIPTS.jsonl` | Codex/Claude reviewer lifecycle hooks, including the Codex SessionStart watcher |
+| `SUBAGENT_RECEIPTS.jsonl` | Codex/Claude subagent lifecycle hooks, including the root-hook-registered, MCP-hosted Codex watcher |
+| `REVIEW_RECEIPTS.jsonl` | Codex/Claude reviewer lifecycle hooks, including the root-hook-registered, MCP-hosted Codex watcher |
 | `CONVERSATION.md` | Codex/Claude UserPromptSubmit/Subagent hooks |
 | durable docs under `doc/<area>/<TYPE>__*.md` | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
 
@@ -86,14 +86,39 @@ checks may still help debugging, but close authority comes from `task_verify`
 reading task state and the two lifecycle streams.
 
 Codex runtimes do not always forward collaboration tools to plugin
-`PostToolUse`. On SessionStart, Harness therefore launches a watcher scoped to
-the current `CODEX_THREAD_ID` and canonical repository. The watcher captures
-HEAD and the task diff fingerprint only while a correlated child is still
-running, then accepts completion only when the root-delivered message matches
-the child rollout's final answer and task-complete record. Historical finals,
-unrecognized lenses, cross-repository lineage, partial records, symlinks, and
-schema ambiguity cannot create PASS. The watcher and classic PostToolUse path
-share the same receipt owner and freshness gates.
+`PostToolUse`. SessionStart and each installed Codex root hook therefore validate
+the current official `session_id` (with a matching environment fallback),
+canonical repository, root rollout, and initial offset, then writes a versioned
+registration under the current user's state directory. Registration retries
+briefly on SessionStart when rollout creation races hook delivery. Later hooks
+restore missing or invalid registration state without overwriting a valid
+initial offset; late recovery begins at the current offset and covers only
+future subagent starts.
+It does not fork. The existing Harness MCP server discovers these registrations
+and hosts one passive daemon watcher thread per root tuple. MCP restart replays
+from the immutable initial offset; receipt deduplication makes replay safe.
+Because Codex MCP processes do not receive the root thread id as process state,
+the watcher binds a root to a task only from that root rollout's successful
+Harness `task_start` or `task_context` completion event, after canonical task
+state validation and before the reviewed or QA child starts.
+
+Each rollout is opened with no-follow semantics and validated by descriptor
+identity, owner, link count, non-group/world-writable mode, size, and an owner-controlled non-writable session
+directory chain. Path replacement or inode changes fail closed. A
+per-registration interprocess lease ensures that concurrent MCP servers cannot
+tail and append evidence for the same root tuple at the same time.
+
+The watcher captures HEAD and the task diff fingerprint only while a correlated
+child is still running, then accepts completion only when the root-delivered
+message matches the child rollout's final answer and task-complete record.
+Historical finals, unrecognized lenses, cross-repository lineage, partial
+records, symlinks, unsafe registrations, and schema ambiguity cannot create
+PASS. The unresolved repository `doc/harness/tasks` directory chain is also
+owner/type checked with `lstat`; symlinked task roots cannot redirect receipts
+across repositories. No model-callable MCP tool can author review or QA evidence. The
+MCP-hosted watcher and classic PostToolUse path share the same protected receipt
+owner and freshness gates. No recovery hook converts a child that completed
+before start capture into evidence.
 
 ## Durable Knowledge
 

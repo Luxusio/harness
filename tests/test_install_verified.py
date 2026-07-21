@@ -76,8 +76,9 @@ def test_success_marker_skips_same_fingerprint_and_reinstalls_changed_diff(tmp_p
         mock.patch.object(mod, "_tracked_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_payload_fingerprint", return_value="payload-1"),
         mock.patch.object(mod, "_copy_payload_snapshot"),
+        mock.patch.object(mod, "_payload_modes_match_index", return_value=True),
     )
-    with common[0], common[1], common[2], common[3], common[4], common[5], common[6], common[7], common[8], common[9], common[10], common[11], mock.patch.object(
+    with common[0], common[1], common[2], common[3], common[4], common[5], common[6], common[7], common[8], common[9], common[10], common[11], common[12], mock.patch.object(
         mod, "_verification_state", return_value=(True, "", "fp-1")
     ), mock.patch.object(mod.subprocess, "run", return_value=installer) as run:
         assert mod.install_verified(task) == 0
@@ -100,6 +101,7 @@ def test_success_marker_skips_same_fingerprint_and_reinstalls_changed_diff(tmp_p
         mock.patch.object(mod, "_tracked_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_payload_fingerprint", return_value="payload-2"),
         mock.patch.object(mod, "_copy_payload_snapshot"),
+        mock.patch.object(mod, "_payload_modes_match_index", return_value=True),
         mock.patch.object(mod.subprocess, "run", return_value=installer) as run,
     ):
         assert mod.install_verified(task) == 0
@@ -125,6 +127,121 @@ def test_unreviewed_dirty_payload_blocks_install(tmp_path):
     run.assert_not_called()
 
 
+def test_unreviewed_dirty_payload_allows_nonbehavioral_metadata(tmp_path):
+    repo, task = _repo(tmp_path)
+    dirty = {
+        "plugin-codex/README.md",
+        "plugin/scripts/README.md",
+        "plugin/CHANGELOG.md",
+        "plugin/unreviewed.bin",
+        "plugin/reviewed.py",
+    }
+    allowed = {
+        "plugin-codex/README.md",
+        "plugin/scripts/README.md",
+        "plugin/CHANGELOG.md",
+    }
+    with (
+        mock.patch.object(mod, "_dirty_install_payload", return_value=dirty),
+        mock.patch.object(mod, "read_state", return_value={}),
+        mock.patch.object(mod, "_reviewable_source_paths", return_value=["plugin/reviewed.py"]),
+        mock.patch.object(
+            mod, "_is_nonbehavioral_payload_metadata",
+            side_effect=lambda _repo, path: path in allowed,
+        ),
+    ):
+        assert mod._unreviewed_dirty_payload(repo, task) == ["plugin/unreviewed.bin"]
+
+
+def test_nonbehavioral_metadata_requires_exact_safe_tracked_file(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    readme = repo / "plugin-codex/README.md"
+    readme.parent.mkdir(parents=True)
+    readme.write_text("documentation\n", encoding="utf-8")
+    readme.chmod(0o644)
+    subprocess.run(["git", "add", "plugin-codex/README.md"], cwd=repo, check=True)
+
+    assert mod._is_nonbehavioral_payload_metadata(repo, "plugin-codex/README.md")
+    assert not mod._is_nonbehavioral_payload_metadata(repo, "plugin/nested/README.md")
+    assert not mod._is_nonbehavioral_payload_metadata(repo, "plugin-codex/readme.md")
+
+    readme.chmod(0o755)
+    assert not mod._is_nonbehavioral_payload_metadata(repo, "plugin-codex/README.md")
+    readme.unlink()
+    readme.symlink_to(repo / "outside")
+    assert not mod._is_nonbehavioral_payload_metadata(repo, "plugin-codex/README.md")
+
+
+def test_payload_fingerprint_includes_mode_and_rejects_symlink(tmp_path):
+    repo = tmp_path / "repo"
+    payload = repo / "plugin/file.py"
+    payload.parent.mkdir(parents=True)
+    payload.write_text("print('ok')\n", encoding="utf-8")
+    payload.chmod(0o644)
+    regular = mod._payload_fingerprint(repo, {"plugin/file.py"})
+
+    payload.chmod(0o755)
+    assert mod._payload_fingerprint(repo, {"plugin/file.py"}) != regular
+
+    payload.unlink()
+    outside = tmp_path / "outside.py"
+    outside.write_text("print('outside')\n", encoding="utf-8")
+    payload.symlink_to(outside)
+    assert mod._payload_fingerprint(repo, {"plugin/file.py"}) == ""
+
+
+def test_payload_path_normalization_preserves_dot_root_and_rejects_escape():
+    assert mod._is_install_payload_path(".claude-plugin/marketplace.json")
+    assert mod._is_install_payload_path("./plugin/scripts/tool.py")
+    assert not mod._is_install_payload_path("../plugin/CHANGELOG.md")
+    assert not mod._is_install_payload_path("/plugin/CHANGELOG.md")
+    assert not mod._is_install_payload_path("plugin//scripts/tool.py")
+    assert not mod._is_install_payload_path("C:/plugin/scripts/tool.py")
+
+
+def test_payload_modes_must_match_git_and_reject_hardlinks(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    payload = repo / "plugin/file.py"
+    payload.parent.mkdir(parents=True)
+    payload.write_text("print('ok')\n", encoding="utf-8")
+    payload.chmod(0o644)
+    subprocess.run(["git", "add", "plugin/file.py"], cwd=repo, check=True)
+    paths = {"plugin/file.py"}
+    assert mod._payload_modes_match_index(repo, paths)
+
+    payload.chmod(0o755)
+    assert not mod._payload_modes_match_index(repo, paths)
+    payload.chmod(0o644)
+    hardlink = repo / "plugin/file-hardlink.py"
+    hardlink.hardlink_to(payload)
+    assert not mod._payload_modes_match_index(repo, paths)
+
+
+def test_payload_read_rejects_writable_directory_chain(tmp_path):
+    repo = tmp_path / "repo"
+    payload = repo / "plugin/file.py"
+    payload.parent.mkdir(parents=True)
+    payload.write_text("print('ok')\n", encoding="utf-8")
+    payload.chmod(0o644)
+
+    repo.chmod(0o777)
+    assert mod._read_payload_file(repo, "plugin/file.py") is None
+    repo.chmod(0o700)
+    payload.parent.chmod(0o777)
+    assert mod._read_payload_file(repo, "plugin/file.py") is None
+
+
+def test_payload_mode_check_fails_closed_on_git_index_error(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    with mock.patch.object(mod, "_git_index_modes", return_value=None):
+        assert not mod._payload_modes_match_index(repo, {"plugin/file.py"})
+
+
 def test_source_change_during_install_withholds_success_marker(tmp_path):
     repo, task = _repo(tmp_path)
     with (
@@ -145,6 +262,7 @@ def test_source_change_during_install_withholds_success_marker(tmp_path):
             side_effect=["payload-1", "payload-1", "payload-2"],
         ),
         mock.patch.object(mod, "_copy_payload_snapshot"),
+        mock.patch.object(mod, "_payload_modes_match_index", return_value=True),
         mock.patch.object(mod.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)),
     ):
         assert mod.install_verified(task) == 5
@@ -194,6 +312,7 @@ def test_active_task_switch_during_install_withholds_marker(tmp_path):
         mock.patch.object(mod, "_tracked_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_payload_fingerprint", return_value="payload"),
         mock.patch.object(mod, "_copy_payload_snapshot"),
+        mock.patch.object(mod, "_payload_modes_match_index", return_value=True),
         mock.patch.object(mod.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)),
     ):
         assert mod.install_verified(task) == 5

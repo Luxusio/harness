@@ -213,6 +213,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         ):
             server.handle_request(server._read())
             stdout.flush()
+            server.close()
 
         raw = stdout_bytes.getvalue()
         self.assertTrue(raw.startswith(b"Content-Length: "), raw)
@@ -242,6 +243,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             stdout.flush()
 
         response = json.loads(stdout_bytes.getvalue().decode())
+        server.close()
         instructions = response["result"]["instructions"]
         self.assertIn("Goal-first control plane", instructions)
         self.assertIn("goal_start", instructions)
@@ -260,6 +262,37 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertIn("mcp__plugin_harness_harness__", instructions)
         self.assertIn("do not use Claude display prefixes", instructions)
         self.assertNotIn("write_critic_runtime", instructions)
+
+    def test_codex_initialize_hosts_and_closes_watcher_manager(self):
+        manager = mock.Mock()
+        manager.start.return_value = manager
+        server = harness_server.McpServer()
+        with (
+            mock.patch.object(harness_server, "_WatcherManager", return_value=manager) as factory,
+            mock.patch.object(harness_server, "find_repo_root", return_value="/trusted/repo"),
+            mock.patch.object(server, "_reply"),
+        ):
+            server.handle_request({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "codex-cli"}},
+            })
+            server.close()
+        factory.assert_called_once_with("/trusted/repo")
+        manager.start.assert_called_once_with()
+        manager.stop.assert_called_once_with()
+
+    def test_watcher_manager_failure_does_not_break_codex_initialize(self):
+        server = harness_server.McpServer()
+        with (
+            mock.patch.object(harness_server, "_WatcherManager", side_effect=RuntimeError("boom")),
+            mock.patch.object(server, "_reply") as reply,
+        ):
+            server.handle_request({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "codex-cli"}},
+            })
+        self.assertIsNone(server.watcher_manager)
+        reply.assert_called_once()
 
     def test_initialize_instructions_match_current_claude_mcp_contract(self):
         request = {
@@ -666,6 +699,36 @@ class HarnessMcpServerTests(unittest.TestCase):
             state = (Path(task_dir) / "TASK_STATE.yaml").read_text(encoding="utf-8")
             self.assertIn("status: blocked", state)
             self.assertIn("runtime_verdict: BLOCKED_ENV", state)
+
+    def test_task_start_explicitly_resumes_blocked_task(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__resume-blocked")
+            state_path = Path(task_dir) / "TASK_STATE.yaml"
+            state = state_path.read_text(encoding="utf-8")
+            state_path.write_text(
+                state.replace("status: created", "status: blocked").replace(
+                    "runtime_verdict: pending", "runtime_verdict: BLOCKED_ENV"
+                ),
+                encoding="utf-8",
+            )
+            (Path(task_dir) / "BLOCKED.md").write_text("# BLOCKED\n", encoding="utf-8")
+            original_ctd = harness_server.canonical_task_dir
+            original_root = harness_server.find_repo_root
+            harness_server.canonical_task_dir = lambda task_id=None, slug=None, repo_root=None, **kw: task_dir
+            harness_server.find_repo_root = lambda *a, **kw: tmp
+            try:
+                result = harness_server.call_tool(
+                    "task_start", {"task_id": "TASK__resume-blocked"}
+                )
+            finally:
+                harness_server.canonical_task_dir = original_ctd
+                harness_server.find_repo_root = original_root
+
+            self.assertNotIn("isError", result)
+            context = result["structuredContent"]["task_context"]
+            self.assertEqual(context["status"], "created")
+            self.assertEqual(context["runtime_verdict"], "PENDING")
+            self.assertFalse((Path(task_dir) / "BLOCKED.md").exists())
 
     def test_write_plan_writes_plan_meta_checks_and_audit(self):
         with tempfile.TemporaryDirectory() as tmp:

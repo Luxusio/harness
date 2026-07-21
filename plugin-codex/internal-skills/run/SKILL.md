@@ -73,11 +73,14 @@ path and keep the fallback reason in task state or the final response;
 `task_close` will still require a real completed QA PASS receipt for
 verification-gated work when `spawn_agent` was available.
 
-On Codex builds that do not forward collaboration tools to PostToolUse, the
-SessionStart hook's thread-scoped watcher owns the same receipt flow. Give
-review/QA agents structured `task_name` values containing their exact lens and
-await the final response normally. A watcher started after completion cannot
-retroactively attest the source snapshot.
+On Codex builds that do not forward collaboration tools to PostToolUse,
+SessionStart creates the exact root-rollout registration and every installed
+root hook idempotently restores it. The existing Harness MCP server hosts the
+thread-scoped watcher as a daemon thread. The hook/runtime
+path, not a model-callable MCP tool, owns receipts. Give review/QA agents
+structured `task_name` values containing their exact lens and await the final
+response normally. A registration created after completion cannot retroactively
+attest the source snapshot; recovery covers only future subagent starts.
 
 Subagent lifecycle cleanup: track every `agent_id` returned by `spawn_agent`.
 After a spawned agent completes, fails, is cancelled, or is no longer needed,
@@ -85,6 +88,15 @@ call `close_agent` when that tool is available. Before final response,
 `task_close`, or handoff, close every agent this workflow spawned unless the
 user explicitly asked to leave a still-running agent open. Completed agents can
 continue to count toward the concurrency limit until closed.
+
+Subagent wait UX: after spawning a batch, do useful coordinator-side work
+before waiting. When no useful work remains, use one `wait_agent` interval of
+up to 60 seconds. Do not issue rapid 10/20/30-second wait loops or interleave
+`list_agents` polling between timeouts. After a timeout, give one compact status update
+before the next wait interval. Treat an agent's progress message and
+final response as one lifecycle; do not add an extra wait solely to collect a
+duplicate completion notification. Call `list_agents` once after the required
+batch has completed, because that call exists for receipt exposure, not polling.
 
 Use inline execution as the fallback for roles that normally benefit from independence only when `spawn_agent` is unavailable or the work is not actually independent. If independent work runs sequentially, state the concrete blocker and affected lanes in the lane table or final response; vague reasons such as lack of user request are invalid. Do not create a runtime fallback document just to record routing history.
 

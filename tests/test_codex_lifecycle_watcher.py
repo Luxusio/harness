@@ -98,6 +98,30 @@ def _delivery(agent_path: str, final: str):
     }}
 
 
+def _task_context_binding(task_id: str, task_dir: str, *, ok: bool = True):
+    return {"type": "event_msg", "payload": {
+        "type": "mcp_tool_call_end",
+        "invocation": {
+            "server": "harness", "tool": "task_context",
+            "arguments": {"task_id": task_id},
+        },
+        "result": {"Ok" if ok else "Err": {
+            "structuredContent": {
+                "task_id": task_id,
+                "task_dir": task_dir,
+                "task_context": {"task_id": task_id},
+            },
+        }},
+    }}
+
+
+def _task_start_binding(slug: str, task_id: str, task_dir: str):
+    event = _task_context_binding(task_id, task_dir)
+    event["payload"]["invocation"]["tool"] = "task_start"
+    event["payload"]["invocation"]["arguments"] = {"slug": slug}
+    return event
+
+
 def test_watcher_records_start_then_correlated_review_completion(tmp_path, monkeypatch):
     mod = _load()
     codex_home = tmp_path / ".codex"
@@ -168,6 +192,48 @@ def test_watcher_rejects_child_that_completed_before_start_capture(tmp_path, mon
         for event in _spawn_events(root_id, child_id, "qa_cli", agent_path):
             watcher.feed(event)
     assert receipts == []
+
+
+def test_watcher_restart_replays_persisted_exact_start_after_child_completes(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    task_dir = repo / "doc/harness/tasks/TASK__watcher"
+    task_dir.mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    agent_path = "/root/code_review"
+    call_id = "call_runtime_123456"
+    event_id = f"{root_id}:{call_id}:{child_id}"
+    final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo), final))
+    receipts = [{
+        "status": "started", "agent_id": agent_path, "lens": "review-code",
+        "runtime_event_id": event_id, "head_sha": "a" * 40,
+        "base_sha": "a" * 40, "diff_fingerprint": "sha256:before",
+        "runtime_session_id": root_id, "runtime_thread_id": child_id,
+        "runtime_agent_path": agent_path,
+    }]
+
+    def record(_task_dir, receipt):
+        receipts.append(receipt)
+        return receipt
+
+    watcher = mod.Watcher(str(repo), root_id)
+    with mock.patch.object(mod, "_active_task_for_session", return_value=str(task_dir)), \
+         mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"), \
+         mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
+         mock.patch.object(mod, "list_review_receipts", side_effect=lambda _td: receipts), \
+         mock.patch.object(mod, "list_subagent_receipts", return_value=[]):
+        for event in _spawn_events(root_id, child_id, "code_review", agent_path):
+            watcher.feed(event)
+        watcher.feed(_delivery(agent_path, final))
+
+    assert [(item["status"], item.get("verdict")) for item in receipts] == [
+        ("started", None), ("completed", "PASS"),
+    ]
 
 
 def test_watcher_marks_completion_pending_when_source_changes(tmp_path, monkeypatch):
@@ -312,7 +378,7 @@ def test_record_receipt_preserves_runtime_provenance(tmp_path):
     assert entry["runtime_agent_path"] == "/root/qa_cli"
 
 
-def test_ensure_launches_once_for_exact_root_rollout(tmp_path, monkeypatch):
+def test_ensure_registers_once_without_forking_for_exact_root_rollout(tmp_path, monkeypatch):
     mod = _load()
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
@@ -328,23 +394,21 @@ def test_ensure_launches_once_for_exact_root_rollout(tmp_path, monkeypatch):
         },
     }])
 
-    process = mock.Mock(pid=43210)
-    with mock.patch.object(mod.subprocess, "Popen", return_value=process) as popen, \
-         mock.patch.object(mod, "_process_identity", return_value=("watcher", "99")), \
-         mock.patch.object(mod, "_watcher_process_matches", return_value=True):
-        assert mod.ensure(str(repo), root_id)
-        assert mod.ensure(str(repo), root_id)
+    assert mod.ensure(str(repo), root_id)
+    first = json.loads(mod._state_path(str(repo), root_id).read_text())
+    assert mod.ensure(str(repo), root_id)
 
-    assert popen.call_count == 1
-    state = json.loads((repo / mod.RUNTIME_SUBDIR / f"{root_id}.json").read_text())
-    assert state["pid"] == 43210
+    state = json.loads(mod._state_path(str(repo), root_id).read_text())
+    assert state == first
+    assert state["version"] == mod.REGISTRATION_VERSION
+    assert state["owner"] == mod.REGISTRATION_OWNER
     assert state["repo_root"] == str(repo.resolve())
-    command = popen.call_args.args[0]
-    assert "--watch" in command
-    assert command[command.index("--offset") + 1] == str(rollout.stat().st_size)
+    assert state["offset"] == rollout.stat().st_size
+    assert "pid" not in state
+    assert "process_start" not in state
 
 
-def test_ensure_replaces_stale_watcher_pid(tmp_path, monkeypatch):
+def test_ensure_replaces_legacy_process_state_with_registration(tmp_path, monkeypatch):
     mod = _load()
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
@@ -355,17 +419,50 @@ def test_ensure_replaces_stale_watcher_pid(tmp_path, monkeypatch):
     _write_jsonl(rollout, [{"type": "session_meta", "payload": {
         "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
     }}])
-    state_path = repo / mod.RUNTIME_SUBDIR / f"{root_id}.json"
+    state_path = mod._state_path(str(repo), root_id)
     state_path.parent.mkdir(parents=True)
     state_path.write_text(json.dumps({
         "pid": 123, "thread_id": root_id, "repo_root": str(repo.resolve()),
     }))
-    with mock.patch.object(mod, "_watcher_process_matches", return_value=False), \
-         mock.patch.object(mod, "_process_identity", return_value=("watcher", "100")), \
-         mock.patch.object(mod.subprocess, "Popen", return_value=mock.Mock(pid=456)) as popen:
-        assert mod.ensure(str(repo), root_id)
-    assert popen.call_count == 1
-    assert json.loads(state_path.read_text())["pid"] == 456
+    assert mod.ensure(str(repo), root_id)
+    state = json.loads(state_path.read_text())
+    assert state["version"] == mod.REGISTRATION_VERSION
+    assert state["owner"] == mod.REGISTRATION_OWNER
+    assert "pid" not in state
+
+
+def test_ensure_migrates_valid_v2_registration_without_changing_offset(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    rollout = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
+    _write_jsonl(rollout, [{"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
+    }}])
+    original_offset = rollout.stat().st_size
+    with rollout.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps({"type": "event_msg", "payload": {"type": "later"}}) + "\n")
+    state_path = mod._state_path(str(repo), root_id)
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(json.dumps({
+        "version": 2,
+        "owner": "session_start_hook",
+        "thread_id": root_id,
+        "repo_root": str(repo.resolve()),
+        "rollout": str(rollout),
+        "offset": original_offset,
+        "registered_at": 1234.5,
+    }))
+
+    assert mod.ensure(str(repo), root_id)
+    state = json.loads(state_path.read_text())
+    assert state["version"] == mod.REGISTRATION_VERSION
+    assert state["owner"] == mod.REGISTRATION_OWNER
+    assert state["offset"] == original_offset
+    assert state["registered_at"] == 1234.5
 
 
 def test_ensure_rejects_symlinked_runtime_registry(tmp_path, monkeypatch):
@@ -379,14 +476,284 @@ def test_ensure_rejects_symlinked_runtime_registry(tmp_path, monkeypatch):
     _write_jsonl(rollout, [{"type": "session_meta", "payload": {
         "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
     }}])
-    runtime_parent = repo / "doc/harness/runtime"
-    runtime_parent.mkdir(parents=True)
+    runtime_dir = mod._runtime_dir(str(repo))
+    runtime_dir.parent.mkdir(parents=True)
     outside = tmp_path / "outside"
     outside.mkdir()
-    (runtime_parent / "codex-watchers").symlink_to(outside, target_is_directory=True)
-    with mock.patch.object(mod.subprocess, "Popen") as popen:
-        assert not mod.ensure(str(repo), root_id)
-    popen.assert_not_called()
+    runtime_dir.symlink_to(outside, target_is_directory=True)
+    assert not mod.ensure(str(repo), root_id)
+
+
+def test_root_meta_rejects_path_replacement_after_descriptor_open(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    rollout = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
+    _write_jsonl(rollout, [{"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
+    }}])
+    original = mod._root_meta_from_handle
+
+    def replace_after_read(handle, thread_id, repo_root):
+        result = original(handle, thread_id, repo_root)
+        prior = rollout.with_suffix(".prior")
+        rollout.rename(prior)
+        _write_jsonl(rollout, [{"type": "session_meta", "payload": {
+            "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
+        }}])
+        return result
+
+    with mock.patch.object(mod, "_root_meta_from_handle", side_effect=replace_after_read):
+        assert not mod._root_meta(rollout, root_id, str(repo.resolve()))
+
+
+def test_child_status_rejects_path_replacement_during_parse(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    agent_path = "/root/qa_cli"
+    final = "VERDICT: PASS"
+    rollout = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    _write_jsonl(rollout, _child_events(root_id, child_id, agent_path, str(repo), final))
+    original = mod._load_json_line
+    swapped = False
+
+    def replace_after_first_line(raw):
+        nonlocal swapped
+        result = original(raw)
+        if not swapped:
+            swapped = True
+            prior = rollout.with_suffix(".prior")
+            rollout.rename(prior)
+            _write_jsonl(rollout, _child_events(root_id, child_id, agent_path, str(repo), final))
+        return result
+
+    with mock.patch.object(mod, "_load_json_line", side_effect=replace_after_first_line):
+        status, _, _ = mod._child_status(child_id, root_id, agent_path, str(repo.resolve()))
+    assert status == "invalid"
+
+
+def test_rollout_rejects_group_or_world_writable_session_ancestor(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    rollout = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
+    _write_jsonl(rollout, [{"type": "session_meta", "payload": {"id": root_id}}])
+    rollout.parent.chmod(0o777)
+    try:
+        assert mod._find_rollout(root_id) is None
+    finally:
+        rollout.parent.chmod(0o700)
+
+
+def test_rollout_rejects_group_or_world_writable_root_and_child_files(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    root = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
+    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    _write_jsonl(root, [{"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
+    }}])
+    _write_jsonl(child, _child_events(root_id, child_id, "/root/qa_cli", str(repo)))
+    for mode in (0o620, 0o602):
+        root.chmod(mode)
+        child.chmod(mode)
+        assert mod._find_rollout(root_id) is None
+        assert mod._child_status(child_id, root_id, "/root/qa_cli", str(repo.resolve()))[0] == "pending"
+    root.chmod(0o600)
+    child.chmod(0o600)
+
+
+def test_registrations_revalidates_exact_root_and_rejects_symlink(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    rollout = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
+    _write_jsonl(rollout, [{"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
+    }}])
+    assert mod.ensure(str(repo), root_id)
+    assert [item["thread_id"] for item in mod.registrations(str(repo))] == [root_id]
+
+    state_path = mod._state_path(str(repo), root_id)
+    outside = tmp_path / "outside.json"
+    outside.write_text(state_path.read_text())
+    state_path.unlink()
+    state_path.symlink_to(outside)
+    assert mod.registrations(str(repo)) == []
+
+    state_path.unlink()
+    os.link(outside, state_path)
+    assert mod.registrations(str(repo)) == []
+
+
+def test_registrations_prunes_expired_root_state(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    rollout = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
+    _write_jsonl(rollout, [{"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
+    }}])
+    assert mod.ensure(str(repo), root_id)
+    state_path = mod._state_path(str(repo), root_id)
+    state = json.loads(state_path.read_text())
+    expired = 1.0
+    state["registered_at"] = expired
+    state_path.write_text(json.dumps(state))
+    os.utime(rollout, (expired, expired))
+    with mock.patch.object(mod.time, "time", return_value=mod.REGISTRATION_TTL_SECONDS + 10):
+        assert mod.registrations(str(repo)) == []
+    assert not state_path.exists()
+
+
+def test_manager_starts_one_daemon_worker_per_registration_and_stops(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    registrations = [
+        {"thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42", "rollout": "/one", "offset": 11},
+        {"thread_id": "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f", "rollout": "/two", "offset": 22},
+    ]
+    calls = []
+
+    def fake_watch(repo_root, thread_id, rollout, offset, *, stop_event, **_kwargs):
+        calls.append((repo_root, thread_id, rollout, offset))
+        stop_event.wait(0.05)
+        return 0
+
+    manager = mod.WatcherManager(str(repo), scan_seconds=0.01)
+    with mock.patch.object(mod, "registrations", return_value=registrations), \
+         mock.patch.object(mod, "watch", side_effect=fake_watch):
+        assert manager.scan_once() == 2
+        assert manager.scan_once() == 0
+        manager.stop()
+    assert {call[1] for call in calls} == {item["thread_id"] for item in registrations}
+    assert all(worker.daemon for worker in manager.workers.values())
+
+
+def test_manager_caps_simultaneous_workers(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    items = [
+        {"thread_id": f"019f825b-f25f-70c3-8ee8-071f79fa1c4{i}", "rollout": f"/{i}", "offset": i}
+        for i in range(3)
+    ]
+
+    def fake_watch(*_args, stop_event, **_kwargs):
+        stop_event.wait(1)
+        return 0
+
+    manager = mod.WatcherManager(str(repo), max_workers=2)
+    with mock.patch.object(mod, "registrations", return_value=items), \
+         mock.patch.object(mod, "watch", side_effect=fake_watch):
+        assert manager.scan_once() == 2
+        manager.stop()
+    assert len(manager.workers) == 2
+
+
+def test_manager_restart_replays_immutable_registration_offset(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    registration = {
+        "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+        "rollout": "/root-rollout", "offset": 777,
+    }
+    calls = []
+
+    def fake_watch(_repo, _thread, _rollout, offset, *, stop_event, **_kwargs):
+        calls.append(offset)
+        return 0
+
+    with mock.patch.object(mod, "registrations", return_value=[registration]), \
+         mock.patch.object(mod, "watch", side_effect=fake_watch):
+        first = mod.WatcherManager(str(repo))
+        second = mod.WatcherManager(str(repo))
+        assert first.scan_once() == 1
+        first.workers[registration["thread_id"]].join()
+        assert second.scan_once() == 1
+        second.workers[registration["thread_id"]].join()
+    assert calls == [777, 777]
+
+
+def test_managers_use_cross_process_lease_for_same_registration(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    registration = {
+        "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+        "rollout": "/root-rollout", "offset": 777,
+    }
+    entered = mod.threading.Event()
+
+    def fake_watch(*_args, stop_event, **_kwargs):
+        entered.set()
+        stop_event.wait(1)
+        return 0
+
+    with mock.patch.object(mod, "registrations", return_value=[registration]), \
+         mock.patch.object(mod, "watch", side_effect=fake_watch):
+        first = mod.WatcherManager(str(repo))
+        second = mod.WatcherManager(str(repo))
+        assert first.scan_once() == 1
+        assert entered.wait(1)
+        assert second.scan_once() == 0
+        first.stop()
+        assert second.scan_once() == 1
+        second.stop()
+
+
+def test_watch_inherits_rollout_idle_age_instead_of_resetting_lifetime(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    rollout = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
+    _write_jsonl(rollout, [{"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
+    }}])
+    os.utime(rollout, (1, 1))
+    with mock.patch.object(mod.time, "time", return_value=1000):
+        assert mod.watch(
+            str(repo), root_id, str(rollout), rollout.stat().st_size,
+            stop_event=mod.threading.Event(), idle_seconds=10,
+        ) == 0
+
+
+def test_main_retries_bounded_rollout_creation_race():
+    mod = _load()
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    with mock.patch.object(mod, "ensure", side_effect=[False, False, True]) as ensure, \
+         mock.patch.object(mod.time, "monotonic", return_value=0.0), \
+         mock.patch.object(mod.time, "sleep"):
+        assert mod.main([
+            "--ensure", "--repo-root", "/repo", "--thread-id", root_id,
+            "--retry-seconds", "1.0",
+        ]) == 0
+    assert ensure.call_count == 3
 
 
 def test_active_task_requires_exact_session_marker_and_state(tmp_path):
@@ -411,6 +778,106 @@ def test_active_task_requires_exact_session_marker_and_state(tmp_path):
     }))
     with mock.patch.object(mod, "resolve_active_task_dir", return_value=str(task)):
         assert mod._active_task_for_session(str(repo), root_id) == ""
+
+
+def test_validated_task_dir_rejects_symlinked_tasks_root(tmp_path):
+    mod = _load()
+    attacker = tmp_path / "attacker"
+    victim = tmp_path / "victim"
+    (attacker / ".git").mkdir(parents=True)
+    victim_task = victim / "doc/harness/tasks/TASK__victim"
+    victim_task.mkdir(parents=True)
+    (victim_task / "TASK_STATE.yaml").write_text(
+        "task_id: TASK__victim\nstatus: created\nruntime_verdict: pending\n"
+        "touched_paths: []\nplan_session_state: closed\nclosed_at: null\nupdated: now\n"
+    )
+    attacker_harness = attacker / "doc/harness"
+    attacker_harness.mkdir(parents=True)
+    (attacker_harness / "tasks").symlink_to(victim / "doc/harness/tasks", target_is_directory=True)
+
+    assert mod._validated_task_dir(str(attacker), "TASK__victim") == ""
+
+
+def test_watcher_binds_task_from_successful_root_mcp_context_without_session_marker(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    task_id = "TASK__watcher"
+    task_dir = repo / "doc/harness/tasks" / task_id
+    task_dir.mkdir(parents=True)
+    (task_dir / "TASK_STATE.yaml").write_text(
+        f"task_id: {task_id}\nstatus: created\nruntime_verdict: pending\n"
+        "touched_paths: []\nplan_session_state: closed\nclosed_at: null\nupdated: now\n"
+    )
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    agent_path = "/root/code_review"
+    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo)))
+    receipts = []
+
+    def record(_task_dir, receipt):
+        entry = {**receipt, "head_sha": "a" * 40, "base_sha": "a" * 40,
+                 "diff_fingerprint": "sha256:before"}
+        receipts.append(entry)
+        return entry
+
+    watcher = mod.Watcher(str(repo), root_id)
+    with mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
+         mock.patch.object(mod, "list_review_receipts", side_effect=lambda _td: receipts), \
+         mock.patch.object(mod, "list_subagent_receipts", return_value=[]):
+        watcher.feed(_task_context_binding(task_id, str(task_dir)))
+        for event in _spawn_events(root_id, child_id, "code_review", agent_path):
+            watcher.feed(event)
+
+    assert watcher.task_dir == str(task_dir.resolve())
+    assert [(item["status"], item["lens"]) for item in receipts] == [("started", "review-code")]
+
+
+def test_watcher_rejects_failed_or_invalid_root_mcp_task_binding(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    task_id = "TASK__watcher"
+    task_dir = repo / "doc/harness/tasks" / task_id
+    task_dir.mkdir(parents=True)
+    (task_dir / "TASK_STATE.yaml").write_text(
+        f"task_id: {task_id}\nstatus: created\nruntime_verdict: pending\n"
+        "touched_paths: []\nplan_session_state: closed\nclosed_at: null\nupdated: now\n"
+    )
+    watcher = mod.Watcher(str(repo), "019f825b-f25f-70c3-8ee8-071f79fa1c42")
+    watcher.feed(_task_context_binding(task_id, str(task_dir), ok=False))
+    assert watcher.task_dir == ""
+    wrong_server = _task_context_binding(task_id, str(task_dir))
+    wrong_server["payload"]["invocation"]["server"] = "other"
+    watcher.feed(wrong_server)
+    assert watcher.task_dir == ""
+    watcher.feed(_task_context_binding("../TASK__watcher", str(task_dir)))
+    assert watcher.task_dir == ""
+
+
+def test_watcher_binds_real_task_start_slug_from_success_result(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    task_id = "TASK__watcher"
+    task_dir = repo / "doc/harness/tasks" / task_id
+    task_dir.mkdir(parents=True)
+    (task_dir / "TASK_STATE.yaml").write_text(
+        f"task_id: {task_id}\nstatus: created\nruntime_verdict: pending\n"
+        "touched_paths: []\nplan_session_state: closed\nclosed_at: null\nupdated: now\n"
+    )
+    watcher = mod.Watcher(str(repo), "019f825b-f25f-70c3-8ee8-071f79fa1c42")
+    watcher.feed(_task_start_binding("watcher", task_id, str(task_dir)))
+    assert watcher.task_dir == str(task_dir.resolve())
+
+    conflicting = _task_context_binding(task_id, str(task_dir))
+    conflicting["payload"]["invocation"]["arguments"]["task_id"] = "TASK__other"
+    watcher.task_dir = ""
+    watcher.feed(conflicting)
+    assert watcher.task_dir == ""
 
 
 def test_watcher_reuses_classic_posttooluse_start_receipt(tmp_path, monkeypatch):

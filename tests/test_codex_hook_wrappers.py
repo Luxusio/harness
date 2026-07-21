@@ -132,6 +132,7 @@ class TestCodexHookWrappers(unittest.TestCase):
     def test_session_start_runs_children_from_payload_cwd(self):
         mod = _load("hook_session_start")
         calls: list[dict] = []
+        root_id = "019f834e-1e91-7662-9024-f548103d751e"
 
         def fake_run(*args, **kwargs):
             kwargs["cmd"] = args[0]
@@ -139,8 +140,10 @@ class TestCodexHookWrappers(unittest.TestCase):
             return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
 
         with tempfile.TemporaryDirectory() as repo:
-            payload = json.dumps({"cwd": repo})
-            with mock.patch("subprocess.run", side_effect=fake_run):
+            payload = json.dumps({"cwd": repo, "session_id": root_id})
+            with mock.patch.dict("os.environ", {}, clear=True), \
+                 mock.patch.object(mod, "restore_watcher_registration") as restore, \
+                 mock.patch("subprocess.run", side_effect=fake_run):
                 with mock.patch.object(sys, "stdin", _BytesStdin(payload)):
                     with contextlib.redirect_stdout(io.StringIO()):
                         self.assertEqual(mod.main(), 0)
@@ -148,9 +151,67 @@ class TestCodexHookWrappers(unittest.TestCase):
         self.assertTrue(calls)
         self.assertTrue(all(call.get("cwd") == repo for call in calls))
         child_names = [Path(call["cmd"][1]).name for call in calls]
+        restore.assert_called_once_with(payload.encode(), retry_seconds=1.0)
+        self.assertNotIn("codex_lifecycle_watcher.py", child_names)
         self.assertNotIn("hygiene_scan.py", child_names)
         self.assertNotIn("inject_checkpoint.py", child_names)
         self.assertNotIn("contract_lint.py", child_names)
+
+    def test_session_start_rejects_mismatched_payload_and_environment_identity(self):
+        mod = _load("codex_hook_registration")
+        payload_id = "019f834e-1e91-7662-9024-f548103d751e"
+        env_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+        with tempfile.TemporaryDirectory() as repo:
+            payload = json.dumps({"cwd": repo, "session_id": payload_id}).encode()
+            with mock.patch.dict("os.environ", {"CODEX_THREAD_ID": env_id}, clear=True), \
+                 mock.patch.object(mod, "ensure") as ensure:
+                self.assertFalse(mod.restore_watcher_registration(payload, ensure_fn=ensure))
+
+        ensure.assert_not_called()
+
+    def test_all_codex_hook_wrappers_restore_registration(self):
+        modules = [
+            ("hook_session_start", {}, 1.0),
+            ("hook_pre_tool_use", {"tool_name": "Read"}, 0.0),
+            ("hook_post_tool_use", {"tool_name": "wait_agent"}, 0.0),
+            ("hook_user_prompt_submit", {}, 0.0),
+            ("hook_stop", {}, 0.0),
+        ]
+        root_id = "019f834e-1e91-7662-9024-f548103d751e"
+        for name, extra, retry_seconds in modules:
+            mod = _load(name)
+            with tempfile.TemporaryDirectory() as repo:
+                payload = {**extra, "cwd": repo, "session_id": root_id}
+                raw = json.dumps(payload)
+                with mock.patch.object(mod, "restore_watcher_registration") as restore, \
+                     mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")), \
+                     mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(mod.main(), 0)
+            if retry_seconds:
+                restore.assert_called_once_with(raw.encode(), retry_seconds=retry_seconds)
+            else:
+                restore.assert_called_once_with(raw.encode())
+
+    def test_registration_helper_retries_and_late_recovery_is_future_only(self):
+        mod = _load("codex_hook_registration")
+        root_id = "019f834e-1e91-7662-9024-f548103d751e"
+        attempts = []
+        with tempfile.TemporaryDirectory() as repo:
+            payload = json.dumps({"cwd": repo, "session_id": root_id}).encode()
+
+            def ensure(repo_root, thread_id):
+                attempts.append((repo_root, thread_id))
+                return len(attempts) == 2
+
+            with mock.patch.dict("os.environ", {}, clear=True), \
+                 mock.patch.object(mod.time, "monotonic", side_effect=[0.0, 0.0, 0.01, 0.02]), \
+                 mock.patch.object(mod.time, "sleep"):
+                self.assertTrue(mod.restore_watcher_registration(
+                    payload, retry_seconds=0.1, ensure_fn=ensure,
+                ))
+        self.assertEqual(attempts, [(repo, root_id), (repo, root_id)])
+        self.assertIn("only future subagent starts", mod.restore_watcher_registration.__doc__)
 
     def test_pre_post_prompt_and_stop_wrappers_use_payload_cwd(self):
         modules = [

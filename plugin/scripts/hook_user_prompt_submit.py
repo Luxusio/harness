@@ -8,6 +8,12 @@ import subprocess
 import sys
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, SCRIPTS_DIR)
+try:
+    from codex_hook_registration import restore_watcher_registration  # type: ignore
+except Exception:  # pragma: no cover - hook must fail open
+    restore_watcher_registration = None
+
 CHILD_TIMEOUT_SECONDS = 6
 CODEX_ROUTE = (
     "[harness-route] Repository mutation: invoke $harness:run before edits; "
@@ -40,6 +46,8 @@ def _is_harness_repo(cwd: str | None) -> bool:
 
 def main() -> int:
     payload = sys.stdin.buffer.read()
+    if restore_watcher_registration is not None:
+        restore_watcher_registration(payload)
     cwd = _payload_cwd(payload)
     harness_repo = _is_harness_repo(cwd)
     context = ""
