@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
@@ -101,14 +102,24 @@ def _record_codex_subagent_start(payload: bytes) -> None:
         pass
 
 
-def _run(script: str, payload: bytes) -> bytes:
+HOOK_TIMEOUT_SECONDS = 5.0
+TOTAL_BUDGET_SECONDS = 4.25
+REGISTRATION_BUDGET_SECONDS = 0.5
+CHILD_TIMEOUT_SECONDS = 1.5
+DEADLINE_MARGIN_SECONDS = 0.1
+
+
+def _run(script: str, payload: bytes, deadline: float) -> bytes:
+    remaining = deadline - time.monotonic() - DEADLINE_MARGIN_SECONDS
+    if remaining <= 0:
+        return b""
     try:
         proc = subprocess.run(
             [sys.executable, os.path.join(SCRIPTS_DIR, script)],
             input=payload,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=3,
+            timeout=min(CHILD_TIMEOUT_SECONDS, remaining),
             cwd=_payload_cwd(payload),
         )
         return proc.stdout or b""
@@ -117,9 +128,10 @@ def _run(script: str, payload: bytes) -> bytes:
 
 
 def main() -> int:
+    deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
     payload = sys.stdin.buffer.read()
     if restore_watcher_registration is not None:
-        restore_watcher_registration(payload)
+        restore_watcher_registration(payload, budget_seconds=REGISTRATION_BUDGET_SECONDS)
     # Codex exposes the durable runtime agent id only in the spawn result. The
     # post-tool hook records that correlated start; registering the pre-call's
     # tool_call_id here would create an active record that no completion event
@@ -128,7 +140,7 @@ def main() -> int:
     if _tool_name(payload) == "Bash":
         scripts.append("mcp_bash_guard.py")
     for script in scripts:
-        out = _run(script, payload)
+        out = _run(script, payload, deadline)
         if out:
             sys.stdout.buffer.write(out)
             return 0

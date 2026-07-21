@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
@@ -14,7 +15,11 @@ try:
 except Exception:  # pragma: no cover - hook must fail open
     restore_watcher_registration = None
 
-CHILD_TIMEOUT_SECONDS = 6
+HOOK_TIMEOUT_SECONDS = 8.0
+TOTAL_BUDGET_SECONDS = 7.0
+REGISTRATION_BUDGET_SECONDS = 0.5
+CHILD_TIMEOUT_SECONDS = 6.0
+DEADLINE_MARGIN_SECONDS = 0.1
 CODEX_ROUTE = (
     "[harness-route] Repository mutation: invoke $harness:run before edits; "
     "read-only requests: answer directly."
@@ -45,19 +50,23 @@ def _is_harness_repo(cwd: str | None) -> bool:
 
 
 def main() -> int:
+    deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
     payload = sys.stdin.buffer.read()
     if restore_watcher_registration is not None:
-        restore_watcher_registration(payload)
+        restore_watcher_registration(payload, budget_seconds=REGISTRATION_BUDGET_SECONDS)
     cwd = _payload_cwd(payload)
     harness_repo = _is_harness_repo(cwd)
     context = ""
+    remaining = deadline - time.monotonic() - DEADLINE_MARGIN_SECONDS
     try:
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired("prompt_memory.py", 0)
         proc = subprocess.run(
             [sys.executable, os.path.join(SCRIPTS_DIR, "prompt_memory.py")],
             input=payload,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=CHILD_TIMEOUT_SECONDS,
+            timeout=min(CHILD_TIMEOUT_SECONDS, remaining),
             cwd=cwd,
             env={**os.environ, "HARNESS_RUNTIME": "codex"},
         )

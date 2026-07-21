@@ -27,7 +27,7 @@ def _payload_cwd(payload: bytes) -> str | None:
 def main() -> int:
     payload = sys.stdin.buffer.read()
     if restore_watcher_registration is not None:
-        restore_watcher_registration(payload)
+        restore_watcher_registration(payload, budget_seconds=0.5)
     try:
         # Codex does not auto-resume after a Stop block. If we forward
         # stop_gate.py's block decision, Codex turns it into a hook_prompt that

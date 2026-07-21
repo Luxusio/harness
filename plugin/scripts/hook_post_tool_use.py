@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
@@ -38,6 +39,12 @@ except Exception:  # pragma: no cover - hook must fail open
     list_subagent_receipts = None
     list_review_receipts = None
     review_diff_fingerprint = None
+
+HOOK_TIMEOUT_SECONDS = 3.0
+TOTAL_BUDGET_SECONDS = 2.4
+REGISTRATION_BUDGET_SECONDS = 0.4
+CHILD_TIMEOUT_SECONDS = 1.5
+DEADLINE_MARGIN_SECONDS = 0.1
 
 
 def _payload_cwd(payload: bytes) -> str | None:
@@ -298,9 +305,10 @@ def _record_codex_subagent_completion(payload: bytes) -> None:
 
 
 def main() -> int:
+    deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
     payload = sys.stdin.buffer.read()
     if restore_watcher_registration is not None:
-        restore_watcher_registration(payload)
+        restore_watcher_registration(payload, budget_seconds=REGISTRATION_BUDGET_SECONDS)
     tool_name = _tool_name(payload)
     _record_codex_spawn_result(payload)
     _record_codex_subagent_completion(payload)
@@ -315,13 +323,16 @@ def main() -> int:
         return 0
     if tool_name != "Bash":
         return 0
+    remaining = deadline - time.monotonic() - DEADLINE_MARGIN_SECONDS
+    if remaining <= 0:
+        return 0
     try:
         proc = subprocess.run(
             [sys.executable, os.path.join(SCRIPTS_DIR, "tool_routing.py")],
             input=payload,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=3,
+            timeout=min(CHILD_TIMEOUT_SECONDS, remaining),
             cwd=_payload_cwd(payload),
         )
         hint = (proc.stdout or b"").decode("utf-8", errors="replace").strip()

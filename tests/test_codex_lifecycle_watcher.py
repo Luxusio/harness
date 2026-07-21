@@ -396,7 +396,12 @@ def test_ensure_registers_once_without_forking_for_exact_root_rollout(tmp_path, 
 
     assert mod.ensure(str(repo), root_id)
     first = json.loads(mod._state_path(str(repo), root_id).read_text())
-    assert mod.ensure(str(repo), root_id)
+    with mock.patch.object(
+        mod, "_find_rollout", side_effect=AssertionError("fast path must not scan")
+    ), mock.patch.object(
+        mod, "_atomic_json", side_effect=AssertionError("fast path must not rewrite")
+    ):
+        assert mod.ensure(str(repo), root_id)
 
     state = json.loads(mod._state_path(str(repo), root_id).read_text())
     assert state == first
@@ -406,6 +411,20 @@ def test_ensure_registers_once_without_forking_for_exact_root_rollout(tmp_path, 
     assert state["offset"] == rollout.stat().st_size
     assert "pid" not in state
     assert "process_start" not in state
+
+
+def test_ensure_stops_recovery_when_deadline_expires_after_discovery(tmp_path, monkeypatch):
+    mod = _load()
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    rollout = tmp_path / f"rollout-{root_id}.jsonl"
+    with mock.patch.object(mod, "_valid_current_registration", return_value=False), \
+         mock.patch.object(mod, "_find_rollout", return_value=rollout), \
+         mock.patch.object(mod, "_deadline_expired", return_value=True), \
+         mock.patch.object(mod, "_open_trusted_file") as open_rollout:
+        assert not mod.ensure(str(repo), root_id, deadline=1.0)
+    open_rollout.assert_not_called()
 
 
 def test_ensure_replaces_legacy_process_state_with_registration(tmp_path, monkeypatch):

@@ -4,9 +4,11 @@ import contextlib
 import importlib.util
 import io
 import json
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -151,7 +153,9 @@ class TestCodexHookWrappers(unittest.TestCase):
         self.assertTrue(calls)
         self.assertTrue(all(call.get("cwd") == repo for call in calls))
         child_names = [Path(call["cmd"][1]).name for call in calls]
-        restore.assert_called_once_with(payload.encode(), retry_seconds=1.0)
+        restore.assert_called_once_with(
+            payload.encode(), retry_seconds=1.0, budget_seconds=1.25,
+        )
         self.assertNotIn("codex_lifecycle_watcher.py", child_names)
         self.assertNotIn("hygiene_scan.py", child_names)
         self.assertNotIn("inject_checkpoint.py", child_names)
@@ -171,14 +175,14 @@ class TestCodexHookWrappers(unittest.TestCase):
 
     def test_all_codex_hook_wrappers_restore_registration(self):
         modules = [
-            ("hook_session_start", {}, 1.0),
-            ("hook_pre_tool_use", {"tool_name": "Read"}, 0.0),
-            ("hook_post_tool_use", {"tool_name": "wait_agent"}, 0.0),
-            ("hook_user_prompt_submit", {}, 0.0),
-            ("hook_stop", {}, 0.0),
+            ("hook_session_start", {}, {"retry_seconds": 1.0, "budget_seconds": 1.25}),
+            ("hook_pre_tool_use", {"tool_name": "Read"}, {"budget_seconds": 0.5}),
+            ("hook_post_tool_use", {"tool_name": "wait_agent"}, {"budget_seconds": 0.4}),
+            ("hook_user_prompt_submit", {}, {"budget_seconds": 0.5}),
+            ("hook_stop", {}, {"budget_seconds": 0.5}),
         ]
         root_id = "019f834e-1e91-7662-9024-f548103d751e"
-        for name, extra, retry_seconds in modules:
+        for name, extra, registration_kwargs in modules:
             mod = _load(name)
             with tempfile.TemporaryDirectory() as repo:
                 payload = {**extra, "cwd": repo, "session_id": root_id}
@@ -188,10 +192,7 @@ class TestCodexHookWrappers(unittest.TestCase):
                      mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
                      contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(mod.main(), 0)
-            if retry_seconds:
-                restore.assert_called_once_with(raw.encode(), retry_seconds=retry_seconds)
-            else:
-                restore.assert_called_once_with(raw.encode())
+            restore.assert_called_once_with(raw.encode(), **registration_kwargs)
 
     def test_registration_helper_retries_and_late_recovery_is_future_only(self):
         mod = _load("codex_hook_registration")
@@ -212,6 +213,80 @@ class TestCodexHookWrappers(unittest.TestCase):
                 ))
         self.assertEqual(attempts, [(repo, root_id), (repo, root_id)])
         self.assertIn("only future subagent starts", mod.restore_watcher_registration.__doc__)
+
+    def test_registration_attempt_has_a_hard_wall_clock_deadline(self):
+        mod = _load("codex_hook_registration")
+
+        def slow_ensure(*_args, **_kwargs):
+            time.sleep(1.0)
+            return True
+
+        started = time.monotonic()
+        with mock.patch.object(mod, "ensure", side_effect=slow_ensure):
+            restored = mod._ensure_with_deadline(
+                "/tmp", "019f834e-1e91-7662-9024-f548103d751e", started + 0.05,
+            )
+        self.assertFalse(restored)
+        self.assertLess(time.monotonic() - started, 0.5)
+
+    def test_registration_preserves_a_shorter_existing_alarm(self):
+        mod = _load("codex_hook_registration")
+        delivered: list[int] = []
+
+        def previous_handler(signum, _frame):
+            delivered.append(signum)
+
+        def slow_ensure(*_args, **_kwargs):
+            time.sleep(1.0)
+            return True
+
+        original_handler = signal.signal(signal.SIGALRM, previous_handler)
+        signal.setitimer(signal.ITIMER_REAL, 0.05)
+        try:
+            with mock.patch.object(mod, "ensure", side_effect=slow_ensure):
+                restored = mod._ensure_with_deadline(
+                    "/tmp", "019f834e-1e91-7662-9024-f548103d751e",
+                    time.monotonic() + 0.5,
+                )
+            self.assertFalse(restored)
+            self.assertEqual(delivered, [signal.SIGALRM])
+            self.assertIs(signal.getsignal(signal.SIGALRM), previous_handler)
+        finally:
+            signal.setitimer(signal.ITIMER_REAL, 0.0)
+            signal.signal(signal.SIGALRM, original_handler)
+
+    def test_registration_does_not_swallow_a_restored_alarm_exception(self):
+        mod = _load("codex_hook_registration")
+
+        class CallerDeadline(Exception):
+            pass
+
+        def previous_handler(_signum, _frame):
+            raise CallerDeadline("caller deadline")
+
+        def slow_ensure(*_args, **_kwargs):
+            time.sleep(1.0)
+            return True
+
+        original_ensure = mod.ensure
+        original_handler = signal.signal(signal.SIGALRM, previous_handler)
+        signal.setitimer(signal.ITIMER_REAL, 0.05)
+        try:
+            mod.ensure = slow_ensure
+            with tempfile.TemporaryDirectory() as repo:
+                payload = json.dumps({
+                    "cwd": repo,
+                    "session_id": "019f834e-1e91-7662-9024-f548103d751e",
+                }).encode()
+                with mock.patch.dict("os.environ", {}, clear=True):
+                    with self.assertRaisesRegex(CallerDeadline, "caller deadline"):
+                        mod.restore_watcher_registration(
+                            payload, budget_seconds=0.5, ensure_fn=slow_ensure,
+                        )
+        finally:
+            mod.ensure = original_ensure
+            signal.setitimer(signal.ITIMER_REAL, 0.0)
+            signal.signal(signal.SIGALRM, original_handler)
 
     def test_pre_post_prompt_and_stop_wrappers_use_payload_cwd(self):
         modules = [
@@ -255,6 +330,53 @@ class TestCodexHookWrappers(unittest.TestCase):
 
         self.assertEqual(calls[0]["env"]["HARNESS_RUNTIME"], "codex")
         self.assertEqual(calls[0]["timeout"], mod.CHILD_TIMEOUT_SECONDS)
+
+    def test_codex_wrapper_budgets_fit_outer_hook_timeouts(self):
+        for name in (
+            "hook_pre_tool_use", "hook_post_tool_use", "hook_user_prompt_submit",
+        ):
+            mod = _load(name)
+            self.assertLess(mod.TOTAL_BUDGET_SECONDS, mod.HOOK_TIMEOUT_SECONDS, name)
+            self.assertLess(mod.REGISTRATION_BUDGET_SECONDS, mod.TOTAL_BUDGET_SECONDS, name)
+            self.assertLess(mod.CHILD_TIMEOUT_SECONDS, mod.HOOK_TIMEOUT_SECONDS, name)
+
+    def test_pre_tool_children_consume_one_shared_deadline(self):
+        mod = _load("hook_pre_tool_use")
+        calls: list[float] = []
+
+        def fake_run(*args, **kwargs):
+            calls.append(kwargs["timeout"])
+            return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as repo, \
+             mock.patch.object(mod, "restore_watcher_registration"), \
+             mock.patch.object(mod.time, "monotonic", side_effect=[0.0, 0.0, 1.5, 3.9]), \
+             mock.patch("subprocess.run", side_effect=fake_run), \
+             mock.patch.object(sys, "stdin", _BytesStdin(json.dumps({"cwd": repo, "tool_name": "Bash"}))), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(mod.main(), 0)
+
+        self.assertEqual(calls[:2], [mod.CHILD_TIMEOUT_SECONDS] * 2)
+        self.assertAlmostEqual(calls[2], 0.25)
+
+    def test_wrapper_constants_match_installed_outer_timeouts(self):
+        spec = importlib.util.spec_from_file_location(
+            "install_for_hook_budget_test", REPO_ROOT / "install.py"
+        )
+        install = importlib.util.module_from_spec(spec)
+        assert spec.loader
+        sys.modules[spec.name] = install
+        spec.loader.exec_module(install)
+        config = install._codex_hooks_config(REPO_ROOT / "installed")
+        for event, name in (
+            ("PreToolUse", "hook_pre_tool_use"),
+            ("PostToolUse", "hook_post_tool_use"),
+            ("UserPromptSubmit", "hook_user_prompt_submit"),
+        ):
+            mod = _load(name)
+            outer = config["hooks"][event][0]["hooks"][0]["timeout"]
+            self.assertEqual(mod.HOOK_TIMEOUT_SECONDS, outer)
+            self.assertLess(mod.TOTAL_BUDGET_SECONDS, outer)
 
     def test_codex_prompt_wrapper_injects_public_run_route(self):
         mod = _load("hook_user_prompt_submit")

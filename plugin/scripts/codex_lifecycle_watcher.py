@@ -57,6 +57,10 @@ LEGACY_REGISTRATION_VERSION = 2
 LEGACY_REGISTRATION_OWNER = "session_start_hook"
 
 
+def _deadline_expired(deadline: float | None) -> bool:
+    return deadline is not None and time.monotonic() >= deadline
+
+
 def _codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").resolve()
 
@@ -158,12 +162,23 @@ def _safe_regular_file(path: Path, root: Path, *, max_size: int | None = None) -
     return True
 
 
-def _find_rollout(thread_id: str) -> Path | None:
+def _find_rollout(thread_id: str, *, deadline: float | None = None) -> Path | None:
     if not THREAD_RE.fullmatch(thread_id):
         return None
     root = _sessions_root()
+    candidates: list[Path] = []
     try:
-        candidates = list(root.glob(f"**/rollout-*{thread_id}.jsonl"))[:3]
+        for directory, _subdirs, filenames in os.walk(root):
+            if _deadline_expired(deadline):
+                return None
+            suffix = f"{thread_id}.jsonl"
+            for name in filenames:
+                if name.startswith("rollout-") and name.endswith(suffix):
+                    candidates.append(Path(directory) / name)
+                    if len(candidates) >= 3:
+                        break
+            if len(candidates) >= 3:
+                break
     except OSError:
         return None
     valid = [path for path in candidates if _safe_regular_file(path, root)]
@@ -334,16 +349,59 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
         raise
 
 
-def ensure(repo_root: str, thread_id: str) -> bool:
+def _valid_current_registration(repo_root: str, thread_id: str) -> bool:
+    """Validate the exact v3 state without discovery, locking, or rewriting."""
+    runtime = _trusted_runtime_dir(repo_root)
+    if runtime is None:
+        return False
+    state = _read_owned_json(_state_path(repo_root, thread_id), runtime)
+    offset = state.get("offset")
+    registered_at = state.get("registered_at")
+    if not (
+        state.get("version") == REGISTRATION_VERSION
+        and state.get("owner") == REGISTRATION_OWNER
+        and state.get("thread_id") == thread_id
+        and state.get("repo_root") == repo_root
+        and isinstance(offset, int)
+        and not isinstance(offset, bool)
+        and offset >= 0
+        and isinstance(registered_at, (int, float))
+        and not isinstance(registered_at, bool)
+    ):
+        return False
+    rollout_value = state.get("rollout")
+    if not isinstance(rollout_value, str):
+        return False
+    rollout = Path(rollout_value)
+    trust_root = _sessions_root()
+    opened = _open_trusted_file(rollout, trust_root)
+    if opened is None:
+        return False
+    handle, info = opened
+    try:
+        return (
+            offset <= info.st_size
+            and _root_meta_from_handle(handle, thread_id, repo_root)
+            and _path_matches_handle(rollout, trust_root, handle)
+        )
+    finally:
+        handle.close()
+
+
+def ensure(repo_root: str, thread_id: str, *, deadline: float | None = None) -> bool:
     """Register a root rollout for the MCP-hosted watcher manager.
 
     This entry point is owned by trusted Codex root hooks. It performs only
     validation and an atomic registry write; it never forks or writes a review
     or QA receipt. Existing valid registration offsets are immutable.
     """
+    if not THREAD_RE.fullmatch(thread_id):
+        return False
     repo_root = os.path.realpath(find_repo_root(repo_root))
-    rollout = _find_rollout(thread_id)
-    if rollout is None:
+    if _valid_current_registration(repo_root, thread_id):
+        return True
+    rollout = _find_rollout(thread_id, deadline=deadline)
+    if rollout is None or _deadline_expired(deadline):
         return False
     trust_root = _sessions_root()
     opened = _open_trusted_file(rollout, trust_root)
@@ -358,7 +416,7 @@ def ensure(repo_root: str, thread_id: str) -> bool:
         offset = rollout_info.st_size
     finally:
         rollout_handle.close()
-    if offset < 0:
+    if offset < 0 or _deadline_expired(deadline):
         return False
     runtime = _trusted_runtime_dir(repo_root)
     if runtime is None:
@@ -379,9 +437,14 @@ def ensure(repo_root: str, thread_id: str) -> bool:
         return False
     with os.fdopen(lock_fd, "a+", encoding="utf-8") as lock:
         if fcntl is not None:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError:
+                return False
         state_path = _state_path(repo_root, thread_id)
         state = _read_owned_json(state_path, runtime)
+        if _deadline_expired(deadline):
+            return False
         state_offset = state.get("offset")
         registered_at = state.get("registered_at")
         tuple_valid = (

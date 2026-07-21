@@ -6,6 +6,7 @@ All notable changes to the harness Claude Code plugin.
 
 ### Fixed
 
+- Codex root hooks now validate an existing lifecycle registration directly instead of recursively scanning every rollout and taking the registration lock on every event. Wrapper child work also shares an event-level deadline below the configured Codex hook timeout, preventing sequential gate checks from overrunning PreToolUse, UserPromptSubmit, or PostToolUse.
 - Codex now exposes one implicitly invocable `$harness:run` entry skill for repository mutation; hooks, setup routing, and write-gate recovery point to it while plan/develop/review prompts stay internal.
 - Codex cachebuster installs preserve prior cache versions so hooks already loaded by running sessions keep valid executable paths until those sessions restart.
 - Review routing now treats `AGENTS.md` and `CLAUDE.md` as behavioral artifacts and scans committed changes from the task baseline, including deleted security-sensitive lines.

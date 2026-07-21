@@ -93,7 +93,13 @@ registration under the current user's state directory. Registration retries
 briefly on SessionStart when rollout creation races hook delivery. Later hooks
 restore missing or invalid registration state without overwriting a valid
 initial offset; late recovery begins at the current offset and covers only
-future subagent starts.
+future subagent starts. An existing version-3 registration is validated from its
+exact state and rollout paths before discovery, so ordinary hook events do not
+recursively scan the session tree, acquire the registration lock, or rewrite
+state. Discovery for a missing registration is deadline-aware and registration
+locking is non-blocking. PreToolUse, UserPromptSubmit, and PostToolUse wrappers
+enforce one total child-work deadline strictly below their configured outer
+Codex hook timeout; individual subprocesses consume the remaining shared budget.
 It does not fork. The existing Harness MCP server discovers these registrations
 and hosts one passive daemon watcher thread per root tuple. MCP restart replays
 from the immutable initial offset; receipt deduplication makes replay safe.
