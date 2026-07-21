@@ -25,8 +25,9 @@ user-invocable: true
 >   `qa.browser_qa_supported: false` as the v1 default on Codex side; v2 will lift this.
 >   Setup reads MCP availability from current session tools or Codex/global runtime
 >   config. Project-root `.mcp.json` remains user-owned configuration.
-> - `Skill()` chaining and `Agent()` fan-out have no Codex equivalent. setup contains zero such
->   call sites today (port was clean), so this caveat is informational only.
+> - The public `$harness:run` entry loads the internal workflow inline. When Codex exposes
+>   `spawn_agent` directly or through lazy tool discovery, that workflow uses it for independent
+>   review and QA; setup itself contains no fan-out call sites.
 
 ## Sub-files
 
@@ -440,6 +441,9 @@ See `verify-report.md` — file existence checks, QA infrastructure verification
 Codex-specific verifications:
 - `codex --version` against `plugin-codex/.codex-version` (minimum 0.130.0).
 - `codex mcp test harness` returns "server reachable".
+- The installed public `skills/run/SKILL.md` exists, its
+  `agents/openai.yaml` enables implicit invocation, and AGENTS.md routes
+  repository mutations to `$harness:run`.
 - (Best effort) Trigger a benign `codex exec` to fire PreToolUse + Stop hooks; verify no `gate-crash` entries in `learnings.jsonl`.
 
 ---

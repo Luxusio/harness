@@ -1,6 +1,6 @@
 ---
 name: plan
-description: Harness 7-phase review pipeline that writes PLAN.md and related task contract artefacts via MCP. Codex variant runs single-voice (Claude-only dual-voice fan-out deferred to v2).
+description: Harness 7-phase review pipeline that writes PLAN.md and related task contract artefacts via MCP. Codex uses independent review voices when spawn_agent or an external model route is available, with single-voice only as an explicit fallback.
 user-invocable: false
 ---
 
@@ -9,10 +9,10 @@ user-invocable: false
 # Lives here only to measure porting friction for AC-003 of TASK__dual-runtime-v1.5-spike-and-sync.
 
 
-Codex-variant 7-phase review pipeline. Runs structured review across CEO, Engineering, and DX lenses (Design lens optional); single-voice on Codex (dual-voice Agent fan-out remains Claude-only); classifies every decision; surfaces only contested items to the user; writes the final task contract through the protected-artifact MCP.
+Codex-variant 7-phase review pipeline. Runs structured review across CEO, Engineering, and DX lenses (Design lens optional); uses independent voices when the current runtime exposes them; classifies every decision; surfaces only contested items to the user; writes the final task contract through the protected-artifact MCP.
 
 > **Codex runtime notes** (delta from Claude):
-> - **Dual Voice is degraded to single voice** on Codex v1.5. Claude's invariant "Phases 1-4 spawn Voice A and Voice B via Agent" cannot apply — Codex has no Agent fan-out tool. The orchestrator runs one critical-reviewer pass per phase instead of two independent voices. Cross-model adversariality is lost; flag this in PLAN.md's Review Status section. Use the Claude runtime for dual-voice fidelity on high-stakes plans.
+> - **Dual Voice is capability-routed.** Discover deferred tools before deciding. When `spawn_agent` or an external model route is available, run independent Voice A and Voice B contexts. Use one inline critical-reviewer pass only when no independent route exists, and record that fallback in PLAN.md's Review Status section.
 > - **Sub-skills are inlined, not invoked.** Claude's `Skill("harness:plan-ceo-review", task_id)` chain has no Codex equivalent. The orchestrator reads each internal prompt's SKILL.md content inline and executes the methodology in the same conversation. Codex keeps these prompts under `plugin-codex/internal-skills/` so they remain packaged without appearing in the user-visible skill menu.
 > - **AskUserQuestion = conversational ask.** Three mandatory user-gates remain: Phase 1.1 premise gate, Phase 5.3 User Challenge gate, Phase 5.4.1 final approval. Each becomes "ask the user X with options A/B/C; read the reply" prose. Same content, no structured envelope.
 > - **`${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}`** for bash invocations that remain, such as update_checks.py. Plan artifact writes use MCP `write_plan`, not the legacy CLI.
@@ -35,7 +35,7 @@ Phase 5 (user-facing gate) stays inline below. Read sub-files from `plugin/skill
 
 ## Invariants (Codex variant)
 
-- **Single Voice** by default on Codex v1.5. Where the Claude source says "Voice A + Voice B via Agent", the Codex orchestrator runs ONE critical-reviewer pass and notes the degradation in PLAN.md `Review Status`. The degradation matrix at `review-phases.md` § Degradation matrix has a `single-voice` row that's the default here.
+- **Independent voices by capability.** Where the Claude source says "Voice A + Voice B via Agent", use separate subagent or external-model contexts when exposed. Otherwise run ONE inline critical-reviewer pass and note the degradation in PLAN.md `Review Status`; use the `single-voice` degradation row only for that fallback.
 - **Premise gate mandatory.** Phase 1.1 emits one conversational ask before Phase 5. Premises are never auto-decided (except spawned mode).
 - **Never-auto decisions.** User Challenge items get their own ask at Phase 5.3.
 - **Write via MCP only.** PLAN.md, PLAN.meta.json, CHECKS.yaml, AUDIT_TRAIL.md go through `write_plan`. Never Write/Edit directly. CHECKS.yaml post-plan mutations use `update_checks.py` only.
@@ -93,7 +93,7 @@ Each review phase reads its corresponding Codex internal prompt and executes the
 - Phase 3 → `plugin-codex/internal-skills/plan-eng-review/SKILL.md`
 - Phase 4 → `plugin-codex/internal-skills/plan-devex-review/SKILL.md` (only if dx_scope=true)
 
-These sub-skills are heavy dual-voice review pipelines on the Claude side. On Codex v1.5 the orchestrator runs them single-voice — same dimensions, same outputs, one reviewer instead of two. Surface this in the Phase N consensus row of AUDIT_TRAIL.md.
+These sub-skills are heavy dual-voice review pipelines on the Claude side. On Codex, route them through independent contexts when available; otherwise use the same dimensions and outputs with one reviewer and surface that fallback in the Phase N consensus row of AUDIT_TRAIL.md.
 
 ---
 
@@ -111,17 +111,22 @@ Required: `{"state": "...", "phase": "...", "source": "plan-skill"}`. Mirror `pl
 
 ---
 
-## Single-Voice Protocol (Codex variant)
+## Capability-Routed Voice Protocol (Codex variant)
 
-Phases 1-4 run ONE critical-reviewer pass per phase. The pass:
+Phases 1-4 first discover `spawn_agent` and external-model routes. When an
+independent route exists, run Voice A and Voice B in separate contexts and
+synthesize their results. Only when none exists, run ONE inline
+critical-reviewer pass. Every pass:
 - Reads the phase brief (lens dimensions from `review-phases.md`).
 - Produces findings per dimension.
 - Classifies each finding (Mechanical / Taste / User Challenge).
-- Appends a `single-voice` consensus row to AUDIT_TRAIL.md.
+- Appends a consensus row to AUDIT_TRAIL.md, marked `single-voice` only when the independent route was unavailable.
 
-Compared to Claude's dual-voice: less cross-blind-spot detection, faster turnaround, no Voice A vs Voice B disagreement surfacing. For high-stakes plans, prefer native `/goal` on the Claude runtime, which routes through the full plan phase.
+The fallback has less cross-blind-spot detection and no Voice A vs Voice B
+disagreement surfacing, so record it explicitly. A Codex run with independent
+subagents is not a degraded single-voice run merely because the runtime differs.
 
-Full protocol, dimensions, checklists, and degradation matrix: `review-phases.md` (Claude tree). The Codex orchestrator uses the `single-voice` row of the degradation matrix as its default.
+Full protocol, dimensions, checklists, and degradation matrix: `review-phases.md` (Claude tree). The Codex orchestrator uses the `single-voice` row only as the capability fallback.
 
 ---
 
@@ -147,7 +152,7 @@ Verify required outputs before collecting decisions:
 - [ ] Phase 3: Engineering consensus in AUDIT_TRAIL; phase-transition summary
 - [ ] Phase 4 (if ran): DX consensus in AUDIT_TRAIL; phase-transition summary
 - [ ] AUDIT_TRAIL has ≥ 1 row per completed phase
-- [ ] Single-voice mode logged with reason for each phase (the reason on Codex v1.5 is "Codex variant — no Agent fan-out").
+- [ ] Any single-voice fallback is logged with the concrete unavailable independent route for each affected phase.
 
 If missing after 2 retries, proceed to 5.1 with warning block:
 ```
@@ -176,7 +181,7 @@ That is the entire user-facing summary.
 
 ### 5.1.1 Collect all decisions
 
-From single-voice consensus rows across Phases 1-4: Mechanical (silently applied), Taste, User Challenge.
+From the available consensus rows across Phases 1-4: Mechanical (silently applied), Taste, User Challenge.
 
 ### 5.2 Log Taste decisions to AUDIT_TRAIL (no gate render)
 
@@ -214,7 +219,7 @@ Per-challenge ask format (conversational):
 
 Reply parsing: A/B follow the option; any free-text reply treats as Modify.
 
-**Note on single-voice User Challenges:** in Claude's dual-voice flow, a User Challenge fires only when BOTH voices agree the user is wrong. Single-voice has weaker signal — Codex's single reviewer may flag User Challenges that dual-voice would resolve via Voice A vs Voice B disagreement. Err on the side of fewer challenges; if uncertain, classify as Taste.
+**Note on single-voice fallback User Challenges:** when no independent route was available, one reviewer is weaker evidence than two agreeing voices and may flag challenges that dual-voice disagreement would resolve. Err on the side of fewer challenges; if uncertain, classify as Taste.
 
 ### 5.4 Final scope confirmation
 
@@ -245,10 +250,11 @@ Emit §5.1 summary, then ask:
 
 | Mode | Phase 2 | Phase 4 | Voices | Mandatory outputs | auto_decide |
 |------|---------|---------|--------|-------------------|-------------|
-| `light` | skip | skip | single | single-voice versions | premise+challenge still gated |
-| `standard` (Codex default) | ui_scope gate | dx_scope gate | single (Codex variant) | full checklists | CEO→SELECTIVE EXPANSION, DX→DX POLISH |
+| `light` | skip | skip | capability-routed | reduced review versions | premise+challenge still gated |
+| `standard` (Codex default) | ui_scope gate | dx_scope gate | capability-routed | full checklists | CEO→SELECTIVE EXPANSION, DX→DX POLISH |
 
-On Codex v1.5, `standard` and `light` differ only in whether Phase 2/4 run at all. Voice count is single in both — the only way to get dual-voice on this repo is to run plan from Claude.
+On Codex, `standard` and `light` differ only in whether Phase 2/4 run at all.
+Voice count is selected from the current capability surface in both modes.
 
 Both modes: Phase 1 premise gate and Phase 5.3 User Challenges never auto-decided (except spawned mode).
 

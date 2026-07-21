@@ -9,6 +9,10 @@ import sys
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 CHILD_TIMEOUT_SECONDS = 6
+CODEX_ROUTE = (
+    "[harness-route] Repository mutation: invoke $harness:run before edits; "
+    "read-only requests: answer directly."
+)
 
 
 def _payload_cwd(payload: bytes) -> str | None:
@@ -20,8 +24,25 @@ def _payload_cwd(payload: bytes) -> str | None:
     return cwd if isinstance(cwd, str) and os.path.isdir(cwd) else None
 
 
+def _is_harness_repo(cwd: str | None) -> bool:
+    """Detect setup from the filesystem only; never invoke Git in a prompt hook."""
+    if not cwd:
+        return False
+    current = os.path.abspath(cwd)
+    while True:
+        if os.path.isfile(os.path.join(current, "doc", "harness", "manifest.yaml")):
+            return True
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
+
+
 def main() -> int:
     payload = sys.stdin.buffer.read()
+    cwd = _payload_cwd(payload)
+    harness_repo = _is_harness_repo(cwd)
+    context = ""
     try:
         proc = subprocess.run(
             [sys.executable, os.path.join(SCRIPTS_DIR, "prompt_memory.py")],
@@ -29,19 +50,20 @@ def main() -> int:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=CHILD_TIMEOUT_SECONDS,
-            cwd=_payload_cwd(payload),
+            cwd=cwd,
             env={**os.environ, "HARNESS_RUNTIME": "codex"},
         )
         context = (proc.stdout or b"").decode("utf-8", errors="replace").strip()
-        if context:
-            sys.stdout.write(json.dumps({
-                "hookSpecificOutput": {
-                    "hookEventName": "UserPromptSubmit",
-                    "additionalContext": context,
-                }
-            }))
     except Exception:
         pass
+    if context or harness_repo:
+        context = CODEX_ROUTE + ("\n" + context if context else "")
+        sys.stdout.write(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": context,
+            }
+        }))
     return 0
 
 

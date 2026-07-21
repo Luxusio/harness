@@ -1,0 +1,6 @@
+interface:
+  display_name: "Harness Run"
+  short_description: "Run the guarded repository change workflow"
+  default_prompt: "Use $harness:run to implement this repository change through plan, review, QA, and close."
+policy:
+  allow_implicit_invocation: true

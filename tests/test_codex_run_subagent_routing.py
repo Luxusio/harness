@@ -72,7 +72,8 @@ def test_codex_run_documents_qa_subagent_call_shape():
     body = _text(CODEX_RUN)
 
     assert "QA subagent pattern on Codex" in body
-    assert "Verify (QA — capability-routed on Codex)" in body
+    assert "Verify recovery (only when develop returned before close)" in body
+    assert "not a second QA pass" in body
     assert "You are the qa-<lens> lens for <task_id>" in body
     assert "plugin-codex/agents/qa-<lens>.md" in body
     assert 'agent_type: "harness:qa-<lens>"' in body

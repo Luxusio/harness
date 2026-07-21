@@ -152,11 +152,11 @@ On Codex side the plan skill uses the available runtime surface. When `spawn_age
 
 ### Phase 3: Develop
 
-Read `plugin-codex/internal-skills/develop/SKILL.md` and execute its phases, passing `task_id`. The develop skill on Codex is a hand-port of the Claude source (`plugin/skills/develop/SKILL.md`) under the MCP-only-sharing policy (spike-report §3.6) — same canonical-loop methodology, with `Agent` fan-out routed through `spawn_agent` when available, `Skill()` chains rendered as inline-read sub-skill references, and `AskUserQuestion` gates rendered as conversational prose asks. Phase 0 through Phase 8.7 parity is preserved. Develop changes source/docs directly, then verification must spawn a QA subagent so the hook records SUBAGENT_RECEIPTS.jsonl. On BLOCKED: stop and report.
+Read `plugin-codex/internal-skills/develop/SKILL.md` and execute its phases, passing `task_id`. The develop skill on Codex is a hand-port of the Claude source (`plugin/skills/develop/SKILL.md`) under the MCP-only-sharing policy (spike-report §3.6) — same canonical-loop methodology, with `Agent` fan-out routed through `spawn_agent` when available, `Skill()` chains rendered as inline-read sub-skill references, and `AskUserQuestion` gates rendered as conversational prose asks. Execute Phase 0 through Phase 9. Develop owns the implementation-through-close transaction, including independent code review, QA, verified installation, durable-doc classification, final freshness restoration, and `task_close`. Execute that lifecycle once, suppress its nested user-facing completion response, and return here for post-close continuation. Do not run a second QA or close cycle after develop succeeds. On BLOCKED: stop and report.
 
 Multi-lens parallel QA (qa-browser + qa-api in one batch) should use `spawn_agent` when available. Browser MCP verification is availability-gated: if the current Codex session exposes browser tools (for example `chrome_devtools` or a future Playwright MCP), run the qa-browser methodology via subagent when possible or inline when no subagent path exists; if browser verification is required but no browser tool or reachable app exists, write a browser-lens `BLOCKED_ENV` verdict instead of silently falling back to CLI-only QA.
 
-On completion: SUBAGENT_RECEIPTS.jsonl exists for the task and task_verify reports PASS. If BLOCKED: stop, report, ask user.
+On completion: hook-owned review and QA receipts are fresh, `task_verify` reports PASS, and the task is closed. If BLOCKED: stop, report, ask user.
 
 Before entering develop, re-entering develop after QA/UX FAIL, entering verify,
 or closing, check `<task_dir>/USER_FEEDBACK.jsonl` when present. This file is
@@ -170,7 +170,13 @@ skill, pattern, test, or script. Do not write a handoff artifact for this;
 Close-time checking only catches missed feedback; it is not the primary moment
 to interpret user intent.
 
-### Phase 4: Verify (QA — capability-routed on Codex)
+### Phase 4: Verify recovery (only when develop returned before close)
+
+Skip this phase when Phase 3 closed the task. This is a recovery path for an
+interrupted or older develop flow, not a second QA pass. First call
+`task_context`: when fresh required QA receipts and a PASS verdict already
+exist, call `task_verify` only; spawn QA below only for a missing, failed, or
+stale required lens.
 
 Read `doc/harness/manifest.yaml` for project type. On Codex, choose the appropriate QA lens and route it by current capability: discover deferred tools first, use `spawn_agent` when available, and use inline methodology only as fallback. If `spawn_agent` is available, the QA lens MUST run as a subagent; the orchestrator must not invent a PASS from its own context. Also route applicable UX review lenses for user-facing surfaces. Verification is recognized by fresh hook-recorded QA completions in `SUBAGENT_RECEIPTS.jsonl`; findings and the explicit verdict come from the subagent final response. A start entry alone cannot pass verification.
 
@@ -233,7 +239,7 @@ echo '{"ts":"'"$_TS"'","type":"qa-failure-pattern","source":"run-retry","runtime
 
 ### Phase 4.5: Health score snapshot
 
-Before closing, capture the final project health score:
+If Phase 3 did not already capture it, capture the final project health score:
 
 ```bash
 python3 ${HARNESS_PLUGIN_ROOT}/scripts/health.py --dry-run 2>&1 || true
@@ -242,6 +248,10 @@ python3 ${HARNESS_PLUGIN_ROOT}/scripts/health.py --dry-run 2>&1 || true
 Store the printed score for inclusion in the completion report.
 
 ### Phase 5: Close
+
+Skip the `task_close` call when Phase 3 already closed the task. Otherwise this
+phase owns the one recovery close attempt after Phase 4 has restored fresh PASS
+evidence.
 
 ```
 task_close { task_id: "<task_id>" }

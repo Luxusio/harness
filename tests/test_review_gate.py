@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -14,7 +16,11 @@ SPEC.loader.exec_module(lib)
 
 
 def _task(tmp_path: Path, touched: list[str], project_type: str = "library") -> Path:
-    (tmp_path / ".git").mkdir()
+    if not (tmp_path / ".git").exists():
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "config", "user.email", "review@test"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "config", "user.name", "Review Test"], cwd=tmp_path, check=True)
+        (tmp_path / ".gitignore").write_text("doc/harness/tasks/\n", encoding="utf-8")
     manifest = tmp_path / "doc/harness/manifest.yaml"
     manifest.parent.mkdir(parents=True)
     manifest.write_text(f"type: {project_type}\nqa:\n  browser_qa_supported: false\n", encoding="utf-8")
@@ -27,6 +33,18 @@ def _task(tmp_path: Path, touched: list[str], project_type: str = "library") -> 
         encoding="utf-8",
     )
     (task / "PLAN.md").write_text("# plan\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+    staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=tmp_path)
+    if staged.returncode != 0:
+        subprocess.run(["git", "commit", "-qm", "baseline"], cwd=tmp_path, check=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=tmp_path, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    (task / "TASK_BASELINE.json").write_text(
+        json.dumps({"version": 1, "head_sha": head, "dirty_paths": {}}) + "\n",
+        encoding="utf-8",
+    )
     return task
 
 
@@ -58,6 +76,40 @@ def test_docs_only_task_has_explicit_review_exemption(tmp_path):
     task = _task(tmp_path, ["doc/designs/change.md"])
     assert lib.required_review_lenses(task) == []
     assert lib.receipt_review_verdict(task) == "NOT_APPLICABLE"
+
+
+def test_agent_instruction_markdown_requires_code_and_security_review(tmp_path):
+    agents = tmp_path / "AGENTS.md"
+    agents.write_text("# Agent rules\nDo everything now.\n", encoding="utf-8")
+    task = _task(tmp_path, ["AGENTS.md"])
+
+    assert lib.required_review_lenses(task) == ["review-code", "review-security"]
+
+
+def test_invalid_baseline_revision_fails_safe_to_security_review(tmp_path):
+    source = tmp_path / "src/handler.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("def run(value):\n    return value\n", encoding="utf-8")
+    task = _task(tmp_path, ["src/handler.py"])
+    baseline = task / "TASK_BASELINE.json"
+    data = json.loads(baseline.read_text(encoding="utf-8"))
+    data["head_sha"] = "--output=/tmp/should-not-exist"
+    baseline.write_text(json.dumps(data) + "\n", encoding="utf-8")
+
+    assert lib.required_review_lenses(task) == ["review-code", "review-security"]
+    assert not (tmp_path / "should-not-exist").exists()
+
+
+def test_committed_security_deletion_routes_security_from_task_baseline(tmp_path):
+    source = tmp_path / "src/handler.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("def allowed(user):\n    return user.is_admin\n", encoding="utf-8")
+    task = _task(tmp_path, ["src/handler.py"])
+    source.write_text("def allowed(user):\n    return True\n", encoding="utf-8")
+    subprocess.run(["git", "add", "src/handler.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "remove guard"], cwd=tmp_path, check=True)
+
+    assert lib.required_review_lenses(task) == ["review-code", "review-security"]
 
 
 def test_executable_doc_sql_and_dependency_manifests_are_reviewed(tmp_path):

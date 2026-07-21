@@ -38,7 +38,7 @@ Further references:
 - `.codex-plugin/plugin.json` — Codex plugin manifest (mirror of Claude's `.claude-plugin/plugin.json`).
 - `.codex-version` — minimum Codex CLI version pin (0.130.0). Setup refuses registration if installed Codex is older.
 - `config.toml.example` — annotated snippet showing the `~/.codex/config.toml` block that Codex needs for harness to be discoverable. Setup's additive-merge appends a copy to your real config with a timestamped backup, using the installed copy under `~/.codex/harness/plugins/harness`.
-- `skills/` — user-visible Codex skills. Only `setup` lives here; normal work enters through native `/goal` for explicit goals or plain repo-mutating requests that the agent routes into hidden harness task prompts.
+- `skills/` — user-visible Codex entry skills: `setup` for bootstrap/repair and `run` for repository mutation. `run` is implicitly invocable and loads the canonical internal workflow before edits.
 - `internal-skills/` — hand-authored Codex methodology prompts hidden from the user skill menu (`run`, `goal-queue`, `plan`, `develop`, `plan-*-review`).
 - `agents/` — QA/UX/review methodology references. On Codex, the orchestrator checks the current and deferred tool catalogs and uses `spawn_agent` when available; inline execution is the explicit fallback when no independent agent route exists.
 - Codex hook config is emitted by `install.py` as plugin-local `hooks.json`. It intentionally omits Stop-loop control; Codex flow is prompt-controlled by the skills. Hook scripts provide prompt context, tool safety, and QA spawn/wait lifecycle receipts.
@@ -48,7 +48,8 @@ Further references:
 | Skill | Source L | Codex L | as-is % | Notes |
 |-------|----------|---------|---------|-------|
 | setup | — | — | 71 | v1.5 spike port |
-| run | 171 | 176 | 56 | v1.5 spike port |
+| run (public entry) | — | thin | — | Trigger and routing wrapper over `internal-skills/run` |
+| internal-skills/run | 171 | 176 | 56 | Canonical Codex orchestration workflow |
 | internal-skills/plan | — | 292 | 45 | v1.5 spike port; dual-voice degrades to single-voice |
 | internal-skills/develop | 500 | 511 | 48 | Agent fan-out → sequential; sub-files fall back to plugin/skills/develop/<sub>.md |
 | internal-skills/plan-ceo-review | 1293 | 1335 | 52 | 14 AskUQ → prose; single-voice degraded adversarial |

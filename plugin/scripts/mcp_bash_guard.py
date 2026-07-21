@@ -74,6 +74,7 @@ _ARTIFACT_TOOL_HINT = {
     "SUBAGENT_RECEIPTS.jsonl": "runtime subagent-start hook",
     "REVIEW_RECEIPTS.jsonl": "runtime review lifecycle hook",
     "INSTALL_RECEIPT.json": "scripts/install_verified.py",
+    "TASK_BASELINE.json": "task-start runtime",
     "PLAN.md": "mcp__plugin_harness_harness__write_plan",
     "PLAN.meta.json": "mcp__plugin_harness_harness__write_plan",
     "CHECKS.yaml": "plan-skill + scripts/update_checks.py",
@@ -284,6 +285,8 @@ def _deny(target, command):
         "CONVERSATION.md": "Let the runtime hooks record conversation history",
     }
     next_action = _NEXT.get(base, "")
+    if not next_action and category == "source":
+        next_action = "Invoke $harness:run and let its developer phase perform the edit"
     if not next_action and category == "workflow-control-surface":
         next_action = ("Create doc/harness/tasks/<active-task>/MAINTENANCE marker "
                        "and handle through the active harness task's close-time Self-Healing Candidates")

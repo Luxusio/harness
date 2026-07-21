@@ -47,7 +47,12 @@ class TestTouchedPathBaseline(unittest.TestCase):
             lib.ensure_task_scaffold(str(td), "TASK__baseline")
             baseline = td / "TASK_BASELINE.json"
             data = json.loads(baseline.read_text(encoding="utf-8"))
+            head = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo,
+                check=True, capture_output=True, text=True,
+            ).stdout.strip()
         self.assertEqual(data["version"], 1)
+        self.assertEqual(data["head_sha"], head)
         self.assertIn("existing.txt", data["dirty_paths"])
 
     def test_unchanged_baseline_dirty_path_is_excluded(self):

@@ -108,6 +108,10 @@ Codex:
 - Harness MCP is registered in global Codex configuration.
 - Installed hooks have current trust hashes.
 - `AGENTS.md` contains `<!-- harness:routing-injected -->`.
+- `AGENTS.md` routes repository mutation to `$harness:run`.
+- The installed plugin contains `skills/run/SKILL.md` and
+  `skills/run/agents/openai.yaml`; the latter sets
+  `policy.allow_implicit_invocation: true`.
 
 Claude Code:
 

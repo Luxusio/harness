@@ -55,6 +55,7 @@ class TestCodexHookWrappers(unittest.TestCase):
         context = data["hookSpecificOutput"]["additionalContext"]
         self.assertEqual(data["hookSpecificOutput"]["hookEventName"], "PostToolUse")
         self.assertIn("[harness-goal]", context)
+        self.assertIn("$harness:run", context)
         self.assertIn("get_goal", context)
         self.assertIn("goal_start", context)
         self.assertIn("task_start", context)
@@ -193,6 +194,80 @@ class TestCodexHookWrappers(unittest.TestCase):
 
         self.assertEqual(calls[0]["env"]["HARNESS_RUNTIME"], "codex")
         self.assertEqual(calls[0]["timeout"], mod.CHILD_TIMEOUT_SECONDS)
+
+    def test_codex_prompt_wrapper_injects_public_run_route(self):
+        mod = _load("hook_user_prompt_submit")
+
+        def fake_run(*args, **kwargs):
+            return subprocess.CompletedProcess(
+                args[0], 0, stdout=b"[harness-context] task=TASK__route", stderr=b"",
+            )
+
+        with tempfile.TemporaryDirectory() as repo:
+            output = io.StringIO()
+            with mock.patch("subprocess.run", side_effect=fake_run):
+                with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps({"cwd": repo}))):
+                    with contextlib.redirect_stdout(output):
+                        self.assertEqual(mod.main(), 0)
+
+        context = json.loads(output.getvalue())["hookSpecificOutput"]["additionalContext"]
+        self.assertTrue(context.startswith("[harness-route]"))
+        self.assertIn("$harness:run", context)
+        self.assertIn("before edits", context)
+        self.assertIn("read-only", context)
+
+    def test_codex_prompt_wrapper_injects_route_when_repo_is_dormant(self):
+        mod = _load("hook_user_prompt_submit")
+
+        def fake_run(*args, **kwargs):
+            return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as repo:
+            manifest = Path(repo) / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("type: cli\n", encoding="utf-8")
+            child = Path(repo) / "src"
+            child.mkdir()
+            output = io.StringIO()
+            with mock.patch("subprocess.run", side_effect=fake_run):
+                with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps({"cwd": str(child)}))):
+                    with contextlib.redirect_stdout(output):
+                        self.assertEqual(mod.main(), 0)
+
+        context = json.loads(output.getvalue())["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(context, mod.CODEX_ROUTE)
+
+    def test_codex_prompt_wrapper_stays_silent_outside_harness_when_memory_is_silent(self):
+        mod = _load("hook_user_prompt_submit")
+
+        def fake_run(*args, **kwargs):
+            return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
+
+        output = io.StringIO()
+        with mock.patch("subprocess.run", side_effect=fake_run):
+            with mock.patch.object(sys, "stdin", _BytesStdin("{}")):
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(mod.main(), 0)
+        self.assertEqual(output.getvalue(), "")
+
+    def test_codex_prompt_wrapper_keeps_route_when_memory_times_out(self):
+        mod = _load("hook_user_prompt_submit")
+
+        with tempfile.TemporaryDirectory() as repo:
+            manifest = Path(repo) / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("type: cli\n", encoding="utf-8")
+            output = io.StringIO()
+            with mock.patch(
+                "subprocess.run",
+                side_effect=subprocess.TimeoutExpired(["prompt_memory.py"], 6),
+            ):
+                with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps({"cwd": repo}))):
+                    with contextlib.redirect_stdout(output):
+                        self.assertEqual(mod.main(), 0)
+
+        context = json.loads(output.getvalue())["hookSpecificOutput"]["additionalContext"]
+        self.assertEqual(context, mod.CODEX_ROUTE)
 
     def test_pre_tool_use_does_not_register_uncorrelatable_codex_agent_id(self):
         mod = _load("hook_pre_tool_use")

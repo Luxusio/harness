@@ -26,6 +26,9 @@ except ImportError:
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 INSTALL_PY = REPO_ROOT / "install.py"
+CODEX_PLUGIN_VERSION = json.loads(
+    (REPO_ROOT / "plugin-codex" / ".codex-plugin" / "plugin.json").read_text()
+)["version"]
 
 
 def _load_install_module():
@@ -186,7 +189,8 @@ def test_codex_manifest_declares_all_plugin_local_capabilities():
     manifest = json.loads((REPO_ROOT / "plugin-codex" / ".codex-plugin" / "plugin.json").read_text())
 
     assert manifest["name"] == "harness"
-    assert manifest["version"] == "2.3.0"
+    assert manifest["version"] == CODEX_PLUGIN_VERSION
+    assert manifest["version"].startswith("2.3.0+codex.")
     assert manifest["skills"] == "./skills/"
     assert manifest["hooks"] == "./hooks.json"
     assert manifest["mcpServers"] == "./.mcp.json"
@@ -204,7 +208,8 @@ def test_sync_codex_payload_produces_complete_plugin_bundle(tmp_path):
         assert (codex_plugin / rel).exists(), f"manifest path must exist: {rel}"
 
     skill_names = sorted(path.parent.name for path in (codex_plugin / "skills").glob("*/SKILL.md"))
-    assert skill_names == ["setup"]
+    assert skill_names == ["run", "setup"]
+    assert (codex_plugin / "skills" / "run" / "agents" / "openai.yaml").is_file()
 
     internal_skill_names = sorted(
         path.parent.name for path in (codex_plugin / "internal-skills").glob("*/SKILL.md")
@@ -342,7 +347,7 @@ def test_codex_mcp_config_uses_absolute_python_and_installed_plugin_root(tmp_pat
     assert mcp["command"] != "python3"
 
 
-def test_install_codex_plugin_cache_uses_manifest_version_not_codex_suffix(tmp_path):
+def test_install_codex_plugin_cache_uses_manifest_version(tmp_path):
     module = _load_install_module()
     install_root = tmp_path / "codex" / "harness"
     module.sync_codex_payload(install_root)
@@ -354,9 +359,9 @@ def test_install_codex_plugin_cache_uses_manifest_version_not_codex_suffix(tmp_p
 
     cached = module.install_codex_plugin_cache(source_root, codex_home)
 
-    assert cached.name == "2.3.0"
-    assert cached == codex_home / "plugins" / "cache" / "harness" / "harness" / "2.3.0"
-    assert not stale_suffix.exists()
+    assert cached.name == CODEX_PLUGIN_VERSION
+    assert cached == codex_home / "plugins" / "cache" / "harness" / "harness" / CODEX_PLUGIN_VERSION
+    assert (stale_suffix / "stale.txt").read_text() == "old"
     assert (cached / "hooks.json").is_file()
     assert (cached / ".mcp.json").is_file()
     assert (cached / "scripts" / "hook_pre_tool_use.py").is_file()
@@ -489,11 +494,20 @@ def test_real_codex_install_with_fake_cli_enables_plugin_hooks_and_cache(tmp_pat
     assert f"plugin marketplace add {codex_install_root}" in lines
     assert lines.index("features enable plugin_hooks") < lines.index(f"plugin marketplace add {codex_install_root}")
 
-    cached = tmp_path / ".codex" / "plugins" / "cache" / "harness" / "harness" / "2.3.0"
+    cached = (
+        tmp_path
+        / ".codex"
+        / "plugins"
+        / "cache"
+        / "harness"
+        / "harness"
+        / CODEX_PLUGIN_VERSION
+    )
     assert (cached / ".codex-plugin" / "plugin.json").is_file()
     assert (cached / "hooks.json").is_file()
     assert (cached / ".mcp.json").is_file()
-    assert not (cached / "skills" / "run" / "SKILL.md").exists()
+    assert (cached / "skills" / "run" / "SKILL.md").is_file()
+    assert (cached / "skills" / "run" / "agents" / "openai.yaml").is_file()
     assert (cached / "internal-skills" / "run" / "SKILL.md").is_file()
     assert (cached / "scripts" / "hook_pre_tool_use.py").is_file()
     assert (cached / "mcp" / "harness_server.py").is_file()
@@ -704,7 +718,7 @@ def test_sync_claude_payload_keeps_previous_tree_when_staging_fails(tmp_path, mo
     assert (install_root / "sentinel.txt").read_text() == "previous"
 
 
-def test_codex_plugin_cache_removes_all_stale_versions(tmp_path):
+def test_codex_plugin_cache_preserves_prior_versions_for_running_sessions(tmp_path):
     module = _load_install_module()
     install_root = tmp_path / "codex" / "harness"
     module.sync_codex_payload(install_root)
@@ -717,8 +731,12 @@ def test_codex_plugin_cache_removes_all_stale_versions(tmp_path):
 
     cached = module.install_codex_plugin_cache(install_root / "plugins" / "harness", codex_home)
 
-    assert cached == cache_parent / "2.3.0"
-    assert sorted(path.name for path in cache_parent.iterdir()) == ["2.3.0"]
+    assert cached == cache_parent / CODEX_PLUGIN_VERSION
+    assert sorted(path.name for path in cache_parent.iterdir()) == sorted(
+        ["2.2.0", "2.3.0-codex", "local", CODEX_PLUGIN_VERSION]
+    )
+    for version in ["2.2.0", "2.3.0-codex", "local"]:
+        assert (cache_parent / version / "stale.txt").read_text() == "old"
 
 
 def test_sync_claude_payload_copies_runtime_under_claude_root_without_git(tmp_path):
@@ -762,13 +780,23 @@ def test_install_codex_plugin_cache_marks_plugin_installed(tmp_path):
 
     cached = module.install_codex_plugin_cache(source_root, tmp_path / "codex-home")
 
-    assert cached == tmp_path / "codex-home" / "plugins" / "cache" / "harness" / "harness" / "2.3.0"
+    assert cached == (
+        tmp_path
+        / "codex-home"
+        / "plugins"
+        / "cache"
+        / "harness"
+        / "harness"
+        / CODEX_PLUGIN_VERSION
+    )
     assert (cached / ".codex-plugin" / "plugin.json").is_file()
     assert (cached / ".mcp.json").is_file()
     assert (cached / "hooks.json").is_file()
-    assert not (cached / "skills" / "run" / "SKILL.md").exists()
+    assert (cached / "skills" / "run" / "SKILL.md").is_file()
+    assert (cached / "skills" / "run" / "agents" / "openai.yaml").is_file()
     assert (cached / "internal-skills" / "run" / "SKILL.md").is_file()
     assert not (cached / "stale.txt").exists()
+    assert (stale / "stale.txt").read_text() == "old"
 
 
 def test_codex_skill_files_start_with_yaml_frontmatter():

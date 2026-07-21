@@ -73,6 +73,7 @@ class TestMutationsAgainstSource(unittest.TestCase):
                 self.assertRegex(reason, TAIL_RE)
                 self.assertIn("rule=source", reason)
                 self.assertIn("HARNESS_SKIP_MCP_GUARD", reason)
+                self.assertIn("$harness:run", reason)
 
 
 class TestMutationsAgainstWorkflowControl(unittest.TestCase):
@@ -111,6 +112,15 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             self.assertEqual(decision, "deny")
             self.assertIn("rule=protected-artifact", reason)
             self.assertIn("subagent-start hook", reason)
+
+    def test_redirect_into_task_baseline_denies_with_runtime_hint(self):
+        with scratch_task_in_real_repo("baseline-prot") as task_dir:
+            baseline = os.path.join(task_dir, "TASK_BASELINE.json")
+            r = _run_bash(f"echo '{{}}' > {baseline}")
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("rule=protected-artifact", reason)
+            self.assertIn("task-start runtime", reason)
 
 
 class TestEnvPrefixBypassFix(unittest.TestCase):

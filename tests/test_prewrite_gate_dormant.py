@@ -141,6 +141,7 @@ class TestDormantRepoFailsOpen(unittest.TestCase):
             decision, reason = _parse_decision(r.stdout)
             self.assertEqual(decision, "deny")
             self.assertIn("no-active-task", reason or "")
+            self.assertIn("$harness:run", reason or "")
 
 
 class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
@@ -160,6 +161,7 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
                              f"Expected deny but got: stdout={r.stdout!r}")
             self.assertIn("no-active-task", reason or "",
                           f"Expected no-active-task in reason: {reason!r}")
+            self.assertIn("$harness:run", reason or "")
 
     def test_mixed_closed_and_open_still_denies(self):
         """One closed + one created → open task triggers deny."""
@@ -206,6 +208,21 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
             self.assertEqual(r.returncode, 0)
             decision, reason = _parse_decision(r.stdout)
             self.assertNotEqual(decision, "deny", reason)
+
+    def test_task_baseline_is_runtime_owned(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks_dir = _scaffold(tmpdir)
+            task_dir = _write_task_state(tasks_dir, "baseline", "created")
+            with open(os.path.join(task_dir, "PLAN.md"), "w", encoding="utf-8") as f:
+                f.write("# plan\n")
+            with open(os.path.join(tasks_dir, ".active"), "w", encoding="utf-8") as f:
+                f.write(task_dir + "\n")
+            baseline = os.path.join(task_dir, "TASK_BASELINE.json")
+            r = _invoke(tmpdir, baseline)
+            decision, reason = _parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("C-05-protected-artifact", reason or "")
+            self.assertIn("task-start-runtime", reason or "")
 
 
 if __name__ == "__main__":

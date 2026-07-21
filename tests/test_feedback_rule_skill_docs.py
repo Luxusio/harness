@@ -154,7 +154,12 @@ def test_develop_installs_harness_after_fresh_qa_before_close():
     for path in paths:
         body = path.read_text(encoding="utf-8")
         install_at = body.index("### Phase 7.8: Harness source auto-install")
-        close_at = body.index("### Phase 8: Close and final response")
+        close_heading = (
+            "### Phase 9: Final freshness, install, close, and response"
+            if "plugin-codex" in str(path)
+            else "### Phase 8: Close and final response"
+        )
+        close_at = body.index(close_heading)
         assert install_at < close_at
         section = body[install_at:close_at]
         assert "plugin/scripts/install_verified.py" in section

@@ -6,6 +6,10 @@ All notable changes to the harness Claude Code plugin.
 
 ### Fixed
 
+- Codex now exposes one implicitly invocable `$harness:run` entry skill for repository mutation; hooks, setup routing, and write-gate recovery point to it while plan/develop/review prompts stay internal.
+- Codex cachebuster installs preserve prior cache versions so hooks already loaded by running sessions keep valid executable paths until those sessions restart.
+- Review routing now treats `AGENTS.md` and `CLAUDE.md` as behavioral artifacts and scans committed changes from the task baseline, including deleted security-sensitive lines.
+- Codex setup finalization now requires the public run policy, implicit invocation, and the `$harness:run` mutation route before stamping setup complete.
 - Setup now emits the runtime manifest schema (`version: 5`, `type`, nested `qa`) used by QA routing.
 - Codex installs include every setup sub-file and template referenced by the setup skill.
 - Setup finalization gitignores Goal, task-pack, review, runtime, and opt-in goal-payload artifacts from one canonical list.

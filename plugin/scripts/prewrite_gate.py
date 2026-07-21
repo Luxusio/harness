@@ -63,6 +63,7 @@ PROTECTED_ARTIFACTS = {
     "SUBAGENT_RECEIPTS.jsonl": "subagent-start-hook",
     "REVIEW_RECEIPTS.jsonl": "review-lifecycle-hook",
     "INSTALL_RECEIPT.json": "verified-install-helper",
+    "TASK_BASELINE.json": "task-start-runtime",
     "CONVERSATION.md": "conversation-hook",
 }
 
@@ -75,6 +76,7 @@ PROTECTED_ARTIFACT_HUMAN = {
     "SUBAGENT_RECEIPTS.jsonl": "Codex/Claude subagent-start hook",
     "REVIEW_RECEIPTS.jsonl": "Codex/Claude review lifecycle hooks",
     "INSTALL_RECEIPT.json": "scripts/install_verified.py",
+    "TASK_BASELINE.json": "task-start runtime",
     "CONVERSATION.md": "Codex/Claude conversation hooks",
 }
 
@@ -600,13 +602,17 @@ def main():
             return 0
         human = (
             "No active task. Source writes require the canonical loop. "
-            "Open or resume a harness task first; use native /goal when an explicit Goal is intended."
+            "On Codex invoke $harness:run to open or resume the task before editing; "
+            "use native /goal when an explicit Goal is intended."
         )
         _deny("no-active-task", file_path, "plan-skill", human, repo_root)
         return 0
 
     if not (active_dir and os.path.isdir(active_dir) and active_dir.startswith(tasks_dir)):
-        human = "Active task points to invalid path. Open or resume a harness task before source writes."
+        human = (
+            "Active task points to invalid path. On Codex invoke $harness:run "
+            "to repair or resume routing before source writes."
+        )
         _deny("invalid-active", file_path, "plan-skill", human, repo_root)
         return 0
 
@@ -619,7 +625,10 @@ def main():
             "develop_verify_close",
         }
         if not os.path.isfile(os.path.join(active_dir, "MAINTENANCE")) and not micro_loop:
-            human = "PLAN.md does not exist yet. Run Skill(harness:plan) first."
+            human = (
+                "PLAN.md does not exist yet. On Codex invoke $harness:run; "
+                "the public entry loads the internal plan phase."
+            )
             _deny("C-02-plan-first", file_path, "plan-skill", human, repo_root)
             return 0
 

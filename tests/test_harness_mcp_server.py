@@ -749,7 +749,15 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                       write_receipt: bool = True, write_handoff: bool = True,
                       touched_paths: list[str] | None = None,
                       handoff_body: str | None = None) -> str:
-        (Path(base) / ".git").mkdir(exist_ok=True)
+        repo = Path(base)
+        git_dir = repo / ".git"
+        if git_dir.is_dir() and not (git_dir / "HEAD").exists():
+            git_dir.rmdir()
+        if not git_dir.exists():
+            subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.email", "mcp@test"], cwd=repo, check=True)
+            subprocess.run(["git", "config", "user.name", "MCP Test"], cwd=repo, check=True)
+        (repo / ".gitignore").write_text("TASK__*/\n", encoding="utf-8")
         for rel in (
             "plugin/skills/run/self-improvement.md",
             "plugin/scripts/_lib.py",
@@ -761,6 +769,14 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             p.parent.mkdir(parents=True, exist_ok=True)
             if not p.exists():
                 p.write_text("# fixture\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=repo)
+        if staged.returncode != 0:
+            subprocess.run(["git", "commit", "-qm", "fixture baseline"], cwd=repo, check=True)
+        head_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+            capture_output=True, text=True,
+        ).stdout.strip()
         task_dir = Path(base) / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
         tp = touched_paths or []
@@ -776,6 +792,10 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             encoding="utf-8",
         )
         (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
+        (task_dir / "TASK_BASELINE.json").write_text(
+            json.dumps({"version": 1, "head_sha": head_sha, "dirty_paths": {}}) + "\n",
+            encoding="utf-8",
+        )
         if write_handoff:
             default_handoff = "# handoff\n\n## Commit-backed Learnings\n\nStatus: none\n"
             body = handoff_body or default_handoff
@@ -786,19 +806,24 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 encoding="utf-8",
             )
         if write_receipt:
-            for status, verdict in (("started", ""), ("completed", "PASS")):
-                harness_server.record_subagent_receipt(task_dir, {
-                    "source": "subagent_start_hook" if status == "started" else "subagent_stop_hook",
-                    "status": status,
-                    "agent_id": f"review-{task_id}",
-                    "agent_type": "harness:code-reviewer",
-                    "verdict": verdict,
-                    "summary": (
-                        "VERDICT: PASS\n"
-                        "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
-                        if verdict else "review started"
-                    ),
-                })
+            review_types = {
+                "review-code": "harness:code-reviewer",
+                "review-security": "harness:security-reviewer",
+            }
+            for lens in harness_server.required_review_lenses(task_dir):
+                for status, verdict in (("started", ""), ("completed", "PASS")):
+                    harness_server.record_subagent_receipt(task_dir, {
+                        "source": "subagent_start_hook" if status == "started" else "subagent_stop_hook",
+                        "status": status,
+                        "agent_id": f"{lens}-{task_id}",
+                        "agent_type": review_types[lens],
+                        "verdict": verdict,
+                        "summary": (
+                            "VERDICT: PASS\n"
+                            "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+                            if verdict else "review started"
+                        ),
+                    })
             for status, verdict in (("started", ""), ("completed", "PASS")):
                 harness_server.record_subagent_receipt(task_dir, {
                     "source": "subagent_start_hook" if status == "started" else "subagent_stop_hook",
@@ -832,7 +857,11 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
 
     def _set_context_git_changed_paths(self, paths: list[str]):
         harness_server.emit_compact_context.__globals__["_git_changed_paths"] = (
-            lambda repo_root: set(paths)
+            lambda repo_root, *args, **kwargs: (
+                {path: "sha256:test" for path in paths}
+                if kwargs.get("with_fingerprints")
+                else set(paths)
+            )
         )
 
     def _unpatch_repo_root_for_context(self):

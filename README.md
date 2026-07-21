@@ -179,7 +179,7 @@ The post-close self-improvement pass in the Goal child-task executor auto-promot
 | PreToolUse | `hook_pre_tool_use.py` | Codex plugin wrapper for PreToolUse gates |
 | PreToolUse (Bash) | `mcp_bash_guard.py` | Block Bash-layer mutations of source / protected / workflow-control paths |
 | UserPromptSubmit | `prompt_memory.py` | Inject stored `[harness-context]` state without Git; authoritative freshness stays in verify/close gates |
-| UserPromptSubmit | `hook_user_prompt_submit.py` | Codex plugin wrapper for prompt memory |
+| UserPromptSubmit | `hook_user_prompt_submit.py` | Codex wrapper that injects `$harness:run` routing plus prompt memory |
 | PostToolUse (Bash) | `tool_routing.py` | Emit `[harness-hint]` on known failures (wrong test command, missing script) |
 | PostToolUse (Bash/Goal/agent lifecycle) | `hook_post_tool_use.py` | Route Bash failures, native `create_goal` synchronization, and Codex reviewer/QA receipts |
 | SessionStart | `hook_session_start.py` | Codex plugin wrapper for startup context |
@@ -211,8 +211,14 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 | Skill | Description |
 |-------|-------------|
 | `/harness:setup` | Bootstrap harness in target project |
+| `/harness:run` | Codex public entry for any repository-mutating workflow |
 
-Normal usage is `/harness:setup` once per repository, then either native `/goal` for explicit/broad objectives or a plain repo-mutating request that the agent routes into a harness task. Goal owns child tasks directly when a Goal is active: focused work can stay as one child task, while broad work grows the Goal queue as bugs, pages, domains, or follow-up gaps are discovered. `run`, `plan`, `develop`, `goal-queue`, and the four review sub-skills (`plan-ceo-review`, `plan-design-review`, `plan-eng-review`, `plan-devex-review`) are internal orchestration details and are not invoked directly.
+Normal usage is `/harness:setup` once per repository. On Codex, `$harness:run`
+is implicitly selected for plain repository mutation and may also be invoked
+explicitly; it loads the internal canonical workflow. Native `/goal` remains
+the explicit/broad objective container and the run skill attaches its child
+task. On Claude Code, native Goal/task routing remains the entry. `plan`,
+`develop`, `goal-queue`, and the four plan-review sub-skills remain internal.
 
 Existing repositories from the pre-native Goal queue model should run setup
 Repair/Upgrade, or run the migration directly:

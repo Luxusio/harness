@@ -89,11 +89,11 @@ Do not write another role's artifact. Prewrite gate enforces this.
 
 ## 6. Auto-routing
 
-**Default for repo-mutating intent: harness task routing.** Never ask the user
-to choose an orchestration mode or re-submit a clear request as `/goal`. Native
-`/goal` owns explicit goals and broad work; plain repo-mutating requests
-let the agent open or resume a harness task directly when the canonical loop is
-needed.
+**Default for repo-mutating intent: harness task routing.** Codex enters through
+the public `$harness:run` skill, which loads the internal canonical workflow.
+Never ask the user to choose an orchestration mode or re-submit a clear request
+as `/goal`. Native `/goal` owns explicit goals and broad work; plain
+repo-mutating requests open or resume a harness task directly.
 
 Explicit user invocation or approval of a harness repo-mutating workflow
 authorizes the subagents required by that workflow's verification and review
@@ -105,7 +105,7 @@ apply to read-only answers or ordinary non-harness work.
 |--------|----------|
 | Set up harness | `Skill(setup)` |
 | Pre-planning / scope-sharpening (product framing before a task) | `Skill(harness:setup)` (fills the office-hours role; no separate office-hours skill) |
-| Any repo-mutating intent — new feature, fix, refactor, behavior change (default) | If native Goal context exists, sync/create Goal and start or resume the next child task; otherwise open/resume a harness task directly with `task_start` / `task_context` |
+| Any repo-mutating intent — new feature, fix, refactor, behavior change (default) | On Codex invoke `$harness:run`; it syncs the native Goal when present and otherwise opens/resumes a task with `task_start` / `task_context` |
 | User explicitly says "plan only" / "just plan" | Sync/create Goal, run the internal plan phase, then stop after plan |
 | User explicitly says "implement PLAN.md" / "develop only" | Resume the active Goal child task through the internal develop path |
 | Multi-component or API↔frontend change in one task | Goal child task with develop Phase 3.0 auto-fanout |

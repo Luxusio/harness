@@ -10,14 +10,15 @@ updated: 2026-04-15
 ## Harness routing
 <!-- harness:routing-injected -->
 
-**Default = harness task routing.** Native `/goal` owns explicit goals and broad
-work. Plain repo-mutating requests are also valid task intake: the agent opens
-or resumes a harness task when the canonical loop is needed. Hooks inject
-context; they do not create tasks automatically. Do not route normal
-repo-mutating requests through legacy `run` / `autopilot` commands.
+**Default = harness task routing.** On Codex, invoke the public `$harness:run`
+entry skill for repository mutation before editing; it loads the internal
+canonical workflow. Native `/goal` owns explicit goals and broad work. Plain
+repo-mutating requests are also valid task intake. Hooks inject context; they
+do not create tasks automatically. Do not use legacy autopilot commands.
 
-- Repo-mutating intent (feature, fix, refactor, behavior change) → sync native
-  Goal when present, otherwise open/resume a harness task directly.
+- Repo-mutating intent (feature, fix, refactor, behavior change) → Codex uses
+  `$harness:run`; the workflow syncs a native Goal when present and otherwise
+  opens or resumes a harness task directly.
 - Broad goals grow child tasks as bugs, pages, domains, or follow-up gaps are
   discovered.
 - Focused goals can remain a single child task.

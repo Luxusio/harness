@@ -503,11 +503,12 @@ new thread is required without forging receipts. The same successful
 fingerprint is skipped under a task-local lock. Skip only when the user
 explicitly opts out of installation.
 
-### Phase 8: Close and final response
+### Phase 8: Completion preparation
 
 **Concreteness standard:** every user-facing claim must locate without searching — name file, function, line, test, command, or subagent lens. "Fixed auth bug" is not acceptable; `auth.ts:47 — added null check on session.token` is.
 
-Before `task_close`, verify these are true:
+Prepare these completion checks now; the final phase revalidates them after
+durable-doc and learning work:
 
 1. Every AC is `passed` or explicitly `deferred` in CHECKS.yaml.
 2. `task_verify` reports a fresh PASS after the last edit.
@@ -517,7 +518,8 @@ Before `task_close`, verify these are true:
 6. Durable docs are updated when the task changed user-visible behavior, externally consumed API contracts, reusable guidance, significant decisions, external constraints, user-stated durable rules, or reusable implementation knowledge.
 7. Reusable EUREKA discoveries, user corrections, dogfood findings, setup recipes, and repeated friction are either promoted to committed artifacts or explicitly rejected/deferred with a concrete reason.
 
-Call `task_close`, then provide a concise final response with:
+Do not call `task_close` or emit the final response yet. Draft a concise
+completion report with:
 
 1. Summary (one sentence per AC or task slice)
 2. Files changed (important files only, with one-line description)
@@ -535,7 +537,7 @@ score = (ac_completion × 0.40) + (test_coverage × 0.30)
 - `adversarial_clean` = max(0, 10 - (crit × 3 + high × 1.5 + med × 0.5)).
 - `scope_discipline` = 10 / 7 / 4 / 0 (none / auto-added / justified / unjustified).
 
-**Cleanup:** PROGRESS.md persists beyond Phase 8 as the scope-lock contract for any post-close edits. Keep PROGRESS.md in place; do not create a separate narrative handoff artifact.
+**Cleanup:** PROGRESS.md persists through final close as the scope-lock contract. Keep PROGRESS.md in place; do not create a separate narrative handoff artifact.
 
 ### Phase 8.5: Reflect and Log (capture-when-fresh, no quota)
 
@@ -672,5 +674,28 @@ legacy critic markdown artifacts.
 ### Phase 8.7: Distilled Change Doc
 
 One-paragraph summary of the task's user-visible behavior change. Lives at `doc/changes/<date>-<slug>.md`. Optional if no user-visible change.
+
+### Phase 9: Final freshness, install, close, and response
+
+Phase 9 is the only normal owner of `task_close` and the user-facing completion
+response. First determine whether Phases 8.5-8.7 changed any tracked source or
+durable-document file after the last review/QA/install fingerprint.
+
+If they did, rerun the always-on code review and any conditional security
+review from Phase 6.6, then rerun required QA/UX from Phase 7 and call
+`task_verify`. A docs edit is not exempt from review/QA freshness when it
+changes the reviewed fingerprint. Rerun the verified source installer from
+Phase 7.8 only when an install-payload file changed after the prior install;
+for docs-only edits, retain the existing installed payload and record that the
+payload fingerprint is unchanged. If no tracked file changed, call
+`task_verify` once more to confirm the existing receipts are still fresh.
+
+Recheck every Phase 8 completion condition. Then call `task_close` exactly once.
+Before `task_close`, confirm the final `task_verify` result and any required
+install-payload receipt describe the same current revision.
+If blocked, report `missing_for_close`, fix the named gate, restore fresh
+review/QA/install evidence as required, and retry. After success, emit the
+prepared completion report with concrete file, test, reviewer, QA, durable-doc,
+installation, and remaining-risk evidence.
 
 ---

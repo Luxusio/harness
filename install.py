@@ -359,6 +359,9 @@ def _build_codex_payload(target: Path, final_root: Path) -> None:
         json.dumps(_codex_mcp_config(final_root), indent=2) + "\n"
     )
     for rel in (
+        "skills/run/SKILL.md",
+        "skills/run/agents/openai.yaml",
+        "internal-skills/run/SKILL.md",
         "skills/setup/bootstrap.md",
         "skills/setup/verify-report.md",
         "skills/setup/templates/CONTRACTS.md",
@@ -725,9 +728,11 @@ def install_codex_plugin_cache(source_root: Path, codex_home: Path) -> Path:
         if staged.exists():
             shutil.rmtree(staged)
         raise
-    for sibling in target.parent.iterdir():
-        if sibling != target and sibling.is_dir() and not sibling.name.startswith("."):
-            shutil.rmtree(sibling)
+    # Keep prior version directories intact. Already-running Codex sessions
+    # retain the absolute hook commands from the cache version they loaded;
+    # deleting that directory mid-session breaks SessionStart and
+    # UserPromptSubmit until the process restarts. Codex can select the new
+    # cachebuster on the next thread while existing sessions finish safely.
     return target
 
 

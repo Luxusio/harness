@@ -1560,6 +1560,8 @@ _DEPENDENCY_REVIEW_FILES = {
     "pyproject.toml", "cargo.lock", "cargo.toml",
 }
 
+_AGENT_INSTRUCTION_FILES = {"agents.md", "claude.md"}
+
 
 def _is_dependency_manifest(path):
     basename = os.path.basename(str(path or "").lower())
@@ -1588,13 +1590,20 @@ def _reviewable_source_paths(task_dir, state=None):
         lower = rel.lower()
         basename = os.path.basename(lower)
         suffix = os.path.splitext(lower)[1]
-        is_reviewable_artifact = suffix in executable_suffixes or _is_dependency_manifest(lower)
+        is_agent_instruction = basename in _AGENT_INSTRUCTION_FILES
+        is_reviewable_artifact = (
+            suffix in executable_suffixes
+            or _is_dependency_manifest(lower)
+            or is_agent_instruction
+        )
         if lower.startswith("doc/") and not is_reviewable_artifact:
             continue
         if lower.endswith((".pyc", ".pyo", ".pyd")) or "__pycache__/" in lower:
             continue
         if lower.endswith((".md", ".rst", ".txt")) and not (
-            lower.startswith(("plugin/", "plugin-codex/")) or _is_dependency_manifest(lower)
+            lower.startswith(("plugin/", "plugin-codex/"))
+            or _is_dependency_manifest(lower)
+            or is_agent_instruction
         ):
             continue
         if basename in {"readme", "readme.md", "changelog", "changelog.md", "license"}:
@@ -1615,18 +1624,58 @@ _SECURITY_REVIEW_SIGNAL_RE = re.compile(
 )
 
 
-def _path_has_security_signal(repo_root, relpath):
-    if _is_dependency_manifest(relpath) or _SECURITY_REVIEW_SIGNAL_RE.search(relpath):
+def _task_baseline_head_sha(task_dir):
+    try:
+        with open(_baseline_file(task_dir), encoding="utf-8") as f:
+            baseline = json.load(f)
+    except Exception:
+        return ""
+    head_sha = str(baseline.get("head_sha") or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", head_sha):
+        return ""
+    try:
+        repo_root = find_repo_root(task_dir)
+        commit = subprocess.run(
+            ["git", "rev-parse", "--verify", "--end-of-options", f"{head_sha}^{{commit}}"],
+            cwd=repo_root, capture_output=True, text=True, timeout=2,
+        )
+        if commit.returncode != 0 or commit.stdout.strip().lower() != head_sha.lower():
+            return ""
+        ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", head_sha, "HEAD"],
+            cwd=repo_root, capture_output=True, text=True, timeout=2,
+        )
+        if ancestor.returncode != 0:
+            return ""
+    except Exception:
+        return ""
+    return head_sha
+
+
+def _path_has_security_signal(task_dir, repo_root, relpath):
+    if (
+        os.path.basename(str(relpath or "").lower()) in _AGENT_INSTRUCTION_FILES
+        or _is_dependency_manifest(relpath)
+        or _SECURITY_REVIEW_SIGNAL_RE.search(relpath)
+    ):
+        return True
+    baseline_head = _task_baseline_head_sha(task_dir)
+    if not baseline_head:
+        # Legacy/corrupt baselines cannot prove that committed deleted lines
+        # were inspected. Route the security reviewer rather than granting an
+        # unsafe exemption.
         return True
     try:
         result = subprocess.run(
-            ["git", "diff", "--unified=0", "HEAD", "--", relpath],
+            ["git", "diff", "--unified=0", "--end-of-options", baseline_head, "--", relpath],
             cwd=repo_root, capture_output=True, text=True, timeout=3,
         )
         if result.returncode == 0 and result.stdout and _SECURITY_REVIEW_SIGNAL_RE.search(result.stdout):
             return True
+        if result.returncode != 0:
+            return True
     except Exception:
-        pass
+        return True
     path = os.path.join(repo_root, relpath)
     try:
         if os.path.isfile(path):
@@ -1654,7 +1703,7 @@ def required_review_lenses(task_dir, state=None):
     lenses = ["review-code"]
     repo_root = find_repo_root(task_dir)
     for relpath in paths:
-        if _path_has_security_signal(repo_root, relpath):
+        if _path_has_security_signal(task_dir, repo_root, relpath):
             lenses.append("review-security")
             break
     return lenses
@@ -2332,6 +2381,7 @@ def capture_task_baseline(task_dir, repo_root=None):
             "version": 1,
             "captured_at": now_iso(),
             "repo_root": repo_root,
+            "head_sha": _git_head_for_receipt(task_dir),
             "dirty_paths": _changed_path_fingerprints(repo_root),
         }
         os.makedirs(task_dir, exist_ok=True)

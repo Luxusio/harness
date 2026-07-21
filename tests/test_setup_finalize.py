@@ -15,6 +15,7 @@ SETUP_SOURCE = REPO / "plugin/skills/setup"
 def make_plugin_root(tmp_path: Path) -> Path:
     root = tmp_path / "plugin"
     for rel in (
+        "skills/run/SKILL.md",
         "skills/setup/SKILL.md",
         "skills/setup/repo-census.md",
         "skills/setup/project-interview.md",
@@ -31,6 +32,9 @@ def make_plugin_root(tmp_path: Path) -> Path:
         target = root / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
+    run_policy = root / "skills/run/agents/openai.yaml"
+    run_policy.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(REPO / "plugin-codex/skills/run/agents/openai.yaml", run_policy)
     return root
 
 
@@ -47,7 +51,9 @@ def make_repo(tmp_path: Path, *, manifest: str, project_doc: str = "AGENTS.md") 
     shutil.copy2(REPO / "plugin/skills/setup/templates/CONTRACTS.md", repo / "CONTRACTS.md")
     shutil.copy2(REPO / "plugin/skills/setup/templates/CONTRACTS.local.md", repo / "CONTRACTS.local.md")
     (repo / project_doc).write_text(
-        "@CONTRACTS.md\n<!-- harness:routing-injected -->\n", encoding="utf-8"
+        "@CONTRACTS.md\n<!-- harness:routing-injected -->\n"
+        "Repository mutation -> invoke $harness:run before editing.\n",
+        encoding="utf-8",
     )
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     return repo
@@ -113,6 +119,73 @@ def test_fresh_setup_ignores_all_operational_artifacts_and_stamps_version(tmp_pa
 
     second = run(repo, plugin_root)
     assert second.returncode == 0
+
+
+def test_codex_finalize_rejects_missing_public_run_policy(tmp_path):
+    plugin_root = make_plugin_root(tmp_path)
+    (plugin_root / "skills/run/agents/openai.yaml").unlink()
+    repo = make_repo(tmp_path, manifest=canonical_manifest())
+
+    result = run(repo, plugin_root)
+
+    assert result.returncode == 1
+    assert "skills/run/agents/openai.yaml" in result.stdout
+
+
+def test_codex_finalize_rejects_disabled_implicit_run_policy(tmp_path):
+    plugin_root = make_plugin_root(tmp_path)
+    (plugin_root / "skills/run/agents/openai.yaml").write_text(
+        "policy:\n  allow_implicit_invocation: false\n", encoding="utf-8"
+    )
+    repo = make_repo(tmp_path, manifest=canonical_manifest())
+
+    result = run(repo, plugin_root)
+
+    assert result.returncode == 1
+    assert "policy.allow_implicit_invocation: true" in result.stdout
+
+
+def test_codex_finalize_rejects_nested_implicit_run_policy(tmp_path):
+    plugin_root = make_plugin_root(tmp_path)
+    (plugin_root / "skills/run/agents/openai.yaml").write_text(
+        "policy:\n  nested:\n    allow_implicit_invocation: true\n", encoding="utf-8"
+    )
+    repo = make_repo(tmp_path, manifest=canonical_manifest())
+
+    result = run(repo, plugin_root)
+
+    assert result.returncode == 1
+    assert "policy.allow_implicit_invocation: true" in result.stdout
+
+
+def test_codex_finalize_rejects_duplicate_implicit_run_policy(tmp_path):
+    plugin_root = make_plugin_root(tmp_path)
+    (plugin_root / "skills/run/agents/openai.yaml").write_text(
+        "policy:\n"
+        "  allow_implicit_invocation: true\n"
+        "  allow_implicit_invocation: false\n",
+        encoding="utf-8",
+    )
+    repo = make_repo(tmp_path, manifest=canonical_manifest())
+
+    result = run(repo, plugin_root)
+
+    assert result.returncode == 1
+    assert "policy.allow_implicit_invocation: true" in result.stdout
+
+
+def test_codex_finalize_rejects_marker_without_public_run_route(tmp_path):
+    plugin_root = make_plugin_root(tmp_path)
+    repo = make_repo(tmp_path, manifest=canonical_manifest())
+    (repo / "AGENTS.md").write_text(
+        "@CONTRACTS.md\n<!-- harness:routing-injected -->\nRead-only help is direct.\n",
+        encoding="utf-8",
+    )
+
+    result = run(repo, plugin_root)
+
+    assert result.returncode == 1
+    assert "route repository mutation to $harness:run" in result.stdout
 
 
 def test_prepare_migrates_legacy_manifest_but_does_not_stamp(tmp_path):

@@ -19,12 +19,13 @@ DEFAULT_AGENT_RE = re.compile(r"^- Default (agent|operating agent) is harness\s*
 
 ROUTING_BLOCK = """## Harness routing
 <!-- harness:routing-injected -->
-- Run the full cycle (plan -> develop -> verify -> close) -> native `/goal` for explicit goals, or let the agent open/resume a harness task for plain repo-mutating requests
+- On Codex, every repo-mutating request -> invoke `$harness:run` before editing; it loads the internal canonical workflow, syncs a native Goal when present, and otherwise opens/resumes a Harness task
+- On Claude Code, run the full cycle (plan -> develop -> verify -> close) through native `/goal` for explicit goals or the runtime's canonical task route for plain repo-mutating requests
 - Bootstrap harness in a new project / repair existing -> `Skill(harness:setup)`
 - Plan-only requests -> sync/create Goal and stop after the internal plan phase if the user explicitly asks not to implement
 - Implement an approved PLAN.md / develop only -> resume the active Goal child task through the internal develop path
 - Contract drift / post-upgrade cleanup -> continuous maintenance flow in the active/next Goal child task
-- Read-only question or explanation -> answer directly, no skill
+- Read-only question or explanation -> answer directly, no Harness run skill
 
 ### Durable Decision Documentation Gate
 

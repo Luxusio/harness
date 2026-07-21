@@ -16,6 +16,7 @@ QA_PROMPTS = [
 
 CODEX_SKILL_PROMPTS = [
     REPO / "plugin-codex" / "skills" / "setup" / "SKILL.md",
+    REPO / "plugin-codex" / "skills" / "run" / "SKILL.md",
     REPO / "plugin-codex" / "internal-skills" / "run" / "SKILL.md",
     REPO / "plugin-codex" / "internal-skills" / "plan" / "SKILL.md",
     REPO / "plugin-codex" / "internal-skills" / "develop" / "SKILL.md",

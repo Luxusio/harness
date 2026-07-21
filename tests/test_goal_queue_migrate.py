@@ -123,8 +123,8 @@ def test_updates_marked_claude_routing_block_and_legacy_agent_line(tmp_path):
     body = claude.read_text(encoding="utf-8")
     assert "Default agent is harness" not in body
     assert "choose run or autopilot" not in body
-    assert "native `/goal` for explicit goals" in body
-    assert "agent open/resume a harness task for plain repo-mutating requests" in body
+    assert "$harness:run" in body
+    assert "invoke `$harness:run` before editing" in body
     assert "## Local Notes\nKeep me." in body
 
 

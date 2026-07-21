@@ -16,6 +16,7 @@ from pathlib import Path
 HARNESS_VERSION = "2.3.0"
 MANIFEST_SCHEMA = 5
 ROUTING_MARKER = "<!-- harness:routing-injected -->"
+CODEX_RUN_POLICY = "skills/run/agents/openai.yaml"
 
 OPERATIONAL_IGNORES = (
     "doc/harness/tasks/",
@@ -54,6 +55,7 @@ OPERATIONAL_IGNORES = (
 )
 
 REQUIRED_SETUP_RESOURCES = (
+    "skills/run/SKILL.md",
     "skills/setup/SKILL.md",
     "skills/setup/repo-census.md",
     "skills/setup/project-interview.md",
@@ -255,6 +257,28 @@ def has_verify_command(text: str) -> bool:
     return False
 
 
+def codex_run_allows_implicit_invocation(text: str) -> bool:
+    """Parse the one required nested policy flag without a YAML dependency."""
+    lines = text.splitlines()
+    policy_indexes = [i for i, raw in enumerate(lines) if raw == "policy:"]
+    if len(policy_indexes) != 1:
+        return False
+    policy_index = policy_indexes[0]
+    matches = []
+    for raw in lines[policy_index + 1:]:
+        if raw and not raw[0].isspace():
+            break
+        if "allow_implicit_invocation" not in raw:
+            continue
+        if not raw.startswith("  ") or raw.startswith("   ") or ":" not in raw:
+            return False
+        key, value = raw[2:].split(":", 1)
+        if key != "allow_implicit_invocation":
+            return False
+        matches.append(value.strip().lower())
+    return matches == ["true"]
+
+
 def validate_structure(
     repo: Path,
     plugin_root: Path,
@@ -284,6 +308,25 @@ def validate_structure(
             errors.append(f"{project_doc} is missing the harness routing marker")
         if not any(line.strip() == "@CONTRACTS.md" for line in project_text.splitlines()):
             errors.append(f"{project_doc} is missing @CONTRACTS.md import")
+        if project_doc == "AGENTS.md":
+            routing_text = project_text.split(ROUTING_MARKER, 1)[-1]
+            if "$harness:run" not in routing_text or not re.search(
+                r"repo(?:sitory)?[- ]mutat", routing_text, re.IGNORECASE
+            ):
+                errors.append(
+                    "AGENTS.md harness routing block must route repository mutation "
+                    "to $harness:run"
+                )
+
+    if project_doc == "AGENTS.md":
+        policy_path = plugin_root / CODEX_RUN_POLICY
+        policy_text = policy_path.read_text(encoding="utf-8") if policy_path.is_file() else ""
+        if not policy_text:
+            errors.append(f"installed setup resource is missing or empty: {CODEX_RUN_POLICY}")
+        elif not codex_run_allows_implicit_invocation(policy_text):
+            errors.append(
+                f"{CODEX_RUN_POLICY} must set policy.allow_implicit_invocation: true"
+            )
 
     for rel in ("CONTRACTS.md", "CONTRACTS.local.md"):
         path = safe_path(repo, rel)
