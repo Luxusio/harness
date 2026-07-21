@@ -373,6 +373,13 @@ the current HEAD/worktree fingerprint. Send only FIX_NOW to the implementer;
 after any edit rerun focused tests/checkpoint and all routed reviews. Inline
 self-review is not a strict-compliance fallback.
 
+The Codex SessionStart hook also runs a thread-scoped lifecycle watcher for
+runtimes that omit collaboration events from PostToolUse. Use structured
+`task_name` values containing `code_review` or `security_review`; do not use a
+generic worker name for a required reviewer. The watcher must observe the
+spawn while the child is still running to bind the start-time fingerprint.
+Starting the watcher after a reviewer finishes cannot recover a PASS.
+
 ### Phase 7: Verification Gate
 
 Read `plugin/skills/develop/verification-gate.md` (Claude tree fallback) for the full gate methodology. Runs test commands from PLAN.md, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit.
@@ -401,6 +408,10 @@ results, then run `task_verify` with `reconcile_acs: true`. The Codex
 hooks record observed lifecycle events automatically. If no subagent path exists, run
 the lens methodology in-conversation and state the fallback in task state or final response; do not
 call a critic writer.
+
+Use structured QA/UX `task_name` values such as `qa_cli`, `qa_browser`, or
+`ux_browser`. These names are the runtime-visible lens binding when delegated
+prompt bodies are encrypted in Codex rollouts.
 
 Multi-lens concurrency uses `spawn_agent` when available; otherwise run required lenses sequentially. If browser QA is required, close with browser-lens PASS evidence or browser-lens `BLOCKED_ENV`.
 

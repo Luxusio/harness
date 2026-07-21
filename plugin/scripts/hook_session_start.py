@@ -37,6 +37,19 @@ def _run(args: list[str], payload: bytes) -> bytes:
 def main() -> int:
     payload = sys.stdin.buffer.read()
     chunks: list[str] = []
+    cwd = _payload_cwd(payload)
+    if cwd and os.environ.get("CODEX_THREAD_ID"):
+        _run(
+            [
+                "codex_lifecycle_watcher.py",
+                "--ensure",
+                "--repo-root",
+                cwd,
+                "--thread-id",
+                os.environ["CODEX_THREAD_ID"],
+            ],
+            payload,
+        )
     commands = [
         ["note_freshness.py", "--from-git", "1", "--quiet"],
         ["verification_gap_check.py"],

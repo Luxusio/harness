@@ -41,7 +41,7 @@ Further references:
 - `skills/` — user-visible Codex entry skills: `setup` for bootstrap/repair and `run` for repository mutation. `run` is implicitly invocable and loads the canonical internal workflow before edits.
 - `internal-skills/` — hand-authored Codex methodology prompts hidden from the user skill menu (`run`, `goal-queue`, `plan`, `develop`, `plan-*-review`).
 - `agents/` — QA/UX/review methodology references. On Codex, the orchestrator checks the current and deferred tool catalogs and uses `spawn_agent` when available; inline execution is the explicit fallback when no independent agent route exists.
-- Codex hook config is emitted by `install.py` as plugin-local `hooks.json`. It intentionally omits Stop-loop control; Codex flow is prompt-controlled by the skills. Hook scripts provide prompt context, tool safety, and QA spawn/wait lifecycle receipts.
+- Codex hook config is emitted by `install.py` as plugin-local `hooks.json`. It intentionally omits Stop-loop control; Codex flow is prompt-controlled by the skills. Hook scripts provide prompt context, tool safety, and review/QA lifecycle receipts. SessionStart launches a thread-scoped rollout watcher because some Codex builds do not forward collaboration tools to plugin PostToolUse; the watcher records start-time fingerprints and strictly correlated child completions through the same protected receipt owner.
 
 ## Skills and Internal Prompts
 
@@ -70,11 +70,11 @@ Further references:
 
 ## What's deferred to v2
 
-- **Parallel sub-agent fanout** — Codex 0.130.0 has no `Agent(subagent_type=...)` primitive in skill scope. Develop Phase 3.0 (per-AC parallel), Phase 4.5-4.8 (parallel quality audit), Phase 7 (multi-lens QA in one batch), Phase 7.7 (dogfooder spawn) all collapse to sequential inline on Codex. Will revisit when Codex `multi_agent` ergonomics make subagent spawn cheap.
+- **Parallel sub-agent fanout** — capability-routed through Codex collaboration tools when exposed. Older builds without that surface still use the documented sequential fallback.
 - **Browser MCP verification** — qa-browser methodology is ported, but runtime calls to `mcp__chrome-devtools__*` have no Codex equivalent yet. Wire Codex Playwright MCP in v2.
 - **Dual-voice plan-* reviews** — plan-skill's Voice A / Voice B fan-out for the 4 plan-* review lenses degrades to single-voice on Codex (no Agent primitive). v2 fix is multi_agent-based; until then, users wanting dual-voice fidelity should use native `/goal` on the Claude runtime, which routes through the full plan phase.
 - **AskUserQuestion** — every call site in the 9 ported skills converted to conversational prose with numbered/lettered options. Functional but UX-wise less discoverable than the structured tool. v2 may introduce a Codex helper that renders prose asks with a consistent shape.
-- **Prewrite gate role-detection on Codex** — verification receipts are hook-owned, and Codex subagent starts are captured by PreToolUse. Inline fallback roles return final-response findings and do not write critic artifacts.
+- **Inline fallback evidence** — verification receipts remain hook-owned. Inline fallback roles return final-response findings and do not write critic artifacts or satisfy strict independent PASS gates.
 - **Stop loop control** — disabled on Codex. Codex follows the prompt in `run` / `develop` to continue through verify and close inside the current turn when feasible. It does not rely on Stop-hook auto-resume.
 
 ## For Claude users

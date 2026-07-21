@@ -109,7 +109,9 @@ All under `plugin/agents/`. Narrow tool surface — each agent gets only what it
 | `ux-browser` / `ux-api` / `ux-cli` / `ux-desktop` | Surface-specific UX review; judges whether the implemented experience is shippable |
 
 QA/UX agents return findings in their final response. Codex and Claude hooks
-record subagent starts to `SUBAGENT_RECEIPTS.jsonl`; `task_verify(reconcile_acs=true)`
+record subagent starts to `SUBAGENT_RECEIPTS.jsonl`; Codex also uses the
+SessionStart-owned `codex_lifecycle_watcher.py` when collaboration PostToolUse
+events are unavailable. `task_verify(reconcile_acs=true)`
 uses that hook-owned receipt to set runtime verification and promote open
 CHECKS.yaml entries. QA agents never hold `Edit`/`Write` on source files.
 Dogfooder remains a non-gating backlog pass after QA/UX.
@@ -183,6 +185,7 @@ The post-close self-improvement pass in the Goal child-task executor auto-promot
 | PostToolUse (Bash) | `tool_routing.py` | Emit `[harness-hint]` on known failures (wrong test command, missing script) |
 | PostToolUse (Bash/Goal/agent lifecycle) | `hook_post_tool_use.py` | Route Bash failures, native `create_goal` synchronization, and Codex reviewer/QA receipts |
 | SessionStart | `hook_session_start.py` | Codex plugin wrapper for startup context |
+| SessionStart background | `codex_lifecycle_watcher.py` | Bind Codex runtime subagent starts and completions to fresh review/QA receipts |
 | Stop | `hook_stop.py` | Codex plugin wrapper for stop gating |
 | (task_start) | `environment_snapshot.py` | One-shot probe invoked from `task_start`; writes `ENVIRONMENT_SNAPSHOT.md` into the task dir |
 

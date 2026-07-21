@@ -52,8 +52,8 @@ develop or creates a follow-up child task when the gap is separable.
 |---|---|
 | `PLAN.md`, `PLAN.meta.json`, optional `CHECKS.yaml`, optional `AUDIT_TRAIL.md` | MCP `write_plan` |
 | `CHECKS.yaml` status transitions after plan | `plugin/scripts/update_checks.py` |
-| `SUBAGENT_RECEIPTS.jsonl` | Codex/Claude subagent lifecycle hooks |
-| `REVIEW_RECEIPTS.jsonl` | Codex/Claude reviewer lifecycle hooks |
+| `SUBAGENT_RECEIPTS.jsonl` | Codex/Claude subagent lifecycle hooks, including the Codex SessionStart watcher |
+| `REVIEW_RECEIPTS.jsonl` | Codex/Claude reviewer lifecycle hooks, including the Codex SessionStart watcher |
 | `CONVERSATION.md` | Codex/Claude UserPromptSubmit/Subagent hooks |
 | durable docs under `doc/<area>/<TYPE>__*.md` | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
 
@@ -84,6 +84,16 @@ source edits after review or QA prevent close. Self-authored PASS notes,
 summaries, or narrative evidence do not close the task. Commands and inline
 checks may still help debugging, but close authority comes from `task_verify`
 reading task state and the two lifecycle streams.
+
+Codex runtimes do not always forward collaboration tools to plugin
+`PostToolUse`. On SessionStart, Harness therefore launches a watcher scoped to
+the current `CODEX_THREAD_ID` and canonical repository. The watcher captures
+HEAD and the task diff fingerprint only while a correlated child is still
+running, then accepts completion only when the root-delivered message matches
+the child rollout's final answer and task-complete record. Historical finals,
+unrecognized lenses, cross-repository lineage, partial records, symlinks, and
+schema ambiguity cannot create PASS. The watcher and classic PostToolUse path
+share the same receipt owner and freshness gates.
 
 ## Durable Knowledge
 

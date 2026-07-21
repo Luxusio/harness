@@ -10,6 +10,7 @@ Minimal harness scripts. Self-contained — no plugin-legacy dependency.
 - `environment_snapshot.py` — task_start snapshot with manifest, tool manager, and tool version probes
 - `prompt_memory.py` — zero-Git UserPromptSubmit context injection from stored task/receipt state, including active-task restore digest, Goal routing, and runbook reminders
 - `hook_post_tool_use.py` — Codex PostToolUse adapter; reminds native `create_goal` callers to synchronize through harness and records reviewer/QA lifecycle evidence
+- `codex_lifecycle_watcher.py` — SessionStart-owned watcher that binds Codex runtime spawn/start evidence to the current task fingerprint and records strictly correlated review/QA completions when collaboration PostToolUse events are unavailable
 - `task_pack_runner.py` — ordered multi-task queue state for roadmap/stage requests that should continue without asking users to choose internal task sequence
 - `setup_finalize.py` — applies canonical operational ignores, migrates legacy manifests to schema v5, verifies setup resources and routing, and stamps `.version` only after success
 - `contract_lint.py` — CONTRACTS.md managed-block lint; `--check-weight` enforces C-13 SKILL.md budget

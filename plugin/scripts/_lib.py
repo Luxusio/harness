@@ -585,6 +585,11 @@ def current_session_id(default="default"):
         or _LAST_HOOK_INPUT.get("sessionId")
         or os.environ.get("HARNESS_SESSION_ID")
         or os.environ.get("CODEX_SESSION_ID")
+        or (
+            os.environ.get("CODEX_THREAD_ID")
+            if str(os.environ.get("HARNESS_RUNTIME") or "").lower() == "codex"
+            else None
+        )
         or os.environ.get("CLAUDE_SESSION_ID")
         or default
     )
@@ -1822,6 +1827,10 @@ def record_subagent_receipt(task_dir, receipt):
         "finished_at": now if is_completed else "",
         "finding_counts": finding_counts,
         "finding_counts_reported": counts_reported,
+        "runtime_event_id": _receipt_short(receipt.get("runtime_event_id"), 500),
+        "runtime_session_id": _receipt_short(receipt.get("runtime_session_id"), 160),
+        "runtime_thread_id": _receipt_short(receipt.get("runtime_thread_id"), 160),
+        "runtime_agent_path": _receipt_short(receipt.get("runtime_agent_path"), 300),
     }
     seed = "|".join([entry["ts"], entry["source"], entry["agent_id"], entry["agent_type"], entry["lens"]])
     entry["receipt_id"] = "subagent-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]

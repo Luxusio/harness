@@ -73,6 +73,12 @@ path and keep the fallback reason in task state or the final response;
 `task_close` will still require a real completed QA PASS receipt for
 verification-gated work when `spawn_agent` was available.
 
+On Codex builds that do not forward collaboration tools to PostToolUse, the
+SessionStart hook's thread-scoped watcher owns the same receipt flow. Give
+review/QA agents structured `task_name` values containing their exact lens and
+await the final response normally. A watcher started after completion cannot
+retroactively attest the source snapshot.
+
 Subagent lifecycle cleanup: track every `agent_id` returned by `spawn_agent`.
 After a spawned agent completes, fails, is cancelled, or is no longer needed,
 call `close_agent` when that tool is available. Before final response,
