@@ -117,3 +117,33 @@ def test_codex_develop_sequential_fallback_requires_skip_evidence_payload():
     assert "`estimated_lines`, `estimated_seconds`" in body
     assert "Valid reasons are only `spawn_agent-unavailable`" in body
     assert "`dependency-conflict`, or `small-task`" in body
+
+
+def test_coordinator_review_precedes_generic_parallel_failure_retry():
+    required = (
+        "needs-coordinator-review",
+        "before generic rollback",
+        "never retry",
+        "same ownership",
+        "reassign ownership",
+        "amend",
+        "escalate",
+    )
+    for path in (CLAUDE_DEVELOP, CODEX_DEVELOP):
+        body = " ".join(_text(path).lower().split())
+        for fragment in required:
+            assert fragment in body, f"{path}: missing {fragment!r}"
+
+
+def test_codex_worker_prompt_produces_coordinator_review_status():
+    body = " ".join(_text(CODEX_DEVELOP).lower().split())
+
+    assert "read `plugin-codex/agents/developer.md`" in body
+    assert "return the exact status `needs-coordinator-review`" in body
+    assert "ownership, lane, or approved scope" in body
+
+
+def test_coordinator_review_keeps_successful_independent_siblings_promoted():
+    for path in (CLAUDE_DEVELOP, CODEX_DEVELOP):
+        body = " ".join(_text(path).lower().split())
+        assert "keep successful independent siblings promoted" in body

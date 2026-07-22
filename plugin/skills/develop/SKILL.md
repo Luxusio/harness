@@ -210,6 +210,16 @@ Use one Agent per independent AC. Do not assign multiple independent ACs to one
 executor. The coordinator reads subagent final responses and merges PROGRESS.md
 and CHECKS.yaml after all siblings return.
 
+**Coordinator-review branch (before generic rollback).** If any worker returns
+the exact status `needs-coordinator-review`, handle it before generic rollback
+or sequential retry. This status is not an ordinary worker failure. Read the
+ownership/blocker evidence, keep successful independent siblings promoted, and
+choose one converging action: reassign ownership within the already approved
+PLAN target paths, amend the lane/AC through the protected plan flow when the
+target set or scope must change, or escalate to the user. Never retry the AC
+with the same ownership unchanged. Only `blocked`, process/test failure, or a
+worker crash enters the generic rollback protocol below.
+
 See `plugin/skills/develop/parallel-fanout.md` for the full Parallelization Triggers table, Spawn-all-in-one-message rule, Stage Agent Routing matrix, and the Audit hook (the rule's 6-month value is re-verified via `learnings.jsonl type:parallel-trigger` log).
 
 **Rollback protocol** — on ANY sibling Agent failure during a parallel batch:

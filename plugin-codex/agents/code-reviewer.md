@@ -80,6 +80,16 @@ claim tests cover behavior, name the exact test and exercised branch. If you
 claim a path is safe, cite the line that establishes the invariant. Replace
 “likely” or “probably” with evidence or an explicit missing-evidence statement.
 
+For test evidence, read setup and fixtures through the actual production path
+and exercised branch to the outcome assertion. The assertion should fail if
+the claimed regression returns. Smoke checks such as `renders`, `does not
+throw`, or `is defined` prove only that named property; do not credit them with
+stronger behavioral coverage. Mocks and stubs must not bypass the production
+boundary the claim depends on. Inspect the relevant opposite, error, and
+partial-failure branches when the behavior or risk warrants them. Keep proof
+proportionate to the AC and material risk; do not demand exhaustive tests for a
+trivial declarative change.
+
 ## Confidence and disposition
 
 - Confidence 8-10: directly reproduced or strongly proven from complete source

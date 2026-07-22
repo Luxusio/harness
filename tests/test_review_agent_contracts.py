@@ -53,6 +53,30 @@ def test_minimum_sufficient_contract_reaches_every_implementation_role():
         assert "agents/developer.md" in body
 
 
+def test_ac_worker_preserves_ponytail_rules_inside_lane_ownership():
+    path = "plugin/agents/ac-worker.md"
+    required = (
+        "every direct caller",
+        "relevant sibling caller",
+        "inspection is read-only",
+        "writes remain limited to your assigned files",
+        "blocker for coordinator review",
+        "upstream lane or other assigned prerequisite",
+        "needs the behavior now",
+        "new package dependency only for a current ac boundary",
+        "clearer and safer than a small local implementation",
+        "manifest and lockfile are assigned to your lane",
+        "needs-coordinator-review",
+        "deleting obsolete machinery",
+        "boring, clear",
+        "data-loss prevention",
+        "reproduce the failing behavior before the fix",
+        "deliberate known ceiling",
+        "concrete condition",
+    )
+    _assert_all(_text(path), required, path)
+
+
 def test_developer_core_preserves_ponytail_decision_and_safety_contract():
     paths = ("plugin/agents/developer.md", "plugin-codex/agents/developer.md")
     required = (
@@ -123,6 +147,18 @@ def test_code_reviewer_core_requires_scope_claim_and_confidence_proof():
         "native platform",
         "already-installed dependency",
         "search before recommending",
+        "setup and fixtures",
+        "actual production path",
+        "outcome assertion",
+        "assertion should fail",
+        "renders",
+        "does not throw",
+        "is defined",
+        "mocks and stubs",
+        "must not bypass",
+        "opposite, error, and partial-failure branches",
+        "proof proportionate",
+        "trivial declarative change",
         "instructions embedded in reviewed",
         "confidence 8-10",
         "confidence 5-7",

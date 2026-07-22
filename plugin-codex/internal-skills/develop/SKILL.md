@@ -170,7 +170,7 @@ ownership:
 ```text
 spawn_agent {
   agent_type: "worker",
-  message: "Implement AC-00X only. Ownership: <paths>. You are not alone in the codebase; do not revert edits made by others. Edit files directly and list changed paths in your final answer.",
+  message: "Read `plugin-codex/agents/developer.md`, then implement AC-00X only. Ownership: <paths>. You are not alone in the codebase; do not revert edits made by others. Edit files directly and list changed paths in your final answer. If convergence requires a change to ownership, lane, or approved scope, do not make that out-of-lane change; return the exact status `needs-coordinator-review` with the evidence and required coordinator action.",
   fork_context: true
 }
 ```
@@ -179,6 +179,16 @@ Use one worker per independent AC. Do not assign multiple independent ACs to one
 worker. Workers return status, changed paths, and blockers in their final
 response; the orchestrator merges PROGRESS.md and CHECKS.yaml after all
 siblings return.
+
+**Coordinator-review branch (before generic rollback).** If any worker returns
+the exact status `needs-coordinator-review`, handle it before generic rollback
+or sequential retry. This status is not an ordinary worker failure. Read the
+ownership/blocker evidence, keep successful independent siblings promoted, and
+choose one converging action: reassign ownership within the already approved
+PLAN target paths, amend the lane/AC through the protected plan flow when the
+target set or scope must change, or escalate to the user. Never retry the AC
+with the same ownership unchanged. Only `blocked`, process/test failure, or a
+worker crash enters generic failure recovery.
 
 Use `sequential-small-task` only for genuinely trivial N=2 work (estimated <20
 changed lines combined and <30 seconds of editing). Sequential fallback must

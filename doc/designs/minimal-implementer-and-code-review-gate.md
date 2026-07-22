@@ -139,7 +139,7 @@ Do not adopt directly:
 | Harness role / mechanism | Behavior adopted | Primary reference | Harness adaptation |
 |--------------------------|------------------|-------------------|--------------------|
 | `harness:developer` and `harness:ac-worker` | Understand the real flow first; then stop at no change, reuse, stdlib, platform, installed dependency, smallest local expression, minimum new code | Ponytail `skills/ponytail/SKILL.md` | Named **minimum sufficient**, not minimum LOC; applied only to mutating implementers |
-| `harness:developer` | Inspect direct/sibling callers, fix a bug once at the shared root cause, prefer deletion and boring clear primitives, and leave one runnable check for non-trivial logic | Ponytail `skills/ponytail/SKILL.md` | PLAN/user intent remains authoritative; no forced one-liners, reduced scope, or framework-free testing |
+| `harness:developer` and `harness:ac-worker` | Inspect direct/sibling callers, fix a bug once at the shared root cause, prefer deletion and boring clear primitives, and leave one runnable check for non-trivial logic | Ponytail `skills/ponytail/SKILL.md` | PLAN/user intent and worker ownership remain authoritative; an AC worker may read outside its lane but returns an ownership blocker instead of editing another lane |
 | `harness:developer` and `harness:ac-worker` | Do not simplify away trust-boundary validation, data-loss prevention, security, accessibility, or requested behavior | Ponytail `skills/ponytail/SKILL.md` | Expanded to current authorization, transaction, concurrency, cleanup, and error-propagation invariants |
 | `harness:code-reviewer` | Read-only independent reviewer; spec compliance before quality; every finding has source evidence, severity, confidence, and a clear verdict | oh-my-claudecode `agents/code-reviewer.md` | Removed generic SOLID/function-length thresholds and positive-commentary requirements; added project-scale proportionality |
 | `harness:code-reviewer` minimality lens | Report deletion, reuse, native/stdlib replacement, and speculative abstraction | Ponytail `skills/ponytail-review/SKILL.md` | Made it one paired lens inside a broader correctness/architecture review instead of a standalone completion verdict |
@@ -181,6 +181,25 @@ The implementer must:
 10. use the project's existing test conventions for one focused runnable check
     of non-trivial branches, parsers, concurrency, security, or data-loss paths.
 
+The named AC worker applies the same operational rules within its assigned
+lane: it may inspect direct and relevant sibling callers outside owned files,
+but it never edits them. If the shared-root correction belongs to another lane,
+it returns exact status `needs-coordinator-review`. The coordinator handles that
+status before generic rollback: reassign ownership inside approved targets,
+amend the lane/AC through the protected plan flow, or escalate. It never retries
+the same ownership unchanged. The worker distinguishes a missing upstream lane
+or prerequisite from a package dependency, and may add a package only when its
+manifest and lockfile are assigned to the lane. It reproduces bugs when feasible,
+prefers deletion and boring clear primitives after comprehension, preserves
+accessibility and data-loss safeguards, records deliberate ceilings with their
+expansion trigger, and admits the package only for a current boundary where it
+is materially clearer or safer than the smallest local implementation.
+
+The Codex generic-worker spawn template must load the full developer role and
+must name the same exact `needs-coordinator-review` producer contract whenever
+convergence requires an ownership, lane, or approved-scope change. A consumer
+branch alone is insufficient because ordinary blocker prose would bypass it.
+
 The prompt must say “minimum sufficient”, never “fewest lines”. Dense code,
 removed error handling, and missing tests are not accepted as minimalism.
 
@@ -210,6 +229,15 @@ back to approved scope. It verifies suggested replacements against the current
 project before recommending them. Confidence below the blocking threshold
 becomes a named investigation, non-blocking optional note, or is omitted rather
 than entering a speculative fix loop.
+
+Test evidence is evaluated through the complete proof chain: setup and fixtures,
+the production path and branch actually executed, and the outcome assertion.
+A test file, name, or green execution is not behavior coverage by itself. Smoke
+assertions such as “renders”, “does not throw”, or “is defined” prove only that
+named property; mocks or stubs must not bypass the boundary being claimed.
+Opposite, error, and partial-failure branches are checked when the AC or current
+risk depends on them, without demanding exhaustive suites for trivial
+declarative changes.
 
 The reviewer never edits. For every proposed addition or deletion it must give:
 
@@ -282,6 +310,9 @@ Update these prompt surfaces:
 7. Keep each Claude/Codex role prompt standalone, delimit its behavioral core
    with `harness:role-core` markers, require byte-identical cores in tests, and
    keep runtime-specific frontmatter or routing notes outside the core.
+8. Treat `needs-coordinator-review` as a convergent ownership/decomposition
+   signal before generic parallel failure rollback; never retry unchanged lane
+   ownership automatically.
 
 Prompt rules alone are advisory. Hook and close-gate enforcement must reject a
 missing, incomplete, self-authored, or stale review.
