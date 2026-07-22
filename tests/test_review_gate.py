@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 
@@ -70,6 +72,550 @@ def _record(
     if head_sha is not None:
         receipt["head_sha"] = head_sha
     return lib.record_subagent_receipt(task, receipt)
+
+
+def test_review_snapshot_scope_deduplicates_and_refreshes_fingerprints(tmp_path):
+    source = tmp_path / "src/main.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    task = _task(tmp_path, ["src/main.py"])
+    original_paths = lib._reviewable_source_paths
+    original_fingerprint = lib._fingerprint_path
+    calls = 0
+
+    def counted_fingerprint(repo_root, relpath):
+        nonlocal calls
+        calls += 1
+        return original_fingerprint(repo_root, relpath)
+
+    lib._reviewable_source_paths = lambda task_dir, state=None: ["src/main.py"]
+    lib._fingerprint_path = counted_fingerprint
+    try:
+        with lib.review_snapshot_scope():
+            first = lib.review_diff_fingerprint(task)
+            assert lib.review_diff_fingerprint(task) == first
+            assert calls == 1
+            lib.refresh_review_snapshot()
+            assert lib.review_diff_fingerprint(task) == first
+            assert calls == 2
+
+        try:
+            with lib.review_snapshot_scope():
+                lib.review_diff_fingerprint(task)
+                raise RuntimeError("scope reset probe")
+        except RuntimeError:
+            pass
+
+        with lib.review_snapshot_scope():
+            assert lib.review_diff_fingerprint(task) == first
+        assert calls == 4
+    finally:
+        lib._reviewable_source_paths = original_paths
+        lib._fingerprint_path = original_fingerprint
+
+
+def test_review_snapshot_scope_is_isolated_between_threads(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    source = tmp_path / "src/main.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    task = _task(tmp_path, ["src/main.py"])
+    original_paths = lib._reviewable_source_paths
+    original_fingerprint = lib._fingerprint_path
+    calls = 0
+    lock = threading.Lock()
+
+    def counted_fingerprint(repo_root, relpath):
+        nonlocal calls
+        with lock:
+            calls += 1
+        return original_fingerprint(repo_root, relpath)
+
+    def fingerprint_twice():
+        with lib.review_snapshot_scope():
+            first = lib.review_diff_fingerprint(task)
+            return first, lib.review_diff_fingerprint(task)
+
+    lib._reviewable_source_paths = lambda task_dir, state=None: ["src/main.py"]
+    lib._fingerprint_path = counted_fingerprint
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: fingerprint_twice(), range(2)))
+        assert all(first == second for first, second in results)
+        assert calls == 2
+    finally:
+        lib._reviewable_source_paths = original_paths
+        lib._fingerprint_path = original_fingerprint
+
+
+def test_git_changed_path_snapshot_fails_closed_on_command_error(tmp_path):
+    from types import SimpleNamespace
+    from unittest import mock
+
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git/HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    with mock.patch.object(
+        lib.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="", stderr="boom")
+    ):
+        try:
+            lib._uncached_git_changed_paths(str(tmp_path))
+        except RuntimeError as exc:
+            assert "snapshot unavailable" in str(exc)
+        else:
+            raise AssertionError("Git command failure must not produce an empty snapshot")
+
+
+def test_git_failure_stays_fatal_if_metadata_disappears_mid_request(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "paths@test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Paths Test"], cwd=tmp_path, check=True)
+    (tmp_path / "tracked.py").write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=tmp_path, check=True)
+    head = tmp_path / ".git/HEAD"
+    hidden = tmp_path / ".git/HEAD.hidden"
+
+    with lib.review_snapshot_scope():
+        assert lib._uncached_git_changed_paths(str(tmp_path)) == set()
+        head.rename(hidden)
+        try:
+            lib._uncached_git_changed_paths(str(tmp_path))
+        except RuntimeError as exc:
+            assert "snapshot unavailable" in str(exc)
+        else:
+            raise AssertionError("A known Git root must not become a fake empty snapshot")
+        finally:
+            hidden.rename(head)
+
+
+def test_git_submodule_snapshot_fails_closed_on_command_error(tmp_path):
+    from types import SimpleNamespace
+    from unittest import mock
+
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".git/HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    with mock.patch.object(
+        lib.subprocess, "run", return_value=SimpleNamespace(returncode=1, stdout="", stderr="boom")
+    ):
+        try:
+            lib._initialized_submodule_paths(str(tmp_path))
+        except RuntimeError as exc:
+            assert "submodule snapshot unavailable" in str(exc)
+        else:
+            raise AssertionError("Git submodule failure must not produce an empty snapshot")
+
+
+def test_initialized_submodule_snapshot_does_not_require_valid_gitmodules(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "paths@test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Paths Test"], cwd=tmp_path, check=True)
+    submodule = tmp_path / "gstack"
+    submodule.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=submodule, check=True)
+    subprocess.run(["git", "config", "user.email", "paths@test"], cwd=submodule, check=True)
+    subprocess.run(["git", "config", "user.name", "Paths Test"], cwd=submodule, check=True)
+    (submodule / "tracked.py").write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.py"], cwd=submodule, check=True)
+    subprocess.run(["git", "commit", "-qm", "submodule"], cwd=submodule, check=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=submodule, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", f"160000,{head},gstack"],
+        cwd=tmp_path, check=True,
+    )
+    (tmp_path / ".gitmodules").write_text(
+        '[submodule "gstack"]\n\tpath = gstack\n', encoding="utf-8",
+    )
+
+    assert lib._initialized_submodule_paths(str(tmp_path)) == ["gstack"]
+
+
+def test_initialized_submodule_snapshot_rejects_symlink_worktree(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    submodule = tmp_path / "gstack"
+    submodule.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=submodule, check=True)
+    subprocess.run(["git", "config", "user.email", "paths@test"], cwd=submodule, check=True)
+    subprocess.run(["git", "config", "user.name", "Paths Test"], cwd=submodule, check=True)
+    (submodule / "tracked.py").write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.py"], cwd=submodule, check=True)
+    subprocess.run(["git", "commit", "-qm", "submodule"], cwd=submodule, check=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=submodule, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", f"160000,{head},gstack"],
+        cwd=tmp_path, check=True,
+    )
+    submodule.rename(tmp_path / "gstack-real")
+    submodule.symlink_to("gstack-real", target_is_directory=True)
+
+    try:
+        lib._initialized_submodule_paths(str(tmp_path))
+    except RuntimeError as exc:
+        assert "submodule snapshot unavailable" in str(exc)
+    else:
+        raise AssertionError("A symlinked gitlink worktree must fail closed")
+
+
+def test_initialized_submodule_snapshot_rejects_external_gitdir(tmp_path):
+    source = tmp_path / "source"
+    external = tmp_path / "external"
+    parent = tmp_path / "parent"
+    for repo in (source, external, parent):
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "paths@test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Paths Test"], cwd=repo, check=True)
+    for repo, value in ((source, "source"), (external, "external")):
+        (repo / "tracked.py").write_text(f"{value}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "tracked.py"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", value], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(source), "sub"],
+        cwd=parent, check=True,
+    )
+    (parent / "sub/.git").write_text(
+        f"gitdir: {external / '.git'}\n", encoding="utf-8",
+    )
+
+    try:
+        lib._initialized_submodule_paths(str(parent))
+    except RuntimeError as exc:
+        assert "submodule snapshot unavailable" in str(exc)
+    else:
+        raise AssertionError("An external submodule gitdir must fail closed")
+
+
+def test_nested_submodule_snapshot_rejects_external_gitdir(tmp_path):
+    inner_source = tmp_path / "inner-source"
+    outer_source = tmp_path / "outer-source"
+    external = tmp_path / "external"
+    parent = tmp_path / "parent"
+    for repo in (inner_source, outer_source, external, parent):
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "paths@test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Paths Test"], cwd=repo, check=True)
+    for repo in (inner_source, external):
+        (repo / "tracked.py").write_text(f"{repo.name}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "tracked.py"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", repo.name], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(inner_source), "nested"],
+        cwd=outer_source, check=True,
+    )
+    subprocess.run(["git", "commit", "-qm", "outer"], cwd=outer_source, check=True)
+    subprocess.run(
+        ["git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(outer_source), "outer"],
+        cwd=parent, check=True,
+    )
+    subprocess.run(
+        ["git", "-c", "protocol.file.allow=always", "submodule", "update", "--init", "--recursive"],
+        cwd=parent, check=True,
+    )
+    (parent / "outer/nested/.git").write_text(
+        f"gitdir: {external / '.git'}\n", encoding="utf-8",
+    )
+
+    try:
+        lib._initialized_submodule_paths(str(parent))
+    except RuntimeError as exc:
+        assert "submodule snapshot unavailable" in str(exc)
+    else:
+        raise AssertionError("A nested external submodule gitdir must fail closed")
+
+
+def test_submodule_worktree_binding_is_rechecked_after_gitdir_retarget(tmp_path):
+    source = tmp_path / "source"
+    parent = tmp_path / "parent"
+    external_worktree = tmp_path / "external-worktree"
+    for repo in (source, parent):
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "paths@test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Paths Test"], cwd=repo, check=True)
+    (source / "tracked.py").write_text("source\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.py"], cwd=source, check=True)
+    subprocess.run(["git", "commit", "-qm", "source"], cwd=source, check=True)
+    subprocess.run(
+        ["git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(source), "sub"],
+        cwd=parent, check=True,
+    )
+    git_file = parent / "sub/.git"
+    alternate = parent / ".git/modules/alternate"
+    subprocess.run(["git", "init", "--bare", "-q", str(alternate)], check=True)
+    external_worktree.mkdir()
+    subprocess.run(
+        ["git", f"--git-dir={alternate}", "config", "core.bare", "false"], check=True,
+    )
+    subprocess.run(
+        ["git", f"--git-dir={alternate}", "config", "core.worktree", str(external_worktree)],
+        check=True,
+    )
+
+    with lib.review_snapshot_scope():
+        assert lib._initialized_submodule_paths(str(parent)) == ["sub"]
+        git_file.write_text("gitdir: ../.git/modules/alternate\n", encoding="utf-8")
+        try:
+            lib._validated_submodule_root(str(parent), "sub")
+        except RuntimeError as exc:
+            assert "submodule snapshot unavailable" in str(exc)
+        else:
+            raise AssertionError("Retargeted gitdir worktree binding must be rechecked")
+
+
+def test_submodule_head_is_bound_to_validated_gitdir(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    parent = tmp_path / "parent"
+    for repo in (source, parent):
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "paths@test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Paths Test"], cwd=repo, check=True)
+    (source / "tracked.py").write_text("source\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.py"], cwd=source, check=True)
+    subprocess.run(["git", "commit", "-qm", "source"], cwd=source, check=True)
+    subprocess.run(
+        ["git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(source), "sub"],
+        cwd=parent, check=True,
+    )
+    sub_root = parent / "sub"
+    git_file = sub_root / ".git"
+    alternate = parent / ".git/modules/alternate"
+    subprocess.run(["git", "init", "--bare", "-q", str(alternate)], check=True)
+    subprocess.run(
+        ["git", f"--git-dir={alternate}", "config", "core.bare", "false"], check=True,
+    )
+    subprocess.run(
+        ["git", f"--git-dir={alternate}", "config", "core.worktree", str(sub_root)], check=True,
+    )
+    original_head = lib._git_head_snapshot
+    observed = {}
+
+    def retarget_during_head(repo_root, *, git_dir=None, use_cache=True):
+        observed.update(git_dir=git_dir, use_cache=use_cache)
+        git_file.write_text("gitdir: ../.git/modules/alternate\n", encoding="utf-8")
+        return original_head(repo_root, git_dir=git_dir, use_cache=use_cache)
+
+    monkeypatch.setattr(lib, "_git_head_snapshot", retarget_during_head)
+    try:
+        lib._submodule_gitlink_fingerprint(str(parent), "sub")
+    except RuntimeError as exc:
+        assert "submodule snapshot unavailable" in str(exc)
+    else:
+        raise AssertionError("Submodule HEAD must remain bound to one gitdir")
+    assert observed["git_dir"]
+    assert observed["use_cache"] is False
+
+
+def test_review_fingerprint_changes_with_clean_submodule_head(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "paths@test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Paths Test"], cwd=tmp_path, check=True)
+    submodule = tmp_path / "gstack"
+    submodule.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=submodule, check=True)
+    subprocess.run(["git", "config", "user.email", "paths@test"], cwd=submodule, check=True)
+    subprocess.run(["git", "config", "user.name", "Paths Test"], cwd=submodule, check=True)
+    source = submodule / "tracked.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.py"], cwd=submodule, check=True)
+    subprocess.run(["git", "commit", "-qm", "first"], cwd=submodule, check=True)
+    first_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=submodule, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", f"160000,{first_head},gstack"],
+        cwd=tmp_path, check=True,
+    )
+    subprocess.run(["git", "commit", "-qm", "parent"], cwd=tmp_path, check=True)
+    task = _task(tmp_path, ["gstack"])
+    first = lib.review_diff_fingerprint(str(task))
+
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-qam", "second"], cwd=submodule, check=True)
+    second = lib.review_diff_fingerprint(str(task))
+
+    assert first != second
+
+    second_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=submodule, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(["git", "checkout", "-q", first_head], cwd=submodule, check=True)
+    checkout_reset = lib.review_diff_fingerprint(str(task))
+    assert checkout_reset == first
+    subprocess.run(
+        ["git", "update-index", "--cacheinfo", f"160000,{second_head},gstack"],
+        cwd=tmp_path, check=True,
+    )
+    staged_gitlink = lib.review_diff_fingerprint(str(task))
+    assert staged_gitlink != first
+
+
+def test_uninitialized_gitlink_index_change_invalidates_review(tmp_path):
+    source_repo = tmp_path / "source"
+    parent = tmp_path / "parent"
+    source_repo.mkdir()
+    parent.mkdir()
+    for repo in (source_repo, parent):
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "paths@test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Paths Test"], cwd=repo, check=True)
+    source = source_repo / "tracked.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.py"], cwd=source_repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "first"], cwd=source_repo, check=True)
+    first_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source_repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-qam", "second"], cwd=source_repo, check=True)
+    second_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source_repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", f"160000,{first_head},ghost-sub"],
+        cwd=parent, check=True,
+    )
+    subprocess.run(["git", "commit", "-qm", "parent"], cwd=parent, check=True)
+    task = _task(parent, ["ghost-sub"])
+    first = lib.review_diff_fingerprint(str(task))
+
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", f"160000,{second_head},ghost-sub"],
+        cwd=parent, check=True,
+    )
+
+    assert lib._initialized_submodule_paths(str(parent)) == []
+    assert lib.review_diff_fingerprint(str(task)) != first
+
+
+def test_git_changed_paths_preserve_newline_filename(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.email", "paths@test"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Paths Test"], cwd=tmp_path, check=True)
+    source = tmp_path / "src" / "line\nbreak.py"
+    source.parent.mkdir()
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    subprocess.run(["git", "add", "src"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=tmp_path, check=True)
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+
+    assert lib._uncached_git_changed_paths(str(tmp_path)) == {"src/line\nbreak.py"}
+
+
+def test_changed_path_fingerprint_rejects_fifo_and_hashes_symlink_target(tmp_path):
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)
+    try:
+        lib._fingerprint_path(str(tmp_path), "pipe")
+    except RuntimeError as exc:
+        assert "fingerprint unavailable" in str(exc)
+    else:
+        raise AssertionError("FIFO fingerprinting must fail closed")
+
+    link = tmp_path / "link"
+    link.symlink_to("target-one")
+    first = lib._fingerprint_path(str(tmp_path), "link")
+    link.unlink()
+    link.symlink_to("target-two")
+    second = lib._fingerprint_path(str(tmp_path), "link")
+    assert first.startswith("symlink-sha256:")
+    assert first != second
+
+
+def test_changed_path_fingerprint_rejects_rename_replacement(tmp_path, monkeypatch):
+    target = tmp_path / "source.py"
+    replacement = tmp_path / "replacement.py"
+    target.write_text("VALUE = 1\n", encoding="utf-8")
+    replacement.write_text("VALUE = 2\n", encoding="utf-8")
+    original_fstat = os.fstat
+    calls = 0
+
+    def replace_after_read(fd):
+        nonlocal calls
+        result = original_fstat(fd)
+        calls += 1
+        if calls == 2:
+            os.replace(replacement, target)
+        return result
+
+    monkeypatch.setattr(os, "fstat", replace_after_read)
+    try:
+        lib._fingerprint_path(str(tmp_path), "source.py")
+    except RuntimeError as exc:
+        assert "fingerprint unavailable" in str(exc)
+    else:
+        raise AssertionError("A path replacement during hashing must fail closed")
+
+
+def test_receipt_fingerprint_rejects_rename_replacement(tmp_path, monkeypatch):
+    task = tmp_path / "task"
+    task.mkdir()
+    target = task / lib.REVIEW_RECEIPTS_NAME
+    replacement = task / "replacement.jsonl"
+    target.write_text('{"verdict":"PASS"}\n', encoding="utf-8")
+    replacement.write_text('{"verdict":"FAIL"}\n', encoding="utf-8")
+    original_fstat = os.fstat
+    calls = 0
+
+    def replace_after_read(fd):
+        nonlocal calls
+        result = original_fstat(fd)
+        calls += 1
+        if calls == 2:
+            os.replace(replacement, target)
+        return result
+
+    monkeypatch.setattr(os, "fstat", replace_after_read)
+    try:
+        lib.receipt_stream_fingerprint(str(task))
+    except RuntimeError as exc:
+        assert "receipt stream snapshot unavailable" in str(exc)
+    else:
+        raise AssertionError("A receipt replacement during hashing must fail closed")
+
+
+def test_git_path_map_keeps_backslash_and_slash_names_distinct(tmp_path):
+    backslash = tmp_path / "a\\b"
+    nested = tmp_path / "a" / "b"
+    nested.parent.mkdir()
+    backslash.write_text("one\n", encoding="utf-8")
+    nested.write_text("two\n", encoding="utf-8")
+
+    paths = {"a\\b", "a/b"}
+    fingerprints = {
+        path: lib._fingerprint_path(str(tmp_path), path) for path in paths
+    }
+    assert set(fingerprints) == paths
+    assert fingerprints["a\\b"] != fingerprints["a/b"]
+
+
+def test_review_paths_preserve_posix_backslash_identity(tmp_path):
+    if os.sep != "/":
+        return
+    backslash = tmp_path / "a\\b.py"
+    nested = tmp_path / "a" / "b.py"
+    hidden = tmp_path / ".hidden.py"
+    nested.parent.mkdir()
+    backslash.write_text("VALUE = 1\n", encoding="utf-8")
+    nested.write_text("VALUE = 2\n", encoding="utf-8")
+    hidden.write_text("VALUE = 3\n", encoding="utf-8")
+    task = _task(tmp_path, ["a\\b.py", "a/b.py", ".hidden.py"])
+
+    backslash.write_text("VALUE = 4\n", encoding="utf-8")
+    hidden.write_text("VALUE = 5\n", encoding="utf-8")
+    assert set(lib._reviewable_source_paths(task)) == {"a\\b.py", "a/b.py", ".hidden.py"}
+    assert not lib._stale_skip("doc\\harness\\payload.py")
 
 
 def test_docs_only_task_has_explicit_review_exemption(tmp_path):

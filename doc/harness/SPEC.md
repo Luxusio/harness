@@ -85,15 +85,57 @@ summaries, or narrative evidence do not close the task. Commands and inline
 checks may still help debugging, but close authority comes from `task_verify`
 reading task state and the two lifecycle streams.
 
+`task_context`, `task_verify`, and `task_close` reuse one request-local snapshot
+of source-derived Git paths and review fingerprints. The snapshot is isolated by
+execution context, is discarded on success or exception, and never caches review
+or QA receipts. Before `task_close` writes closed state, it clears that snapshot
+and reruns the complete context, receipt, runtime-freshness, and CHECKS gates;
+after those gates finish, it clears the cache again and requires the end-of-gate
+changed-path fingerprint map and HEAD to match the initial values. It also
+compares uncached raw review/QA receipt-stream fingerprints across the final
+gate. Source, receipt, or HEAD changes observed between them therefore fail
+closed and require a fresh verification. A failed or timed-out Git changed-path snapshot and an
+unavailable initial or final HEAD are invalid evidence and block close rather
+than being treated as an empty, stable repository state. Git roots confirmed
+earlier in a request remain trusted across cache refreshes, so temporarily
+removing `.git` or `HEAD` cannot downgrade a later command failure to synthetic
+fixture compatibility. Git changed paths use
+NUL-delimited output so control characters remain unambiguous; regular files
+are opened without following symlinks, symlink targets are hashed directly,
+and the pathname identity is rechecked after reading so rename replacement,
+unreadable, or special path types invalidate the snapshot. Git path identity is
+preserved end to end; separator normalization is applied only on Windows.
+Every parent-index gitlink OID is fingerprinted, including uninitialized
+submodules. Initialized submodules additionally include checkout HEAD and
+worktree identity, so a staged gitlink update or clean checkout move is both
+review-routed and freshness-gated. Gitlink worktrees and their path components
+must be real directories rather than symlinks. A submodule `.git` control file
+is read without following symlinks, must resolve inside the parent Git common
+directory, and Git must report the validated worktree itself as its top level;
+this worktree-binding query is intentionally uncached so an in-request gitdir
+retarget is detected. Submodule HEAD is read with the validated gitdir and
+worktree passed explicitly to Git, and the control-file binding is compared
+before and after. These checks prevent traversal into external repositories,
+including nested gitlinks.
+
 Codex runtimes do not always forward collaboration tools to plugin
 `PostToolUse`. SessionStart and each installed Codex root hook therefore validate
 the current official `session_id` (with a matching environment fallback),
 canonical repository, root rollout, and initial offset, then writes a versioned
-registration under the current user's state directory. Registration retries
+registration under the current user's state directory. This restoration path is
+strictly opt-in: without `doc/harness/manifest.yaml`, global hooks do not create
+or restore Harness watcher state. Setup detection stops at the nearest Git root,
+starting from the physical `realpath` of the hook cwd, so an independent nested
+repository or symlinked external project cannot inherit an outer repository's
+manifest. Registration retries
 briefly on SessionStart when rollout creation races hook delivery. Later hooks
 restore missing or invalid registration state without overwriting a valid
 initial offset; late recovery begins at the current offset and covers only
-future subagent starts. An existing version-3 registration is validated from its
+future subagent starts. Root-owned workspace ancestors common in container
+mounts are accepted for task binding only when group/other write bits are
+absent, while symlink checks and current-user ownership of the task directory
+remain enforced. An existing version-3
+registration is validated from its
 exact state and rollout paths before discovery, so ordinary hook events do not
 recursively scan the session tree, acquire the registration lock, or rewrite
 state. Discovery for a missing registration is deadline-aware and registration

@@ -199,6 +199,10 @@ class TestCodexHookWrappers(unittest.TestCase):
         root_id = "019f834e-1e91-7662-9024-f548103d751e"
         attempts = []
         with tempfile.TemporaryDirectory() as repo:
+            (Path(repo) / ".git").mkdir()
+            manifest = Path(repo) / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("type: cli\n", encoding="utf-8")
             payload = json.dumps({"cwd": repo, "session_id": root_id}).encode()
 
             def ensure(repo_root, thread_id):
@@ -213,6 +217,53 @@ class TestCodexHookWrappers(unittest.TestCase):
                 ))
         self.assertEqual(attempts, [(repo, root_id), (repo, root_id)])
         self.assertIn("only future subagent starts", mod.restore_watcher_registration.__doc__)
+
+    def test_registration_helper_noops_without_harness_manifest(self):
+        mod = _load("codex_hook_registration")
+        root_id = "019f834e-1e91-7662-9024-f548103d751e"
+        with tempfile.TemporaryDirectory() as repo:
+            payload = json.dumps({"cwd": repo, "session_id": root_id}).encode()
+            ensure = mock.Mock(return_value=True)
+            with mock.patch.dict("os.environ", {}, clear=True):
+                self.assertFalse(mod.restore_watcher_registration(payload, ensure_fn=ensure))
+        ensure.assert_not_called()
+
+    def test_registration_helper_does_not_inherit_outer_repo_manifest(self):
+        mod = _load("codex_hook_registration")
+        root_id = "019f834e-1e91-7662-9024-f548103d751e"
+        with tempfile.TemporaryDirectory() as outer:
+            outer_root = Path(outer)
+            (outer_root / ".git").mkdir()
+            manifest = outer_root / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("type: cli\n", encoding="utf-8")
+            inner = outer_root / "plain-project"
+            (inner / ".git").mkdir(parents=True)
+            payload = json.dumps({"cwd": str(inner), "session_id": root_id}).encode()
+            ensure = mock.Mock(return_value=True)
+            with mock.patch.dict("os.environ", {}, clear=True):
+                self.assertFalse(mod.restore_watcher_registration(payload, ensure_fn=ensure))
+        ensure.assert_not_called()
+
+    def test_registration_helper_uses_physical_symlinked_cwd(self):
+        mod = _load("codex_hook_registration")
+        root_id = "019f834e-1e91-7662-9024-f548103d751e"
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            outer = base / "outer"
+            external = base / "external"
+            (outer / ".git").mkdir(parents=True)
+            manifest = outer / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("type: cli\n", encoding="utf-8")
+            (external / ".git").mkdir(parents=True)
+            link = outer / "plain-project"
+            link.symlink_to(external, target_is_directory=True)
+            payload = json.dumps({"cwd": str(link), "session_id": root_id}).encode()
+            ensure = mock.Mock(return_value=True)
+            with mock.patch.dict("os.environ", {}, clear=True):
+                self.assertFalse(mod.restore_watcher_registration(payload, ensure_fn=ensure))
+        ensure.assert_not_called()
 
     def test_registration_attempt_has_a_hard_wall_clock_deadline(self):
         mod = _load("codex_hook_registration")
@@ -274,6 +325,10 @@ class TestCodexHookWrappers(unittest.TestCase):
         try:
             mod.ensure = slow_ensure
             with tempfile.TemporaryDirectory() as repo:
+                (Path(repo) / ".git").mkdir()
+                manifest = Path(repo) / "doc/harness/manifest.yaml"
+                manifest.parent.mkdir(parents=True)
+                manifest.write_text("type: cli\n", encoding="utf-8")
                 payload = json.dumps({
                     "cwd": repo,
                     "session_id": "019f834e-1e91-7662-9024-f548103d751e",
@@ -406,6 +461,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
 
         with tempfile.TemporaryDirectory() as repo:
+            (Path(repo) / ".git").mkdir()
             manifest = Path(repo) / "doc/harness/manifest.yaml"
             manifest.parent.mkdir(parents=True)
             manifest.write_text("type: cli\n", encoding="utf-8")
@@ -433,10 +489,62 @@ class TestCodexHookWrappers(unittest.TestCase):
                     self.assertEqual(mod.main(), 0)
         self.assertEqual(output.getvalue(), "")
 
+    def test_codex_prompt_wrapper_does_not_inherit_outer_repo_manifest(self):
+        mod = _load("hook_user_prompt_submit")
+
+        def fake_run(*args, **kwargs):
+            return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as outer:
+            outer_root = Path(outer)
+            (outer_root / ".git").mkdir()
+            manifest = outer_root / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("type: cli\n", encoding="utf-8")
+            inner = outer_root / "plain-project"
+            (inner / ".git").mkdir(parents=True)
+            output = io.StringIO()
+            with mock.patch("subprocess.run", side_effect=fake_run):
+                with mock.patch.object(
+                    sys, "stdin", _BytesStdin(json.dumps({"cwd": str(inner)})),
+                ):
+                    with contextlib.redirect_stdout(output):
+                        self.assertEqual(mod.main(), 0)
+
+        self.assertEqual(output.getvalue(), "")
+
+    def test_codex_prompt_wrapper_uses_physical_symlinked_cwd(self):
+        mod = _load("hook_user_prompt_submit")
+
+        def fake_run(*args, **kwargs):
+            return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            outer = base / "outer"
+            external = base / "external"
+            (outer / ".git").mkdir(parents=True)
+            manifest = outer / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("type: cli\n", encoding="utf-8")
+            (external / ".git").mkdir(parents=True)
+            link = outer / "plain-project"
+            link.symlink_to(external, target_is_directory=True)
+            output = io.StringIO()
+            with mock.patch("subprocess.run", side_effect=fake_run):
+                with mock.patch.object(
+                    sys, "stdin", _BytesStdin(json.dumps({"cwd": str(link)})),
+                ):
+                    with contextlib.redirect_stdout(output):
+                        self.assertEqual(mod.main(), 0)
+
+        self.assertEqual(output.getvalue(), "")
+
     def test_codex_prompt_wrapper_keeps_route_when_memory_times_out(self):
         mod = _load("hook_user_prompt_submit")
 
         with tempfile.TemporaryDirectory() as repo:
+            (Path(repo) / ".git").mkdir()
             manifest = Path(repo) / "doc/harness/manifest.yaml"
             manifest.parent.mkdir(parents=True)
             manifest.write_text("type: cli\n", encoding="utf-8")

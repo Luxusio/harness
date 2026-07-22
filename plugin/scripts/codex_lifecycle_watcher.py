@@ -549,10 +549,13 @@ def _validated_task_dir(repo_root: str, task_id: str) -> str:
         for part in ("doc", "harness", "tasks"):
             tasks_root = tasks_root / part
             component = os.lstat(tasks_root)
+            trusted_owner = component.st_uid == os.getuid() or (
+                component.st_uid == 0 and not component.st_mode & 0o022
+            )
             if (
                 stat.S_ISLNK(component.st_mode)
                 or not stat.S_ISDIR(component.st_mode)
-                or component.st_uid != os.getuid()
+                or not trusted_owner
             ):
                 return ""
         if tasks_root.resolve(strict=True) != tasks_root.absolute():

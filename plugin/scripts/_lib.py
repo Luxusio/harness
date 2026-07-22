@@ -11,10 +11,13 @@ Provenance is derived from artifact existence, not counters.
 
 import os
 import re
+import stat
 import subprocess
 import tempfile
 import json
 import hashlib
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
 
 TASK_DIR = "doc/harness/tasks"
@@ -31,6 +34,42 @@ SCHEMA_FIELDS = (
     "touched_paths", "plan_session_state",
     "closed_at", "updated",
 )
+
+_REVIEW_SNAPSHOT_CACHE = ContextVar("harness_review_snapshot_cache", default=None)
+_REQUEST_GIT_ROOTS = ContextVar("harness_request_git_roots", default=None)
+
+
+@contextmanager
+def review_snapshot_scope():
+    """Reuse source-derived review work only within one caller request."""
+    current = _REVIEW_SNAPSHOT_CACHE.get()
+    if current is not None:
+        yield
+        return
+    token = _REVIEW_SNAPSHOT_CACHE.set({})
+    roots_token = _REQUEST_GIT_ROOTS.set(set())
+    try:
+        yield
+    finally:
+        _REQUEST_GIT_ROOTS.reset(roots_token)
+        _REVIEW_SNAPSHOT_CACHE.reset(token)
+
+
+def refresh_review_snapshot() -> None:
+    """Discard the current request snapshot before a final freshness gate."""
+    cache = _REVIEW_SNAPSHOT_CACHE.get()
+    if cache is not None:
+        cache.clear()
+
+
+def _review_snapshot_cache():
+    return _REVIEW_SNAPSHOT_CACHE.get()
+
+
+def _remember_git_root(repo_root):
+    roots = _REQUEST_GIT_ROOTS.get()
+    if roots is not None:
+        roots.add(os.path.realpath(repo_root))
 
 
 # ── Plugin-root env var (AC-006 of TASK__dual-runtime-plugin-claude-codex) ─
@@ -949,9 +988,10 @@ def find_repo_root(start_dir=None):
     # Codex plugin-local hooks may execute from the installed plugin directory
     # while the hook payload still carries the project cwd. Prefer that payload
     # cwd so gates read the user's repo, not ~/.codex/harness/plugins/harness.
-    d = os.path.abspath(start_dir or _hook_payload_cwd() or os.getcwd())
+    d = os.path.realpath(start_dir or _hook_payload_cwd() or os.getcwd())
     while d != "/":
-        if os.path.isdir(os.path.join(d, ".git")):
+        git_path = os.path.join(d, ".git")
+        if os.path.isdir(git_path) or os.path.isfile(git_path):
             return d
         d = os.path.dirname(d)
     return os.path.abspath(start_dir or os.getcwd())
@@ -1568,6 +1608,16 @@ _DEPENDENCY_REVIEW_FILES = {
 _AGENT_INSTRUCTION_FILES = {"agents.md", "claude.md"}
 
 
+def _canonical_git_relpath(value):
+    """Preserve Git path identity while accepting an explicit ./ prefix."""
+    rel = str(value or "")
+    if os.sep == "\\":
+        rel = rel.replace("\\", "/")
+    while rel.startswith("./"):
+        rel = rel[2:]
+    return rel
+
+
 def _is_dependency_manifest(path):
     basename = os.path.basename(str(path or "").lower())
     return basename in _DEPENDENCY_REVIEW_FILES or bool(
@@ -1578,7 +1628,16 @@ def _is_dependency_manifest(path):
 def _reviewable_source_paths(task_dir, state=None):
     """Return task paths whose behavior merits independent static review."""
     st = state or read_state(task_dir)
+    cache = _review_snapshot_cache()
+    cache_key = (
+        "reviewable_paths",
+        os.path.realpath(task_dir),
+        tuple(sorted(str(path) for path in (st.get("touched_paths") or []))),
+    )
+    if cache is not None and cache_key in cache:
+        return list(cache[cache_key])
     repo_root = find_repo_root(task_dir)
+    gitlink_paths = set(_gitlink_index_snapshot(repo_root))
     candidates = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
     candidates = _filter_baseline_unchanged(task_dir, repo_root, candidates)
     paths = []
@@ -1589,7 +1648,7 @@ def _reviewable_source_paths(task_dir, state=None):
         ".toml", ".ts", ".tsx", ".vue", ".xml", ".yaml", ".yml",
     }
     for raw in candidates:
-        rel = str(raw or "").replace("\\", "/").lstrip("./")
+        rel = _canonical_git_relpath(raw)
         if not rel:
             continue
         lower = rel.lower()
@@ -1600,6 +1659,7 @@ def _reviewable_source_paths(task_dir, state=None):
             suffix in executable_suffixes
             or _is_dependency_manifest(lower)
             or is_agent_instruction
+            or rel.rstrip("/") in gitlink_paths
         )
         if lower.startswith("doc/") and not is_reviewable_artifact:
             continue
@@ -1614,7 +1674,10 @@ def _reviewable_source_paths(task_dir, state=None):
         if basename in {"readme", "readme.md", "changelog", "changelog.md", "license"}:
             continue
         paths.append(rel)
-    return sorted(set(paths))
+    result = sorted(set(paths))
+    if cache is not None:
+        cache[cache_key] = tuple(result)
+    return result
 
 
 _SECURITY_REVIEW_SIGNAL_RE = re.compile(
@@ -1717,16 +1780,85 @@ def required_review_lenses(task_dir, state=None):
 def review_diff_fingerprint(task_dir, state=None):
     """Hash the current task source snapshot, including uncommitted files."""
     st = state or read_state(task_dir)
+    cache = _review_snapshot_cache()
+    cache_key = (
+        "review_fingerprint",
+        os.path.realpath(task_dir),
+        tuple(sorted(str(path) for path in (st.get("touched_paths") or []))),
+    )
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
     repo_root = find_repo_root(task_dir)
+    gitlink_paths = set(_gitlink_index_snapshot(repo_root))
     h = hashlib.sha256()
     for relpath in _reviewable_source_paths(task_dir, st):
-        path = os.path.join(repo_root, relpath)
-        h.update(relpath.encode("utf-8", errors="replace"))
+        h.update(os.fsencode(relpath))
         h.update(b"\0")
-        if os.path.isfile(path):
-            h.update(_hash_file(path).encode("ascii"))
+        if relpath.rstrip("/") in gitlink_paths:
+            fingerprint = _submodule_gitlink_fingerprint(repo_root, relpath.rstrip("/"))
         else:
-            h.update(b"<missing>")
+            fingerprint = _fingerprint_path(repo_root, relpath)
+        h.update(fingerprint.encode("ascii"))
+        h.update(b"\0")
+    result = "sha256:" + h.hexdigest()
+    if cache is not None:
+        cache[cache_key] = result
+    return result
+
+
+def receipt_stream_fingerprint(task_dir):
+    """Hash live review/QA receipt streams without request caching."""
+    h = hashlib.sha256()
+    for name in (REVIEW_RECEIPTS_NAME, SUBAGENT_RECEIPTS_NAME):
+        path = os.path.join(task_dir, name)
+        h.update(name.encode("utf-8"))
+        h.update(b"\0")
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            h.update(b"<missing>\0")
+            continue
+        except OSError as exc:
+            raise RuntimeError("receipt stream snapshot unavailable") from exc
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            raise RuntimeError("receipt stream snapshot unavailable")
+        flags = (
+            os.O_RDONLY
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0)
+        )
+        fd = None
+        try:
+            fd = os.open(path, flags)
+            opened = os.fstat(fd)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino)
+            ):
+                raise RuntimeError("receipt stream snapshot unavailable")
+            handle = os.fdopen(fd, "rb")
+            fd = None
+            with handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    h.update(chunk)
+                after = os.fstat(handle.fileno())
+            final_path = os.lstat(path)
+            if (
+                after.st_size != opened.st_size
+                or after.st_mtime_ns != opened.st_mtime_ns
+                or after.st_ctime_ns != opened.st_ctime_ns
+                or not stat.S_ISREG(final_path.st_mode)
+                or (final_path.st_dev, final_path.st_ino) != (opened.st_dev, opened.st_ino)
+            ):
+                raise RuntimeError("receipt stream snapshot unavailable")
+        except OSError as exc:
+            raise RuntimeError("receipt stream snapshot unavailable") from exc
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
         h.update(b"\0")
     return "sha256:" + h.hexdigest()
 
@@ -2125,7 +2257,7 @@ _STALE_CHECK_PATH_CAP = 1000  # bound mtime scan in pathological cases
 def _stale_skip(relpath: str) -> bool:
     if not relpath:
         return True
-    norm = relpath.replace("\\", "/").lstrip("./")
+    norm = _canonical_git_relpath(relpath)
     base = os.path.basename(norm)
     if base in _STALE_CHECK_SKIP_BASENAMES:
         return True
@@ -2318,42 +2450,326 @@ def _fingerprint_path(repo_root, relpath):
     """Return a stable fingerprint for current path contents.
 
     Missing paths use a sentinel so deleted-at-baseline files do not keep
-    reappearing as task-owned changes. Hash failures return ``None`` and are
-    treated as changed by the baseline filter.
+    reappearing as task-owned changes. Symlinks hash their link target without
+    following it. Unreadable or unsupported path types fail closed.
     """
     path = os.path.join(repo_root, relpath)
-    if not os.path.exists(path):
-        return "missing"
-    if os.path.isdir(path):
-        return "dir"
     try:
+        path_info = os.lstat(path)
+    except FileNotFoundError:
+        return "missing"
+    except OSError as exc:
+        raise RuntimeError("changed path fingerprint unavailable") from exc
+    if stat.S_ISDIR(path_info.st_mode):
+        return "dir"
+    if stat.S_ISLNK(path_info.st_mode):
+        try:
+            target = os.readlink(path)
+            after = os.lstat(path)
+        except OSError as exc:
+            raise RuntimeError("changed path fingerprint unavailable") from exc
+        if (after.st_dev, after.st_ino) != (path_info.st_dev, path_info.st_ino):
+            raise RuntimeError("changed path fingerprint unavailable")
+        return "symlink-sha256:" + hashlib.sha256(os.fsencode(target)).hexdigest()
+    if not stat.S_ISREG(path_info.st_mode):
+        raise RuntimeError("changed path fingerprint unavailable")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = None
+    try:
+        fd = os.open(path, flags)
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != (path_info.st_dev, path_info.st_ino)
+        ):
+            raise RuntimeError("changed path fingerprint unavailable")
         h = hashlib.sha256()
-        with open(path, "rb") as f:
+        handle = os.fdopen(fd, "rb")
+        fd = None
+        with handle as f:
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
                 h.update(chunk)
+            after = os.fstat(f.fileno())
+        final_path = os.lstat(path)
+        if (
+            after.st_size != opened.st_size
+            or after.st_mtime_ns != opened.st_mtime_ns
+            or after.st_ctime_ns != opened.st_ctime_ns
+            or not stat.S_ISREG(final_path.st_mode)
+            or (final_path.st_dev, final_path.st_ino) != (opened.st_dev, opened.st_ino)
+        ):
+            raise RuntimeError("changed path fingerprint unavailable")
         return "sha256:" + h.hexdigest()
-    except OSError:
-        return None
+    except OSError as exc:
+        raise RuntimeError("changed path fingerprint unavailable") from exc
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _has_git_metadata(repo_root):
+    git_path = os.path.join(repo_root, ".git")
+    roots = _REQUEST_GIT_ROOTS.get()
+    return (
+        os.path.isfile(git_path)
+        or os.path.isfile(os.path.join(git_path, "HEAD"))
+        or roots is not None and os.path.realpath(repo_root) in roots
+    )
+
+
+def _git_path_snapshot(repo_root, argument, *, use_cache=True):
+    cache = _review_snapshot_cache()
+    cache_key = ("git_path_snapshot", os.path.realpath(repo_root), argument)
+    if use_cache and cache is not None and cache_key in cache:
+        return cache[cache_key]
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--path-format=absolute", argument],
+            cwd=repo_root, capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("Git submodule snapshot unavailable") from exc
+    value = str(result.stdout or "").strip()
+    if result.returncode != 0 or not value or not os.path.isabs(value):
+        raise RuntimeError("Git submodule snapshot unavailable")
+    value = os.path.abspath(value)
+    if use_cache and cache is not None:
+        cache[cache_key] = value
+    return value
+
+
+def _validate_submodule_git_metadata(repo_root, sub_root, git_info):
+    git_path = os.path.join(sub_root, ".git")
+    binding_material = []
+    if stat.S_ISDIR(git_info.st_mode):
+        if os.path.realpath(git_path) != os.path.abspath(git_path):
+            raise RuntimeError("Git submodule snapshot unavailable")
+        resolved_gitdir = os.path.abspath(git_path)
+        binding_material.append(f"dir:{git_info.st_dev}:{git_info.st_ino}")
+    else:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        fd = None
+        try:
+            fd = os.open(git_path, flags)
+            opened = os.fstat(fd)
+            if (
+                not stat.S_ISREG(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != (git_info.st_dev, git_info.st_ino)
+            ):
+                raise RuntimeError("Git submodule snapshot unavailable")
+            raw = os.read(fd, 4097)
+            after = os.fstat(fd)
+            final_path = os.lstat(git_path)
+            if (
+                len(raw) > 4096
+                or after.st_size != opened.st_size
+                or after.st_mtime_ns != opened.st_mtime_ns
+                or after.st_ctime_ns != opened.st_ctime_ns
+                or not stat.S_ISREG(final_path.st_mode)
+                or (final_path.st_dev, final_path.st_ino) != (opened.st_dev, opened.st_ino)
+            ):
+                raise RuntimeError("Git submodule snapshot unavailable")
+        except OSError as exc:
+            raise RuntimeError("Git submodule snapshot unavailable") from exc
+        finally:
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        line = os.fsdecode(raw).strip()
+        if not line.startswith("gitdir: "):
+            raise RuntimeError("Git submodule snapshot unavailable")
+        target = line[len("gitdir: "):].strip()
+        if not target:
+            raise RuntimeError("Git submodule snapshot unavailable")
+        target = os.path.abspath(
+            target if os.path.isabs(target) else os.path.join(sub_root, target)
+        )
+        target_real = os.path.realpath(target)
+        parent_common = _git_path_snapshot(repo_root, "--git-common-dir")
+        parent_common_real = os.path.realpath(parent_common)
+        try:
+            confined = os.path.commonpath([target_real, parent_common_real]) == parent_common_real
+        except ValueError:
+            confined = False
+        if (
+            target != target_real
+            or parent_common != parent_common_real
+            or not confined
+            or not os.path.isdir(target)
+        ):
+            raise RuntimeError("Git submodule snapshot unavailable")
+        resolved_gitdir = target_real
+        binding_material.append(
+            "file:"
+            + str(git_info.st_dev)
+            + ":"
+            + str(git_info.st_ino)
+            + ":"
+            + hashlib.sha256(raw).hexdigest()
+        )
+
+    reported_worktree = _git_path_snapshot(
+        sub_root, "--show-toplevel", use_cache=False,
+    )
+    if os.path.realpath(reported_worktree) != os.path.realpath(sub_root):
+        raise RuntimeError("Git submodule snapshot unavailable")
+    try:
+        final_git = os.lstat(git_path)
+    except OSError as exc:
+        raise RuntimeError("Git submodule snapshot unavailable") from exc
+    if (
+        final_git.st_mode != git_info.st_mode
+        or (final_git.st_dev, final_git.st_ino) != (git_info.st_dev, git_info.st_ino)
+    ):
+        raise RuntimeError("Git submodule snapshot unavailable")
+    binding_material.append(resolved_gitdir)
+    return "|".join(binding_material), resolved_gitdir
+
+
+def _submodule_metadata_binding(repo_root, sub_root):
+    try:
+        git_info = os.lstat(os.path.join(sub_root, ".git"))
+    except OSError as exc:
+        raise RuntimeError("Git submodule snapshot unavailable") from exc
+    if stat.S_ISLNK(git_info.st_mode) or not (
+        stat.S_ISREG(git_info.st_mode) or stat.S_ISDIR(git_info.st_mode)
+    ):
+        raise RuntimeError("Git submodule snapshot unavailable")
+    return _validate_submodule_git_metadata(repo_root, sub_root, git_info)
+
+
+def _validated_submodule_root(repo_root, relpath, *, allow_missing=False):
+    """Return an initialized submodule root without following worktree symlinks."""
+    canonical = _canonical_git_relpath(relpath).rstrip("/")
+    if (
+        not canonical
+        or os.path.isabs(canonical)
+        or canonical == ".."
+        or canonical.startswith("../")
+    ):
+        raise RuntimeError("Git submodule snapshot unavailable")
+    current = repo_root
+    for component in canonical.split("/"):
+        if component in ("", ".", ".."):
+            raise RuntimeError("Git submodule snapshot unavailable")
+        current = os.path.join(current, component)
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            if allow_missing:
+                return None, None
+            raise RuntimeError("Git submodule snapshot unavailable")
+        except OSError as exc:
+            raise RuntimeError("Git submodule snapshot unavailable") from exc
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise RuntimeError("Git submodule snapshot unavailable")
+    try:
+        git_info = os.lstat(os.path.join(current, ".git"))
+    except FileNotFoundError:
+        if allow_missing:
+            return None, None
+        raise RuntimeError("Git submodule snapshot unavailable")
+    except OSError as exc:
+        raise RuntimeError("Git submodule snapshot unavailable") from exc
+    if stat.S_ISLNK(git_info.st_mode) or not (
+        stat.S_ISREG(git_info.st_mode) or stat.S_ISDIR(git_info.st_mode)
+    ):
+        raise RuntimeError("Git submodule snapshot unavailable")
+    _validate_submodule_git_metadata(repo_root, current, git_info)
+    return current, info
+
+
+def _submodule_gitlink_fingerprint(repo_root, relpath):
+    entry = _gitlink_index_snapshot(repo_root).get(relpath)
+    if not entry:
+        raise RuntimeError("Git submodule snapshot unavailable")
+    index_oid, initialized = entry
+    if not initialized:
+        return f"gitlink:index:{index_oid}:uninitialized"
+    sub_root, before = _validated_submodule_root(repo_root, relpath)
+    binding_before, git_dir = _submodule_metadata_binding(repo_root, sub_root)
+    head = _git_head_snapshot(
+        sub_root, git_dir=git_dir, use_cache=False,
+    )
+    binding_after, _ = _submodule_metadata_binding(repo_root, sub_root)
+    if binding_after != binding_before:
+        raise RuntimeError("Git submodule snapshot unavailable")
+    _validated_submodule_root(repo_root, relpath)
+    try:
+        after = os.lstat(sub_root)
+    except OSError as exc:
+        raise RuntimeError("Git submodule snapshot unavailable") from exc
+    if (
+        not stat.S_ISDIR(after.st_mode)
+        or stat.S_ISLNK(after.st_mode)
+        or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+    ):
+        raise RuntimeError("Git submodule snapshot unavailable")
+    return (
+        f"gitlink:index:{index_oid}:checkout:{head}:"
+        f"worktree:{after.st_dev}:{after.st_ino}"
+    )
+
+
+def _uncached_git_changed_paths(repo_root):
+    """Read changed repository-relative path names from Git once."""
+    if _has_git_metadata(repo_root):
+        _remember_git_root(repo_root)
+    changed = set()
+    commands = (
+        ["git", "-c", f"safe.directory={repo_root}", "diff", "--name-only", "-z", "HEAD"],
+        ["git", "-c", f"safe.directory={repo_root}", "diff", "--cached", "--name-only", "-z", "HEAD"],
+        ["git", "-c", f"safe.directory={repo_root}", "ls-files", "--others", "--exclude-standard", "-z"],
+    )
+    for cmd in commands:
+        try:
+            r = subprocess.run(
+                cmd, capture_output=True, cwd=repo_root, timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            if not _has_git_metadata(repo_root):
+                return set()
+            raise RuntimeError("Git changed-path snapshot unavailable") from exc
+        if r.returncode != 0:
+            if not _has_git_metadata(repo_root):
+                return set()
+            raise RuntimeError("Git changed-path snapshot unavailable")
+        raw_output = r.stdout
+        if isinstance(raw_output, bytes):
+            paths = (os.fsdecode(item) for item in raw_output.split(b"\0"))
+        else:
+            paths = str(raw_output or "").split("\0")
+        changed.update(path for path in paths if path)
+    return changed
 
 
 def _git_changed_paths(repo_root, prefix="", with_fingerprints=False):
-    changed = {} if with_fingerprints else set()
-    commands = (
-        ["git", "-c", f"safe.directory={repo_root}", "diff", "--name-only", "HEAD"],
-        ["git", "-c", f"safe.directory={repo_root}", "diff", "--cached", "--name-only", "HEAD"],
-        ["git", "-c", f"safe.directory={repo_root}", "ls-files", "--others", "--exclude-standard"],
-    )
-    for cmd in commands:
-        r = subprocess.run(cmd, capture_output=True, text=True, cwd=repo_root)
-        if r.returncode == 0:
-            for line in r.stdout.splitlines():
-                path = line.strip()
-                if path:
-                    rel = (prefix + path).replace("\\", "/")
-                    if with_fingerprints:
-                        changed[rel] = _fingerprint_path(repo_root, path)
-                    else:
-                        changed.add(rel)
+    cache = _review_snapshot_cache()
+    root_key = ("git_changed_path_names", os.path.realpath(repo_root))
+    if cache is not None and root_key in cache:
+        raw_paths = set(cache[root_key])
+    else:
+        raw_paths = _uncached_git_changed_paths(repo_root)
+        if cache is not None:
+            cache[root_key] = frozenset(raw_paths)
+
+    if not with_fingerprints:
+        return {prefix + path for path in raw_paths}
+
+    cache_key = ("git_changed_path_fingerprints", os.path.realpath(repo_root), prefix)
+    if cache is not None and cache_key in cache:
+        return dict(cache[cache_key])
+    changed = {
+        prefix + path: _fingerprint_path(repo_root, path)
+        for path in raw_paths
+    }
+    if cache is not None:
+        cache[cache_key] = dict(changed)
     return changed
 
 
@@ -2363,15 +2779,47 @@ def _baseline_file(task_dir):
 
 def _changed_path_fingerprints(repo_root):
     changed = _git_changed_paths(repo_root, with_fingerprints=True)
-    for sub_path in _initialized_submodule_paths(repo_root):
-        sub_root = os.path.join(repo_root, sub_path)
-        if os.path.isdir(sub_root):
-            changed.update(_git_changed_paths(
-                sub_root,
-                prefix=sub_path.rstrip("/") + "/",
-                with_fingerprints=True,
-            ))
+    for sub_path, (_, initialized) in _gitlink_index_snapshot(repo_root).items():
+        changed[sub_path] = _submodule_gitlink_fingerprint(repo_root, sub_path)
+        if not initialized:
+            continue
+        sub_root, _ = _validated_submodule_root(repo_root, sub_path)
+        changed.update(_git_changed_paths(
+            sub_root,
+            prefix=sub_path.rstrip("/") + "/",
+            with_fingerprints=True,
+        ))
+        _validated_submodule_root(repo_root, sub_path)
     return changed
+
+
+def _git_head_snapshot(repo_root, *, git_dir=None, use_cache=True):
+    """Return an exact repository HEAD for source snapshot comparison."""
+    cache = _review_snapshot_cache()
+    cache_key = (
+        "git_head_snapshot",
+        os.path.realpath(repo_root),
+        os.path.realpath(git_dir) if git_dir else "",
+    )
+    if use_cache and cache is not None and cache_key in cache:
+        return cache[cache_key]
+    command = ["git"]
+    if git_dir:
+        command.extend([f"--git-dir={git_dir}", f"--work-tree={repo_root}"])
+    command.extend(["rev-parse", "--verify", "HEAD"])
+    try:
+        result = subprocess.run(
+            command,
+            cwd=repo_root, capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("Git HEAD snapshot unavailable") from exc
+    head = result.stdout.strip() if result.returncode == 0 else ""
+    if not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", head):
+        raise RuntimeError("Git HEAD snapshot unavailable")
+    if use_cache and cache is not None:
+        cache[cache_key] = head
+    return head
 
 
 def capture_task_baseline(task_dir, repo_root=None):
@@ -2437,24 +2885,83 @@ def _filter_baseline_unchanged(task_dir, repo_root, changed):
     return out
 
 
-def _initialized_submodule_paths(repo_root):
-    r = subprocess.run(
-        ["git", "submodule", "status", "--recursive"],
-        capture_output=True, text=True, cwd=repo_root,
-    )
-    if r.returncode != 0:
-        return []
-    out = []
-    for line in r.stdout.splitlines():
-        # Leading '-' means registered but not initialized.
-        if not line or line[0] == "-":
-            continue
-        parts = line.strip().split()
-        if len(parts) >= 2:
-            path = parts[1].strip()
-            if path and not path.startswith("-"):
-                out.append(path.rstrip("/"))
+def _gitlink_index_snapshot(repo_root):
+    cache = _review_snapshot_cache()
+    cache_key = ("gitlink_index_snapshot", os.path.realpath(repo_root))
+    if cache is not None and cache_key in cache:
+        return dict(cache[cache_key])
+
+    def walk(worktree, prefix, seen):
+        real_worktree = os.path.realpath(worktree)
+        if real_worktree in seen:
+            raise RuntimeError("Git submodule snapshot unavailable")
+        seen.add(real_worktree)
+        if _has_git_metadata(worktree):
+            _remember_git_root(worktree)
+        try:
+            result = subprocess.run(
+                ["git", "ls-files", "--stage", "-z"],
+                capture_output=True, cwd=worktree, timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            if not _has_git_metadata(worktree):
+                return {}
+            raise RuntimeError("Git submodule snapshot unavailable") from exc
+        if result.returncode != 0:
+            if not _has_git_metadata(worktree):
+                return {}
+            raise RuntimeError("Git submodule snapshot unavailable")
+
+        found = {}
+        raw_output = result.stdout
+        records = (
+            raw_output.split(b"\0")
+            if isinstance(raw_output, bytes)
+            else str(raw_output or "").split("\0")
+        )
+        for record in records:
+            if not record:
+                continue
+            tab = b"\t" if isinstance(record, bytes) else "\t"
+            metadata, separator, raw_path = record.partition(tab)
+            mode = (
+                metadata.split(b" ", 1)[0]
+                if isinstance(metadata, bytes)
+                else metadata.split(" ", 1)[0]
+            )
+            if not separator or mode not in (b"160000", "160000"):
+                continue
+            path = os.fsdecode(raw_path) if isinstance(raw_path, bytes) else raw_path
+            path = _canonical_git_relpath(path).rstrip("/")
+            if not path or os.path.isabs(path) or path == ".." or path.startswith("../"):
+                raise RuntimeError("Git submodule snapshot unavailable")
+            full_path = prefix + path
+            fields = metadata.split()
+            if len(fields) != 3 or fields[2] not in (b"0", "0"):
+                raise RuntimeError("Git submodule snapshot unavailable")
+            oid = os.fsdecode(fields[1]) if isinstance(fields[1], bytes) else fields[1]
+            if not re.fullmatch(r"[0-9a-fA-F]{40,64}", oid):
+                raise RuntimeError("Git submodule snapshot unavailable")
+            sub_root, _ = _validated_submodule_root(
+                worktree, path, allow_missing=True,
+            )
+            initialized = sub_root is not None
+            found[full_path] = (oid.lower(), initialized)
+            if initialized:
+                found.update(walk(sub_root, full_path + "/", seen))
+        return found
+
+    out = walk(repo_root, "", set())
+    if cache is not None:
+        cache[cache_key] = dict(out)
     return out
+
+
+def _initialized_submodule_paths(repo_root):
+    return [
+        path for path, (_, initialized) in _gitlink_index_snapshot(repo_root).items()
+        if initialized
+    ]
 
 
 def sync_from_git_diff(task_dir):
@@ -2473,9 +2980,11 @@ def sync_from_git_diff(task_dir):
     repo_root = find_repo_root(task_dir)
     changed = _git_changed_paths(repo_root)
     for sub_path in _initialized_submodule_paths(repo_root):
-        sub_root = os.path.join(repo_root, sub_path)
-        if os.path.isdir(sub_root):
-            changed.update(_git_changed_paths(sub_root, prefix=sub_path.rstrip("/") + "/"))
+        sub_root, _ = _validated_submodule_root(repo_root, sub_path)
+        changed.update(_git_changed_paths(
+            sub_root, prefix=sub_path.rstrip("/") + "/",
+        ))
+        _validated_submodule_root(repo_root, sub_path)
     changed = _filter_baseline_unchanged(task_dir, repo_root, changed)
     if not changed:
         return []

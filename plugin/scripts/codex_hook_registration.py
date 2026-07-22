@@ -23,6 +23,22 @@ class _RegistrationTimeout(Exception):
     pass
 
 
+def _harness_enabled_cwd(cwd: str) -> bool:
+    """Check setup only at the nearest containing Git repository root."""
+    current = os.path.realpath(cwd)
+    while True:
+        if os.path.isdir(os.path.join(current, ".git")) or os.path.isfile(
+            os.path.join(current, ".git")
+        ):
+            return os.path.isfile(
+                os.path.join(current, "doc", "harness", "manifest.yaml")
+            )
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
+
+
 def _ensure_with_deadline(cwd: str, thread_id: str, deadline: float) -> bool:
     """Interrupt the complete registration attempt at its wall-clock budget."""
     remaining = deadline - time.monotonic()
@@ -117,7 +133,7 @@ def restore_watcher_registration(
     only future subagent starts. It never reconstructs already-finished work.
     """
     cwd, thread_id = _registration_identity(payload)
-    if not cwd or not thread_id:
+    if not cwd or not thread_id or not _harness_enabled_cwd(cwd):
         return False
     started = time.monotonic()
     deadline = started + max(0.0, float(budget_seconds))

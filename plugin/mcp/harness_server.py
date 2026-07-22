@@ -87,6 +87,8 @@ from _lib import (  # type: ignore
     write_active_marker, clear_active_marker,
     receipt_runtime_verdict, subagent_receipt_summary, record_subagent_receipt,
     receipt_review_verdict, review_receipt_summary, required_review_lenses,
+    review_snapshot_scope, refresh_review_snapshot, receipt_stream_fingerprint,
+    _changed_path_fingerprints, _git_head_for_receipt,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
 )
@@ -575,110 +577,168 @@ def handle_goal_finish(args: dict) -> dict:
 def handle_task_context(args: dict) -> dict:
     ti = _req(args, "task_id")
     td = canonical_task_dir(task_id=ti)
-    ctx = emit_compact_context(td)
-    if "error" in ctx:
-        return _err("task_context failed", data=ctx)
-    return _ok({
-        "task_dir": td,
-        "task_context": ctx,
-        "subagent_receipts": subagent_receipt_summary(td),
-        "review_receipts": review_receipt_summary(td),
-    })
+    with review_snapshot_scope():
+        ctx = emit_compact_context(td)
+        if "error" in ctx:
+            return _err("task_context failed", data=ctx)
+        return _ok({
+            "task_dir": td,
+            "task_context": ctx,
+            "subagent_receipts": subagent_receipt_summary(td),
+            "review_receipts": review_receipt_summary(td),
+        })
 
 
 def handle_task_verify(args: dict) -> dict:
     ti = _req(args, "task_id")
     td = canonical_task_dir(task_id=ti)
-    sync_from_git_diff(td)
-    verify_run = None
-    if _truthy(args.get("run_commands")):
-        max_workers_raw = args.get("max_workers")
-        max_workers = int(max_workers_raw) if isinstance(max_workers_raw, int) and max_workers_raw > 0 else None
-        verify_run = _run_verify_runner(
-            td,
-            parallel=_truthy(args.get("parallel")) or args.get("parallel") is None,
-            max_workers=max_workers,
-        )
+    with review_snapshot_scope():
+        sync_from_git_diff(td)
+        verify_run = None
+        if _truthy(args.get("run_commands")):
+            max_workers_raw = args.get("max_workers")
+            max_workers = int(max_workers_raw) if isinstance(max_workers_raw, int) and max_workers_raw > 0 else None
+            verify_run = _run_verify_runner(
+                td,
+                parallel=_truthy(args.get("parallel")) or args.get("parallel") is None,
+                max_workers=max_workers,
+            )
+            # Verification commands may mutate generated or source files.
+            refresh_review_snapshot()
 
-    stale, stale_path = _runtime_is_stale(td)
-    st = read_state(td)
-    effective_verdict = receipt_runtime_verdict(td, st)
-    if (st.get("runtime_verdict") or "pending").upper() != effective_verdict:
-        set_state_field(td, "runtime_verdict", effective_verdict if effective_verdict != "PENDING" else "pending")
+        stale, stale_path = _runtime_is_stale(td)
+        st = read_state(td)
+        effective_verdict = receipt_runtime_verdict(td, st)
+        if (st.get("runtime_verdict") or "pending").upper() != effective_verdict:
+            set_state_field(td, "runtime_verdict", effective_verdict if effective_verdict != "PENDING" else "pending")
 
-    ac_reconcile = {"promoted_acs": [], "reason": "not requested"}
-    if _truthy(args.get("reconcile_acs")):
-        ac_reconcile = _reconcile_acs_from_qa(td)
+        ac_reconcile = {"promoted_acs": [], "reason": "not requested"}
+        if _truthy(args.get("reconcile_acs")):
+            ac_reconcile = _reconcile_acs_from_qa(td)
 
-    st = read_state(td)
-    rv = receipt_runtime_verdict(td, st)
-    review_verdict = receipt_review_verdict(td, st)
-    ctx = emit_compact_context(td)
-    payload = {
-        "task_dir": td, "runtime_verdict": rv,
-        "touched_paths": st.get("touched_paths") or [],
-        "next_action": ctx.get("next_action", ""),
-        "missing_for_close": ctx.get("missing_for_close", []),
-        "report_path": _task_artifact_rel(td, "SUBAGENT_RECEIPTS.jsonl"),
-        "review_verdict": review_verdict,
-        "required_review_lenses": required_review_lenses(td, st),
-        "review_report_path": _task_artifact_rel(td, "REVIEW_RECEIPTS.jsonl"),
-        "stale": stale,
-        "stale_path": stale_path,
-        "ac_reconcile": ac_reconcile,
-        "subagent_receipts": subagent_receipt_summary(td),
-        "review_receipts": review_receipt_summary(td),
-    }
-    if verify_run is not None:
-        payload["verify_run"] = verify_run
-    return _ok(payload)
+        st = read_state(td)
+        rv = receipt_runtime_verdict(td, st)
+        review_verdict = receipt_review_verdict(td, st)
+        ctx = emit_compact_context(td)
+        payload = {
+            "task_dir": td, "runtime_verdict": rv,
+            "touched_paths": st.get("touched_paths") or [],
+            "next_action": ctx.get("next_action", ""),
+            "missing_for_close": ctx.get("missing_for_close", []),
+            "report_path": _task_artifact_rel(td, "SUBAGENT_RECEIPTS.jsonl"),
+            "review_verdict": review_verdict,
+            "required_review_lenses": required_review_lenses(td, st),
+            "review_report_path": _task_artifact_rel(td, "REVIEW_RECEIPTS.jsonl"),
+            "stale": stale,
+            "stale_path": stale_path,
+            "ac_reconcile": ac_reconcile,
+            "subagent_receipts": subagent_receipt_summary(td),
+            "review_receipts": review_receipt_summary(td),
+        }
+        if verify_run is not None:
+            payload["verify_run"] = verify_run
+        return _ok(payload)
 
 
 def handle_task_close(args: dict) -> dict:
     ti = _req(args, "task_id")
     td = canonical_task_dir(task_id=ti)
-    sync_from_git_diff(td)
-    ctx = emit_compact_context(td)
-    missing = ctx.get("missing_for_close") or []
-    stale, stale_path = _runtime_is_stale(td)
-    checks_status, blocking = _checks_gate_status(td)
-    if missing:
-        data = {
-            "task_dir": td, "missing_for_close": missing, "task_context": ctx,
-            "stale": stale, "stale_path": stale_path,
-        }
+    with review_snapshot_scope():
+        try:
+            sync_from_git_diff(td)
+            initial_snapshot = _changed_path_fingerprints(find_repo_root(td))
+        except RuntimeError:
+            return _err("task_close blocked: Git changed-path snapshot unavailable", data={
+                "task_dir": td, "git_snapshot_unavailable": True,
+            })
+        initial_head = _git_head_for_receipt(td)
+        ctx = emit_compact_context(td)
+        missing = ctx.get("missing_for_close") or []
+        stale, stale_path = _runtime_is_stale(td)
+        checks_status, blocking = _checks_gate_status(td)
+        if missing:
+            data = {
+                "task_dir": td, "missing_for_close": missing, "task_context": ctx,
+                "stale": stale, "stale_path": stale_path,
+            }
+            if checks_status == "blocked":
+                data["blocking_acs"] = blocking
+            return _err("task_close blocked", data=data)
+
+        if stale:
+            return _err("task_close blocked: runtime verification stale — re-run task_verify", data={
+                "task_dir": td, "stale_path": stale_path,
+            })
+
         if checks_status == "blocked":
-            data["blocking_acs"] = blocking
-        return _err("task_close blocked", data=data)
+            return _err("task_close blocked: CHECKS gate", data={
+                "task_dir": td, "blocking_acs": blocking,
+            })
 
-    if stale:
-        return _err("task_close blocked: runtime verification stale — re-run task_verify", data={
-            "task_dir": td, "stale_path": stale_path,
+        if not initial_head:
+            return _err("task_close blocked: Git HEAD unavailable", data={
+                "task_dir": td, "head_unavailable": True,
+            })
+
+        # Rebuild source-derived state and reread live receipts immediately
+        # before granting close. This catches changes during the first gate.
+        refresh_review_snapshot()
+        try:
+            final_receipts_before = receipt_stream_fingerprint(td)
+        except RuntimeError:
+            return _err("task_close blocked: receipt stream snapshot unavailable", data={
+                "task_dir": td, "receipt_snapshot_unavailable": True,
+            })
+        final_ctx = emit_compact_context(td)
+        final_missing = final_ctx.get("missing_for_close") or []
+        final_stale, final_stale_path = _runtime_is_stale(td)
+        final_checks_status, final_blocking = _checks_gate_status(td)
+        # The final gates can take long enough for an uncommitted edit to land.
+        # Rebuild once more after they finish, then compare the end snapshot.
+        refresh_review_snapshot()
+        try:
+            final_snapshot = _changed_path_fingerprints(find_repo_root(td))
+        except RuntimeError:
+            return _err("task_close blocked: final Git changed-path snapshot unavailable", data={
+                "task_dir": td, "git_snapshot_unavailable": True,
+            })
+        final_head = _git_head_for_receipt(td)
+        try:
+            final_receipts_after = receipt_stream_fingerprint(td)
+        except RuntimeError:
+            return _err("task_close blocked: final receipt stream snapshot unavailable", data={
+                "task_dir": td, "receipt_snapshot_unavailable": True,
+            })
+        receipt_stream_changed = final_receipts_after != final_receipts_before
+        snapshot_changed = final_snapshot != initial_snapshot
+        head_unavailable = not final_head
+        head_changed = final_head != initial_head
+        if receipt_stream_changed or snapshot_changed or head_unavailable or head_changed or final_missing or final_stale or final_checks_status == "blocked":
+            return _err("task_close blocked: final freshness changed — re-run task_verify", data={
+                "task_dir": td,
+                "receipt_stream_changed": receipt_stream_changed,
+                "snapshot_changed": snapshot_changed,
+                "head_unavailable": head_unavailable,
+                "head_changed": head_changed,
+                "missing_for_close": final_missing,
+                "task_context": final_ctx,
+                "stale": final_stale,
+                "stale_path": final_stale_path,
+                "blocking_acs": final_blocking if final_checks_status == "blocked" else [],
+            })
+
+        st = read_state(td)
+        st["status"] = "closed"
+        st["closed_at"] = now_iso()
+        st["updated"] = now_iso()
+        write_state(td, st)
+
+        clear_active_marker(find_repo_root(), td)
+        st = read_state(td)
+        return _ok({
+            "task_dir": td, "closed": True, "status": st.get("status"),
+            "gate_artifact": _task_artifact_rel(td, "PLAN.md"),
         })
-
-    # PR2 CHECKS gate: refuse close when any AC is non-terminal.
-    # Absent CHECKS.yaml → warn-log + proceed (pre-PR2 tasks).
-    if checks_status == "blocked":
-        return _err("task_close blocked: CHECKS gate", data={
-            "task_dir": td, "blocking_acs": blocking,
-        })
-    if checks_status == "absent":
-        # CHECKS.yaml absent → proceed silently for pre-PR2 task compatibility.
-        # Do not pollute learnings.jsonl — runtime alerts are not learnings.
-        pass
-
-    st = read_state(td)
-    st["status"] = "closed"
-    st["closed_at"] = now_iso()
-    st["updated"] = now_iso()
-    write_state(td, st)
-
-    clear_active_marker(find_repo_root(), td)
-    st = read_state(td)
-    return _ok({
-        "task_dir": td, "closed": True, "status": st.get("status"),
-        "gate_artifact": _task_artifact_rel(td, "PLAN.md"),
-    })
 
 
 def handle_task_blocked(args: dict) -> dict:

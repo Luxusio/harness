@@ -817,6 +817,78 @@ def test_validated_task_dir_rejects_symlinked_tasks_root(tmp_path):
     assert mod._validated_task_dir(str(attacker), "TASK__victim") == ""
 
 
+def test_validated_task_dir_accepts_root_owned_workspace_ancestors(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    task = repo / "doc/harness/tasks/TASK__root-workspace"
+    task.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (task / "TASK_STATE.yaml").write_text(
+        "task_id: TASK__root-workspace\nstatus: created\nruntime_verdict: pending\n"
+        "touched_paths: []\nplan_session_state: closed\nclosed_at: null\nupdated: now\n"
+    )
+    root_owned = {
+        repo / "doc",
+        repo / "doc/harness",
+        repo / "doc/harness/tasks",
+    }
+    original_lstat = mod.os.lstat
+
+    class RootOwnedStat:
+        def __init__(self, wrapped):
+            self._wrapped = wrapped
+            self.st_uid = 0
+
+        def __getattr__(self, name):
+            return getattr(self._wrapped, name)
+
+    def root_owned_ancestors(path):
+        result = original_lstat(path)
+        if Path(path) in root_owned:
+            return RootOwnedStat(result)
+        return result
+
+    with mock.patch.object(mod.os, "lstat", side_effect=root_owned_ancestors):
+        assert mod._validated_task_dir(
+            str(repo), "TASK__root-workspace",
+        ) == str(task.resolve())
+
+
+def test_validated_task_dir_rejects_writable_root_owned_ancestor(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    task = repo / "doc/harness/tasks/TASK__unsafe-root-workspace"
+    task.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (task / "TASK_STATE.yaml").write_text(
+        "task_id: TASK__unsafe-root-workspace\nstatus: created\n"
+        "runtime_verdict: pending\ntouched_paths: []\nplan_session_state: closed\n"
+        "closed_at: null\nupdated: now\n"
+    )
+    unsafe = repo / "doc/harness"
+    original_lstat = mod.os.lstat
+
+    class WritableRootStat:
+        def __init__(self, wrapped):
+            self._wrapped = wrapped
+            self.st_uid = 0
+            self.st_mode = wrapped.st_mode | 0o022
+
+        def __getattr__(self, name):
+            return getattr(self._wrapped, name)
+
+    def writable_root_ancestor(path):
+        result = original_lstat(path)
+        if Path(path) == unsafe:
+            return WritableRootStat(result)
+        return result
+
+    with mock.patch.object(mod.os, "lstat", side_effect=writable_root_ancestor):
+        assert mod._validated_task_dir(
+            str(repo), "TASK__unsafe-root-workspace",
+        ) == ""
+
+
 def test_watcher_binds_task_from_successful_root_mcp_context_without_session_marker(tmp_path, monkeypatch):
     mod = _load()
     codex_home = tmp_path / ".codex"

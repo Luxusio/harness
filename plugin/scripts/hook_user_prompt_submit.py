@@ -11,9 +11,13 @@ import time
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 try:
-    from codex_hook_registration import restore_watcher_registration  # type: ignore
+    from codex_hook_registration import (  # type: ignore
+        _harness_enabled_cwd,
+        restore_watcher_registration,
+    )
 except Exception:  # pragma: no cover - hook must fail open
     restore_watcher_registration = None
+    _harness_enabled_cwd = None
 
 HOOK_TIMEOUT_SECONDS = 8.0
 TOTAL_BUDGET_SECONDS = 7.0
@@ -37,16 +41,9 @@ def _payload_cwd(payload: bytes) -> str | None:
 
 def _is_harness_repo(cwd: str | None) -> bool:
     """Detect setup from the filesystem only; never invoke Git in a prompt hook."""
-    if not cwd:
+    if not cwd or _harness_enabled_cwd is None:
         return False
-    current = os.path.abspath(cwd)
-    while True:
-        if os.path.isfile(os.path.join(current, "doc", "harness", "manifest.yaml")):
-            return True
-        parent = os.path.dirname(current)
-        if parent == current:
-            return False
-        current = parent
+    return _harness_enabled_cwd(cwd)
 
 
 def main() -> int:

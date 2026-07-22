@@ -84,6 +84,30 @@ def test_prewrite_gate_noops_without_manifest(tmp_path: Path):
     _assert_no_harness_files(repo)
 
 
+def test_prewrite_gate_does_not_inherit_outer_manifest_for_gitfile_worktree(tmp_path: Path):
+    outer = _repo(tmp_path)
+    manifest = outer / "doc/harness/manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("type: cli\n", encoding="utf-8")
+    inner = outer / "plain-worktree"
+    inner.mkdir()
+    (inner / ".git").write_text(
+        "gitdir: ../.git/worktrees/plain-worktree\n", encoding="utf-8",
+    )
+    target = inner / "src/app.py"
+    payload = {
+        "cwd": str(inner),
+        "tool_name": "Write",
+        "tool_input": {"file_path": str(target), "content": "x = 1\n"},
+    }
+
+    result = _run("prewrite_gate.py", inner, payload)
+
+    assert result.returncode == 0
+    assert result.stdout == ""
+    assert not (inner / "doc/harness").exists()
+
+
 def test_tool_routing_noops_without_manifest(tmp_path: Path):
     repo = _repo(tmp_path)
     payload = {

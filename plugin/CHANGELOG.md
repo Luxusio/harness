@@ -6,7 +6,16 @@ All notable changes to the harness Claude Code plugin.
 
 ### Fixed
 
+- `task_context`, `task_verify`, and `task_close` now deduplicate source-derived Git and review-fingerprint work within each request. `task_close` clears the request cache, requires the changed-path fingerprint map, HEAD, and final-gate receipt streams to remain stable and available, and reruns all freshness gates immediately before closing. Failed or timed-out Git path snapshots now fail closed.
+- Git changed-path and receipt snapshots now use NUL-delimited names where applicable, preserve POSIX backslashes and other path identity end to end, fingerprint symlinks without following them, recheck pathname identity after reads, and reject unreadable or special path types instead of accepting ambiguous or blocking evidence.
+- Every parent-index gitlink OID is fingerprinted, including uninitialized submodules; initialized submodules also include checkout HEAD and worktree identity. Staged gitlink updates and clean checkout moves cannot evade review routing or close-time freshness comparison, and symlinked gitlink worktrees fail closed.
 - Codex root hooks now validate an existing lifecycle registration directly instead of recursively scanning every rollout and taking the registration lock on every event. Wrapper child work also shares an event-level deadline below the configured Codex hook timeout, preventing sequential gate checks from overrunning PreToolUse, UserPromptSubmit, or PostToolUse.
+- Codex lifecycle task binding now accepts non-group/other-writable root-owned workspace ancestors common in container mounts while retaining no-symlink checks and current-user ownership for the task directory itself.
+- Global Codex hooks no longer create or restore lifecycle watcher registrations in repositories without the nearest Git root's Harness setup manifest, so nested independent projects cannot inherit an outer opt-in.
+- Initialized submodule `.git` control files must resolve inside the parent Git common directory and report the validated worktree, preventing external gitdir traversal for direct and nested gitlinks.
+- Git-root detection consistently treats `.git` files as repository boundaries, and submodule worktree-binding validation is uncached so in-request gitdir retargeting fails closed.
+- Git roots confirmed earlier in a request cannot fall back to synthetic empty snapshots if metadata disappears, and submodule HEAD reads are explicitly bound to one validated gitdir/worktree tuple.
+- Harness setup detection canonicalizes symlinked working directories before selecting the nearest Git root, preventing lexical-path inheritance of an outer manifest.
 - Codex now exposes one implicitly invocable `$harness:run` entry skill for repository mutation; hooks, setup routing, and write-gate recovery point to it while plan/develop/review prompts stay internal.
 - Codex cachebuster installs preserve prior cache versions so hooks already loaded by running sessions keep valid executable paths until those sessions restart.
 - Review routing now treats `AGENTS.md` and `CLAUDE.md` as behavioral artifacts and scans committed changes from the task baseline, including deleted security-sensitive lines.
