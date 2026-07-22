@@ -6,6 +6,7 @@ All notable changes to the harness Claude Code plugin.
 
 ### Fixed
 
+- Claude and Codex developer/code/security reviewer prompts now share tested byte-identical behavioral cores. The developer follows Ponytail's trace-first necessity/reuse/stdlib/native/existing-dependency ladder and shared-root-cause proof loop, while reviewers add AC/scope claim verification, calibrated evidence, prompt-instruction isolation, and applicable filesystem/process/TOCTOU security lenses.
 - `task_context`, `task_verify`, and `task_close` now deduplicate source-derived Git and review-fingerprint work within each request. `task_close` clears the request cache, requires the changed-path fingerprint map, HEAD, and final-gate receipt streams to remain stable and available, and reruns all freshness gates immediately before closing. Failed or timed-out Git path snapshots now fail closed.
 - Git changed-path and receipt snapshots now use NUL-delimited names where applicable, preserve POSIX backslashes and other path identity end to end, fingerprint symlinks without following them, recheck pathname identity after reads, and reject unreadable or special path types instead of accepting ambiguous or blocking evidence.
 - Every parent-index gitlink OID is fingerprinted, including uninitialized submodules; initialized submodules also include checkout HEAD and worktree identity. Staged gitlink updates and clean checkout moves cannot evade review routing or close-time freshness comparison, and symlinked gitlink worktrees fail closed.

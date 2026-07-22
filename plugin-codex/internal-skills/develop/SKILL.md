@@ -82,7 +82,12 @@ The harness MCP does not tolerate mid-task stops. **Never halt with a bare BLOCK
 
 ## Model Routing
 
-On Claude, develop routes mechanical work to haiku and adversarial review cross-model. On Codex 0.130.0 the orchestrator runs the entire flow in a single conversation context — no model swap mid-skill. The mechanical-vs-strategic distinction still exists in *what* the orchestrator does (lighter prose for completeness audit, heavier reasoning for adversarial review) but not in *which* model does it. v2 will revisit if Codex multi_agent ergonomics make swap-mid-skill cheap.
+On Claude, develop routes mechanical work to haiku and adversarial review
+cross-model. On Codex, route from the capabilities exposed by the current
+session: keep dependent implementation in the coordinator, use spawned workers
+for bounded independent ACs when available, and require spawned independent
+review/QA lenses when the runtime exposes them. Do not hard-code a Codex version
+or assume the whole flow must run in one conversation context.
 
 ## Flow
 

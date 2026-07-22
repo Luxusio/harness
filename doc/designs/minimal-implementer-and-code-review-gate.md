@@ -1,10 +1,10 @@
 ---
 date: 2026-07-20
-status: proposed
+status: accepted
 scope: harness develop workflow
 references:
   ponytail: 16f29800fd2681bdf24f3eb4ccffe38be3baec6b
-  gstack: a3259400a366593e0c909dd9ac3e59752efd2488
+  gstack: a7593d70ef1b6500d1f6457c58cf7c9896cf6062
   oh-my-claudecode: 21a6e488ce12d79b9a22d37e1093ac8e79f21029
 ---
 
@@ -46,6 +46,11 @@ dependency, use the smallest local expression, and only then add new code.
 It requires reading and tracing the real flow before choosing the smallest
 solution. It explicitly refuses to simplify away trust-boundary validation,
 data-loss prevention, security, accessibility, or requested behavior.
+The stronger operational rules are equally important: inspect direct and
+sibling callers before a bug fix, place one correction at the shared root
+cause, prefer deletion and boring existing primitives only after comprehension,
+choose edge-case correctness over a flimsier short form, and leave one focused
+runnable check for non-trivial behavior.
 
 Its `ponytail-review` is deliberately narrow: it reports only deletion and
 simplification opportunities and leaves correctness and security to separate
@@ -57,13 +62,21 @@ Adopt:
 
 - the implementation ladder;
 - search and trace before editing;
+- shared-root-cause fixes after inspecting affected callers;
+- deletion, reuse, and boring clear primitives when they preserve the complete
+  requested behavior;
 - no speculative abstraction, dependency, configuration, or defense;
 - explicit exceptions for current trust boundaries and failure risks;
+- one proportionate runnable regression check for non-trivial behavior;
 - a deletion/simplification lens in review.
 
 Do not adopt:
 
 - raw line count as the implementation objective;
+- forced one-liners, max-three-line handoffs, intensity/session modes,
+  framework-free tests, or source-code `ponytail:` comments;
+- shipping a reduced interpretation and asking later when PLAN/user intent
+  already requires the complete behavior;
 - Ponytail injection into QA or reviewers;
 - a simplification-only review as the completion gate.
 
@@ -84,6 +97,8 @@ Adopt:
 - scope-triggered specialists and parallel dispatch;
 - freshness metadata and cross-review synthesis;
 - separate `FIX_NOW` and `INVESTIGATE` outcomes.
+- AC-to-diff/test/doc scope auditing, claim verification before findings, and
+  confidence calibration that suppresses unsupported blockers.
 
 Adapt:
 
@@ -124,15 +139,16 @@ Do not adopt directly:
 | Harness role / mechanism | Behavior adopted | Primary reference | Harness adaptation |
 |--------------------------|------------------|-------------------|--------------------|
 | `harness:developer` and `harness:ac-worker` | Understand the real flow first; then stop at no change, reuse, stdlib, platform, installed dependency, smallest local expression, minimum new code | Ponytail `skills/ponytail/SKILL.md` | Named **minimum sufficient**, not minimum LOC; applied only to mutating implementers |
+| `harness:developer` | Inspect direct/sibling callers, fix a bug once at the shared root cause, prefer deletion and boring clear primitives, and leave one runnable check for non-trivial logic | Ponytail `skills/ponytail/SKILL.md` | PLAN/user intent remains authoritative; no forced one-liners, reduced scope, or framework-free testing |
 | `harness:developer` and `harness:ac-worker` | Do not simplify away trust-boundary validation, data-loss prevention, security, accessibility, or requested behavior | Ponytail `skills/ponytail/SKILL.md` | Expanded to current authorization, transaction, concurrency, cleanup, and error-propagation invariants |
 | `harness:code-reviewer` | Read-only independent reviewer; spec compliance before quality; every finding has source evidence, severity, confidence, and a clear verdict | oh-my-claudecode `agents/code-reviewer.md` | Removed generic SOLID/function-length thresholds and positive-commentary requirements; added project-scale proportionality |
 | `harness:code-reviewer` minimality lens | Report deletion, reuse, native/stdlib replacement, and speculative abstraction | Ponytail `skills/ponytail-review/SKILL.md` | Made it one paired lens inside a broader correctness/architecture review instead of a standalone completion verdict |
-| `harness:code-reviewer` adversarial lens | Always examine production failure, races, leaks, silent corruption, swallowed errors, and trust-boundary violations | gstack `ship/sections/adversarial.md` | Required for every source diff; unlike gstack's informational fallback, missing review fails closed |
-| Review finding verification | Require exact motivating code, confidence calibration, and suppress unsupported speculation from blocking output | gstack `review/checklist.md` and `ship/sections/review-army.md` | Added `direction: excess|missing` and `disposition: FIX_NOW|INVESTIGATE|OPTIONAL`; only `FIX_NOW` enters the implementation loop |
+| `harness:code-reviewer` adversarial lens | Always examine production failure, races, leaks, silent corruption, swallowed errors, and trust-boundary violations | gstack `ship/SKILL.md` | Required for every source diff; unlike gstack's informational fallback, missing review fails closed |
+| Review finding verification | Require exact motivating code, AC/scope cross-reference, search-before-recommending, confidence calibration, and suppress unsupported speculation from blocking output | gstack `review/checklist.md` and `review/SKILL.md` | Added `direction: excess|missing` and `disposition: FIX_NOW|INVESTIGATE|OPTIONAL`; only strongly evidenced `FIX_NOW` enters the implementation loop |
 | `harness:security-reviewer` | Separate read-only OWASP/trust-boundary specialist prioritizing exploitability and blast radius | oh-my-claudecode `agents/security-reviewer.md` | Runs conditionally from path **or diff-content** signals; baseline security remains in the always-on code reviewer |
-| Security specialist routing | Security and migration are insurance controls and must not be disabled by historical zero findings | gstack `ship/sections/review-army.md` | Security remains conditional on current scope but is never adaptive-hit-rate gated |
+| Security specialist routing | Security and migration are insurance controls and must not be disabled by historical zero findings | gstack `ship/SKILL.md` | Security remains conditional on current scope but is never adaptive-hit-rate gated |
 | Review/QA role separation | Architecture, security, quality review, and runtime QA are independent responsibilities | oh-my-claudecode `skills/autopilot/SKILL.md` | Uses one balanced reviewer plus conditional security specialist to reduce duplicate findings; QA remains a later distinct gate |
-| Lifecycle freshness and synthesis | Persist reviewed revision, run independent reviewer contexts, and prioritize corroborated findings | gstack `ship/sections/adversarial.md` | Stores hook-owned `HEAD` plus uncommitted worktree fingerprint; any edit invalidates review and requires later QA |
+| Lifecycle freshness and synthesis | Persist reviewed revision, run independent reviewer contexts, and prioritize corroborated findings | gstack `ship/SKILL.md` | Stores hook-owned `HEAD` plus uncommitted worktree fingerprint; any edit invalidates review and requires later QA |
 | Reviewer persona propagation | Parent context does not reliably reach subagents; explicitly inject or scope the role | Ponytail `hooks/ponytail-subagent.js` | Reviewer and implementer prompts are named role files on Claude and explicit methodology references in Codex spawn prompts |
 
 These are behavioral references, not vendored dependencies. Harness owns the
@@ -159,6 +175,11 @@ The implementer must:
 6. leave the smallest meaningful regression check for non-trivial behavior;
 7. report only the skipped complexity and the concrete condition that would
    justify adding it later.
+8. inspect direct and sibling callers for a bug and fix the shared root cause;
+9. prefer deletion and boring clear existing primitives after comprehension,
+   while choosing correctness over a shorter but flimsier expression;
+10. use the project's existing test conventions for one focused runnable check
+    of non-trivial branches, parsers, concurrency, security, or data-loss paths.
 
 The prompt must say “minimum sufficient”, never “fewest lines”. Dense code,
 removed error handling, and missing tests are not accepted as minimalism.
@@ -182,6 +203,13 @@ It owns five paired lenses:
 The review must not recommend an abstraction merely because a design principle
 can be named. It may require one only when current code has multiple consumers,
 duplicated policy, a documented boundary, or a volatile external interface.
+
+Before the paired lenses, the reviewer maps every CHECKS acceptance criterion
+to code, test, and durable-doc evidence, and maps every material changed path
+back to approved scope. It verifies suggested replacements against the current
+project before recommending them. Confidence below the blocking threshold
+becomes a named investigation, non-blocking optional note, or is omitted rather
+than entering a speculative fix loop.
 
 The reviewer never edits. For every proposed addition or deletion it must give:
 
@@ -215,6 +243,14 @@ reviewer covers applicable trust boundaries, exploitability, and blast radius;
 it does not report style or general refactoring advice. Security review is an
 insurance control and is never disabled due to a low historical hit rate.
 
+For local tools, hooks, plugins, installers, and repository code, the applicable
+security surface includes physical versus lexical paths, symlink components,
+gitfile/worktree/submodule/nested-repository boundaries, metadata confinement,
+TOCTOU identity and type revalidation, ownership and writable modes, subprocess
+argv/shell/environment/cwd handling, and hook/model/tool output provenance and
+freshness. These are conditional lenses: a finding still needs a concrete
+attack, concurrent-writer, corruption, privilege, or present failure path.
+
 ### 4. QA agents: unchanged responsibility, later in the flow
 
 `qa-api`, `qa-browser`, `qa-cli`, and `qa-desktop` continue to own runtime and
@@ -243,6 +279,9 @@ Update these prompt surfaces:
    await, parse verdict, record receipt, fix, and re-review.
 6. Scope any Ponytail-like prompt injection to implementer agents only. Never
    inject it globally into QA, security, or balanced review agents.
+7. Keep each Claude/Codex role prompt standalone, delimit its behavioral core
+   with `harness:role-core` markers, require byte-identical cores in tests, and
+   keep runtime-specific frontmatter or routing notes outside the core.
 
 Prompt rules alone are advisory. Hook and close-gate enforcement must reject a
 missing, incomplete, self-authored, or stale review.
@@ -362,11 +401,10 @@ Refactor it as follows:
 
 ## Reference files inspected
 
-- Ponytail: `skills/ponytail/SKILL.md`,
+- Ponytail (`https://github.com/DietrichGebert/ponytail`): `skills/ponytail/SKILL.md`,
   `skills/ponytail-review/SKILL.md`, `hooks/ponytail-subagent.js`
-- gstack: `review/SKILL.md`, `review/checklist.md`,
-  `review/specialists/*.md`, `ship/sections/adversarial.md`,
-  `ship/sections/review-army.md`
+- gstack (`https://github.com/garrytan/gstack`): `review/SKILL.md`,
+  `review/checklist.md`, `review/specialists/*.md`, and `ship/SKILL.md`
 - oh-my-claudecode: `agents/architect.md`, `agents/code-reviewer.md`,
   `agents/security-reviewer.md`, `agents/code-simplifier.md`,
   `skills/autopilot/SKILL.md`, `src/verification/tier-selector.ts`
