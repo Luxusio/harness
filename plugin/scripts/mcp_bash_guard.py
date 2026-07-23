@@ -52,6 +52,7 @@ REDIRECT_TOKENS = {">", ">>", "1>", "1>>"}
 # Note: 2> stderr redirect is intentionally NOT blocked — logs are common.
 
 LAST_ARG_MUTATORS = {"cp", "mv", "install", "touch", "truncate"}
+DELETE_MUTATORS = {"rm", "unlink"}
 TEE_COMMAND = "tee"
 
 # Shell operators that separate command units. We shlex-tokenize first
@@ -209,6 +210,12 @@ def _process_segment(segment_tokens, targets, repo_root):
         return
     if cmd in LAST_ARG_MUTATORS:
         _append_target(targets, _last_non_option(non_env), cmd, repo_root)
+        return
+    if cmd in DELETE_MUTATORS:
+        for token in non_env[1:]:
+            if token == "--" or token.startswith("-"):
+                continue
+            _append_target(targets, token, cmd, repo_root)
         return
     if cmd == TEE_COMMAND:
         for token in non_env[1:]:

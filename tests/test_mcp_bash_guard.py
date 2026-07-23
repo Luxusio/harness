@@ -47,6 +47,8 @@ MUTATION_VERBS_SOURCE = [
     ("install", f"install -m644 /tmp/foo {SRC_PATH}"),
     ("touch", f"touch {SRC_PATH}"),
     ("truncate", f"truncate -s0 {SRC_PATH}"),
+    ("rm", f"rm -f {SRC_PATH}"),
+    ("unlink", f"unlink {SRC_PATH}"),
     ("tee", f"echo x | tee {SRC_PATH}"),
     ("python-open-w", f"python3 -c \"open('{SRC_PATH}','w')\""),
     ("python-path-write-text",
@@ -130,6 +132,24 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             self.assertEqual(decision, "deny")
             self.assertIn("rule=protected-artifact", reason)
             self.assertIn("task-start runtime", reason)
+
+    def test_rm_cannot_delete_baseline_and_requirement_together(self):
+        with scratch_task_in_real_repo("baseline-delete-prot") as task_dir:
+            baseline = os.path.join(task_dir, "TASK_BASELINE.json")
+            marker = os.path.join(task_dir, "TASK_BASELINE.required")
+            r = _run_bash(f"rm -f -- {baseline} {marker}")
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("rule=protected-artifact", reason)
+            self.assertIn("task-start runtime", reason)
+
+    def test_unlink_cannot_delete_baseline_requirement(self):
+        with scratch_task_in_real_repo("baseline-unlink-prot") as task_dir:
+            marker = os.path.join(task_dir, "TASK_BASELINE.required")
+            r = _run_bash(f"unlink -- {marker}")
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("rule=protected-artifact", reason)
 
 
 class TestEnvPrefixBypassFix(unittest.TestCase):
