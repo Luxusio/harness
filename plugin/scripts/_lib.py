@@ -25,6 +25,7 @@ MANIFEST_PATH = "doc/harness/manifest.yaml"
 TASK_BASELINE_NAME = "TASK_BASELINE.json"
 SUBAGENT_RECEIPTS_NAME = "SUBAGENT_RECEIPTS.jsonl"
 REVIEW_RECEIPTS_NAME = "REVIEW_RECEIPTS.jsonl"
+TASK_CLOSE_RECEIPT_NAME = "TASK_CLOSE_RECEIPT.json"
 CONVERSATION_NAME = "CONVERSATION.md"
 CONVERSATION_TEXT_CAP = 2000
 CONVERSATION_READ_CAP = 256 * 1024
@@ -678,6 +679,7 @@ def finish_harness_goal(repo_root: str, *, status: str = "complete") -> dict:
     if final_status == "complete":
         tasks = current.get("tasks") if isinstance(current.get("tasks"), list) else []
         blockers = []
+        validated = []
         if not tasks:
             blockers.append("no child tasks")
         for task in tasks:
@@ -685,6 +687,7 @@ def finish_harness_goal(repo_root: str, *, status: str = "complete") -> dict:
                 blockers.append("invalid child task entry")
                 continue
             task_id = str(task.get("task_id") or "")
+            task_dir = ""
             try:
                 task_dir = canonical_task_dir(
                     task_id=task_id,
@@ -696,11 +699,24 @@ def finish_harness_goal(repo_root: str, *, status: str = "complete") -> dict:
                 state = {}
             if (
                 task.get("status") != "closed"
+                or state.get("task_id") != task_id
                 or state.get("status") != "closed"
-                or receipt_runtime_verdict(task_dir, state) != "PASS"
-                or runtime_is_stale(task_dir)[0]
+                or str(state.get("runtime_verdict") or "").upper() != "PASS"
+                or not task_close_attestation_valid(task_dir, state)
             ):
                 blockers.append(task_id or "<missing task_id>")
+            else:
+                validated.append((task_id, task_dir))
+        if not blockers:
+            for task_id, task_dir in validated:
+                final_state = read_state(task_dir)
+                if (
+                    final_state.get("task_id") != task_id
+                    or final_state.get("status") != "closed"
+                    or str(final_state.get("runtime_verdict") or "").upper() != "PASS"
+                    or not task_close_attestation_valid(task_dir, final_state)
+                ):
+                    blockers.append(task_id)
         if blockers:
             raise ValueError(
                 "goal completion blocked by unfinished or unverified child tasks: "
@@ -2103,6 +2119,60 @@ def receipt_stream_fingerprint(task_dir):
                     pass
         h.update(b"\0")
     return "sha256:" + h.hexdigest()
+
+
+def write_task_close_attestation(task_dir, state, *, head_sha, receipt_fingerprint):
+    """Persist the task_close evidence needed after later Goal work changes Git."""
+    payload = {
+        "version": 1,
+        "task_id": str(state.get("task_id") or ""),
+        "closed_at": str(state.get("closed_at") or ""),
+        "runtime_verdict": str(state.get("runtime_verdict") or "").upper(),
+        "head_sha": str(head_sha or ""),
+        "receipt_stream_fingerprint": str(receipt_fingerprint or ""),
+    }
+    if (
+        not re.fullmatch(r"TASK__[A-Za-z0-9._-]+", payload["task_id"])
+        or not payload["closed_at"]
+        or payload["runtime_verdict"] != "PASS"
+        or not re.fullmatch(r"[0-9a-f]{40}", payload["head_sha"])
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", payload["receipt_stream_fingerprint"])
+    ):
+        raise ValueError("invalid task close attestation inputs")
+    _atomic_json_write(os.path.join(task_dir, TASK_CLOSE_RECEIPT_NAME), payload)
+    return payload
+
+
+def clear_task_close_attestation(task_dir):
+    try:
+        os.unlink(os.path.join(task_dir, TASK_CLOSE_RECEIPT_NAME))
+    except FileNotFoundError:
+        pass
+
+
+def task_close_attestation_valid(task_dir, state):
+    if not task_dir:
+        return False
+    payload = _read_json_file(
+        os.path.join(task_dir, TASK_CLOSE_RECEIPT_NAME),
+        max_size=16 * 1024,
+    )
+    if (
+        payload.get("version") != 1
+        or payload.get("task_id") != state.get("task_id")
+        or payload.get("closed_at") != state.get("closed_at")
+        or payload.get("runtime_verdict") != "PASS"
+        or not re.fullmatch(r"[0-9a-f]{40}", str(payload.get("head_sha") or ""))
+        or not re.fullmatch(
+            r"sha256:[0-9a-f]{64}",
+            str(payload.get("receipt_stream_fingerprint") or ""),
+        )
+    ):
+        return False
+    try:
+        return receipt_stream_fingerprint(task_dir) == payload["receipt_stream_fingerprint"]
+    except RuntimeError:
+        return False
 
 
 def _infer_receipt_lens(agent_type, explicit_lens=""):

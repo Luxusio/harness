@@ -90,6 +90,7 @@ from _lib import (  # type: ignore
     receipt_review_verdict, review_receipt_summary, required_review_lenses,
     review_snapshot_scope, refresh_review_snapshot, receipt_stream_fingerprint,
     _changed_path_fingerprints, _git_head_for_receipt,
+    write_task_close_attestation, clear_task_close_attestation,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
 )
@@ -644,7 +645,8 @@ def handle_task_start(args: dict) -> dict:
 
     ensure_task_scaffold(task_dir, tid, request_text=request_text)
     resumed = read_state(task_dir)
-    if str(resumed.get("status") or "").lower() == "blocked":
+    if str(resumed.get("status") or "").lower() in {"blocked", "closed"}:
+        clear_task_close_attestation(task_dir)
         resumed["status"] = "created"
         resumed["runtime_verdict"] = "pending"
         resumed["closed_at"] = None
@@ -910,9 +912,16 @@ def handle_task_close(args: dict) -> dict:
         if not st:
             return _invalid_task_state_error("task_close", td)
         st["status"] = "closed"
+        st["runtime_verdict"] = "PASS"
         st["closed_at"] = now_iso()
         st["updated"] = now_iso()
         write_state(td, st)
+        write_task_close_attestation(
+            td,
+            st,
+            head_sha=final_head,
+            receipt_fingerprint=final_receipts_after,
+        )
 
         repo_root = find_repo_root()
         goal = read_current_goal(repo_root)

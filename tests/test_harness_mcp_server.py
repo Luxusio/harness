@@ -189,10 +189,17 @@ class HarnessMcpServerTests(unittest.TestCase):
                 task_dir.mkdir(parents=True, exist_ok=True)
                 (task_dir / "TASK_STATE.yaml").write_text(
                     "task_id: TASK__login-bugs\nstatus: closed\n"
-                    "runtime_verdict: PASS\ntouched_paths: []\n",
+                    "runtime_verdict: PASS\ntouched_paths: []\n"
+                    "closed_at: 2026-01-01T00:00:02Z\n",
                     encoding="utf-8",
                 )
                 self._write_subagent_receipt(str(task_dir))
+                harness_server.write_task_close_attestation(
+                    str(task_dir),
+                    harness_server.read_state(str(task_dir)),
+                    head_sha="a" * 40,
+                    receipt_fingerprint=harness_server.receipt_stream_fingerprint(str(task_dir)),
+                )
 
                 nxt = harness_server.call_tool("goal_next_task", {})
                 self.assertIsNone(nxt["structuredContent"]["task"])
@@ -227,6 +234,17 @@ class HarnessMcpServerTests(unittest.TestCase):
             missing_receipt = self._call_in_repo(tmp, "goal_finish", {"status": "complete"})
             self.assertTrue(missing_receipt.get("isError"))
             self._write_subagent_receipt(str(task_dir))
+            state.write_text(
+                state.read_text(encoding="utf-8")
+                .replace("closed_at: null", "closed_at: 2026-01-01T00:00:02Z"),
+                encoding="utf-8",
+            )
+            harness_server.write_task_close_attestation(
+                str(task_dir),
+                harness_server.read_state(str(task_dir)),
+                head_sha="a" * 40,
+                receipt_fingerprint=harness_server.receipt_stream_fingerprint(str(task_dir)),
+            )
             self._call_in_repo(tmp, "goal_add_task", {
                 "task_id": "TASK__goal-child", "status": "closed",
             })
@@ -239,6 +257,27 @@ class HarnessMcpServerTests(unittest.TestCase):
             goal = restarted["structuredContent"]["goal"]
             self.assertEqual(goal["status"], "active")
             self.assertNotIn("finished_at", goal)
+
+    def test_goal_completion_rejects_hand_labeled_closed_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(self._make_task(tmp, "TASK__closed-child"))
+            self._call_in_repo(tmp, "goal_start", {"objective": "finish multiple children"})
+            self._call_in_repo(tmp, "goal_add_task", {
+                "task_id": "TASK__closed-child", "status": "closed",
+            })
+            state = task_dir / "TASK_STATE.yaml"
+            state.write_text(
+                state.read_text(encoding="utf-8")
+                .replace("status: created", "status: closed")
+                .replace("runtime_verdict: pending", "runtime_verdict: PASS")
+                .replace("closed_at: null", "closed_at: 2026-01-01T00:00:01Z"),
+                encoding="utf-8",
+            )
+
+            finished = self._call_in_repo(tmp, "goal_finish", {"status": "complete"})
+
+            self.assertTrue(finished.get("isError"))
+            self.assertIn("TASK__closed-child", finished["structuredContent"]["error"])
 
     def test_goal_completion_requires_at_least_one_child(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1135,6 +1174,37 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(context["status"], "created")
             self.assertEqual(context["runtime_verdict"], "PENDING")
             self.assertFalse((Path(task_dir) / "BLOCKED.md").exists())
+
+    def test_task_start_reopens_closed_task_and_clears_close_attestation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__resume-closed")
+            state_path = Path(task_dir) / "TASK_STATE.yaml"
+            state_path.write_text(
+                state_path.read_text(encoding="utf-8")
+                .replace("status: created", "status: closed")
+                .replace("runtime_verdict: pending", "runtime_verdict: PASS")
+                .replace("closed_at: null", "closed_at: 2026-01-01T00:00:01Z"),
+                encoding="utf-8",
+            )
+            close_receipt = Path(task_dir) / "TASK_CLOSE_RECEIPT.json"
+            close_receipt.write_text("{}\n", encoding="utf-8")
+            original_ctd = harness_server.canonical_task_dir
+            original_root = harness_server.find_repo_root
+            harness_server.canonical_task_dir = lambda task_id=None, slug=None, repo_root=None, **kw: task_dir
+            harness_server.find_repo_root = lambda *a, **kw: tmp
+            try:
+                result = harness_server.call_tool(
+                    "task_start", {"task_id": "TASK__resume-closed"}
+                )
+            finally:
+                harness_server.canonical_task_dir = original_ctd
+                harness_server.find_repo_root = original_root
+
+            self.assertNotIn("isError", result)
+            context = result["structuredContent"]["task_context"]
+            self.assertEqual(context["status"], "created")
+            self.assertEqual(context["runtime_verdict"], "PENDING")
+            self.assertFalse(close_receipt.exists())
 
     def test_write_plan_writes_plan_meta_checks_and_audit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2118,7 +2188,6 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 mock.patch.object(harness_server, "_checks_gate_status", return_value=("passed", [])),
                 mock.patch.object(harness_server, "_git_head_for_receipt", return_value="a" * 40),
                 mock.patch.object(harness_server, "_changed_path_fingerprints", return_value={}),
-                mock.patch.object(harness_server, "receipt_stream_fingerprint", return_value="same"),
             ):
                 result = harness_server.handle_task_close({"task_id": "TASK__goal-close-sync"})
 
@@ -2127,6 +2196,47 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 (repo / "doc/harness/goals/current.json").read_text(encoding="utf-8")
             )
             self.assertEqual(current["tasks"][0]["status"], "closed")
+            self.assertTrue((canonical / "TASK_CLOSE_RECEIPT.json").is_file())
+
+    def test_goal_completion_preserves_closed_child_after_later_child_work(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            tasks_root = repo / "doc/harness/tasks"
+            tasks_root.mkdir(parents=True)
+            task_dirs = {}
+            for task_id in ("TASK__first-child", "TASK__second-child"):
+                prepared = Path(self._prepare_task(
+                    tmp,
+                    task_id,
+                    checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
+                ))
+                canonical = tasks_root / task_id
+                prepared.rename(canonical)
+                task_dirs[task_id] = str(canonical)
+
+            harness_server.start_harness_goal(tmp, "two children", goal_id="GOAL__two-children")
+            for task_id in task_dirs:
+                harness_server.add_goal_task(tmp, task_id, status="active")
+
+            clean = {"missing_for_close": [], "next_action": "close"}
+            for index, (task_id, task_dir) in enumerate(task_dirs.items()):
+                with (
+                    mock.patch.object(harness_server, "canonical_task_dir", return_value=task_dir),
+                    mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                    mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
+                    mock.patch.object(harness_server, "emit_compact_context", return_value=clean),
+                    mock.patch.object(harness_server, "_runtime_is_stale", return_value=(False, "")),
+                    mock.patch.object(harness_server, "_checks_gate_status", return_value=("passed", [])),
+                    mock.patch.object(harness_server, "_git_head_for_receipt", return_value="a" * 40),
+                    mock.patch.object(harness_server, "_changed_path_fingerprints", return_value={}),
+                ):
+                    closed = harness_server.handle_task_close({"task_id": task_id})
+                self.assertNotIn("isError", closed)
+                if index == 0:
+                    (repo / "later-child.py").write_text("changed later\n", encoding="utf-8")
+
+            finished = harness_server.finish_harness_goal(tmp, status="complete")
+            self.assertEqual(finished["status"], "complete")
 
     def test_close_blocks_when_initial_git_head_is_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:
