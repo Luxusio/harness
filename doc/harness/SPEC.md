@@ -3,7 +3,7 @@
 tags: [harness, spec, architecture]
 status: draft
 created: 2026-04-09
-updated: 2026-06-22
+updated: 2026-07-23
 task_ref: TASK__harness-architecture
 
 ---
@@ -61,6 +61,42 @@ Manual evidence writers are intentionally absent. The MCP server does not expose
 manual evidence writers, critic writers, handoff writers, or REQ writer tools.
 `CONVERSATION.md` is readable task history; machine enforcement only reads
 explicit `<!-- item: ... -->` markers.
+
+### Control-plane artifact integrity
+
+Task selectors accepted by MCP tools resolve to one immediate
+`doc/harness/tasks/TASK__<safe-id>` child. Bare IDs are normalized for
+compatibility; canonical repository-relative and absolute task paths are
+accepted. Traversal, control characters, selector mismatches, outside paths,
+and symlink aliases are rejected before task artifacts are created or changed.
+Goal IDs use the same safe-name boundary, and Goal child entries persist the
+canonical repository-relative task path.
+
+`write_plan` validates the complete supplied bundle before its first write, so
+an invalid optional `CHECKS.yaml` or `AUDIT_TRAIL.md` cannot leave a new PLAN or
+meta file behind. `task_blocked` requires an existing `TASK_STATE.yaml` before
+writing `BLOCKED.md`. Missing `CHECKS.yaml` remains compatible with task packs
+that predate the ledger; a present empty, malformed, duplicate-ID, or
+invalid-status ledger is invalid and cannot be reconciled or closed. AC field
+updates preserve the ledger's existing item indentation and use unambiguous
+regular-expression group replacement.
+
+Per-session active markers are authoritative only while their canonical task
+state is live. Marker leaves must be regular files and are read without
+following symlinks; a session marker's embedded session and task identities
+must match its filename and resolved task. A malformed or mismatched marker,
+or one pointing at a closed/blocked task, falls back to the legacy `.active`
+marker. The legacy marker remains
+conservative for pre-state task packs so Stop and prewrite gates do not silently
+disengage; active-task iteration filters terminal per-session records as well.
+
+The confinement boundary validates lexical and physical paths and avoids
+following pre-existing control-plane leaf symlinks. Harness runs with the
+calling user's privileges and does not provide a privilege boundary against a
+hostile process running concurrently as that same user; such a process can
+already write every target Harness can write. A descriptor-relative filesystem
+transaction layer is intentionally out of scope unless Harness later gains a
+privilege transition or a distinct lower-trust concurrent repository writer.
 
 ## Verification
 

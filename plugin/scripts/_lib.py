@@ -485,25 +485,94 @@ def _goal_slug(value: str) -> str:
 
 def _goal_id(goal_id: str | None = None, objective: str = "") -> str:
     if goal_id:
-        return goal_id if goal_id.startswith("GOAL__") else f"GOAL__{_goal_slug(goal_id)}"
+        if goal_id.startswith("GOAL__"):
+            if not re.fullmatch(r"GOAL__[A-Za-z0-9_.-]{1,180}", goal_id):
+                raise ValueError(
+                    "invalid goal_id; expected GOAL__ followed by 1-180 letters, "
+                    "digits, dot, underscore, or hyphen. Omit goal_id to derive one safely."
+                )
+            return goal_id
+        return f"GOAL__{_goal_slug(goal_id)}"
     return f"GOAL__{_goal_slug(objective or 'goal')}"
 
 
+def _validated_control_dir(repo_root: str, relative_dir: str, label: str) -> str:
+    """Validate existing path components without creating control-plane state."""
+    root = os.path.abspath(repo_root)
+    current = root
+    for part in relative_dir.split("/"):
+        current = os.path.join(current, part)
+        if not os.path.lexists(current):
+            continue
+        if os.path.islink(current) or not os.path.isdir(current):
+            raise ValueError(f"invalid {label}; {relative_dir} must be a real directory inside the repository")
+        try:
+            if os.path.commonpath((os.path.realpath(current), os.path.realpath(root))) != os.path.realpath(root):
+                raise ValueError(f"invalid {label}; {relative_dir} resolves outside the repository")
+        except ValueError:
+            raise ValueError(f"invalid {label}; {relative_dir} resolves outside the repository") from None
+    return os.path.join(root, *relative_dir.split("/"))
+
+
 def _goal_path(repo_root: str, goal_id: str) -> str:
-    return os.path.join(repo_root, GOALS_DIR, f"{goal_id}.json")
+    safe_goal_id = _goal_id(goal_id)
+    goals_dir = _validated_control_dir(repo_root, GOALS_DIR, "goal storage root")
+    return os.path.join(goals_dir, f"{safe_goal_id}.json")
 
 
 def _current_goal_path(repo_root: str) -> str:
-    return os.path.join(repo_root, GOAL_CURRENT_FILE)
+    goals_dir = _validated_control_dir(repo_root, GOALS_DIR, "goal storage root")
+    return os.path.join(goals_dir, "current.json")
 
 
-def _read_json_file(path: str) -> dict:
+def _read_regular_text_file(path: str, *, max_size: int = 1024 * 1024) -> str:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
     try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
+        fd = os.open(path, flags)
+    except OSError:
+        return ""
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > max_size:
+            return ""
+        with os.fdopen(fd, encoding="utf-8") as f:
+            fd = -1
+            return f.read()
+    except (OSError, UnicodeError):
+        return ""
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _read_json_file(path: str, *, max_size: int = 1024 * 1024) -> dict:
+    try:
+        data = json.loads(_read_regular_text_file(path, max_size=max_size))
+    except (TypeError, ValueError):
         return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _atomic_text_write(path: str, text: str) -> None:
+    """Replace a text leaf without following a pre-existing leaf symlink."""
+    parent = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".text.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def read_current_goal(repo_root: str | None = None) -> dict:
@@ -515,18 +584,16 @@ def read_current_goal(repo_root: str | None = None) -> dict:
 
 
 def write_goal_state(repo_root: str, state: dict) -> dict:
-    goal_id = str(state.get("goal_id") or _goal_id(objective=str(state.get("objective") or "")))
+    raw_goal_id = str(state.get("goal_id") or "")
+    goal_id = _goal_id(raw_goal_id, str(state.get("objective") or ""))
     state = dict(state)
     state["goal_id"] = goal_id
     state["updated_at"] = now_iso()
-    goals_dir = os.path.join(repo_root, GOALS_DIR)
+    goals_dir = _validated_control_dir(repo_root, GOALS_DIR, "goal storage root")
     os.makedirs(goals_dir, exist_ok=True)
     text = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     for path in (_goal_path(repo_root, goal_id), _current_goal_path(repo_root)):
-        tmp = f"{path}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.replace(tmp, path)
+        _atomic_text_write(path, text)
     return state
 
 
@@ -561,7 +628,13 @@ def add_goal_task(repo_root: str, task_id: str, *, title: str = "", status: str 
     current = read_current_goal(repo_root)
     if not current:
         raise ValueError("no active goal")
-    tid = task_id if task_id.startswith("TASK__") else f"TASK__{task_id}"
+    canonical_dir = canonical_task_dir(
+        task_id=task_id,
+        task_dir=task_dir or None,
+        repo_root=repo_root,
+    )
+    tid = os.path.basename(canonical_dir)
+    stored_task_dir = os.path.relpath(canonical_dir, repo_root).replace(os.sep, "/")
     tasks = current.get("tasks") if isinstance(current.get("tasks"), list) else []
     updated = False
     for task in tasks:
@@ -570,8 +643,7 @@ def add_goal_task(repo_root: str, task_id: str, *, title: str = "", status: str 
                 task["title"] = title
             if status:
                 task["status"] = status
-            if task_dir:
-                task["task_dir"] = task_dir
+            task["task_dir"] = stored_task_dir
             updated = True
             break
     if not updated:
@@ -579,7 +651,7 @@ def add_goal_task(repo_root: str, task_id: str, *, title: str = "", status: str 
             "task_id": tid,
             "title": title or tid,
             "status": status or "queued",
-            "task_dir": task_dir,
+            "task_dir": stored_task_dir,
         })
     current["tasks"] = tasks
     return write_goal_state(repo_root, current)
@@ -938,13 +1010,35 @@ def read_state(task_dir):
     """Read all fields from TASK_STATE.yaml."""
     path = state_file(task_dir)
     result = {}
-    if not os.path.isfile(path):
+    text = _read_regular_text_file(path, max_size=256 * 1024)
+    if not text:
         return result
+    lines = text.splitlines()
     for field in SCHEMA_FIELDS:
         if field == "touched_paths":
-            result[field] = yaml_array(field, path)
+            prefix = field + ":"
+            result[field] = []
+            for i, line in enumerate(lines):
+                if not line.startswith(prefix):
+                    continue
+                rest = line[len(prefix):].strip()
+                if rest == "[]":
+                    break
+                for item_line in lines[i + 1:]:
+                    match = re.match(r"^\s+-\s+(.*)", item_line)
+                    if not match:
+                        break
+                    result[field].append(match.group(1).strip().strip('"').strip("'"))
+                break
         else:
-            result[field] = yaml_field(field, path)
+            prefix = field + ":"
+            result[field] = None
+            for line in lines:
+                if line.startswith(prefix):
+                    value = line[len(prefix):].strip()
+                    if value not in ("null", "~", "", "[]"):
+                        result[field] = value.strip('"').strip("'")
+                    break
     return result
 
 
@@ -1008,32 +1102,88 @@ def is_harness_enabled_repo(repo_root=None):
     return os.path.isfile(os.path.join(root, MANIFEST_PATH))
 
 
+_TASK_ID_RE = re.compile(r"TASK__[A-Za-z0-9_.-]{1,180}\Z")
+
+
 def _normalize_task_id(task_id=None, slug=None, task_dir=None):
     """Derive canonical TASK__<id> from arguments."""
     if task_id:
-        return task_id if task_id.startswith("TASK__") else f"TASK__{task_id}"
+        value = str(task_id)
+        tid = value if value.startswith("TASK__") else f"TASK__{value}"
+        field = "task_id"
     if slug:
-        return f"TASK__{slug}"
-    if task_dir:
+        value = str(slug)
+        tid = value if value.startswith("TASK__") else f"TASK__{value}"
+        field = "slug"
+    if task_dir and not task_id and not slug:
         name = os.path.basename(os.path.normpath(task_dir))
-        return name if name.startswith("TASK__") else f"TASK__{name}"
-    return None
+        tid = name if name.startswith("TASK__") else f"TASK__{name}"
+        field = "task_dir"
+    if not (task_id or slug or task_dir):
+        return None
+    if not _TASK_ID_RE.fullmatch(tid):
+        raise ValueError(
+            f"invalid {field}; expected canonical TASK__<safe-id> using only "
+            "letters, digits, dot, underscore, or hyphen"
+        )
+    return tid
 
 
 def canonical_task_dir(task_id=None, slug=None, task_dir=None,
                        tasks_dir=TASK_DIR, repo_root=None):
-    """Resolve canonical task directory path."""
+    """Resolve a task selector to an immediate child of the repo task root."""
     repo_root = repo_root or find_repo_root()
-    tid = _normalize_task_id(task_id, slug, task_dir)
+    selectors = [
+        _normalize_task_id(task_id=task_id) if task_id else None,
+        _normalize_task_id(slug=slug) if slug else None,
+        _normalize_task_id(task_dir=task_dir) if task_dir else None,
+    ]
+    selected = {item for item in selectors if item}
+    if len(selected) > 1:
+        raise ValueError(
+            "task selectors disagree; task_id, slug, and task_dir must name the same canonical TASK__<safe-id>"
+        )
+    tid = next(iter(selected), None)
     if not tid:
         return ""
-    return os.path.join(repo_root, tasks_dir, tid)
+    tasks_root = _validated_control_dir(repo_root, tasks_dir, "canonical task root")
+    canonical = os.path.join(tasks_root, tid)
+    if task_dir:
+        raw = str(task_dir)
+        if any(ord(ch) < 32 for ch in raw):
+            raise ValueError("invalid task_dir; control characters are not allowed")
+        candidate = os.path.abspath(raw if os.path.isabs(raw) else os.path.join(repo_root, raw))
+        expected_form = canonical if os.path.isabs(raw) else os.path.relpath(canonical, repo_root)
+        if raw != expected_form:
+            raise ValueError(
+                f"invalid task_dir; expected exact canonical path {os.path.relpath(canonical, repo_root)} "
+                "or its absolute path without traversal or aliases"
+            )
+        if candidate != canonical or os.path.dirname(candidate) != tasks_root:
+            raise ValueError(
+                f"invalid task_dir; expected canonical {os.path.relpath(canonical, repo_root)} "
+                "or its absolute path inside this repository"
+            )
+    expected_real = os.path.join(os.path.realpath(tasks_root), tid)
+    if os.path.lexists(canonical):
+        if os.path.islink(canonical) or not os.path.isdir(canonical):
+            raise ValueError("invalid task selector; canonical task directory must be a real directory")
+        if os.path.realpath(canonical) != expected_real:
+            raise ValueError("invalid task selector; canonical task directory resolves outside this repository")
+    return canonical
 
 
 def canonical_task_id(task_id=None, slug=None, task_dir=None,
                       tasks_dir=TASK_DIR, repo_root=None):
     """Derive canonical task id string."""
-    return _normalize_task_id(task_id, slug, task_dir) or ""
+    resolved = canonical_task_dir(
+        task_id=task_id,
+        slug=slug,
+        task_dir=task_dir,
+        tasks_dir=tasks_dir,
+        repo_root=repo_root,
+    )
+    return os.path.basename(resolved) if resolved else ""
 
 
 # ── Active task markers ─────────────────────────────────────────────────
@@ -1047,7 +1197,11 @@ def _legacy_active_path(repo_root):
 
 
 def _active_sessions_dir(repo_root):
-    return os.path.join(repo_root, TASK_DIR, ACTIVE_SESSIONS_DIRNAME)
+    return _validated_control_dir(
+        repo_root,
+        f"{TASK_DIR}/{ACTIVE_SESSIONS_DIRNAME}",
+        "active session marker root",
+    )
 
 
 def _session_active_path(repo_root, session_id=None):
@@ -1084,19 +1238,26 @@ def write_active_marker(repo_root, task_dir, session_id=None):
         except OSError:
             pass
         raise
-    with open(_legacy_active_path(repo_root), "w", encoding="utf-8") as f:
-        f.write(task_dir)
+    _atomic_text_write(_legacy_active_path(repo_root), task_dir)
+
+
+def _read_regular_marker(path, *, max_size=256 * 1024):
+    return _read_regular_text_file(path, max_size=max_size)
+
+
+def _read_session_marker(path, expected_session_id):
+    try:
+        data = json.loads(_read_regular_marker(path))
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict) or data.get("session_id") != expected_session_id:
+        return {}
+    return data
 
 
 def _read_legacy_active(repo_root):
     path = _legacy_active_path(repo_root)
-    if not os.path.isfile(path):
-        return ""
-    try:
-        with open(path, encoding="utf-8") as f:
-            first = (f.read().strip().splitlines() or [""])[0]
-    except OSError:
-        return ""
+    first = (_read_regular_marker(path).strip().splitlines() or [""])[0]
     if not first:
         return ""
     if os.path.isabs(first):
@@ -1104,40 +1265,70 @@ def _read_legacy_active(repo_root):
     return os.path.join(repo_root, TASK_DIR, first.rstrip("/"))
 
 
+def _live_active_task_dir(repo_root, value, *, require_live_state=True):
+    if not isinstance(value, str) or not value:
+        return ""
+    try:
+        td = canonical_task_dir(task_dir=value, repo_root=repo_root)
+    except ValueError:
+        return ""
+    if not require_live_state:
+        # The legacy .active marker predates TASK_STATE and is intentionally
+        # conservative: an explicit canonical marker keeps Stop/prewrite gates
+        # engaged even for old or partially-created task packs.
+        return td
+    state = read_state(td)
+    if str(state.get("status") or "").lower() not in {
+        "created", "planning", "implementing", "verifying"
+    }:
+        return ""
+    if state.get("task_id") != os.path.basename(td):
+        return ""
+    return td
+
+
 def resolve_active_task_dir(repo_root=None, session_id=None):
     """Resolve active task for this session, falling back to legacy ``.active``."""
     repo_root = repo_root or find_repo_root()
-    path = _session_active_path(repo_root, session_id)
-    if os.path.isfile(path):
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
-            td = data.get("task_dir")
-            if isinstance(td, str) and td:
-                return td
-        except Exception:
-            pass
-    return _read_legacy_active(repo_root)
+
+    try:
+        sid = current_session_id() if session_id is None else sanitize_session_id(session_id)
+        path = _session_active_path(repo_root, sid)
+    except ValueError:
+        path = ""
+        sid = ""
+    data = _read_session_marker(path, sid) if path else {}
+    td = _live_active_task_dir(repo_root, data.get("task_dir"))
+    if td and data.get("task_id") == os.path.basename(td):
+        return td
+    return _live_active_task_dir(
+        repo_root, _read_legacy_active(repo_root), require_live_state=False
+    )
 
 
 def iter_active_task_dirs(repo_root=None):
     """Yield unique active task dirs from session markers and legacy fallback."""
     repo_root = repo_root or find_repo_root()
     seen = set()
-    sessions = _active_sessions_dir(repo_root)
+    try:
+        sessions = _active_sessions_dir(repo_root)
+    except ValueError:
+        sessions = ""
     if os.path.isdir(sessions):
         for name in os.listdir(sessions):
             if not name.endswith(".json"):
                 continue
-            try:
-                with open(os.path.join(sessions, name), encoding="utf-8") as f:
-                    td = json.load(f).get("task_dir")
-            except Exception:
+            sid = name[:-5]
+            if sanitize_session_id(sid) != sid:
                 continue
-            if isinstance(td, str) and td and td not in seen:
+            data = _read_session_marker(os.path.join(sessions, name), sid)
+            td = _live_active_task_dir(repo_root, data.get("task_dir"))
+            if td and data.get("task_id") == os.path.basename(td) and td not in seen:
                 seen.add(td)
                 yield td
-    legacy = _read_legacy_active(repo_root)
+    legacy = _live_active_task_dir(
+        repo_root, _read_legacy_active(repo_root), require_live_state=False
+    )
     if legacy and legacy not in seen:
         yield legacy
 
@@ -1146,7 +1337,7 @@ def clear_active_marker(repo_root, task_dir=None, session_id=None):
     """Clear this session's active marker and matching legacy marker."""
     try:
         os.unlink(_session_active_path(repo_root, session_id))
-    except OSError:
+    except (OSError, ValueError):
         pass
     legacy = _legacy_active_path(repo_root)
     try:
@@ -1164,13 +1355,16 @@ def clear_active_marker(repo_root, task_dir=None, session_id=None):
 def ensure_task_scaffold(task_dir, task_id, request_text=""):
     """Create task dir with minimal 7-field TASK_STATE.yaml. Preserves existing state on resume."""
     os.makedirs(task_dir, exist_ok=True)
-    if os.path.isfile(state_file(task_dir)):
+    expected_tid = _normalize_task_id(task_id, task_dir=task_dir) or task_id
+    if os.path.lexists(state_file(task_dir)):
         existing = read_state(task_dir)
-        if existing:
-            created = [state_file(task_dir)]
-            tid = existing.get("task_id") or _normalize_task_id(task_id, task_dir=task_dir) or task_id
-            return {"created": created, "task_dir": task_dir, "task_id": tid}
-    tid = _normalize_task_id(task_id, task_dir=task_dir) or task_id
+        if existing.get("task_id") != expected_tid:
+            raise ValueError(
+                "existing TASK_STATE.yaml must be a regular file whose task_id matches its canonical directory"
+            )
+        created = [state_file(task_dir)]
+        return {"created": created, "task_dir": task_dir, "task_id": expected_tid}
+    tid = expected_tid
     fields = {
         "task_id": tid,
         "status": "created",
@@ -1186,9 +1380,8 @@ def ensure_task_scaffold(task_dir, task_id, request_text=""):
     created = [state_file(task_dir)]
     if request_text:
         req_path = os.path.join(task_dir, "REQUEST.md")
-        if not os.path.isfile(req_path):
-            with open(req_path, "w", encoding="utf-8") as f:
-                f.write(request_text)
+        if not os.path.isfile(req_path) or os.path.islink(req_path):
+            _atomic_text_write(req_path, request_text)
             created.append(req_path)
     return {"created": created, "task_dir": task_dir, "task_id": tid}
 

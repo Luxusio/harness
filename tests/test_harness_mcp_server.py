@@ -37,7 +37,7 @@ EXPECTED_TOOLS = {
 
 class HarnessMcpServerTests(unittest.TestCase):
     def _make_task(self, base_dir: str, task_id: str) -> str:
-        task_dir = Path(base_dir) / task_id
+        task_dir = Path(base_dir) / "doc" / "harness" / "tasks" / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
         (task_dir / "TASK_STATE.yaml").write_text(
             "\n".join(
@@ -56,6 +56,10 @@ class HarnessMcpServerTests(unittest.TestCase):
         )
         (task_dir / "PLAN.md").write_text("# Plan\n\nSmall plan.\n", encoding="utf-8")
         return str(task_dir)
+
+    def _call_in_repo(self, repo_root: str, name: str, args: dict) -> dict:
+        with mock.patch.object(harness_server, "find_repo_root", return_value=repo_root):
+            return harness_server.call_tool(name, args)
 
     def _write_subagent_receipt(
         self,
@@ -189,6 +193,209 @@ class HarnessMcpServerTests(unittest.TestCase):
                 self.assertTrue((Path(tmp) / "doc" / "harness" / "goals" / "current.json").is_file())
             finally:
                 harness_server.find_repo_root = original_find_repo_root
+
+    def test_goal_start_rejects_prefixed_traversal_before_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = self._call_in_repo(
+                tmp,
+                "goal_start",
+                {"objective": "safe objective", "goal_id": "GOAL__/../../../escaped"},
+            )
+            self.assertTrue(result.get("isError"))
+            self.assertIn("goal_id", result["structuredContent"]["error"])
+            self.assertFalse((Path(tmp) / "escaped.json").exists())
+
+    def test_goal_start_rejects_symlinked_storage_roots(self):
+        for symlink_parent in (False, True):
+            with self.subTest(symlink_parent=symlink_parent), tempfile.TemporaryDirectory() as tmp:
+                outside = Path(tmp) / "outside-goals"
+                outside.mkdir()
+                if symlink_parent:
+                    (Path(tmp) / "doc").symlink_to(outside, target_is_directory=True)
+                else:
+                    harness_dir = Path(tmp) / "doc" / "harness"
+                    harness_dir.mkdir(parents=True)
+                    (harness_dir / "goals").symlink_to(outside, target_is_directory=True)
+                result = self._call_in_repo(
+                    tmp,
+                    "goal_start",
+                    {"objective": "safe objective", "goal_id": "GOAL__safe"},
+                )
+                self.assertTrue(result.get("isError"))
+                self.assertEqual(result["structuredContent"]["field"], "goal_storage_root")
+                self.assertEqual(result["structuredContent"]["rejected_value"], repr("doc/harness/goals"))
+                self.assertIn("non-symlink", result["structuredContent"]["expected"])
+                self.assertIn("Restore", result["structuredContent"]["next_action"])
+                self.assertFalse((outside / "GOAL__safe.json").exists())
+                self.assertFalse((outside / "current.json").exists())
+
+    def test_goal_state_replaces_leaf_symlinks_without_touching_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            goals = Path(tmp) / "doc" / "harness" / "goals"
+            goals.mkdir(parents=True)
+            sentinel = Path(tmp) / "goal-sentinel"
+            sentinel.write_text("keep", encoding="utf-8")
+            for name in ("GOAL__safe.json", "GOAL__safe.json.tmp", "current.json"):
+                (goals / name).symlink_to(sentinel)
+            result = self._call_in_repo(
+                tmp,
+                "goal_start",
+                {"objective": "safe objective", "goal_id": "GOAL__safe"},
+            )
+            self.assertNotIn("isError", result)
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+            self.assertFalse((goals / "GOAL__safe.json").is_symlink())
+            self.assertFalse((goals / "current.json").is_symlink())
+
+    def test_goal_readers_ignore_valid_json_leaf_symlinks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            goals = Path(tmp) / "doc" / "harness" / "goals"
+            goals.mkdir(parents=True)
+            external = Path(tmp) / "external-goal.json"
+            external.write_text(
+                json.dumps({
+                    "goal_id": "GOAL__safe",
+                    "objective": "SENSITIVE_VALUE",
+                    "status": "active",
+                    "source": {"secret": "SENSITIVE_VALUE"},
+                    "tasks": [{"task_id": "TASK__foreign"}],
+                }),
+                encoding="utf-8",
+            )
+
+            (goals / "current.json").symlink_to(external)
+            context = self._call_in_repo(tmp, "goal_context", {})
+            self.assertNotIn("SENSITIVE_VALUE", json.dumps(context))
+
+            (goals / "current.json").unlink()
+            (goals / "GOAL__safe.json").symlink_to(external)
+            started = self._call_in_repo(
+                tmp,
+                "goal_start",
+                {"objective": "safe objective", "goal_id": "GOAL__safe"},
+            )
+            self.assertNotIn("isError", started)
+            self.assertNotIn("SENSITIVE_VALUE", json.dumps(started))
+            self.assertFalse((goals / "GOAL__safe.json").is_symlink())
+
+    def test_goal_add_task_rejects_outside_task_dir_before_persisting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._call_in_repo(tmp, "goal_start", {"objective": "safe objective"})
+            current = Path(tmp) / "doc" / "harness" / "goals" / "current.json"
+            before = current.read_bytes()
+            result = self._call_in_repo(
+                tmp,
+                "goal_add_task",
+                {"task_id": "TASK__safe", "task_dir": str(Path(tmp) / "outside")},
+            )
+            self.assertTrue(result.get("isError"))
+            self.assertEqual(current.read_bytes(), before)
+
+    def test_task_start_rejects_traversal_and_outside_paths_without_mutation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            git_dir = Path(tmp) / ".git"
+            git_dir.mkdir()
+            index_lock = git_dir / "index.lock"
+            index_lock.write_bytes(b"")
+            escaped = Path(tmp).parent / "escaped-task"
+            outside = Path(tmp) / "outside"
+            for args in (
+                {"task_id": "TASK__/../../../escaped-task"},
+                {"task_dir": str(outside)},
+                {"task_dir": "doc/harness/tasks/../tasks/TASK__safe"},
+                {"task_id": "TASK__safe\n"},
+            ):
+                result = self._call_in_repo(tmp, "task_start", args)
+                self.assertTrue(result.get("isError"), args)
+                self.assertIn("canonical", result["structuredContent"]["error"])
+                self.assertIn("next_action", result["structuredContent"])
+            self.assertFalse(escaped.exists())
+            self.assertFalse(outside.exists())
+            self.assertTrue(index_lock.exists(), "invalid selectors must not clean repository locks")
+
+    def test_task_start_rejects_mismatched_existing_state_before_side_effects(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(self._make_task(tmp, "TASK__expected"))
+            state = task_dir / "TASK_STATE.yaml"
+            state.write_text(
+                state.read_text(encoding="utf-8").replace(
+                    "task_id: TASK__expected", "task_id: TASK__other"
+                ),
+                encoding="utf-8",
+            )
+            git_dir = Path(tmp) / ".git"
+            git_dir.mkdir()
+            lock = git_dir / "index.lock"
+            lock.write_bytes(b"")
+            before = {path.name: path.read_bytes() for path in task_dir.iterdir() if path.is_file()}
+
+            result = self._call_in_repo(tmp, "task_start", {"task_id": "TASK__expected"})
+
+            self.assertTrue(result.get("isError"))
+            self.assertIn("does not match", result["structuredContent"]["error"])
+            after = {path.name: path.read_bytes() for path in task_dir.iterdir() if path.is_file()}
+            self.assertEqual(after, before)
+            self.assertTrue(lock.exists())
+            self.assertFalse((task_dir.parent / ".active").exists())
+            self.assertFalse((task_dir.parent / ".active_sessions").exists())
+
+    def test_task_selectors_accept_canonical_paths_and_reject_mismatch_or_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task = Path(self._make_task(tmp, "TASK__safe"))
+            relative = task.relative_to(tmp).as_posix()
+            self.assertEqual(
+                harness_server.canonical_task_dir(task_dir=relative, repo_root=tmp),
+                str(task),
+            )
+            self.assertEqual(
+                harness_server.canonical_task_dir(
+                    task_id="safe", task_dir=str(task), repo_root=tmp
+                ),
+                str(task),
+            )
+            with self.assertRaisesRegex(ValueError, "disagree"):
+                harness_server.canonical_task_dir(
+                    task_id="TASK__other", task_dir=str(task), repo_root=tmp
+                )
+            outside = Path(tmp) / "outside-target"
+            outside.mkdir()
+            alias = task.parent / "TASK__alias"
+            alias.symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "real directory"):
+                harness_server.canonical_task_dir(task_dir=str(alias), repo_root=tmp)
+            for tool_args in (
+                ("task_start", {"task_id": "TASK__alias"}),
+                ("write_plan", {"task_id": "TASK__alias", "plan": "# escaped\n"}),
+                ("task_blocked", {
+                    "task_id": "TASK__alias",
+                    "blocked_reason": "x",
+                    "unblock_condition": "y",
+                }),
+            ):
+                result = self._call_in_repo(tmp, tool_args[0], tool_args[1])
+                self.assertTrue(result.get("isError"), tool_args[0])
+                self.assertEqual(result["structuredContent"]["field"], "task_id")
+                self.assertEqual(result["structuredContent"]["rejected_value"], repr("TASK__alias"))
+                self.assertIn("TASK__", result["structuredContent"]["expected"])
+                self.assertIn("next_action", result["structuredContent"])
+            self.assertEqual(list(outside.iterdir()), [])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            harness_dir = Path(tmp) / "doc" / "harness"
+            harness_dir.mkdir(parents=True)
+            outside = Path(tmp) / "outside-task-root"
+            outside.mkdir()
+            (harness_dir / "tasks").symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, "task root"):
+                harness_server.canonical_task_dir(task_id="TASK__safe", repo_root=tmp)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            outside = Path(tmp) / "outside-doc"
+            outside.mkdir()
+            (Path(tmp) / "doc").symlink_to(outside, target_is_directory=True)
+            result = self._call_in_repo(tmp, "task_start", {"task_id": "TASK__escape"})
+            self.assertTrue(result.get("isError"))
+            self.assertFalse((outside / "harness" / "tasks" / "TASK__escape").exists())
 
     def test_stdio_transport_accepts_content_length_frames(self):
         request = {
@@ -595,6 +802,8 @@ class HarnessMcpServerTests(unittest.TestCase):
             body = (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8")
         self.assertEqual(verify["structuredContent"]["ac_reconcile"]["promoted_acs"], ["AC-001"])
         self.assertIn("status: passed", body)
+        self.assertRegex(body, r"(?m)^    last_updated: 2026-")
+        self.assertNotIn("P26-", body)
 
     def test_record_ac_evidence_is_not_exposed(self):
         result = harness_server.call_tool(
@@ -651,7 +860,7 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_micro_execution_mode_allows_no_plan_but_still_requires_verify(self):
         with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(tmp) / "TASK__micro"
+            task_dir = Path(tmp) / "doc" / "harness" / "tasks" / "TASK__micro"
             original_ctd = harness_server.canonical_task_dir
             original_root = harness_server.find_repo_root
             harness_server.canonical_task_dir = lambda task_id=None, slug=None, repo_root=None, **kw: str(task_dir)
@@ -700,6 +909,112 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("status: blocked", state)
             self.assertIn("runtime_verdict: BLOCKED_ENV", state)
 
+    def test_task_writers_replace_leaf_symlinks_without_touching_targets(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "doc" / "harness" / "tasks" / "TASK__leaf-safe"
+            task_dir.mkdir(parents=True)
+            sentinel = Path(tmp) / "task-sentinel"
+            sentinel.write_text("keep", encoding="utf-8")
+            request = Path(tmp) / "request.txt"
+            request.write_text("request body", encoding="utf-8")
+            (task_dir / "REQUEST.md").symlink_to(sentinel)
+            (task_dir / "BLOCKED.md").symlink_to(sentinel)
+            active = task_dir.parent / ".active"
+            active.symlink_to(sentinel)
+
+            start = self._call_in_repo(
+                tmp,
+                "task_start",
+                {"task_id": "TASK__leaf-safe", "request_file": str(request)},
+            )
+            self.assertNotIn("isError", start)
+            blocked = self._call_in_repo(
+                tmp,
+                "task_blocked",
+                {
+                    "task_id": "TASK__leaf-safe",
+                    "blocked_reason": "environment",
+                    "unblock_condition": "restore environment",
+                },
+            )
+            self.assertNotIn("isError", blocked)
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+            self.assertFalse((task_dir / "REQUEST.md").is_symlink())
+            self.assertFalse((task_dir / "BLOCKED.md").is_symlink())
+            self.assertFalse(active.exists(), "task_blocked clears the safely replaced active marker")
+
+    def test_task_blocked_missing_task_leaves_no_orphan_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "doc" / "harness" / "tasks" / "TASK__typo"
+            result = self._call_in_repo(
+                tmp,
+                "task_blocked",
+                {
+                    "task_id": "TASK__typo",
+                    "blocked_reason": "missing",
+                    "unblock_condition": "start it first",
+                },
+            )
+            self.assertTrue(result.get("isError"))
+            self.assertIn("task_start", result["structuredContent"].get("next_action", ""))
+            self.assertFalse(task_dir.exists())
+
+    def test_task_blocked_rejects_symlinked_state_without_touching_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(self._make_task(tmp, "TASK__unsafe-state"))
+            state = task_dir / "TASK_STATE.yaml"
+            external = Path(tmp) / "external-state.yaml"
+            external.write_text(state.read_text(encoding="utf-8"), encoding="utf-8")
+            state.unlink()
+            state.symlink_to(external)
+            before = external.read_bytes()
+            result = self._call_in_repo(
+                tmp,
+                "task_blocked",
+                {
+                    "task_id": "TASK__unsafe-state",
+                    "blocked_reason": "environment",
+                    "unblock_condition": "restore environment",
+                },
+            )
+            self.assertTrue(result.get("isError"))
+            self.assertEqual(external.read_bytes(), before)
+            self.assertTrue(state.is_symlink())
+
+    def test_task_mutators_reject_mismatched_state_before_writing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(self._make_task(tmp, "TASK__expected"))
+            state = task_dir / "TASK_STATE.yaml"
+            state.write_text(
+                state.read_text(encoding="utf-8").replace(
+                    "task_id: TASK__expected", "task_id: TASK__other"
+                ),
+                encoding="utf-8",
+            )
+            before = {path.name: path.read_bytes() for path in task_dir.iterdir() if path.is_file()}
+
+            plan = self._call_in_repo(
+                tmp,
+                "write_plan",
+                {"task_id": "TASK__expected", "plan": "# Replacement\n"},
+            )
+            blocked = self._call_in_repo(
+                tmp,
+                "task_blocked",
+                {
+                    "task_id": "TASK__expected",
+                    "blocked_reason": "environment",
+                    "unblock_condition": "restore environment",
+                },
+            )
+            self.assertTrue(plan.get("isError"))
+            self.assertTrue(blocked.get("isError"))
+            self.assertIn("invalid TASK_STATE.yaml", plan["structuredContent"]["error"])
+            self.assertIn("invalid TASK_STATE.yaml", blocked["structuredContent"]["error"])
+            after = {path.name: path.read_bytes() for path in task_dir.iterdir() if path.is_file()}
+            self.assertEqual(after, before)
+            self.assertFalse((task_dir / "BLOCKED.md").exists())
+
     def test_task_start_explicitly_resumes_blocked_task(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__resume-blocked")
@@ -733,7 +1048,8 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_write_plan_writes_plan_meta_checks_and_audit(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__planmcp")
-            result = harness_server.call_tool(
+            result = self._call_in_repo(
+                tmp,
                 "write_plan",
                 {
                     "task_dir": task_dir,
@@ -763,7 +1079,8 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_write_plan_rejects_empty_plan(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__emptyplan")
-            result = harness_server.call_tool(
+            result = self._call_in_repo(
+                tmp,
                 "write_plan",
                 {"task_dir": task_dir, "plan": " \n\t"},
             )
@@ -773,28 +1090,89 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_write_plan_rejects_empty_optional_checks(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__emptychecks")
-            result = harness_server.call_tool(
+            before = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
+            result = self._call_in_repo(
+                tmp,
                 "write_plan",
                 {"task_dir": task_dir, "plan": "# Plan\n", "checks": " \n\t"},
             )
             self.assertTrue(result.get("isError"))
             self.assertIn("empty CHECKS.yaml", result["structuredContent"]["error"])
+            after = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
+            self.assertEqual(after, before)
 
     def test_write_plan_rejects_empty_optional_audit(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__emptyaudit")
-            result = harness_server.call_tool(
+            result = self._call_in_repo(
+                tmp,
                 "write_plan",
                 {"task_dir": task_dir, "plan": "# Plan\n", "audit": "\n"},
             )
             self.assertTrue(result.get("isError"))
             self.assertIn("empty AUDIT_TRAIL.md", result["structuredContent"]["error"])
 
+    def test_write_plan_rejects_invalid_audit_before_any_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__invalidaudit")
+            before = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
+            result = self._call_in_repo(
+                tmp,
+                "write_plan",
+                {"task_dir": task_dir, "plan": "# Replacement\n", "audit": "not a table row\n"},
+            )
+            self.assertTrue(result.get("isError"))
+            self.assertIn("invalid AUDIT_TRAIL.md", result["structuredContent"]["error"])
+            after = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
+            self.assertEqual(after, before)
+
+    def test_write_plan_rejects_audit_leaf_symlink_without_copying_target(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(self._make_task(tmp, "TASK__auditsymlink"))
+            sentinel = Path(tmp) / "audit-sentinel"
+            sentinel.write_text("TOP_SECRET_SENTINEL", encoding="utf-8")
+            audit = task_dir / "AUDIT_TRAIL.md"
+            audit.symlink_to(sentinel)
+            plan_before = (task_dir / "PLAN.md").read_bytes()
+            result = self._call_in_repo(
+                tmp,
+                "write_plan",
+                {
+                    "task_dir": str(task_dir),
+                    "plan": "# Replacement\n",
+                    "audit": "| 1 | phase | decision |\n",
+                },
+            )
+            self.assertTrue(result.get("isError"))
+            self.assertIn("unsafe AUDIT_TRAIL.md", result["structuredContent"]["error"])
+            self.assertEqual((task_dir / "PLAN.md").read_bytes(), plan_before)
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "TOP_SECRET_SENTINEL")
+            self.assertTrue(audit.is_symlink())
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO artifact regression requires POSIX")
+    def test_write_plan_rejects_audit_fifo_without_blocking(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(self._make_task(tmp, "TASK__auditfifo"))
+            audit = task_dir / "AUDIT_TRAIL.md"
+            os.mkfifo(audit)
+            result = self._call_in_repo(
+                tmp,
+                "write_plan",
+                {
+                    "task_dir": str(task_dir),
+                    "plan": "# Replacement\n",
+                    "audit": "| 1 | phase | decision |\n",
+                },
+            )
+            self.assertTrue(result.get("isError"))
+            self.assertIn("unsafe AUDIT_TRAIL.md", result["structuredContent"]["error"])
+
     def test_write_plan_appends_audit_header_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__auditmcp")
             for row in ("| 1 | p | d | c | p | r | - |\n", "| 2 | p | d2 | c | p | r | - |\n"):
-                result = harness_server.call_tool(
+                result = self._call_in_repo(
+                    tmp,
                     "write_plan",
                     {"task_dir": task_dir, "plan": "# Plan\n", "audit": row},
                 )
@@ -803,6 +1181,214 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(body.count("| # | phase | decision | classification | principle | rationale | rejected_option |"), 1)
             self.assertIn("| 1 |", body)
             self.assertIn("| 2 |", body)
+
+    def test_write_plan_rejects_malformed_checks_before_any_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__malformedchecks")
+            before = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
+            result = self._call_in_repo(
+                tmp,
+                "write_plan",
+                {
+                    "task_dir": task_dir,
+                    "plan": "# Replacement\n",
+                    "checks": "- id: AC-001\n  title: missing status\n",
+                },
+            )
+            self.assertTrue(result.get("isError"))
+            self.assertIn("invalid CHECKS.yaml", result["structuredContent"]["error"])
+            after = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
+            self.assertEqual(after, before)
+
+    def test_present_invalid_checks_are_not_absent_or_auto_promoted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__invalidchecks")
+            checks = Path(task_dir) / "CHECKS.yaml"
+            checks.write_text("- id: AC-001\n  status: mystery\n", encoding="utf-8")
+            self._write_subagent_receipt(task_dir)
+            self.assertEqual(harness_server._checks_gate_status(task_dir)[0], "invalid")
+            before = checks.read_bytes()
+            self.assertEqual(harness_server._auto_promote_open_acs(task_dir, "PASS"), [])
+            self.assertEqual(checks.read_bytes(), before)
+            original_ctd = harness_server.canonical_task_dir
+            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
+            try:
+                verify = harness_server.call_tool(
+                    "task_verify", {"task_id": "TASK__invalidchecks", "reconcile_acs": True}
+                )
+            finally:
+                harness_server.canonical_task_dir = original_ctd
+            self.assertIn("present but invalid", verify["structuredContent"]["ac_reconcile"]["reason"])
+
+    def test_checks_gate_rejects_symlink_and_non_regular_ledger_leaves(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__invalidchecksleaf")
+            checks = Path(task_dir) / "CHECKS.yaml"
+            external = Path(tmp) / "external-checks.yaml"
+            external.write_text("- id: AC-001\n  status: passed\n", encoding="utf-8")
+
+            checks.symlink_to(external)
+            self.assertEqual(harness_server._checks_gate_status(task_dir)[0], "invalid")
+            self.assertEqual(harness_server._auto_promote_open_acs(task_dir, "PASS"), [])
+            self.assertEqual(external.read_text(encoding="utf-8"), "- id: AC-001\n  status: passed\n")
+
+            checks.unlink()
+            checks.mkdir()
+            self.assertEqual(harness_server._checks_gate_status(task_dir)[0], "invalid")
+
+            if hasattr(os, "mkfifo"):
+                checks.rmdir()
+                os.mkfifo(checks)
+                self.assertEqual(harness_server._checks_gate_status(task_dir)[0], "invalid")
+                self.assertEqual(harness_server._auto_promote_open_acs(task_dir, "PASS"), [])
+
+    def test_checks_parser_rejects_empty_duplicate_missing_and_invalid_fields(self):
+        invalid_ledgers = (
+            " \n",
+            "- id: \n  status: open\n",
+            "- id: AC-001\n  status: open\n- id: AC-001\n  status: passed\n",
+            "- id: AC-001\n  title: no status\n",
+            "- id: AC-001\n  status: mystery\n",
+            "not-a-checks-ledger\n",
+            "- id: AC-001\n  status: open\nunindented garbage\n",
+            "- id: AC-001\n  status: open\n  - stray list item\n",
+            "- id: AC-001\n  status: open\n  status: passed\n",
+            "- id: AC-001\n  status: passed\n  - id: AC-002\n    status: passed\n",
+            '- id: "AC-001\n  status: open\n',
+            '- id: AC-001\n  status: "open\n',
+        )
+        for ledger in invalid_ledgers:
+            with self.subTest(ledger=ledger):
+                with self.assertRaises(ValueError):
+                    harness_server._parse_checks_text(ledger)
+
+    def test_malformed_quoted_checks_never_promote_or_pass_gate(self):
+        malformed = (
+            '- id: "AC-001\n  status: open\n',
+            '- id: AC-001\n  status: "open\n',
+        )
+        for ledger in malformed:
+            with self.subTest(ledger=ledger), tempfile.TemporaryDirectory() as tmp:
+                task_dir = self._make_task(tmp, "TASK__malformed-quotes")
+                checks = Path(task_dir) / "CHECKS.yaml"
+                checks.write_text(ledger, encoding="utf-8")
+                before = checks.read_bytes()
+                self.assertEqual(harness_server._checks_gate_status(task_dir)[0], "invalid")
+                self.assertEqual(harness_server._auto_promote_open_acs(task_dir, "PASS"), [])
+                self.assertEqual(checks.read_bytes(), before)
+
+    def test_checks_parser_preserves_supported_flat_and_wrapped_shapes(self):
+        flat = '- id: AC-001\n  title: "flat"\n  status: open\n  extra: kept\n'
+        wrapped = (
+            "version: 1\nchecks:\n"
+            "  - id: AC-002\n    description: wrapped\n    status: implemented_candidate\n"
+        )
+        self.assertEqual(harness_server._parse_checks_text(flat)[0]["title"], "flat")
+        self.assertEqual(
+            harness_server._parse_checks_text(wrapped)[0]["status"],
+            "implemented_candidate",
+        )
+        for legacy_wrapper in ("acs", "acceptance"):
+            with self.subTest(legacy_wrapper=legacy_wrapper):
+                legacy = (
+                    f"task_id: TASK__legacy\n{legacy_wrapper}:\n"
+                    "  - id: AC-LEGACY\n"
+                    "    description: repository-proven wrapper\n"
+                    "    status: open\n"
+                )
+                self.assertEqual(
+                    harness_server._parse_checks_text(legacy)[0]["id"],
+                    "AC-LEGACY",
+                )
+        nested_unknown = (
+            "task_id: TASK__compat\n"
+            "metadata:\n"
+            "  source: legacy\n"
+            "checks:\n"
+            "  - id: AC-003\n"
+            "    status: open\n"
+            "    files:\n"
+            "      - plugin/scripts/_lib.py\n"
+            "    checks:\n"
+            "      note: nested metadata\n"
+            "    evidence_log:\n"
+            "      - id: evidence-row\n"
+            "        path: tests/test_harness_mcp_server.py\n"
+        )
+        self.assertEqual(harness_server._parse_checks_text(nested_unknown)[0]["id"], "AC-003")
+
+        trailing_metadata = (
+            "version: 1\n"
+            "checks:\n"
+            "  - id: AC-TRAILING\n"
+            "    status: open\n"
+            "metadata:\n"
+            "  source: legacy\n"
+            "trailer: kept\n"
+        )
+        self.assertEqual(
+            harness_server._parse_checks_text(trailing_metadata)[0]["id"],
+            "AC-TRAILING",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__trailing-metadata")
+            checks = Path(task_dir) / "CHECKS.yaml"
+            checks.write_text(trailing_metadata, encoding="utf-8")
+            self.assertEqual(
+                harness_server._auto_promote_open_acs(task_dir, "trailing compatibility"),
+                ["AC-TRAILING"],
+            )
+            result_text = checks.read_text(encoding="utf-8")
+            self.assertLess(result_text.index("checks:"), result_text.index("- id: AC-TRAILING"))
+            self.assertLess(result_text.index("- id: AC-TRAILING"), result_text.index("metadata:"))
+            self.assertIn("  source: legacy", result_text)
+            self.assertIn("trailer: kept", result_text)
+            self.assertEqual(harness_server._parse_checks_text(result_text)[0]["status"], "passed")
+
+        for wrapper, item_indent, field_indent in (("", "", "  "), ("checks:\n", "  ", "    ")):
+            with self.subTest(quoted_wrapper=bool(wrapper)), tempfile.TemporaryDirectory() as tmp:
+                task_dir = self._make_task(tmp, "TASK__quoted-promotion")
+                checks = Path(task_dir) / "CHECKS.yaml"
+                checks.write_text(
+                    wrapper
+                    + f'{item_indent}- id: "AC-QUOTED"\n'
+                    + f'{field_indent}status: "open"\n',
+                    encoding="utf-8",
+                )
+                self.assertEqual(
+                    harness_server._auto_promote_open_acs(task_dir, "quoted compatibility"),
+                    ["AC-QUOTED"],
+                )
+                self.assertEqual(harness_server._parse_checks_yaml(task_dir)[0]["status"], "passed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__nested-promotion")
+            checks = Path(task_dir) / "CHECKS.yaml"
+            checks.write_text(nested_unknown, encoding="utf-8")
+            promoted = harness_server._auto_promote_open_acs(task_dir, "nested compatibility")
+            result_text = checks.read_text(encoding="utf-8")
+            reparsed = harness_server._parse_checks_text(result_text)
+            self.assertEqual(promoted, ["AC-003"])
+            self.assertEqual([(item["id"], item["status"]) for item in reparsed], [("AC-003", "passed")])
+            self.assertIn("- id: evidence-row", result_text)
+
+        nested_collision = (
+            "- id: AC-004\n"
+            "  metadata:\n"
+            "    status: open\n"
+            "    last_updated: nested\n"
+            "    evidence: nested\n"
+            "  status: failed\n"
+            "  last_updated: direct\n"
+            "  evidence: direct\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__nested-collision")
+            checks = Path(task_dir) / "CHECKS.yaml"
+            checks.write_text(nested_collision, encoding="utf-8")
+            before = checks.read_bytes()
+            self.assertEqual(harness_server._auto_promote_open_acs(task_dir, "must not promote"), [])
+            self.assertEqual(checks.read_bytes(), before)
 
 
 class HarnessMcpServerPR2CloseGate(unittest.TestCase):
@@ -1236,6 +1822,47 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         self.assertTrue(result["structuredContent"]["closed"])
 
     # ---- AC-003: missing CHECKS.yaml warn-passes + logs ----
+    def test_close_blocks_present_structurally_invalid_checks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp,
+                "TASK__invalid-checks-close",
+                checks_yaml="- id: AC-001\n  status: passed\nunindented garbage\n",
+            )
+            self._patch(td)
+            try:
+                result = harness_server.call_tool(
+                    "task_close", {"task_id": "TASK__invalid-checks-close"}
+                )
+            finally:
+                self._unpatch()
+        self.assertTrue(result.get("isError"))
+        self.assertIn("invalid", result["structuredContent"]["error"])
+
+    def test_close_blocks_if_checks_become_invalid_during_final_reread(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp,
+                "TASK__checks-toctou",
+                checks_yaml="- id: AC-001\n  status: passed\n",
+            )
+            self._patch(td)
+            try:
+                with mock.patch.object(
+                    harness_server,
+                    "_checks_gate_status",
+                    side_effect=[("ok", []), ("invalid", [])],
+                ):
+                    result = harness_server.call_tool(
+                        "task_close", {"task_id": "TASK__checks-toctou"}
+                    )
+            finally:
+                self._unpatch()
+            state = Path(td, "TASK_STATE.yaml").read_text(encoding="utf-8")
+        self.assertTrue(result.get("isError"))
+        self.assertTrue(result["structuredContent"]["checks_invalid"])
+        self.assertNotIn("status: closed", state)
+
     def test_close_warn_passes_without_checks_yaml(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(tmp, "TASK__pr2-003", checks_yaml=None)

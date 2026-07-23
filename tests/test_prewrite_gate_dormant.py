@@ -198,7 +198,7 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
             sessions = os.path.join(tasks_dir, ".active_sessions")
             os.makedirs(sessions, exist_ok=True)
             with open(os.path.join(sessions, "s1.json"), "w", encoding="utf-8") as f:
-                json.dump({"session_id": "s1", "task_dir": task_dir}, f)
+                json.dump({"session_id": "s1", "task_id": "TASK__session", "task_dir": task_dir}, f)
             target = os.path.join(tmpdir, "foo.py")
             r = _invoke_payload(tmpdir, {
                 "tool_name": "Write",

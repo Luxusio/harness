@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -128,6 +129,12 @@ def _opt(args: dict, k: str) -> str | None:
     return v.strip() if isinstance(v, str) and v.strip() else None
 
 
+def _selector_opt(args: dict, k: str) -> str | None:
+    """Return selector text verbatim so validation can reject hidden whitespace."""
+    v = args.get(k)
+    return v if isinstance(v, str) and v else None
+
+
 def _task_artifact_rel(td: str, fn: str) -> str:
     return f"doc/harness/tasks/{os.path.basename(td)}/{fn}" if artifact_exists(td, fn) else ""
 
@@ -212,53 +219,158 @@ def _cleanup_orphan_index_lock(repo_root: str, max_age_secs: int = 0) -> bool:
 # file. See `_lib.py` for the full helper + skip-list constants.
 
 
-def _parse_checks_yaml(td: str) -> list[dict] | None:
-    """Parse CHECKS.yaml into [{id, status, title}, ...].
+_CHECKS_VALID_STATUSES = {"open", "implemented_candidate", "passed", "failed", "deferred"}
 
-    Returns ``None`` when the file is missing (pre-PR2 task compatibility);
-    caller warn-logs and proceeds. Returns ``[]`` when the file is present
-    but empty or unparseable — treat as same as missing after logging. Uses
-    block-scanning so we don't pull in PyYAML; matches the
-    ``update_checks.py`` parser shape.
-    """
-    checks_path = os.path.join(td, "CHECKS.yaml")
-    if not os.path.isfile(checks_path):
-        return None
-    try:
-        with open(checks_path, encoding="utf-8") as f:
-            text = f.read()
-    except OSError:
-        return []
 
-    import re
+def _checks_scalar(value: str, *, label: str) -> str:
+    scalar = value.strip()
+    starts_quoted = bool(scalar) and scalar[0] in {'"', "'"}
+    ends_quoted = bool(scalar) and scalar[-1] in {'"', "'"}
+    if starts_quoted or ends_quoted:
+        if len(scalar) < 2 or not starts_quoted or scalar[0] != scalar[-1]:
+            raise ValueError(f"CHECKS.yaml contains malformed quoted {label}")
+        return scalar[1:-1]
+    return scalar
+
+
+def _checks_item_indent(lines: list[str]) -> int:
+    wrapper = next(
+        (re.match(r"^(?:checks|acceptance_criteria|acs|acceptance):\s*$", line) for line in lines
+         if re.match(r"^(?:checks|acceptance_criteria|acs|acceptance):\s*$", line)),
+        None,
+    )
+    return 2 if wrapper else 0
+
+
+def _parse_checks_text(text: str) -> list[dict]:
+    if not text.strip():
+        raise ValueError("CHECKS.yaml is empty")
+    lines = text.splitlines()
+    expected_item_indent = _checks_item_indent(lines)
     blocks: list[str] = []
     current: list[str] = []
-    for line in text.splitlines():
-        if re.match(r"^\s*-\s+id:\s*", line):
+    prefix: list[str] = []
+    suffix_started = False
+    for line in lines:
+        item_match = re.match(r"^(\s*)-\s+id:\s*", line)
+        if item_match and len(item_match.group(1)) == expected_item_indent:
+            if suffix_started:
+                raise ValueError("CHECKS.yaml AC list cannot resume after top-level suffix metadata")
             if current:
                 blocks.append("\n".join(current))
             current = [line]
         elif current:
-            current.append(line)
+            leading = len(line) - len(line.lstrip())
+            if line.strip() and expected_item_indent > 0 and leading < expected_item_indent:
+                blocks.append("\n".join(current))
+                current = []
+                suffix_started = True
+                prefix.append(line)
+            else:
+                current.append(line)
+        else:
+            prefix.append(line)
     if current:
         blocks.append("\n".join(current))
+    prefix_nested_allowed = False
+    prefix_valid = True
+    for line in prefix:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        leading = len(line) - len(line.lstrip())
+        if leading:
+            if not prefix_nested_allowed:
+                prefix_valid = False
+                break
+            continue
+        field_match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$", line)
+        if not field_match:
+            prefix_valid = False
+            break
+        prefix_nested_allowed = field_match.group(2).strip() in {"", "|", ">", "|-", ">-"}
+    if not prefix_valid or not blocks:
+        raise ValueError("CHECKS.yaml has no parseable AC list")
 
     items: list[dict] = []
+    seen: set[str] = set()
     for block in blocks:
-        m_id = re.match(r"^\s*-\s+id:\s*(\S+)", block)
-        m_status = re.search(r"^\s+status:\s*(\S+)", block, re.MULTILINE)
-        m_title = re.search(r'^\s+title:\s*"?(.*?)"?\s*$', block, re.MULTILINE)
-        if not m_id:
-            continue
-        title = (m_title.group(1) if m_title else "").strip().strip('"').strip("'")
-        if len(title) > 120:
-            title = title[:117] + "..."
-        items.append({
-            "id": m_id.group(1),
-            "status": (m_status.group(1) if m_status else "open").strip(),
-            "title": title,
-        })
+        block_lines = block.splitlines()
+        first_line = block_lines[0]
+        m_id = re.match(r"^(\s*)-\s+id:\s*(.*?)\s*$", first_line)
+        field_indent = len(m_id.group(1)) + 2 if m_id else 2
+        nested_allowed = False
+        direct_fields: list[tuple[str, str]] = []
+        for line in block_lines[1:]:
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            leading = len(line) - len(line.lstrip())
+            if leading < field_indent:
+                raise ValueError("CHECKS.yaml contains malformed content inside an AC block")
+            if leading > field_indent:
+                if not nested_allowed:
+                    raise ValueError("CHECKS.yaml contains malformed nested content inside an AC block")
+                continue
+            field_match = re.match(r"^\s+([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$", line)
+            if not field_match:
+                raise ValueError("CHECKS.yaml contains malformed content inside an AC block")
+            field_name, field_value = field_match.groups()
+            direct_fields.append((field_name, field_value.strip()))
+            nested_allowed = field_value.strip() in {"", "|", ">", "|-", ">-"}
+        status_matches = [value for name, value in direct_fields if name == "status"]
+        if len(status_matches) != 1:
+            raise ValueError("CHECKS.yaml AC has missing or duplicate status")
+        title_values = [value for name, value in direct_fields if name in {"title", "description"}]
+        ac_id = _checks_scalar(m_id.group(2) if m_id else "", label="AC id")
+        status = _checks_scalar(status_matches[0], label="status")
+        if not ac_id or not re.fullmatch(r"AC-[A-Za-z0-9_.-]+", ac_id):
+            raise ValueError("CHECKS.yaml contains an empty or invalid AC id")
+        if ac_id in seen:
+            raise ValueError(f"CHECKS.yaml contains duplicate AC id {ac_id}")
+        if status not in _CHECKS_VALID_STATUSES:
+            raise ValueError(f"CHECKS.yaml AC {ac_id} has missing or invalid status")
+        seen.add(ac_id)
+        title = _checks_scalar(title_values[0] if title_values else "", label="title")
+        items.append({"id": ac_id, "status": status, "title": title[:120]})
     return items
+
+
+def _parse_checks_yaml(td: str) -> list[dict] | None:
+    """Parse CHECKS.yaml into [{id, status, title}, ...].
+
+    Returns ``None`` only when the file is missing (legacy compatibility), and
+    ``[]`` when a present ledger is invalid. Uses a narrow block scanner so the
+    control plane does not add a YAML dependency.
+    """
+    checks_path = os.path.join(td, "CHECKS.yaml")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
+    try:
+        fd = os.open(checks_path, flags)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return []
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return []
+        with os.fdopen(fd, encoding="utf-8") as f:
+            fd = -1
+            text = f.read()
+    except (OSError, UnicodeError):
+        return []
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+    try:
+        return _parse_checks_text(text)
+    except ValueError:
+        return []
 
 
 _CHECKS_GATE_TERMINAL = {"passed", "deferred"}
@@ -322,7 +434,7 @@ def _checks_gate_status(td: str) -> tuple[str, list[dict]]:
     if items is None:
         return "absent", []
     if not items:
-        return "absent", []
+        return "invalid", []
     blocking = [ac for ac in items if ac["status"] not in _CHECKS_GATE_TERMINAL]
     return ("blocked" if blocking else "ok"), blocking
 
@@ -336,13 +448,15 @@ def _truthy(v: Any) -> bool:
 
 
 def _set_block_field(block: str, field: str, value: str) -> str:
-    pattern = rf"^(\s+{re.escape(field)}:\s*).*$"
-    replacement = rf"\1{value}"
+    item_match = re.match(r"^(\s*)-\s+id:\s*", block)
+    indent = (item_match.group(1) if item_match else "") + "  "
+    pattern = rf"^{re.escape(indent)}{re.escape(field)}:\s*.*$"
+    replacement = f"{indent}{field}: {value}"
     new, count = re.subn(pattern, replacement, block, count=1, flags=re.MULTILINE)
     if count:
         return new
     suffix = "\n" if block.endswith("\n") else ""
-    return block.rstrip("\n") + f"\n  {field}: {value}" + suffix
+    return block.rstrip("\n") + f"\n{indent}{field}: {value}" + suffix
 
 
 def _auto_promote_open_acs(td: str, evidence: str) -> list[str]:
@@ -353,26 +467,42 @@ def _auto_promote_open_acs(td: str, evidence: str) -> list[str]:
     exceptions or previous failures.
     """
     checks_path = os.path.join(td, "CHECKS.yaml")
-    if not os.path.isfile(checks_path):
-        return []
     try:
-        with open(checks_path, encoding="utf-8") as f:
-            text = f.read()
-    except OSError:
+        text = _read_regular_text_no_follow(checks_path)
+    except (OSError, UnicodeError, ValueError):
         return []
     if not text.strip():
+        return []
+    try:
+        _parse_checks_text(text)
+    except ValueError:
         return []
 
     blocks: list[str] = []
     current: list[str] = []
     prefix_lines: list[str] = []
+    suffix_lines: list[str] = []
+    suffix_started = False
+    expected_item_indent = _checks_item_indent(text.splitlines())
     for line in text.splitlines():
-        if re.match(r"^\s*-\s+id:\s*", line):
+        item_match = re.match(r"^(\s*)-\s+id:\s*", line)
+        if item_match and len(item_match.group(1)) == expected_item_indent:
+            if suffix_started:
+                return []
             if current:
                 blocks.append("\n".join(current))
             current = [line]
         elif current:
-            current.append(line)
+            leading = len(line) - len(line.lstrip())
+            if line.strip() and expected_item_indent > 0 and leading < expected_item_indent:
+                blocks.append("\n".join(current))
+                current = []
+                suffix_started = True
+                suffix_lines.append(line)
+            else:
+                current.append(line)
+        elif suffix_started:
+            suffix_lines.append(line)
         else:
             prefix_lines.append(line)
     if current:
@@ -387,17 +517,25 @@ def _auto_promote_open_acs(td: str, evidence: str) -> list[str]:
         safe_evidence = safe_evidence[:237].rstrip() + "..."
     for block in blocks:
         m_id = re.match(r"^\s*-\s+id:\s*(\S+)", block)
-        m_status = re.search(r"^\s+status:\s*(\S+)", block, re.MULTILINE)
-        status = (m_status.group(1) if m_status else "open").strip()
-        if m_id and status in _AC_AUTO_PROMOTE_STATUSES:
+        item_match = re.match(r"^(\s*)-\s+id:\s*", block)
+        direct_indent = (item_match.group(1) if item_match else "") + "  "
+        m_status = re.search(
+            rf"^{re.escape(direct_indent)}status:\s*(\S+)", block, re.MULTILINE
+        )
+        try:
+            ac_id = _checks_scalar(m_id.group(1) if m_id else "", label="AC id")
+            status = _checks_scalar(m_status.group(1) if m_status else "open", label="status")
+        except ValueError:
+            return []
+        if ac_id and status in _AC_AUTO_PROMOTE_STATUSES:
             block = _set_block_field(block, "status", "passed")
             block = _set_block_field(block, "last_updated", now_iso())
             block = _set_block_field(block, "evidence", safe_evidence)
-            promoted.append(m_id.group(1))
+            promoted.append(ac_id)
         new_blocks.append(block)
     if not promoted:
         return []
-    new_text = "\n".join([p for p in prefix_lines if p] + new_blocks) + "\n"
+    new_text = "\n".join(prefix_lines + new_blocks + suffix_lines).rstrip("\n") + "\n"
     try:
         _atomic_write_text(checks_path, new_text)
     except OSError:
@@ -407,6 +545,12 @@ def _auto_promote_open_acs(td: str, evidence: str) -> list[str]:
 
 def _reconcile_acs_from_qa(td: str) -> dict:
     """Promote open ACs after all required QA completion receipts pass."""
+    checks_status, _ = _checks_gate_status(td)
+    if checks_status == "invalid":
+        return {
+            "promoted_acs": [],
+            "reason": "CHECKS.yaml is present but invalid; fix it before reconciliation",
+        }
     st = read_state(td)
     runtime_verdict = receipt_runtime_verdict(td, st)
     if runtime_verdict != "PASS":
@@ -443,30 +587,50 @@ def _log_gate_warn(task_id: str, key: str, insight: str) -> None:
 
 
 def _resolve_td(args: dict) -> str:
-    td = _opt(args, "task_dir")
-    ti = _opt(args, "task_id")
-    if ti:
-        return canonical_task_dir(task_id=ti)
-    if td:
-        return td
+    td = _selector_opt(args, "task_dir")
+    ti = _selector_opt(args, "task_id")
+    if ti or td:
+        return canonical_task_dir(task_id=ti, task_dir=td, repo_root=find_repo_root())
     raise ValueError("task_id or task_dir required")
+
+
+def _validated_task_state(td: str) -> dict:
+    state = read_state(td)
+    return state if state.get("task_id") == os.path.basename(td) else {}
+
+
+def _invalid_task_state_error(operation: str, td: str) -> dict:
+    return _err(
+        f"{operation} failed: missing or invalid TASK_STATE.yaml",
+        data={
+            "task_dir": td,
+            "next_action": "Restore a regular TASK_STATE.yaml whose task_id matches the canonical task directory, or call task_start to initialize it.",
+        },
+    )
 
 
 # ── Tool handlers ────────────────────────────────────────────────────────
 
 
 def handle_task_start(args: dict) -> dict:
-    td = _opt(args, "task_dir")
-    ti = _opt(args, "task_id")
-    sl = _opt(args, "slug")
+    td = _selector_opt(args, "task_dir")
+    ti = _selector_opt(args, "task_id")
+    sl = _selector_opt(args, "slug")
     rf = _opt(args, "request_file")
     if not td and not ti and not sl:
         raise ValueError("task_start requires task_dir, task_id, or slug")
 
     repo_root = find_repo_root()
+    task_dir = canonical_task_dir(task_id=ti, slug=sl, task_dir=td, repo_root=repo_root)
+    tid = canonical_task_id(task_dir=task_dir, repo_root=repo_root)
+    existing_state_path = os.path.join(task_dir, "TASK_STATE.yaml")
+    if os.path.lexists(existing_state_path):
+        existing_state = read_state(task_dir)
+        if existing_state.get("task_id") != tid:
+            raise ValueError(
+                "task_start refused existing TASK_STATE.yaml whose task_id does not match the canonical task directory"
+            )
     _cleanup_orphan_index_lock(repo_root)
-    task_dir = td or canonical_task_dir(task_id=ti, slug=sl, repo_root=repo_root)
-    tid = canonical_task_id(task_id=ti, slug=sl, task_dir=task_dir)
 
     request_text = ""
     if rf:
@@ -527,7 +691,7 @@ def handle_goal_start(args: dict) -> dict:
     state = start_harness_goal(
         repo_root,
         objective,
-        goal_id=_opt(args, "goal_id"),
+        goal_id=_selector_opt(args, "goal_id"),
         source=source,
     )
     return _ok({"goal": state, "next_action": "Use goal_context; if no child task exists, task_start then goal_add_task."})
@@ -549,7 +713,7 @@ def handle_goal_add_task(args: dict) -> dict:
         task_id,
         title=_opt(args, "title") or "",
         status=_opt(args, "status") or "queued",
-        task_dir=_opt(args, "task_dir") or "",
+        task_dir=_selector_opt(args, "task_dir") or "",
     )
     return _ok({"goal": state})
 
@@ -576,7 +740,9 @@ def handle_goal_finish(args: dict) -> dict:
 
 def handle_task_context(args: dict) -> dict:
     ti = _req(args, "task_id")
-    td = canonical_task_dir(task_id=ti)
+    td = canonical_task_dir(task_id=ti, repo_root=find_repo_root())
+    if not _validated_task_state(td):
+        return _invalid_task_state_error("task_context", td)
     with review_snapshot_scope():
         ctx = emit_compact_context(td)
         if "error" in ctx:
@@ -591,7 +757,9 @@ def handle_task_context(args: dict) -> dict:
 
 def handle_task_verify(args: dict) -> dict:
     ti = _req(args, "task_id")
-    td = canonical_task_dir(task_id=ti)
+    td = canonical_task_dir(task_id=ti, repo_root=find_repo_root())
+    if not _validated_task_state(td):
+        return _invalid_task_state_error("task_verify", td)
     with review_snapshot_scope():
         sync_from_git_diff(td)
         verify_run = None
@@ -642,7 +810,9 @@ def handle_task_verify(args: dict) -> dict:
 
 def handle_task_close(args: dict) -> dict:
     ti = _req(args, "task_id")
-    td = canonical_task_dir(task_id=ti)
+    td = canonical_task_dir(task_id=ti, repo_root=find_repo_root())
+    if not _validated_task_state(td):
+        return _invalid_task_state_error("task_close", td)
     with review_snapshot_scope():
         try:
             sync_from_git_diff(td)
@@ -656,6 +826,14 @@ def handle_task_close(args: dict) -> dict:
         missing = ctx.get("missing_for_close") or []
         stale, stale_path = _runtime_is_stale(td)
         checks_status, blocking = _checks_gate_status(td)
+        if checks_status == "invalid":
+            return _err(
+                "task_close blocked: CHECKS.yaml is present but invalid",
+                data={
+                    "task_dir": td,
+                    "next_action": "Repair CHECKS.yaml through write_plan or update_checks.py, then re-run task_verify.",
+                },
+            )
         if missing:
             data = {
                 "task_dir": td, "missing_for_close": missing, "task_context": ctx,
@@ -713,7 +891,7 @@ def handle_task_close(args: dict) -> dict:
         snapshot_changed = final_snapshot != initial_snapshot
         head_unavailable = not final_head
         head_changed = final_head != initial_head
-        if receipt_stream_changed or snapshot_changed or head_unavailable or head_changed or final_missing or final_stale or final_checks_status == "blocked":
+        if receipt_stream_changed or snapshot_changed or head_unavailable or head_changed or final_missing or final_stale or final_checks_status in {"blocked", "invalid"}:
             return _err("task_close blocked: final freshness changed — re-run task_verify", data={
                 "task_dir": td,
                 "receipt_stream_changed": receipt_stream_changed,
@@ -725,9 +903,12 @@ def handle_task_close(args: dict) -> dict:
                 "stale": final_stale,
                 "stale_path": final_stale_path,
                 "blocking_acs": final_blocking if final_checks_status == "blocked" else [],
+                "checks_invalid": final_checks_status == "invalid",
             })
 
-        st = read_state(td)
+        st = _validated_task_state(td)
+        if not st:
+            return _invalid_task_state_error("task_close", td)
         st["status"] = "closed"
         st["closed_at"] = now_iso()
         st["updated"] = now_iso()
@@ -745,19 +926,17 @@ def handle_task_blocked(args: dict) -> dict:
     ti = _req(args, "task_id")
     reason = _req(args, "blocked_reason")
     unblock = _req(args, "unblock_condition")
-    td = canonical_task_dir(task_id=ti)
-    os.makedirs(td, exist_ok=True)
+    td = canonical_task_dir(task_id=ti, repo_root=find_repo_root())
+    st = _validated_task_state(td)
+    if not st:
+        return _invalid_task_state_error("task_blocked", td)
     blocked_md = (
         "# BLOCKED\n\n"
         f"## Blocked Reason\n{reason}\n\n"
         f"## Unblock Condition\n{unblock}\n\n"
         f"## Blocked At\n{now_iso()}\n"
     )
-    with open(os.path.join(td, "BLOCKED.md"), "w", encoding="utf-8") as f:
-        f.write(blocked_md)
-    st = read_state(td)
-    if not st:
-        return _err("task_blocked failed: missing TASK_STATE.yaml", data={"task_dir": td})
+    _atomic_write_text(os.path.join(td, "BLOCKED.md"), blocked_md)
     st["status"] = "blocked"
     st["runtime_verdict"] = "BLOCKED_ENV"
     st["updated"] = now_iso()
@@ -808,6 +987,29 @@ def _nonempty_artifact_content(value: str, *, artifact: str, filename: str) -> s
     return value
 
 
+def _valid_audit_content(value: str) -> bool:
+    lines = [line.strip() for line in value.splitlines() if line.strip()]
+    return bool(lines) and all(line.startswith("|") and line.count("|") >= 3 for line in lines)
+
+
+def _read_regular_text_no_follow(path: str) -> str:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
+    fd = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError("existing audit artifact is not a regular file")
+        with os.fdopen(fd, "r", encoding="utf-8") as f:
+            fd = -1
+            return f.read()
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def _record_write(path: str, text: str, written: list[str], bytes_written: dict[str, int]) -> None:
     _atomic_write_text(path, text)
     name = os.path.basename(path)
@@ -818,8 +1020,8 @@ def _record_write(path: str, text: str, written: list[str], bytes_written: dict[
 def handle_write_plan(args: dict) -> dict:
     """Write the minimal task-local planning artifacts in one MCP call."""
     td = _resolve_td(args)
-    if not os.path.isfile(os.path.join(td, "TASK_STATE.yaml")):
-        return _err("write_plan failed: missing TASK_STATE.yaml", data={"task_dir": td})
+    if not _validated_task_state(td):
+        return _invalid_task_state_error("write_plan", td)
     raw_plan = args.get("plan")
     plan = raw_plan if isinstance(raw_plan, str) else ""
     raw_checks = args.get("checks")
@@ -827,32 +1029,50 @@ def handle_write_plan(args: dict) -> dict:
     raw_audit = args.get("audit")
     audit = raw_audit if isinstance(raw_audit, str) else None
     meta = _coerce_meta(args.get("meta"))
-    written: list[str] = []
-    bytes_written: dict[str, int] = {}
-
     checked_plan = _nonempty_artifact_content(plan, artifact="plan", filename="PLAN.md")
     if isinstance(checked_plan, dict):
         return checked_plan
-    _record_write(os.path.join(td, "PLAN.md"), checked_plan, written, bytes_written)
-
     plan_meta = json.dumps(_plan_meta_dict(td, "PLAN.md", meta), indent=2, ensure_ascii=False) + "\n"
-    _record_write(os.path.join(td, "PLAN.meta.json"), plan_meta, written, bytes_written)
-
+    checked_checks = None
     if checks is not None:
         checked_checks = _nonempty_artifact_content(checks, artifact="checks", filename="CHECKS.yaml")
         if isinstance(checked_checks, dict):
             return checked_checks
-        _record_write(os.path.join(td, "CHECKS.yaml"), checked_checks, written, bytes_written)
+        try:
+            _parse_checks_text(checked_checks)
+        except ValueError as exc:
+            return _err(
+                f"write_plan refused invalid CHECKS.yaml: {exc}",
+                data={"artifact": "checks", "filename": "CHECKS.yaml", "written": [],
+                      "next_action": "Fix the named CHECKS ledger error and retry write_plan."},
+            )
 
+    checked_audit = None
+    audit_path = os.path.join(td, "AUDIT_TRAIL.md")
+    audit_content = None
     if audit is not None:
         checked_audit = _nonempty_artifact_content(audit, artifact="audit", filename="AUDIT_TRAIL.md")
         if isinstance(checked_audit, dict):
             return checked_audit
-        path = os.path.join(td, "AUDIT_TRAIL.md")
+        if not _valid_audit_content(checked_audit):
+            return _err(
+                "write_plan refused invalid AUDIT_TRAIL.md; expected Markdown table rows",
+                data={"artifact": "audit", "filename": "AUDIT_TRAIL.md", "written": [],
+                      "next_action": "Pass one or more Markdown table rows, or omit audit."},
+            )
         try:
-            existing = open(path, encoding="utf-8").read() if os.path.isfile(path) else ""
-        except OSError:
-            existing = ""
+            if os.path.isfile(audit_path):
+                existing = _read_regular_text_no_follow(audit_path)
+            elif os.path.lexists(audit_path):
+                raise ValueError("existing audit artifact is not a regular file")
+            else:
+                existing = ""
+        except (OSError, ValueError) as exc:
+            return _err(
+                f"write_plan refused unsafe AUDIT_TRAIL.md: {exc}",
+                data={"artifact": "audit", "filename": "AUDIT_TRAIL.md", "written": [],
+                      "next_action": "Replace the audit leaf with a regular repository file, then retry."},
+            )
         first_line = existing.lstrip("\n").split("\n")[0] if existing.strip() else ""
         has_header = first_line.startswith("| # |")
         if not existing.strip():
@@ -861,7 +1081,16 @@ def handle_write_plan(args: dict) -> dict:
             new_content = existing.rstrip("\n") + "\n" + checked_audit.rstrip("\n") + "\n"
         else:
             new_content = existing.rstrip("\n") + "\n\n" + AUDIT_HEADER + checked_audit.rstrip("\n") + "\n"
-        _record_write(path, new_content, written, bytes_written)
+        audit_content = new_content
+
+    written: list[str] = []
+    bytes_written: dict[str, int] = {}
+    _record_write(os.path.join(td, "PLAN.md"), checked_plan, written, bytes_written)
+    _record_write(os.path.join(td, "PLAN.meta.json"), plan_meta, written, bytes_written)
+    if checked_checks is not None:
+        _record_write(os.path.join(td, "CHECKS.yaml"), checked_checks, written, bytes_written)
+    if audit_content is not None:
+        _record_write(audit_path, audit_content, written, bytes_written)
 
     return _ok({
         "artifact": "plan",
@@ -970,7 +1199,39 @@ def call_tool(name: str, args: dict | None) -> dict:
     try:
         return TOOLS[name]["handler"](args or {})
     except ValueError as e:
-        return _err(str(e))
+        message = str(e)
+        supplied = args or {}
+        if "goal storage root" in message:
+            field = "goal_storage_root"
+            raw = "doc/harness/goals"
+            expected = "a real, non-symlink doc/harness/goals directory inside the repository"
+            next_action = "Restore doc/harness/goals and its existing parents as real repository directories, then retry."
+        elif "canonical task root" in message:
+            field = "task_storage_root"
+            raw = "doc/harness/tasks"
+            expected = "a real, non-symlink doc/harness/tasks directory inside the repository"
+            next_action = "Restore doc/harness/tasks and its existing parents as real repository directories, then retry."
+        else:
+            field = next(
+                (key for key in ("task_dir", "task_id", "slug", "goal_id") if key in message),
+                next((key for key in ("goal_id", "task_dir", "task_id", "slug") if key in supplied), "selector"),
+            )
+            raw = supplied.get(field) if field != "selector" else None
+            expected = (
+                "GOAL__<safe-id>, or omit goal_id"
+                if field == "goal_id"
+                else "TASK__<safe-id> or doc/harness/tasks/TASK__<safe-id>"
+            )
+            next_action = "Correct the named selector to the canonical form and retry without changing repository state."
+        rejected = repr(raw)
+        if len(rejected) > 160:
+            rejected = rejected[:157] + "..."
+        return _err(message, data={
+            "field": field,
+            "rejected_value": rejected,
+            "expected": expected,
+            "next_action": next_action,
+        })
     except Exception as e:
         return _err(f"{name} failed: {e}")
 

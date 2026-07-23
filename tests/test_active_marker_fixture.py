@@ -15,6 +15,8 @@ Covers AC-001..AC-005 in TASK__active-marker-test-fixture-race:
 from __future__ import annotations
 
 import inspect
+import importlib.util
+import json
 import os
 import shutil
 import tempfile
@@ -25,6 +27,11 @@ import conftest
 from conftest import REPO_ROOT, scratch_task_in_real_repo
 
 ACTIVE_PATH = os.path.join(REPO_ROOT, "doc", "harness", "tasks", ".active")
+LIB_PATH = os.path.join(REPO_ROOT, "plugin", "scripts", "_lib.py")
+_spec = importlib.util.spec_from_file_location("active_marker_lib", LIB_PATH)
+assert _spec and _spec.loader
+active_marker_lib = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(active_marker_lib)
 
 
 def _read_active(path: str = ACTIVE_PATH) -> str | None:
@@ -53,6 +60,200 @@ class FixtureContractTests(unittest.TestCase):
         lock_src = inspect.getsource(conftest.active_marker_lock)
         self.assertIn("active_marker_lock(root)", src)
         self.assertIn("fcntl.flock", lock_src)
+
+
+class ActiveMarkerResolutionTests(unittest.TestCase):
+    def _task(self, repo: str, task_id: str, status: str) -> str:
+        task = os.path.join(repo, "doc", "harness", "tasks", task_id)
+        os.makedirs(task, exist_ok=True)
+        with open(os.path.join(task, "TASK_STATE.yaml"), "w", encoding="utf-8") as f:
+            f.write(f"task_id: {task_id}\nstatus: {status}\n")
+        return task
+
+    def test_closed_session_marker_falls_back_to_live_legacy_marker(self):
+        with tempfile.TemporaryDirectory() as repo:
+            closed = self._task(repo, "TASK__closed", "closed")
+            live = self._task(repo, "TASK__live", "implementing")
+            active_marker_lib.write_active_marker(repo, closed, session_id="session-a")
+            with open(os.path.join(repo, "doc", "harness", "tasks", ".active"), "w", encoding="utf-8") as f:
+                f.write(live)
+            self.assertEqual(
+                active_marker_lib.resolve_active_task_dir(repo, session_id="session-a"),
+                live,
+            )
+
+    def test_live_session_marker_keeps_precedence(self):
+        with tempfile.TemporaryDirectory() as repo:
+            session_task = self._task(repo, "TASK__session", "verifying")
+            legacy_task = self._task(repo, "TASK__legacy", "implementing")
+            active_marker_lib.write_active_marker(repo, session_task, session_id="session-a")
+            with open(os.path.join(repo, "doc", "harness", "tasks", ".active"), "w", encoding="utf-8") as f:
+                f.write(legacy_task)
+            self.assertEqual(
+                active_marker_lib.resolve_active_task_dir(repo, session_id="session-a"),
+                session_task,
+            )
+
+    def test_active_iterator_excludes_closed_session_markers(self):
+        with tempfile.TemporaryDirectory() as repo:
+            closed = self._task(repo, "TASK__closed", "closed")
+            live = self._task(repo, "TASK__live", "planning")
+            active_marker_lib.write_active_marker(repo, closed, session_id="closed-session")
+            active_marker_lib.write_active_marker(repo, live, session_id="live-session")
+            self.assertEqual(list(active_marker_lib.iter_active_task_dirs(repo)), [live])
+
+    def test_session_state_task_id_mismatch_falls_back_and_is_not_iterated(self):
+        with tempfile.TemporaryDirectory() as repo:
+            mismatched = self._task(repo, "TASK__marker-name", "implementing")
+            with open(os.path.join(mismatched, "TASK_STATE.yaml"), "w", encoding="utf-8") as f:
+                f.write("task_id: TASK__different\nstatus: implementing\n")
+            legacy = self._task(repo, "TASK__legacy", "planning")
+            active_marker_lib.write_active_marker(repo, mismatched, session_id="session-a")
+            with open(os.path.join(repo, "doc", "harness", "tasks", ".active"), "w", encoding="utf-8") as f:
+                f.write(legacy)
+            self.assertEqual(
+                active_marker_lib.resolve_active_task_dir(repo, session_id="session-a"),
+                legacy,
+            )
+            self.assertEqual(list(active_marker_lib.iter_active_task_dirs(repo)), [legacy])
+
+    def test_session_state_missing_task_id_falls_back_and_is_not_iterated(self):
+        with tempfile.TemporaryDirectory() as repo:
+            missing = self._task(repo, "TASK__marker-name", "implementing")
+            with open(os.path.join(missing, "TASK_STATE.yaml"), "w", encoding="utf-8") as f:
+                f.write("status: implementing\n")
+            legacy = self._task(repo, "TASK__legacy", "planning")
+            active_marker_lib.write_active_marker(repo, missing, session_id="session-a")
+            with open(os.path.join(repo, "doc", "harness", "tasks", ".active"), "w", encoding="utf-8") as f:
+                f.write(legacy)
+            self.assertEqual(
+                active_marker_lib.resolve_active_task_dir(repo, session_id="session-a"),
+                legacy,
+            )
+            self.assertEqual(list(active_marker_lib.iter_active_task_dirs(repo)), [legacy])
+
+    def test_session_marker_leaf_and_payload_identity_fail_closed(self):
+        with tempfile.TemporaryDirectory() as repo:
+            session_task = self._task(repo, "TASK__session", "implementing")
+            legacy = self._task(repo, "TASK__legacy", "planning")
+            active_marker_lib.write_active_marker(repo, session_task, session_id="session-a")
+            tasks = os.path.join(repo, "doc", "harness", "tasks")
+            marker = os.path.join(tasks, ".active_sessions", "session-a.json")
+            legacy_marker = os.path.join(tasks, ".active")
+            with open(legacy_marker, "w", encoding="utf-8") as f:
+                f.write(legacy)
+
+            with open(marker, "r", encoding="utf-8") as f:
+                valid = json.load(f)
+            for field, value in (("session_id", "session-b"), ("task_id", "TASK__other")):
+                with self.subTest(field=field):
+                    payload = dict(valid)
+                    payload[field] = value
+                    with open(marker, "w", encoding="utf-8") as f:
+                        json.dump(payload, f)
+                    self.assertEqual(
+                        active_marker_lib.resolve_active_task_dir(repo, session_id="session-a"),
+                        legacy,
+                    )
+                    self.assertEqual(list(active_marker_lib.iter_active_task_dirs(repo)), [legacy])
+
+            external = os.path.join(repo, "external-session.json")
+            with open(external, "w", encoding="utf-8") as f:
+                json.dump(valid, f)
+            os.unlink(marker)
+            os.symlink(external, marker)
+            self.assertEqual(
+                active_marker_lib.resolve_active_task_dir(repo, session_id="session-a"),
+                legacy,
+            )
+            self.assertEqual(list(active_marker_lib.iter_active_task_dirs(repo)), [legacy])
+
+    def test_symlinked_legacy_marker_is_not_followed(self):
+        with tempfile.TemporaryDirectory() as repo:
+            live = self._task(repo, "TASK__live", "implementing")
+            tasks = os.path.join(repo, "doc", "harness", "tasks")
+            os.makedirs(os.path.join(tasks, ".active_sessions"))
+            external = os.path.join(repo, "external-active")
+            with open(external, "w", encoding="utf-8") as f:
+                f.write(live)
+            os.symlink(external, os.path.join(tasks, ".active"))
+            self.assertEqual(
+                active_marker_lib.resolve_active_task_dir(repo, session_id="missing"),
+                "",
+            )
+            self.assertEqual(list(active_marker_lib.iter_active_task_dirs(repo)), [])
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO marker regression requires POSIX")
+    def test_fifo_session_and_legacy_markers_are_ignored_without_blocking(self):
+        with tempfile.TemporaryDirectory() as repo:
+            legacy = self._task(repo, "TASK__legacy", "planning")
+            active_marker_lib.write_active_marker(repo, legacy, session_id="session-a")
+            tasks = os.path.join(repo, "doc", "harness", "tasks")
+            session_marker = os.path.join(tasks, ".active_sessions", "session-a.json")
+            legacy_marker = os.path.join(tasks, ".active")
+
+            os.unlink(session_marker)
+            os.mkfifo(session_marker)
+            self.assertEqual(
+                active_marker_lib.resolve_active_task_dir(repo, session_id="session-a"),
+                legacy,
+            )
+            self.assertEqual(list(active_marker_lib.iter_active_task_dirs(repo)), [legacy])
+
+            os.unlink(session_marker)
+            os.unlink(legacy_marker)
+            os.mkfifo(legacy_marker)
+            self.assertEqual(
+                active_marker_lib.resolve_active_task_dir(repo, session_id="session-a"),
+                "",
+            )
+            self.assertEqual(list(active_marker_lib.iter_active_task_dirs(repo)), [])
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO state regression requires POSIX")
+    def test_symlinked_and_fifo_task_state_do_not_activate_task(self):
+        with tempfile.TemporaryDirectory() as repo:
+            task = self._task(repo, "TASK__unsafe-state", "implementing")
+            fallback = self._task(repo, "TASK__fallback", "planning")
+            active_marker_lib.write_active_marker(repo, task, session_id="session-a")
+            tasks = os.path.join(repo, "doc", "harness", "tasks")
+            with open(os.path.join(tasks, ".active"), "w", encoding="utf-8") as f:
+                f.write(fallback)
+            state = os.path.join(task, "TASK_STATE.yaml")
+            external = os.path.join(repo, "external-state.yaml")
+            with open(external, "w", encoding="utf-8") as f:
+                f.write("task_id: TASK__unsafe-state\nstatus: implementing\n")
+
+            os.unlink(state)
+            os.symlink(external, state)
+            self.assertEqual(
+                active_marker_lib.resolve_active_task_dir(repo, session_id="session-a"),
+                fallback,
+            )
+
+            os.unlink(state)
+            os.mkfifo(state)
+            self.assertEqual(
+                active_marker_lib.resolve_active_task_dir(repo, session_id="session-a"),
+                fallback,
+            )
+
+    def test_symlinked_active_sessions_root_never_writes_or_deletes_outside(self):
+        with tempfile.TemporaryDirectory() as repo:
+            task = self._task(repo, "TASK__live", "implementing")
+            tasks = os.path.join(repo, "doc", "harness", "tasks")
+            outside = os.path.join(repo, "outside-sessions")
+            os.makedirs(outside)
+            os.symlink(outside, os.path.join(tasks, ".active_sessions"))
+            sentinel = os.path.join(outside, "session-a.json")
+            with open(sentinel, "w", encoding="utf-8") as f:
+                f.write("keep")
+
+            with self.assertRaisesRegex(ValueError, "active session marker root"):
+                active_marker_lib.write_active_marker(repo, task, session_id="session-a")
+            active_marker_lib.clear_active_marker(repo, task, session_id="session-a")
+
+            with open(sentinel, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read(), "keep")
 
 
 class FixtureRoundTripTests(unittest.TestCase):
