@@ -3093,6 +3093,14 @@ def capture_task_baseline(task_dir, repo_root=None):
                 json.dump(data, f, indent=2, sort_keys=True)
                 f.write("\n")
             os.replace(tmp, path)
+            try:
+                _read_task_baseline_snapshot(task_dir, repo_root=repo_root)
+            except Exception:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+                raise
         except BaseException:
             try:
                 os.unlink(tmp)

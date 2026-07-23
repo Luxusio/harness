@@ -65,11 +65,13 @@ HEAD ancestry must validate. Invalid baselines and failed Git snapshots block
 the gate instead of degrading to an empty task scope. Dirt that existed at
 task start remains excluded when the identical content is later committed.
 For a newly scaffolded task in a Git repository, baseline capture is mandatory
-and happens before `TASK_STATE.yaml` is created. An unborn repository or
-transient capture failure blocks `task_start` with recovery guidance instead of
-creating a task whose later committed payload could disappear. Every Git-backed
-task requires the baseline thereafter: missing baselines fail closed regardless
-of how they were removed. Older baseline-less tasks must be restarted as a new
+and the written artifact must pass the same bounded reader contract before
+`TASK_STATE.yaml` is created. A generated artifact that exceeds path or size
+limits is removed and capture fails. An unborn repository or transient capture
+failure likewise blocks `task_start` with recovery guidance instead of creating
+a task whose later committed payload could disappear. Every Git-backed task
+requires the baseline thereafter: missing baselines fail closed regardless of
+how they were removed. Older baseline-less tasks must be restarted as a new
 task, which is the explicit migration path and avoids ambiguous legacy inference.
 
 ## Protected Artifacts

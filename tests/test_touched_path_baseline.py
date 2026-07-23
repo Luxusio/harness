@@ -67,6 +67,23 @@ class TestTouchedPathBaseline(unittest.TestCase):
             self.assertFalse((td / "TASK_STATE.yaml").exists())
             self.assertFalse((td / "TASK_BASELINE.json").exists())
 
+    def test_new_task_rejects_generated_baseline_over_path_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            td = _task_dir(repo)
+            dirty = {
+                f"generated/path-{index:05d}.txt": "missing"
+                for index in range(10001)
+            }
+            with mock.patch.object(
+                lib, "_changed_path_fingerprints", return_value=dirty,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "baseline capture unavailable"):
+                    lib.ensure_task_scaffold(str(td), "TASK__baseline")
+
+            self.assertFalse((td / "TASK_STATE.yaml").exists())
+            self.assertFalse((td / "TASK_BASELINE.json").exists())
+
     def test_task_start_records_baseline_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = _mk_repo(tmp)

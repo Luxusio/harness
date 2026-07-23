@@ -12,7 +12,9 @@ created; an unborn repository or transient snapshot failure blocks task start
 instead of silently creating an unreviewable committed scope. A missing baseline
 on any Git-backed task fails closed regardless of deletion method; older
 baseline-less tasks must be restarted explicitly instead of being inferred as
-legacy from ambiguous absence.
+legacy from ambiguous absence. Newly generated baselines are reread through the
+same bounded integrity contract before state creation, and an over-cap artifact
+is removed rather than leaving an unusable task.
 
 Task and Goal terminal transitions are coupled: `task_close` closes the active
 Goal child, while `goal_finish(complete)` requires at least one canonical child
