@@ -11,6 +11,8 @@ New Git-backed tasks require successful baseline capture before task state is
 created; an unborn repository or transient snapshot failure blocks task start
 instead of silently creating an unreviewable committed scope. Existing legacy
 tasks without a baseline remain compatible.
+A protected generation marker distinguishes those legacy tasks from new tasks,
+so deleting a required baseline later blocks every source-scope gate.
 
 Task and Goal terminal transitions are coupled: `task_close` closes the active
 Goal child, while `goal_finish(complete)` requires at least one canonical child

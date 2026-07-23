@@ -52,6 +52,7 @@ class TestTouchedPathBaseline(unittest.TestCase):
 
             self.assertFalse((td / "TASK_STATE.yaml").exists())
             self.assertFalse((td / "TASK_BASELINE.json").exists())
+            self.assertFalse((td / "TASK_BASELINE.required").exists())
 
     def test_new_task_blocks_when_baseline_fingerprinting_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -66,6 +67,7 @@ class TestTouchedPathBaseline(unittest.TestCase):
 
             self.assertFalse((td / "TASK_STATE.yaml").exists())
             self.assertFalse((td / "TASK_BASELINE.json").exists())
+            self.assertFalse((td / "TASK_BASELINE.required").exists())
 
     def test_task_start_records_baseline_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -79,9 +81,37 @@ class TestTouchedPathBaseline(unittest.TestCase):
                 ["git", "rev-parse", "HEAD"], cwd=repo,
                 check=True, capture_output=True, text=True,
             ).stdout.strip()
+            marker = (td / "TASK_BASELINE.required").read_text(encoding="utf-8")
         self.assertEqual(data["version"], 1)
         self.assertEqual(data["head_sha"], head)
         self.assertIn("existing.txt", data["dirty_paths"])
+        self.assertEqual(marker, "version: 1\n")
+
+    def test_deleted_required_baseline_fails_closed_after_clean_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            td = _task_dir(repo)
+            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+            (td / "TASK_BASELINE.json").unlink()
+            source = repo / "plugin/runtime.py"
+            source.parent.mkdir(parents=True)
+            source.write_text("VALUE = 1\n", encoding="utf-8")
+            _run(["git", "add", "plugin/runtime.py"], repo)
+            _run(["git", "commit", "-qm", "task change"], repo)
+
+            with self.assertRaisesRegex(RuntimeError, "required task baseline missing"):
+                lib.sync_from_git_diff(str(td))
+
+    def test_invalid_baseline_requirement_marker_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            td = _task_dir(repo)
+            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+            (td / "TASK_BASELINE.json").unlink()
+            (td / "TASK_BASELINE.required").write_text("invalid\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "marker integrity"):
+                lib.sync_from_git_diff(str(td))
 
     def test_unchanged_baseline_dirty_path_is_excluded(self):
         with tempfile.TemporaryDirectory() as tmp:

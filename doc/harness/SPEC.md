@@ -67,6 +67,9 @@ and happens before `TASK_STATE.yaml` is created. An unborn repository or
 transient capture failure blocks `task_start` with recovery guidance instead of
 creating a task whose later committed payload could disappear. Identifiable
 legacy tasks that already lack a baseline retain their prior compatibility.
+New tasks also receive a protected `TASK_BASELINE.required` generation marker;
+if their baseline is later deleted, review, install, and close fail closed
+instead of reclassifying the task as legacy.
 
 ## Protected Artifacts
 
@@ -74,6 +77,7 @@ legacy tasks that already lack a baseline retain their prior compatibility.
 |---|---|
 | `PLAN.md`, `PLAN.meta.json`, optional `CHECKS.yaml`, optional `AUDIT_TRAIL.md` | MCP `write_plan` |
 | `CHECKS.yaml` status transitions after plan | `plugin/scripts/update_checks.py` |
+| `TASK_BASELINE.json`, `TASK_BASELINE.required` | task-start runtime |
 | `SUBAGENT_RECEIPTS.jsonl` | Codex/Claude subagent lifecycle hooks, including the root-hook-registered, MCP-hosted Codex watcher |
 | `REVIEW_RECEIPTS.jsonl` | Codex/Claude reviewer lifecycle hooks, including the root-hook-registered, MCP-hosted Codex watcher |
 | `CONVERSATION.md` | Codex/Claude UserPromptSubmit/Subagent hooks |

@@ -75,6 +75,7 @@ _ARTIFACT_TOOL_HINT = {
     "REVIEW_RECEIPTS.jsonl": "runtime review lifecycle hook",
     "INSTALL_RECEIPT.json": "scripts/install_verified.py",
     "TASK_BASELINE.json": "task-start runtime",
+    "TASK_BASELINE.required": "task-start runtime",
     "PLAN.md": "mcp__plugin_harness_harness__write_plan",
     "PLAN.meta.json": "mcp__plugin_harness_harness__write_plan",
     "CHECKS.yaml": "plan-skill + scripts/update_checks.py",

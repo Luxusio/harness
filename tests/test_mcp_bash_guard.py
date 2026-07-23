@@ -122,6 +122,15 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             self.assertIn("rule=protected-artifact", reason)
             self.assertIn("task-start runtime", reason)
 
+    def test_redirect_into_task_baseline_requirement_denies_with_runtime_hint(self):
+        with scratch_task_in_real_repo("baseline-required-prot") as task_dir:
+            marker = os.path.join(task_dir, "TASK_BASELINE.required")
+            r = _run_bash(f"echo 'version: 1' > {marker}")
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("rule=protected-artifact", reason)
+            self.assertIn("task-start runtime", reason)
+
 
 class TestEnvPrefixBypassFix(unittest.TestCase):
     """Legacy bug: `FOO=bar sed -i x file` treated cmd as FOO=bar not sed → undetected."""

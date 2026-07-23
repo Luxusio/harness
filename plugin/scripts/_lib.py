@@ -23,6 +23,7 @@ from datetime import datetime, timezone
 TASK_DIR = "doc/harness/tasks"
 MANIFEST_PATH = "doc/harness/manifest.yaml"
 TASK_BASELINE_NAME = "TASK_BASELINE.json"
+TASK_BASELINE_REQUIRED_NAME = "TASK_BASELINE.required"
 SUBAGENT_RECEIPTS_NAME = "SUBAGENT_RECEIPTS.jsonl"
 REVIEW_RECEIPTS_NAME = "REVIEW_RECEIPTS.jsonl"
 CONVERSATION_NAME = "CONVERSATION.md"
@@ -1410,6 +1411,11 @@ def ensure_task_scaffold(task_dir, task_id, request_text=""):
     if _has_git_metadata(repo_root) and not baseline_path:
         raise RuntimeError(
             "task baseline capture unavailable; create or restore a valid Git HEAD and retry task_start"
+        )
+    if baseline_path:
+        _atomic_text_write(
+            os.path.join(task_dir, TASK_BASELINE_REQUIRED_NAME),
+            "version: 1\n",
         )
     write_state(task_dir, fields)
 
@@ -3104,6 +3110,11 @@ def _read_task_baseline_snapshot(task_dir, repo_root=None):
     """Read and validate one task baseline without following its leaf."""
     path = _baseline_file(task_dir)
     if not os.path.lexists(path):
+        marker = os.path.join(task_dir, TASK_BASELINE_REQUIRED_NAME)
+        if os.path.lexists(marker):
+            if _read_regular_text_file(marker, max_size=64) != "version: 1\n":
+                raise RuntimeError("task baseline requirement marker integrity unavailable")
+            raise RuntimeError("required task baseline missing")
         return None
     data = _read_json_file(path, max_size=2 * 1024 * 1024)
     repo_root = os.path.abspath(repo_root or find_repo_root(task_dir))
