@@ -53,7 +53,7 @@ def test_codex_qa_docs_do_not_suggest_claude_agent_subagent_type_call_shape():
     run = (REPO_ROOT / "plugin-codex" / "internal-skills" / "run" / "SKILL.md").read_text(encoding="utf-8")
     assert "QA subagent pattern on Codex" in run
     assert "spawn_agent {" in run
-    assert 'agent_type: "harness:qa-<lens>"' in run
+    assert 'task_name: "qa_<lens>"' in run
     qa_section = run.split("QA subagent pattern on Codex:", 1)[1].split("When the QA lens returns", 1)[0]
     assert "Agent(subagent_type=" not in qa_section
     assert "harness:qa-browser" not in qa_section

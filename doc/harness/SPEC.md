@@ -35,6 +35,13 @@ tools maintain the harness Goal/task queue. The agent chooses whether the Goal
 needs another child task by inspecting the current task result, discovered gaps,
 and pending user feedback.
 
+Closing a task also marks the matching child entry closed in the active
+Goal. A Goal can become `complete` only when it has at least one child and every
+child's canonical task state is both closed and receipt-verified PASS. Starting
+the same terminal Goal is an explicit resume operation: it preserves its task
+queue and creation history while returning the Goal to `active` and clearing
+the prior terminal timestamp.
+
 ## Task Loop
 
 Every repo-mutating child task follows this loop:
@@ -45,6 +52,16 @@ plan when needed -> minimum-sufficient develop -> independent review -> runtime 
 
 No verification is skipped. If verification finds a gap, the task returns to
 develop or creates a follow-up child task when the gap is separable.
+
+The task-start Git baseline owns the task's source scope through review, QA,
+verified installation, and close. That scope is the union of current worktree
+changes and paths committed between the baseline HEAD and current HEAD, so a
+clean commit cannot erase the task's reviewed install payload.
+Present baselines are bounded regular files read without following symlinks;
+their version, repository binding, path/fingerprint map, commit identity, and
+HEAD ancestry must validate. Invalid baselines and failed Git snapshots block
+the gate instead of degrading to an empty task scope. Dirt that existed at
+task start remains excluded when the identical content is later committed.
 
 ## Protected Artifacts
 

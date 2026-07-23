@@ -914,7 +914,15 @@ def handle_task_close(args: dict) -> dict:
         st["updated"] = now_iso()
         write_state(td, st)
 
-        clear_active_marker(find_repo_root(), td)
+        repo_root = find_repo_root()
+        goal = read_current_goal(repo_root)
+        if goal.get("status") == "active" and any(
+            isinstance(task, dict) and task.get("task_id") == os.path.basename(td)
+            for task in goal.get("tasks", [])
+        ):
+            add_goal_task(repo_root, os.path.basename(td), status="closed", task_dir=td)
+
+        clear_active_marker(repo_root, td)
         st = read_state(td)
         return _ok({
             "task_dir": td, "closed": True, "status": st.get("status"),

@@ -44,7 +44,10 @@ def _task(tmp_path: Path, touched: list[str], project_type: str = "library") -> 
         capture_output=True, text=True,
     ).stdout.strip()
     (task / "TASK_BASELINE.json").write_text(
-        json.dumps({"version": 1, "head_sha": head, "dirty_paths": {}}) + "\n",
+        json.dumps({
+            "version": 1, "repo_root": str(tmp_path),
+            "head_sha": head, "dirty_paths": {},
+        }) + "\n",
         encoding="utf-8",
     )
     return task
@@ -633,6 +636,8 @@ def test_agent_instruction_markdown_requires_code_and_security_review(tmp_path):
 
 
 def test_invalid_baseline_revision_fails_safe_to_security_review(tmp_path):
+    import pytest
+
     source = tmp_path / "src/handler.py"
     source.parent.mkdir(parents=True)
     source.write_text("def run(value):\n    return value\n", encoding="utf-8")
@@ -642,7 +647,8 @@ def test_invalid_baseline_revision_fails_safe_to_security_review(tmp_path):
     data["head_sha"] = "--output=/tmp/should-not-exist"
     baseline.write_text(json.dumps(data) + "\n", encoding="utf-8")
 
-    assert lib.required_review_lenses(task) == ["review-code", "review-security"]
+    with pytest.raises(RuntimeError, match="baseline"):
+        lib.required_review_lenses(task)
     assert not (tmp_path / "should-not-exist").exists()
 
 

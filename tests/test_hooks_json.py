@@ -75,14 +75,12 @@ class TestHooksJson(unittest.TestCase):
 
     def test_both_gate_commands_have_fail_safe(self):
         """C-12: every hook must end with `|| true` (fail-safe)."""
-        entries = self.data["hooks"]["PreToolUse"]
-        for entry in entries:
-            for h in entry.get("hooks", []):
-                cmd = h["command"]
-                # Only gate scripts (prewrite, bash_guard) need fail-safe.
-                if "prewrite_gate.py" in cmd or "mcp_bash_guard.py" in cmd:
+        for event, entries in self.data["hooks"].items():
+            for entry in entries:
+                for h in entry.get("hooks", []):
+                    cmd = h["command"]
                     self.assertTrue(cmd.rstrip().endswith("|| true"),
-                                    f"missing `|| true`: {cmd!r}")
+                                    f"{event} missing `|| true`: {cmd!r}")
 
     def test_timeouts_are_bounded(self):
         """C-12 convention: every hook timeout ≤ 10s."""

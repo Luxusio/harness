@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -83,15 +85,97 @@ class TestTouchedPathBaseline(unittest.TestCase):
             touched = lib.sync_from_git_diff(str(td))
         self.assertIn("new.txt", touched)
 
-    def test_missing_or_corrupt_baseline_falls_back_to_current_behavior(self):
+    def test_present_corrupt_baseline_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = _mk_repo(tmp)
             (repo / "existing.txt").write_text("dirty before task\n", encoding="utf-8")
             td = _task_dir(repo)
             lib.ensure_task_scaffold(str(td), "TASK__baseline")
             (td / "TASK_BASELINE.json").write_text("{not json", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "baseline integrity"):
+                lib.sync_from_git_diff(str(td))
+
+    def test_symlinked_baseline_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            td = _task_dir(repo)
+            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+            baseline = td / "TASK_BASELINE.json"
+            outside = repo / "outside-baseline.json"
+            outside.write_bytes(baseline.read_bytes())
+            baseline.unlink()
+            baseline.symlink_to(outside)
+            with self.assertRaisesRegex(RuntimeError, "baseline integrity"):
+                lib.sync_from_git_diff(str(td))
+
+    def test_baseline_requires_absolute_matching_repository_identity(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            td = _task_dir(repo)
+            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+            baseline = td / "TASK_BASELINE.json"
+            original = json.loads(baseline.read_text(encoding="utf-8"))
+            previous_cwd = os.getcwd()
+            os.chdir(repo)
+            try:
+                for stored_root in (None, "", ".", "relative/repo"):
+                    with self.subTest(stored_root=stored_root):
+                        data = dict(original)
+                        if stored_root is None:
+                            data.pop("repo_root", None)
+                        else:
+                            data["repo_root"] = stored_root
+                        baseline.write_text(json.dumps(data), encoding="utf-8")
+                        with self.assertRaisesRegex(RuntimeError, "baseline integrity"):
+                            lib.sync_from_git_diff(str(td))
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_unchanged_pre_task_dirt_stays_excluded_after_commit(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            path = repo / "existing.txt"
+            path.write_text("dirty before task\n", encoding="utf-8")
+            td = _task_dir(repo)
+            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+            _run(["git", "add", "existing.txt"], repo)
+            _run(["git", "commit", "-qm", "commit prior dirt unchanged"], repo)
+
             touched = lib.sync_from_git_diff(str(td))
-        self.assertIn("existing.txt", touched)
+
+        self.assertNotIn("existing.txt", touched)
+
+    def test_committed_path_diff_failure_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            td = _task_dir(repo)
+            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+            original_run = lib.subprocess.run
+
+            def fail_diff(command, *args, **kwargs):
+                if len(command) > 1 and command[1] == "diff" and "--name-only" in command:
+                    return subprocess.CompletedProcess(command, 1, b"", b"failure")
+                return original_run(command, *args, **kwargs)
+
+            with mock.patch.object(lib.subprocess, "run", side_effect=fail_diff):
+                with self.assertRaisesRegex(RuntimeError, "Git diff unavailable"):
+                    lib.sync_from_git_diff(str(td))
+
+    def test_committed_path_diff_timeout_fails_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            td = _task_dir(repo)
+            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+            original_run = lib.subprocess.run
+
+            def timeout_diff(command, *args, **kwargs):
+                if len(command) > 1 and command[1] == "diff" and "--name-only" in command:
+                    raise subprocess.TimeoutExpired(command, 5)
+                return original_run(command, *args, **kwargs)
+
+            with mock.patch.object(lib.subprocess, "run", side_effect=timeout_diff):
+                with self.assertRaisesRegex(RuntimeError, "Git diff unavailable"):
+                    lib.sync_from_git_diff(str(td))
 
     def test_required_qa_lenses_ignore_unchanged_pre_task_dirty_api_path(self):
         with tempfile.TemporaryDirectory() as tmp:

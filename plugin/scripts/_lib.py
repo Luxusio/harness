@@ -615,7 +615,7 @@ def start_harness_goal(
     state = {
         "goal_id": gid,
         "objective": objective,
-        "status": existing.get("status") or "active",
+        "status": "active",
         "created_at": existing.get("created_at") or now_iso(),
         "updated_at": now_iso(),
         "source": source or existing.get("source") or {},
@@ -671,6 +671,37 @@ def finish_harness_goal(repo_root: str, *, status: str = "complete") -> dict:
     if not current:
         raise ValueError("no active goal")
     final_status = status if status in {"complete", "blocked"} else "complete"
+    if final_status == "complete":
+        tasks = current.get("tasks") if isinstance(current.get("tasks"), list) else []
+        blockers = []
+        if not tasks:
+            blockers.append("no child tasks")
+        for task in tasks:
+            if not isinstance(task, dict):
+                blockers.append("invalid child task entry")
+                continue
+            task_id = str(task.get("task_id") or "")
+            try:
+                task_dir = canonical_task_dir(
+                    task_id=task_id,
+                    task_dir=str(task.get("task_dir") or "") or None,
+                    repo_root=repo_root,
+                )
+                state = read_state(task_dir)
+            except (OSError, ValueError):
+                state = {}
+            if (
+                task.get("status") != "closed"
+                or state.get("status") != "closed"
+                or receipt_runtime_verdict(task_dir, state) != "PASS"
+                or runtime_is_stale(task_dir)[0]
+            ):
+                blockers.append(task_id or "<missing task_id>")
+        if blockers:
+            raise ValueError(
+                "goal completion blocked by unfinished or unverified child tasks: "
+                + ", ".join(blockers)
+            )
     current["status"] = final_status
     current["finished_at"] = now_iso()
     return write_goal_state(repo_root, current)
@@ -1596,12 +1627,15 @@ def _durable_docs_touched(touched_paths):
 
 
 def _effective_touched_paths(task_dir, touched_paths):
-    """Merge task paths with task-baseline-filtered current git changes."""
+    """Merge task paths with committed and current changes since task start."""
     out = set(touched_paths or [])
     try:
         repo_root = find_repo_root(task_dir)
-        changed = _git_changed_paths(repo_root)
+        changed = _committed_paths_since_baseline(task_dir, repo_root)
+        changed.update(_git_changed_paths(repo_root))
         out.update(_filter_baseline_unchanged(task_dir, repo_root, changed))
+    except RuntimeError:
+        raise
     except Exception:
         pass
     return sorted(p for p in out if isinstance(p, str))
@@ -1886,31 +1920,37 @@ _SECURITY_REVIEW_SIGNAL_RE = re.compile(
 
 
 def _task_baseline_head_sha(task_dir):
+    baseline = _read_task_baseline_snapshot(task_dir)
+    return str(baseline.get("head_sha") or "") if baseline else ""
+
+
+def _committed_paths_since_baseline(task_dir, repo_root=None):
+    """Return repository paths committed after the task baseline."""
+    repo_root = repo_root or find_repo_root(task_dir)
+    baseline_head = _task_baseline_head_sha(task_dir)
+    if not baseline_head:
+        return set()
     try:
-        with open(_baseline_file(task_dir), encoding="utf-8") as f:
-            baseline = json.load(f)
-    except Exception:
-        return ""
-    head_sha = str(baseline.get("head_sha") or "").strip()
-    if not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", head_sha):
-        return ""
-    try:
-        repo_root = find_repo_root(task_dir)
-        commit = subprocess.run(
-            ["git", "rev-parse", "--verify", "--end-of-options", f"{head_sha}^{{commit}}"],
-            cwd=repo_root, capture_output=True, text=True, timeout=2,
+        result = subprocess.run(
+            [
+                "git", "diff", "--name-only", "-z", "--no-renames",
+                "--end-of-options", baseline_head, "HEAD", "--",
+            ],
+            cwd=repo_root, capture_output=True, timeout=5,
         )
-        if commit.returncode != 0 or commit.stdout.strip().lower() != head_sha.lower():
-            return ""
-        ancestor = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", head_sha, "HEAD"],
-            cwd=repo_root, capture_output=True, text=True, timeout=2,
-        )
-        if ancestor.returncode != 0:
-            return ""
-    except Exception:
-        return ""
-    return head_sha
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("task baseline Git diff unavailable") from exc
+    if result.returncode != 0:
+        raise RuntimeError("task baseline Git diff unavailable")
+    raw = result.stdout if isinstance(result.stdout, bytes) else str(result.stdout or "").encode()
+    paths = set()
+    for item in raw.split(b"\0"):
+        if not item:
+            continue
+        rel = _canonical_git_relpath(os.fsdecode(item))
+        if rel and not os.path.isabs(rel) and rel != ".." and not rel.startswith("../"):
+            paths.add(rel)
+    return paths
 
 
 def _path_has_security_signal(task_dir, repo_root, relpath):
@@ -3018,20 +3058,23 @@ def _git_head_snapshot(repo_root, *, git_dir=None, use_cache=True):
 def capture_task_baseline(task_dir, repo_root=None):
     """Write task-start dirty-path fingerprints.
 
-    Existing baselines are preserved on resume. Failure is non-blocking:
-    tasks without a readable baseline fall back to historical touched-path
-    behavior in ``sync_from_git_diff``.
+    Existing valid baselines are preserved on resume. A missing baseline keeps
+    legacy behavior; a present-invalid baseline is an integrity failure.
     """
     path = _baseline_file(task_dir)
-    if os.path.isfile(path):
+    if os.path.lexists(path):
+        _read_task_baseline_snapshot(task_dir, repo_root=repo_root)
         return path
     try:
         repo_root = repo_root or find_repo_root(task_dir)
+        head_sha = _git_head_for_receipt(task_dir)
+        if not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", head_sha):
+            return ""
         data = {
             "version": 1,
             "captured_at": now_iso(),
             "repo_root": repo_root,
-            "head_sha": _git_head_for_receipt(task_dir),
+            "head_sha": head_sha,
             "dirty_paths": _changed_path_fingerprints(repo_root),
         }
         os.makedirs(task_dir, exist_ok=True)
@@ -3052,14 +3095,63 @@ def capture_task_baseline(task_dir, repo_root=None):
         return ""
 
 
-def _read_task_baseline(task_dir):
-    try:
-        with open(_baseline_file(task_dir), encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
+def _read_task_baseline_snapshot(task_dir, repo_root=None):
+    """Read and validate one task baseline without following its leaf."""
+    path = _baseline_file(task_dir)
+    if not os.path.lexists(path):
         return None
+    data = _read_json_file(path, max_size=2 * 1024 * 1024)
+    repo_root = os.path.abspath(repo_root or find_repo_root(task_dir))
+    head_sha = str(data.get("head_sha") or "").strip()
     dirty = data.get("dirty_paths")
-    return dirty if isinstance(dirty, dict) else None
+    stored_root = str(data.get("repo_root") or "")
+    valid_paths = isinstance(dirty, dict) and len(dirty) <= 10000 and all(
+        isinstance(key, str)
+        and key == _canonical_git_relpath(key)
+        and key
+        and not os.path.isabs(key)
+        and key != ".."
+        and not key.startswith("../")
+        and all(part not in {"", ".", ".."} for part in key.split("/"))
+        and isinstance(value, str)
+        and bool(re.fullmatch(
+            r"(?:missing|dir|(?:sha256|symlink-sha256):[0-9a-f]{64}|gitlink:[A-Za-z0-9:._/-]{1,500})",
+            value,
+        ))
+        for key, value in (dirty.items() if isinstance(dirty, dict) else [])
+    )
+    if (
+        data.get("version") != 1
+        or not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", head_sha)
+        or not stored_root
+        or not os.path.isabs(stored_root)
+        or os.path.realpath(stored_root) != os.path.realpath(repo_root)
+        or not valid_paths
+    ):
+        raise RuntimeError("task baseline integrity unavailable")
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "--verify", "--end-of-options", f"{head_sha}^{{commit}}"],
+            cwd=repo_root, capture_output=True, text=True, timeout=2,
+        )
+        ancestor = subprocess.run(
+            ["git", "merge-base", "--is-ancestor", head_sha, "HEAD"],
+            cwd=repo_root, capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("task baseline Git snapshot unavailable") from exc
+    if (
+        commit.returncode != 0
+        or commit.stdout.strip().lower() != head_sha.lower()
+        or ancestor.returncode != 0
+    ):
+        raise RuntimeError("task baseline Git snapshot unavailable")
+    return data
+
+
+def _read_task_baseline(task_dir):
+    baseline = _read_task_baseline_snapshot(task_dir)
+    return baseline.get("dirty_paths") if baseline else None
 
 
 def _filter_baseline_unchanged(task_dir, repo_root, changed):
@@ -3067,13 +3159,20 @@ def _filter_baseline_unchanged(task_dir, repo_root, changed):
     if baseline is None:
         return changed
     current = _changed_path_fingerprints(repo_root)
+    gitlink_paths = set(_gitlink_index_snapshot(repo_root))
     out = set()
     for rel in changed:
         if rel not in baseline:
             out.add(rel)
             continue
         current_fp = current.get(rel)
-        if current_fp is None or current_fp != baseline.get(rel):
+        if current_fp is None:
+            current_fp = (
+                _submodule_gitlink_fingerprint(repo_root, rel.rstrip("/"))
+                if rel.rstrip("/") in gitlink_paths
+                else _fingerprint_path(repo_root, rel)
+            )
+        if current_fp != baseline.get(rel):
             out.add(rel)
     return out
 
@@ -3160,10 +3259,11 @@ def _initialized_submodule_paths(repo_root):
 def sync_from_git_diff(task_dir):
     """Sync touched paths from git state.
 
-    Three sources:
-      1. Unstaged modifications (``git diff --name-only HEAD``).
-      2. Staged modifications (``git diff --cached --name-only HEAD``).
-      3. Untracked-but-not-ignored files (``git ls-files --others --exclude-standard``).
+    Four sources:
+      1. Paths committed after the task-start HEAD baseline.
+      2. Unstaged modifications (``git diff --name-only HEAD``).
+      3. Staged modifications (``git diff --cached --name-only HEAD``).
+      4. Untracked-but-not-ignored files (``git ls-files --others --exclude-standard``).
 
     Untracked inclusion matters for the PR2 stale-verdict check: a new file
     created after ``runtime_verdict: PASS`` must show up in ``touched_paths``
@@ -3171,13 +3271,15 @@ def sync_from_git_diff(task_dir):
     stay excluded via ``--exclude-standard``.
     """
     repo_root = find_repo_root(task_dir)
-    changed = _git_changed_paths(repo_root)
+    changed = _committed_paths_since_baseline(task_dir, repo_root)
+    current_changes = _git_changed_paths(repo_root)
     for sub_path in _initialized_submodule_paths(repo_root):
         sub_root, _ = _validated_submodule_root(repo_root, sub_path)
-        changed.update(_git_changed_paths(
+        current_changes.update(_git_changed_paths(
             sub_root, prefix=sub_path.rstrip("/") + "/",
         ))
         _validated_submodule_root(repo_root, sub_path)
+    changed.update(current_changes)
     changed = _filter_baseline_unchanged(task_dir, repo_root, changed)
     if not changed:
         return []

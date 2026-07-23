@@ -40,9 +40,9 @@ that can run without touching the same files. Use concrete Codex calls like:
 
 ```text
 spawn_agent {
-  agent_type: "harness:qa-cli",
+  task_name: "qa_cli",
   message: "You are the qa-cli lens for <task_id>. Read <task_dir>/PLAN.md, CHECKS.yaml, and changed files. Run focused verification. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with concrete findings and evidence.",
-  fork_context: true
+  fork_turns: "all"
 }
 ```
 
@@ -222,11 +222,15 @@ QA subagent pattern on Codex:
 
 ```text
 spawn_agent {
-  agent_type: "harness:qa-<lens>",
+  task_name: "qa_<lens>",
   message: "You are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, CHECKS.yaml, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with command/browser evidence and concrete findings.",
-  fork_context: true
+  fork_turns: "all"
 }
 ```
+
+Use the exact stable QA task names `qa_cli`, `qa_api`, `qa_browser`, and
+`qa_desktop`. Do not decorate or suffix them: lifecycle receipt binding uses
+the exact root task name. Run at most one agent for each required QA lens.
 
 After awaiting QA/UX, run `task_verify` with `reconcile_acs: true`. The verify
 step reads `SUBAGENT_RECEIPTS.jsonl`, promotes only `status: open` checks when

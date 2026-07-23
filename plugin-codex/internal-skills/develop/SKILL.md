@@ -421,9 +421,9 @@ judge shippability without reverse-engineering the change.
 
 ```text
 spawn_agent {
-  agent_type: "harness:qa-<lens>",
+  task_name: "qa_<lens>",
   message: "You are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, CHECKS.yaml, TASK_STATE.yaml, changed files, durable docs named in PLAN or touched paths, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence and concrete findings.",
-  fork_context: true
+  fork_turns: "all"
 }
 ```
 
@@ -440,6 +440,9 @@ call after the batch completes.
 Use structured QA/UX `task_name` values such as `qa_cli`, `qa_browser`, or
 `ux_browser`. These names are the runtime-visible lens binding when delegated
 prompt bodies are encrypted in Codex rollouts.
+Use the exact stable QA names `qa_cli`, `qa_api`, `qa_browser`, and
+`qa_desktop`, without decorations or suffixes, and run at most one agent per
+required QA lens.
 
 Multi-lens concurrency uses `spawn_agent` when available; otherwise run required lenses sequentially. If browser QA is required, close with browser-lens PASS evidence or browser-lens `BLOCKED_ENV`.
 

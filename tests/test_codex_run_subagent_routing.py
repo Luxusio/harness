@@ -32,7 +32,7 @@ def test_codex_run_uses_capability_first_subagent_routing():
     assert "track every `agent_id` returned by `spawn_agent`" in body
     assert "`close_agent`" in body
     assert "Completed agents can\ncontinue to count toward the concurrency limit until closed" in body
-    assert 'agent_type: "harness:qa-cli"' in body
+    assert 'task_name: "qa_cli"' in body
     assert 'agent_type: "worker"' in body
     assert 'agent_type: "explorer"' in body
     assert "When `spawn_agent` is available and work is independent, use it" in body
@@ -76,7 +76,8 @@ def test_codex_run_documents_qa_subagent_call_shape():
     assert "not a second QA pass" in body
     assert "You are the qa-<lens> lens for <task_id>" in body
     assert "plugin-codex/agents/qa-<lens>.md" in body
-    assert 'agent_type: "harness:qa-<lens>"' in body
+    assert 'task_name: "qa_<lens>"' in body
+    assert "Do not decorate or suffix them" in body
     assert "concrete findings" in body
     assert "must not invent a PASS from its own context" in body
     assert "`subagent_receipts`" in body

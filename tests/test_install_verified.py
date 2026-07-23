@@ -289,6 +289,41 @@ def test_snapshot_paths_use_tracked_and_task_reviewed_files_only(tmp_path):
     assert "plugin/.omc/ignored-secret" not in paths
 
 
+def test_reviewable_payload_survives_clean_commit_after_task_baseline(tmp_path):
+    repo, task = _repo(tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
+    (repo / ".gitignore").write_text("doc/harness/tasks/\n", encoding="utf-8")
+    payload = repo / "plugin/runtime.py"
+    payload.parent.mkdir(parents=True, exist_ok=True)
+    payload.write_text("VALUE = 1\n", encoding="utf-8")
+    (task / "TASK_STATE.yaml").write_text(
+        "task_id: TASK__install\nstatus: active\nruntime_verdict: pending\n"
+        "touched_paths: []\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repo, check=True)
+    baseline = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    (task / "TASK_BASELINE.json").write_text(
+        json.dumps({
+            "version": 1, "repo_root": str(repo),
+            "head_sha": baseline, "dirty_paths": {},
+        }),
+        encoding="utf-8",
+    )
+
+    payload.write_text("VALUE = 2\n", encoding="utf-8")
+    subprocess.run(["git", "add", "plugin/runtime.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "task payload"], cwd=repo, check=True)
+
+    assert mod._reviewable_source_paths(str(task)) == ["plugin/runtime.py"]
+
+
 def test_global_lock_ignores_xdg_cache_and_follows_installer_home(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
