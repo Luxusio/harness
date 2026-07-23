@@ -437,9 +437,8 @@ Use the same wait UX for QA/UX: useful local work first, one wait interval of
 up to 60 seconds, one status update after timeout, and one final `list_agents`
 call after the batch completes.
 
-Use structured QA/UX `task_name` values such as `qa_cli`, `qa_browser`, or
-`ux_browser`. These names are the runtime-visible lens binding when delegated
-prompt bodies are encrypted in Codex rollouts.
+Use structured QA/UX `task_name` values. These names are the runtime-visible
+lens binding when delegated prompt bodies are encrypted in Codex rollouts.
 Use a fresh task name for every QA run. Its prefix must be exactly `qa_cli_`,
 `qa_api_`, `qa_browser_`, or `qa_desktop_`, followed by a short sanitized task
 slug and run id. This preserves lens inference while avoiding name collisions
