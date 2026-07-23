@@ -366,6 +366,17 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertFalse(outside.exists())
             self.assertTrue(index_lock.exists(), "invalid selectors must not clean repository locks")
 
+    def test_task_start_blocks_unborn_git_repo_without_orphan_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            subprocess.run(["git", "init", "-q"], cwd=tmp, check=True)
+            result = self._call_in_repo(
+                tmp, "task_start", {"task_id": "TASK__unborn-baseline"},
+            )
+            self.assertTrue(result.get("isError"))
+            self.assertIn("baseline capture unavailable", result["structuredContent"]["error"])
+            state = Path(tmp) / "doc/harness/tasks/TASK__unborn-baseline/TASK_STATE.yaml"
+            self.assertFalse(state.exists())
+
     def test_task_start_rejects_mismatched_existing_state_before_side_effects(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = Path(self._make_task(tmp, "TASK__expected"))

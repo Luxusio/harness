@@ -62,6 +62,11 @@ their version, repository binding, path/fingerprint map, commit identity, and
 HEAD ancestry must validate. Invalid baselines and failed Git snapshots block
 the gate instead of degrading to an empty task scope. Dirt that existed at
 task start remains excluded when the identical content is later committed.
+For a newly scaffolded task in a Git repository, baseline capture is mandatory
+and happens before `TASK_STATE.yaml` is created. An unborn repository or
+transient capture failure blocks `task_start` with recovery guidance instead of
+creating a task whose later committed payload could disappear. Identifiable
+legacy tasks that already lack a baseline retain their prior compatibility.
 
 ## Protected Artifacts
 

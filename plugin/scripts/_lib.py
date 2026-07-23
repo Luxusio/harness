@@ -1405,8 +1405,13 @@ def ensure_task_scaffold(task_dir, task_id, request_text=""):
         "closed_at": None,
         "updated": now_iso(),
     }
+    repo_root = find_repo_root(task_dir)
+    baseline_path = capture_task_baseline(task_dir, repo_root=repo_root)
+    if _has_git_metadata(repo_root) and not baseline_path:
+        raise RuntimeError(
+            "task baseline capture unavailable; create or restore a valid Git HEAD and retry task_start"
+        )
     write_state(task_dir, fields)
-    capture_task_baseline(task_dir)
 
     created = [state_file(task_dir)]
     if request_text:

@@ -41,6 +41,32 @@ def _task_dir(repo: Path) -> Path:
 
 
 class TestTouchedPathBaseline(unittest.TestCase):
+    def test_new_task_in_unborn_git_repo_fails_before_state_creation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            _run(["git", "init", "-q"], repo)
+            td = _task_dir(repo)
+
+            with self.assertRaisesRegex(RuntimeError, "baseline capture unavailable"):
+                lib.ensure_task_scaffold(str(td), "TASK__baseline")
+
+            self.assertFalse((td / "TASK_STATE.yaml").exists())
+            self.assertFalse((td / "TASK_BASELINE.json").exists())
+
+    def test_new_task_blocks_when_baseline_fingerprinting_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            td = _task_dir(repo)
+            with mock.patch.object(
+                lib, "_changed_path_fingerprints",
+                side_effect=RuntimeError("snapshot unavailable"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "baseline capture unavailable"):
+                    lib.ensure_task_scaffold(str(td), "TASK__baseline")
+
+            self.assertFalse((td / "TASK_STATE.yaml").exists())
+            self.assertFalse((td / "TASK_BASELINE.json").exists())
+
     def test_task_start_records_baseline_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = _mk_repo(tmp)

@@ -7,6 +7,10 @@ Baseline reads are bounded, regular-file-only, no-follow operations with
 repository, revision, path, fingerprint, and ancestry validation. Invalid or
 unavailable baselines fail closed, while unchanged pre-task dirt remains out of
 scope even if it is committed later.
+New Git-backed tasks require successful baseline capture before task state is
+created; an unborn repository or transient snapshot failure blocks task start
+instead of silently creating an unreviewable committed scope. Existing legacy
+tasks without a baseline remain compatible.
 
 Task and Goal terminal transitions are coupled: `task_close` closes the active
 Goal child, while `goal_finish(complete)` requires at least one canonical child
