@@ -208,6 +208,10 @@ Codex hook timeout; individual subprocesses consume the remaining shared budget.
 It does not fork. The existing Harness MCP server discovers these registrations
 and hosts one passive daemon watcher thread per root tuple. MCP restart replays
 from the immutable initial offset; receipt deduplication makes replay safe.
+Root-delivered child messages become completion candidates only when their
+runtime envelope is `Message Type: FINAL_ANSWER`; intermediate progress
+`MESSAGE` deliveries are ignored so they cannot poison the later attested
+completion.
 Because Codex MCP processes do not receive the root thread id as process state,
 the watcher binds a root to a task only from that root rollout's successful
 Harness `task_start` or `task_context` completion event, after canonical task

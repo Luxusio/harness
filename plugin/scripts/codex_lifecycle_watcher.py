@@ -672,6 +672,8 @@ def _root_delivery(event: dict[str, Any]) -> tuple[str, str] | None:
         if isinstance(item, dict) and item.get("type") == "input_text":
             text_parts.append(str(item.get("text") or ""))
     text = "\n".join(text_parts)
+    if not text.startswith("Message Type: FINAL_ANSWER\n"):
+        return None
     marker = "Payload:\n"
     final = text.split(marker, 1)[1] if marker in text else text
     return author, final.strip()

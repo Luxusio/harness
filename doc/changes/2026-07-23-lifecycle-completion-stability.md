@@ -24,4 +24,6 @@ that explicit restart.
 Every registered Claude hook command is fail-safe with `|| true`. Codex run and
 develop guidance uses fresh names with `qa_cli_`, `qa_api_`, `qa_browser_`, or
 `qa_desktop_` prefixes. The watcher binds receipts from the prefix while the
-suffix prevents same-thread collisions across sequential tasks.
+suffix prevents same-thread collisions across sequential tasks. Intermediate
+child status messages are ignored; only the runtime's `FINAL_ANSWER` envelope
+can bind completion, so progress updates cannot invalidate the later QA PASS.
