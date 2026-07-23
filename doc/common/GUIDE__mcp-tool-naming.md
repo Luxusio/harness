@@ -6,8 +6,8 @@ freshness: current
 invalidated_by_paths:
   - plugin/.mcp.json
   - tests/test_mcp_tool_name_contracts.py
-updated: 2026-06-22
-freshness_updated: 2026-06-22T00:00:00Z
+updated: 2026-07-23
+freshness_updated: 2026-07-23T05:42:36Z
 ---
 
 # Harness MCP tool naming across runtimes
