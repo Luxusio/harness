@@ -151,6 +151,27 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             self.assertEqual(decision, "deny")
             self.assertIn("rule=protected-artifact", reason)
 
+    def test_rm_glob_cannot_delete_baseline_artifacts(self):
+        with scratch_task_in_real_repo("baseline-glob-prot") as task_dir:
+            for name in ("TASK_BASELINE.json", "TASK_BASELINE.required"):
+                with open(os.path.join(task_dir, name), "w", encoding="utf-8") as f:
+                    f.write("fixture\n")
+            pattern = os.path.join(task_dir, "TASK_BASELINE.*")
+            r = _run_bash(f"rm -f {pattern}")
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("rule=protected-artifact", reason)
+
+    def test_rm_brace_expansion_cannot_delete_baseline_artifacts(self):
+        with scratch_task_in_real_repo("baseline-brace-prot") as task_dir:
+            pattern = os.path.join(
+                task_dir, "{TASK_BASELINE.json,TASK_BASELINE.required}",
+            )
+            r = _run_bash(f"rm -f {pattern}")
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("rule=protected-artifact", reason)
+
 
 class TestEnvPrefixBypassFix(unittest.TestCase):
     """Legacy bug: `FOO=bar sed -i x file` treated cmd as FOO=bar not sed → undetected."""

@@ -13,8 +13,9 @@ instead of silently creating an unreviewable committed scope. Existing legacy
 tasks without a baseline remain compatible.
 A protected generation marker distinguishes those legacy tasks from new tasks,
 so deleting a required baseline later blocks every source-scope gate.
-The Bash mutation guard inspects every non-option `rm`/`unlink` operand, so a
-single command cannot delete both the baseline and its generation marker.
+The Bash mutation guard inspects every non-option `rm`/`unlink` operand and
+bounded glob/brace alternatives, so one literal or shell-expanded command
+cannot delete both the baseline and its generation marker.
 
 Task and Goal terminal transitions are coupled: `task_close` closes the active
 Goal child, while `goal_finish(complete)` requires at least one canonical child

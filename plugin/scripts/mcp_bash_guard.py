@@ -20,6 +20,7 @@ Known gaps (documented in doc/harness/patterns/mcp-bash-guard.md):
 from __future__ import annotations
 
 import os
+import glob
 import re
 import shlex
 import sys
@@ -162,6 +163,42 @@ def _last_non_option(tokens):
     return ""
 
 
+def _brace_alternatives(value, *, cap=64):
+    """Expand simple shell brace alternatives with a strict output bound."""
+    results = [value]
+    while len(results) <= cap:
+        expanded = False
+        next_results = []
+        for item in results:
+            match = re.search(r"\{([^{}]+)\}", item)
+            if not match or "," not in match.group(1):
+                next_results.append(item)
+                continue
+            expanded = True
+            for choice in match.group(1).split(","):
+                next_results.append(item[:match.start()] + choice + item[match.end():])
+                if len(next_results) > cap:
+                    return [value]
+        results = next_results
+        if not expanded:
+            return results
+    return [value]
+
+
+def _append_delete_targets(targets, token, method, repo_root):
+    """Inspect literal and bounded shell-expanded deletion operands."""
+    seen = set()
+    for alternative in _brace_alternatives(str(token or "")):
+        candidates = [alternative]
+        if any(char in alternative for char in "*?["):
+            candidates.extend(glob.glob(alternative)[:256])
+        for candidate in candidates:
+            if candidate in seen:
+                continue
+            seen.add(candidate)
+            _append_target(targets, candidate, method, repo_root)
+
+
 # ── Mutation-target extraction ─────────────────────────────────────────────
 
 
@@ -215,7 +252,7 @@ def _process_segment(segment_tokens, targets, repo_root):
         for token in non_env[1:]:
             if token == "--" or token.startswith("-"):
                 continue
-            _append_target(targets, token, cmd, repo_root)
+            _append_delete_targets(targets, token, cmd, repo_root)
         return
     if cmd == TEE_COMMAND:
         for token in non_env[1:]:
