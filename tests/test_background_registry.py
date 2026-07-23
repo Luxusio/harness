@@ -318,6 +318,7 @@ def test_unmatched_stop_records_nonblocking_diagnostic(tmp_path):
     assert record["status"] == "unmatched_stop"
     assert record["agent_id"] == "agent-missing"
     assert record["transcript_path"] == "/tmp/missing.jsonl"
+    assert record["diff_fingerprint"] == ""
     assert background_registry.active_records(repo, task_id="TASK__bg", session_id="sess-1") == []
 
 

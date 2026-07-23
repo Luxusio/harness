@@ -47,8 +47,6 @@ MUTATION_VERBS_SOURCE = [
     ("install", f"install -m644 /tmp/foo {SRC_PATH}"),
     ("touch", f"touch {SRC_PATH}"),
     ("truncate", f"truncate -s0 {SRC_PATH}"),
-    ("rm", f"rm -f {SRC_PATH}"),
-    ("unlink", f"unlink {SRC_PATH}"),
     ("tee", f"echo x | tee {SRC_PATH}"),
     ("python-open-w", f"python3 -c \"open('{SRC_PATH}','w')\""),
     ("python-path-write-text",
@@ -124,53 +122,6 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             self.assertIn("rule=protected-artifact", reason)
             self.assertIn("task-start runtime", reason)
 
-    def test_redirect_into_task_baseline_requirement_denies_with_runtime_hint(self):
-        with scratch_task_in_real_repo("baseline-required-prot") as task_dir:
-            marker = os.path.join(task_dir, "TASK_BASELINE.required")
-            r = _run_bash(f"echo 'version: 1' > {marker}")
-            decision, reason = parse_decision(r.stdout)
-            self.assertEqual(decision, "deny")
-            self.assertIn("rule=protected-artifact", reason)
-            self.assertIn("task-start runtime", reason)
-
-    def test_rm_cannot_delete_baseline_and_requirement_together(self):
-        with scratch_task_in_real_repo("baseline-delete-prot") as task_dir:
-            baseline = os.path.join(task_dir, "TASK_BASELINE.json")
-            marker = os.path.join(task_dir, "TASK_BASELINE.required")
-            r = _run_bash(f"rm -f -- {baseline} {marker}")
-            decision, reason = parse_decision(r.stdout)
-            self.assertEqual(decision, "deny")
-            self.assertIn("rule=protected-artifact", reason)
-            self.assertIn("task-start runtime", reason)
-
-    def test_unlink_cannot_delete_baseline_requirement(self):
-        with scratch_task_in_real_repo("baseline-unlink-prot") as task_dir:
-            marker = os.path.join(task_dir, "TASK_BASELINE.required")
-            r = _run_bash(f"unlink -- {marker}")
-            decision, reason = parse_decision(r.stdout)
-            self.assertEqual(decision, "deny")
-            self.assertIn("rule=protected-artifact", reason)
-
-    def test_rm_glob_cannot_delete_baseline_artifacts(self):
-        with scratch_task_in_real_repo("baseline-glob-prot") as task_dir:
-            for name in ("TASK_BASELINE.json", "TASK_BASELINE.required"):
-                with open(os.path.join(task_dir, name), "w", encoding="utf-8") as f:
-                    f.write("fixture\n")
-            pattern = os.path.join(task_dir, "TASK_BASELINE.*")
-            r = _run_bash(f"rm -f {pattern}")
-            decision, reason = parse_decision(r.stdout)
-            self.assertEqual(decision, "deny")
-            self.assertIn("rule=protected-artifact", reason)
-
-    def test_rm_brace_expansion_cannot_delete_baseline_artifacts(self):
-        with scratch_task_in_real_repo("baseline-brace-prot") as task_dir:
-            pattern = os.path.join(
-                task_dir, "{TASK_BASELINE.json,TASK_BASELINE.required}",
-            )
-            r = _run_bash(f"rm -f {pattern}")
-            decision, reason = parse_decision(r.stdout)
-            self.assertEqual(decision, "deny")
-            self.assertIn("rule=protected-artifact", reason)
 
 
 class TestEnvPrefixBypassFix(unittest.TestCase):

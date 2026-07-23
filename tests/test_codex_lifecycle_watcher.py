@@ -172,6 +172,57 @@ def test_watcher_records_start_then_correlated_review_completion(tmp_path, monke
     assert receipts[0]["runtime_event_id"] == receipts[1]["runtime_event_id"]
 
 
+def test_watcher_records_sequential_unique_qa_names_in_one_root(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    task_dir = repo / "doc/harness/tasks/TASK__watcher"
+    task_dir.mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    runs = [
+        ("019f82a6-ce64-75a3-b01d-92f7b0b4fe6f", "qa_cli_first_r1", "/root/qa_cli_first_r1", "call_runtime_first"),
+        ("019f82a6-ce64-75a3-b01d-92f7b0b4fe70", "qa_cli_second_r2", "/root/qa_cli_second_r2", "call_runtime_second"),
+    ]
+    receipts = []
+
+    def record(_task_dir, receipt):
+        entry = {
+            **receipt,
+            "head_sha": receipt.get("head_sha") or "a" * 40,
+            "base_sha": receipt.get("base_sha") or "a" * 40,
+            "diff_fingerprint": receipt.get("diff_fingerprint") or "sha256:before",
+        }
+        receipts.append(entry)
+        return entry
+
+    watcher = mod.Watcher(str(repo), root_id)
+    with mock.patch.object(mod, "_active_task_for_session", return_value=str(task_dir)), \
+         mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"), \
+         mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
+         mock.patch.object(mod, "list_review_receipts", return_value=[]), \
+         mock.patch.object(mod, "list_subagent_receipts", side_effect=lambda _td: receipts):
+        for child_id, task_name, agent_path, call_id in runs:
+            child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+            _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo)))
+            events = _spawn_events(root_id, child_id, task_name, agent_path)
+            for event in events:
+                payload = event["payload"]
+                if payload.get("call_id") == "call_runtime_123456":
+                    payload["call_id"] = call_id
+                if payload.get("event_id") == "call_runtime_123456":
+                    payload["event_id"] = call_id
+                watcher.feed(event)
+            final = "VERDICT: PASS\nQA passed"
+            _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo), final))
+            watcher.feed(_delivery(agent_path, final))
+
+    completed = [item for item in receipts if item["status"] == "completed"]
+    assert [item["lens"] for item in completed] == ["qa-cli", "qa-cli"]
+    assert [item["verdict"] for item in completed] == ["PASS", "PASS"]
+    assert len({item["runtime_agent_path"] for item in completed}) == 2
+
+
 def test_watcher_rejects_child_that_completed_before_start_capture(tmp_path, monkeypatch):
     mod = _load()
     codex_home = tmp_path / ".codex"

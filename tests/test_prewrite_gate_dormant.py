@@ -224,20 +224,6 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
             self.assertIn("C-05-protected-artifact", reason or "")
             self.assertIn("task-start-runtime", reason or "")
 
-    def test_task_baseline_requirement_marker_is_runtime_owned(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tasks_dir = _scaffold(tmpdir)
-            task_dir = _write_task_state(tasks_dir, "baseline-marker", "created")
-            with open(os.path.join(task_dir, "PLAN.md"), "w", encoding="utf-8") as f:
-                f.write("# plan\n")
-            with open(os.path.join(tasks_dir, ".active"), "w", encoding="utf-8") as f:
-                f.write(task_dir + "\n")
-            marker = os.path.join(task_dir, "TASK_BASELINE.required")
-            r = _invoke(tmpdir, marker)
-            decision, reason = _parse_decision(r.stdout)
-            self.assertEqual(decision, "deny")
-            self.assertIn("C-05-protected-artifact", reason or "")
-            self.assertIn("task-start-runtime", reason or "")
 
 
 if __name__ == "__main__":

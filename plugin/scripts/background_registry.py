@@ -196,7 +196,7 @@ def _diagnostic_record(
         "payload_keys": keys,
         "updated_at": now_iso(),
         "updated_ts": ts,
-        "diff_fingerprint": review_diff_fingerprint(task_dir),
+        "diff_fingerprint": review_diff_fingerprint(task_dir) if task_dir else "",
     }
     transcript = _payload_value(payload, "agent_transcript_path", "transcript_path")
     if transcript:

@@ -64,7 +64,6 @@ PROTECTED_ARTIFACTS = {
     "REVIEW_RECEIPTS.jsonl": "review-lifecycle-hook",
     "INSTALL_RECEIPT.json": "verified-install-helper",
     "TASK_BASELINE.json": "task-start-runtime",
-    "TASK_BASELINE.required": "task-start-runtime",
     "CONVERSATION.md": "conversation-hook",
 }
 
@@ -78,7 +77,6 @@ PROTECTED_ARTIFACT_HUMAN = {
     "REVIEW_RECEIPTS.jsonl": "Codex/Claude review lifecycle hooks",
     "INSTALL_RECEIPT.json": "scripts/install_verified.py",
     "TASK_BASELINE.json": "task-start runtime",
-    "TASK_BASELINE.required": "task-start runtime",
     "CONVERSATION.md": "Codex/Claude conversation hooks",
 }
 

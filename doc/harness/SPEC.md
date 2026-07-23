@@ -41,6 +41,8 @@ child's canonical task state is both closed and receipt-verified PASS. Starting
 the same terminal Goal is an explicit resume operation: it preserves its task
 queue and creation history while returning the Goal to `active` and clearing
 the prior terminal timestamp.
+Terminal Goals reject child mutation and repeat finish calls until that explicit
+`goal_start`, so blocked or complete state cannot accumulate unfinished work.
 
 ## Task Loop
 
@@ -65,11 +67,10 @@ task start remains excluded when the identical content is later committed.
 For a newly scaffolded task in a Git repository, baseline capture is mandatory
 and happens before `TASK_STATE.yaml` is created. An unborn repository or
 transient capture failure blocks `task_start` with recovery guidance instead of
-creating a task whose later committed payload could disappear. Identifiable
-legacy tasks that already lack a baseline retain their prior compatibility.
-New tasks also receive a protected `TASK_BASELINE.required` generation marker;
-if their baseline is later deleted, review, install, and close fail closed
-instead of reclassifying the task as legacy.
+creating a task whose later committed payload could disappear. Every Git-backed
+task requires the baseline thereafter: missing baselines fail closed regardless
+of how they were removed. Older baseline-less tasks must be restarted as a new
+task, which is the explicit migration path and avoids ambiguous legacy inference.
 
 ## Protected Artifacts
 
@@ -77,7 +78,7 @@ instead of reclassifying the task as legacy.
 |---|---|
 | `PLAN.md`, `PLAN.meta.json`, optional `CHECKS.yaml`, optional `AUDIT_TRAIL.md` | MCP `write_plan` |
 | `CHECKS.yaml` status transitions after plan | `plugin/scripts/update_checks.py` |
-| `TASK_BASELINE.json`, `TASK_BASELINE.required` | task-start runtime |
+| `TASK_BASELINE.json` | task-start runtime |
 | `SUBAGENT_RECEIPTS.jsonl` | Codex/Claude subagent lifecycle hooks, including the root-hook-registered, MCP-hosted Codex watcher |
 | `REVIEW_RECEIPTS.jsonl` | Codex/Claude reviewer lifecycle hooks, including the root-hook-registered, MCP-hosted Codex watcher |
 | `CONVERSATION.md` | Codex/Claude UserPromptSubmit/Subagent hooks |

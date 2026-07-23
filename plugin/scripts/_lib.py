@@ -23,7 +23,6 @@ from datetime import datetime, timezone
 TASK_DIR = "doc/harness/tasks"
 MANIFEST_PATH = "doc/harness/manifest.yaml"
 TASK_BASELINE_NAME = "TASK_BASELINE.json"
-TASK_BASELINE_REQUIRED_NAME = "TASK_BASELINE.required"
 SUBAGENT_RECEIPTS_NAME = "SUBAGENT_RECEIPTS.jsonl"
 REVIEW_RECEIPTS_NAME = "REVIEW_RECEIPTS.jsonl"
 CONVERSATION_NAME = "CONVERSATION.md"
@@ -629,6 +628,8 @@ def add_goal_task(repo_root: str, task_id: str, *, title: str = "", status: str 
     current = read_current_goal(repo_root)
     if not current:
         raise ValueError("no active goal")
+    if current.get("status") != "active":
+        raise ValueError("goal is terminal; call goal_start explicitly before changing child tasks")
     canonical_dir = canonical_task_dir(
         task_id=task_id,
         task_dir=task_dir or None,
@@ -671,6 +672,8 @@ def finish_harness_goal(repo_root: str, *, status: str = "complete") -> dict:
     current = read_current_goal(repo_root)
     if not current:
         raise ValueError("no active goal")
+    if current.get("status") != "active":
+        raise ValueError("goal is terminal; call goal_start explicitly before finishing it again")
     final_status = status if status in {"complete", "blocked"} else "complete"
     if final_status == "complete":
         tasks = current.get("tasks") if isinstance(current.get("tasks"), list) else []
@@ -1411,11 +1414,6 @@ def ensure_task_scaffold(task_dir, task_id, request_text=""):
     if _has_git_metadata(repo_root) and not baseline_path:
         raise RuntimeError(
             "task baseline capture unavailable; create or restore a valid Git HEAD and retry task_start"
-        )
-    if baseline_path:
-        _atomic_text_write(
-            os.path.join(task_dir, TASK_BASELINE_REQUIRED_NAME),
-            "version: 1\n",
         )
     write_state(task_dir, fields)
 
@@ -3069,8 +3067,8 @@ def _git_head_snapshot(repo_root, *, git_dir=None, use_cache=True):
 def capture_task_baseline(task_dir, repo_root=None):
     """Write task-start dirty-path fingerprints.
 
-    Existing valid baselines are preserved on resume. A missing baseline keeps
-    legacy behavior; a present-invalid baseline is an integrity failure.
+    Existing valid baselines are preserved on resume. Git-backed tasks require
+    a valid baseline; absence or invalid contents are integrity failures.
     """
     path = _baseline_file(task_dir)
     if os.path.lexists(path):
@@ -3109,15 +3107,12 @@ def capture_task_baseline(task_dir, repo_root=None):
 def _read_task_baseline_snapshot(task_dir, repo_root=None):
     """Read and validate one task baseline without following its leaf."""
     path = _baseline_file(task_dir)
+    repo_root = os.path.abspath(repo_root or find_repo_root(task_dir))
     if not os.path.lexists(path):
-        marker = os.path.join(task_dir, TASK_BASELINE_REQUIRED_NAME)
-        if os.path.lexists(marker):
-            if _read_regular_text_file(marker, max_size=64) != "version: 1\n":
-                raise RuntimeError("task baseline requirement marker integrity unavailable")
+        if _has_git_metadata(repo_root):
             raise RuntimeError("required task baseline missing")
         return None
     data = _read_json_file(path, max_size=2 * 1024 * 1024)
-    repo_root = os.path.abspath(repo_root or find_repo_root(task_dir))
     head_sha = str(data.get("head_sha") or "").strip()
     dirty = data.get("dirty_paths")
     stored_root = str(data.get("repo_root") or "")

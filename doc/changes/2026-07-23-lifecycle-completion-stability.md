@@ -9,20 +9,19 @@ unavailable baselines fail closed, while unchanged pre-task dirt remains out of
 scope even if it is committed later.
 New Git-backed tasks require successful baseline capture before task state is
 created; an unborn repository or transient snapshot failure blocks task start
-instead of silently creating an unreviewable committed scope. Existing legacy
-tasks without a baseline remain compatible.
-A protected generation marker distinguishes those legacy tasks from new tasks,
-so deleting a required baseline later blocks every source-scope gate.
-The Bash mutation guard inspects every non-option `rm`/`unlink` operand and
-bounded glob/brace alternatives, so one literal or shell-expanded command
-cannot delete both the baseline and its generation marker.
+instead of silently creating an unreviewable committed scope. A missing baseline
+on any Git-backed task fails closed regardless of deletion method; older
+baseline-less tasks must be restarted explicitly instead of being inferred as
+legacy from ambiguous absence.
 
 Task and Goal terminal transitions are coupled: `task_close` closes the active
 Goal child, while `goal_finish(complete)` requires at least one canonical child
 whose task state is closed with fresh receipt-backed QA PASS. Calling `goal_start` on
 the same completed or blocked Goal explicitly reactivates it and preserves its
-queue.
+queue; terminal Goals reject child mutation and repeated finish calls until
+that explicit restart.
 
 Every registered Claude hook command is fail-safe with `|| true`. Codex run and
-develop guidance uses the exact QA task names `qa_cli`, `qa_api`, `qa_browser`,
-and `qa_desktop`, which are the stable lifecycle receipt bindings.
+develop guidance uses fresh names with `qa_cli_`, `qa_api_`, `qa_browser_`, or
+`qa_desktop_` prefixes. The watcher binds receipts from the prefix while the
+suffix prevents same-thread collisions across sequential tasks.

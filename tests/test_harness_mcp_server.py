@@ -247,6 +247,33 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertTrue(result.get("isError"))
             self.assertIn("no child tasks", result["structuredContent"]["error"])
 
+    def test_terminal_goal_rejects_child_mutation_and_repeat_finish_until_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._call_in_repo(tmp, "goal_start", {
+                "objective": "terminal guard", "goal_id": "GOAL__terminal-guard",
+            })
+            blocked = self._call_in_repo(tmp, "goal_finish", {"status": "blocked"})
+            self.assertEqual(blocked["structuredContent"]["goal"]["status"], "blocked")
+
+            add = self._call_in_repo(tmp, "goal_add_task", {
+                "task_id": "TASK__must-restart", "status": "queued",
+            })
+            self.assertTrue(add.get("isError"))
+            self.assertIn("call goal_start explicitly", add["structuredContent"]["error"])
+
+            finish = self._call_in_repo(tmp, "goal_finish", {"status": "blocked"})
+            self.assertTrue(finish.get("isError"))
+            self.assertIn("call goal_start explicitly", finish["structuredContent"]["error"])
+
+            restarted = self._call_in_repo(tmp, "goal_start", {
+                "objective": "terminal guard", "goal_id": "GOAL__terminal-guard",
+            })
+            self.assertEqual(restarted["structuredContent"]["goal"]["status"], "active")
+            add_after_restart = self._call_in_repo(tmp, "goal_add_task", {
+                "task_id": "TASK__must-restart", "status": "queued",
+            })
+            self.assertNotIn("isError", add_after_restart)
+
     def test_goal_start_rejects_prefixed_traversal_before_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             result = self._call_in_repo(
@@ -2492,6 +2519,17 @@ class HarnessTouchedPathSubmoduleTests(unittest.TestCase):
                 "plan_session_state: closed\n"
                 "closed_at: null\n"
                 "updated: 2026-01-01T00:00:00Z\n",
+                encoding="utf-8",
+            )
+            (task_dir / "TASK_BASELINE.json").write_text(
+                json.dumps({
+                    "version": 1,
+                    "repo_root": str(parent),
+                    "head_sha": self._git(
+                        str(parent), "rev-parse", "HEAD",
+                    ).stdout.strip(),
+                    "dirty_paths": {},
+                }),
                 encoding="utf-8",
             )
             (parent / "services" / "api space" / "api.py").write_text("v2\n", encoding="utf-8")

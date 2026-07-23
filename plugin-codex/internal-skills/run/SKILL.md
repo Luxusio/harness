@@ -40,7 +40,7 @@ that can run without touching the same files. Use concrete Codex calls like:
 
 ```text
 spawn_agent {
-  task_name: "qa_cli",
+  task_name: "qa_cli_<task_slug>_<run_id>",
   message: "You are the qa-cli lens for <task_id>. Read <task_dir>/PLAN.md, CHECKS.yaml, and changed files. Run focused verification. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with concrete findings and evidence.",
   fork_turns: "all"
 }
@@ -222,15 +222,17 @@ QA subagent pattern on Codex:
 
 ```text
 spawn_agent {
-  task_name: "qa_<lens>",
+  task_name: "qa_<lens>_<task_slug>_<run_id>",
   message: "You are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, CHECKS.yaml, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with command/browser evidence and concrete findings.",
   fork_turns: "all"
 }
 ```
 
-Use the exact stable QA task names `qa_cli`, `qa_api`, `qa_browser`, and
-`qa_desktop`. Do not decorate or suffix them: lifecycle receipt binding uses
-the exact root task name. Run at most one agent for each required QA lens.
+Start each QA run with a fresh task name whose prefix is exactly `qa_cli_`,
+`qa_api_`, `qa_browser_`, or `qa_desktop_`, followed by a short sanitized task
+slug and run id. The watcher binds the lens from that prefix and the unique
+suffix prevents collaboration-tree name collisions across sequential tasks.
+Run at most one agent for each required QA lens in a single verification cycle.
 
 After awaiting QA/UX, run `task_verify` with `reconcile_acs: true`. The verify
 step reads `SUBAGENT_RECEIPTS.jsonl`, promotes only `status: open` checks when
