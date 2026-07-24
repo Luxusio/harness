@@ -16,6 +16,9 @@ to plugin hooks.
   stop-gate routing, even when no active harness task exists.
 - Enable capture with `HARNESS_CAPTURE_GOAL_PAYLOADS=1` or by creating
   `doc/harness/debug/CAPTURE_GOAL_PAYLOADS` in the repository.
+- The repository marker and generated payload directory are gitignored local
+  operational state so enabling sensitive prompt capture cannot be committed
+  accidentally for other contributors.
 - Records include top-level payload keys, prompt candidate fields, goal-command
   detection for `/goal` and `/골`, transcript candidate lines containing
   `/goal` or `Goal set`, runtime/session metadata, and a capped payload envelope

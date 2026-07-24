@@ -19,7 +19,9 @@ committed artifact: a runbook, `doc/harness/patterns/*.md`,
 ## Files
 
 - `doc/harness/runbooks.yaml` contains approved runbooks.
-- `doc/harness/runbook_candidates.yaml` contains unapproved candidates.
+- `doc/harness/runbook_candidates.yaml` contains unapproved, gitignored local
+  staging. It must be approved into `runbooks.yaml` or another committed
+  artifact before it becomes shared project knowledge.
 
 Approved runbooks are shown by `prompt_memory.py` in a capped
 `[harness-runbooks]` reminder. Candidates are only reminders for the

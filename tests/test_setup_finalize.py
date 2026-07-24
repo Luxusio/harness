@@ -105,6 +105,8 @@ def test_fresh_setup_ignores_all_operational_artifacts_and_stamps_version(tmp_pa
         "doc/harness/task-packs/current.json",
         "doc/harness/reviews/main-reviews.jsonl",
         "doc/harness/debug/goal-hook-payloads/prompt.json",
+        "doc/harness/debug/CAPTURE_GOAL_PAYLOADS",
+        "doc/harness/runbook_candidates.yaml",
         "doc/harness/maintenance/probe.json",
         "doc/harness/archive/probe.json",
         "doc/harness/.routing-state.json",
@@ -119,6 +121,46 @@ def test_fresh_setup_ignores_all_operational_artifacts_and_stamps_version(tmp_pa
 
     second = run(repo, plugin_root)
     assert second.returncode == 0
+
+
+def test_local_operational_files_are_rejected_when_already_tracked(tmp_path):
+    plugin_root = make_plugin_root(tmp_path)
+    for index, rel in enumerate((
+        "doc/harness/debug/CAPTURE_GOAL_PAYLOADS",
+        "doc/harness/runbook_candidates.yaml",
+    )):
+        repo = make_repo(tmp_path / str(index), manifest=canonical_manifest())
+        artifact = repo / rel
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("local runtime state\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(repo), "add", "-f", rel],
+            check=True,
+        )
+
+        result = run(repo, plugin_root)
+
+        assert result.returncode == 1
+        assert f"operational artifact is already tracked: {rel}" in result.stdout
+
+
+def test_local_writer_paths_match_canonical_operational_ignores():
+    def load(name: str, path: Path):
+        spec = importlib.util.spec_from_file_location(name, path)
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    setup = load("setup_finalize_contract", SCRIPT)
+    runbooks = load("runbook_memory_contract", REPO / "plugin/scripts/runbook_memory.py")
+    harness_lib = load("harness_lib_contract", REPO / "plugin/scripts/_lib.py")
+
+    writer_paths = {
+        runbooks.CANDIDATES_REL,
+        harness_lib.GOAL_PAYLOAD_MARKER.replace(os.sep, "/"),
+    }
+    assert writer_paths <= set(setup.OPERATIONAL_IGNORES)
 
 
 def test_codex_finalize_rejects_missing_public_run_policy(tmp_path):
