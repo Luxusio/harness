@@ -14,14 +14,8 @@ import re
 import stat
 import subprocess
 import sys
-import time
 from pathlib import Path
 from typing import Any, Callable
-
-try:
-    import fcntl
-except Exception:  # pragma: no cover - non-POSIX fallback
-    fcntl = None
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
@@ -165,51 +159,6 @@ def _atomic_write_text(path: str, text: str) -> None:
         except OSError:
             pass
         raise
-
-
-def _cleanup_orphan_index_lock(repo_root: str, max_age_secs: int = 0) -> bool:
-    """Remove an orphan .git/index.lock left around task_start.
-
-    The cleanup is intentionally narrow: only a 0-byte lock file is eligible,
-    and on POSIX we also require a non-blocking exclusive flock to succeed.
-    Non-empty locks are treated as active git state and left alone.
-    """
-    lock_path = os.path.join(repo_root, ".git", "index.lock")
-    try:
-        st = os.stat(lock_path)
-    except (FileNotFoundError, OSError):
-        return False
-    if st.st_size != 0:
-        return False
-    if time.time() - st.st_mtime < max_age_secs:
-        return False
-    fd = None
-    try:
-        fd = os.open(lock_path, os.O_RDWR)
-        if fcntl is not None:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except (OSError, IOError):
-        if fd is not None:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-        return False
-    try:
-        if fcntl is not None and fd is not None:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-    except (OSError, IOError):
-        pass
-    try:
-        if fd is not None:
-            os.close(fd)
-    except OSError:
-        pass
-    try:
-        os.unlink(lock_path)
-    except OSError:
-        return False
-    return True
 
 
 # ── PR2 close-gate helpers ──────────────────────────────────────────────
@@ -610,6 +559,24 @@ def _invalid_task_state_error(operation: str, td: str) -> dict:
     )
 
 
+def _minimal_task_start_context(task_dir: str, task_id: str) -> dict:
+    """Return conservative, non-routing context after scaffold commit."""
+    state = read_state(task_dir)
+    return {
+        "task_id": task_id,
+        "task_dir": task_dir,
+        "status": str(state.get("status") or "created"),
+        "runtime_verdict": str(state.get("runtime_verdict") or "pending").upper(),
+        "touched_paths": list(state.get("touched_paths") or []),
+        "context_complete": False,
+        "source_write_allowed": False,
+        "next_action": (
+            f"Call task_context with task_id {task_id}. "
+            "Do not call task_start again."
+        ),
+    }
+
+
 # ── Tool handlers ────────────────────────────────────────────────────────
 
 
@@ -625,14 +592,13 @@ def handle_task_start(args: dict) -> dict:
     task_dir = canonical_task_dir(task_id=ti, slug=sl, task_dir=td, repo_root=repo_root)
     tid = canonical_task_id(task_dir=task_dir, repo_root=repo_root)
     existing_state_path = os.path.join(task_dir, "TASK_STATE.yaml")
-    if os.path.lexists(existing_state_path):
+    resumed_existing = os.path.lexists(existing_state_path)
+    if resumed_existing:
         existing_state = read_state(task_dir)
         if existing_state.get("task_id") != tid:
             raise ValueError(
                 "task_start refused existing TASK_STATE.yaml whose task_id does not match the canonical task directory"
             )
-    _cleanup_orphan_index_lock(repo_root)
-
     request_text = ""
     if rf:
         rp = rf if os.path.isabs(rf) else os.path.join(repo_root, rf)
@@ -643,31 +609,49 @@ def handle_task_start(args: dict) -> dict:
             except OSError:
                 pass
 
-    ensure_task_scaffold(task_dir, tid, request_text=request_text)
-    resumed = read_state(task_dir)
-    if str(resumed.get("status") or "").lower() in {"blocked", "closed"}:
-        clear_task_close_attestation(task_dir)
-        resumed["status"] = "created"
-        resumed["runtime_verdict"] = "pending"
-        resumed["closed_at"] = None
-        resumed["updated"] = now_iso()
-        write_state(task_dir, resumed)
+    warnings = []
+    with review_snapshot_scope(deadline_seconds=40):
+        ensure_task_scaffold(task_dir, tid, request_text=request_text)
+        resumed = read_state(task_dir)
+        if str(resumed.get("status") or "").lower() in {"blocked", "closed"}:
+            clear_task_close_attestation(task_dir)
+            resumed["status"] = "created"
+            resumed["runtime_verdict"] = "pending"
+            resumed["closed_at"] = None
+            resumed["updated"] = now_iso()
+            write_state(task_dir, resumed)
+            try:
+                os.unlink(os.path.join(task_dir, "BLOCKED.md"))
+            except FileNotFoundError:
+                pass
+        execution_mode = _opt(args, "execution_mode")
+        if execution_mode:
+            mode = execution_mode.strip().lower()
+            if mode not in {"standard", "micro"}:
+                raise ValueError("execution_mode must be standard or micro")
+            if mode == "micro":
+                set_state_field(task_dir, "plan_session_state", "micro_loop")
+
+        # The active marker is the final required task-start commit step.
+        write_active_marker(repo_root, task_dir)
         try:
-            os.unlink(os.path.join(task_dir, "BLOCKED.md"))
-        except FileNotFoundError:
-            pass
-    execution_mode = _opt(args, "execution_mode")
-    if execution_mode:
-        mode = execution_mode.strip().lower()
-        if mode not in {"standard", "micro"}:
-            raise ValueError("execution_mode must be standard or micro")
-        if mode == "micro":
-            set_state_field(task_dir, "plan_session_state", "micro_loop")
+            ctx = emit_compact_context(task_dir)
+            if "error" in ctx:
+                raise RuntimeError(str(ctx.get("error") or "compact context unavailable"))
+        except Exception as exc:
+            ctx = _minimal_task_start_context(task_dir, tid)
+            warnings.append({
+                "code": "TASK_CONTEXT_DEFERRED",
+                "stage": "task_context",
+                "message": (
+                    "Task ready; full routing context was deferred "
+                    "to keep task_start responsive."
+                ),
+                "detail": str(exc)[:300],
+                "retry_action": ctx["next_action"],
+            })
 
-    # Write session-scoped active marker so multiple sessions can work in one repo.
-    write_active_marker(repo_root, task_dir)
-
-    # Best-effort environment snapshot: probe failure must never block task_start.
+    # Best-effort environment snapshot runs after the coherent Git/context scope.
     snapshot_path = ""
     if _env_snapshot is not None:
         try:
@@ -675,13 +659,14 @@ def handle_task_start(args: dict) -> dict:
         except Exception:
             snapshot_path = ""
 
-    ctx = emit_compact_context(task_dir)
-    _cleanup_orphan_index_lock(repo_root)
-    if "error" in ctx:
-        return _err("task_start failed", data={"task_dir": task_dir})
     return _ok({
         "task_dir": task_dir, "task_id": tid, "task_context": ctx,
         "environment_snapshot": snapshot_path,
+        "start_status": "ready_with_warnings" if warnings else "ready",
+        "task_created": not resumed_existing,
+        "resumed": resumed_existing,
+        "warnings": warnings,
+        "next_action": ctx.get("next_action", ""),
     })
 
 
@@ -1004,9 +989,50 @@ def _nonempty_artifact_content(value: str, *, artifact: str, filename: str) -> s
     return value
 
 
-def _valid_audit_content(value: str) -> bool:
+def _normalize_audit_content(value: str) -> tuple[str, str]:
+    """Accept natural Markdown audit tables and return canonical data rows."""
     lines = [line.strip() for line in value.splitlines() if line.strip()]
-    return bool(lines) and all(line.startswith("|") and line.count("|") >= 3 for line in lines)
+    if lines and re.fullmatch(r"#{1,6}\s+audit trail", lines[0], re.IGNORECASE):
+        lines.pop(0)
+    canonical_header = (
+        "#", "phase", "decision", "classification", "principle", "rationale",
+        "rejected_option",
+    )
+    if lines and lines[0].startswith("|") and lines[0].endswith("|"):
+        first_cells = tuple(
+            cell.strip().lower() for cell in lines[0][1:-1].split("|")
+        )
+        if first_cells == canonical_header:
+            lines.pop(0)
+            if lines and re.fullmatch(r"\|(?:\s*:?-{3,}:?\s*\|)+", lines[0]):
+                lines.pop(0)
+        elif first_cells and first_cells[0] == "#":
+            return "", (
+                "Use the audit header columns '#, phase, decision, classification, "
+                "principle, rationale, rejected_option', or pass data rows only."
+            )
+    if not lines:
+        return "", "Pass at least one audit data row after the optional heading and table header."
+    valid_rows = True
+    for line in lines:
+        if not line.startswith("|") or not line.endswith("|"):
+            valid_rows = False
+            break
+        cells = [cell.strip() for cell in line[1:-1].split("|")]
+        if (
+            len(cells) < 3
+            or any(not cell for cell in cells)
+            or all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)
+        ):
+            valid_rows = False
+            break
+    if not valid_rows:
+        return "", (
+            "Pass at least one complete audit data row with three or more "
+            "non-empty cells, or a full Markdown table with an optional "
+            "'# Audit Trail' heading, header row, and separator."
+        )
+    return "\n".join(lines) + "\n", ""
 
 
 def _read_regular_text_no_follow(path: str) -> str:
@@ -1071,11 +1097,13 @@ def handle_write_plan(args: dict) -> dict:
         checked_audit = _nonempty_artifact_content(audit, artifact="audit", filename="AUDIT_TRAIL.md")
         if isinstance(checked_audit, dict):
             return checked_audit
-        if not _valid_audit_content(checked_audit):
+        checked_audit, audit_error = _normalize_audit_content(checked_audit)
+        if audit_error:
             return _err(
-                "write_plan refused invalid AUDIT_TRAIL.md; expected Markdown table rows",
+                "write_plan refused invalid AUDIT_TRAIL.md; could not understand the supplied audit table",
                 data={"artifact": "audit", "filename": "AUDIT_TRAIL.md", "written": [],
-                      "next_action": "Pass one or more Markdown table rows, or omit audit."},
+                      "next_action": audit_error,
+                      "example": "| 1 | phase | decision | classification | principle | rationale | rejected_option |"},
             )
         try:
             if os.path.isfile(audit_path):

@@ -14,15 +14,17 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
+import time
 from typing import Any
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
-    from _lib import yaml_field, find_repo_root, MANIFEST_PATH  # type: ignore
+    from _lib import find_repo_root, MANIFEST_PATH  # type: ignore
 except Exception:
-    yaml_field = None
     find_repo_root = None
     MANIFEST_PATH = "doc/harness/manifest.yaml"
 
@@ -30,6 +32,9 @@ except Exception:
 ARTIFACT_NAME = "ENVIRONMENT_SNAPSHOT.md"
 
 _ROOT_ENTRIES_CAP = 20
+_PROBE_BUDGET_SECONDS = 4.0
+_COMMAND_TIMEOUT_SECONDS = 3.0
+_MANIFEST_SIZE_CAP = 256 * 1024
 
 _TOOLING_FIELDS = (
     "ast_grep_ready",
@@ -79,9 +84,18 @@ _MANIFEST_TOP_FIELDS = (
 )
 
 
-def _run(cmd: list[str], cwd: str) -> str:
+def _run(cmd: list[str], cwd: str, deadline: float) -> str:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return ""
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd, timeout=3)
+        r = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=cwd,
+            timeout=min(_COMMAND_TIMEOUT_SECONDS, remaining),
+        )
     except Exception:
         return ""
     if r.returncode != 0:
@@ -98,24 +112,67 @@ def _short_version(raw: str) -> str:
     return first or "missing"
 
 
-def _git_branch(repo_root: str) -> str:
-    return _run(["git", "branch", "--show-current"], repo_root) or "unknown"
+def _git_branch(repo_root: str, deadline: float) -> str:
+    return _run(["git", "branch", "--show-current"], repo_root, deadline) or "unknown"
 
 
-def _manifest_fields(repo_root: str) -> dict[str, str]:
+def _read_manifest(repo_root: str) -> str:
+    """Read one bounded regular manifest without following its leaf."""
     manifest = os.path.join(repo_root, MANIFEST_PATH)
-    out: dict[str, str] = {}
-    for field in _MANIFEST_TOP_FIELDS:
-        if yaml_field is None:
-            out[field] = ""
-            continue
-        out[field] = yaml_field(field, manifest) or ""
-    # project_meta.shape is a nested key; flatten by scanning the file.
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
     try:
-        with open(manifest, encoding="utf-8") as f:
-            body = f.read()
-    except OSError:
-        body = ""
+        before = os.lstat(manifest)
+        if not stat.S_ISREG(before.st_mode) or before.st_size > _MANIFEST_SIZE_CAP:
+            return ""
+        fd = os.open(manifest, flags)
+    except (FileNotFoundError, OSError):
+        return ""
+    try:
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_size > _MANIFEST_SIZE_CAP
+            or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+        ):
+            return ""
+        with os.fdopen(fd, encoding="utf-8") as file_obj:
+            fd = -1
+            body = file_obj.read(_MANIFEST_SIZE_CAP + 1)
+        if len(body.encode("utf-8")) > _MANIFEST_SIZE_CAP:
+            return ""
+        after = os.lstat(manifest)
+        if (after.st_dev, after.st_ino, stat.S_IFMT(after.st_mode)) != (
+            opened.st_dev, opened.st_ino, stat.S_IFMT(opened.st_mode)
+        ):
+            return ""
+        return body
+    except (OSError, UnicodeError):
+        return ""
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _top_level_value(body: str, field: str) -> str:
+    prefix = f"{field}:"
+    for line in body.splitlines():
+        if line.startswith(prefix):
+            value = line[len(prefix):].strip()
+            if value in {"null", "~", "", "[]"}:
+                return ""
+            return value.strip('"').strip("'")
+    return ""
+
+
+def _manifest_fields(body: str) -> dict[str, str]:
+    out = {field: _top_level_value(body, field) for field in _MANIFEST_TOP_FIELDS}
+    # project_meta.shape is a nested key; flatten by scanning the captured text.
     shape = ""
     in_pm = False
     for line in body.splitlines():
@@ -132,13 +189,7 @@ def _manifest_fields(repo_root: str) -> dict[str, str]:
     return out
 
 
-def _tooling_block(repo_root: str) -> dict[str, str]:
-    manifest = os.path.join(repo_root, MANIFEST_PATH)
-    try:
-        with open(manifest, encoding="utf-8") as f:
-            body = f.read()
-    except OSError:
-        body = ""
+def _tooling_block(body: str) -> dict[str, str]:
     out = {k: "unknown" for k in _TOOLING_FIELDS}
     in_tooling = False
     for line in body.splitlines():
@@ -156,11 +207,14 @@ def _tooling_block(repo_root: str) -> dict[str, str]:
     return out
 
 
-def _tool_managers(repo_root: str) -> dict[str, dict[str, str]]:
+def _tool_managers(repo_root: str, deadline: float) -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
     for name, spec in _TOOL_MANAGER_COMMANDS.items():
         path = shutil.which(name)
-        version = _short_version(_run(spec["probe"], repo_root)) if path else "missing"
+        version = (
+            _short_version(_run(spec["probe"], repo_root, deadline))
+            if path else "missing"
+        )
         out[name] = {
             "path": path or "missing",
             "version": version,
@@ -169,13 +223,13 @@ def _tool_managers(repo_root: str) -> dict[str, dict[str, str]]:
     return out
 
 
-def _tool_versions(repo_root: str) -> dict[str, str]:
+def _tool_versions(repo_root: str, deadline: float) -> dict[str, str]:
     out: dict[str, str] = {}
     for name, cmd in _VERSION_COMMANDS.items():
         if not shutil.which(cmd[0]):
             out[name] = "missing"
             continue
-        out[name] = _short_version(_run(cmd, repo_root))
+        out[name] = _short_version(_run(cmd, repo_root, deadline))
     return out
 
 
@@ -247,6 +301,34 @@ def _render(ctx: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _write_snapshot(path: str, body: str) -> None:
+    """Atomically replace the snapshot leaf without following special files."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(
+        dir=directory, prefix=".environment-snapshot.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file_obj:
+            fd = -1
+            file_obj.write(body)
+            file_obj.flush()
+            try:
+                os.fsync(file_obj.fileno())
+            except OSError:
+                pass
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
 def snapshot(task_dir: str, repo_root: str | None = None) -> str:
     """Write ENVIRONMENT_SNAPSHOT.md into ``task_dir``; return its path.
 
@@ -258,21 +340,21 @@ def snapshot(task_dir: str, repo_root: str | None = None) -> str:
             return ""
         if repo_root is None:
             repo_root = find_repo_root() if find_repo_root else os.getcwd()
+        deadline = time.monotonic() + _PROBE_BUDGET_SECONDS
+        manifest = _read_manifest(repo_root)
         ctx = {
             "repo": {
                 "root": repo_root,
-                "branch": _git_branch(repo_root),
+                "branch": _git_branch(repo_root, deadline),
             },
-            "manifest": _manifest_fields(repo_root),
-            "tooling": _tooling_block(repo_root),
-            "tool_managers": _tool_managers(repo_root),
-            "tool_versions": _tool_versions(repo_root),
+            "manifest": _manifest_fields(manifest),
+            "tooling": _tooling_block(manifest),
+            "tool_managers": _tool_managers(repo_root, deadline),
+            "tool_versions": _tool_versions(repo_root, deadline),
             "root_entries": _root_entries(repo_root),
         }
         path = os.path.join(task_dir, ARTIFACT_NAME)
-        os.makedirs(task_dir, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(_render(ctx))
+        _write_snapshot(path, _render(ctx))
         return path
     except Exception:
         return ""

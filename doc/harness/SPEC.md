@@ -74,6 +74,33 @@ requires the baseline thereafter: missing baselines fail closed regardless of
 how they were removed. Older baseline-less tasks must be restarted as a new
 task, which is the explicit migration path and avoids ambiguous legacy inference.
 
+`task_start` captures the baseline and computes compact context inside one
+request-local Git snapshot. Git subprocesses share a 40-second cumulative
+deadline, and repeated changed-path, committed-path, and gitlink queries reuse
+the request snapshot. Expensive enumeration commands may consume at most 15
+seconds each, including HEAD and baseline ancestry validation, but never more
+than the remaining Git subprocess budget. Timeout and nonzero-exit diagnostics
+name the failed operation and repository. This keeps an internal response
+reserve below the MCP transport timeout without treating a slow, otherwise
+valid repository as a missing HEAD. Filesystem hashing and artifact rendering
+remain outside that subprocess budget. Other handlers that do not establish
+the cumulative start deadline retain their prior two- or five-second
+per-command limits.
+
+The initialization commit point is a validated baseline, a matching
+`TASK_STATE.yaml`, and the session active marker. Failures before that point
+remain hard errors and do not claim that a task exists. If optional compact
+context fails after that point, `task_start` returns
+`start_status: ready_with_warnings`, a conservative dict-shaped context, and an
+explicit instruction to call `task_context` rather than retrying
+`task_start`. Resuming an existing task revalidates its baseline before writing
+the active marker, returns `resumed: true` with `task_created: false`, and the
+read-only start path never removes Git index locks.
+Optional environment probing has one four-second subprocess budget, reads the
+manifest once through a bounded no-follow regular-file check, atomically
+replaces its own output leaf without following symlinks or opening special
+files, and cannot turn a committed scaffold into a failed start.
+
 ## Protected Artifacts
 
 | Artifact | Writer |
@@ -149,6 +176,13 @@ source edits after review or QA prevent close. Self-authored PASS notes,
 summaries, or narrative evidence do not close the task. Commands and inline
 checks may still help debugging, but close authority comes from `task_verify`
 reading task state and the two lifecycle streams.
+
+`write_plan` owns the canonical audit header but accepts both convenient caller
+forms: audit data rows only, or a complete Markdown audit table with an optional
+`# Audit Trail` heading, header row, and separator. It strips duplicate framing
+and stores exactly one canonical header. Inputs that cannot be normalized are
+rejected before any bundled artifact write, with an accepted example and a
+specific correction instead of an undocumented row-only requirement.
 
 `task_context`, `task_verify`, and `task_close` reuse one request-local snapshot
 of source-derived Git paths and review fingerprints. The snapshot is isolated by

@@ -36,6 +36,15 @@ EXPECTED_TOOLS = {
 
 
 class HarnessMcpServerTests(unittest.TestCase):
+    def _run_git(self, cwd: str, *args: str) -> None:
+        subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
     def _make_task(self, base_dir: str, task_id: str) -> str:
         task_dir = Path(base_dir) / "doc" / "harness" / "tasks" / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
@@ -442,6 +451,68 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("baseline capture unavailable", result["structuredContent"]["error"])
             state = Path(tmp) / "doc/harness/tasks/TASK__unborn-baseline/TASK_STATE.yaml"
             self.assertFalse(state.exists())
+
+    def test_task_start_never_removes_repository_index_lock(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._run_git(tmp, "init", "-q")
+            self._run_git(tmp, "config", "user.email", "a@b")
+            self._run_git(tmp, "config", "user.name", "a")
+            (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
+            self._run_git(tmp, "add", "README.md")
+            self._run_git(tmp, "commit", "-qm", "init")
+            lock = Path(tmp) / ".git/index.lock"
+            lock.write_bytes(b"")
+
+            result = self._call_in_repo(
+                tmp, "task_start", {"task_id": "TASK__preserve-index-lock"},
+            )
+
+            self.assertNotIn("isError", result)
+            self.assertTrue(lock.exists())
+
+    def test_task_start_fails_closed_for_invalid_resumed_baseline(self):
+        cases = ("missing", "corrupt", "symlink", "mismatched-root")
+        for case in cases:
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                self._run_git(tmp, "init", "-q")
+                self._run_git(tmp, "config", "user.email", "a@b")
+                self._run_git(tmp, "config", "user.name", "a")
+                (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
+                self._run_git(tmp, "add", "README.md")
+                self._run_git(tmp, "commit", "-qm", "init")
+                task_dir = Path(tmp) / f"doc/harness/tasks/TASK__invalid-{case}"
+                lib_globals = harness_server.ensure_task_scaffold.__globals__
+                lib_globals["ensure_task_scaffold"](
+                    str(task_dir), f"TASK__invalid-{case}"
+                )
+                baseline = task_dir / "TASK_BASELINE.json"
+                if case == "missing":
+                    baseline.unlink()
+                elif case == "corrupt":
+                    baseline.write_text("{not json", encoding="utf-8")
+                elif case == "symlink":
+                    outside = Path(tmp) / "outside-baseline.json"
+                    outside.write_bytes(baseline.read_bytes())
+                    baseline.unlink()
+                    baseline.symlink_to(outside)
+                else:
+                    data = json.loads(baseline.read_text(encoding="utf-8"))
+                    data["repo_root"] = str(Path(tmp) / "other")
+                    baseline.write_text(json.dumps(data), encoding="utf-8")
+
+                result = self._call_in_repo(
+                    tmp,
+                    "task_start",
+                    {"task_id": f"TASK__invalid-{case}"},
+                )
+
+                self.assertTrue(result.get("isError"))
+                self.assertNotEqual(
+                    result["structuredContent"].get("start_status"),
+                    "ready_with_warnings",
+                )
+                self.assertFalse((task_dir.parent / ".active").exists())
+                self.assertFalse((task_dir.parent / ".active_sessions").exists())
 
     def test_task_start_rejects_mismatched_existing_state_before_side_effects(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1173,6 +1244,8 @@ class HarnessMcpServerTests(unittest.TestCase):
             context = result["structuredContent"]["task_context"]
             self.assertEqual(context["status"], "created")
             self.assertEqual(context["runtime_verdict"], "PENDING")
+            self.assertFalse(result["structuredContent"]["task_created"])
+            self.assertTrue(result["structuredContent"]["resumed"])
             self.assertFalse((Path(task_dir) / "BLOCKED.md").exists())
 
     def test_task_start_reopens_closed_task_and_clears_close_attestation(self):
@@ -1205,6 +1278,177 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(context["status"], "created")
             self.assertEqual(context["runtime_verdict"], "PENDING")
             self.assertFalse(close_receipt.exists())
+
+    def test_task_start_returns_ready_with_warnings_after_committed_scaffold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._run_git(tmp, "init", "-q")
+            self._run_git(tmp, "config", "user.email", "a@b")
+            self._run_git(tmp, "config", "user.name", "a")
+            (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
+            self._run_git(tmp, "add", "README.md")
+            self._run_git(tmp, "commit", "-qm", "init")
+            task_dir = Path(tmp) / "doc/harness/tasks/TASK__context-warning"
+
+            with (
+                mock.patch.object(
+                    harness_server, "canonical_task_dir", return_value=str(task_dir)
+                ),
+                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                mock.patch.object(
+                    harness_server,
+                    "emit_compact_context",
+                    side_effect=RuntimeError("context scan exceeded request budget"),
+                ),
+                mock.patch.object(harness_server, "_env_snapshot", return_value=""),
+            ):
+                result = harness_server.handle_task_start(
+                    {"task_id": "TASK__context-warning"}
+                )
+
+            self.assertNotIn("isError", result)
+            payload = result["structuredContent"]
+            self.assertEqual(payload["start_status"], "ready_with_warnings")
+            self.assertTrue(payload["task_created"])
+            self.assertFalse(payload["resumed"])
+            self.assertIsInstance(payload["task_context"], dict)
+            self.assertFalse(payload["task_context"]["context_complete"])
+            self.assertFalse(payload["task_context"]["source_write_allowed"])
+            self.assertIn("Do not call task_start again", payload["next_action"])
+            self.assertEqual(payload["warnings"][0]["code"], "TASK_CONTEXT_DEFERRED")
+            self.assertTrue((task_dir / "TASK_BASELINE.json").is_file())
+            self.assertTrue((task_dir / "TASK_STATE.yaml").is_file())
+
+    def test_task_start_defers_error_shaped_compact_context_after_committed_scaffold(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._run_git(tmp, "init", "-q")
+            self._run_git(tmp, "config", "user.email", "a@b")
+            self._run_git(tmp, "config", "user.name", "a")
+            (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
+            self._run_git(tmp, "add", "README.md")
+            self._run_git(tmp, "commit", "-qm", "init")
+            task_dir = Path(tmp) / "doc/harness/tasks/TASK__context-error-result"
+
+            with (
+                mock.patch.object(
+                    harness_server, "canonical_task_dir", return_value=str(task_dir)
+                ),
+                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                mock.patch.object(
+                    harness_server,
+                    "emit_compact_context",
+                    return_value={"error": "context scan unavailable"},
+                ),
+                mock.patch.object(harness_server, "_env_snapshot", return_value=""),
+            ):
+                result = harness_server.handle_task_start(
+                    {"task_id": "TASK__context-error-result"}
+                )
+
+            self.assertNotIn("isError", result)
+            payload = result["structuredContent"]
+            self.assertEqual(payload["start_status"], "ready_with_warnings")
+            self.assertEqual(payload["warnings"][0]["code"], "TASK_CONTEXT_DEFERRED")
+            self.assertIn("context scan unavailable", payload["warnings"][0]["detail"])
+            self.assertFalse(payload["task_context"]["source_write_allowed"])
+
+    def test_resumed_task_context_warning_reports_ready_without_new_creation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._run_git(tmp, "init", "-q")
+            self._run_git(tmp, "config", "user.email", "a@b")
+            self._run_git(tmp, "config", "user.name", "a")
+            (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
+            self._run_git(tmp, "add", "README.md")
+            self._run_git(tmp, "commit", "-qm", "init")
+            task_dir = Path(tmp) / "doc/harness/tasks/TASK__resumed-warning"
+            harness_server.ensure_task_scaffold(
+                str(task_dir), "TASK__resumed-warning"
+            )
+
+            with (
+                mock.patch.object(
+                    harness_server, "canonical_task_dir", return_value=str(task_dir)
+                ),
+                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                mock.patch.object(
+                    harness_server,
+                    "emit_compact_context",
+                    side_effect=RuntimeError("context delayed"),
+                ),
+                mock.patch.object(harness_server, "_env_snapshot", return_value=""),
+            ):
+                result = harness_server.handle_task_start(
+                    {"task_id": "TASK__resumed-warning"}
+                )
+
+            payload = result["structuredContent"]
+            self.assertEqual(payload["start_status"], "ready_with_warnings")
+            self.assertFalse(payload["task_created"])
+            self.assertTrue(payload["resumed"])
+            self.assertEqual(
+                payload["warnings"][0]["message"],
+                "Task ready; full routing context was deferred to keep task_start responsive.",
+            )
+
+    def test_task_start_reuses_changed_path_snapshot_for_compact_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._run_git(tmp, "init", "-q")
+            self._run_git(tmp, "config", "user.email", "a@b")
+            self._run_git(tmp, "config", "user.name", "a")
+            (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
+            self._run_git(tmp, "add", "README.md")
+            self._run_git(tmp, "commit", "-qm", "init")
+            task_dir = Path(tmp) / "doc/harness/tasks/TASK__cached-start"
+            lib_globals = harness_server.ensure_task_scaffold.__globals__
+            original_scan = lib_globals["_uncached_git_changed_paths"]
+            original_run = lib_globals["subprocess"].run
+            scan_calls = 0
+            committed_diff_calls = 0
+            baseline_commit_calls = 0
+            baseline_ancestor_calls = 0
+
+            def counted_scan(repo_root):
+                nonlocal scan_calls
+                scan_calls += 1
+                return original_scan(repo_root)
+
+            def counted_run(command, *args, **kwargs):
+                nonlocal committed_diff_calls, baseline_commit_calls, baseline_ancestor_calls
+                if (
+                    command[:4] == ["git", "diff", "--name-only", "-z"]
+                    and "HEAD" in command
+                    and "--no-renames" in command
+                ):
+                    committed_diff_calls += 1
+                if (
+                    command[:4] == ["git", "rev-parse", "--verify", "--end-of-options"]
+                    and command[-1].endswith("^{commit}")
+                ):
+                    baseline_commit_calls += 1
+                if command[:3] == ["git", "merge-base", "--is-ancestor"]:
+                    baseline_ancestor_calls += 1
+                return original_run(command, *args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    harness_server, "canonical_task_dir", return_value=str(task_dir)
+                ),
+                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                mock.patch.object(harness_server, "_env_snapshot", return_value=""),
+                mock.patch.dict(
+                    lib_globals, {"_uncached_git_changed_paths": counted_scan}
+                ),
+                mock.patch.object(lib_globals["subprocess"], "run", side_effect=counted_run),
+            ):
+                result = harness_server.handle_task_start(
+                    {"task_id": "TASK__cached-start"}
+                )
+
+            self.assertNotIn("isError", result)
+            self.assertEqual(result["structuredContent"]["start_status"], "ready")
+            self.assertEqual(scan_calls, 1)
+            self.assertEqual(committed_diff_calls, 1)
+            self.assertEqual(baseline_commit_calls, 1)
+            self.assertEqual(baseline_ancestor_calls, 1)
 
     def test_write_plan_writes_plan_meta_checks_and_audit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1284,8 +1528,142 @@ class HarnessMcpServerTests(unittest.TestCase):
             )
             self.assertTrue(result.get("isError"))
             self.assertIn("invalid AUDIT_TRAIL.md", result["structuredContent"]["error"])
+            self.assertIn("full Markdown table", result["structuredContent"]["next_action"])
+            self.assertIn("| 1 | phase | decision |", result["structuredContent"]["example"])
             after = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
             self.assertEqual(after, before)
+
+    def test_write_plan_accepts_full_markdown_audit_table_and_normalizes_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__friendlyaudit")
+            full_table = "\n".join(
+                [
+                    "# Audit Trail",
+                    "",
+                    "| # | phase | decision | classification | principle | rationale | rejected_option |",
+                    "|---|---|---|---|---|---|---|",
+                    "| 1 | plan | accept natural Markdown | Mechanical | P5 | friendly input | row-only input |",
+                    "",
+                ]
+            )
+
+            result = self._call_in_repo(
+                tmp,
+                "write_plan",
+                {"task_dir": task_dir, "plan": "# Plan\n", "audit": full_table},
+            )
+
+            self.assertNotIn("isError", result)
+            body = (Path(task_dir) / "AUDIT_TRAIL.md").read_text(encoding="utf-8")
+            self.assertEqual(body.count("# Audit Trail"), 0)
+            self.assertEqual(
+                body.count(
+                    "| # | phase | decision | classification | principle | rationale | rejected_option |"
+                ),
+                1,
+            )
+            self.assertEqual(body.count("|---|---|---|---|---|---|---|"), 1)
+            self.assertIn("| 1 | plan | accept natural Markdown |", body)
+
+    def test_write_plan_accepts_unspaced_canonical_audit_header(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__unspacedaudit")
+            audit = "\n".join(
+                [
+                    "# Audit Trail",
+                    "|#|phase|decision|classification|principle|rationale|rejected_option|",
+                    "|---|---|---|---|---|---|---|",
+                    "|1|plan|friendly input|Mechanical|P5|less friction|-|",
+                ]
+            )
+
+            result = self._call_in_repo(
+                tmp,
+                "write_plan",
+                {"task_dir": task_dir, "plan": "# Plan\n", "audit": audit},
+            )
+
+            self.assertNotIn("isError", result)
+            body = (Path(task_dir) / "AUDIT_TRAIL.md").read_text(encoding="utf-8")
+            self.assertEqual(body.count("# Audit Trail"), 0)
+            self.assertIn("|1|plan|friendly input|", body)
+
+    def test_write_plan_rejects_noncanonical_hash_header_without_dropping_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__wrongauditheader")
+            before = {
+                p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()
+            }
+            result = self._call_in_repo(
+                tmp,
+                "write_plan",
+                {
+                    "task_dir": task_dir,
+                    "plan": "# Replacement\n",
+                    "audit": "| # | garbage | x |\n| 1 | phase | decision |\n",
+                },
+            )
+
+            self.assertTrue(result.get("isError"))
+            self.assertIn("audit header columns", result["structuredContent"]["next_action"])
+            after = {
+                p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()
+            }
+            self.assertEqual(after, before)
+
+    def test_write_plan_rejects_audit_header_without_data_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__headeronlyaudit")
+            before = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
+            result = self._call_in_repo(
+                tmp,
+                "write_plan",
+                {
+                    "task_dir": task_dir,
+                    "plan": "# Replacement\n",
+                    "audit": (
+                        "# Audit Trail\n\n"
+                        "| # | phase | decision | classification | principle | rationale | rejected_option |\n"
+                        "|---|---|---|---|---|---|---|\n"
+                    ),
+                },
+            )
+            self.assertTrue(result.get("isError"))
+            self.assertIn("at least one audit data row", result["structuredContent"]["next_action"])
+            after = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
+            self.assertEqual(after, before)
+
+    def test_write_plan_rejects_blank_or_separator_only_audit_rows_atomically(self):
+        invalid_values = (
+            "| | |",
+            "|---|---|",
+            "# Audit Trail\n| | |",
+        )
+        for index, audit_value in enumerate(invalid_values):
+            with self.subTest(audit=audit_value), tempfile.TemporaryDirectory() as tmp:
+                task_dir = self._make_task(tmp, f"TASK__incompleteaudit{index}")
+                before = {
+                    p.name: p.read_bytes()
+                    for p in Path(task_dir).iterdir()
+                    if p.is_file()
+                }
+                result = self._call_in_repo(
+                    tmp,
+                    "write_plan",
+                    {
+                        "task_dir": task_dir,
+                        "plan": "# Replacement\n",
+                        "audit": audit_value,
+                    },
+                )
+                self.assertTrue(result.get("isError"))
+                self.assertIn("non-empty cells", result["structuredContent"]["next_action"])
+                after = {
+                    p.name: p.read_bytes()
+                    for p in Path(task_dir).iterdir()
+                    if p.is_file()
+                }
+                self.assertEqual(after, before)
 
     def test_write_plan_rejects_audit_leaf_symlink_without_copying_target(self):
         with tempfile.TemporaryDirectory() as tmp:

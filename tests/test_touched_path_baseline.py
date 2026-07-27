@@ -67,6 +67,182 @@ class TestTouchedPathBaseline(unittest.TestCase):
             self.assertFalse((td / "TASK_STATE.yaml").exists())
             self.assertFalse((td / "TASK_BASELINE.json").exists())
 
+    def test_new_task_preserves_baseline_fingerprinting_failure_cause(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            td = _task_dir(repo)
+            with mock.patch.object(
+                lib,
+                "_changed_path_fingerprints",
+                side_effect=RuntimeError(
+                    "Git changed-path snapshot unavailable: worktree enumeration timed out"
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "task baseline capture unavailable.*worktree enumeration timed out",
+                ):
+                    lib.ensure_task_scaffold(str(td), "TASK__baseline")
+
+            self.assertFalse((td / "TASK_STATE.yaml").exists())
+            self.assertFalse((td / "TASK_BASELINE.json").exists())
+
+    def test_changed_path_enumeration_preserves_legacy_limit_without_deadline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            with mock.patch.object(
+                lib.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired(["git", "diff"], 5),
+            ) as run:
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    r"working tree diff timed out after 5\.0s",
+                ):
+                    lib._uncached_git_changed_paths(str(repo))
+
+            self.assertEqual(run.call_args.kwargs["timeout"], 5.0)
+
+    def test_head_read_preserves_legacy_limit_without_deadline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            with mock.patch.object(
+                lib.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired(["git", "rev-parse"], 2),
+            ) as run:
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    r"git HEAD read timed out after 2\.0s",
+                ):
+                    with lib.review_snapshot_scope():
+                        lib._git_head_snapshot(str(repo))
+
+            self.assertEqual(run.call_args.kwargs["timeout"], 2.0)
+
+    def test_new_baseline_preserves_head_timeout_and_exit_diagnostics(self):
+        failures = (
+            (
+                subprocess.TimeoutExpired(["git", "rev-parse"], 15),
+                r"git HEAD read timed out after 15\.0s",
+            ),
+            (
+                subprocess.CompletedProcess([], 128, stdout="", stderr="bad HEAD"),
+                r"git HEAD read exited 128",
+            ),
+        )
+        for failure, message in failures:
+            with self.subTest(message=message), tempfile.TemporaryDirectory() as tmp:
+                repo = _mk_repo(tmp)
+                td = _task_dir(repo)
+                kwargs = (
+                    {"side_effect": failure}
+                    if isinstance(failure, BaseException)
+                    else {"return_value": failure}
+                )
+                with mock.patch.object(lib.subprocess, "run", **kwargs):
+                    with self.assertRaisesRegex(
+                        RuntimeError, f"task baseline capture unavailable.*{message}"
+                    ):
+                        with lib.review_snapshot_scope(deadline_seconds=40):
+                            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+                self.assertFalse((td / "TASK_STATE.yaml").exists())
+
+    def test_existing_baseline_preserves_commit_and_ancestor_diagnostics(self):
+        cases = (
+            ("commit-timeout", "rev-parse", "timeout", "baseline commit validation timed out"),
+            ("commit-exit", "rev-parse", "exit", "baseline commit validation exited 7"),
+            ("ancestor-timeout", "merge-base", "timeout", "baseline ancestry validation timed out"),
+            ("ancestor-exit", "merge-base", "exit", "baseline ancestry validation exited 7"),
+        )
+        for name, target, failure_kind, message in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
+                repo = _mk_repo(tmp)
+                td = _task_dir(repo)
+                lib.ensure_task_scaffold(str(td), "TASK__baseline")
+                baseline = json.loads(
+                    (td / "TASK_BASELINE.json").read_text(encoding="utf-8")
+                )
+                head = baseline["head_sha"]
+
+                def validation_run(command, *args, **kwargs):
+                    operation = command[1] if len(command) > 1 else ""
+                    if operation == target:
+                        if failure_kind == "timeout":
+                            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+                        return subprocess.CompletedProcess(command, 7, stdout="", stderr="")
+                    if operation == "rev-parse":
+                        return subprocess.CompletedProcess(command, 0, stdout=head + "\n")
+                    return subprocess.CompletedProcess(command, 0, stdout="")
+
+                with mock.patch.object(
+                    lib.subprocess, "run", side_effect=validation_run
+                ):
+                    with self.assertRaisesRegex(RuntimeError, message):
+                        lib._read_task_baseline_snapshot(str(td), str(repo))
+
+    def test_request_snapshot_deadline_stops_git_before_transport_timeout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            with mock.patch.object(
+                lib.time, "monotonic", side_effect=[100.0, 141.0]
+            ):
+                with mock.patch.object(lib.subprocess, "run") as run:
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "snapshot deadline exhausted before working tree diff",
+                    ):
+                        with lib.review_snapshot_scope(deadline_seconds=40):
+                            lib._uncached_git_changed_paths(str(repo))
+
+            run.assert_not_called()
+
+    def test_valid_changed_path_scan_can_continue_after_five_seconds(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            completed = subprocess.CompletedProcess([], 0, stdout=b"")
+            with mock.patch.object(
+                lib.time, "monotonic", side_effect=[100.0, 106.0, 112.0, 118.0]
+            ):
+                with mock.patch.object(
+                    lib.subprocess, "run", return_value=completed
+                ) as run:
+                    with lib.review_snapshot_scope(deadline_seconds=40):
+                        self.assertEqual(lib._uncached_git_changed_paths(str(repo)), set())
+
+            self.assertEqual(run.call_count, 3)
+            self.assertTrue(all(call.kwargs["timeout"] == 15.0 for call in run.call_args_list))
+
+    def test_committed_path_diff_reuses_cache_and_clips_to_remaining_deadline(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            td = _task_dir(repo)
+            lib.ensure_task_scaffold(str(td), "TASK__baseline")
+            completed = subprocess.CompletedProcess([], 0, stdout=b"")
+            with mock.patch.object(
+                lib.time, "monotonic", side_effect=[100.0, 139.0]
+            ):
+                with (
+                    mock.patch.object(
+                        lib, "_task_baseline_head_sha", return_value="a" * 40
+                    ),
+                    mock.patch.object(
+                        lib.subprocess, "run", return_value=completed
+                    ) as run,
+                ):
+                    with lib.review_snapshot_scope(deadline_seconds=40):
+                        self.assertEqual(
+                            lib._committed_paths_since_baseline(str(td), str(repo)),
+                            set(),
+                        )
+                        self.assertEqual(
+                            lib._committed_paths_since_baseline(str(td), str(repo)),
+                            set(),
+                        )
+
+            run.assert_called_once()
+            self.assertEqual(run.call_args.kwargs["timeout"], 1.0)
+
     def test_new_task_rejects_generated_baseline_over_path_cap(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = _mk_repo(tmp)

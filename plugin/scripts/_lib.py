@@ -16,6 +16,7 @@ import subprocess
 import tempfile
 import json
 import hashlib
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -38,10 +39,12 @@ SCHEMA_FIELDS = (
 
 _REVIEW_SNAPSHOT_CACHE = ContextVar("harness_review_snapshot_cache", default=None)
 _REQUEST_GIT_ROOTS = ContextVar("harness_request_git_roots", default=None)
+_REQUEST_SNAPSHOT_DEADLINE = ContextVar("harness_request_snapshot_deadline", default=None)
+_GIT_ENUMERATION_TIMEOUT_SECONDS = 15.0
 
 
 @contextmanager
-def review_snapshot_scope():
+def review_snapshot_scope(deadline_seconds=None):
     """Reuse source-derived review work only within one caller request."""
     current = _REVIEW_SNAPSHOT_CACHE.get()
     if current is not None:
@@ -49,9 +52,16 @@ def review_snapshot_scope():
         return
     token = _REVIEW_SNAPSHOT_CACHE.set({})
     roots_token = _REQUEST_GIT_ROOTS.set(set())
+    deadline = (
+        time.monotonic() + float(deadline_seconds)
+        if deadline_seconds is not None
+        else None
+    )
+    deadline_token = _REQUEST_SNAPSHOT_DEADLINE.set(deadline)
     try:
         yield
     finally:
+        _REQUEST_SNAPSHOT_DEADLINE.reset(deadline_token)
         _REQUEST_GIT_ROOTS.reset(roots_token)
         _REVIEW_SNAPSHOT_CACHE.reset(token)
 
@@ -71,6 +81,26 @@ def _remember_git_root(repo_root):
     roots = _REQUEST_GIT_ROOTS.get()
     if roots is not None:
         roots.add(os.path.realpath(repo_root))
+
+
+def _bounded_snapshot_timeout(
+    default_seconds, operation, repo_root, *, deadline_allowance_seconds=None
+):
+    """Return the legacy timeout, or a larger allowance under a request deadline."""
+    deadline = _REQUEST_SNAPSHOT_DEADLINE.get()
+    if deadline is None:
+        return float(default_seconds)
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RuntimeError(
+            f"Git snapshot deadline exhausted before {operation} in {repo_root}"
+        )
+    allowance = (
+        default_seconds
+        if deadline_allowance_seconds is None
+        else deadline_allowance_seconds
+    )
+    return min(float(allowance), remaining)
 
 
 # ── Plugin-root env var (AC-006 of TASK__dual-runtime-plugin-claude-codex) ─
@@ -1413,6 +1443,9 @@ def ensure_task_scaffold(task_dir, task_id, request_text=""):
             raise ValueError(
                 "existing TASK_STATE.yaml must be a regular file whose task_id matches its canonical directory"
             )
+        repo_root = find_repo_root(task_dir)
+        if _has_git_metadata(repo_root):
+            _read_task_baseline_snapshot(task_dir, repo_root=repo_root)
         created = [state_file(task_dir)]
         return {"created": created, "task_dir": task_dir, "task_id": expected_tid}
     tid = expected_tid
@@ -1426,7 +1459,10 @@ def ensure_task_scaffold(task_dir, task_id, request_text=""):
         "updated": now_iso(),
     }
     repo_root = find_repo_root(task_dir)
-    baseline_path = capture_task_baseline(task_dir, repo_root=repo_root)
+    try:
+        baseline_path = capture_task_baseline(task_dir, repo_root=repo_root)
+    except Exception as exc:
+        raise RuntimeError(f"task baseline capture unavailable: {exc}") from exc
     if _has_git_metadata(repo_root) and not baseline_path:
         raise RuntimeError(
             "task baseline capture unavailable; create or restore a valid Git HEAD and retry task_start"
@@ -1955,18 +1991,43 @@ def _committed_paths_since_baseline(task_dir, repo_root=None):
     baseline_head = _task_baseline_head_sha(task_dir)
     if not baseline_head:
         return set()
+    cache = _review_snapshot_cache()
+    cache_key = (
+        "committed_paths_since_baseline",
+        os.path.realpath(task_dir),
+        os.path.realpath(repo_root),
+        baseline_head,
+    )
+    if cache is not None and cache_key in cache:
+        return set(cache[cache_key])
+    operation = "committed path diff"
+    timeout = _bounded_snapshot_timeout(
+        5, operation, repo_root,
+        deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
+    )
     try:
         result = subprocess.run(
             [
                 "git", "diff", "--name-only", "-z", "--no-renames",
                 "--end-of-options", baseline_head, "HEAD", "--",
             ],
-            cwd=repo_root, capture_output=True, timeout=5,
+            cwd=repo_root, capture_output=True, timeout=timeout,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError("task baseline Git diff unavailable") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"task baseline Git diff unavailable: {operation} timed out "
+            f"after {timeout:.1f}s in {repo_root}"
+        ) from exc
+    except OSError as exc:
+        raise RuntimeError(
+            f"task baseline Git diff unavailable: {operation} could not run "
+            f"in {repo_root}: {exc}"
+        ) from exc
     if result.returncode != 0:
-        raise RuntimeError("task baseline Git diff unavailable")
+        raise RuntimeError(
+            f"task baseline Git diff unavailable: {operation} exited "
+            f"{result.returncode} in {repo_root}"
+        )
     raw = result.stdout if isinstance(result.stdout, bytes) else str(result.stdout or "").encode()
     paths = set()
     for item in raw.split(b"\0"):
@@ -1975,6 +2036,8 @@ def _committed_paths_since_baseline(task_dir, repo_root=None):
         rel = _canonical_git_relpath(os.fsdecode(item))
         if rel and not os.path.isabs(rel) and rel != ".." and not rel.startswith("../"):
             paths.add(rel)
+    if cache is not None:
+        cache[cache_key] = frozenset(paths)
     return paths
 
 
@@ -2840,10 +2903,21 @@ def _git_path_snapshot(repo_root, argument, *, use_cache=True):
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--path-format=absolute", argument],
-            cwd=repo_root, capture_output=True, text=True, timeout=2,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=_bounded_snapshot_timeout(2, f"git rev-parse {argument}", repo_root),
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError("Git submodule snapshot unavailable") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"Git submodule snapshot unavailable: git rev-parse {argument} "
+            f"timed out in {repo_root}"
+        ) from exc
+    except OSError as exc:
+        raise RuntimeError(
+            f"Git submodule snapshot unavailable: git rev-parse {argument} "
+            f"could not run in {repo_root}"
+        ) from exc
     value = str(result.stdout or "").strip()
     if result.returncode != 0 or not value or not os.path.isabs(value):
         raise RuntimeError("Git submodule snapshot unavailable")
@@ -3034,23 +3108,40 @@ def _uncached_git_changed_paths(repo_root):
         _remember_git_root(repo_root)
     changed = set()
     commands = (
-        ["git", "-c", f"safe.directory={repo_root}", "diff", "--name-only", "-z", "HEAD"],
-        ["git", "-c", f"safe.directory={repo_root}", "diff", "--cached", "--name-only", "-z", "HEAD"],
-        ["git", "-c", f"safe.directory={repo_root}", "ls-files", "--others", "--exclude-standard", "-z"],
+        ("working tree diff", ["git", "-c", f"safe.directory={repo_root}", "diff", "--name-only", "-z", "HEAD"]),
+        ("staged diff", ["git", "-c", f"safe.directory={repo_root}", "diff", "--cached", "--name-only", "-z", "HEAD"]),
+        ("untracked files", ["git", "-c", f"safe.directory={repo_root}", "ls-files", "--others", "--exclude-standard", "-z"]),
     )
-    for cmd in commands:
+    for operation, cmd in commands:
         try:
-            r = subprocess.run(
-                cmd, capture_output=True, cwd=repo_root, timeout=5,
+            timeout = _bounded_snapshot_timeout(
+                5, operation, repo_root,
+                deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+            r = subprocess.run(
+                cmd, capture_output=True, cwd=repo_root, timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
             if not _has_git_metadata(repo_root):
                 return set()
-            raise RuntimeError("Git changed-path snapshot unavailable") from exc
+            raise RuntimeError(
+                f"Git changed-path snapshot unavailable: {operation} timed out "
+                f"after {timeout:.1f}s in {repo_root}"
+            ) from exc
+        except OSError as exc:
+            if not _has_git_metadata(repo_root):
+                return set()
+            raise RuntimeError(
+                f"Git changed-path snapshot unavailable: {operation} could not run "
+                f"in {repo_root}"
+            ) from exc
         if r.returncode != 0:
             if not _has_git_metadata(repo_root):
                 return set()
-            raise RuntimeError("Git changed-path snapshot unavailable")
+            raise RuntimeError(
+                f"Git changed-path snapshot unavailable: {operation} failed "
+                f"in {repo_root}"
+            )
         raw_output = r.stdout
         if isinstance(raw_output, bytes):
             paths = (os.fsdecode(item) for item in raw_output.split(b"\0"))
@@ -3119,16 +3210,40 @@ def _git_head_snapshot(repo_root, *, git_dir=None, use_cache=True):
     if git_dir:
         command.extend([f"--git-dir={git_dir}", f"--work-tree={repo_root}"])
     command.extend(["rev-parse", "--verify", "HEAD"])
+    operation = "git HEAD read"
+    timeout = _bounded_snapshot_timeout(
+        2, operation, repo_root,
+        deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
+    )
     try:
         result = subprocess.run(
             command,
-            cwd=repo_root, capture_output=True, text=True, timeout=2,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError("Git HEAD snapshot unavailable") from exc
-    head = result.stdout.strip() if result.returncode == 0 else ""
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"Git HEAD snapshot unavailable: {operation} timed out after "
+            f"{timeout:.1f}s in {repo_root}"
+        ) from exc
+    except OSError as exc:
+        raise RuntimeError(
+            f"Git HEAD snapshot unavailable: {operation} could not run "
+            f"in {repo_root}: {exc}"
+        ) from exc
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Git HEAD snapshot unavailable: {operation} exited "
+            f"{result.returncode} in {repo_root}"
+        )
+    head = result.stdout.strip()
     if not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", head):
-        raise RuntimeError("Git HEAD snapshot unavailable")
+        raise RuntimeError(
+            f"Git HEAD snapshot unavailable: {operation} returned an invalid "
+            f"object id in {repo_root}"
+        )
     if use_cache and cache is not None:
         cache[cache_key] = head
     return head
@@ -3144,48 +3259,53 @@ def capture_task_baseline(task_dir, repo_root=None):
     if os.path.lexists(path):
         _read_task_baseline_snapshot(task_dir, repo_root=repo_root)
         return path
+    repo_root = repo_root or find_repo_root(task_dir)
+    if not _has_git_metadata(repo_root):
+        return ""
+    head_sha = _git_head_snapshot(repo_root)
+    data = {
+        "version": 1,
+        "captured_at": now_iso(),
+        "repo_root": repo_root,
+        "head_sha": head_sha,
+        "dirty_paths": _changed_path_fingerprints(repo_root),
+    }
+    os.makedirs(task_dir, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=task_dir, prefix=".baseline.", suffix=".tmp")
     try:
-        repo_root = repo_root or find_repo_root(task_dir)
-        head_sha = _git_head_for_receipt(task_dir)
-        if not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", head_sha):
-            return ""
-        data = {
-            "version": 1,
-            "captured_at": now_iso(),
-            "repo_root": repo_root,
-            "head_sha": head_sha,
-            "dirty_paths": _changed_path_fingerprints(repo_root),
-        }
-        os.makedirs(task_dir, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(dir=task_dir, prefix=".baseline.", suffix=".tmp")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp, path)
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, sort_keys=True)
-                f.write("\n")
-            os.replace(tmp, path)
+            _read_task_baseline_snapshot(task_dir, repo_root=repo_root)
+        except Exception:
             try:
-                _read_task_baseline_snapshot(task_dir, repo_root=repo_root)
-            except Exception:
-                try:
-                    os.unlink(path)
-                except OSError:
-                    pass
-                raise
-        except BaseException:
-            try:
-                os.unlink(tmp)
+                os.unlink(path)
             except OSError:
                 pass
             raise
-        return path
-    except Exception:
-        return ""
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return path
 
 
 def _read_task_baseline_snapshot(task_dir, repo_root=None):
     """Read and validate one task baseline without following its leaf."""
     path = _baseline_file(task_dir)
     repo_root = os.path.abspath(repo_root or find_repo_root(task_dir))
+    cache = _review_snapshot_cache()
+    cache_key = (
+        "validated_task_baseline",
+        os.path.realpath(task_dir),
+        os.path.realpath(repo_root),
+    )
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
     if not os.path.lexists(path):
         if _has_git_metadata(repo_root):
             raise RuntimeError("required task baseline missing")
@@ -3218,23 +3338,70 @@ def _read_task_baseline_snapshot(task_dir, repo_root=None):
         or not valid_paths
     ):
         raise RuntimeError("task baseline integrity unavailable")
+    commit_operation = "baseline commit validation"
+    commit_timeout = _bounded_snapshot_timeout(
+        2, commit_operation, repo_root,
+        deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
+    )
     try:
         commit = subprocess.run(
             ["git", "rev-parse", "--verify", "--end-of-options", f"{head_sha}^{{commit}}"],
-            cwd=repo_root, capture_output=True, text=True, timeout=2,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=commit_timeout,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"task baseline Git snapshot unavailable: {commit_operation} timed "
+            f"out after {commit_timeout:.1f}s in {repo_root}"
+        ) from exc
+    except OSError as exc:
+        raise RuntimeError(
+            f"task baseline Git snapshot unavailable: {commit_operation} could "
+            f"not run in {repo_root}: {exc}"
+        ) from exc
+    if commit.returncode != 0:
+        raise RuntimeError(
+            f"task baseline Git snapshot unavailable: {commit_operation} exited "
+            f"{commit.returncode} in {repo_root}"
+        )
+    if commit.stdout.strip().lower() != head_sha.lower():
+        raise RuntimeError(
+            f"task baseline Git snapshot unavailable: {commit_operation} "
+            f"returned a mismatched object id in {repo_root}"
+        )
+
+    ancestor_operation = "baseline ancestry validation"
+    ancestor_timeout = _bounded_snapshot_timeout(
+        2, ancestor_operation, repo_root,
+        deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
+    )
+    try:
         ancestor = subprocess.run(
             ["git", "merge-base", "--is-ancestor", head_sha, "HEAD"],
-            cwd=repo_root, capture_output=True, text=True, timeout=2,
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=ancestor_timeout,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError("task baseline Git snapshot unavailable") from exc
-    if (
-        commit.returncode != 0
-        or commit.stdout.strip().lower() != head_sha.lower()
-        or ancestor.returncode != 0
-    ):
-        raise RuntimeError("task baseline Git snapshot unavailable")
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"task baseline Git snapshot unavailable: {ancestor_operation} timed "
+            f"out after {ancestor_timeout:.1f}s in {repo_root}"
+        ) from exc
+    except OSError as exc:
+        raise RuntimeError(
+            f"task baseline Git snapshot unavailable: {ancestor_operation} could "
+            f"not run in {repo_root}: {exc}"
+        ) from exc
+    if ancestor.returncode != 0:
+        raise RuntimeError(
+            f"task baseline Git snapshot unavailable: {ancestor_operation} exited "
+            f"{ancestor.returncode} in {repo_root}"
+        )
+    if cache is not None:
+        cache[cache_key] = data
     return data
 
 
@@ -3280,18 +3447,37 @@ def _gitlink_index_snapshot(repo_root):
         if _has_git_metadata(worktree):
             _remember_git_root(worktree)
         try:
+            timeout = _bounded_snapshot_timeout(
+                5,
+                "gitlink index enumeration",
+                worktree,
+                deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
+            )
             result = subprocess.run(
                 ["git", "ls-files", "--stage", "-z"],
-                capture_output=True, cwd=worktree, timeout=5,
+                capture_output=True, cwd=worktree, timeout=timeout,
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except subprocess.TimeoutExpired as exc:
             if not _has_git_metadata(worktree):
                 return {}
-            raise RuntimeError("Git submodule snapshot unavailable") from exc
+            raise RuntimeError(
+                "Git submodule snapshot unavailable: gitlink index enumeration "
+                f"timed out after {timeout:.1f}s in {worktree}"
+            ) from exc
+        except OSError as exc:
+            if not _has_git_metadata(worktree):
+                return {}
+            raise RuntimeError(
+                "Git submodule snapshot unavailable: gitlink index enumeration "
+                f"could not run in {worktree}"
+            ) from exc
         if result.returncode != 0:
             if not _has_git_metadata(worktree):
                 return {}
-            raise RuntimeError("Git submodule snapshot unavailable")
+            raise RuntimeError(
+                "Git submodule snapshot unavailable: gitlink index enumeration "
+                f"failed in {worktree}"
+            )
 
         found = {}
         raw_output = result.stdout
