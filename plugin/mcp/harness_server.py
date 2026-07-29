@@ -78,16 +78,26 @@ from _lib import (  # type: ignore
     now_iso, read_state, write_state, set_state_field,
     ensure_task_scaffold, emit_compact_context, sync_from_git_diff,
     artifact_exists, canonical_task_dir, canonical_task_id,
-    find_repo_root, runtime_is_stale as _runtime_is_stale,
+    find_harness_root, harness_root_resolution, find_repo_root,
+    runtime_is_stale as _runtime_is_stale,
     write_active_marker, clear_active_marker,
     receipt_runtime_verdict, subagent_receipt_summary, record_subagent_receipt,
     receipt_review_verdict, review_receipt_summary, required_review_lenses,
     review_snapshot_scope, refresh_review_snapshot, receipt_stream_fingerprint,
-    _changed_path_fingerprints, _git_head_for_receipt,
+    _workspace_changed_path_fingerprints, _control_root_touched_path_fingerprints,
+    _git_head_for_receipt,
     write_task_close_attestation, clear_task_close_attestation,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
 )
+
+
+def _control_root() -> str:
+    candidate = find_repo_root()
+    root, error = harness_root_resolution(candidate)
+    if error:
+        raise RuntimeError(f"invalid Harness workspace at {root}: {error}")
+    return root or candidate
 try:
     from environment_snapshot import snapshot as _env_snapshot  # type: ignore
 except Exception:
@@ -356,7 +366,7 @@ def _run_verify_runner(td: str, parallel: bool = True, max_workers: int | None =
         cmd.extend(["--max-workers", str(max_workers)])
     proc = subprocess.run(
         cmd,
-        cwd=find_repo_root(td),
+        cwd=find_harness_root(td) or find_repo_root(td),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -519,7 +529,7 @@ def _log_gate_warn(task_id: str, key: str, insight: str) -> None:
     """Append a one-line gate-warn entry to doc/harness/learnings.jsonl."""
     try:
         import json as _json
-        repo_root = find_repo_root()
+        repo_root = _control_root()
         learn = os.path.join(repo_root, "doc", "harness", "learnings.jsonl")
         os.makedirs(os.path.dirname(learn), exist_ok=True)
         entry = _json.dumps({
@@ -540,7 +550,7 @@ def _resolve_td(args: dict) -> str:
     td = _selector_opt(args, "task_dir")
     ti = _selector_opt(args, "task_id")
     if ti or td:
-        return canonical_task_dir(task_id=ti, task_dir=td, repo_root=find_repo_root())
+        return canonical_task_dir(task_id=ti, task_dir=td, repo_root=_control_root())
     raise ValueError("task_id or task_dir required")
 
 
@@ -588,7 +598,7 @@ def handle_task_start(args: dict) -> dict:
     if not td and not ti and not sl:
         raise ValueError("task_start requires task_dir, task_id, or slug")
 
-    repo_root = find_repo_root()
+    repo_root = _control_root()
     task_dir = canonical_task_dir(task_id=ti, slug=sl, task_dir=td, repo_root=repo_root)
     tid = canonical_task_id(task_dir=task_dir, repo_root=repo_root)
     existing_state_path = os.path.join(task_dir, "TASK_STATE.yaml")
@@ -611,7 +621,9 @@ def handle_task_start(args: dict) -> dict:
 
     warnings = []
     with review_snapshot_scope(deadline_seconds=40):
-        ensure_task_scaffold(task_dir, tid, request_text=request_text)
+        ensure_task_scaffold(
+            task_dir, tid, request_text=request_text, repo_root=repo_root
+        )
         resumed = read_state(task_dir)
         if str(resumed.get("status") or "").lower() in {"blocked", "closed"}:
             clear_task_close_attestation(task_dir)
@@ -672,7 +684,7 @@ def handle_task_start(args: dict) -> dict:
 
 def handle_goal_start(args: dict) -> dict:
     objective = _req(args, "objective")
-    repo_root = find_repo_root()
+    repo_root = _control_root()
     source_raw = args.get("source")
     source = source_raw if isinstance(source_raw, dict) else {}
     state = start_harness_goal(
@@ -685,7 +697,7 @@ def handle_goal_start(args: dict) -> dict:
 
 
 def handle_goal_context(args: dict) -> dict:
-    repo_root = find_repo_root()
+    repo_root = _control_root()
     goal = read_current_goal(repo_root)
     if not goal:
         return _ok({"goal": None, "active": False, "next_action": "No active harness goal. Call goal_start."})
@@ -694,7 +706,7 @@ def handle_goal_context(args: dict) -> dict:
 
 def handle_goal_add_task(args: dict) -> dict:
     task_id = _req(args, "task_id")
-    repo_root = find_repo_root()
+    repo_root = _control_root()
     state = add_goal_task(
         repo_root,
         task_id,
@@ -706,7 +718,7 @@ def handle_goal_add_task(args: dict) -> dict:
 
 
 def handle_goal_next_task(args: dict) -> dict:
-    repo_root = find_repo_root()
+    repo_root = _control_root()
     result = next_goal_task(repo_root)
     return _ok({
         "goal": result.get("goal") or None,
@@ -720,14 +732,14 @@ def handle_goal_next_task(args: dict) -> dict:
 
 
 def handle_goal_finish(args: dict) -> dict:
-    repo_root = find_repo_root()
+    repo_root = _control_root()
     state = finish_harness_goal(repo_root, status=_opt(args, "status") or "complete")
     return _ok({"goal": state})
 
 
 def handle_task_context(args: dict) -> dict:
     ti = _req(args, "task_id")
-    td = canonical_task_dir(task_id=ti, repo_root=find_repo_root())
+    td = canonical_task_dir(task_id=ti, repo_root=_control_root())
     if not _validated_task_state(td):
         return _invalid_task_state_error("task_context", td)
     with review_snapshot_scope():
@@ -744,7 +756,7 @@ def handle_task_context(args: dict) -> dict:
 
 def handle_task_verify(args: dict) -> dict:
     ti = _req(args, "task_id")
-    td = canonical_task_dir(task_id=ti, repo_root=find_repo_root())
+    td = canonical_task_dir(task_id=ti, repo_root=_control_root())
     if not _validated_task_state(td):
         return _invalid_task_state_error("task_verify", td)
     with review_snapshot_scope():
@@ -797,13 +809,17 @@ def handle_task_verify(args: dict) -> dict:
 
 def handle_task_close(args: dict) -> dict:
     ti = _req(args, "task_id")
-    td = canonical_task_dir(task_id=ti, repo_root=find_repo_root())
+    td = canonical_task_dir(task_id=ti, repo_root=_control_root())
     if not _validated_task_state(td):
         return _invalid_task_state_error("task_close", td)
     with review_snapshot_scope():
         try:
             sync_from_git_diff(td)
-            initial_snapshot = _changed_path_fingerprints(find_repo_root(td))
+            control_root = find_harness_root(td) or find_repo_root(td)
+            initial_snapshot = _workspace_changed_path_fingerprints(control_root)
+            initial_control_snapshot = _control_root_touched_path_fingerprints(
+                td, control_root
+            )
         except RuntimeError:
             return _err("task_close blocked: Git changed-path snapshot unavailable", data={
                 "task_dir": td, "git_snapshot_unavailable": True,
@@ -862,7 +878,10 @@ def handle_task_close(args: dict) -> dict:
         # Rebuild once more after they finish, then compare the end snapshot.
         refresh_review_snapshot()
         try:
-            final_snapshot = _changed_path_fingerprints(find_repo_root(td))
+            final_snapshot = _workspace_changed_path_fingerprints(control_root)
+            final_control_snapshot = _control_root_touched_path_fingerprints(
+                td, control_root
+            )
         except RuntimeError:
             return _err("task_close blocked: final Git changed-path snapshot unavailable", data={
                 "task_dir": td, "git_snapshot_unavailable": True,
@@ -876,13 +895,17 @@ def handle_task_close(args: dict) -> dict:
             })
         receipt_stream_changed = final_receipts_after != final_receipts_before
         snapshot_changed = final_snapshot != initial_snapshot
+        control_snapshot_changed = (
+            final_control_snapshot != initial_control_snapshot
+        )
         head_unavailable = not final_head
         head_changed = final_head != initial_head
-        if receipt_stream_changed or snapshot_changed or head_unavailable or head_changed or final_missing or final_stale or final_checks_status in {"blocked", "invalid"}:
+        if receipt_stream_changed or snapshot_changed or control_snapshot_changed or head_unavailable or head_changed or final_missing or final_stale or final_checks_status in {"blocked", "invalid"}:
             return _err("task_close blocked: final freshness changed — re-run task_verify", data={
                 "task_dir": td,
                 "receipt_stream_changed": receipt_stream_changed,
                 "snapshot_changed": snapshot_changed,
+                "control_snapshot_changed": control_snapshot_changed,
                 "head_unavailable": head_unavailable,
                 "head_changed": head_changed,
                 "missing_for_close": final_missing,
@@ -908,7 +931,7 @@ def handle_task_close(args: dict) -> dict:
             receipt_fingerprint=final_receipts_after,
         )
 
-        repo_root = find_repo_root()
+        repo_root = _control_root()
         goal = read_current_goal(repo_root)
         if goal.get("status") == "active" and any(
             isinstance(task, dict) and task.get("task_id") == os.path.basename(td)
@@ -928,7 +951,7 @@ def handle_task_blocked(args: dict) -> dict:
     ti = _req(args, "task_id")
     reason = _req(args, "blocked_reason")
     unblock = _req(args, "unblock_condition")
-    td = canonical_task_dir(task_id=ti, repo_root=find_repo_root())
+    td = canonical_task_dir(task_id=ti, repo_root=_control_root())
     st = _validated_task_state(td)
     if not st:
         return _invalid_task_state_error("task_blocked", td)
@@ -943,7 +966,7 @@ def handle_task_blocked(args: dict) -> dict:
     st["runtime_verdict"] = "BLOCKED_ENV"
     st["updated"] = now_iso()
     write_state(td, st)
-    clear_active_marker(find_repo_root(), td)
+    clear_active_marker(_control_root(), td)
     return _ok({
         "task_dir": td,
         "status": "blocked",
@@ -1295,7 +1318,7 @@ class McpServer:
         if self.watcher_manager is not None or _WatcherManager is None:
             return
         try:
-            self.watcher_manager = _WatcherManager(find_repo_root()).start()
+            self.watcher_manager = _WatcherManager(_control_root()).start()
         except Exception:
             # Lifecycle attestation is fail-closed.  A watcher failure must not
             # take down task_context or other MCP control-plane operations.

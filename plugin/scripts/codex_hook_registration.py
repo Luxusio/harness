@@ -14,38 +14,28 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
 from codex_lifecycle_watcher import ensure
+from _lib import find_harness_root
 
 
 THREAD_RE = re.compile(r"^[0-9a-fA-F-]{16,80}$")
 
 
-class _RegistrationTimeout(Exception):
+class _RegistrationTimeout(BaseException):
     pass
 
 
 def _harness_enabled_cwd(cwd: str) -> bool:
-    """Check setup only at the nearest containing Git repository root."""
-    current = os.path.realpath(cwd)
-    while True:
-        if os.path.isdir(os.path.join(current, ".git")) or os.path.isfile(
-            os.path.join(current, ".git")
-        ):
-            return os.path.isfile(
-                os.path.join(current, "doc", "harness", "manifest.yaml")
-            )
-        parent = os.path.dirname(current)
-        if parent == current:
-            return False
-        current = parent
+    """Return whether ``cwd`` belongs to an explicitly enabled workspace."""
+    return bool(find_harness_root(cwd))
 
 
-def _ensure_with_deadline(cwd: str, thread_id: str, deadline: float) -> bool:
-    """Interrupt the complete registration attempt at its wall-clock budget."""
+def _call_with_deadline(callback, deadline: float, fallback=False):
+    """Run in-process registration work inside the remaining hard budget."""
     remaining = deadline - time.monotonic()
     if remaining <= 0:
-        return False
+        return fallback
     if not hasattr(signal, "setitimer"):
-        return ensure(cwd, thread_id, deadline=deadline)
+        return fallback
 
     def _timeout(_signum, _frame):
         raise _RegistrationTimeout()
@@ -54,7 +44,7 @@ def _ensure_with_deadline(cwd: str, thread_id: str, deadline: float) -> bool:
         current_timer = signal.getitimer(signal.ITIMER_REAL)
         previous_handler = signal.signal(signal.SIGALRM, _timeout)
     except (AttributeError, ValueError):
-        return ensure(cwd, thread_id, deadline=deadline)
+        return fallback
     effective_remaining = min(
         remaining,
         current_timer[0] if current_timer[0] > 0 else remaining,
@@ -64,13 +54,13 @@ def _ensure_with_deadline(cwd: str, thread_id: str, deadline: float) -> bool:
         previous_timer = signal.setitimer(signal.ITIMER_REAL, effective_remaining)
     except (AttributeError, ValueError):
         signal.signal(signal.SIGALRM, previous_handler)
-        return ensure(cwd, thread_id, deadline=deadline)
+        return fallback
     try:
-        return ensure(cwd, thread_id, deadline=deadline)
+        return callback()
     except _RegistrationTimeout:
-        return False
+        return fallback
     except Exception:
-        return False
+        return fallback
     finally:
         signal.setitimer(signal.ITIMER_REAL, 0.0)
         signal.signal(signal.SIGALRM, previous_handler)
@@ -87,6 +77,25 @@ def _ensure_with_deadline(cwd: str, thread_id: str, deadline: float) -> bool:
             signal.setitimer(signal.ITIMER_REAL, next_delay, previous_interval)
         if previous_due:
             signal.raise_signal(signal.SIGALRM)
+
+
+def _ensure_with_deadline(
+    control_root: str,
+    thread_id: str,
+    deadline: float,
+    *,
+    session_cwd: str | None = None,
+) -> bool:
+    """Interrupt the complete registration attempt at its wall-clock budget."""
+    return bool(_call_with_deadline(
+        lambda: ensure(
+            control_root, thread_id,
+            session_cwd=session_cwd or control_root,
+            deadline=deadline,
+        ),
+        deadline,
+        False,
+    ))
 
 
 def _payload_data(payload: bytes) -> dict:
@@ -132,20 +141,26 @@ def restore_watcher_registration(
     A late recovery starts at the then-current rollout offset, so it can attest
     only future subagent starts. It never reconstructs already-finished work.
     """
-    cwd, thread_id = _registration_identity(payload)
-    if not cwd or not thread_id or not _harness_enabled_cwd(cwd):
-        return False
     started = time.monotonic()
     deadline = started + max(0.0, float(budget_seconds))
+    cwd, thread_id = _registration_identity(payload)
+    control_root = (
+        _call_with_deadline(lambda: find_harness_root(cwd), deadline, "")
+        if cwd else ""
+    )
+    if not cwd or not thread_id or not control_root:
+        return False
     retry_deadline = started + min(
         max(0.0, float(retry_seconds)), max(0.0, float(budget_seconds))
     )
     while True:
         if ensure_fn is ensure:
-            restored = _ensure_with_deadline(cwd, thread_id, deadline)
+            restored = _ensure_with_deadline(
+                control_root, thread_id, deadline, session_cwd=cwd
+            )
         else:
             try:
-                restored = ensure_fn(cwd, thread_id)
+                restored = ensure_fn(control_root, thread_id)
             except Exception:
                 restored = False
         if restored:

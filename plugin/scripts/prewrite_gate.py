@@ -35,6 +35,8 @@ try:
         _escape_hint,
         log_gate_bypass,
         find_repo_root,
+        find_harness_root,
+        harness_root_resolution,
         yaml_array,
         now_iso,
         TASK_DIR,
@@ -533,9 +535,47 @@ def main():
     if not file_path:
         return 0
 
-    file_path = os.path.abspath(file_path)
-    repo_root = find_repo_root()
+    payload_cwd = str(data.get("cwd") or "").strip()
+    hook_cwd = os.path.realpath(payload_cwd or os.getcwd())
+    requested_path = os.path.abspath(
+        file_path if os.path.isabs(file_path) else os.path.join(hook_cwd, file_path)
+    )
+    if payload_cwd:
+        harness_root, harness_error = harness_root_resolution(hook_cwd)
+        repo_root = harness_root or find_repo_root(hook_cwd)
+    else:
+        candidate_root = find_repo_root()
+        harness_root, harness_error = harness_root_resolution(candidate_root)
+        repo_root = harness_root or candidate_root
+    if harness_error:
+        _deny(
+            "invalid-harness-workspace",
+            requested_path,
+            "harness:setup",
+            f"Harness workspace configuration is invalid: {harness_error}",
+            repo_root,
+        )
+        return 0
     if not is_harness_enabled_repo(repo_root):
+        return 0
+    file_path = os.path.realpath(requested_path)
+    try:
+        requested_common = os.path.commonpath([repo_root, requested_path])
+    except ValueError:
+        requested_common = ""
+    try:
+        physical_common = os.path.commonpath([repo_root, file_path])
+    except ValueError:
+        physical_common = ""
+    if physical_common != repo_root:
+        if requested_common == repo_root:
+            _deny(
+                "symlink-outside-control",
+                requested_path,
+                "developer",
+                "The requested path resolves outside the Harness control root.",
+                repo_root,
+            )
         return 0
     tasks_dir = os.path.join(repo_root, TASK_DIR)
     try:

@@ -1,0 +1,528 @@
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+from unittest import mock
+
+
+REPO = Path(__file__).resolve().parents[1]
+SCRIPTS = REPO / "plugin" / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+
+
+def _load(name: str, directory: Path = SCRIPTS):
+    path = directory / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"{name}_multigit_test", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+lib = _load("_lib")
+harness_server = _load("harness_server", REPO / "plugin" / "mcp")
+
+
+def _git_repo(path: Path, filename: str) -> None:
+    path.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True)
+    subprocess.run(["git", "config", "user.name", "test"], cwd=path, check=True)
+    (path / filename).write_text("base\n", encoding="utf-8")
+    subprocess.run(["git", "add", filename], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-qm", "init"], cwd=path, check=True)
+
+
+def _workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
+    root = tmp_path / "workspace"
+    api = root / "pay-api"
+    web = root / "pay-webapp"
+    _git_repo(api, "api.py")
+    _git_repo(web, "web.js")
+    manifest = root / "doc/harness/manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "version: 5\n"
+        "name: pay\n"
+        "type: saas\n"
+        "source_git_roots: [pay-api, pay-webapp]\n"
+        "test_command: echo ok\n"
+        "verify_commands: [echo ok]\n"
+        "qa:\n"
+        "  browser_qa_supported: false\n",
+        encoding="utf-8",
+    )
+    return root, api, web
+
+
+def test_workspace_baseline_and_fingerprint_cover_all_registered_git_roots(tmp_path):
+    root, api, web = _workspace(tmp_path)
+    task = root / "doc/harness/tasks/TASK__multi"
+
+    lib.ensure_task_scaffold(str(task), "TASK__multi")
+    baseline = json.loads((task / "TASK_BASELINE.json").read_text(encoding="utf-8"))
+    assert baseline["version"] == 2
+    assert set(baseline["source_heads"]) == {"pay-api/", "pay-webapp/"}
+    assert set(baseline["control_paths"]) == {
+        "AGENTS.md",
+        "CLAUDE.md",
+        "CONTRACTS.md",
+        "CONTRACTS.local.md",
+        "CONTRACTS.user.md",
+        "doc/harness/manifest.yaml",
+    }
+    first_head = lib._git_head_for_receipt(str(task))
+
+    (api / "api.py").write_text("changed\n", encoding="utf-8")
+    (web / "new.js").write_text("new\n", encoding="utf-8")
+    touched = lib.sync_from_git_diff(str(task))
+    assert set(touched) == {"pay-api/api.py", "pay-webapp/new.js"}
+    first_fingerprint = lib.review_diff_fingerprint(str(task))
+
+    (web / "new.js").write_text("newer\n", encoding="utf-8")
+    assert lib.review_diff_fingerprint(str(task)) != first_fingerprint
+    subprocess.run(["git", "add", "api.py"], cwd=api, check=True)
+    subprocess.run(["git", "commit", "-qm", "change api"], cwd=api, check=True)
+    assert lib._git_head_for_receipt(str(task)) != first_head
+
+
+def test_workspace_missing_task_baseline_fails_closed(tmp_path):
+    root, _api, _web = _workspace(tmp_path)
+    task = root / "doc/harness/tasks/TASK__missing-baseline"
+    lib.ensure_task_scaffold(str(task), "TASK__missing-baseline")
+    (task / "TASK_BASELINE.json").unlink()
+
+    try:
+        lib.sync_from_git_diff(str(task))
+    except RuntimeError as exc:
+        assert "required task baseline missing" in str(exc)
+    else:
+        raise AssertionError("multi-Git tasks must require their baseline")
+
+    try:
+        lib.ensure_task_scaffold(str(task), "TASK__missing-baseline")
+    except RuntimeError as exc:
+        assert "required task baseline missing" in str(exc)
+    else:
+        raise AssertionError("resuming a multi-Git task without a baseline must fail")
+
+
+def test_resumed_task_fails_when_registered_source_root_moved(tmp_path):
+    root, api, _web = _workspace(tmp_path)
+    task = root / "doc/harness/tasks/TASK__moved-root"
+    lib.ensure_task_scaffold(
+        str(task), "TASK__moved-root", repo_root=str(root)
+    )
+    api.rename(root / "pay-api-moved")
+
+    with mock.patch.object(
+        harness_server, "_control_root", return_value=str(root)
+    ):
+        result = harness_server.call_tool(
+            "task_start", {"task_id": "TASK__moved-root"}
+        )
+
+    assert result.get("isError")
+    assert "source_git_roots" in result["content"][0]["text"]
+    assert not (root / "doc/harness/tasks/.active").exists()
+
+    moved = root / "pay-api-moved"
+    prewrite = subprocess.run(
+        [sys.executable, str(SCRIPTS / "prewrite_gate.py")],
+        cwd=moved,
+        input=json.dumps({
+            "cwd": str(moved),
+            "tool_name": "Edit",
+            "tool_input": {"file_path": str(moved / "api.py")},
+        }),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert '"permissionDecision": "deny"' in prewrite.stdout
+    assert "invalid" in prewrite.stdout.lower()
+
+    previous_cwd = os.getcwd()
+    try:
+        os.chdir(moved)
+        try:
+            harness_server._control_root()
+        except RuntimeError as exc:
+            assert "invalid Harness workspace" in str(exc)
+        else:
+            raise AssertionError("MCP control-root resolution must fail closed")
+    finally:
+        os.chdir(previous_cwd)
+
+
+def test_control_behavior_symlink_fails_baseline_capture(tmp_path):
+    root, _api, _web = _workspace(tmp_path)
+    external = tmp_path / "external-agents.md"
+    external.write_text("outside\n", encoding="utf-8")
+    (root / "AGENTS.md").symlink_to(external)
+    task = root / "doc/harness/tasks/TASK__control-symlink"
+
+    try:
+        lib.ensure_task_scaffold(
+            str(task), "TASK__control-symlink", repo_root=str(root)
+        )
+    except RuntimeError as exc:
+        assert "must not be a symlink" in str(exc)
+    else:
+        raise AssertionError("control-root behavior symlinks must fail closed")
+
+
+def test_workspace_resolution_rejects_unregistered_nested_repo(tmp_path):
+    root, api, _web = _workspace(tmp_path)
+    rogue = root / "rogue"
+    _git_repo(rogue, "rogue.txt")
+
+    assert lib.find_harness_root(str(api)) == str(root.resolve())
+    assert lib.find_harness_root(str(rogue)) == ""
+
+
+def test_current_nongit_manifest_requires_explicit_source_roots(tmp_path):
+    root = tmp_path / "workspace"
+    api = root / "pay-api"
+    _git_repo(api, "api.py")
+    manifest = root / "doc/harness/manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("version: 5\ntype: api\n", encoding="utf-8")
+
+    resolved, error = lib.harness_root_resolution(str(api))
+    assert resolved == str(root.resolve())
+    assert "source_git_roots is required" in error
+    assert lib.find_harness_root(str(api)) == ""
+
+    manifest.write_text("version: 4\ntype: api\n", encoding="utf-8")
+    assert lib.find_harness_root(str(api)) == str(root.resolve())
+
+
+def test_harness_root_rejects_symlinked_manifest_ancestor(tmp_path):
+    root = tmp_path / "workspace"
+    root.mkdir()
+    external = tmp_path / "external-doc"
+    (external / "harness").mkdir(parents=True)
+    (external / "harness/manifest.yaml").write_text(
+        "version: 5\nsource_git_roots: ['api']\n", encoding="utf-8"
+    )
+    (root / "doc").symlink_to(external, target_is_directory=True)
+
+    resolved, error = lib.harness_root_resolution(str(root))
+    assert resolved == str(root.resolve())
+    assert "must not be symlinks" in error
+
+
+def test_workspace_source_roots_fail_closed_for_symlink_and_missing_root(tmp_path):
+    root, api, _web = _workspace(tmp_path)
+    manifest = root / "doc/harness/manifest.yaml"
+    link = root / "linked-api"
+    link.symlink_to(api, target_is_directory=True)
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            "[pay-api, pay-webapp]", "[linked-api, missing]"
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        lib.configured_source_git_roots(str(root))
+    except RuntimeError as exc:
+        assert "symlink" in str(exc)
+    else:
+        raise AssertionError("unsafe workspace roots must fail closed")
+
+
+def test_codex_registration_uses_parent_control_root_for_child_cwd(tmp_path, monkeypatch):
+    root, api, _web = _workspace(tmp_path)
+    registration = _load("codex_hook_registration")
+    calls: list[tuple[str, str]] = []
+    payload = json.dumps({
+        "cwd": str(api),
+        "session_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+    }).encode()
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+
+    assert registration.restore_watcher_registration(
+        payload,
+        ensure_fn=lambda control_root, thread_id: (
+            calls.append((control_root, thread_id)) or True
+        ),
+    )
+    assert calls == [(
+        str(root.resolve()),
+        "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+    )]
+
+
+def test_child_cwd_uses_parent_control_root_for_claude_gates(tmp_path):
+    root, api, _web = _workspace(tmp_path)
+    task = root / "doc/harness/tasks/TASK__child-gates"
+    lib.ensure_task_scaffold(str(task), "TASK__child-gates")
+    (task / "PLAN.md").write_text("# Plan\n", encoding="utf-8")
+    (root / "doc/harness/tasks/.active").write_text(
+        str(task) + "\n", encoding="utf-8"
+    )
+
+    prewrite = subprocess.run(
+        [sys.executable, str(SCRIPTS / "prewrite_gate.py")],
+        cwd=api,
+        input=json.dumps({
+            "cwd": str(api),
+            "tool_name": "Edit",
+            "tool_input": {"file_path": str(task / "PLAN.md")},
+        }),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert '"permissionDecision": "deny"' in prewrite.stdout
+
+    alias = api / "notes.txt"
+    alias.symlink_to(
+        Path("../doc/harness/tasks/TASK__child-gates/PLAN.md")
+    )
+    alias_prewrite = subprocess.run(
+        [sys.executable, str(SCRIPTS / "prewrite_gate.py")],
+        cwd=api,
+        input=json.dumps({
+            "cwd": str(api),
+            "tool_name": "Edit",
+            "tool_input": {"file_path": str(alias)},
+        }),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert '"permissionDecision": "deny"' in alias_prewrite.stdout
+
+    bash_guard = subprocess.run(
+        [sys.executable, str(SCRIPTS / "mcp_bash_guard.py")],
+        cwd=api,
+        input=json.dumps({
+            "cwd": str(api),
+            "tool_name": "Bash",
+            "tool_input": {
+                "command": "touch ../doc/harness/tasks/TASK__child-gates/PLAN.md"
+            },
+        }),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    assert '"permissionDecision": "deny"' in bash_guard.stdout
+
+    stop_env = os.environ.copy()
+    stop_env["HARNESS_BACKGROUND_WAIT_SECS"] = "0"
+    stop = subprocess.run(
+        [sys.executable, str(SCRIPTS / "stop_gate.py")],
+        cwd=api,
+        input=json.dumps({"cwd": str(api), "session_id": "sess-child"}),
+        text=True,
+        capture_output=True,
+        check=True,
+        env=stop_env,
+    )
+    assert json.loads(stop.stdout)["decision"] == "block"
+
+
+def test_child_cwd_claude_lifecycle_records_parent_task_receipt(tmp_path):
+    root, api, _web = _workspace(tmp_path)
+    task = root / "doc/harness/tasks/TASK__child-receipt"
+    lib.ensure_task_scaffold(str(task), "TASK__child-receipt")
+    (root / "doc/harness/tasks/.active").write_text(
+        str(task) + "\n", encoding="utf-8"
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(SCRIPTS / "background_hook.py"), "--event", "start"],
+        cwd=api,
+        input=json.dumps({
+            "cwd": str(api),
+            "hook_event_name": "SubagentStart",
+            "session_id": "sess-child",
+            "agent_id": "agent-child",
+            "agent_type": "harness:qa-cli",
+        }),
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert result.stdout == ""
+    receipts = [
+        json.loads(line)
+        for line in (task / "SUBAGENT_RECEIPTS.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert receipts[-1]["agent_id"] == "agent-child"
+    assert receipts[-1]["lens"] == "qa-cli"
+
+
+def test_verify_runner_executes_parent_workspace_manifest_command(tmp_path):
+    root, _api, _web = _workspace(tmp_path)
+    task = root / "doc/harness/tasks/TASK__verify-multigit"
+    lib.ensure_task_scaffold(str(task), "TASK__verify-multigit")
+
+    result = harness_server._run_verify_runner(str(task), parallel=False)
+
+    assert result["returncode"] == 0
+    assert len(result["commands"]) == 1
+    assert result["commands"][0]["command"] == "echo ok"
+    assert result["commands"][0]["returncode"] == 0
+
+
+def test_task_close_compares_workspace_snapshots_across_final_gate(tmp_path):
+    root, _api, _web = _workspace(tmp_path)
+    task = root / "doc/harness/tasks/TASK__close-multigit"
+    lib.ensure_task_scaffold(str(task), "TASK__close-multigit")
+    (task / "PLAN.md").write_text("# Plan\n", encoding="utf-8")
+    clean = {"missing_for_close": [], "next_action": "close"}
+
+    with mock.patch.object(
+        harness_server, "canonical_task_dir", return_value=str(task)
+    ), mock.patch.object(
+        harness_server, "sync_from_git_diff", return_value=[]
+    ), mock.patch.object(
+        harness_server, "emit_compact_context", return_value=clean
+    ), mock.patch.object(
+        harness_server, "_runtime_is_stale", return_value=(False, "")
+    ), mock.patch.object(
+        harness_server, "_checks_gate_status", return_value=("passed", [])
+    ), mock.patch.object(
+        harness_server, "_git_head_for_receipt", return_value="a" * 40
+    ), mock.patch.object(
+        harness_server,
+        "_workspace_changed_path_fingerprints",
+        side_effect=[
+            {"pay-api/api.py": "sha256:" + "1" * 64},
+            {"pay-api/api.py": "sha256:" + "2" * 64},
+        ],
+    ) as snapshots:
+        result = harness_server.handle_task_close(
+            {"task_id": "TASK__close-multigit"}
+        )
+
+    assert result.get("isError")
+    assert result["structuredContent"]["snapshot_changed"]
+    assert [call.args[0] for call in snapshots.call_args_list] == [
+        str(root.resolve()),
+        str(root.resolve()),
+    ]
+
+
+def test_task_close_detects_control_root_file_change_across_final_gate(tmp_path):
+    root, _api, _web = _workspace(tmp_path)
+    task = root / "doc/harness/tasks/TASK__close-control-race"
+    lib.ensure_task_scaffold(str(task), "TASK__close-control-race")
+    (task / "PLAN.md").write_text("# Plan\n", encoding="utf-8")
+    project_doc = root / "AGENTS.md"
+    project_doc.write_text("@CONTRACTS.md\n", encoding="utf-8")
+    touched = lib.sync_from_git_diff(str(task))
+    assert "AGENTS.md" in touched
+    assert "AGENTS.md" in lib._reviewable_source_paths(str(task))
+    clean = {"missing_for_close": [], "next_action": "close"}
+    context_calls = 0
+
+    def context_with_race(_task_dir):
+        nonlocal context_calls
+        context_calls += 1
+        if context_calls == 2:
+            project_doc.write_text("@CONTRACTS.md\nchanged\n", encoding="utf-8")
+        return clean
+
+    with mock.patch.object(
+        harness_server, "canonical_task_dir", return_value=str(task)
+    ), mock.patch.object(
+        harness_server, "sync_from_git_diff", return_value=[]
+    ), mock.patch.object(
+        harness_server, "emit_compact_context", side_effect=context_with_race
+    ), mock.patch.object(
+        harness_server, "_runtime_is_stale", return_value=(False, "")
+    ), mock.patch.object(
+        harness_server, "_checks_gate_status", return_value=("passed", [])
+    ), mock.patch.object(
+        harness_server, "_git_head_for_receipt", return_value="a" * 40
+    ), mock.patch.object(
+        harness_server, "_workspace_changed_path_fingerprints", return_value={}
+    ):
+        result = harness_server.handle_task_close(
+            {"task_id": "TASK__close-control-race"}
+        )
+
+    assert result.get("isError")
+    assert result["structuredContent"]["control_snapshot_changed"]
+
+
+def test_setup_skills_apply_fixed_defaults_without_policy_questions():
+    codex = (REPO / "plugin-codex/skills/setup/SKILL.md").read_text(encoding="utf-8")
+    claude = (REPO / "plugin/skills/setup/SKILL.md").read_text(encoding="utf-8")
+    interview = (REPO / "plugin/skills/setup/project-interview.md").read_text(
+        encoding="utf-8"
+    )
+
+    for skill, project_doc in ((codex, "AGENTS.md"), (claude, "CLAUDE.md")):
+        section = skill.split("### Proactive Toggle + Routing Injection", 1)[1].split(
+            "\n---", 1
+        )[0]
+        assert "Do not ask" in section
+        assert "_harness_config_set proactive true" in section
+        assert "_harness_config_set routing_declined false" in section
+        assert f"routing block in {project_doc}" in section
+        assert "Reply `A`" not in section
+        assert "AskUserQuestion" not in section
+
+    assert "Q2–Q4 — Fixed operating defaults (never ask)" in interview
+    assert "Q6 — Fixed failure mode (never ask)" in interview
+    assert "말하지 않은 범위도 멋대로 수정하는 것" in interview
+
+
+def test_setup_automates_contract_import_and_health_scoring():
+    codex = (REPO / "plugin-codex/skills/setup/SKILL.md").read_text(encoding="utf-8")
+    claude = (REPO / "plugin/skills/setup/SKILL.md").read_text(encoding="utf-8")
+    bootstrap = (REPO / "plugin/skills/setup/bootstrap.md").read_text(
+        encoding="utf-8"
+    )
+
+    for skill in (codex, claude):
+        health_default = skill.split(
+            "### Health scoring default (never ask)", 1
+        )[1].split("## Phase 2.5", 1)[0]
+        health_detection = skill.split(
+            "## Phase 2.5: Health Stack Auto-Detection", 1
+        )[1].split("## Phase 3:", 1)[0]
+        assert "Do not ask whether to enable health scoring" in health_default
+        assert "Stage every census test command" in health_detection
+        assert "Never ask for confirmation" in health_detection
+        assert "Detected health tooling. Write" not in health_detection
+        assert "HARNESS_SPAWNED" not in health_detection
+
+    contract_import = bootstrap.split(
+        "### 3.7.3 Runtime project-document import line", 1
+    )[1].split("### 3.7.4", 1)[0]
+    assert "When missing, do not ask" in contract_import
+    assert "immediately after the closing delimiter" in contract_import
+    assert "after the first H1" in contract_import
+    assert "preserves\nall existing bytes outside the insertion" in contract_import
+    assert "rejects symlinked project documents" in contract_import
+    assert "AskUserQuestion" not in contract_import
+    local_contract = bootstrap.split(
+        "### 3.7.2 CONTRACTS.local.md", 1
+    )[1].split("### 3.7.3", 1)[0]
+    assert "replace only" in local_contract
+    assert "setup-owned C-100 block" in local_contract
+    assert "never bulk-rewrite or modify any other content" in local_contract
+    contract_template = (
+        REPO / "plugin/skills/setup/templates/CONTRACTS.md"
+    ).read_text(encoding="utf-8")
+    c15 = contract_template.split("### C-15", 1)[1].split("### C-16", 1)[0]
+    assert "idempotently add that missing import without asking" in c15
+    assert "only the setup-owned C-100 block" in c15
+    root_contract = (REPO / "CONTRACTS.md").read_text(encoding="utf-8")
+    root_c15 = root_contract.split("### C-15", 1)[1].split("### C-16", 1)[0]
+    assert root_c15 == c15

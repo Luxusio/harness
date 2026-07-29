@@ -16,6 +16,7 @@ the session healthy on any crash; try/except wraps ``main``.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -25,8 +26,10 @@ try:
     from _lib import (  # type: ignore
         read_hook_input,
         yaml_field,
+        find_harness_root,
         find_repo_root,
         is_harness_enabled_repo,
+        read_current_goal,
         MANIFEST_PATH,
         _log_gate_error,
     )
@@ -48,6 +51,60 @@ _CMD_NOT_FOUND_RE = re.compile(
 _NO_SUCH_SCRIPT_RE = re.compile(
     r"No such file or directory[:\s]+['\"]?((?:plugin/scripts|plugin/mcp)/[\w\-.]+\.py)",
 )
+
+
+def goal_hint_main() -> int:
+    """Emit native-Goal routing guidance from a timeout-bounded child."""
+    try:
+        data = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
+        cwd = str(data.get("cwd") or os.getcwd())
+        repo_root = find_harness_root(cwd)
+        if not repo_root or not is_harness_enabled_repo(repo_root):
+            return 0
+        response = data.get(
+            "tool_response", data.get("tool_result", data.get("toolResult"))
+        )
+        if isinstance(response, dict):
+            status = str(response.get("status") or "").strip().lower()
+            if (
+                response.get("success") is False
+                or response.get("error")
+                or status in {"error", "failed"}
+            ):
+                return 0
+        elif isinstance(response, str) and re.match(
+            r"(?is)^\s*(?:error|failed)\b", response
+        ):
+            return 0
+        tool_input = (
+            data.get("tool_input")
+            or data.get("input")
+            or data.get("arguments")
+            or {}
+        )
+        objective = (
+            " ".join(str(tool_input.get("objective") or "").split())
+            if isinstance(tool_input, dict)
+            else ""
+        )
+        current = read_current_goal(repo_root)
+        if (
+            objective
+            and current.get("status") == "active"
+            and objective
+            == " ".join(str(current.get("objective") or "").split())
+        ):
+            return 0
+    except Exception:
+        return 0
+    sys.stdout.write(
+        "[harness-goal] Native Goal was created. Invoke $harness:run; before "
+        "implementation call get_goal, then harness goal_start with that "
+        "objective; call goal_context; if no child task exists, call task_start "
+        "then goal_add_task. Continue with goal_next_task. Do not treat "
+        "create_goal alone as harness activation."
+    )
+    return 0
 
 
 def _hint_for_command(cmd: str, repo_root: str) -> str:
@@ -147,6 +204,8 @@ def main() -> int:
 
 if __name__ == "__main__":
     try:
+        if "--goal-hint-worker" in sys.argv[1:]:
+            sys.exit(goal_hint_main() or 0)
         sys.exit(main() or 0)
     except Exception as exc:
         try:

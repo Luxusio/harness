@@ -33,7 +33,7 @@ user-invocable: true
 
 | File | Content |
 |------|---------|
-| `project-interview.md` | Phase 2.0: 6 forcing questions (office-hours style) |
+| `project-interview.md` | Phase 2.0: lightweight purpose/verification interview + fixed defaults |
 | `repo-census.md` | Phase 1: project type detection, build/test command detection, summary |
 | `bootstrap.md` | Phase 3: directory, manifest.yaml, AGENTS.md, critics, contracts install |
 | `verify-report.md` | Phase 4: file verification, QA infra verification, completion report |
@@ -52,6 +52,12 @@ checkout path.
 _BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
 _PROJECT=$(basename "$(git rev-parse --show-toplevel 2>/dev/null)" 2>/dev/null || echo "unknown")
 _ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+if [ ! -e "$_ROOT/.git" ]; then
+  _SOURCE_GIT_ROOTS=$(find "$_ROOT" -mindepth 2 -maxdepth 2 -name .git \
+    -printf '%h\n' 2>/dev/null | sort -u)
+  echo "NON_GIT_CONTROL_ROOT: yes"
+  printf 'SOURCE_GIT_ROOT: %s\n' $_SOURCE_GIT_ROOTS
+fi
 echo "harness setup | PROJECT: $_PROJECT | BRANCH: $_BRANCH"
 
 [ -f doc/harness/manifest.yaml ] && echo "EXISTING_SETUP: yes" && head -20 doc/harness/manifest.yaml || echo "EXISTING_SETUP: no"
@@ -145,39 +151,19 @@ Then: `touch "$_MARKER_DIR/lake-intro-seen"`.
 
 ### Proactive Toggle + Routing Injection
 
-Both are independent objective questions. Ask them together when neither marker has fired yet. Skip the one that has fired.
+Do not ask about either setting. On every fresh, repair, or upgrade setup:
 
-**Branching:**
+1. Run `_harness_config_set proactive true` and
+   `_harness_config_set routing_declined false`.
+2. Touch `"$_MARKER_DIR/proactive-prompted"`.
+3. Run the legacy cleanup and Goal queue migration from `bootstrap.md` §3.4.
+4. Emit or replace the idempotent Harness routing block in AGENTS.md.
+5. Touch `"$_MARKER_DIR/routing-injected"`.
 
-- Both pending (`PROACTIVE_PROMPTED=no` AND `ROUTING_INJECTED=no` AND
-  `ROUTING_DECLINED=false` AND `LAKE_INTRO=yes`): ask both in one turn.
-- Only one pending: ask that one.
-- Neither pending: skip.
-
-**Both-pending conversational ask:**
-
-> Two quick choices to wire harness into this project:
->
-> **(Q1) Proactive routing.** harness can proactively figure out when to invoke setup. Recommended: keep on. Reply `A` to keep on, `B` to turn off.
->
-> **(Q2) Routing rules in AGENTS.md.** harness works best when AGENTS.md includes ~5 lines of skill-routing rules. Reply `A` to add the rules (recommended), `B` to skip.
-
-After the reply, apply per-question:
-
-- Proactive A/B: `_harness_config_set proactive true|false`, then
-  `touch "$_MARKER_DIR/proactive-prompted"`.
-- Routing A: emit the idempotent routing block from `bootstrap.md`
-  Section 3.4 (marker: `harness:routing-injected`) into AGENTS.md, then
-  `touch "$_MARKER_DIR/routing-injected"`. Before injection, run the
-  legacy cleanup from §3.4 to strip any stale `Default agent is harness`
-  line. The emitted block includes the Durable Decision Documentation Gate:
-  user-stated durable product/design/architecture/domain/workflow/implementation
-  decisions are not handled until documented under `doc/` or recorded with a
-  specific no-doc rationale in the PLAN durable-doc decision.
-- Routing B: `_harness_config_set routing_declined true`.
-
-Lake Intro stays a standalone information-only message above — never
-bundle it here, it is not a question.
+The routing block includes the Durable Decision Documentation Gate. Setup
+owns these defaults and reapplies them on rerun so onboarding stays consistent.
+User-stated durable decisions are not handled until documented under `doc/` or
+given a specific no-doc rationale in the PLAN durable-doc decision.
 
 ---
 
@@ -277,9 +263,10 @@ detection bash, build/test command sniffing, and summary format.
 
 ### Phase 2.0: Project interview
 
-Read the adjacent `project-interview.md` and follow in full. Six forcing
-questions capture WHY before configuring HOW. Stage answers until the
-canonical manifest exists, then apply them in Phase 3.5.
+Read the adjacent `project-interview.md` and follow in full. Ask only for
+missing project purpose or undetectable verification facts. Apply the fixed
+audience, workflow, full-loop, and failure-avoidance defaults without asking.
+Stage answers until the canonical manifest exists, then apply them in Phase 3.5.
 
 **Skip detection (evaluate in order; any match skips the interview):**
 
@@ -310,14 +297,9 @@ fi
 
 If any condition matched: skip Phase 2.0. The active/next harness task can re-open the interview later when drift is suspected.
 
-Interview output narrows Q1-Q3 below — check `doc/harness/.interview-answers.json` before asking each remaining question.
-
-**Q1 + Q4 bundling.** Q1 (Project Type Confirmation) and Q4 (Quality Tooling) are independent objective multiple-choice questions, so they can ride one conversational ask. Q2 and Q3 stay solo (Q2 branches into free-text on B; Q3 branches by Q1's answer).
-
-- Both ask-able (Q1 not census-decided AND Q4 not previously answered): ask both in one turn. Apply Q1 first (it gates Q3's branch), then ask Q2 and Q3, then apply Q4.
-- Q1 census-decided (detected type is unambiguous): ask Q4 only.
-- Q4 already configured: ask Q1 only.
-- Both decided: skip Q1 + Q4 entirely.
+Interview output narrows Q1-Q3 below — check
+`doc/harness/.interview-answers.json` before asking each remaining question.
+Health scoring is a fixed setup default and is never part of the interview.
 
 ### Q1: Project Type Confirmation
 
@@ -332,8 +314,6 @@ Ask:
 > B) Web frontend — browser-rendered UI (React/Vue/Next.js/…)
 > C) API / backend — server-side only
 > D) CLI / library — no server, no UI
-
-When bundled with Q4 above, include both questions in the same turn; let the user reply with two letters (e.g. "A and A") or two short lines.
 
 ### Q2: Key Commands
 
@@ -360,31 +340,35 @@ Branch by project type. Check prerequisites before asking. If all met, auto-enab
 
 **Fullstack (frontend + API):** Enable qa-api for backend by default. Enable browser QA only when current session tools or Codex/global runtime config already provide the browser MCP surface and the user explicitly wants browser QA.
 
-### Q4: Quality Tooling
+### Health scoring default (never ask)
 
-Ask:
-> harness can compute a project health score (0-10 composite) from configured commands. This is optional and prints to stdout.
->
-> RECOMMENDATION: Choose A. Near-zero setup cost — harness auto-detects test_command as the default health component.
-> Completeness: A=8/10, B=5/10
->
-> A) Enable health scoring (recommended — uses test_command as default, extend with health_components later)
-> B) Skip for now — I'll configure manually
-
-If A: manifest gets `health_components` uncommenting the default entry that wraps `test_command`.
+Always enable health scoring from the census-detected test and quality
+commands. For a non-Git control workspace, keep each command executable from
+the control root (for example `cd pay-api && ./gradlew test` and
+`cd pay-webapp && npm test`) and give each component a root-qualified name.
+Only use source roots accepted by the census safe-name rule, render them with
+`shlex.quote("./" + root)` so leading-dash names cannot become `cd` options,
+and serialize each complete command as a quoted YAML scalar.
+Do not ask whether to enable health scoring.
 
 ## Phase 2.5: Health Stack Auto-Detection
 
-Run detection after the project interview, before bootstrap. Do not write a
-fresh manifest here. Stage the result in `_PENDING_HEALTH_COMPONENTS`; apply it
-only after Phase 3 creates the canonical manifest. Existing
-`health_components:` remains the repair/upgrade idempotency marker.
+Run detection after the project interview, before bootstrap. Prefer the exact
+test commands already found by the census, including every registered API and
+frontend source root. Supplement those commands with the quality-tool signals
+below. Do not write a fresh manifest here. Stage the result in
+`_PENDING_HEALTH_COMPONENTS`; apply it only after Phase 3 creates the canonical
+manifest. On repair/upgrade, preserve an existing non-empty
+`health_components` list. Treat `health_components: []` as an old disabled
+default and replace it with the detected/default components.
 
 ```bash
-# Idempotent check
+# Idempotent check: preserve an existing configured list, but migrate [].
 _MANIFEST="$_ROOT/doc/harness/manifest.yaml"
-if [ -f "$_MANIFEST" ] && grep -q "^health_components:" "$_MANIFEST" 2>/dev/null; then
-  echo "health_components already set — skipping auto-detect"
+if [ -f "$_MANIFEST" ] \
+   && grep -q "^health_components:" "$_MANIFEST" 2>/dev/null \
+   && ! grep -qE "^health_components:[[:space:]]*\[\][[:space:]]*$" "$_MANIFEST" 2>/dev/null; then
+  echo "health_components already configured — preserving"
 else
   # 9-signal scan
   _DETECTED=""
@@ -406,17 +390,14 @@ else
 fi
 ```
 
-If signals detected, ask (or auto-accept if `HARNESS_SPAWNED=1`):
-
-> Detected health tooling. Write these to manifest `health_components`?
-> RECOMMENDATION: Y — health scoring compounds across tasks with zero extra setup.
-> A) Yes, write detected components (recommended)
-> B) No, skip
-
-If the user accepts (or `HARNESS_SPAWNED=1`), stage one entry per detected
-signal. If declined or none are detected, stage an empty list. Never create a
-partial manifest during this phase.
-The persisted opt-out marker is exactly `health_components: []`.
+Stage every census test command and detected signal automatically. Never ask for confirmation.
+If the signal scan is empty but `test_command` exists, stage
+one `test` component wrapping that exact command. For multi-root workspaces,
+stage one root-qualified component per detected source test command. Only when
+no executable verification command exists may setup stage
+`health_components: []`, and it must report that Health scoring could not be
+enabled rather than asking a policy question. Never create a partial manifest
+during this phase.
 
 ## Phase 3: Bootstrap Core Structure
 

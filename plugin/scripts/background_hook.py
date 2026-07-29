@@ -11,6 +11,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from _lib import (  # type: ignore
         find_repo_root,
+        find_harness_root,
+        harness_root_resolution,
         is_harness_enabled_repo,
         last_hook_input,
         log_gate_crash,
@@ -27,7 +29,19 @@ def main() -> int:
     args = parser.parse_args()
     try:
         payload = read_hook_input()
-        repo_root = find_repo_root()
+        payload_cwd = str(payload.get("cwd") or "").strip()
+        hook_cwd = os.path.realpath(payload_cwd or os.getcwd())
+        if payload_cwd:
+            harness_root, _harness_error = harness_root_resolution(hook_cwd)
+            if _harness_error:
+                return 0
+            repo_root = harness_root or find_repo_root(hook_cwd)
+        else:
+            candidate_root = find_repo_root()
+            harness_root, _harness_error = harness_root_resolution(candidate_root)
+            if _harness_error:
+                return 0
+            repo_root = harness_root or candidate_root
         if not is_harness_enabled_repo(repo_root):
             return 0
         background_registry.handle_subagent_hook(repo_root, payload, forced_event=args.event)

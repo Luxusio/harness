@@ -20,6 +20,7 @@ except Exception:  # pragma: no cover - registration recovery is best effort
 try:
     from _lib import (  # type: ignore
         extract_qa_verdict,
+        find_harness_root,
         find_repo_root,
         is_harness_enabled_repo,
         list_review_receipts,
@@ -31,6 +32,7 @@ try:
     )
 except Exception:  # pragma: no cover - hook must fail open
     extract_qa_verdict = None
+    find_harness_root = None
     find_repo_root = None
     is_harness_enabled_repo = None
     record_subagent_receipt = None
@@ -45,6 +47,21 @@ TOTAL_BUDGET_SECONDS = 2.4
 REGISTRATION_BUDGET_SECONDS = 0.4
 CHILD_TIMEOUT_SECONDS = 1.5
 DEADLINE_MARGIN_SECONDS = 0.1
+# Production receipt ownership belongs to the lifecycle watcher. Tests may
+# switch this module-local value to ``sync`` to exercise the parser helpers
+# without making outer PostToolUse latency depend on Git.
+RECEIPT_EVENT_MODE = "watcher"
+
+
+def _receipt_control_root(cwd: str) -> str:
+    root = find_harness_root(cwd) if find_harness_root is not None else ""
+    if root:
+        return root
+    if find_repo_root is not None and resolve_active_task_dir is not None:
+        candidate = find_repo_root(cwd)
+        if resolve_active_task_dir(candidate):
+            return candidate
+    return ""
 
 
 def _payload_cwd(payload: bytes) -> str | None:
@@ -99,13 +116,15 @@ def _goal_routing_hint(payload: bytes) -> str:
     ``get_goal`` itself. PostToolUse is the first reliable point at which the
     goal exists and the agent can be told to synchronize it through harness.
     """
-    if find_repo_root is None or is_harness_enabled_repo is None or read_current_goal is None:
+    if find_harness_root is None or is_harness_enabled_repo is None or read_current_goal is None:
         return ""
     data = _json_payload(payload)
     if not _is_create_goal_tool(str(data.get("tool_name") or data.get("tool") or "")):
         return ""
     try:
-        repo_root = find_repo_root(_payload_cwd(payload) or os.getcwd())
+        repo_root = _receipt_control_root(_payload_cwd(payload) or os.getcwd())
+        if not repo_root:
+            return ""
         if not is_harness_enabled_repo(repo_root):
             return ""
         response = data.get("tool_response", data.get("tool_result", data.get("toolResult")))
@@ -158,7 +177,10 @@ def _response_text(value) -> str:
 
 def _response_agent_id(value) -> str:
     if isinstance(value, dict):
-        for key in ("agent_id", "agentId", "task_name", "taskName", "target", "id"):
+        for key in (
+            "agent_id", "agentId", "agent_name", "agentName",
+            "task_name", "taskName", "target", "id",
+        ):
             candidate = value.get(key)
             if isinstance(candidate, str) and candidate.strip():
                 return candidate.strip()
@@ -179,13 +201,15 @@ def _response_agent_id(value) -> str:
 
 
 def _record_codex_spawn_result(payload: bytes) -> None:
-    if None in (find_repo_root, record_subagent_receipt, resolve_active_task_dir):
+    if None in (find_harness_root, record_subagent_receipt, resolve_active_task_dir):
         return
     data = _json_payload(payload)
     if not _is_spawn_agent_tool(str(data.get("tool_name") or data.get("tool") or "")):
         return
     try:
-        repo_root = find_repo_root(_payload_cwd(payload) or os.getcwd())
+        repo_root = _receipt_control_root(_payload_cwd(payload) or os.getcwd())
+        if not repo_root:
+            return
         task_dir = resolve_active_task_dir(repo_root)
         if not task_dir:
             return
@@ -214,7 +238,7 @@ def _record_codex_spawn_result(payload: bytes) -> None:
 
 
 def _completed_agents(value) -> list[tuple[str, str]]:
-    """Extract only structurally identified completed agents from list_agents."""
+    """Extract structurally identified completions from wait/list responses."""
     completed: list[tuple[str, str]] = []
     if isinstance(value, dict):
         name = value.get("agent_name")
@@ -223,6 +247,14 @@ def _completed_agents(value) -> list[tuple[str, str]]:
             final = status.get("completed")
             if isinstance(final, str):
                 completed.append((name, final))
+        status_map = value.get("status")
+        if isinstance(status_map, dict):
+            for agent_id, agent_status in status_map.items():
+                if not isinstance(agent_id, str) or not isinstance(agent_status, dict):
+                    continue
+                final = agent_status.get("completed")
+                if isinstance(final, str):
+                    completed.append((agent_id, final))
         for child in value.values():
             completed.extend(_completed_agents(child))
     elif isinstance(value, list):
@@ -235,16 +267,29 @@ def _record_one_completion(task_dir, target: str, final_text: str) -> None:
     verdict = extract_qa_verdict(final_text)
     if not verdict:
         return
-    receipts = list_subagent_receipts(task_dir) + list_review_receipts(task_dir)
-    started = next((
-        item for item in reversed(receipts)
-        if str(item.get("agent_id") or "") == target
-        and str(item.get("status") or "").lower() == "started"
-        and str(item.get("lens") or "").startswith(("qa-", "review-"))
-        and item.get("agent_type")
-    ), None)
-    if not started:
+    receipts = sorted(
+        list_subagent_receipts(task_dir) + list_review_receipts(task_dir),
+        key=lambda item: str(item.get("ts") or ""),
+    )
+    open_starts = []
+    for item in receipts:
+        if str(item.get("agent_id") or "") != target:
+            continue
+        status = str(item.get("status") or "").lower()
+        if (
+            status == "started"
+            and str(item.get("lens") or "").startswith(("qa-", "review-"))
+            and item.get("agent_type")
+        ):
+            open_starts.append(item)
+        elif status in {"completed", "done"} and open_starts:
+            open_starts.pop(0)
+    # A name can be reused by the runtime. Without a unique runtime ID in the
+    # wait response, more than one unmatched start is ambiguous and must not
+    # authorize a completion receipt.
+    if len(open_starts) != 1:
         return
+    started = open_starts[0]
     if any(
         str(item.get("agent_id") or "") == target
         and str(item.get("status") or "").lower() in {"completed", "done"}
@@ -253,13 +298,17 @@ def _record_one_completion(task_dir, target: str, final_text: str) -> None:
     ):
         return
     started_fingerprint = str(started.get("diff_fingerprint") or "")
+    lens = str(started.get("lens") or "")
     if (
-        str(started.get("lens") or "").startswith("review-")
+        lens.startswith(("review-", "qa-", "ux-"))
         and review_diff_fingerprint is not None
         and started_fingerprint != review_diff_fingerprint(task_dir)
     ):
         verdict = "PENDING"
-        final_text = (final_text + "\nReview invalidated: source changed while reviewer was running.").strip()
+        final_text = (
+            final_text
+            + "\nAgent result invalidated: source changed while it was running."
+        ).strip()
     record_subagent_receipt(
         task_dir,
         {
@@ -278,7 +327,7 @@ def _record_one_completion(task_dir, target: str, final_text: str) -> None:
 
 def _record_codex_subagent_completion(payload: bytes) -> None:
     if None in (
-        extract_qa_verdict, find_repo_root, list_subagent_receipts, list_review_receipts,
+        extract_qa_verdict, find_harness_root, list_subagent_receipts, list_review_receipts,
         record_subagent_receipt, resolve_active_task_dir,
     ):
         return
@@ -287,14 +336,24 @@ def _record_codex_subagent_completion(payload: bytes) -> None:
     if not (_is_wait_agent_tool(tool_name) or _is_list_agents_tool(tool_name)):
         return
     try:
-        repo_root = find_repo_root(_payload_cwd(payload) or os.getcwd())
+        repo_root = _receipt_control_root(_payload_cwd(payload) or os.getcwd())
+        if not repo_root:
+            return
         task_dir = resolve_active_task_dir(repo_root)
         if not task_dir:
             return
         response = data.get("tool_response") or data.get("tool_result") or data.get("toolResult") or {}
-        if _is_list_agents_tool(tool_name):
-            for target, final_text in _completed_agents(response):
+        structured = _completed_agents(response)
+        if structured:
+            seen = set()
+            for target, final_text in structured:
+                identity = (target, final_text)
+                if identity in seen:
+                    continue
+                seen.add(identity)
                 _record_one_completion(task_dir, target, final_text)
+            return
+        if _is_list_agents_tool(tool_name):
             return
         tool_input = data.get("tool_input") or data.get("input") or data.get("arguments") or {}
         target = str(tool_input.get("target") or tool_input.get("agent_id") or "") if isinstance(tool_input, dict) else ""
@@ -310,9 +369,35 @@ def main() -> int:
     if restore_watcher_registration is not None:
         restore_watcher_registration(payload, budget_seconds=REGISTRATION_BUDGET_SECONDS)
     tool_name = _tool_name(payload)
-    _record_codex_spawn_result(payload)
-    _record_codex_subagent_completion(payload)
-    goal_hint = _goal_routing_hint(payload)
+    if RECEIPT_EVENT_MODE == "sync" and (
+        _is_spawn_agent_tool(tool_name)
+        or _is_wait_agent_tool(tool_name)
+        or _is_list_agents_tool(tool_name)
+    ):
+        _record_codex_spawn_result(payload)
+        _record_codex_subagent_completion(payload)
+    goal_hint = ""
+    if _is_create_goal_tool(tool_name):
+        remaining = deadline - time.monotonic() - DEADLINE_MARGIN_SECONDS
+        if remaining > 0:
+            try:
+                proc = subprocess.run(
+                    [
+                        sys.executable,
+                        os.path.join(SCRIPTS_DIR, "tool_routing.py"),
+                        "--goal-hint-worker",
+                    ],
+                    input=payload,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
+                    timeout=min(CHILD_TIMEOUT_SECONDS, remaining),
+                    cwd=_payload_cwd(payload),
+                )
+                goal_hint = (proc.stdout or b"").decode(
+                    "utf-8", errors="replace"
+                ).strip()
+            except Exception:
+                goal_hint = ""
     if goal_hint:
         sys.stdout.write(json.dumps({
             "hookSpecificOutput": {

@@ -17,9 +17,10 @@ except Exception:  # pragma: no cover - registration recovery is best effort
     restore_watcher_registration = None
 
 try:
-    from _lib import find_repo_root, resolve_active_task_dir  # type: ignore
+    from _lib import find_harness_root, find_repo_root, resolve_active_task_dir  # type: ignore
     from background_registry import register_subagent_start  # type: ignore
 except Exception:  # pragma: no cover - hook must fail open
+    find_harness_root = None
     find_repo_root = None
     resolve_active_task_dir = None
     register_subagent_start = None
@@ -66,13 +67,20 @@ def _structured_task_id(tool_input: dict) -> str:
 
 
 def _record_codex_subagent_start(payload: bytes) -> None:
-    if register_subagent_start is None or find_repo_root is None or resolve_active_task_dir is None:
+    if register_subagent_start is None or find_harness_root is None or resolve_active_task_dir is None:
         return
     data = _json_payload(payload)
     if not _is_subagent_spawn_tool(str(data.get("tool_name") or data.get("tool") or "")):
         return
     try:
-        repo_root = find_repo_root(_payload_cwd(payload) or os.getcwd())
+        cwd = _payload_cwd(payload) or os.getcwd()
+        repo_root = find_harness_root(cwd)
+        if not repo_root and find_repo_root is not None:
+            candidate = find_repo_root(cwd)
+            if resolve_active_task_dir(candidate):
+                repo_root = candidate
+        if not repo_root:
+            return
         tool_input = data.get("tool_input") or data.get("input") or data.get("arguments") or {}
         if isinstance(tool_input, dict):
             expected_task_id = _structured_task_id(tool_input)

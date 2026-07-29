@@ -97,10 +97,10 @@ def test_review_snapshot_scope_deduplicates_and_refreshes_fingerprints(tmp_path)
         with lib.review_snapshot_scope():
             first = lib.review_diff_fingerprint(task)
             assert lib.review_diff_fingerprint(task) == first
-            assert calls == 1
+            assert calls == 2
             lib.refresh_review_snapshot()
             assert lib.review_diff_fingerprint(task) == first
-            assert calls == 2
+            assert calls == 4
 
         try:
             with lib.review_snapshot_scope():
@@ -111,7 +111,7 @@ def test_review_snapshot_scope_deduplicates_and_refreshes_fingerprints(tmp_path)
 
         with lib.review_snapshot_scope():
             assert lib.review_diff_fingerprint(task) == first
-        assert calls == 4
+        assert calls == 8
     finally:
         lib._reviewable_source_paths = original_paths
         lib._fingerprint_path = original_fingerprint
@@ -146,7 +146,7 @@ def test_review_snapshot_scope_is_isolated_between_threads(tmp_path):
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(lambda _: fingerprint_twice(), range(2)))
         assert all(first == second for first, second in results)
-        assert calls == 2
+        assert calls == 4
     finally:
         lib._reviewable_source_paths = original_paths
         lib._fingerprint_path = original_fingerprint
@@ -588,6 +588,79 @@ def test_receipt_fingerprint_rejects_rename_replacement(tmp_path, monkeypatch):
         raise AssertionError("A receipt replacement during hashing must fail closed")
 
 
+def test_receipt_append_rejects_symlink_without_touching_target(tmp_path):
+    task = tmp_path / "TASK__receipt-symlink-write"
+    task.mkdir()
+    external = tmp_path / "external.jsonl"
+    external.write_text("keep\n", encoding="utf-8")
+    (task / lib.SUBAGENT_RECEIPTS_NAME).symlink_to(external)
+
+    try:
+        lib.record_subagent_receipt(task, {
+            "agent_id": "agent-1",
+            "agent_type": "qa-cli",
+            "status": "started",
+        })
+    except RuntimeError as exc:
+        assert "integrity unavailable" in str(exc)
+    else:
+        raise AssertionError("symlink receipt append must fail closed")
+    assert external.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_receipt_read_rejects_symlink(tmp_path):
+    task = tmp_path / "TASK__receipt-symlink-read"
+    task.mkdir()
+    external = tmp_path / "external.jsonl"
+    external.write_text("{}\n", encoding="utf-8")
+    (task / lib.REVIEW_RECEIPTS_NAME).symlink_to(external)
+
+    try:
+        lib.list_review_receipts(task)
+    except RuntimeError as exc:
+        assert "integrity unavailable" in str(exc)
+    else:
+        raise AssertionError("symlink receipt read must fail closed")
+
+
+def test_receipt_read_rejects_malformed_nonempty_record(tmp_path):
+    task = tmp_path / "TASK__receipt-malformed"
+    task.mkdir()
+    path = task / lib.REVIEW_RECEIPTS_NAME
+    path.write_text(
+        '{"kind":"review","verdict":"PASS"}\n{"kind":',
+        encoding="utf-8",
+    )
+
+    try:
+        lib.list_review_receipts(task)
+    except RuntimeError as exc:
+        assert "integrity unavailable" in str(exc)
+    else:
+        raise AssertionError("malformed receipt records must fail closed")
+
+
+def test_receipt_write_rejects_symlinked_task_directory(tmp_path):
+    tasks = tmp_path / "doc/harness/tasks"
+    tasks.mkdir(parents=True)
+    external = tmp_path / "external-task"
+    external.mkdir()
+    linked = tasks / "TASK__linked"
+    linked.symlink_to(external, target_is_directory=True)
+
+    try:
+        lib.record_subagent_receipt(linked, {
+            "agent_id": "agent-linked",
+            "agent_type": "qa-cli",
+            "status": "started",
+        })
+    except RuntimeError as exc:
+        assert "integrity unavailable" in str(exc)
+    else:
+        raise AssertionError("symlinked receipt ancestors must fail closed")
+    assert not (external / lib.SUBAGENT_RECEIPTS_NAME).exists()
+
+
 def test_git_path_map_keeps_backslash_and_slash_names_distinct(tmp_path):
     backslash = tmp_path / "a\\b"
     nested = tmp_path / "a" / "b"
@@ -625,6 +698,39 @@ def test_docs_only_task_has_explicit_review_exemption(tmp_path):
     task = _task(tmp_path, ["doc/designs/change.md"])
     assert lib.required_review_lenses(task) == []
     assert lib.receipt_review_verdict(task) == "NOT_APPLICABLE"
+
+
+def test_completion_fingerprint_covers_nonreviewable_contract_markdown(tmp_path):
+    contract = tmp_path / "CONTRACTS.md"
+    contract.write_text("# Contracts\nC-1 deny unsafe writes\n", encoding="utf-8")
+    task = _task(tmp_path, ["CONTRACTS.md"])
+    assert lib.required_review_lenses(task) == []
+    first = lib.review_diff_fingerprint(task)
+
+    contract.write_text("# Contracts\nC-1 allow all writes\n", encoding="utf-8")
+
+    assert lib.review_diff_fingerprint(task) != first
+
+
+def test_git_workspace_rejects_symlinked_behavior_and_manifest_files(tmp_path):
+    task = _task(tmp_path, [])
+    external = tmp_path.parent / "external-contract.md"
+    external.write_text("# external\n", encoding="utf-8")
+    contract = tmp_path / "CONTRACTS.md"
+    contract.symlink_to(external)
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="must not be a symlink"):
+        lib.review_diff_fingerprint(task)
+
+    contract.unlink()
+    manifest = tmp_path / "doc/harness/manifest.yaml"
+    manifest.unlink()
+    manifest.symlink_to(external)
+    resolved, error = lib.harness_root_resolution(str(tmp_path))
+    assert resolved == str(tmp_path.resolve())
+    assert "regular non-symlink" in error
 
 
 def test_agent_instruction_markdown_requires_code_and_security_review(tmp_path):

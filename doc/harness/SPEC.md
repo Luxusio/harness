@@ -177,6 +177,17 @@ summaries, or narrative evidence do not close the task. Commands and inline
 checks may still help debugging, but close authority comes from `task_verify`
 reading task state and the two lifecycle streams.
 
+Codex collaboration APIs are capability-versioned rather than fixed to one
+tool set. A structurally identified `wait_agent` result such as
+`status[agent_id].completed` is a complete lifecycle signal; `list_agents` is
+only a fallback when it exists and the wait response omitted identities or
+final responses. When Codex does not forward collaboration calls to
+PostToolUse, the registered root-rollout watcher also recognizes an
+`exec`-wrapped `multi_agent_v1__spawn_agent`, the returned `agent_id`, matching
+child metadata and final/task-complete pair, and the root
+`<subagent_notification>`. The watcher captures source freshness at start and
+requires every identity and final response to agree before recording PASS.
+
 `write_plan` owns the canonical audit header but accepts both convenient caller
 forms: audit data rows only, or a complete Markdown audit table with an optional
 `# Audit Trail` heading, header row, and separator. It strips duplicate framing
@@ -222,18 +233,21 @@ Codex runtimes do not always forward collaboration tools to plugin
 the current official `session_id` (with a matching environment fallback),
 canonical repository, root rollout, and initial offset, then writes a versioned
 registration under the current user's state directory. This restoration path is
-strictly opt-in: without `doc/harness/manifest.yaml`, global hooks do not create
-or restore Harness watcher state. Setup detection stops at the nearest Git root,
-starting from the physical `realpath` of the hook cwd, so an independent nested
-repository or symlinked external project cannot inherit an outer repository's
-manifest. Registration retries
+strictly opt-in. A normal repository requires `doc/harness/manifest.yaml` at
+its Git root. A non-Git control workspace may instead declare exact,
+setup-validated `source_git_roots`; hooks accept that control manifest only
+when the physical hook cwd has an exact registered Git root. Missing, moved,
+symlinked, duplicate, nested, or unregistered roots fail closed, so an
+independent nested repository cannot inherit the outer workspace's task.
+Registration stores the control root separately from the session cwd and
+validates the rollout against the latter. Registration retries
 briefly on SessionStart when rollout creation races hook delivery. Later hooks
 restore missing or invalid registration state without overwriting a valid
 initial offset; late recovery begins at the current offset and covers only
 future subagent starts. Root-owned workspace ancestors common in container
 mounts are accepted for task binding only when group/other write bits are
 absent, while symlink checks and current-user ownership of the task directory
-remain enforced. An existing version-3
+remain enforced. An existing version-4
 registration is validated from its
 exact state and rollout paths before discovery, so ordinary hook events do not
 recursively scan the session tree, acquire the registration lock, or rewrite
@@ -241,7 +255,11 @@ state. Discovery for a missing registration is deadline-aware and registration
 locking is non-blocking. PreToolUse, UserPromptSubmit, and PostToolUse wrappers
 enforce one total child-work deadline strictly below their configured outer
 Codex hook timeout; individual subprocesses consume the remaining shared budget.
-It does not fork. The existing Harness MCP server discovers these registrations
+Lifecycle root resolution is included in that hard budget. PostToolUse performs
+no review/QA changed-path or fingerprint scan; the single lifecycle watcher
+exclusively observes ordered runtime spawn/completion events and owns that
+heavier receipt work outside the outer hook deadline.
+The lifecycle watcher itself does not fork. The existing Harness MCP server discovers these registrations
 and hosts one passive daemon watcher thread per root tuple. MCP restart replays
 from the immutable initial offset; receipt deduplication makes replay safe.
 Root-delivered child messages become completion candidates only when their
@@ -252,6 +270,36 @@ Because Codex MCP processes do not receive the root thread id as process state,
 the watcher binds a root to a task only from that root rollout's successful
 Harness `task_start` or `task_context` completion event, after canonical task
 state validation and before the reviewed or QA child starts.
+
+For a multi-Git control workspace, task baselines store each registered root's
+HEAD and workspace-prefixed dirty paths. Receipt HEAD identity is a
+deterministic 40-hex composite over the sorted root/HEAD tuples, and diff
+fingerprints resolve each touched path against its configured root. A change in
+any registered repository therefore invalidates an older review or QA PASS.
+Setup finalization validates the configured roots and does not run parent-level
+Git ignore checks when the control root itself is not a Git repository.
+Claude write, Bash, Stop, and subagent lifecycle hooks resolve a registered
+child Git cwd back to this control root. Multi-Git baselines also fingerprint a
+bounded parent behavioral surface (`AGENTS.md`, `CLAUDE.md`, contracts, and the
+Harness manifest); normal synchronization discovers changes to those files,
+and `task_close` compares them independently of `touched_paths` to close the
+final-gate race.
+Runtime project-document edits reject symlink components and use a bounded,
+atomic helper for routing and contract-import changes. Registered source-root
+names are restricted to `[A-Za-z0-9._/-]+` before any control-root-relative
+test command is generated, and task resume preserves configuration errors when
+a previously registered child repository has moved or disappeared.
+
+Setup applies the recommended routing and operating profile without asking the
+user to design Harness policy: proactive routing is enabled, the runtime
+routing block is injected, audience defaults to SaaS/public, execution defaults
+to standard plan-review-merge, and the full verification loop is enabled. The
+failure-avoidance question is also omitted; setup owns and reapplies C-100 as
+`말하지 않은 범위도 멋대로 수정하는 것`. Project purpose and
+undetectable verification facts remain the only interview inputs. Setup also
+adds a missing `@CONTRACTS.md` runtime import with an idempotent targeted edit
+and enables Health scoring from every census-detected API/frontend test and
+quality command without asking.
 
 Each rollout is opened with no-follow semantics and validated by descriptor
 identity, owner, link count, non-group/world-writable mode, size, and an owner-controlled non-writable session

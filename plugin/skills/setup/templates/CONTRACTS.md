@@ -211,9 +211,12 @@ with an explicit `VERDICT: PASS` after the latest source edit and
 **When:** `setup` or continuous maintenance installs/updates harness files.
 **Enforced by:** Skill procedure — `CLAUDE.md` gets at most a 1-line
 `@CONTRACTS.md` import; `CONTRACTS.md` respects managed-block markers;
-`CONTRACTS.local.md` is never touched once created.
-**On violation:** hard-block. Any rewrite of user-authored content must
-present a diff via `AskUserQuestion` first.
+setup may idempotently add that missing import without asking and may replace
+only the setup-owned C-100 block in `CONTRACTS.local.md` on rerun. Every other
+line in the runtime project document and `CONTRACTS.local.md` remains
+user-owned.
+**On violation:** hard-block. Any rewrite outside those two bounded,
+setup-owned operations must present a diff via `AskUserQuestion` first.
 **Why:** User trust is the most load-bearing contract. Surprise overwrites
 break it immediately.
 

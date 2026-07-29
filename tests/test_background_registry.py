@@ -156,6 +156,32 @@ def test_background_hook_payload_cwd_non_harness_repo_does_not_write(tmp_path):
     assert not (repo / "doc" / "harness").exists()
 
 
+def test_background_hook_rejects_invalid_parent_workspace(tmp_path):
+    root = tmp_path / "workspace"
+    child = root / "api"
+    (child / ".git").mkdir(parents=True)
+    manifest = root / "doc/harness/manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text("version: 5\ntype: api\n", encoding="utf-8")
+
+    result = subprocess.run(
+        [sys.executable, os.path.join(SCRIPTS_DIR, "background_hook.py"), "--event", "stop"],
+        cwd=child,
+        input=json.dumps({
+            "cwd": str(child),
+            "session_id": "sess-1",
+            "agent_id": "agent-1",
+            "agent_type": "harness:qa-cli",
+        }),
+        text=True,
+        capture_output=True,
+        timeout=5,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not os.path.exists(background_registry.registry_path(str(root)))
+
+
 def test_background_hook_writes_in_harness_enabled_repo(tmp_path):
     repo_path, _task_dir = _repo(tmp_path)
     _mark_harness_enabled(repo_path)

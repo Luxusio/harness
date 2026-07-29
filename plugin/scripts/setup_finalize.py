@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import fnmatch
 import os
 import re
@@ -17,6 +19,27 @@ HARNESS_VERSION = "2.3.0"
 MANIFEST_SCHEMA = 5
 ROUTING_MARKER = "<!-- harness:routing-injected -->"
 CODEX_RUN_POLICY = "skills/run/agents/openai.yaml"
+ROUTING_BLOCK = """## Harness routing
+<!-- harness:routing-injected -->
+- On Codex, every repo-mutating request → invoke `$harness:run` before editing; it loads the internal canonical workflow, syncs a native Goal when present, and otherwise opens/resumes a Harness task
+- On Claude Code, run the full cycle (plan → develop → verify → close) through native `/goal` for explicit goals or the runtime's canonical task route for plain repo-mutating requests
+- Bootstrap harness in a new project / repair existing → `Skill(harness:setup)`
+- Plan-only requests → sync/create Goal and stop after the internal plan phase if the user explicitly asks not to implement
+- Implement an approved PLAN.md / develop only → resume the active Goal child task through the internal develop path
+- Contract drift / post-upgrade cleanup → continuous maintenance flow in the active/next Goal child task
+- Read-only question or explanation → answer directly, no Harness run skill
+
+### Durable Decision Documentation Gate
+
+A user-stated durable decision is not handled until it is documented under `doc/`.
+If the user establishes, corrects, or confirms a lasting product, design,
+architecture, domain, workflow, or implementation rule, update the matching
+`doc/` file before finalizing. Conversation history is not durable memory. If
+no matching document exists, create one under the appropriate `doc/` area; if no
+doc is needed, record the specific no-doc rationale in the PLAN durable-doc
+decision.
+<!-- /harness:routing-injected -->
+"""
 
 OPERATIONAL_IGNORES = (
     "doc/harness/tasks/",
@@ -178,6 +201,78 @@ def manifest_maps(text: str) -> tuple[dict[str, str], dict[str, str], list[str]]
     return top, qa, errors
 
 
+def manifest_array(text: str, key: str) -> list[str]:
+    lines = text.splitlines()
+    prefix = key + ":"
+    for index, raw in enumerate(lines):
+        if not raw.startswith(prefix):
+            continue
+        rest = raw[len(prefix):].strip()
+        if rest.startswith("[") and rest.endswith("]"):
+            return [
+                item.strip().strip('"').strip("'")
+                for item in rest[1:-1].split(",")
+                if item.strip()
+            ]
+        values: list[str] = []
+        for child in lines[index + 1:]:
+            match = re.match(r"^  -\s+(.+?)\s*$", child)
+            if not match:
+                break
+            values.append(match.group(1).strip().strip('"').strip("'"))
+        return values
+    return []
+
+
+def source_git_root_errors(repo: Path, manifest_text: str) -> list[str]:
+    values = manifest_array(manifest_text, "source_git_roots")
+    if (repo / ".git").exists() and not values:
+        return []
+    if not values:
+        return ["non-Git Harness workspace requires source_git_roots"]
+    errors: list[str] = []
+    roots: list[Path] = []
+    for value in values:
+        if (
+            not value
+            or Path(value).is_absolute()
+            or value in {".", ".."}
+            or value.startswith("../")
+            or not re.fullmatch(r"[A-Za-z0-9._/-]+", value)
+            or any(part in {"", ".", ".."} for part in value.replace("\\", "/").split("/"))
+        ):
+            errors.append(f"invalid source_git_roots entry: {value}")
+            continue
+        try:
+            candidate = safe_path(repo, value)
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        if not candidate.is_dir():
+            errors.append(f"source_git_roots entry is not a directory: {value}")
+            continue
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(candidate), "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            errors.append(f"source_git_roots entry is not a readable Git root: {value}")
+            continue
+        if result.returncode != 0 or Path(result.stdout.strip()).resolve() != candidate.resolve():
+            errors.append(f"source_git_roots entry is not an exact Git root: {value}")
+            continue
+        resolved = candidate.resolve()
+        if resolved in roots:
+            errors.append(f"duplicate source_git_roots entry: {value}")
+            continue
+        if any(root in resolved.parents or resolved in root.parents for root in roots):
+            errors.append(f"nested source_git_roots entries are not allowed: {value}")
+            continue
+        roots.append(resolved)
+    return errors
+
+
 def migrate_manifest_text(original: str) -> tuple[str, list[str]]:
     top, existing_qa, errors = manifest_maps(original)
     raw_version = top.get("version")
@@ -291,6 +386,7 @@ def validate_structure(
     errors: list[str] = []
     top, qa, parse_errors = manifest_maps(manifest_text)
     errors.extend(parse_errors)
+    errors.extend(source_git_root_errors(repo, manifest_text))
     if top.get("version") != str(MANIFEST_SCHEMA):
         errors.append(f"manifest version must be {MANIFEST_SCHEMA}")
     for key in ("name", "type"):
@@ -404,6 +500,8 @@ def representative_path(pattern: str) -> str:
 
 def effective_ignore_errors(repo: Path) -> list[str]:
     errors: list[str] = []
+    if not (repo / ".git").exists():
+        return errors
     probes = {representative_path(pattern) for pattern in OPERATIONAL_IGNORES}
     existing: set[Path] = set()
     for pattern in OPERATIONAL_IGNORES:
@@ -456,6 +554,261 @@ def restore(path: Path, original: str | None, mode: int | None) -> None:
         os.chmod(path, mode)
 
 
+def _project_doc_text(path: Path) -> tuple[str, os.stat_result | None]:
+    try:
+        before = os.lstat(path)
+    except FileNotFoundError:
+        return "", None
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise ValueError("runtime project document must be a regular non-symlink file")
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        opened = os.fstat(fd)
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            raise ValueError("runtime project document changed during setup")
+        with os.fdopen(fd, "r", encoding="utf-8", newline="") as handle:
+            fd = -1
+            text = handle.read(2 * 1024 * 1024 + 1)
+        if len(text) > 2 * 1024 * 1024:
+            raise ValueError("runtime project document is too large")
+        after = os.lstat(path)
+        if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino):
+            raise ValueError("runtime project document changed during setup")
+        return text, before
+    finally:
+        if fd >= 0:
+            os.close(fd)
+
+
+def _with_contract_import(text: str) -> str:
+    if any(line.strip() == "@CONTRACTS.md" for line in text.splitlines()):
+        return text
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = text.splitlines(keepends=True)
+    insert_after = 0
+    if lines and lines[0].strip() == "---":
+        for index, line in enumerate(lines[1:], 1):
+            if line.strip() == "---":
+                insert_after = index + 1
+                break
+    if insert_after == 0:
+        for index, line in enumerate(lines):
+            if line.startswith("# "):
+                insert_after = index + 1
+                break
+    offset = sum(len(line) for line in lines[:insert_after])
+    prefix = text[:offset]
+    suffix = text[offset:]
+    separator = "" if not prefix or prefix.endswith(("\n", "\r")) else newline
+    return prefix + separator + "@CONTRACTS.md" + newline + suffix
+
+
+def _with_routing_block(text: str) -> str:
+    newline = "\r\n" if "\r\n" in text else "\n"
+    legacy = re.compile(
+        r"(?m)^[ \t]*- Default agent is harness[ \t]*(?:\r?\n|$)"
+    )
+    working = legacy.sub("", text)
+    marker = re.search(r"(?m)^<!-- harness:routing-injected -->[ \t]*(?:\r?\n|$)", working)
+    block = ROUTING_BLOCK.rstrip("\n").replace("\n", newline) + newline
+    if marker is None:
+        separator = ""
+        if working:
+            separator = newline if working.endswith(("\n", "\r")) else newline * 2
+        return working + separator + block
+    start = marker.start()
+    prefix = working[:start]
+    prior_heading = re.search(
+        r"(?m)^## Harness routing[ \t]*(?:\r?\n)$", prefix
+    )
+    if prior_heading and not prefix[prior_heading.end():].strip():
+        start = prior_heading.start()
+    closing = re.search(
+        r"(?m)^<!-- /harness:routing-injected -->[ \t]*(?:\r?\n|$)",
+        working[marker.end():],
+    )
+    if closing is not None:
+        end = marker.end() + closing.end()
+    else:
+        next_heading = re.search(r"(?m)^## .*(?:\r?\n|$)", working[marker.end():])
+        # A legacy unbounded block is only safe to replace through a following
+        # section boundary. At EOF, preserve the ambiguous suffix as user data.
+        end = (
+            marker.end()
+            if next_heading is None
+            else marker.end() + next_heading.start()
+        )
+    return working[:start] + block + working[end:]
+
+
+def _exchange_project_doc(left: str, right: str) -> None:
+    """Atomically exchange two files, or fail closed when unsupported."""
+    try:
+        renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
+    except (AttributeError, OSError) as exc:
+        raise OSError(errno.ENOTSUP, "atomic project-document exchange unavailable") from exc
+    renameat2.argtypes = [
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    if renameat2(
+        -100, os.fsencode(left), -100, os.fsencode(right), 2
+    ) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code))
+
+
+def _same_project_doc_snapshot(
+    text: str,
+    info: os.stat_result | None,
+    expected_text: str,
+    expected: os.stat_result | None,
+) -> bool:
+    if expected is None:
+        return info is None and text == expected_text
+    return (
+        info is not None
+        and text == expected_text
+        and (info.st_dev, info.st_ino) == (expected.st_dev, expected.st_ino)
+        and info.st_size == expected.st_size
+        and info.st_mtime_ns == expected.st_mtime_ns
+    )
+
+
+def _same_file_identity(path: Path, expected: os.stat_result) -> bool:
+    try:
+        current = os.lstat(path)
+    except OSError:
+        return False
+    return (
+        stat.S_ISREG(current.st_mode)
+        and not stat.S_ISLNK(current.st_mode)
+        and (current.st_dev, current.st_ino)
+        == (expected.st_dev, expected.st_ino)
+    )
+
+
+def update_project_doc(
+    repo: Path,
+    project_doc: str,
+    *,
+    ensure_routing: bool,
+    ensure_contract_import: bool,
+) -> bool:
+    path = safe_path(repo, project_doc)
+    original, before = _project_doc_text(path)
+    candidate = original
+    if ensure_routing:
+        candidate = _with_routing_block(candidate)
+    if ensure_contract_import:
+        candidate = _with_contract_import(candidate)
+    if candidate == original:
+        return False
+    latest, latest_stat = _project_doc_text(path)
+    if latest != original:
+        raise ValueError("runtime project document content changed during setup")
+    if before is None:
+        if latest_stat is not None:
+            raise ValueError("runtime project document appeared during setup")
+    elif (
+        latest_stat is None
+        or (latest_stat.st_dev, latest_stat.st_ino) != (before.st_dev, before.st_ino)
+        or latest_stat.st_size != before.st_size
+        or latest_stat.st_mtime_ns != before.st_mtime_ns
+        or latest_stat.st_ctime_ns != before.st_ctime_ns
+    ):
+        raise ValueError("runtime project document changed during setup")
+
+    mode = stat.S_IMODE(before.st_mode) if before else 0o644
+    fd, tmp = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
+    )
+    exchanged = False
+    preserve_tmp = False
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(candidate)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(tmp, mode)
+        final_text, final_stat = _project_doc_text(path)
+        if final_text != original:
+            raise ValueError("runtime project document content changed during setup")
+        if before is None:
+            if final_stat is not None:
+                raise ValueError("runtime project document appeared during setup")
+        elif (
+            final_stat is None
+            or (final_stat.st_dev, final_stat.st_ino) != (before.st_dev, before.st_ino)
+            or final_stat.st_size != before.st_size
+            or final_stat.st_mtime_ns != before.st_mtime_ns
+            or final_stat.st_ctime_ns != before.st_ctime_ns
+        ):
+            raise ValueError("runtime project document changed during setup")
+        if before is None:
+            try:
+                os.link(tmp, path, follow_symlinks=False)
+            except FileExistsError as exc:
+                raise ValueError(
+                    "runtime project document appeared during setup"
+                ) from exc
+            os.unlink(tmp)
+        else:
+            candidate_stat = os.lstat(tmp)
+            _exchange_project_doc(tmp, str(path))
+            exchanged = True
+            try:
+                displaced_text, displaced_stat = _project_doc_text(Path(tmp))
+                if not _same_project_doc_snapshot(
+                    displaced_text, displaced_stat, original, before
+                ):
+                    raise ValueError(
+                        "runtime project document changed during setup"
+                    )
+            except BaseException:
+                if not _same_file_identity(path, candidate_stat):
+                    preserve_tmp = True
+                    raise RuntimeError(
+                        f"runtime project document changed again during rollback; "
+                        f"original preserved at {tmp}"
+                    )
+                try:
+                    _exchange_project_doc(tmp, str(path))
+                    exchanged = False
+                except OSError as rollback_exc:
+                    preserve_tmp = True
+                    raise RuntimeError(
+                        f"runtime project document changed and rollback failed; "
+                        f"original preserved at {tmp}"
+                    ) from rollback_exc
+                raise
+            if not _same_file_identity(path, candidate_stat):
+                preserve_tmp = True
+                raise RuntimeError(
+                    f"runtime project document changed after atomic exchange; "
+                    f"original preserved at {tmp}"
+                )
+            os.unlink(tmp)
+            exchanged = False
+    except BaseException:
+        if exchanged and not preserve_tmp:
+            if not _same_file_identity(path, candidate_stat):
+                preserve_tmp = True
+            else:
+                try:
+                    _exchange_project_doc(tmp, str(path))
+                    exchanged = False
+                except OSError:
+                    preserve_tmp = True
+        if not preserve_tmp:
+            try:
+                os.unlink(tmp)
+            except FileNotFoundError:
+                pass
+        raise
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Prepare or finalize a harness setup")
     parser.add_argument("--repo", type=Path, default=Path.cwd())
@@ -466,10 +819,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gitignore-only", action="store_true", help="only apply and verify operational ignores")
     parser.add_argument("--qa-verified", action="store_true", help="attest that setup QA prerequisites passed")
     parser.add_argument("--runtime-verified", action="store_true", help="attest that runtime checks passed")
+    parser.add_argument("--project-doc-only", action="store_true", help="only apply safe runtime-document edits")
+    parser.add_argument("--ensure-routing", action="store_true")
+    parser.add_argument("--ensure-contract-import", action="store_true")
     args = parser.parse_args(argv)
 
     repo = args.repo.resolve()
     plugin_root = args.plugin_root.resolve()
+    if args.project_doc_only:
+        try:
+            changed = update_project_doc(
+                repo,
+                args.project_doc,
+                ensure_routing=args.ensure_routing,
+                ensure_contract_import=args.ensure_contract_import,
+            )
+        except (OSError, ValueError) as exc:
+            print(f"SETUP_ERROR: {exc}")
+            return 1
+        print(f"SETUP_PROJECT_DOC_OK: updated={str(changed).lower()}")
+        return 0
     try:
         gitignore_path = safe_path(repo, ".gitignore")
         manifest_path = safe_path(repo, "doc/harness/manifest.yaml")

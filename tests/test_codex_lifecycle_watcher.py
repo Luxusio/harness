@@ -89,6 +89,23 @@ def _spawn_events(root_id: str, child_id: str, task_name: str, agent_path: str):
     ]
 
 
+def test_spawn_output_accepts_collaboration_agent_name():
+    mod = _load()
+    event = {
+        "type": "response_item",
+        "payload": {
+            "type": "function_call_output",
+            "call_id": "call_runtime_123456",
+            "output": json.dumps({"agent_name": "/root/qa_cli_agent_name"}),
+        },
+    }
+
+    assert mod._spawn_output(event) == (
+        "call_runtime_123456",
+        "/root/qa_cli_agent_name",
+    )
+
+
 def _delivery(agent_path: str, final: str):
     return {"type": "response_item", "payload": {
         "type": "agent_message", "author": agent_path, "recipient": "/root",
@@ -108,6 +125,76 @@ def _intermediate_message(agent_path: str):
             {"type": "encrypted_content", "encrypted_content": "opaque"},
         ],
     }}
+
+
+def _exec_spawn_events(child_id: str, task_name: str):
+    call_id = "call_exec_runtime_123456"
+    return [
+        {"type": "response_item", "payload": {
+            "type": "custom_tool_call", "name": "exec", "call_id": call_id,
+            "input": (
+                "const result = await tools.multi_agent_v1__spawn_agent("
+                f'{{task_name: "{task_name}", message: "encrypted"}}); text(result);'
+            ),
+        }},
+        {"type": "event_msg", "payload": {
+            "type": "sub_agent_activity", "kind": "started", "event_id": call_id,
+            "agent_thread_id": child_id, "agent_path": child_id,
+        }},
+        {"type": "response_item", "payload": {
+            "type": "custom_tool_call_output", "call_id": call_id,
+            "output": json.dumps({"agent_id": child_id}),
+        }},
+    ]
+
+
+def _status_notification(agent_id: str, final: str):
+    return {"type": "response_item", "payload": {
+        "type": "message", "role": "user",
+        "content": [{"type": "input_text", "text": (
+            "<subagent_notification>\n"
+            + json.dumps({"agent_path": agent_id, "status": {"completed": final}})
+            + "\n</subagent_notification>"
+        )}],
+    }}
+
+
+def _status_child_events(
+    root_id: str, child_id: str, task_name: str, cwd: str, final: str | None = None
+):
+    events = [{
+        "type": "session_meta",
+        "payload": {
+            "session_id": root_id,
+            "id": child_id,
+            "parent_thread_id": root_id,
+            "cwd": cwd,
+            "thread_source": "subagent",
+            "agent_path": child_id,
+            "source": {"subagent": {"thread_spawn": {
+                "parent_thread_id": root_id,
+                "depth": 1,
+                "agent_path": child_id,
+            }}},
+        },
+    }, {
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": f"task_name: {task_name}\nReview the task."}],
+        },
+    }]
+    if final is not None:
+        events.extend([
+            {"type": "event_msg", "payload": {
+                "type": "agent_message", "phase": "final_answer", "message": final,
+            }},
+            {"type": "event_msg", "payload": {
+                "type": "task_complete", "last_agent_message": final,
+            }},
+        ])
+    return events
 
 
 def _task_context_binding(task_id: str, task_dir: str, *, ok: bool = True):
@@ -182,6 +269,51 @@ def test_watcher_records_start_then_correlated_review_completion(tmp_path, monke
     ]
     assert receipts[0]["runtime_thread_id"] == child_id
     assert receipts[0]["runtime_event_id"] == receipts[1]["runtime_event_id"]
+
+
+def test_watcher_records_exec_wrapped_spawn_and_status_notification(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    task_dir = repo / "doc/harness/tasks/TASK__watcher-exec"
+    task_dir.mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    task_name = "code_review_exec_runtime"
+    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    _write_jsonl(child, _status_child_events(root_id, child_id, task_name, str(repo)))
+    receipts = []
+
+    def record(_task_dir, receipt):
+        entry = {
+            **receipt,
+            "head_sha": receipt.get("head_sha") or "a" * 40,
+            "base_sha": receipt.get("base_sha") or "a" * 40,
+            "diff_fingerprint": receipt.get("diff_fingerprint") or "sha256:before",
+        }
+        receipts.append(entry)
+        return entry
+
+    watcher = mod.Watcher(str(repo), root_id)
+    final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nClean"
+    with mock.patch.object(mod, "_active_task_for_session", return_value=str(task_dir)), \
+         mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"), \
+         mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
+         mock.patch.object(mod, "list_review_receipts", side_effect=lambda _td: receipts), \
+         mock.patch.object(mod, "list_subagent_receipts", return_value=[]):
+        for event in _exec_spawn_events(child_id, task_name):
+            watcher.feed(event)
+        _write_jsonl(
+            child,
+            _status_child_events(root_id, child_id, task_name, str(repo), final),
+        )
+        watcher.feed(_status_notification(child_id, final))
+
+    assert [(item["status"], item.get("verdict", "")) for item in receipts] == [
+        ("started", ""), ("completed", "PASS"),
+    ]
+    assert receipts[-1]["agent_id"] == child_id
 
 
 def test_watcher_records_sequential_unique_qa_names_in_one_root(tmp_path, monkeypatch):
@@ -377,6 +509,64 @@ def test_watcher_marks_completion_pending_when_source_changes(tmp_path, monkeypa
         _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo), final))
         watcher.feed(_delivery(agent_path, final))
     assert receipts[-1]["verdict"] == "PENDING"
+
+
+def test_watcher_records_child_repo_receipt_for_parent_control_workspace(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    control_root = tmp_path / "workspace"
+    session_cwd = control_root / "pay-api"
+    session_cwd.mkdir(parents=True)
+    task_dir = control_root / "doc/harness/tasks/TASK__watcher-multigit"
+    task_dir.mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    agent_path = "/root/qa_cli"
+    final = "VERDICT: PASS\nQA passed"
+    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    _write_jsonl(
+        child,
+        _child_events(root_id, child_id, agent_path, str(session_cwd)),
+    )
+    receipts = []
+
+    def record(_task_dir, receipt):
+        entry = {
+            **receipt,
+            "head_sha": receipt.get("head_sha") or "a" * 40,
+            "base_sha": receipt.get("base_sha") or "a" * 40,
+            "diff_fingerprint": receipt.get("diff_fingerprint") or "sha256:stable",
+        }
+        receipts.append(entry)
+        return entry
+
+    watcher = mod.Watcher(
+        str(control_root), root_id, session_cwd=str(session_cwd)
+    )
+    with mock.patch.object(
+        mod, "_active_task_for_session", return_value=str(task_dir)
+    ), mock.patch.object(
+        mod, "review_diff_fingerprint", return_value="sha256:stable"
+    ), mock.patch.object(
+        mod, "record_subagent_receipt", side_effect=record
+    ), mock.patch.object(
+        mod, "list_review_receipts", return_value=[]
+    ), mock.patch.object(
+        mod, "list_subagent_receipts", side_effect=lambda _td: receipts
+    ):
+        for event in _spawn_events(root_id, child_id, "qa_cli", agent_path):
+            watcher.feed(event)
+        _write_jsonl(
+            child,
+            _child_events(root_id, child_id, agent_path, str(session_cwd), final),
+        )
+        watcher.feed(_delivery(agent_path, final))
+
+    assert [(item["status"], item.get("verdict")) for item in receipts] == [
+        ("started", None),
+        ("completed", "PASS"),
+    ]
 
 
 def test_child_status_rejects_duplicate_child_boundary(tmp_path, monkeypatch):

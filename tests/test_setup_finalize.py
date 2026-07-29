@@ -5,11 +5,20 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "plugin/scripts/setup_finalize.py"
 SETUP_SOURCE = REPO / "plugin/skills/setup"
+
+
+def load_setup_finalize(name: str):
+    spec = importlib.util.spec_from_file_location(name, SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader
+    spec.loader.exec_module(module)
+    return module
 
 
 def make_plugin_root(tmp_path: Path) -> Path:
@@ -76,6 +85,332 @@ def run(
         capture_output=True,
         timeout=20,
     )
+
+
+def test_project_doc_helper_inserts_import_and_preserves_content(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    plugin_root = make_plugin_root(tmp_path)
+    project_doc = repo / "AGENTS.md"
+    project_doc.write_text(
+        "---\nname: pay\n---\n# Existing\nkeep me\n", encoding="utf-8"
+    )
+
+    result = run(
+        repo,
+        plugin_root,
+        "--project-doc-only",
+        "--ensure-contract-import",
+        attest=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert project_doc.read_text(encoding="utf-8") == (
+        "---\nname: pay\n---\n@CONTRACTS.md\n# Existing\nkeep me\n"
+    )
+
+
+def test_project_doc_helper_rejects_symlink(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    plugin_root = make_plugin_root(tmp_path)
+    external = tmp_path / "external.md"
+    external.write_text("# Outside\n", encoding="utf-8")
+    (repo / "AGENTS.md").symlink_to(external)
+
+    result = run(
+        repo,
+        plugin_root,
+        "--project-doc-only",
+        "--ensure-contract-import",
+        attest=False,
+    )
+
+    assert result.returncode == 1
+    assert "symlink" in result.stdout
+    assert external.read_text(encoding="utf-8") == "# Outside\n"
+
+
+def test_project_doc_import_preserves_no_newline_boundaries(tmp_path):
+    setup_finalize = load_setup_finalize("setup_finalize_no_newline_test")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    project_doc = repo / "AGENTS.md"
+
+    project_doc.write_text("# Existing", encoding="utf-8")
+    setup_finalize.update_project_doc(
+        repo, "AGENTS.md",
+        ensure_routing=False, ensure_contract_import=True,
+    )
+    assert project_doc.read_text(encoding="utf-8") == (
+        "# Existing\n@CONTRACTS.md\n"
+    )
+
+    project_doc.write_text("---\r\nname: pay\r\n---", encoding="utf-8", newline="")
+    setup_finalize.update_project_doc(
+        repo, "AGENTS.md",
+        ensure_routing=False, ensure_contract_import=True,
+    )
+    assert project_doc.read_bytes() == (
+        b"---\r\nname: pay\r\n---\r\n@CONTRACTS.md\r\n"
+    )
+
+
+def test_project_doc_routing_preserves_unmanaged_crlf_content(tmp_path):
+    setup_finalize = load_setup_finalize("setup_finalize_crlf_test")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    project_doc = repo / "AGENTS.md"
+    project_doc.write_bytes(
+        b"# User\r\nkeep-before\r\n\r\n"
+        b"## Harness routing\r\n<!-- harness:routing-injected -->\r\nold\r\n"
+        b"## User Tail\r\nkeep-after\r\n"
+    )
+
+    setup_finalize.update_project_doc(
+        repo, "AGENTS.md",
+        ensure_routing=True, ensure_contract_import=False,
+    )
+    result = project_doc.read_bytes()
+    assert result.startswith(b"# User\r\nkeep-before\r\n\r\n")
+    assert result.endswith(b"## User Tail\r\nkeep-after\r\n")
+    assert b"$harness:run" in result
+    assert b"\n" not in result.replace(b"\r\n", b"")
+
+
+def test_project_doc_routing_preserves_unmarked_same_name_section(tmp_path):
+    setup_finalize = load_setup_finalize("setup_finalize_unmarked_routing_test")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    project_doc = repo / "AGENTS.md"
+    project_doc.write_text(
+        "# User\n\n## Harness routing\n"
+        "This heading and its user-owned instructions must remain.\n"
+        "## User Tail\nkeep-after\n",
+        encoding="utf-8",
+    )
+
+    setup_finalize.update_project_doc(
+        repo, "AGENTS.md",
+        ensure_routing=True, ensure_contract_import=False,
+    )
+    result = project_doc.read_text(encoding="utf-8")
+    assert (
+        "## Harness routing\n"
+        "This heading and its user-owned instructions must remain.\n"
+        "## User Tail\nkeep-after\n"
+    ) in result
+    assert result.count("<!-- harness:routing-injected -->") == 1
+    assert "$harness:run" in result
+
+
+def test_project_doc_routing_preserves_user_rule_after_legacy_eof_block(tmp_path):
+    setup_finalize = load_setup_finalize("setup_finalize_legacy_eof_test")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    project_doc = repo / "AGENTS.md"
+    project_doc.write_text(
+        "## Harness routing\n"
+        "<!-- harness:routing-injected -->\n"
+        "- old generated rule\n"
+        "- user rule appended at EOF\n",
+        encoding="utf-8",
+    )
+    setup_finalize.update_project_doc(
+        repo, "AGENTS.md",
+        ensure_routing=True, ensure_contract_import=False,
+    )
+    result = project_doc.read_text(encoding="utf-8")
+    assert "- user rule appended at EOF\n" in result
+    assert "<!-- /harness:routing-injected -->" in result
+
+
+def test_project_doc_update_aborts_on_same_inode_concurrent_edit(tmp_path):
+    setup_finalize = load_setup_finalize("setup_finalize_concurrent_test")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    project_doc = repo / "AGENTS.md"
+    project_doc.write_text("# Existing\n", encoding="utf-8")
+    original_reader = setup_finalize._project_doc_text
+    calls = 0
+
+    def concurrent_reader(path):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write("concurrent user line\n")
+        return original_reader(path)
+
+    with mock.patch.object(
+        setup_finalize, "_project_doc_text", side_effect=concurrent_reader
+    ):
+        try:
+            setup_finalize.update_project_doc(
+                repo, "AGENTS.md",
+                ensure_routing=False, ensure_contract_import=True,
+            )
+        except ValueError as exc:
+            assert "content changed" in str(exc)
+        else:
+            raise AssertionError("concurrent project-document edits must abort")
+
+    assert project_doc.read_text(encoding="utf-8") == (
+        "# Existing\nconcurrent user line\n"
+    )
+
+
+def test_project_doc_atomic_exchange_restores_concurrent_replacement(tmp_path):
+    setup_finalize = load_setup_finalize("setup_finalize_exchange_race_test")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    project_doc = repo / "AGENTS.md"
+    project_doc.write_text("# Existing\n", encoding="utf-8")
+    real_exchange = setup_finalize._exchange_project_doc
+    exchanged = False
+
+    def racing_exchange(left, right):
+        nonlocal exchanged
+        if not exchanged:
+            exchanged = True
+            Path(right).write_text("# Concurrent replacement\n", encoding="utf-8")
+        return real_exchange(left, right)
+
+    with mock.patch.object(
+        setup_finalize, "_exchange_project_doc", side_effect=racing_exchange
+    ):
+        try:
+            setup_finalize.update_project_doc(
+                repo, "AGENTS.md",
+                ensure_routing=False, ensure_contract_import=True,
+            )
+        except ValueError as exc:
+            assert "changed during setup" in str(exc)
+        else:
+            raise AssertionError("concurrent replacement must abort")
+    assert project_doc.read_text(encoding="utf-8") == "# Concurrent replacement\n"
+
+
+def test_project_doc_exchange_read_failure_rolls_back_original(tmp_path):
+    setup_finalize = load_setup_finalize("setup_finalize_exchange_read_test")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    project_doc = repo / "AGENTS.md"
+    project_doc.write_text("# Original\n", encoding="utf-8")
+    real_reader = setup_finalize._project_doc_text
+
+    def failing_displaced_reader(path):
+        if Path(path) != project_doc:
+            raise OSError("simulated displaced read failure")
+        return real_reader(path)
+
+    with mock.patch.object(
+        setup_finalize, "_project_doc_text", side_effect=failing_displaced_reader
+    ):
+        try:
+            setup_finalize.update_project_doc(
+                repo, "AGENTS.md",
+                ensure_routing=False, ensure_contract_import=True,
+            )
+        except OSError as exc:
+            assert "displaced read failure" in str(exc)
+        else:
+            raise AssertionError("displaced read failure must abort")
+    assert project_doc.read_text(encoding="utf-8") == "# Original\n"
+    assert not list(repo.glob(".AGENTS.md.*.tmp"))
+
+
+def test_project_doc_rollback_failure_preserves_displaced_original(tmp_path):
+    setup_finalize = load_setup_finalize("setup_finalize_rollback_failure_test")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    project_doc = repo / "AGENTS.md"
+    project_doc.write_text("# Original\n", encoding="utf-8")
+    real_exchange = setup_finalize._exchange_project_doc
+    exchanges = 0
+
+    def failing_rollback(left, right):
+        nonlocal exchanges
+        exchanges += 1
+        if exchanges == 1:
+            return real_exchange(left, right)
+        raise OSError("simulated rollback failure")
+
+    real_reader = setup_finalize._project_doc_text
+
+    def mismatched_displaced_reader(path):
+        text, info = real_reader(path)
+        if Path(path) != project_doc:
+            return "# Concurrent original\n", info
+        return text, info
+
+    with mock.patch.object(
+        setup_finalize, "_exchange_project_doc", side_effect=failing_rollback
+    ), mock.patch.object(
+        setup_finalize, "_project_doc_text", side_effect=mismatched_displaced_reader
+    ):
+        try:
+            setup_finalize.update_project_doc(
+                repo, "AGENTS.md",
+                ensure_routing=False, ensure_contract_import=True,
+            )
+        except RuntimeError as exc:
+            assert "original preserved at" in str(exc)
+        else:
+            raise AssertionError("rollback failure must fail closed")
+    preserved = list(repo.glob(".AGENTS.md.*.tmp"))
+    assert len(preserved) == 1
+    assert preserved[0].read_text(encoding="utf-8") == "# Original\n"
+
+
+def test_project_doc_rollback_preserves_second_concurrent_replacement(tmp_path):
+    setup_finalize = load_setup_finalize("setup_finalize_second_race_test")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    project_doc = repo / "AGENTS.md"
+    project_doc.write_text("# Original\n", encoding="utf-8")
+    replaced = False
+
+    def second_writer(*_args):
+        nonlocal replaced
+        if not replaced:
+            replaced = True
+            concurrent = repo / "concurrent.md"
+            concurrent.write_text("# Second writer\n", encoding="utf-8")
+            os.replace(concurrent, project_doc)
+        return False
+
+    with mock.patch.object(
+        setup_finalize, "_same_project_doc_snapshot", side_effect=second_writer
+    ):
+        try:
+            setup_finalize.update_project_doc(
+                repo, "AGENTS.md",
+                ensure_routing=False, ensure_contract_import=True,
+            )
+        except RuntimeError as exc:
+            assert "original preserved at" in str(exc)
+        else:
+            raise AssertionError("a second replacement must be preserved")
+    assert project_doc.read_text(encoding="utf-8") == "# Second writer\n"
+    preserved = list(repo.glob(".AGENTS.md.*.tmp"))
+    assert len(preserved) == 1
+    assert preserved[0].read_text(encoding="utf-8") == "# Original\n"
+
+
+def test_source_git_roots_reject_shell_metacharacters(tmp_path):
+    setup_finalize = load_setup_finalize("setup_finalize_shell_root_test")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    unsafe = repo / "api;touch-pwned"
+    unsafe.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=unsafe, check=True)
+
+    errors = setup_finalize.source_git_root_errors(
+        repo, "source_git_roots: ['api;touch-pwned']\n"
+    )
+
+    assert errors == ["invalid source_git_roots entry: api;touch-pwned"]
 
 
 def canonical_manifest(version: int = 5) -> str:
@@ -519,3 +854,30 @@ def test_canonical_setup_resources_exist_in_source_tree():
         "templates/CONTRACTS.md", "templates/CONTRACTS.local.md", "templates/hygiene.yaml",
     ):
         assert (SETUP_SOURCE / rel).is_file(), rel
+
+
+def test_non_git_control_workspace_finalizes_against_explicit_source_roots(tmp_path):
+    plugin_root = make_plugin_root(tmp_path)
+    manifest = canonical_manifest() + "source_git_roots: [pay-api, pay-webapp]\n"
+    repo = make_repo(tmp_path, manifest=manifest)
+    shutil.rmtree(repo / ".git")
+    for name in ("pay-api", "pay-webapp"):
+        child = repo / name
+        child.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=child, check=True)
+
+    result = run(repo, plugin_root, "--prepare")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "SETUP_PREPARED" in result.stdout
+
+
+def test_non_git_control_workspace_rejects_unregistered_or_missing_sources(tmp_path):
+    plugin_root = make_plugin_root(tmp_path)
+    repo = make_repo(tmp_path, manifest=canonical_manifest())
+    shutil.rmtree(repo / ".git")
+
+    result = run(repo, plugin_root, "--prepare")
+
+    assert result.returncode == 1
+    assert "requires source_git_roots" in result.stdout

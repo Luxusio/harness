@@ -56,16 +56,19 @@ ALL_TOOLS -> discover spawn_agent
 spawn_agent(task_name="code_review", message="Read plugin-codex/agents/code-reviewer.md and review <task_id>. Do not edit. Return exact VERDICT.")
 spawn_agent(task_name="security_review", message="Read plugin-codex/agents/security-reviewer.md and review <task_id>. Do not edit. Return exact VERDICT.")
 wait for every required reviewer
-list_agents to collect structurally identified final responses into receipts
+prefer wait_agent status[agent_id].completed as the receipt completion signal
+use list_agents once only when available and wait_agent omitted final identities
 ```
 
 Lifecycle hooks record starts and matched completions in
 `REVIEW_RECEIPTS.jsonl`. A start, unmatched wait, missing verdict, FAIL,
 BLOCKED_ENV, stale HEAD, or changed worktree fingerprint is not PASS. Do not
 write or repair receipts manually.
-On Codex, `wait_agent` has no target or final transcript; always call
-`list_agents` after waiting so the post-tool hook can correlate each completed
-agent by its runtime name. Never infer identity when multiple agents finish.
+On Codex, runtime capabilities vary. When `wait_agent` returns a structural
+`status[agent_id].completed` map, the post-tool hook correlates those completed
+agents directly and `list_agents` is unnecessary. If the wait response omits
+identities or final transcripts, use `list_agents` once when available. Never
+infer identity when multiple agents finish.
 
 ## Finding and fix loop
 

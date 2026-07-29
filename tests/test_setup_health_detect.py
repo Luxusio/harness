@@ -45,22 +45,21 @@ class TestSetupSkillHealthDetect(unittest.TestCase):
         for sig in signals:
             self.assertIn(sig, content, f"Signal {sig!r} must be documented in setup/SKILL.md")
 
-    def test_idempotent_skip_documented(self):
-        """health_components already set -> skip logic must be present."""
+    def test_existing_config_preservation_documented(self):
+        """A configured component list is preserved while [] is migrated."""
         content = self._read_setup_skill()
-        self.assertIn("health_components already set", content,
-                      "Idempotent skip message must be in setup/SKILL.md")
+        self.assertIn("health_components already configured", content)
+        self.assertIn("Treat `health_components: []` as an old disabled", content)
 
-    def test_spawned_auto_accept_documented(self):
-        """HARNESS_SPAWNED=1 auto-accept should be present."""
+    def test_health_detection_never_prompts(self):
+        """Health components are staged automatically for every setup."""
         content = self._read_setup_skill()
-        self.assertIn("HARNESS_SPAWNED", content,
-                      "HARNESS_SPAWNED auto-accept must be documented in setup/SKILL.md")
-
-    def test_yn_confirm_documented(self):
-        """[Y/n] confirmation must be documented."""
-        content = self._read_setup_skill()
-        self.assertIn("[Y/n]", content, "[Y/n] confirmation must be in setup/SKILL.md")
+        section = content.split("## Phase 2.5: Health Stack Auto-Detection", 1)[1]
+        section = section.split("## Phase 3:", 1)[0]
+        self.assertIn("Never ask for confirmation", section)
+        self.assertNotIn("HARNESS_SPAWNED", section)
+        self.assertNotIn("[Y/n]", section)
+        self.assertNotIn("AskUserQuestion", section)
 
     def test_phase_2_5_before_phase_3(self):
         """Phase 2.5 must appear before Phase 3 in the skill."""
@@ -71,7 +70,7 @@ class TestSetupSkillHealthDetect(unittest.TestCase):
 
 
 class TestHealthComponentsIdempotency(unittest.TestCase):
-    """AC-006: idempotent skip when health_components key already present."""
+    """AC-006: preserve configured components and migrate old empty defaults."""
 
     def test_skip_logic_in_skill(self):
         """Idempotent check uses grep for health_components key presence."""
@@ -81,14 +80,27 @@ class TestHealthComponentsIdempotency(unittest.TestCase):
         self.assertIn("health_components:", content,
                       "health_components: key check must be in setup/SKILL.md")
 
-    def test_empty_list_opt_out_documented(self):
-        """Empty list as intentional opt-out must be documented."""
+    def test_empty_list_migration_documented(self):
+        """An old empty list must no longer disable detected health checks."""
         path = os.path.join(REPO_ROOT, "plugin", "skills", "setup", "SKILL.md")
         with open(path) as f:
             content = f.read()
-        # Should mention writing health_components: [] as opt-out
-        self.assertIn("health_components: []", content,
-                      "health_components: [] opt-out must be documented")
+        self.assertIn("Treat `health_components: []` as an old disabled", content)
+        self.assertIn("replace it with the detected/default components", content)
+
+
+class TestMultiGitHealthCommandSafety(unittest.TestCase):
+    def test_relative_prefix_precedes_shell_quoting(self):
+        for relative in (
+            "plugin/skills/setup/SKILL.md",
+            "plugin-codex/skills/setup/SKILL.md",
+            "plugin/skills/setup/bootstrap.md",
+            "plugin/skills/setup/repo-census.md",
+        ):
+            path = os.path.join(REPO_ROOT, *relative.split("/"))
+            with open(path, encoding="utf-8") as handle:
+                content = handle.read()
+            self.assertIn('shlex.quote("./" + root)', content)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
-# Project interview (office-hours style)
+# Lightweight project interview
 
-Six forcing questions at install time. Captures WHY before configuring HOW.
+Two useful questions at install time, plus fixed operating defaults. Captures
+project purpose and verification facts without asking users to design Harness.
 Runs once during `setup` Phase 2.0, and can be re-opened by an active harness
 task when the project character has drifted (re-anchor).
 
@@ -14,18 +15,9 @@ task when the project character has drifted (re-anchor).
 
 ## Voice
 
-Direct, conversational. Bundling rule:
-
-- Free-text questions (Q1 purpose, Q6 failure-to-avoid) stay solo — they
-  need the user's full attention to produce a useful answer.
-- Branching questions (Q5 verification today, where option A pulls in a
-  free-text command list) stay solo.
-- Objective multiple-choice questions with no dependency between them
-  (Q2 audience, Q3 status quo, Q4 wedge) can be bundled into one
-  `AskUserQuestion` call — `questions` array supports up to 4. Record each
-  answer separately before applying.
-- Absolute rule: never bundle all six. Free-text and branching items
-  drown in a batch and answers go shallow.
+Direct and brief. Ask Q1 only when the user has not already supplied a project
+purpose. Ask Q5 only when verification commands or QA mode cannot be detected.
+Never ask Q2-Q4 or Q6; apply their fixed defaults silently.
 
 ## Questions
 
@@ -47,43 +39,13 @@ AskUserQuestion:
 **Maps to:** `doc/common/CLAUDE.md` frontmatter `summary:` field.
 Also seeds `doc/common/REQ__project__primary-goals.md` first paragraph.
 
-### Q2–Q4 — Audience, status quo, wedge (bundled)
+### Q2–Q4 — Fixed operating defaults (never ask)
 
-These three questions are independent objective multiple-choice, so they
-ride one `AskUserQuestion` call with three entries in `questions`. Answers
-are applied independently to their target files (see **Maps to** per
-question). If the user skips any one, record `null` for that one only and
-apply nothing for it.
+Record these values as if selected during every setup:
 
-```
-AskUserQuestion:
-  questions:
-    - header: "Audience"
-      Question: "이 프로젝트를 쓰는 사람/시스템과 이 repo를 만지는 사람은?"
-      Context: "쓰는 사람 (end-user)과 개발자가 다르면 둘 다 적어주세요."
-      Options:
-        - A) End-user + developer 구분해서 입력
-        - B) 개인 프로젝트 (내가 쓰고 내가 고침)
-        - C) 내부 도구 (팀만 사용)
-        - D) 공개 라이브러리/SaaS
-
-    - header: "Status quo"
-      Question: "하네스 없이 지금까지 변경은 어떻게 진행됐나요?"
-      Options:
-        - A) 단독 작업, 작은 변경 바로 커밋 (light)
-        - B) 플랜 문서 쓰고, 리뷰 받고, 머지 (standard)
-        - C) 크로스 루트 영향 큰 변경이 잦음 (sprinted)
-        - D) 기타 — free text
-
-    - header: "Wedge"
-      Question: "이번에 하네스를 받아서 당장 도움받고 싶은 가장 작은 범위는?"
-      Context: "전부 다 받을 필요 없습니다. 작게 시작해서 확장 가능."
-      Options:
-        - A) 태스크 트래킹만 (TASK_STATE, 훅 최소)
-        - B) 태스크 + 플랜 강제 (plan-first rule 적용)
-        - C) 풀 루프 (plan→develop→verify→close + 자동 리뷰)
-        - D) 유지보수 모드 (maintenance_default: true — 가벼운 가드만)
-```
+- Q2 audience: `D` — public library/SaaS
+- Q3 status quo: `B` — standard plan, review, merge
+- Q4 wedge: `C` — full plan → develop → verify → close loop with automatic review
 
 **Maps to:**
 - Q2 (Audience) → `doc/harness/manifest.yaml` `audience:` (신규 필드).
@@ -113,23 +75,18 @@ AskUserQuestion:
 - `manifest.yaml` `qa.browser_qa_supported: true` (C 선택 시)
 - E 선택 시: `CONTRACTS.local.md` C-102 — "verify 규율 없음, 하네스가 강제" 경고성 규약
 
-### Q6 — Failure mode to avoid
+### Q6 — Fixed failure mode (never ask)
 
-```
-AskUserQuestion:
-  Question: "어떤 상황이 벌어지면 하네스를 지우고 싶어질까요?"
-  Context: "이 답은 프로젝트 전용 규약으로 저장됩니다. 하네스가 이런 상황을
-            만들지 않도록 스스로를 제약."
-  Options:
-    - A) 답변 입력 (free text — '느려진다', '커밋이 너무 번거롭다' 등)
-```
+Always record this exact answer:
+
+`말하지 않은 범위도 멋대로 수정하는 것`
 
 **Maps to:** `CONTRACTS.local.md` C-100 — 최상위 실패 회피 규약.
 
 템플릿:
 ```markdown
 ### C-100
-**Title:** <Q6 답변 한 줄>
+**Title:** 말하지 않은 범위도 멋대로 수정하는 것
 **When:** 사용자가 하네스 설치 시 이 조건을 회피 요청함.
 **Enforced by:** SessionStart/close-time continuous maintenance detects this
 condition and asks the user before changing project-level rules.
@@ -137,7 +94,7 @@ condition and asks the user before changing project-level rules.
 **Why:** 사용자 신뢰가 최우선 제약 (C-15 재강조).
 ```
 
-## After all 6 answers
+## After the interview and fixed defaults
 
 ### Step 1 — Write answers atomically
 
@@ -154,11 +111,11 @@ setup or active harness task replay the config without re-asking the user.
   "harness_version": "<from doc/harness/.version>",
   "answers": {
     "q1_purpose":    { "value": "<str|null>", "skipped": false },
-    "q2_audience":   { "value": "<A|B|C|D|null>", "value_detail": "<str|null>", "skipped": false },
-    "q3_status_quo": { "value": "<A|B|C|D|null>", "value_detail": "<str|null>", "skipped": false },
-    "q4_wedge":      { "value": "<A|B|C|D|null>", "skipped": false },
+    "q2_audience":   { "value": "D", "value_detail": "public library/SaaS", "skipped": false, "source": "setup_default" },
+    "q3_status_quo": { "value": "B", "value_detail": "standard plan-review-merge", "skipped": false, "source": "setup_default" },
+    "q4_wedge":      { "value": "C", "skipped": false, "source": "setup_default" },
     "q5_verify":     { "value": "<A|B|C|D|E|null>", "verify_commands": [], "skipped": false },
-    "q6_avoid":      { "value": "<str|null>", "skipped": false }
+    "q6_avoid":      { "value": "말하지 않은 범위도 멋대로 수정하는 것", "skipped": false, "source": "setup_default" }
   }
 }
 ```
@@ -179,7 +136,9 @@ In this order (each uses Edit/Write with the appropriate gate):
 3. `doc/harness/manifest.yaml` — set `audience`, `execution_mode_default`,
    `maintenance_default`, `verify_commands`, `qa.browser_qa_supported` per
    Q2-Q5
-4. `CONTRACTS.local.md` — append C-100 (Q6) and, if needed, C-101/C-102
+4. `CONTRACTS.local.md` — replace the setup-owned C-100 block with the fixed
+   Q6 value and apply C-101/C-102 as needed. This setup-owned block is
+   intentionally overwritten on rerun; do not append duplicates.
 
 ### Step 3 — Durable project memory
 
@@ -195,20 +154,16 @@ echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"operational","source":"
 
 ## Re-interview flow (continuous maintenance)
 
-When SessionStart, close-time self-healing, or the user detects signals that
-project character has drifted (e.g., `summary:` doesn't match recent commits),
-the active harness task re-reads `.interview-answers.json`, shows the prior
-answers, and asks which questions to re-answer. Only the changed answers update
-their target files — others stay put.
+When project character drifts, re-open only Q1 and Q5. Reapply Q2-Q4 and Q6
+from the fixed setup defaults without presenting them as questions.
 
 ## Safety invariants
 
 - Never overwrite an existing `doc/common/CLAUDE.md` body. Insert only
   into empty `summary:` or append new sections.
-- `CONTRACTS.local.md` inserts are always additive — never modify
-  existing C-## entries. If C-100 already exists (prior interview), use
-  C-103+ for new failure-mode contracts.
+- The setup-owned `CONTRACTS.local.md` C-100 block is replaced idempotently
+  with the fixed Q6 text on every setup run. Other C-## entries remain untouched.
 - Every manifest write goes through Edit on specific fields, never a
   bulk Write that could clobber other keys.
-- If user skips a question, record `null` in `.interview-answers.json`
-  and apply nothing for that question — do NOT guess a default.
+- If the user skips Q1 or Q5, record `null` for that question. Never replace
+  the fixed Q2-Q4 or Q6 defaults with `null`.

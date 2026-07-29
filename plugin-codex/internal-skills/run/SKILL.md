@@ -92,11 +92,13 @@ continue to count toward the concurrency limit until closed.
 Subagent wait UX: after spawning a batch, do useful coordinator-side work
 before waiting. When no useful work remains, use one `wait_agent` interval of
 up to 60 seconds. Do not issue rapid 10/20/30-second wait loops or interleave
-`list_agents` polling between timeouts. After a timeout, give one compact status update
+agent-status polling between timeouts. After a timeout, give one compact status update
 before the next wait interval. Treat an agent's progress message and
 final response as one lifecycle; do not add an extra wait solely to collect a
-duplicate completion notification. Call `list_agents` once after the required
-batch has completed, because that call exists for receipt exposure, not polling.
+duplicate completion notification. Treat `wait_agent`'s structurally identified
+`status[agent_id].completed` result as the preferred completion signal. Only
+call `list_agents` once after the batch when that tool exists and the wait
+response did not already expose completed agent identities and final responses.
 
 Use inline execution as the fallback for roles that normally benefit from independence only when `spawn_agent` is unavailable or the work is not actually independent. If independent work runs sequentially, state the concrete blocker and affected lanes in the lane table or final response; vague reasons such as lack of user request are invalid. Do not create a runtime fallback document just to record routing history.
 

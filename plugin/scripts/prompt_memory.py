@@ -59,11 +59,14 @@ DOC_GATE = (
     "if no doc applies, keep the PLAN durable-doc rationale specific."
 )
 QA_GATE = (
-    "[harness-qa] PENDING: ALL_TOOLS→spawn_agent(QA lenses)→await→list_agents "
+    "[harness-qa] PENDING: ALL_TOOLS→spawn_agent(QA lenses)→await status-map "
+    "completion; use available list_agents only if wait omitted identities "
     "→explicit VERDICT→task_verify; start≠PASS."
 )
 REVIEW_GATE = (
-    "[harness-review] PENDING: spawn+await→list_agents required reviewers; fresh PASS before QA; start≠PASS."
+    "[harness-review] PENDING: spawn+await structural completions for required "
+    "reviewers; available list_agents is fallback only; fresh PASS before QA; "
+    "start≠PASS."
 )
 REVIEW_RECORDED_GATE = (
     "[harness-review/qa] RECORDED review PASS only; task_verify must validate "

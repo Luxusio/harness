@@ -1172,6 +1172,194 @@ def find_repo_root(start_dir=None):
     return os.path.abspath(start_dir or os.getcwd())
 
 
+def _nearest_git_root(start_dir):
+    """Return the nearest containing Git root, or an empty string."""
+    current = os.path.realpath(start_dir or _hook_payload_cwd() or os.getcwd())
+    while True:
+        git_path = os.path.join(current, ".git")
+        if os.path.isdir(git_path) or os.path.isfile(git_path):
+            return current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return ""
+        current = parent
+
+
+def _manifest_array_field(repo_root, key):
+    """Read one top-level scalar or block YAML string array, stdlib-only."""
+    path = os.path.join(repo_root, MANIFEST_PATH)
+    text = _read_regular_text_file(path, max_size=256 * 1024)
+    if not text:
+        return []
+    lines = text.splitlines()
+    prefix = key + ":"
+    for index, line in enumerate(lines):
+        if not line.startswith(prefix):
+            continue
+        rest = line[len(prefix):].strip()
+        if rest.startswith("[") and rest.endswith("]"):
+            inner = rest[1:-1].strip()
+            if not inner:
+                return []
+            return [
+                item.strip().strip('"').strip("'")
+                for item in inner.split(",")
+                if item.strip()
+            ]
+        values = []
+        for child in lines[index + 1:]:
+            match = re.match(r"^  -\s+(.+?)\s*$", child)
+            if not match:
+                break
+            values.append(match.group(1).strip().strip('"').strip("'"))
+        return values
+    return []
+
+
+def configured_source_git_roots(control_root, *, strict=True):
+    """Return deterministic ``(workspace prefix, Git root)`` source bindings.
+
+    A normal Git-backed Harness repository needs no manifest field and maps to
+    the empty prefix. A non-Git control workspace must explicitly declare
+    ``source_git_roots`` in its manifest. Runtime discovery is intentionally
+    forbidden so an outer manifest cannot capture an unrelated nested repo.
+    """
+    control = os.path.realpath(control_root)
+    configured = _manifest_array_field(control, "source_git_roots")
+    if not configured and _nearest_git_root(control) == control:
+        return [("", control)]
+    if not configured:
+        if strict:
+            raise RuntimeError(
+                "Harness workspace has no Git root; manifest source_git_roots is required"
+            )
+        return []
+
+    bindings = []
+    seen_roots = set()
+    for raw in configured:
+        rel = _canonical_git_relpath(raw).rstrip("/")
+        if (
+            not rel
+            or os.path.isabs(rel)
+            or rel in {".", ".."}
+            or rel.startswith("../")
+            or not re.fullmatch(r"[A-Za-z0-9._/-]+", rel)
+            or any(part in {"", ".", ".."} for part in rel.split("/"))
+        ):
+            raise RuntimeError(f"invalid source_git_roots entry: {raw}")
+        candidate = os.path.join(control, *rel.split("/"))
+        cursor = control
+        for part in rel.split("/"):
+            cursor = os.path.join(cursor, part)
+            if os.path.islink(cursor):
+                raise RuntimeError(f"source_git_roots entry contains symlink: {rel}")
+        root = os.path.realpath(candidate)
+        try:
+            contained = os.path.commonpath((control, root)) == control
+        except ValueError:
+            contained = False
+        if not contained or not os.path.isdir(root):
+            raise RuntimeError(f"source_git_roots entry is not a directory inside workspace: {rel}")
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--show-toplevel"],
+                cwd=root, capture_output=True, text=True, timeout=2,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f"source_git_roots entry is not a readable Git root: {rel}") from exc
+        if result.returncode != 0 or os.path.realpath(result.stdout.strip()) != root:
+            raise RuntimeError(f"source_git_roots entry is not an exact Git root: {rel}")
+        if root in seen_roots:
+            raise RuntimeError(f"duplicate source_git_roots entry: {rel}")
+        if any(
+            os.path.commonpath((root, prior)) in {root, prior}
+            for prior in seen_roots
+        ):
+            raise RuntimeError(f"nested source_git_roots entries are not allowed: {rel}")
+        seen_roots.add(root)
+        bindings.append((rel + "/", root))
+    return sorted(bindings)
+
+
+def harness_root_resolution(start_dir=None):
+    """Return ``(root, error)`` for valid/none/invalid Harness ancestry."""
+    start = os.path.realpath(start_dir or _hook_payload_cwd() or os.getcwd())
+    nearest_git = _nearest_git_root(start)
+    current = start
+    while True:
+        manifest_path = os.path.join(current, MANIFEST_PATH)
+        if os.path.lexists(manifest_path):
+            try:
+                manifest_info = None
+                probe = current
+                components = MANIFEST_PATH.split("/")
+                for index, component in enumerate(components):
+                    probe = os.path.join(probe, component)
+                    info = os.lstat(probe)
+                    if stat.S_ISLNK(info.st_mode):
+                        if index == len(components) - 1:
+                            return current, (
+                                "Harness manifest must be a regular non-symlink file"
+                            )
+                        return current, (
+                            "Harness manifest path components must not be symlinks"
+                        )
+                    manifest_info = info
+            except OSError as exc:
+                return current, f"Harness manifest is unreadable: {exc}"
+            if (
+                manifest_info is None
+                or not stat.S_ISREG(manifest_info.st_mode)
+            ):
+                return current, "Harness manifest must be a regular non-symlink file"
+            configured = _manifest_array_field(current, "source_git_roots")
+            if configured:
+                try:
+                    bindings = configured_source_git_roots(current)
+                except RuntimeError as exc:
+                    return current, str(exc)
+            elif _nearest_git_root(current) == current:
+                bindings = [("", current)]
+            else:
+                raw_version = _read_top_manifest_field(current, "version")
+                try:
+                    legacy_manifest = 1 <= int(str(raw_version)) < 5
+                except (TypeError, ValueError):
+                    legacy_manifest = False
+                if not legacy_manifest:
+                    return current, (
+                        "Harness workspace has no Git root; manifest "
+                        "source_git_roots is required"
+                    )
+                # Versioned pre-v5 manifests remain readable for migration.
+                try:
+                    if os.path.commonpath((current, start)) == current:
+                        return current, ""
+                except ValueError:
+                    return "", ""
+                bindings = []
+            if nearest_git:
+                if any(os.path.realpath(root) == nearest_git for _prefix, root in bindings):
+                    return current, ""
+            else:
+                try:
+                    if os.path.commonpath((current, start)) == current:
+                        return current, ""
+                except ValueError:
+                    return "", ""
+        parent = os.path.dirname(current)
+        if parent == current:
+            return "", ""
+        current = parent
+
+
+def find_harness_root(start_dir=None):
+    """Find a valid Harness control root; invalid ancestry is not valid."""
+    root, error = harness_root_resolution(start_dir)
+    return "" if error else root
+
+
 def is_harness_enabled_repo(repo_root=None):
     """Return True when a repo has completed harness setup.
 
@@ -1179,7 +1367,7 @@ def is_harness_enabled_repo(repo_root=None):
     directories. A git root alone is not enough permission to create
     ``doc/harness`` runtime files; setup creates ``doc/harness/manifest.yaml``.
     """
-    root = repo_root or find_repo_root()
+    root = repo_root or find_harness_root() or find_repo_root()
     return os.path.isfile(os.path.join(root, MANIFEST_PATH))
 
 
@@ -1433,7 +1621,7 @@ def clear_active_marker(repo_root, task_dir=None, session_id=None):
 # ── Scaffold ─────────────────────────────────────────────────────────────
 
 
-def ensure_task_scaffold(task_dir, task_id, request_text=""):
+def ensure_task_scaffold(task_dir, task_id, request_text="", repo_root=None):
     """Create task dir with minimal 7-field TASK_STATE.yaml. Preserves existing state on resume."""
     os.makedirs(task_dir, exist_ok=True)
     expected_tid = _normalize_task_id(task_id, task_dir=task_dir) or task_id
@@ -1443,9 +1631,13 @@ def ensure_task_scaffold(task_dir, task_id, request_text=""):
             raise ValueError(
                 "existing TASK_STATE.yaml must be a regular file whose task_id matches its canonical directory"
             )
-        repo_root = find_repo_root(task_dir)
-        if _has_git_metadata(repo_root):
-            _read_task_baseline_snapshot(task_dir, repo_root=repo_root)
+        control_root = (
+            os.path.realpath(repo_root)
+            if repo_root
+            else find_harness_root(task_dir) or find_repo_root(task_dir)
+        )
+        if os.path.lexists(_baseline_file(task_dir)) or _task_baseline_required(control_root):
+            _read_task_baseline_snapshot(task_dir, repo_root=control_root)
         created = [state_file(task_dir)]
         return {"created": created, "task_dir": task_dir, "task_id": expected_tid}
     tid = expected_tid
@@ -1458,12 +1650,16 @@ def ensure_task_scaffold(task_dir, task_id, request_text=""):
         "closed_at": None,
         "updated": now_iso(),
     }
-    repo_root = find_repo_root(task_dir)
+    repo_root = (
+        os.path.realpath(repo_root)
+        if repo_root
+        else find_harness_root(task_dir) or find_repo_root(task_dir)
+    )
     try:
         baseline_path = capture_task_baseline(task_dir, repo_root=repo_root)
     except Exception as exc:
         raise RuntimeError(f"task baseline capture unavailable: {exc}") from exc
-    if _has_git_metadata(repo_root) and not baseline_path:
+    if _task_baseline_required(repo_root) and not baseline_path:
         raise RuntimeError(
             "task baseline capture unavailable; create or restore a valid Git HEAD and retry task_start"
         )
@@ -1482,7 +1678,7 @@ def ensure_task_scaffold(task_dir, task_id, request_text=""):
 
 
 def read_manifest_field(field, repo_root=None):
-    repo_root = repo_root or find_repo_root()
+    repo_root = repo_root or find_harness_root() or find_repo_root()
     return yaml_field(field, os.path.join(repo_root, MANIFEST_PATH))
 
 
@@ -1527,21 +1723,21 @@ def _read_nested_manifest_field(repo_root, *keys):
     top_prefix = top + ":"
     sub_prefix = "  " + sub + ":"  # 2-space indent under block
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                stripped = line.rstrip("\n")
-                if stripped.startswith(top_prefix):
-                    in_block = True
+        text = _read_regular_text_file(path, max_size=256 * 1024)
+        for line in text.splitlines(keepends=True):
+            stripped = line.rstrip("\n")
+            if stripped.startswith(top_prefix):
+                in_block = True
+                continue
+            if in_block:
+                if stripped and not stripped.startswith(" ") and not stripped.startswith("#"):
+                    in_block = False
                     continue
-                if in_block:
-                    if stripped and not stripped.startswith(" ") and not stripped.startswith("#"):
-                        in_block = False
-                        continue
-                    if stripped.startswith(sub_prefix):
-                        val = stripped[len(sub_prefix):].strip()
-                        if val in ("null", "~", "", "[]"):
-                            return None
-                        return val.strip('"').strip("'")
+                if stripped.startswith(sub_prefix):
+                    val = stripped[len(sub_prefix):].strip()
+                    if val in ("null", "~", "", "[]"):
+                        return None
+                    return val.strip('"').strip("'")
     except Exception:
         return None
     return None
@@ -1553,16 +1749,16 @@ def _read_top_manifest_field(repo_root, key):
         return None
     prefix = key + ":"
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                # Only column-zero keys are top-level. Stripping leading
-                # whitespace let nested metadata.type override QA routing.
-                stripped = line.rstrip("\n")
-                if stripped.startswith(prefix):
-                    val = stripped[len(prefix):].strip()
-                    if val in ("null", "~", "", "[]"):
-                        return None
-                    return val.strip('"').strip("'")
+        text = _read_regular_text_file(path, max_size=256 * 1024)
+        for line in text.splitlines(keepends=True):
+            # Only column-zero keys are top-level. Stripping leading
+            # whitespace let nested metadata.type override QA routing.
+            stripped = line.rstrip("\n")
+            if stripped.startswith(prefix):
+                val = stripped[len(prefix):].strip()
+                if val in ("null", "~", "", "[]"):
+                    return None
+                return val.strip('"').strip("'")
     except Exception:
         return None
     return None
@@ -1652,7 +1848,7 @@ def _required_ux_lenses(repo_root, touched_paths):
 
 def _has_req_doc_reference(task_dir, touched_paths):
     """Return True when task artifacts or touched docs reference a durable REQ."""
-    repo_root = find_repo_root(task_dir)
+    repo_root = find_harness_root(task_dir) or find_repo_root(task_dir)
     artifact_names = ("PLAN.md",)
     for name in artifact_names:
         path = os.path.join(task_dir, name)
@@ -1691,10 +1887,18 @@ def _effective_touched_paths(task_dir, touched_paths):
     """Merge task paths with committed and current changes since task start."""
     out = set(touched_paths or [])
     try:
-        repo_root = find_repo_root(task_dir)
-        changed = _committed_paths_since_baseline(task_dir, repo_root)
-        changed.update(_git_changed_paths(repo_root))
-        out.update(_filter_baseline_unchanged(task_dir, repo_root, changed))
+        control_root = find_harness_root(task_dir) or find_repo_root(task_dir)
+        changed = set()
+        for prefix, source_root in _workspace_source_bindings(control_root):
+            changed.update(
+                prefix + path
+                for path in _committed_paths_since_baseline(
+                    task_dir, source_root, workspace_prefix=prefix
+                )
+            )
+        changed.update(_workspace_git_changed_paths(control_root))
+        changed.update(_control_root_changed_paths(task_dir, control_root))
+        out.update(_filter_baseline_unchanged(task_dir, control_root, changed))
     except RuntimeError:
         raise
     except Exception:
@@ -1839,6 +2043,167 @@ def _review_receipts_path(task_dir):
     return os.path.join(task_dir, REVIEW_RECEIPTS_NAME)
 
 
+_RECEIPT_STREAM_MAX_BYTES = 16 * 1024 * 1024
+
+
+def _validated_receipt_task_dir(task_dir):
+    task_dir = os.path.abspath(os.fspath(task_dir))
+    current = task_dir
+    for _ in range(4):
+        try:
+            info = os.lstat(current)
+        except OSError as exc:
+            raise RuntimeError("receipt storage integrity unavailable") from exc
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise RuntimeError("receipt storage integrity unavailable")
+        current = os.path.dirname(current)
+    task_info = os.lstat(task_dir)
+    if task_info.st_uid != os.getuid():
+        raise RuntimeError("receipt storage integrity unavailable")
+    return task_dir
+
+
+@contextmanager
+def _receipt_stream_lock(task_dir):
+    task_dir = _validated_receipt_task_dir(task_dir)
+    lock_path = os.path.join(task_dir, ".receipts.lock")
+    flags = os.O_CREAT | os.O_RDWR
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(lock_path, flags, 0o600)
+    except OSError as exc:
+        raise RuntimeError("receipt storage integrity unavailable") from exc
+    try:
+        info = os.fstat(fd)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_nlink != 1
+        ):
+            raise RuntimeError("receipt storage integrity unavailable")
+        try:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except (ImportError, OSError) as exc:
+            raise RuntimeError("receipt storage integrity unavailable") from exc
+        yield
+    finally:
+        os.close(fd)
+
+
+def _receipt_stream_info(path):
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise RuntimeError("receipt storage integrity unavailable") from exc
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_uid != os.getuid()
+        or info.st_nlink != 1
+        or info.st_size > _RECEIPT_STREAM_MAX_BYTES
+    ):
+        raise RuntimeError("receipt storage integrity unavailable")
+    return info
+
+
+def _append_receipt_stream_unlocked(path, payload):
+    prior = _receipt_stream_info(path)
+    flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o644)
+    except OSError as exc:
+        raise RuntimeError("receipt storage integrity unavailable") from exc
+    try:
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_uid != os.getuid()
+            or opened.st_nlink != 1
+            or opened.st_size + len(payload) > _RECEIPT_STREAM_MAX_BYTES
+            or (
+                prior is not None
+                and (opened.st_dev, opened.st_ino) != (prior.st_dev, prior.st_ino)
+            )
+        ):
+            raise RuntimeError("receipt storage integrity unavailable")
+        view = memoryview(payload)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise RuntimeError("receipt storage integrity unavailable")
+            view = view[written:]
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _append_receipt_stream(path, payload):
+    with _receipt_stream_lock(os.path.dirname(path)):
+        _append_receipt_stream_unlocked(path, payload)
+
+
+def _read_receipt_stream_unlocked(path, kind):
+    prior = _receipt_stream_info(path)
+    if prior is None:
+        return []
+    flags = os.O_RDONLY
+    flags |= (
+        getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError("receipt storage integrity unavailable") from exc
+    try:
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_uid != os.getuid()
+            or opened.st_nlink != 1
+            or opened.st_size > _RECEIPT_STREAM_MAX_BYTES
+            or (opened.st_dev, opened.st_ino) != (prior.st_dev, prior.st_ino)
+        ):
+            raise RuntimeError("receipt storage integrity unavailable")
+        with os.fdopen(fd, encoding="utf-8") as handle:
+            fd = -1
+            text = handle.read(_RECEIPT_STREAM_MAX_BYTES + 1)
+            final = os.fstat(handle.fileno())
+        if (
+            len(text.encode("utf-8")) > _RECEIPT_STREAM_MAX_BYTES
+            or (final.st_dev, final.st_ino) != (opened.st_dev, opened.st_ino)
+            or final.st_size != opened.st_size
+        ):
+            raise RuntimeError("receipt storage integrity unavailable")
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError("receipt storage integrity unavailable") from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    receipts = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            item = json.loads(line)
+        except Exception as exc:
+            raise RuntimeError("receipt storage integrity unavailable") from exc
+        if not isinstance(item, dict) or item.get("kind") != kind:
+            raise RuntimeError("receipt storage integrity unavailable")
+        receipts.append(item)
+    return receipts
+
+
+def _read_receipt_stream(path, kind):
+    with _receipt_stream_lock(os.path.dirname(path)):
+        return _read_receipt_stream_unlocked(path, kind)
+
+
 def _hash_file(path):
     try:
         h = hashlib.sha256()
@@ -1877,14 +2242,175 @@ def extract_qa_verdict(value):
 
 def _git_head_for_receipt(task_dir):
     try:
-        repo_root = find_repo_root(task_dir)
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=repo_root,
-            capture_output=True, text=True, timeout=2,
-        )
-        return result.stdout.strip() if result.returncode == 0 else ""
+        control_root = find_harness_root(task_dir) or find_repo_root(task_dir)
+        return _workspace_head_snapshot(control_root)
     except Exception:
         return ""
+
+
+def _workspace_source_bindings(control_root):
+    nearest_git = _nearest_git_root(control_root)
+    has_manifest = os.path.isfile(os.path.join(control_root, MANIFEST_PATH))
+    configured = _manifest_array_field(control_root, "source_git_roots") if has_manifest else []
+    if not nearest_git and not configured:
+        if not has_manifest:
+            return []
+        raw_version = _read_top_manifest_field(control_root, "version")
+        try:
+            if 1 <= int(str(raw_version)) < 5:
+                return []
+        except (TypeError, ValueError):
+            pass
+        return configured_source_git_roots(control_root, strict=True)
+    return configured_source_git_roots(control_root, strict=True)
+
+
+def _composite_source_heads(source_heads):
+    digest = hashlib.sha1()
+    for prefix, head in sorted(source_heads.items()):
+        digest.update(prefix.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(head).lower().encode("ascii"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _workspace_head_snapshot(control_root):
+    """Return one stable 40-hex identity for all configured source HEADs."""
+    bindings = _workspace_source_bindings(control_root)
+    if not bindings:
+        return ""
+    heads = [(prefix, _git_head_snapshot(root)) for prefix, root in bindings]
+    if len(heads) == 1 and heads[0][0] == "":
+        return heads[0][1]
+    return _composite_source_heads(dict(heads))
+
+
+def _workspace_changed_path_fingerprints(control_root):
+    changed = {}
+    for prefix, root in _workspace_source_bindings(control_root):
+        for relpath, fingerprint in _changed_path_fingerprints(root).items():
+            changed[prefix + relpath] = fingerprint
+    return changed
+
+
+_CONTROL_ROOT_BEHAVIOR_PATHS = (
+    "AGENTS.md",
+    "CLAUDE.md",
+    "CONTRACTS.md",
+    "CONTRACTS.local.md",
+    "CONTRACTS.user.md",
+    MANIFEST_PATH,
+)
+
+
+def _control_root_behavior_fingerprint(control_root, relpath):
+    current = os.path.realpath(control_root)
+    for component in relpath.split("/"):
+        current = os.path.join(current, component)
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            return "missing"
+        except OSError as exc:
+            raise RuntimeError(
+                "control-root behavior fingerprint unavailable"
+            ) from exc
+        if stat.S_ISLNK(info.st_mode):
+            raise RuntimeError("control-root behavior path must not be a symlink")
+    return _fingerprint_path(control_root, relpath)
+
+
+def _control_root_behavior_fingerprints(control_root):
+    """Fingerprint the bounded behavioral surface of every Harness root."""
+    control = os.path.realpath(control_root)
+    if (
+        not os.path.lexists(os.path.join(control, MANIFEST_PATH))
+        and not _nearest_git_root(control)
+    ):
+        return {}
+    return {
+        relpath: _control_root_behavior_fingerprint(control, relpath)
+        for relpath in _CONTROL_ROOT_BEHAVIOR_PATHS
+    }
+
+
+def _control_root_changed_paths(task_dir, control_root):
+    """Return bounded parent-workspace behavior paths changed since baseline."""
+    baseline = _read_task_baseline_snapshot(task_dir, repo_root=control_root)
+    if not baseline or baseline.get("version") != 2:
+        return set()
+    before = baseline.get("control_paths")
+    if not isinstance(before, dict):
+        return set()
+    current = _control_root_behavior_fingerprints(control_root)
+    return {
+        relpath
+        for relpath in set(before) | set(current)
+        if before.get(relpath, "missing") != current.get(relpath, "missing")
+    }
+
+
+def _control_root_touched_path_fingerprints(task_dir, control_root):
+    """Fingerprint bounded behavioral paths outside child Git roots.
+
+    This is intentionally independent of TASK_STATE.touched_paths so a parent
+    file changed concurrently before synchronization still invalidates close.
+    """
+    del task_dir  # Signature stays task-close friendly; discovery is state-independent.
+    return _control_root_behavior_fingerprints(control_root)
+
+
+def _workspace_git_changed_paths(control_root):
+    changed = set()
+    for prefix, root in _workspace_source_bindings(control_root):
+        changed.update(_git_changed_paths(root, prefix=prefix))
+        for sub_path in _initialized_submodule_paths(root):
+            sub_root, _ = _validated_submodule_root(root, sub_path)
+            changed.update(_git_changed_paths(
+                sub_root,
+                prefix=prefix + sub_path.rstrip("/") + "/",
+            ))
+            _validated_submodule_root(root, sub_path)
+    return changed
+
+
+def _workspace_gitlink_paths(control_root):
+    paths = {}
+    for prefix, root in _workspace_source_bindings(control_root):
+        for relpath, entry in _gitlink_index_snapshot(root).items():
+            paths[prefix + relpath] = (root, relpath, entry)
+    return paths
+
+
+def _workspace_path_binding_with_prefix(control_root, relpath):
+    rel = _canonical_git_relpath(relpath)
+    bindings = _workspace_source_bindings(control_root)
+    for prefix, root in bindings:
+        if not prefix:
+            return prefix, root, rel
+        if rel.startswith(prefix):
+            inner = rel[len(prefix):]
+            if inner:
+                return prefix, root, inner
+    control = os.path.realpath(control_root)
+    candidate = os.path.realpath(os.path.join(control, rel))
+    try:
+        if os.path.commonpath((control, candidate)) != control:
+            raise RuntimeError(f"path is outside Harness control root: {rel}")
+    except ValueError as exc:
+        raise RuntimeError(f"path is outside Harness control root: {rel}") from exc
+    nearest_git = _nearest_git_root(
+        candidate if os.path.isdir(candidate) else os.path.dirname(candidate)
+    )
+    if nearest_git and all(nearest_git != root for _prefix, root in bindings):
+        raise RuntimeError(f"path is inside an unregistered Git root: {rel}")
+    return "", control, rel
+
+
+def _workspace_path_binding(control_root, relpath):
+    _prefix, root, inner = _workspace_path_binding_with_prefix(control_root, relpath)
+    return root, inner
 
 
 _DEPENDENCY_REVIEW_FILES = {
@@ -1924,8 +2450,8 @@ def _reviewable_source_paths(task_dir, state=None):
     )
     if cache is not None and cache_key in cache:
         return list(cache[cache_key])
-    repo_root = find_repo_root(task_dir)
-    gitlink_paths = set(_gitlink_index_snapshot(repo_root))
+    repo_root = find_harness_root(task_dir) or find_repo_root(task_dir)
+    gitlink_paths = set(_workspace_gitlink_paths(repo_root))
     candidates = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
     candidates = _filter_baseline_unchanged(task_dir, repo_root, candidates)
     paths = []
@@ -1985,10 +2511,22 @@ def _task_baseline_head_sha(task_dir):
     return str(baseline.get("head_sha") or "") if baseline else ""
 
 
-def _committed_paths_since_baseline(task_dir, repo_root=None):
+def _task_baseline_source_head(task_dir, workspace_prefix=""):
+    if not workspace_prefix:
+        return _task_baseline_head_sha(task_dir)
+    baseline = _read_task_baseline_snapshot(task_dir)
+    if not baseline:
+        return ""
+    if baseline.get("version") == 1:
+        return ""
+    source_heads = baseline.get("source_heads") or {}
+    return str(source_heads.get(workspace_prefix) or "")
+
+
+def _committed_paths_since_baseline(task_dir, repo_root=None, *, workspace_prefix=""):
     """Return repository paths committed after the task baseline."""
-    repo_root = repo_root or find_repo_root(task_dir)
-    baseline_head = _task_baseline_head_sha(task_dir)
+    repo_root = repo_root or find_harness_root(task_dir) or find_repo_root(task_dir)
+    baseline_head = _task_baseline_source_head(task_dir, workspace_prefix)
     if not baseline_head:
         return set()
     cache = _review_snapshot_cache()
@@ -1996,6 +2534,7 @@ def _committed_paths_since_baseline(task_dir, repo_root=None):
         "committed_paths_since_baseline",
         os.path.realpath(task_dir),
         os.path.realpath(repo_root),
+        workspace_prefix,
         baseline_head,
     )
     if cache is not None and cache_key in cache:
@@ -2048,7 +2587,10 @@ def _path_has_security_signal(task_dir, repo_root, relpath):
         or _SECURITY_REVIEW_SIGNAL_RE.search(relpath)
     ):
         return True
-    baseline_head = _task_baseline_head_sha(task_dir)
+    prefix, source_root, source_relpath = _workspace_path_binding_with_prefix(
+        repo_root, relpath
+    )
+    baseline_head = _task_baseline_source_head(task_dir, prefix)
     if not baseline_head:
         # Legacy/corrupt baselines cannot prove that committed deleted lines
         # were inspected. Route the security reviewer rather than granting an
@@ -2056,8 +2598,8 @@ def _path_has_security_signal(task_dir, repo_root, relpath):
         return True
     try:
         result = subprocess.run(
-            ["git", "diff", "--unified=0", "--end-of-options", baseline_head, "--", relpath],
-            cwd=repo_root, capture_output=True, text=True, timeout=3,
+            ["git", "diff", "--unified=0", "--end-of-options", baseline_head, "--", source_relpath],
+            cwd=source_root, capture_output=True, text=True, timeout=3,
         )
         if result.returncode == 0 and result.stdout and _SECURITY_REVIEW_SIGNAL_RE.search(result.stdout):
             return True
@@ -2065,7 +2607,7 @@ def _path_has_security_signal(task_dir, repo_root, relpath):
             return True
     except Exception:
         return True
-    path = os.path.join(repo_root, relpath)
+    path = os.path.join(source_root, source_relpath)
     try:
         if os.path.isfile(path):
             overlap = ""
@@ -2090,7 +2632,7 @@ def required_review_lenses(task_dir, state=None):
     if not paths:
         return []
     lenses = ["review-code"]
-    repo_root = find_repo_root(task_dir)
+    repo_root = find_harness_root(task_dir) or find_repo_root(task_dir)
     for relpath in paths:
         if _path_has_security_signal(task_dir, repo_root, relpath):
             lenses.append("review-security")
@@ -2099,7 +2641,7 @@ def required_review_lenses(task_dir, state=None):
 
 
 def review_diff_fingerprint(task_dir, state=None):
-    """Hash the current task source snapshot, including uncommitted files."""
+    """Hash every task-owned path for review/QA completion freshness."""
     st = state or read_state(task_dir)
     cache = _review_snapshot_cache()
     cache_key = (
@@ -2109,16 +2651,28 @@ def review_diff_fingerprint(task_dir, state=None):
     )
     if cache is not None and cache_key in cache:
         return cache[cache_key]
-    repo_root = find_repo_root(task_dir)
-    gitlink_paths = set(_gitlink_index_snapshot(repo_root))
+    repo_root = find_harness_root(task_dir) or find_repo_root(task_dir)
+    gitlink_paths = _workspace_gitlink_paths(repo_root)
     h = hashlib.sha256()
-    for relpath in _reviewable_source_paths(task_dir, st):
+    candidates = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
+    candidates = _filter_baseline_unchanged(task_dir, repo_root, candidates)
+    for relpath in sorted(set(_canonical_git_relpath(path) for path in candidates if path)):
         h.update(os.fsencode(relpath))
         h.update(b"\0")
         if relpath.rstrip("/") in gitlink_paths:
-            fingerprint = _submodule_gitlink_fingerprint(repo_root, relpath.rstrip("/"))
+            source_root, source_relpath, _entry = gitlink_paths[relpath.rstrip("/")]
+            fingerprint = _submodule_gitlink_fingerprint(source_root, source_relpath)
         else:
-            fingerprint = _fingerprint_path(repo_root, relpath)
+            source_root, source_relpath = _workspace_path_binding(repo_root, relpath)
+            fingerprint = _fingerprint_path(source_root, source_relpath)
+        h.update(fingerprint.encode("ascii"))
+        h.update(b"\0")
+    for relpath, fingerprint in sorted(
+        _control_root_behavior_fingerprints(repo_root).items()
+    ):
+        h.update(b"@control\0")
+        h.update(os.fsencode(relpath))
+        h.update(b"\0")
         h.update(fingerprint.encode("ascii"))
         h.update(b"\0")
     result = "sha256:" + h.hexdigest()
@@ -2127,7 +2681,7 @@ def review_diff_fingerprint(task_dir, state=None):
     return result
 
 
-def receipt_stream_fingerprint(task_dir):
+def _receipt_stream_fingerprint_unlocked(task_dir):
     """Hash live review/QA receipt streams without request caching."""
     h = hashlib.sha256()
     for name in (REVIEW_RECEIPTS_NAME, SUBAGENT_RECEIPTS_NAME):
@@ -2182,6 +2736,11 @@ def receipt_stream_fingerprint(task_dir):
                     pass
         h.update(b"\0")
     return "sha256:" + h.hexdigest()
+
+
+def receipt_stream_fingerprint(task_dir):
+    with _receipt_stream_lock(task_dir):
+        return _receipt_stream_fingerprint_unlocked(task_dir)
 
 
 def write_task_close_attestation(task_dir, state, *, head_sha, receipt_fingerprint):
@@ -2342,52 +2901,18 @@ def record_subagent_receipt(task_dir, receipt):
     seed = "|".join([entry["ts"], entry["source"], entry["agent_id"], entry["agent_type"], entry["lens"]])
     entry["receipt_id"] = "subagent-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
     path = _review_receipts_path(task_dir) if is_review else _subagent_receipts_path(task_dir)
-    os.makedirs(task_dir, exist_ok=True)
+    _validated_receipt_task_dir(task_dir)
     payload = (json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
-    fd = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
-    try:
-        os.write(fd, payload)
-    finally:
-        os.close(fd)
+    _append_receipt_stream(path, payload)
     return entry
 
 
 def list_subagent_receipts(task_dir):
-    path = _subagent_receipts_path(task_dir)
-    if not os.path.isfile(path):
-        return []
-    receipts = []
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                try:
-                    item = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(item, dict) and item.get("kind") == "subagent":
-                    receipts.append(item)
-    except Exception:
-        return []
-    return receipts
+    return _read_receipt_stream(_subagent_receipts_path(task_dir), "subagent")
 
 
 def list_review_receipts(task_dir):
-    path = _review_receipts_path(task_dir)
-    if not os.path.isfile(path):
-        return []
-    receipts = []
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                try:
-                    item = json.loads(line)
-                except Exception:
-                    continue
-                if isinstance(item, dict) and item.get("kind") == "review":
-                    receipts.append(item)
-    except Exception:
-        return []
-    return receipts
+    return _read_receipt_stream(_review_receipts_path(task_dir), "review")
 
 
 def subagent_receipt_summary(task_dir):
@@ -2539,7 +3064,7 @@ def receipt_review_verdict(task_dir, state=None):
 def _required_qa_lenses(task_dir, state=None):
     st = state or read_state(task_dir)
     touched = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
-    repo_root = find_repo_root(task_dir)
+    repo_root = find_harness_root(task_dir) or find_repo_root(task_dir)
     project_type = (_read_top_manifest_field(repo_root, "type") or "").lower()
     lenses = []
     if _manifest_bool(repo_root, "qa", "desktop_qa_supported") or _desktop_touched(touched):
@@ -2584,9 +3109,16 @@ def receipt_runtime_verdict(task_dir, state=None):
     required = _required_qa_lenses(task_dir, st)
     completed = _completed_qa_by_lens(task_dir)
     review_ts = _latest_review_pass_timestamp(task_dir, st)
+    current_head = _git_head_for_receipt(task_dir)
+    current_fingerprint = review_diff_fingerprint(task_dir)
     valid = {
         lens: completed[lens] for lens in required
-        if lens in completed and _qa_started_after_review(task_dir, lens, completed[lens], review_ts)
+        if (
+            lens in completed
+            and _qa_started_after_review(task_dir, lens, completed[lens], review_ts)
+            and str(completed[lens].get("head_sha") or "") == current_head
+            and str(completed[lens].get("diff_fingerprint") or "") == current_fingerprint
+        )
     }
     verdicts = [str(valid[lens].get("verdict") or "").upper() for lens in required if lens in valid]
     if any(verdict == "FAIL" for verdict in verdicts):
@@ -2662,12 +3194,16 @@ def runtime_is_stale(task_dir: str) -> tuple[bool, str]:
         )
     except (TypeError, ValueError):
         return True, SUBAGENT_RECEIPTS_NAME
-    repo_root = find_repo_root(task_dir)
+    repo_root = find_harness_root(task_dir) or find_repo_root(task_dir)
     touched = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
     for relpath in touched[:_STALE_CHECK_PATH_CAP]:
         if _stale_skip(relpath):
             continue
-        path = os.path.join(repo_root, relpath)
+        try:
+            source_root, source_relpath = _workspace_path_binding(repo_root, relpath)
+        except RuntimeError:
+            continue
+        path = os.path.join(source_root, source_relpath)
         try:
             if os.path.getmtime(path) > completed_at:
                 return True, relpath
@@ -2888,11 +3424,34 @@ def _fingerprint_path(repo_root, relpath):
 def _has_git_metadata(repo_root):
     git_path = os.path.join(repo_root, ".git")
     roots = _REQUEST_GIT_ROOTS.get()
-    return (
+    direct = (
         os.path.isfile(git_path)
         or os.path.isfile(os.path.join(git_path, "HEAD"))
         or roots is not None and os.path.realpath(repo_root) in roots
     )
+    if direct:
+        return True
+    if (
+        os.path.isfile(os.path.join(repo_root, MANIFEST_PATH))
+        and _manifest_array_field(repo_root, "source_git_roots")
+    ):
+        try:
+            return bool(configured_source_git_roots(repo_root, strict=False))
+        except RuntimeError:
+            return False
+    return False
+
+
+def _task_baseline_required(repo_root):
+    """Require baseline evidence for real Git or explicit multi-Git controls."""
+    if _has_git_metadata(repo_root):
+        return True
+    if _manifest_array_field(repo_root, "source_git_roots"):
+        # Preserve the strict configuration error (missing/moved/symlinked root)
+        # instead of degrading an existing multi-Git task to a non-Git fixture.
+        configured_source_git_roots(repo_root, strict=True)
+        return True
+    return False
 
 
 def _git_path_snapshot(repo_root, argument, *, use_cache=True):
@@ -3259,17 +3818,37 @@ def capture_task_baseline(task_dir, repo_root=None):
     if os.path.lexists(path):
         _read_task_baseline_snapshot(task_dir, repo_root=repo_root)
         return path
-    repo_root = repo_root or find_repo_root(task_dir)
-    if not _has_git_metadata(repo_root):
+    repo_root = repo_root or find_harness_root(task_dir) or find_repo_root(task_dir)
+    if (
+        not _has_git_metadata(repo_root)
+        and not os.path.isfile(os.path.join(repo_root, MANIFEST_PATH))
+    ):
         return ""
-    head_sha = _git_head_snapshot(repo_root)
-    data = {
-        "version": 1,
-        "captured_at": now_iso(),
-        "repo_root": repo_root,
-        "head_sha": head_sha,
-        "dirty_paths": _changed_path_fingerprints(repo_root),
+    bindings = _workspace_source_bindings(repo_root)
+    if not bindings:
+        return ""
+    source_heads = {
+        prefix: _git_head_snapshot(source_root)
+        for prefix, source_root in bindings
     }
+    if len(bindings) == 1 and bindings[0][0] == "":
+        data = {
+            "version": 1,
+            "captured_at": now_iso(),
+            "repo_root": repo_root,
+            "head_sha": source_heads[""],
+            "dirty_paths": _changed_path_fingerprints(repo_root),
+        }
+    else:
+        data = {
+            "version": 2,
+            "captured_at": now_iso(),
+            "control_root": repo_root,
+            "head_sha": _workspace_head_snapshot(repo_root),
+            "source_heads": source_heads,
+            "dirty_paths": _workspace_changed_path_fingerprints(repo_root),
+            "control_paths": _control_root_behavior_fingerprints(repo_root),
+        }
     os.makedirs(task_dir, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=task_dir, prefix=".baseline.", suffix=".tmp")
     try:
@@ -3297,23 +3876,29 @@ def capture_task_baseline(task_dir, repo_root=None):
 def _read_task_baseline_snapshot(task_dir, repo_root=None):
     """Read and validate one task baseline without following its leaf."""
     path = _baseline_file(task_dir)
-    repo_root = os.path.abspath(repo_root or find_repo_root(task_dir))
+    repo_root = os.path.abspath(
+        repo_root or find_harness_root(task_dir) or find_repo_root(task_dir)
+    )
     cache = _review_snapshot_cache()
     cache_key = (
         "validated_task_baseline",
         os.path.realpath(task_dir),
         os.path.realpath(repo_root),
     )
-    if cache is not None and cache_key in cache:
-        return cache[cache_key]
     if not os.path.lexists(path):
-        if _has_git_metadata(repo_root):
+        if _task_baseline_required(repo_root):
             raise RuntimeError("required task baseline missing")
         return None
+    if cache is not None and cache_key in cache:
+        return cache[cache_key]
     data = _read_json_file(path, max_size=2 * 1024 * 1024)
     head_sha = str(data.get("head_sha") or "").strip()
     dirty = data.get("dirty_paths")
-    stored_root = str(data.get("repo_root") or "")
+    control_paths = data.get("control_paths", {})
+    version = data.get("version")
+    stored_root = str(
+        data.get("repo_root") if version == 1 else data.get("control_root") or ""
+    )
     valid_paths = isinstance(dirty, dict) and len(dirty) <= 10000 and all(
         isinstance(key, str)
         and key == _canonical_git_relpath(key)
@@ -3329,77 +3914,116 @@ def _read_task_baseline_snapshot(task_dir, repo_root=None):
         ))
         for key, value in (dirty.items() if isinstance(dirty, dict) else [])
     )
+    valid_control_paths = (
+        isinstance(control_paths, dict)
+        and set(control_paths).issubset(_CONTROL_ROOT_BEHAVIOR_PATHS)
+        and all(
+            isinstance(value, str)
+            and bool(re.fullmatch(
+                r"(?:missing|dir|(?:sha256|symlink-sha256):[0-9a-f]{64})",
+                value,
+            ))
+            for value in control_paths.values()
+        )
+    )
     if (
-        data.get("version") != 1
+        version not in {1, 2}
         or not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", head_sha)
         or not stored_root
         or not os.path.isabs(stored_root)
         or os.path.realpath(stored_root) != os.path.realpath(repo_root)
         or not valid_paths
+        or not valid_control_paths
     ):
         raise RuntimeError("task baseline integrity unavailable")
-    commit_operation = "baseline commit validation"
-    commit_timeout = _bounded_snapshot_timeout(
-        2, commit_operation, repo_root,
-        deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
-    )
-    try:
-        commit = subprocess.run(
-            ["git", "rev-parse", "--verify", "--end-of-options", f"{head_sha}^{{commit}}"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            timeout=commit_timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"task baseline Git snapshot unavailable: {commit_operation} timed "
-            f"out after {commit_timeout:.1f}s in {repo_root}"
-        ) from exc
-    except OSError as exc:
-        raise RuntimeError(
-            f"task baseline Git snapshot unavailable: {commit_operation} could "
-            f"not run in {repo_root}: {exc}"
-        ) from exc
-    if commit.returncode != 0:
-        raise RuntimeError(
-            f"task baseline Git snapshot unavailable: {commit_operation} exited "
-            f"{commit.returncode} in {repo_root}"
-        )
-    if commit.stdout.strip().lower() != head_sha.lower():
-        raise RuntimeError(
-            f"task baseline Git snapshot unavailable: {commit_operation} "
-            f"returned a mismatched object id in {repo_root}"
-        )
+    if version == 1:
+        source_snapshots = [("", repo_root, head_sha)]
+    else:
+        source_heads = data.get("source_heads")
+        bindings = _workspace_source_bindings(repo_root)
+        if (
+            not isinstance(source_heads, dict)
+            or set(source_heads) != {prefix for prefix, _root in bindings}
+            or any(
+                not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", str(value))
+                for value in source_heads.values()
+            )
+            or _composite_source_heads(source_heads) != head_sha.lower()
+        ):
+            raise RuntimeError("task baseline integrity unavailable")
+        source_snapshots = [
+            (prefix, source_root, str(source_heads[prefix]))
+            for prefix, source_root in bindings
+        ]
 
-    ancestor_operation = "baseline ancestry validation"
-    ancestor_timeout = _bounded_snapshot_timeout(
-        2, ancestor_operation, repo_root,
-        deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
-    )
-    try:
-        ancestor = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", head_sha, "HEAD"],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            timeout=ancestor_timeout,
+    for prefix, source_root, source_head in source_snapshots:
+        commit_operation = "baseline commit validation"
+        if prefix:
+            commit_operation += f" ({prefix})"
+        commit_timeout = _bounded_snapshot_timeout(
+            2, commit_operation, source_root,
+            deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
         )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"task baseline Git snapshot unavailable: {ancestor_operation} timed "
-            f"out after {ancestor_timeout:.1f}s in {repo_root}"
-        ) from exc
-    except OSError as exc:
-        raise RuntimeError(
-            f"task baseline Git snapshot unavailable: {ancestor_operation} could "
-            f"not run in {repo_root}: {exc}"
-        ) from exc
-    if ancestor.returncode != 0:
-        raise RuntimeError(
-            f"task baseline Git snapshot unavailable: {ancestor_operation} exited "
-            f"{ancestor.returncode} in {repo_root}"
+        try:
+            commit = subprocess.run(
+                ["git", "rev-parse", "--verify", "--end-of-options", f"{source_head}^{{commit}}"],
+                cwd=source_root,
+                capture_output=True,
+                text=True,
+                timeout=commit_timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"task baseline Git snapshot unavailable: {commit_operation} timed "
+                f"out after {commit_timeout:.1f}s in {source_root}"
+            ) from exc
+        except OSError as exc:
+            raise RuntimeError(
+                f"task baseline Git snapshot unavailable: {commit_operation} could "
+                f"not run in {source_root}: {exc}"
+            ) from exc
+        if commit.returncode != 0:
+            raise RuntimeError(
+                f"task baseline Git snapshot unavailable: {commit_operation} exited "
+                f"{commit.returncode} in {source_root}"
+            )
+        if commit.stdout.strip().lower() != source_head.lower():
+            raise RuntimeError(
+                f"task baseline Git snapshot unavailable: {commit_operation} "
+                f"returned a mismatched object id "
+                f"in {source_root}"
+            )
+
+        ancestor_operation = "baseline ancestry validation"
+        if prefix:
+            ancestor_operation += f" ({prefix})"
+        ancestor_timeout = _bounded_snapshot_timeout(
+            2, ancestor_operation, source_root,
+            deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
         )
+        try:
+            ancestor = subprocess.run(
+                ["git", "merge-base", "--is-ancestor", source_head, "HEAD"],
+                cwd=source_root,
+                capture_output=True,
+                text=True,
+                timeout=ancestor_timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"task baseline Git snapshot unavailable: {ancestor_operation} timed "
+                f"out after {ancestor_timeout:.1f}s in {source_root}"
+            ) from exc
+        except OSError as exc:
+            raise RuntimeError(
+                f"task baseline Git snapshot unavailable: {ancestor_operation} could "
+                f"not run in {source_root}: {exc}"
+            ) from exc
+        if ancestor.returncode != 0:
+            raise RuntimeError(
+                f"task baseline Git snapshot unavailable: {ancestor_operation} exited "
+                f"{ancestor.returncode} in {source_root}"
+            )
     if cache is not None:
         cache[cache_key] = data
     return data
@@ -3414,8 +4038,8 @@ def _filter_baseline_unchanged(task_dir, repo_root, changed):
     baseline = _read_task_baseline(task_dir)
     if baseline is None:
         return changed
-    current = _changed_path_fingerprints(repo_root)
-    gitlink_paths = set(_gitlink_index_snapshot(repo_root))
+    current = _workspace_changed_path_fingerprints(repo_root)
+    gitlink_paths = _workspace_gitlink_paths(repo_root)
     out = set()
     for rel in changed:
         if rel not in baseline:
@@ -3423,11 +4047,12 @@ def _filter_baseline_unchanged(task_dir, repo_root, changed):
             continue
         current_fp = current.get(rel)
         if current_fp is None:
-            current_fp = (
-                _submodule_gitlink_fingerprint(repo_root, rel.rstrip("/"))
-                if rel.rstrip("/") in gitlink_paths
-                else _fingerprint_path(repo_root, rel)
-            )
+            if rel.rstrip("/") in gitlink_paths:
+                source_root, source_relpath, _entry = gitlink_paths[rel.rstrip("/")]
+                current_fp = _submodule_gitlink_fingerprint(source_root, source_relpath)
+            else:
+                source_root, source_relpath = _workspace_path_binding(repo_root, rel)
+                current_fp = _fingerprint_path(source_root, source_relpath)
         if current_fp != baseline.get(rel):
             out.add(rel)
     return out
@@ -3545,16 +4170,17 @@ def sync_from_git_diff(task_dir):
     so mtime comparison can refuse ``task_close``. ``.gitignore`` entries
     stay excluded via ``--exclude-standard``.
     """
-    repo_root = find_repo_root(task_dir)
-    changed = _committed_paths_since_baseline(task_dir, repo_root)
-    current_changes = _git_changed_paths(repo_root)
-    for sub_path in _initialized_submodule_paths(repo_root):
-        sub_root, _ = _validated_submodule_root(repo_root, sub_path)
-        current_changes.update(_git_changed_paths(
-            sub_root, prefix=sub_path.rstrip("/") + "/",
-        ))
-        _validated_submodule_root(repo_root, sub_path)
-    changed.update(current_changes)
+    repo_root = find_harness_root(task_dir) or find_repo_root(task_dir)
+    changed = set()
+    for prefix, source_root in _workspace_source_bindings(repo_root):
+        changed.update(
+            prefix + path
+            for path in _committed_paths_since_baseline(
+                task_dir, source_root, workspace_prefix=prefix
+            )
+        )
+    changed.update(_workspace_git_changed_paths(repo_root))
+    changed.update(_control_root_changed_paths(task_dir, repo_root))
     changed = _filter_baseline_unchanged(task_dir, repo_root, changed)
     if not changed:
         return []

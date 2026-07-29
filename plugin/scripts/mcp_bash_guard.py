@@ -33,6 +33,8 @@ try:
         _escape_hint,
         log_gate_bypass,
         find_repo_root,
+        find_harness_root,
+        harness_root_resolution,
         is_harness_enabled_repo,
     )
     from prewrite_gate import (
@@ -112,22 +114,24 @@ def _tokenize(command: str):
         return command.split()
 
 
-def _normalize_candidate_path(token: str) -> str:
+def _normalize_candidate_path(
+    token: str, repo_root: str = "", execution_cwd: str = ""
+) -> str:
     value = str(token or "").strip().strip("'").strip('"')
     if not value:
         return ""
-    if value.startswith("./"):
-        value = value[2:]
-    cwd = os.getcwd()
-    if os.path.isabs(value):
-        try:
-            rel = os.path.relpath(value, cwd)
-        except ValueError:
+    value = value.rstrip(",)")
+    cwd = os.path.realpath(execution_cwd or repo_root or os.getcwd())
+    root = os.path.realpath(repo_root or cwd)
+    candidate = os.path.realpath(
+        value if os.path.isabs(value) else os.path.join(cwd, value)
+    )
+    try:
+        if os.path.commonpath((root, candidate)) != root:
             return ""
-        if rel.startswith(".."):
-            return ""
-        value = rel
-    return value.rstrip(",)")
+    except ValueError:
+        return ""
+    return os.path.relpath(candidate, root)
 
 
 def _classify_gated_path(path_value: str, repo_root: str) -> str:
@@ -142,8 +146,8 @@ def _classify_gated_path(path_value: str, repo_root: str) -> str:
     return ""
 
 
-def _append_target(targets, token, method, repo_root):
-    path_value = _normalize_candidate_path(token)
+def _append_target(targets, token, method, repo_root, execution_cwd=""):
+    path_value = _normalize_candidate_path(token, repo_root, execution_cwd)
     category = _classify_gated_path(path_value, repo_root)
     if not category:
         return
@@ -163,19 +167,25 @@ def _last_non_option(tokens):
 # ── Mutation-target extraction ─────────────────────────────────────────────
 
 
-def _extract_redirect_targets(tokens, targets, repo_root):
+def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd=""):
     for index, token in enumerate(tokens):
         if token in REDIRECT_TOKENS and index + 1 < len(tokens):
-            _append_target(targets, tokens[index + 1], "shell redirection", repo_root)
+            _append_target(
+                targets, tokens[index + 1], "shell redirection",
+                repo_root, execution_cwd,
+            )
             continue
         inline = _INLINE_REDIRECT_RE.match(token)
         if inline:
             candidate = inline.group(2).strip()
             if candidate and candidate not in ("&1", "&2"):
-                _append_target(targets, candidate, "shell redirection", repo_root)
+                _append_target(
+                    targets, candidate, "shell redirection",
+                    repo_root, execution_cwd,
+                )
 
 
-def _extract_python_inline_targets(tokens, targets, repo_root):
+def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd=""):
     if "-c" not in tokens:
         return
     try:
@@ -184,10 +194,12 @@ def _extract_python_inline_targets(tokens, targets, repo_root):
         return
     for pat in _PY_PATTERNS:
         for match in pat.findall(code):
-            _append_target(targets, match, "python inline write", repo_root)
+            _append_target(
+                targets, match, "python inline write", repo_root, execution_cwd
+            )
 
 
-def _process_segment(segment_tokens, targets, repo_root):
+def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
     """Classify a single command segment (between shell operators)."""
     if not segment_tokens:
         return
@@ -201,26 +213,36 @@ def _process_segment(segment_tokens, targets, repo_root):
     cmd = os.path.basename(non_env[0])
 
     if cmd == "sed" and any(t == "-i" or t.startswith("-i") for t in non_env[1:]):
-        _append_target(targets, _last_non_option(non_env), "sed -i", repo_root)
+        _append_target(
+            targets, _last_non_option(non_env), "sed -i",
+            repo_root, execution_cwd,
+        )
         return
     if cmd == "perl" and any(t == "-pi" or t.startswith("-pi") for t in non_env[1:]):
-        _append_target(targets, _last_non_option(non_env), "perl -pi", repo_root)
+        _append_target(
+            targets, _last_non_option(non_env), "perl -pi",
+            repo_root, execution_cwd,
+        )
         return
     if cmd in LAST_ARG_MUTATORS:
-        _append_target(targets, _last_non_option(non_env), cmd, repo_root)
+        _append_target(
+            targets, _last_non_option(non_env), cmd, repo_root, execution_cwd
+        )
         return
     if cmd == TEE_COMMAND:
         for token in non_env[1:]:
             if token.startswith("-"):
                 continue
-            _append_target(targets, token, "tee", repo_root)
+            _append_target(targets, token, "tee", repo_root, execution_cwd)
         return
     if cmd.startswith(("python", "python3", "pypy")):
-        _extract_python_inline_targets(non_env, targets, repo_root)
+        _extract_python_inline_targets(
+            non_env, targets, repo_root, execution_cwd
+        )
         return
 
 
-def _extract_mutation_targets(command, repo_root):
+def _extract_mutation_targets(command, repo_root, execution_cwd=""):
     """Extract paths the command would mutate + classify against gated categories.
 
     Shell-aware: shlex-tokenizes first (respecting quotes), then walks the
@@ -233,7 +255,7 @@ def _extract_mutation_targets(command, repo_root):
     if not tokens:
         return targets
 
-    _extract_redirect_targets(tokens, targets, repo_root)
+    _extract_redirect_targets(tokens, targets, repo_root, execution_cwd)
 
     idx = 0
     while idx < len(tokens):
@@ -241,7 +263,7 @@ def _extract_mutation_targets(command, repo_root):
         j = idx
         while j < len(tokens) and tokens[j] not in BOUNDARY_TOKENS:
             j += 1
-        _process_segment(tokens[idx:j], targets, repo_root)
+        _process_segment(tokens[idx:j], targets, repo_root, execution_cwd)
         idx = j + 1  # advance past the boundary token
 
     return targets
@@ -325,10 +347,28 @@ def main():
     if len(command) > _COMMAND_LENGTH_CAP:
         return 0
 
-    repo_root = find_repo_root()
+    payload_cwd = str(data.get("cwd") or "").strip()
+    hook_cwd = os.path.realpath(payload_cwd or os.getcwd())
+    if payload_cwd:
+        harness_root, harness_error = harness_root_resolution(hook_cwd)
+        repo_root = harness_root or find_repo_root(hook_cwd)
+    else:
+        candidate_root = find_repo_root()
+        harness_root, harness_error = harness_root_resolution(candidate_root)
+        repo_root = harness_root or candidate_root
+    if harness_error:
+        _deny(
+            {
+                "path": ".",
+                "category": "workflow-control-surface",
+                "method": f"invalid Harness workspace: {harness_error}",
+            },
+            command,
+        )
+        return 0
     if not is_harness_enabled_repo(repo_root):
         return 0
-    targets = _extract_mutation_targets(command, repo_root)
+    targets = _extract_mutation_targets(command, repo_root, hook_cwd)
     if targets:
         _deny(targets[0], command)
     return 0

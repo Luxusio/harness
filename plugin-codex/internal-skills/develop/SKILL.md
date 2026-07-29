@@ -382,17 +382,19 @@ Call `task_context` and read `required_review_lenses`. Discover deferred
 `spawn_agent` in `ALL_TOOLS`. Spawn `code_review` for every source diff and
 `security_review` when routed, in one message; each reads its matching
 `plugin-codex/agents/*-reviewer.md`, stays read-only, and returns exact VERDICT.
-Await all reviewers, then call `list_agents` to expose each runtime agent name
-and final response to the completion hook. Hook-owned `REVIEW_RECEIPTS.jsonl` must show fresh PASS for
+Await all reviewers. Prefer a `wait_agent` response containing the structural
+`status[agent_id].completed` map; if that signal is absent and `list_agents`
+exists, call it once to expose each runtime agent name and final response to
+the completion hook. Hook-owned `REVIEW_RECEIPTS.jsonl` must show fresh PASS for
 the current HEAD/worktree fingerprint. Send only FIX_NOW to the implementer;
 after any edit rerun focused tests/checkpoint and all routed reviews. Inline
 self-review is not a strict-compliance fallback.
 
 Apply the parent run skill's subagent wait UX rule: finish useful local work,
 then wait in one interval of up to 60 seconds; never use rapid short polling or
-`list_agents` as a progress poll. After a timeout, emit one compact user status
-before waiting again. Call `list_agents` once after the whole review batch is
-complete.
+agent-status tools as a progress poll. After a timeout, emit one compact user
+status before waiting again. Do not require `list_agents` when `wait_agent`
+already returns structurally identified completions.
 
 For runtimes that omit collaboration events from PostToolUse, Codex
 SessionStart creates the exact root-rollout registration, every installed root
@@ -427,15 +429,16 @@ spawn_agent {
 }
 ```
 
-After awaiting QA/UX, call `list_agents` to collect targetless completion
-results, then run `task_verify` with `reconcile_acs: true`. The Codex
+After awaiting QA/UX, use the structural completion results returned by
+`wait_agent`; call `list_agents` only as an available fallback when those
+results are absent, then run `task_verify` with `reconcile_acs: true`. The Codex
 hooks record observed lifecycle events automatically. If no subagent path exists, run
 the lens methodology in-conversation and state the fallback in task state or final response; do not
 call a critic writer.
 
 Use the same wait UX for QA/UX: useful local work first, one wait interval of
-up to 60 seconds, one status update after timeout, and one final `list_agents`
-call after the batch completes.
+up to 60 seconds and one status update after timeout. A final `list_agents`
+call is optional and only needed when the wait result lacks final identities.
 
 Use structured QA/UX `task_name` values. These names are the runtime-visible
 lens binding when delegated prompt bodies are encrypted in Codex rollouts.

@@ -55,6 +55,7 @@ initialized_at: {date}
 name: {project_name}
 type: {detected_or_chosen}
 languages: [{detected_languages}]
+source_git_roots: [{workspace-relative Git roots}] # required only when this control root is not Git
 build_command: {cmd}
 test_command: {cmd}
 dev_command: {cmd or omit}       # browser: dev server start command
@@ -70,22 +71,25 @@ qa:
   desktop_qa_supported: {true|false}
   ux_review_supported: false
 
-# --- Health scoring (optional) ---
-# Override default (test_command only). Each component: name, command, weight.
-# health_components:
-#   - name: typecheck
-#     command: "npx tsc --noEmit"
-#     weight: 0.25
-#   - name: lint
-#     command: "npx eslint . --quiet"
-#     weight: 0.20
-#   - name: test
-#     command: "{test_command}"
-#     weight: 0.30
+# --- Health scoring (enabled automatically) ---
+health_components:
+  - name: test
+    command: "{test_command}"
+    weight: 1.0
 ```
 
 `dev_command`, `entry_url`, `api_base_url` are optional — only include the ones relevant to the project type.
-`health_components` is optional — omit to use defaults (health falls back to `test_command`).
+Phase 3.5 replaces the default `health_components` entry with every
+census-detected test/quality command. In a multi-Git workspace, commands are
+control-root-relative (for example `cd pay-api && ./gradlew test`) and component
+names include the source-root label. The root must pass the census safe-name
+rule and be rendered as `shlex.quote("./" + root)`; serialize the full command
+as a quoted YAML scalar. The explicit `./` keeps leading-dash directory names
+from being parsed as `cd` options.
+`source_git_roots` is omitted for a normal Git repository. For a non-Git
+workspace that controls several independent repositories, write the exact
+setup-census roots (for example `[pay-api, pay-webapp]`). Harness uses these
+roots for baseline, receipt, and QA freshness checks.
 
 ### Browser project fields (required when browser_qa_supported: true)
 
@@ -179,68 +183,24 @@ routing` block with the current Goal-or-direct-task routing block.
 
 ```bash
 python3 "${_PLUGIN_ROOT}/scripts/goal_queue_migrate.py" \
-  --repo "$(pwd)" --project-doc "$_PROJECT_DOC"
+  --repo "$(pwd)" --state-only
 ```
 
 ### Harness routing block (emit into the runtime project document)
 
-The migration script above is the preferred path because it can also migrate
-legacy queue state. If a setup environment cannot run it, fall back to the
-idempotent replace/append below. Marker: `<!-- harness:routing-injected -->`.
+Use the setup finalizer's containment-safe, no-follow project-document helper.
+It rejects symlinks, preserves unrelated content, and atomically replaces only
+the Harness routing block. Marker: `<!-- harness:routing-injected -->`.
+This is the idempotent replace/append path. The emitted block routes
+repo-mutating work to `$harness:run` and contains the
+`Durable Decision Documentation Gate`: a durable decision is not handled until it is documented under `doc/`;
+Conversation history is not durable memory, and
+the task records a specific PLAN durable-doc decision when no doc applies.
 
 ```bash
-python3 - <<'PY'
-import os
-from pathlib import Path
-
-path = Path(os.environ.get("_PROJECT_DOC", "CLAUDE.md"))
-text = path.read_text(encoding="utf-8") if path.exists() else ""
-block = """\
-## Harness routing
-<!-- harness:routing-injected -->
-- On Codex, every repo-mutating request → invoke `$harness:run` before editing; it loads the internal canonical workflow, syncs a native Goal when present, and otherwise opens/resumes a Harness task
-- On Claude Code, run the full cycle (plan → develop → verify → close) through native `/goal` for explicit goals or the runtime's canonical task route for plain repo-mutating requests
-- Bootstrap harness in a new project / repair existing → `Skill(harness:setup)`
-- Plan-only requests → sync/create Goal and stop after the internal plan phase if the user explicitly asks not to implement
-- Implement an approved PLAN.md / develop only → resume the active Goal child task through the internal develop path
-- Contract drift / post-upgrade cleanup → continuous maintenance flow in the active/next Goal child task
-- Read-only question or explanation → answer directly, no Harness run skill
-
-### Durable Decision Documentation Gate
-
-A user-stated durable decision is not handled until it is documented under `doc/`.
-If the user establishes, corrects, or confirms a lasting product, design,
-architecture, domain, workflow, or implementation rule, update the matching
-`doc/` file before finalizing. Conversation history is not durable memory. If
-no matching document exists, create one under the appropriate `doc/` area; if no
-doc is needed, record the specific no-doc rationale in the PLAN durable-doc
-decision.
-"""
-lines = [line for line in text.splitlines() if line.strip() != "- Default agent is harness"]
-start = None
-for i, line in enumerate(lines):
-    if line.strip() in {"## Harness routing", "<!-- harness:routing-injected -->"}:
-        start = i - 1 if line.strip() == "<!-- harness:routing-injected -->" and i > 0 and lines[i - 1].strip() == "## Harness routing" else i
-        break
-if start is None:
-    if lines and lines[-1].strip():
-        lines.append("")
-    lines.extend(block.rstrip().splitlines())
-else:
-    end = len(lines)
-    for i in range(start + 1, len(lines)):
-        if lines[i].startswith("## ") and lines[i].strip() != "## Harness routing":
-            end = i
-            break
-    prefix = lines[:start]
-    suffix = lines[end:]
-    while prefix and not prefix[-1].strip():
-        prefix.pop()
-    while suffix and not suffix[0].strip():
-        suffix.pop(0)
-    lines = prefix + [""] + block.rstrip().splitlines() + ([""] + suffix if suffix else [])
-path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-PY
+python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
+  --repo "$_ROOT" --plugin-root "$_PLUGIN_ROOT" \
+  --project-doc "$_PROJECT_DOC" --project-doc-only --ensure-routing
 ```
 
 Note: no `Default agent is X` line. The harness routes via skills, not agent switching.
@@ -290,7 +250,9 @@ Phase 4 runs the full finalizer after every required artifact exists.
 
 ## 3.7 Contracts installation (non-destructive)
 
-Every decision that could touch existing files uses AskUserQuestion. Never overwrite silently.
+Potentially destructive replacement of an unmanaged contract file requires
+confirmation. Deterministic, idempotent additions such as the runtime import
+line are applied automatically while preserving unrelated content.
 
 ### 3.7.1 CONTRACTS.md (harness-managed)
 
@@ -323,29 +285,24 @@ if [ ! -f CONTRACTS.local.md ]; then
   cp "$_LOCAL_TEMPLATE" CONTRACTS.local.md
 fi
 ```
-Never touched by harness after creation.
+After creation, preserve every user-authored rule. On setup rerun, replace only
+the setup-owned C-100 block with the current fixed default from the template;
+never bulk-rewrite or modify any other content.
 
 ### 3.7.3 Runtime project-document import line
 
 ```bash
-if grep -qF "@CONTRACTS.md" "$_PROJECT_DOC" 2>/dev/null; then
-  echo "@CONTRACTS.md import already present"
-else
-  # ask user
-fi
+python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
+  --repo "$_ROOT" --plugin-root "$_PLUGIN_ROOT" \
+  --project-doc "$_PROJECT_DOC" --project-doc-only \
+  --ensure-contract-import
 ```
 
-If missing:
-```
-AskUserQuestion:
-  Question: "Add '@CONTRACTS.md' import to your runtime project document? (one line at top, existing content preserved)"
-  Options:
-    - A) Yes — insert after frontmatter / first heading
-    - B) Skip — I will add it manually
-    - C) Show me the proposed diff first
-```
-
-On A, Edit tool inserts `@CONTRACTS.md` as a new line immediately after the first `---` frontmatter block (or after first H1 if no frontmatter). Never bulk-rewrite.
+When missing, do not ask. The same containment-safe, no-follow helper inserts
+`@CONTRACTS.md` once, immediately after the closing delimiter of the first
+frontmatter block, or after the first H1 when no frontmatter exists. If neither
+exists, it prepends the line. It rejects symlinked project documents, preserves
+all existing bytes outside the insertion, and uses an atomic replacement.
 
 ### 3.7.4 Verify contract lint
 

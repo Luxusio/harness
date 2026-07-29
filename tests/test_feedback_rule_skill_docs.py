@@ -66,9 +66,10 @@ def test_codex_subagent_waiting_avoids_rapid_polling_noise():
     assert "Subagent wait UX" in run
     assert "rapid 10/20/30-second wait loops" in run
     assert "one compact status update" in run
-    assert "Call `list_agents` once" in run
+    assert "`status[agent_id].completed` result as the preferred completion signal" in run
+    assert "Only\ncall `list_agents` once" in run
     assert "never use rapid short polling" in develop
-    assert "one final `list_agents`" in develop
+    assert "Do not require `list_agents`" in develop
 
 
 def test_qa_agents_surface_self_healing_candidates():

@@ -87,6 +87,23 @@ CENSUS RESULTS:
   Browser: {chromium|chrome|none}
   Chrome MCP: {configured|not_configured}
   Dev command: {detected or "not detected"}
+  Source Git roots: {workspace-relative roots, or "."}
 ```
+
+For a non-Git control root, record only the exact child Git roots detected
+during setup. Store their normalized workspace-relative paths in
+`manifest.yaml` as `source_git_roots`. Do not rediscover descendants at
+runtime. Reject absolute paths, `..`, symlinks, duplicates, nested roots, and
+directories whose `git rev-parse --show-toplevel` does not equal the directory.
+Root names must match `[A-Za-z0-9._/-]+`; reject spaces, quotes, substitutions,
+and shell metacharacters instead of interpolating filesystem names into a
+command.
+Record each detected child build/test command in a form executable from the
+control root, such as `cd pay-api && ./gradlew test` or
+`cd pay-webapp && npm test`. Keep all detected source test commands for
+`verify_commands` and automatic Health scoring; do not collapse a fullstack
+workspace to only one repository's test command. Render the validated root with
+`shlex.quote("./" + root)` and serialize the complete command as a quoted YAML
+scalar so a leading-dash root cannot be interpreted as a `cd` option.
 
 Proceed to Phase 2 with: "Here's what I found about this project: ..."

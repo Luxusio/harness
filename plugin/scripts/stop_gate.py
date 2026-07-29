@@ -17,7 +17,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (  # type: ignore
-    TASK_DIR, find_repo_root, read_hook_input, emit_compact_context,
+    TASK_DIR, find_repo_root, find_harness_root, harness_root_resolution,
+    read_hook_input, emit_compact_context,
     log_gate_crash, last_hook_input, resolve_active_task_dir, current_session_id,
     is_harness_enabled_repo, write_goal_payload_probe,
 )
@@ -142,7 +143,22 @@ def _resolve_active_task_dir(repo_root: str, active_path: str) -> str | None:
 def main():
     try:
         hook_input = read_hook_input()  # drain stdin and populate session id/cwd cache
-        repo_root = find_repo_root()
+        payload_cwd = str(hook_input.get("cwd") or "").strip()
+        hook_cwd = os.path.realpath(payload_cwd or os.getcwd())
+        if payload_cwd:
+            harness_root, harness_error = harness_root_resolution(hook_cwd)
+            repo_root = harness_root or find_repo_root(hook_cwd)
+        else:
+            candidate_root = find_repo_root()
+            repo_root = find_harness_root(candidate_root) or candidate_root
+            harness_error = ""
+        if harness_error:
+            json.dump(gate_block(
+                reason=f"Harness workspace configuration is invalid: {harness_error}",
+                owner_skill="harness:setup",
+                docs="plugin/skills/setup/repo-census.md",
+            ), sys.stdout)
+            return 0
         if not is_harness_enabled_repo(repo_root):
             return 0
         write_goal_payload_probe(repo_root, hook_input, source="Stop")

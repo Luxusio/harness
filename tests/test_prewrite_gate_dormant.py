@@ -76,6 +76,7 @@ def _scaffold(tmpdir: str, *, strict: bool = False) -> str:
     os.makedirs(manifest_dir, exist_ok=True)
     # Touch manifest.yaml so find_repo_root recognises tmpdir as repo root.
     with open(os.path.join(manifest_dir, "manifest.yaml"), "w") as f:
+        f.write("version: 4\n")
         if strict:
             f.write("capabilities:\n  strict_compliance_requires_delegation: true\n")
     tasks_dir = os.path.join(manifest_dir, "tasks")

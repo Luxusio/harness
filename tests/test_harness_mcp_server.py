@@ -18,6 +18,7 @@ spec = importlib.util.spec_from_file_location("harness_server", SERVER_PATH)
 assert spec and spec.loader
 harness_server = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(harness_server)
+import _lib as harness_lib  # type: ignore
 
 
 EXPECTED_TOOLS = {
@@ -93,6 +94,8 @@ class HarnessMcpServerTests(unittest.TestCase):
             "transcript_path": "",
             "transcript_sha256": "",
             "prompt_hash": "",
+            "head_sha": harness_server._git_head_for_receipt(task_dir),
+            "diff_fingerprint": harness_lib.review_diff_fingerprint(task_dir),
         }
         (Path(task_dir) / "SUBAGENT_RECEIPTS.jsonl").write_text(
             json.dumps(receipt, sort_keys=True) + "\n",
@@ -2565,7 +2568,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 mock.patch.object(harness_server, "_runtime_is_stale", return_value=(False, "")),
                 mock.patch.object(harness_server, "_checks_gate_status", return_value=("passed", [])),
                 mock.patch.object(harness_server, "_git_head_for_receipt", return_value="a" * 40),
-                mock.patch.object(harness_server, "_changed_path_fingerprints", return_value={}),
+                mock.patch.object(harness_server, "_workspace_changed_path_fingerprints", return_value={}),
             ):
                 result = harness_server.handle_task_close({"task_id": "TASK__goal-close-sync"})
 
@@ -2606,7 +2609,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                     mock.patch.object(harness_server, "_runtime_is_stale", return_value=(False, "")),
                     mock.patch.object(harness_server, "_checks_gate_status", return_value=("passed", [])),
                     mock.patch.object(harness_server, "_git_head_for_receipt", return_value="a" * 40),
-                    mock.patch.object(harness_server, "_changed_path_fingerprints", return_value={}),
+                    mock.patch.object(harness_server, "_workspace_changed_path_fingerprints", return_value={}),
                 ):
                     closed = harness_server.handle_task_close({"task_id": task_id})
                 self.assertNotIn("isError", closed)
@@ -2642,7 +2645,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
                 mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
                 mock.patch.object(
-                    harness_server, "_changed_path_fingerprints",
+                    harness_server, "_workspace_changed_path_fingerprints",
                     side_effect=RuntimeError("snapshot unavailable"),
                 ),
             ):
@@ -2677,7 +2680,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
                 mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
                 mock.patch.object(
-                    harness_server, "_changed_path_fingerprints",
+                    harness_server, "_workspace_changed_path_fingerprints",
                     side_effect=[set(), RuntimeError("snapshot unavailable")],
                 ),
             ):
@@ -2696,7 +2699,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
                 mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
                 mock.patch.object(
-                    harness_server, "_changed_path_fingerprints",
+                    harness_server, "_workspace_changed_path_fingerprints",
                     side_effect=[{"src/a.py": "sha256:old"}, {"src/a.py": "sha256:new"}],
                 ),
             ):
