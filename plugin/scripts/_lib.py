@@ -621,15 +621,25 @@ def _read_regular_text_file(path: str, *, max_size: int = 1024 * 1024) -> str:
             os.close(fd)
 
 
-def _strict_regular_text_snapshot(path: str, *, max_size: int = 1024 * 1024):
+def _strict_regular_text_snapshot(
+    path: str, *, max_size: int = 1024 * 1024, allow_symlink: bool = False,
+):
     """Snapshot an absent or stable regular UTF-8 leaf without ambiguity."""
     try:
         before = os.lstat(path)
     except FileNotFoundError:
-        return {"exists": False, "text": ""}
+        return {"exists": False, "kind": "absent", "text": ""}
     except OSError as exc:
         raise RuntimeError(f"snapshot unavailable for {path}: {exc}") from exc
-    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+    if stat.S_ISLNK(before.st_mode):
+        if not allow_symlink:
+            raise RuntimeError(f"snapshot requires a regular non-symlink file: {path}")
+        target = os.readlink(path)
+        after = os.lstat(path)
+        if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino):
+            raise RuntimeError(f"snapshot identity changed after read: {path}")
+        return {"exists": True, "kind": "symlink", "target": target, "text": ""}
+    if not stat.S_ISREG(before.st_mode):
         raise RuntimeError(f"snapshot requires a regular non-symlink file: {path}")
     if before.st_size > max_size:
         raise RuntimeError(f"snapshot exceeds size limit: {path}")
@@ -665,7 +675,7 @@ def _strict_regular_text_snapshot(path: str, *, max_size: int = 1024 * 1024):
         or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
     ):
         raise RuntimeError(f"snapshot identity changed after read: {path}")
-    return {"exists": True, "text": text}
+    return {"exists": True, "kind": "regular", "text": text}
 
 
 def _restore_text_snapshots(snapshots):
@@ -677,6 +687,12 @@ def _restore_text_snapshots(snapshots):
                     os.unlink(path)
                 except FileNotFoundError:
                     pass
+            elif snapshot.get("kind") == "symlink":
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
+                os.symlink(snapshot["target"], path)
             else:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 _atomic_text_write(path, snapshot["text"])
@@ -730,7 +746,8 @@ def write_goal_state(repo_root: str, state: dict) -> dict:
     text = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
     paths = (_goal_path(repo_root, goal_id), _current_goal_path(repo_root))
     snapshots = {
-        path: _strict_regular_text_snapshot(path) for path in paths
+        path: _strict_regular_text_snapshot(path, allow_symlink=True)
+        for path in paths
     }
     try:
         for path in paths:
@@ -1964,7 +1981,9 @@ def active_marker_snapshot(repo_root, session_id=None):
         _legacy_active_path(repo_root),
     )
     return {
-        path: _strict_regular_text_snapshot(path, max_size=256 * 1024)
+        path: _strict_regular_text_snapshot(
+            path, max_size=256 * 1024, allow_symlink=True,
+        )
         for path in paths
     }
 

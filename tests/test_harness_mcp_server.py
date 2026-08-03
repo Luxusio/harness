@@ -1799,16 +1799,21 @@ class HarnessMcpServerTests(unittest.TestCase):
             )
             self.assertFalse((task_b / "TASK_STATE.yaml").exists())
 
-    def test_active_marker_snapshot_rejects_unsafe_leaf(self):
+    def test_active_marker_snapshot_restores_symlink_without_touching_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             tasks = Path(tmp) / "doc/harness/tasks"
             sessions = tasks / ".active_sessions"
             sessions.mkdir(parents=True)
             outside = Path(tmp) / "outside-marker"
             outside.write_text("preserve\n", encoding="utf-8")
-            (tasks / ".active").symlink_to(outside)
-            with self.assertRaisesRegex(RuntimeError, "regular non-symlink"):
-                harness_server.active_marker_snapshot(tmp)
+            marker = tasks / ".active"
+            marker.symlink_to(outside)
+            snapshot = harness_server.active_marker_snapshot(tmp)
+            marker.unlink()
+            marker.write_text("replacement\n", encoding="utf-8")
+            harness_server.restore_active_marker_snapshot(snapshot)
+            self.assertTrue(marker.is_symlink())
+            self.assertEqual(os.readlink(marker), str(outside))
             self.assertEqual(outside.read_text(encoding="utf-8"), "preserve\n")
 
     def test_goal_state_two_file_write_rolls_back_on_second_failure(self):
