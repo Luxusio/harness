@@ -3,7 +3,7 @@
 tags: [harness, spec, architecture]
 status: draft
 created: 2026-04-09
-updated: 2026-07-23
+updated: 2026-08-03
 task_ref: TASK__harness-architecture
 
 ---
@@ -219,14 +219,28 @@ Every parent-index gitlink OID is fingerprinted, including uninitialized
 submodules. Initialized submodules additionally include checkout HEAD and
 worktree identity, so a staged gitlink update or clean checkout move is both
 review-routed and freshness-gated. Gitlink worktrees and their path components
-must be real directories rather than symlinks. A submodule `.git` control file
-is read without following symlinks, must resolve inside the parent Git common
-directory, and Git must report the validated worktree itself as its top level;
-this worktree-binding query is intentionally uncached so an in-request gitdir
-retarget is detected. Submodule HEAD is read with the validated gitdir and
-worktree passed explicitly to Git, and the control-file binding is compared
-before and after. These checks prevent traversal into external repositories,
-including nested gitlinks.
+must be real directories rather than symlinks. By default, a submodule `.git`
+control file is read without following symlinks, must resolve inside the parent
+Git common directory, and Git must report the validated worktree itself as its
+top level. A Git-backed control repository may authorize an exception only by
+declaring a `source_git_roots` entry that exactly matches an initialized,
+direct, stage-0 mode-160000 entry in the parent index. Harness never infers or
+automatically registers a source root from a discovered repository or gitlink.
+
+For an authorized direct linked worktree, validation is reciprocal: the
+no-follow `.git` control-file target must equal Git's absolute git directory;
+Git must report the registered checkout as its exact top level and report the
+expected common directory; and the linked-worktree admin directory's
+`commondir` and `gitdir` files must point back to that common directory and the
+registered checkout. Metadata path components may not be symlinks, and the
+control-file and admin-file identities and bindings are compared before and
+after the snapshot. These worktree-binding queries are intentionally uncached
+so in-request retargeting fails closed. Submodule HEAD is read with the
+validated gitdir and worktree passed explicitly to Git. The registered parent
+edge is a leaf only for the parent's recursive scan: the registered service is
+scanned independently, and its own nested submodules remain subject to the
+default parent-common-directory confinement. Registration is therefore direct
+and non-transitive and cannot authorize an external nested gitdir.
 
 Codex runtimes do not always forward collaboration tools to plugin
 `PostToolUse`. SessionStart and each installed Codex root hook therefore validate
@@ -234,11 +248,12 @@ the current official `session_id` (with a matching environment fallback),
 canonical repository, root rollout, and initial offset, then writes a versioned
 registration under the current user's state directory. This restoration path is
 strictly opt-in. A normal repository requires `doc/harness/manifest.yaml` at
-its Git root. A non-Git control workspace may instead declare exact,
-setup-validated `source_git_roots`; hooks accept that control manifest only
-when the physical hook cwd has an exact registered Git root. Missing, moved,
-symlinked, duplicate, nested, or unregistered roots fail closed, so an
-independent nested repository cannot inherit the outer workspace's task.
+its Git root. A non-Git control workspace may declare exact, setup-validated
+`source_git_roots`; a Git-backed control may declare only the exact direct
+gitlinks described above. Hooks accept the control manifest only when the
+physical hook cwd has an exact registered Git root. Missing, moved, symlinked,
+duplicate, nested, or unregistered roots fail closed, so an independent nested
+repository cannot inherit the outer workspace's task.
 Registration stores the control root separately from the session cwd and
 validates the rollout against the latter. Registration retries
 briefly on SessionStart when rollout creation races hook delivery. Later hooks
@@ -271,13 +286,29 @@ the watcher binds a root to a task only from that root rollout's successful
 Harness `task_start` or `task_context` completion event, after canonical task
 state validation and before the reviewed or QA child starts.
 
-For a multi-Git control workspace, task baselines store each registered root's
-HEAD and workspace-prefixed dirty paths. Receipt HEAD identity is a
-deterministic 40-hex composite over the sorted root/HEAD tuples, and diff
-fingerprints resolve each touched path against its configured root. A change in
-any registered repository therefore invalidates an older review or QA PASS.
-Setup finalization validates the configured roots and does not run parent-level
-Git ignore checks when the control root itself is not a Git repository.
+`source_git_roots` has two control-root modes. For a non-Git control workspace,
+the configured roots are exhaustive: each registered repository contributes
+its HEAD and workspace-prefixed dirty paths, while the non-Git parent
+contributes only the bounded behavioral surface described below. For a
+Git-backed control repository, configured roots are additive: the parent
+remains the empty-prefix source binding, and every configured root adds a
+service binding only after exact initialized-direct-gitlink authorization. The
+baseline therefore retains the parent HEAD and direct gitlink OID as well as
+each registered service's HEAD and dirty paths. The authorized parent edge is
+treated as a leaf to avoid scanning the service twice, and touched paths are
+routed to the longest matching registered prefix before the empty parent
+prefix.
+
+Receipt HEAD identity is a deterministic 40-hex composite over the sorted
+root/HEAD tuples, and diff fingerprints resolve each touched path against its
+bound root. A change in any bound repository, or in the parent's registered
+gitlink OID, therefore invalidates an older review or QA PASS. The normalized
+source-binding set in `TASK_BASELINE.json` is immutable for the life of the
+task. Adding, removing, or changing a binding for an active task requires a new
+Harness task ID; the runtime must not edit or reinterpret the existing
+baseline. Setup finalization validates the configured roots and does not run
+parent-level Git ignore checks when the control root itself is not a Git
+repository.
 Claude write, Bash, Stop, and subagent lifecycle hooks resolve a registered
 child Git cwd back to this control root. Multi-Git baselines also fingerprint a
 bounded parent behavioral surface (`AGENTS.md`, `CLAUDE.md`, contracts, and the

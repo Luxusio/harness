@@ -75,6 +75,7 @@ def _initialize_instructions(runtime: str) -> str:
 
 sys.path.insert(0, str(SCRIPTS_DIR))
 from _lib import (  # type: ignore
+    GitBindingError,
     now_iso, read_state, write_state, set_state_field,
     ensure_task_scaffold, emit_compact_context, sync_from_git_diff,
     artifact_exists, canonical_task_dir, canonical_task_id,
@@ -1300,7 +1301,26 @@ def call_tool(name: str, args: dict | None) -> dict:
             "expected": expected,
             "next_action": next_action,
         })
+    except GitBindingError as e:
+        return _err(f"{name} failed: {e}", data={
+            "error_code": e.code,
+            "path": e.path,
+            "invariant": e.invariant,
+            "next_action": e.next_action,
+        })
     except Exception as e:
+        # The MCP server and its test/plugin loaders can import _lib under
+        # distinct module identities. Preserve the structured recovery
+        # contract for an equivalent GitBindingError from either identity.
+        if all(hasattr(e, field) for field in (
+            "code", "path", "invariant", "next_action",
+        )):
+            return _err(f"{name} failed: {e}", data={
+                "error_code": e.code,
+                "path": e.path,
+                "invariant": e.invariant,
+                "next_action": e.next_action,
+            })
         return _err(f"{name} failed: {e}")
 
 

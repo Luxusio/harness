@@ -170,6 +170,34 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertTrue(result.get("isError"))
         self.assertIn("Unknown tool", result["structuredContent"]["error"])
 
+    def test_git_binding_error_returns_structured_recovery_details(self):
+        original = harness_server.TOOLS["task_context"]["handler"]
+
+        def fail(_args):
+            raise harness_lib.GitBindingError(
+                "REGISTERED_WORKTREE_BINDING_MISMATCH",
+                "registered source failed validation",
+                path="services/front",
+                invariant="admin_gitdir_backreference",
+                next_action="Repair the worktree and retry.",
+            )
+
+        harness_server.TOOLS["task_context"]["handler"] = fail
+        try:
+            result = harness_server.call_tool("task_context", {"task_id": "TASK__x"})
+        finally:
+            harness_server.TOOLS["task_context"]["handler"] = original
+
+        self.assertTrue(result["isError"])
+        self.assertEqual(
+            result["structuredContent"]["error_code"],
+            "REGISTERED_WORKTREE_BINDING_MISMATCH",
+        )
+        self.assertEqual(result["structuredContent"]["path"], "services/front")
+        self.assertEqual(
+            result["structuredContent"]["invariant"], "admin_gitdir_backreference"
+        )
+
     def test_goal_tools_manage_active_goal_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             original_find_repo_root = harness_server.find_repo_root

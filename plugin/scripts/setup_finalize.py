@@ -14,6 +14,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+from _lib import (  # type: ignore
+    GitBindingError,
+    _direct_gitlink_index_entries,
+    _registered_source_metadata_binding,
+)
+
 
 HARNESS_VERSION = "2.3.0"
 MANIFEST_SCHEMA = 5
@@ -226,12 +232,17 @@ def manifest_array(text: str, key: str) -> list[str]:
 
 def source_git_root_errors(repo: Path, manifest_text: str) -> list[str]:
     values = manifest_array(manifest_text, "source_git_roots")
-    if (repo / ".git").exists() and not values:
+    git_control = (repo / ".git").exists()
+    if git_control and not values:
         return []
     if not values:
         return ["non-Git Harness workspace requires source_git_roots"]
     errors: list[str] = []
     roots: list[Path] = []
+    try:
+        direct_gitlinks = _direct_gitlink_index_entries(str(repo)) if git_control else {}
+    except RuntimeError as exc:
+        return [str(exc)]
     for value in values:
         if (
             not value
@@ -248,6 +259,25 @@ def source_git_root_errors(repo: Path, manifest_text: str) -> list[str]:
         except ValueError as exc:
             errors.append(str(exc))
             continue
+        normalized = value.replace("\\", "/").rstrip("/")
+        if git_control and normalized not in direct_gitlinks:
+            errors.append(
+                "[REGISTERED_SOURCE_NOT_DIRECT_GITLINK] "
+                f"source_git_roots entry '{normalized}' is not an exact direct "
+                "mode-160000 entry in the control repository index"
+            )
+            continue
+        if git_control and not candidate.is_dir():
+            try:
+                _registered_source_metadata_binding(
+                    str(repo), str(candidate), normalized,
+                )
+            except GitBindingError as exc:
+                errors.append(
+                    f"{exc}; path={exc.path}; invariant={exc.invariant}; "
+                    f"next_action={exc.next_action}"
+                )
+            continue
         if not candidate.is_dir():
             errors.append(f"source_git_roots entry is not a directory: {value}")
             continue
@@ -262,6 +292,17 @@ def source_git_root_errors(repo: Path, manifest_text: str) -> list[str]:
         if result.returncode != 0 or Path(result.stdout.strip()).resolve() != candidate.resolve():
             errors.append(f"source_git_roots entry is not an exact Git root: {value}")
             continue
+        if git_control:
+            try:
+                _registered_source_metadata_binding(
+                    str(repo), str(candidate.resolve()), normalized,
+                )
+            except GitBindingError as exc:
+                errors.append(
+                    f"{exc}; path={exc.path}; invariant={exc.invariant}; "
+                    f"next_action={exc.next_action}"
+                )
+                continue
         resolved = candidate.resolve()
         if resolved in roots:
             errors.append(f"duplicate source_git_roots entry: {value}")

@@ -294,6 +294,78 @@ def test_initialized_submodule_snapshot_rejects_external_gitdir(tmp_path):
         raise AssertionError("An external submodule gitdir must fail closed")
 
 
+def test_registered_direct_linked_worktree_passes_but_unregistered_traversal_fails(tmp_path):
+    service_repo = tmp_path / "service-repo"
+    parent = tmp_path / "parent"
+    for repo in (service_repo, parent):
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "paths@test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Paths Test"], cwd=repo, check=True)
+    (service_repo / "tracked.py").write_text("service\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.py"], cwd=service_repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "service"], cwd=service_repo, check=True)
+    service = parent / "service"
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "--detach", str(service), "HEAD"],
+        cwd=service_repo,
+        check=True,
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=service, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", f"160000,{head},service"],
+        cwd=parent,
+        check=True,
+    )
+
+    assert lib._registered_source_metadata_binding(
+        str(parent), str(service), "service"
+    )
+    snapshot = lib._gitlink_index_snapshot(
+        str(parent), registered_leaves=("service",)
+    )
+    assert snapshot["service"] == (head, True)
+
+    try:
+        lib._initialized_submodule_paths(str(parent))
+    except RuntimeError as exc:
+        assert "submodule snapshot unavailable" in str(exc)
+    else:
+        raise AssertionError("The same external checkout must fail without registration")
+
+
+def test_registered_linked_worktree_rejects_wrong_admin_backreference(tmp_path):
+    service_repo = tmp_path / "service-repo"
+    parent = tmp_path / "parent"
+    for repo in (service_repo, parent):
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "paths@test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Paths Test"], cwd=repo, check=True)
+    (service_repo / "tracked.py").write_text("service\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.py"], cwd=service_repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "service"], cwd=service_repo, check=True)
+    service = parent / "service"
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "--detach", str(service), "HEAD"],
+        cwd=service_repo,
+        check=True,
+    )
+    gitdir = Path((service / ".git").read_text(encoding="utf-8").strip()[len("gitdir: "):])
+    (gitdir / "gitdir").write_text(str(parent / "wrong/.git") + "\n", encoding="utf-8")
+
+    try:
+        lib._registered_source_metadata_binding(str(parent), str(service), "service")
+    except lib.GitBindingError as exc:
+        assert exc.code == "REGISTERED_WORKTREE_BINDING_MISMATCH"
+        assert exc.invariant == "admin_gitdir_backreference"
+    else:
+        raise AssertionError("A forged admin backreference must fail closed")
+
+
 def test_nested_submodule_snapshot_rejects_external_gitdir(tmp_path):
     inner_source = tmp_path / "inner-source"
     outer_source = tmp_path / "outer-source"

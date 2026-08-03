@@ -413,6 +413,87 @@ def test_source_git_roots_reject_shell_metacharacters(tmp_path):
     assert errors == ["invalid source_git_roots entry: api;touch-pwned"]
 
 
+def test_git_backed_source_root_validation_accepts_direct_linked_worktree(tmp_path):
+    setup_finalize = load_setup_finalize("setup_finalize_linked_root_test")
+    parent = tmp_path / "parent"
+    service_repo = tmp_path / "service-repo"
+    for repo in (parent, service_repo):
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "setup@test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Setup Test"], cwd=repo, check=True)
+    (service_repo / "tracked.py").write_text("service\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.py"], cwd=service_repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "service"], cwd=service_repo, check=True)
+    service = parent / "services/front"
+    service.parent.mkdir()
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "--detach", str(service), "HEAD"],
+        cwd=service_repo,
+        check=True,
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=service, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", f"160000,{head},services/front"],
+        cwd=parent,
+        check=True,
+    )
+
+    assert setup_finalize.source_git_root_errors(
+        parent, "source_git_roots: [services/front]\n"
+    ) == []
+
+
+def test_git_backed_source_root_validation_rejects_non_gitlink_with_stable_code(tmp_path):
+    setup_finalize = load_setup_finalize("setup_finalize_non_gitlink_root_test")
+    parent = tmp_path / "parent"
+    child = parent / "child"
+    parent.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=parent, check=True)
+    child.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=child, check=True)
+
+    errors = setup_finalize.source_git_root_errors(
+        parent, "source_git_roots: [child]\n"
+    )
+
+    assert len(errors) == 1
+    assert "[REGISTERED_SOURCE_NOT_DIRECT_GITLINK]" in errors[0]
+
+
+def test_git_backed_source_root_validation_reports_uninitialized_gitlink(tmp_path):
+    setup_finalize = load_setup_finalize("setup_finalize_uninitialized_root_test")
+    parent = tmp_path / "parent"
+    source = tmp_path / "source"
+    for repo in (parent, source):
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "setup@test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Setup Test"], cwd=repo, check=True)
+    (source / "tracked.py").write_text("service\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.py"], cwd=source, check=True)
+    subprocess.run(["git", "commit", "-qm", "service"], cwd=source, check=True)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=source, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", f"160000,{head},service"],
+        cwd=parent, check=True,
+    )
+
+    errors = setup_finalize.source_git_root_errors(
+        parent, "source_git_roots: [service]\n"
+    )
+    assert len(errors) == 1
+    assert "[REGISTERED_SOURCE_UNINITIALIZED]" in errors[0]
+    assert "path=service" in errors[0]
+    assert "next_action=Restore the checkout" in errors[0]
+
+
 def canonical_manifest(version: int = 5) -> str:
     return (
         f"version: {version}\n"

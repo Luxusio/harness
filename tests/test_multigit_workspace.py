@@ -59,6 +59,285 @@ def _workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
     return root, api, web
 
 
+def _git_backed_linked_workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
+    parent = tmp_path / "parent"
+    service_repo = tmp_path / "service-repo"
+    _git_repo(parent, "parent.txt")
+    _git_repo(service_repo, "service.py")
+    service = parent / "services/front"
+    service.parent.mkdir()
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "--detach", str(service), "HEAD"],
+        cwd=service_repo,
+        check=True,
+    )
+    service_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=service, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", f"160000,{service_head},services/front"],
+        cwd=parent,
+        check=True,
+    )
+    manifest = parent / "doc/harness/manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "version: 5\n"
+        "name: linked\n"
+        "type: library\n"
+        "source_git_roots: [services/front]\n"
+        "test_command: echo ok\n"
+        "verify_commands: [echo ok]\n"
+        "qa:\n"
+        "  browser_qa_supported: false\n",
+        encoding="utf-8",
+    )
+    return parent, service_repo, service
+
+
+def test_git_backed_source_roots_are_additive_and_linked_worktree_is_scanned_once(tmp_path):
+    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
+
+    bindings = lib.configured_source_git_roots(str(parent))
+    assert [(prefix, Path(root)) for prefix, root in bindings] == [
+        ("", parent.resolve()),
+        ("services/front/", service.resolve()),
+    ]
+
+    task = parent / "doc/harness/tasks/TASK__linked"
+    lib.ensure_task_scaffold(str(task), "TASK__linked")
+    baseline = json.loads((task / "TASK_BASELINE.json").read_text(encoding="utf-8"))
+    assert set(baseline["source_heads"]) == {"", "services/front/"}
+    registered_fp = baseline["dirty_paths"]["services/front"]
+    assert ":registered-source:checkout:" in registered_fp
+    assert ":worktree:" in registered_fp
+
+    (service / "service.py").write_text("changed\n", encoding="utf-8")
+    original = lib._uncached_git_changed_paths
+    calls: list[str] = []
+
+    def counted(root, **kwargs):
+        calls.append(str(Path(root).resolve()))
+        return original(root, **kwargs)
+
+    with mock.patch.object(lib, "_uncached_git_changed_paths", side_effect=counted):
+        assert "services/front/service.py" in lib._workspace_git_changed_paths(str(parent))
+    assert calls.count(str(service.resolve())) == 1
+
+    prefix, root, inner = lib._workspace_path_binding_with_prefix(
+        str(parent), "services/front/service.py"
+    )
+    assert (prefix, Path(root), inner) == (
+        "services/front/", service.resolve(), "service.py"
+    )
+
+
+def test_git_backed_source_root_must_be_direct_parent_gitlink(tmp_path):
+    parent = tmp_path / "parent"
+    nested = parent / "nested"
+    _git_repo(parent, "parent.txt")
+    _git_repo(nested, "nested.py")
+    manifest = parent / "doc/harness/manifest.yaml"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        "version: 5\nsource_git_roots: [nested]\n", encoding="utf-8"
+    )
+
+    try:
+        lib.configured_source_git_roots(str(parent))
+    except lib.GitBindingError as exc:
+        assert exc.code == "REGISTERED_SOURCE_NOT_DIRECT_GITLINK"
+        assert exc.path == "nested"
+    else:
+        raise AssertionError("An arbitrary nested repository must not be registered")
+
+
+def test_git_backed_old_replacement_baseline_requires_new_task_id(tmp_path):
+    parent, _service_repo, _service = _git_backed_linked_workspace(tmp_path)
+    task = parent / "doc/harness/tasks/TASK__old-binding"
+    lib.ensure_task_scaffold(str(task), "TASK__old-binding")
+    baseline_path = task / "TASK_BASELINE.json"
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    baseline["source_heads"].pop("")
+    baseline["head_sha"] = lib._composite_source_heads(baseline["source_heads"])
+    baseline_path.write_text(json.dumps(baseline) + "\n", encoding="utf-8")
+
+    try:
+        lib._read_task_baseline_snapshot(str(task), repo_root=str(parent))
+    except lib.GitBindingError as exc:
+        assert exc.code == "SOURCE_BINDINGS_CHANGED_RESTART_REQUIRED"
+        assert "new Harness task ID" in exc.next_action
+    else:
+        raise AssertionError("Old replacement-semantics evidence must not be rewritten")
+
+
+def test_git_backed_registered_normal_submodule_remains_supported(tmp_path):
+    source = tmp_path / "source"
+    parent = tmp_path / "parent"
+    _git_repo(source, "source.py")
+    _git_repo(parent, "parent.py")
+    subprocess.run(
+        [
+            "git", "-c", "protocol.file.allow=always", "submodule", "add", "-q",
+            str(source), "service",
+        ],
+        cwd=parent,
+        check=True,
+    )
+    manifest = parent / "doc/harness/manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "version: 5\nsource_git_roots: [service]\n", encoding="utf-8"
+    )
+
+    assert [prefix for prefix, _root in lib.configured_source_git_roots(str(parent))] == [
+        "", "service/"
+    ]
+
+
+def test_registered_gitlink_oid_drift_changes_review_fingerprint(tmp_path):
+    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
+    task = parent / "doc/harness/tasks/TASK__oid-drift"
+    lib.ensure_task_scaffold(str(task), "TASK__oid-drift")
+    lib.sync_touched_paths(str(task), ["services/front"])
+    first = lib.review_diff_fingerprint(str(task))
+    (service / "service.py").write_text("next\n", encoding="utf-8")
+    subprocess.run(["git", "add", "service.py"], cwd=service, check=True)
+    subprocess.run(["git", "commit", "-qm", "next"], cwd=service, check=True)
+    next_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=service, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ["git", "update-index", "--cacheinfo", f"160000,{next_head},services/front"],
+        cwd=parent, check=True,
+    )
+
+    assert lib.review_diff_fingerprint(str(task)) != first
+
+
+def test_version_one_baseline_rejects_new_additive_binding(tmp_path):
+    parent, _service_repo, _service = _git_backed_linked_workspace(tmp_path)
+    task = parent / "doc/harness/tasks/TASK__v1-binding"
+    lib.ensure_task_scaffold(str(task), "TASK__v1-binding")
+    baseline_path = task / "TASK_BASELINE.json"
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    baseline = {
+        "version": 1,
+        "captured_at": baseline["captured_at"],
+        "repo_root": str(parent.resolve()),
+        "head_sha": baseline["source_heads"][""],
+        "dirty_paths": {},
+    }
+    baseline_path.write_text(json.dumps(baseline) + "\n", encoding="utf-8")
+
+    with mock.patch.object(lib, "_review_snapshot_cache", return_value=None):
+        try:
+            lib._read_task_baseline_snapshot(str(task), repo_root=str(parent))
+        except lib.GitBindingError as exc:
+            assert exc.code == "SOURCE_BINDINGS_CHANGED_RESTART_REQUIRED"
+        else:
+            raise AssertionError("v1 evidence must not silently adopt additive roots")
+
+
+def test_registered_binding_retarget_during_head_snapshot_fails_closed(tmp_path):
+    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
+    original_gitfile = (service / ".git").read_text(encoding="utf-8")
+    original_head = lib._git_head_snapshot
+    service_calls = 0
+
+    def retarget_on_evidence(root, **kwargs):
+        nonlocal service_calls
+        if Path(root).resolve() == service.resolve():
+            service_calls += 1
+            if service_calls == 2:
+                (service / ".git").write_text("gitdir: /tmp/not-the-authorized-gitdir\n", encoding="utf-8")
+        return original_head(root, **kwargs)
+
+    try:
+        with mock.patch.object(lib, "_git_head_snapshot", side_effect=retarget_on_evidence):
+            try:
+                lib._workspace_head_snapshot(str(parent))
+            except lib.GitBindingError as exc:
+                assert exc.code in {
+                    "REGISTERED_WORKTREE_BINDING_CHANGED",
+                    "REGISTERED_WORKTREE_BINDING_MISMATCH",
+                }
+            else:
+                raise AssertionError("retargeted service metadata must fail closed")
+    finally:
+        (service / ".git").write_text(original_gitfile, encoding="utf-8")
+
+
+def test_registered_binding_retarget_during_dirty_scan_fails_closed(tmp_path):
+    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
+    original_gitfile = (service / ".git").read_text(encoding="utf-8")
+    original_scan = lib._uncached_git_changed_paths
+
+    def retarget_on_scan(root, **kwargs):
+        if Path(root).resolve() == service.resolve():
+            (service / ".git").write_text(
+                "gitdir: /tmp/not-the-authorized-gitdir\n", encoding="utf-8"
+            )
+        return original_scan(root, **kwargs)
+
+    try:
+        with mock.patch.object(lib, "_uncached_git_changed_paths", side_effect=retarget_on_scan):
+            try:
+                lib._workspace_git_changed_paths(str(parent))
+            except lib.GitBindingError as exc:
+                assert exc.code in {
+                    "REGISTERED_WORKTREE_BINDING_CHANGED",
+                    "REGISTERED_WORKTREE_BINDING_MISMATCH",
+                }
+            else:
+                raise AssertionError("retarget during dirty scan must fail closed")
+    finally:
+        (service / ".git").write_text(original_gitfile, encoding="utf-8")
+
+
+def test_nongit_control_keeps_linked_worktree_source_compatibility(tmp_path):
+    control = tmp_path / "control"
+    source_repo = tmp_path / "source-repo"
+    control.mkdir()
+    _git_repo(source_repo, "source.py")
+    source = control / "source"
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "--detach", str(source), "HEAD"],
+        cwd=source_repo, check=True,
+    )
+    manifest = control / "doc/harness/manifest.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "version: 5\nsource_git_roots: [source]\n", encoding="utf-8",
+    )
+
+    assert lib.configured_source_git_roots(str(control)) == [
+        ("source/", str(source.resolve()))
+    ]
+    task = control / "doc/harness/tasks/TASK__nongit-linked"
+    lib.ensure_task_scaffold(str(task), "TASK__nongit-linked", repo_root=str(control))
+    assert (task / "TASK_BASELINE.json").is_file()
+
+
+def test_uninitialized_registered_gitlink_has_stable_runtime_error(tmp_path):
+    parent, service_repo, service = _git_backed_linked_workspace(tmp_path)
+    subprocess.run(
+        ["git", "worktree", "remove", "--force", str(service)],
+        cwd=service_repo, check=True,
+    )
+
+    try:
+        lib.configured_source_git_roots(str(parent))
+    except lib.GitBindingError as exc:
+        assert exc.code == "REGISTERED_SOURCE_UNINITIALIZED"
+        assert exc.path == "services/front"
+        assert "Restore the checkout" in exc.next_action
+    else:
+        raise AssertionError("missing registered checkout must fail with recovery details")
+
+
 def test_workspace_baseline_and_fingerprint_cover_all_registered_git_roots(tmp_path):
     root, api, web = _workspace(tmp_path)
     task = root / "doc/harness/tasks/TASK__multi"
