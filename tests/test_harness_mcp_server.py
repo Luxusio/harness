@@ -1799,6 +1799,49 @@ class HarnessMcpServerTests(unittest.TestCase):
             )
             self.assertFalse((task_b / "TASK_STATE.yaml").exists())
 
+    def test_active_marker_snapshot_rejects_unsafe_leaf(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tasks = Path(tmp) / "doc/harness/tasks"
+            sessions = tasks / ".active_sessions"
+            sessions.mkdir(parents=True)
+            outside = Path(tmp) / "outside-marker"
+            outside.write_text("preserve\n", encoding="utf-8")
+            (tasks / ".active").symlink_to(outside)
+            with self.assertRaisesRegex(RuntimeError, "regular non-symlink"):
+                harness_server.active_marker_snapshot(tmp)
+            self.assertEqual(outside.read_text(encoding="utf-8"), "preserve\n")
+
+    def test_goal_state_two_file_write_rolls_back_on_second_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            goal = harness_server.start_harness_goal(tmp, "transactional goal")
+            goal_id = goal["goal_id"]
+            goal_path = Path(tmp) / f"doc/harness/goals/{goal_id}.json"
+            current_path = Path(tmp) / "doc/harness/goals/current.json"
+            before_goal = goal_path.read_text(encoding="utf-8")
+            before_current = current_path.read_text(encoding="utf-8")
+            task_dir = Path(tmp) / "doc/harness/tasks/TASK__goal-child"
+            task_dir.mkdir(parents=True)
+            goal_globals = harness_server.add_goal_task.__globals__
+            original_write = goal_globals["_atomic_text_write"]
+            failed = False
+
+            def fail_current_once(path, text):
+                nonlocal failed
+                if Path(path) == current_path and not failed:
+                    failed = True
+                    raise OSError("current goal publication unavailable")
+                return original_write(path, text)
+
+            with mock.patch.dict(
+                goal_globals, {"_atomic_text_write": fail_current_once}
+            ):
+                with self.assertRaisesRegex(OSError, "current goal publication"):
+                    harness_server.add_goal_task(
+                        tmp, "TASK__goal-child", task_dir=str(task_dir), status="closed"
+                    )
+            self.assertEqual(goal_path.read_text(encoding="utf-8"), before_goal)
+            self.assertEqual(current_path.read_text(encoding="utf-8"), before_current)
+
     def test_new_task_rolls_back_when_active_marker_write_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._run_git(tmp, "init", "-q")

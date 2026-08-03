@@ -638,10 +638,10 @@ def handle_task_start(args: dict) -> dict:
         original_resumed_state = read_state(task_dir) if resumed_existing else {}
 
         def rollback_new_start():
-            restore_active_marker_snapshot(prior_marker_snapshot)
             if resumed_existing:
                 if original_resumed_state:
                     write_state(task_dir, original_resumed_state)
+                restore_active_marker_snapshot(prior_marker_snapshot)
                 return
             cleanup = list(scaffold.get("created") or [])
             cleanup.append(os.path.join(task_dir, "TASK_BASELINE.json"))
@@ -650,6 +650,7 @@ def handle_task_start(args: dict) -> dict:
                     os.unlink(artifact)
                 except FileNotFoundError:
                     pass
+            restore_active_marker_snapshot(prior_marker_snapshot)
 
         try:
             resumed = read_state(task_dir)

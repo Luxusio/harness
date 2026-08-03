@@ -621,6 +621,72 @@ def _read_regular_text_file(path: str, *, max_size: int = 1024 * 1024) -> str:
             os.close(fd)
 
 
+def _strict_regular_text_snapshot(path: str, *, max_size: int = 1024 * 1024):
+    """Snapshot an absent or stable regular UTF-8 leaf without ambiguity."""
+    try:
+        before = os.lstat(path)
+    except FileNotFoundError:
+        return {"exists": False, "text": ""}
+    except OSError as exc:
+        raise RuntimeError(f"snapshot unavailable for {path}: {exc}") from exc
+    if stat.S_ISLNK(before.st_mode) or not stat.S_ISREG(before.st_mode):
+        raise RuntimeError(f"snapshot requires a regular non-symlink file: {path}")
+    if before.st_size > max_size:
+        raise RuntimeError(f"snapshot exceeds size limit: {path}")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags)
+    try:
+        opened = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            or opened.st_size > max_size
+        ):
+            raise RuntimeError(f"snapshot identity changed before read: {path}")
+        with os.fdopen(fd, encoding="utf-8") as handle:
+            fd = -1
+            text = handle.read()
+    except (OSError, UnicodeError) as exc:
+        raise RuntimeError(f"snapshot read unavailable for {path}: {exc}") from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    try:
+        after = os.lstat(path)
+    except OSError as exc:
+        raise RuntimeError(f"snapshot identity changed after read: {path}") from exc
+    if (
+        stat.S_ISLNK(after.st_mode)
+        or not stat.S_ISREG(after.st_mode)
+        or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+    ):
+        raise RuntimeError(f"snapshot identity changed after read: {path}")
+    return {"exists": True, "text": text}
+
+
+def _restore_text_snapshots(snapshots):
+    first_error = None
+    for path, snapshot in snapshots.items():
+        try:
+            if not snapshot["exists"]:
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
+            else:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                _atomic_text_write(path, snapshot["text"])
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
+    if first_error is not None:
+        raise first_error
+
+
 def _read_json_file(path: str, *, max_size: int = 1024 * 1024) -> dict:
     try:
         data = json.loads(_read_regular_text_file(path, max_size=max_size))
@@ -662,8 +728,16 @@ def write_goal_state(repo_root: str, state: dict) -> dict:
     goals_dir = _validated_control_dir(repo_root, GOALS_DIR, "goal storage root")
     os.makedirs(goals_dir, exist_ok=True)
     text = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    for path in (_goal_path(repo_root, goal_id), _current_goal_path(repo_root)):
-        _atomic_text_write(path, text)
+    paths = (_goal_path(repo_root, goal_id), _current_goal_path(repo_root))
+    snapshots = {
+        path: _strict_regular_text_snapshot(path) for path in paths
+    }
+    try:
+        for path in paths:
+            _atomic_text_write(path, text)
+    except Exception:
+        _restore_text_snapshots(snapshots)
+        raise
     return state
 
 
@@ -1889,27 +1963,15 @@ def active_marker_snapshot(repo_root, session_id=None):
         _session_active_path(repo_root, session_id),
         _legacy_active_path(repo_root),
     )
-    snapshot = {}
-    for path in paths:
-        snapshot[path] = (
-            _read_regular_text_file(path, max_size=256 * 1024)
-            if os.path.lexists(path)
-            else None
-        )
-    return snapshot
+    return {
+        path: _strict_regular_text_snapshot(path, max_size=256 * 1024)
+        for path in paths
+    }
 
 
 def restore_active_marker_snapshot(snapshot):
     """Restore an exact marker snapshot captured by active_marker_snapshot."""
-    for path, content in snapshot.items():
-        if content is None:
-            try:
-                os.unlink(path)
-            except FileNotFoundError:
-                pass
-            continue
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        _atomic_text_write(path, content)
+    _restore_text_snapshots(snapshot)
 
 
 def _read_regular_marker(path, *, max_size=256 * 1024):
