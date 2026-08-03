@@ -41,6 +41,9 @@ _REVIEW_SNAPSHOT_CACHE = ContextVar("harness_review_snapshot_cache", default=Non
 _REQUEST_GIT_ROOTS = ContextVar("harness_request_git_roots", default=None)
 _REQUEST_SNAPSHOT_DEADLINE = ContextVar("harness_request_snapshot_deadline", default=None)
 _REQUEST_SNAPSHOT_WARNINGS = ContextVar("harness_request_snapshot_warnings", default=None)
+_REQUEST_SOURCE_AUTHORITIES = ContextVar(
+    "harness_request_source_authorities", default=None,
+)
 _DIRTY_ENUMERATION_TIMEOUT_OVERRIDE = ContextVar(
     "harness_dirty_enumeration_timeout_override", default=None,
 )
@@ -58,6 +61,7 @@ def review_snapshot_scope(deadline_seconds=None):
     token = _REVIEW_SNAPSHOT_CACHE.set({})
     roots_token = _REQUEST_GIT_ROOTS.set(set())
     warnings_token = _REQUEST_SNAPSHOT_WARNINGS.set([])
+    authorities_token = _REQUEST_SOURCE_AUTHORITIES.set({})
     deadline = (
         time.monotonic() + float(deadline_seconds)
         if deadline_seconds is not None
@@ -68,6 +72,7 @@ def review_snapshot_scope(deadline_seconds=None):
         yield
     finally:
         _REQUEST_SNAPSHOT_DEADLINE.reset(deadline_token)
+        _REQUEST_SOURCE_AUTHORITIES.reset(authorities_token)
         _REQUEST_SNAPSHOT_WARNINGS.reset(warnings_token)
         _REQUEST_GIT_ROOTS.reset(roots_token)
         _REVIEW_SNAPSHOT_CACHE.reset(token)
@@ -2691,12 +2696,12 @@ def _registered_source_operation(control_root, prefix, source_root, bindings, op
     authority = (
         os.path.realpath(git_dir), git_dir_before.st_dev, git_dir_before.st_ino,
     )
-    cache = _review_snapshot_cache()
+    authorities = _REQUEST_SOURCE_AUTHORITIES.get()
     authority_key = (
-        "registered_source_authority", os.path.realpath(control), relpath,
+        os.path.realpath(control), relpath,
     )
-    if cache is not None:
-        pinned = cache.get(authority_key)
+    if authorities is not None:
+        pinned = authorities.get(authority_key)
         if pinned is not None and pinned != authority:
             raise GitBindingError(
                 "REGISTERED_WORKTREE_BINDING_CHANGED",
@@ -2705,7 +2710,7 @@ def _registered_source_operation(control_root, prefix, source_root, bindings, op
                 invariant="request_source_snapshot_binding",
                 next_action="Stop concurrent Git/worktree operations and retry.",
             )
-        cache[authority_key] = authority
+        authorities[authority_key] = authority
     result = operation(git_dir)
     git_dir_after = _registered_source_metadata_binding(control, source_root, relpath)
     git_dir_after_stat = os.lstat(git_dir_after)
@@ -4649,6 +4654,7 @@ def _read_task_baseline_snapshot(task_dir, repo_root=None, *, validate_git=True)
                 ),
             )
         source_snapshots = [("", repo_root, head_sha)]
+        source_bindings = current_bindings
     else:
         source_heads = data.get("source_heads")
         bindings = _workspace_source_bindings(repo_root)
@@ -4680,8 +4686,18 @@ def _read_task_baseline_snapshot(task_dir, repo_root=None, *, validate_git=True)
             (prefix, source_root, str(source_heads[prefix]))
             for prefix, source_root in bindings
         ]
+        source_bindings = bindings
 
     if not validate_git:
+        for prefix, source_root, _source_head in source_snapshots:
+            if prefix:
+                _registered_source_operation(
+                    repo_root,
+                    prefix,
+                    source_root,
+                    source_bindings,
+                    lambda _git_dir: None,
+                )
         return data
 
     for prefix, source_root, source_head in source_snapshots:

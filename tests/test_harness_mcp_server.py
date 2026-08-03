@@ -1481,6 +1481,42 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(baseline_commit_calls, 1)
             self.assertEqual(baseline_ancestor_calls, 1)
 
+    def test_task_start_does_not_defer_mandatory_binding_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "doc/harness/tasks/TASK__binding-failure"
+            task_dir.mkdir(parents=True)
+            (task_dir / "TASK_STATE.yaml").write_text(
+                "task_id: TASK__binding-failure\n"
+                "status: created\n"
+                "runtime_verdict: pending\n"
+                "touched_paths: []\n"
+                "plan_session_state: closed\n"
+                "closed_at: null\n"
+                "updated: 2026-08-03T00:00:00Z\n",
+                encoding="utf-8",
+            )
+            binding_error = harness_server.GitBindingError(
+                "REGISTERED_WORKTREE_BINDING_CHANGED",
+                "binding changed",
+                path="services/front",
+                invariant="source_snapshot_binding",
+                next_action="retry",
+            )
+            with (
+                mock.patch.object(
+                    harness_server, "canonical_task_dir", return_value=str(task_dir)
+                ),
+                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                mock.patch.object(harness_server, "ensure_task_scaffold"),
+                mock.patch.object(
+                    harness_server, "emit_compact_context", side_effect=binding_error
+                ),
+            ):
+                with self.assertRaises(harness_server.GitBindingError):
+                    harness_server.handle_task_start(
+                        {"task_id": "TASK__binding-failure"}
+                    )
+
     def test_task_context_returns_warning_when_dirty_evidence_is_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._run_git(tmp, "init", "-q")
@@ -2704,6 +2740,37 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
 
         self.assertTrue(result.get("isError"))
         self.assertIn("Git HEAD unavailable", result["content"][0]["text"])
+
+    def test_blocked_close_preserves_dirty_snapshot_warning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__blocked-dirty-warning",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+            )
+            warning_globals = harness_server.git_snapshot_warnings.__globals__
+
+            def degraded_sync(_task_dir):
+                warning_globals["_record_dirty_snapshot_warning"](
+                    tmp,
+                    "Git changed-path snapshot unavailable: root dirty scan "
+                    "budget exhausted before staged diff",
+                )
+                return []
+
+            with (
+                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
+                mock.patch.object(
+                    harness_server, "sync_from_git_diff", side_effect=degraded_sync
+                ),
+                mock.patch.object(harness_server, "_git_head_for_receipt", return_value=""),
+            ):
+                result = harness_server.handle_task_close(
+                    {"task_id": "TASK__blocked-dirty-warning"}
+                )
+
+        self.assertTrue(result.get("isError"))
+        warnings = result["structuredContent"]["git_snapshot_warnings"]
+        self.assertEqual(warnings[0]["code"], "GIT_DIRTY_SNAPSHOT_SKIPPED")
 
     def test_close_blocks_when_initial_git_snapshot_fails(self):
         with tempfile.TemporaryDirectory() as tmp:

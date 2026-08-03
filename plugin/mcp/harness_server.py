@@ -652,7 +652,19 @@ def handle_task_start(args: dict) -> dict:
             ctx = emit_compact_context(task_dir)
             if "error" in ctx:
                 raise RuntimeError(str(ctx.get("error") or "compact context unavailable"))
+        except GitBindingError:
+            raise
         except Exception as exc:
+            detail = str(exc)
+            if detail.startswith((
+                "Git HEAD snapshot unavailable:",
+                "task baseline Git snapshot unavailable:",
+                "Git submodule snapshot unavailable",
+                "required task baseline missing",
+                "task baseline integrity unavailable",
+                "Git snapshot deadline exhausted before ",
+            )):
+                raise
             ctx = _minimal_task_start_context(task_dir, tid)
             warnings.append({
                 "code": "TASK_CONTEXT_DEFERRED",
@@ -821,6 +833,11 @@ def handle_task_close(args: dict) -> dict:
     if not _validated_task_state(td):
         return _invalid_task_state_error("task_close", td)
     with review_snapshot_scope():
+        def close_error(message, data):
+            payload = dict(data)
+            payload["git_snapshot_warnings"] = git_snapshot_warnings()
+            return _err(message, data=payload)
+
         try:
             sync_from_git_diff(td)
             control_root = find_harness_root(td) or find_repo_root(td)
@@ -829,7 +846,7 @@ def handle_task_close(args: dict) -> dict:
                 td, control_root
             )
         except RuntimeError:
-            return _err("task_close blocked: Git changed-path snapshot unavailable", data={
+            return close_error("task_close blocked: Git changed-path snapshot unavailable", {
                 "task_dir": td, "git_snapshot_unavailable": True,
             })
         initial_head = _git_head_for_receipt(td)
@@ -838,9 +855,9 @@ def handle_task_close(args: dict) -> dict:
         stale, stale_path = _runtime_is_stale(td)
         checks_status, blocking = _checks_gate_status(td)
         if checks_status == "invalid":
-            return _err(
+            return close_error(
                 "task_close blocked: CHECKS.yaml is present but invalid",
-                data={
+                {
                     "task_dir": td,
                     "next_action": "Repair CHECKS.yaml through write_plan or update_checks.py, then re-run task_verify.",
                 },
@@ -852,20 +869,20 @@ def handle_task_close(args: dict) -> dict:
             }
             if checks_status == "blocked":
                 data["blocking_acs"] = blocking
-            return _err("task_close blocked", data=data)
+            return close_error("task_close blocked", data)
 
         if stale:
-            return _err("task_close blocked: runtime verification stale — re-run task_verify", data={
+            return close_error("task_close blocked: runtime verification stale — re-run task_verify", {
                 "task_dir": td, "stale_path": stale_path,
             })
 
         if checks_status == "blocked":
-            return _err("task_close blocked: CHECKS gate", data={
+            return close_error("task_close blocked: CHECKS gate", {
                 "task_dir": td, "blocking_acs": blocking,
             })
 
         if not initial_head:
-            return _err("task_close blocked: Git HEAD unavailable", data={
+            return close_error("task_close blocked: Git HEAD unavailable", {
                 "task_dir": td, "head_unavailable": True,
             })
 
@@ -875,7 +892,7 @@ def handle_task_close(args: dict) -> dict:
         try:
             final_receipts_before = receipt_stream_fingerprint(td)
         except RuntimeError:
-            return _err("task_close blocked: receipt stream snapshot unavailable", data={
+            return close_error("task_close blocked: receipt stream snapshot unavailable", {
                 "task_dir": td, "receipt_snapshot_unavailable": True,
             })
         final_ctx = emit_compact_context(td)
@@ -891,14 +908,14 @@ def handle_task_close(args: dict) -> dict:
                 td, control_root
             )
         except RuntimeError:
-            return _err("task_close blocked: final Git changed-path snapshot unavailable", data={
+            return close_error("task_close blocked: final Git changed-path snapshot unavailable", {
                 "task_dir": td, "git_snapshot_unavailable": True,
             })
         final_head = _git_head_for_receipt(td)
         try:
             final_receipts_after = receipt_stream_fingerprint(td)
         except RuntimeError:
-            return _err("task_close blocked: final receipt stream snapshot unavailable", data={
+            return close_error("task_close blocked: final receipt stream snapshot unavailable", {
                 "task_dir": td, "receipt_snapshot_unavailable": True,
             })
         receipt_stream_changed = final_receipts_after != final_receipts_before
@@ -909,7 +926,7 @@ def handle_task_close(args: dict) -> dict:
         head_unavailable = not final_head
         head_changed = final_head != initial_head
         if receipt_stream_changed or snapshot_changed or control_snapshot_changed or head_unavailable or head_changed or final_missing or final_stale or final_checks_status in {"blocked", "invalid"}:
-            return _err("task_close blocked: final freshness changed — re-run task_verify", data={
+            return close_error("task_close blocked: final freshness changed — re-run task_verify", {
                 "task_dir": td,
                 "receipt_stream_changed": receipt_stream_changed,
                 "snapshot_changed": snapshot_changed,

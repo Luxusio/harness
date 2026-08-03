@@ -322,6 +322,67 @@ def test_registered_binding_retarget_between_request_operations_fails_closed(tmp
         gitfile.write_text(original_gitfile, encoding="utf-8")
 
 
+def test_registered_binding_pin_survives_request_snapshot_refresh(tmp_path):
+    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
+    gitfile = service / ".git"
+    original_gitfile = gitfile.read_text(encoding="utf-8")
+    original_admin = Path(original_gitfile.removeprefix("gitdir: ").strip())
+    alternate_admin = original_admin.parent / "alternate-after-refresh"
+    shutil.copytree(original_admin, alternate_admin)
+    (alternate_admin / "gitdir").write_text(str(gitfile) + "\n", encoding="utf-8")
+
+    try:
+        with lib.review_snapshot_scope():
+            lib._workspace_source_heads(str(parent))
+            lib.refresh_review_snapshot()
+            gitfile.write_text(f"gitdir: {alternate_admin}\n", encoding="utf-8")
+            try:
+                lib._workspace_git_changed_paths(str(parent))
+            except lib.GitBindingError as exc:
+                assert exc.code == "REGISTERED_WORKTREE_BINDING_CHANGED"
+                assert exc.invariant == "request_source_snapshot_binding"
+            else:
+                raise AssertionError("snapshot refresh must preserve the authority pin")
+    finally:
+        gitfile.write_text(original_gitfile, encoding="utf-8")
+
+
+def test_new_baseline_rechecks_authority_after_atomic_publication(tmp_path):
+    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
+    task = parent / "doc/harness/tasks/TASK__retarget-on-publication"
+    gitfile = service / ".git"
+    original_gitfile = gitfile.read_text(encoding="utf-8")
+    original_admin = Path(original_gitfile.removeprefix("gitdir: ").strip())
+    alternate_admin = original_admin.parent / "alternate-on-publication"
+    shutil.copytree(original_admin, alternate_admin)
+    (alternate_admin / "gitdir").write_text(str(gitfile) + "\n", encoding="utf-8")
+    original_replace = lib.os.replace
+
+    def replace_then_retarget(source, destination):
+        original_replace(source, destination)
+        if Path(destination).name == "TASK_BASELINE.json":
+            gitfile.write_text(f"gitdir: {alternate_admin}\n", encoding="utf-8")
+
+    try:
+        with (
+            lib.review_snapshot_scope(),
+            mock.patch.object(lib.os, "replace", side_effect=replace_then_retarget),
+        ):
+            try:
+                lib.ensure_task_scaffold(
+                    str(task), "TASK__retarget-on-publication"
+                )
+            except RuntimeError as exc:
+                assert "REGISTERED_WORKTREE_BINDING_CHANGED" in str(exc)
+                assert isinstance(exc.__cause__, lib.GitBindingError)
+            else:
+                raise AssertionError("baseline publication retarget must fail closed")
+        assert not (task / "TASK_BASELINE.json").exists()
+        assert not (task / "TASK_STATE.yaml").exists()
+    finally:
+        gitfile.write_text(original_gitfile, encoding="utf-8")
+
+
 def test_nongit_control_keeps_linked_worktree_source_compatibility(tmp_path):
     control = tmp_path / "control"
     source_repo = tmp_path / "source-repo"
