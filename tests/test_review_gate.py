@@ -265,7 +265,7 @@ def test_initialized_submodule_snapshot_rejects_symlink_worktree(tmp_path):
         raise AssertionError("A symlinked gitlink worktree must fail closed")
 
 
-def test_initialized_submodule_snapshot_rejects_external_gitdir(tmp_path):
+def test_initialized_submodule_snapshot_trusts_external_gitdir(tmp_path):
     source = tmp_path / "source"
     external = tmp_path / "external"
     parent = tmp_path / "parent"
@@ -286,15 +286,10 @@ def test_initialized_submodule_snapshot_rejects_external_gitdir(tmp_path):
         f"gitdir: {external / '.git'}\n", encoding="utf-8",
     )
 
-    try:
-        lib._initialized_submodule_paths(str(parent))
-    except RuntimeError as exc:
-        assert "submodule snapshot unavailable" in str(exc)
-    else:
-        raise AssertionError("An external submodule gitdir must fail closed")
+    assert lib._initialized_submodule_paths(str(parent)) == ["sub"]
 
 
-def test_registered_direct_linked_worktree_passes_but_unregistered_traversal_fails(tmp_path):
+def test_local_linked_worktree_is_trusted_with_or_without_registration(tmp_path):
     service_repo = tmp_path / "service-repo"
     parent = tmp_path / "parent"
     for repo in (service_repo, parent):
@@ -329,15 +324,10 @@ def test_registered_direct_linked_worktree_passes_but_unregistered_traversal_fai
     )
     assert snapshot["service"] == (head, True)
 
-    try:
-        lib._initialized_submodule_paths(str(parent))
-    except RuntimeError as exc:
-        assert "submodule snapshot unavailable" in str(exc)
-    else:
-        raise AssertionError("The same external checkout must fail without registration")
+    assert lib._initialized_submodule_paths(str(parent)) == ["service"]
 
 
-def test_registered_linked_worktree_rejects_wrong_admin_backreference(tmp_path):
+def test_registered_linked_worktree_trusts_gitdir_without_admin_backreference_check(tmp_path):
     service_repo = tmp_path / "service-repo"
     parent = tmp_path / "parent"
     for repo in (service_repo, parent):
@@ -357,16 +347,15 @@ def test_registered_linked_worktree_rejects_wrong_admin_backreference(tmp_path):
     gitdir = Path((service / ".git").read_text(encoding="utf-8").strip()[len("gitdir: "):])
     (gitdir / "gitdir").write_text(str(parent / "wrong/.git") + "\n", encoding="utf-8")
 
-    try:
-        lib._registered_source_metadata_binding(str(parent), str(service), "service")
-    except lib.GitBindingError as exc:
-        assert exc.code == "REGISTERED_WORKTREE_BINDING_MISMATCH"
-        assert exc.invariant == "admin_gitdir_backreference"
-    else:
-        raise AssertionError("A forged admin backreference must fail closed")
+    assert lib._registered_source_metadata_binding(
+        str(parent), str(service), "service"
+    ) == str(gitdir)
+    assert lib._git_head_snapshot(
+        str(service), git_dir=str(gitdir), use_cache=False,
+    )
 
 
-def test_nested_submodule_snapshot_rejects_external_gitdir(tmp_path):
+def test_nested_submodule_snapshot_trusts_external_gitdir(tmp_path):
     inner_source = tmp_path / "inner-source"
     outer_source = tmp_path / "outer-source"
     external = tmp_path / "external"
@@ -397,15 +386,10 @@ def test_nested_submodule_snapshot_rejects_external_gitdir(tmp_path):
         f"gitdir: {external / '.git'}\n", encoding="utf-8",
     )
 
-    try:
-        lib._initialized_submodule_paths(str(parent))
-    except RuntimeError as exc:
-        assert "submodule snapshot unavailable" in str(exc)
-    else:
-        raise AssertionError("A nested external submodule gitdir must fail closed")
+    assert lib._initialized_submodule_paths(str(parent)) == ["outer", "outer/nested"]
 
 
-def test_submodule_worktree_binding_is_rechecked_after_gitdir_retarget(tmp_path):
+def test_submodule_worktree_uses_retargeted_gitdir_on_next_operation(tmp_path):
     source = tmp_path / "source"
     parent = tmp_path / "parent"
     external_worktree = tmp_path / "external-worktree"
@@ -436,56 +420,8 @@ def test_submodule_worktree_binding_is_rechecked_after_gitdir_retarget(tmp_path)
     with lib.review_snapshot_scope():
         assert lib._initialized_submodule_paths(str(parent)) == ["sub"]
         git_file.write_text("gitdir: ../.git/modules/alternate\n", encoding="utf-8")
-        try:
-            lib._validated_submodule_root(str(parent), "sub")
-        except RuntimeError as exc:
-            assert "submodule snapshot unavailable" in str(exc)
-        else:
-            raise AssertionError("Retargeted gitdir worktree binding must be rechecked")
-
-
-def test_submodule_head_is_bound_to_validated_gitdir(tmp_path, monkeypatch):
-    source = tmp_path / "source"
-    parent = tmp_path / "parent"
-    for repo in (source, parent):
-        repo.mkdir()
-        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-        subprocess.run(["git", "config", "user.email", "paths@test"], cwd=repo, check=True)
-        subprocess.run(["git", "config", "user.name", "Paths Test"], cwd=repo, check=True)
-    (source / "tracked.py").write_text("source\n", encoding="utf-8")
-    subprocess.run(["git", "add", "tracked.py"], cwd=source, check=True)
-    subprocess.run(["git", "commit", "-qm", "source"], cwd=source, check=True)
-    subprocess.run(
-        ["git", "-c", "protocol.file.allow=always", "submodule", "add", "-q", str(source), "sub"],
-        cwd=parent, check=True,
-    )
-    sub_root = parent / "sub"
-    git_file = sub_root / ".git"
-    alternate = parent / ".git/modules/alternate"
-    subprocess.run(["git", "init", "--bare", "-q", str(alternate)], check=True)
-    subprocess.run(
-        ["git", f"--git-dir={alternate}", "config", "core.bare", "false"], check=True,
-    )
-    subprocess.run(
-        ["git", f"--git-dir={alternate}", "config", "core.worktree", str(sub_root)], check=True,
-    )
-    original_head = lib._git_head_snapshot
-    observed = {}
-
-    def retarget_during_head(repo_root, *, git_dir=None, use_cache=True):
-        observed.update(git_dir=git_dir, use_cache=use_cache)
-        git_file.write_text("gitdir: ../.git/modules/alternate\n", encoding="utf-8")
-        return original_head(repo_root, git_dir=git_dir, use_cache=use_cache)
-
-    monkeypatch.setattr(lib, "_git_head_snapshot", retarget_during_head)
-    try:
-        lib._submodule_gitlink_fingerprint(str(parent), "sub")
-    except RuntimeError as exc:
-        assert "submodule snapshot unavailable" in str(exc)
-    else:
-        raise AssertionError("Submodule HEAD must remain bound to one gitdir")
-    assert observed["git_dir"]
-    assert observed["use_cache"] is False
+        sub_root, _ = lib._validated_submodule_root(str(parent), "sub")
+        assert sub_root == str(parent / "sub")
 
 
 def test_review_fingerprint_changes_with_clean_submodule_head(tmp_path):

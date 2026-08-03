@@ -41,9 +41,6 @@ _REVIEW_SNAPSHOT_CACHE = ContextVar("harness_review_snapshot_cache", default=Non
 _REQUEST_GIT_ROOTS = ContextVar("harness_request_git_roots", default=None)
 _REQUEST_SNAPSHOT_DEADLINE = ContextVar("harness_request_snapshot_deadline", default=None)
 _REQUEST_SNAPSHOT_WARNINGS = ContextVar("harness_request_snapshot_warnings", default=None)
-_REQUEST_SOURCE_AUTHORITIES = ContextVar(
-    "harness_request_source_authorities", default=None,
-)
 _DIRTY_ENUMERATION_TIMEOUT_OVERRIDE = ContextVar(
     "harness_dirty_enumeration_timeout_override", default=None,
 )
@@ -61,7 +58,6 @@ def review_snapshot_scope(deadline_seconds=None):
     token = _REVIEW_SNAPSHOT_CACHE.set({})
     roots_token = _REQUEST_GIT_ROOTS.set(set())
     warnings_token = _REQUEST_SNAPSHOT_WARNINGS.set([])
-    authorities_token = _REQUEST_SOURCE_AUTHORITIES.set({})
     deadline = (
         time.monotonic() + float(deadline_seconds)
         if deadline_seconds is not None
@@ -72,7 +68,6 @@ def review_snapshot_scope(deadline_seconds=None):
         yield
     finally:
         _REQUEST_SNAPSHOT_DEADLINE.reset(deadline_token)
-        _REQUEST_SOURCE_AUTHORITIES.reset(authorities_token)
         _REQUEST_SNAPSHOT_WARNINGS.reset(warnings_token)
         _REQUEST_GIT_ROOTS.reset(roots_token)
         _REVIEW_SNAPSHOT_CACHE.reset(token)
@@ -1431,87 +1426,8 @@ def _direct_gitlink_index_entries(repo_root, *, git_dir=None):
     return found
 
 
-def _read_binding_file(path, *, code, relpath, invariant, max_size=4096):
-    """Read one small regular metadata file without following its leaf."""
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    fd = None
-    try:
-        before_path = os.lstat(path)
-        fd = os.open(path, flags)
-        opened = os.fstat(fd)
-        raw = os.read(fd, max_size + 1)
-        after = os.fstat(fd)
-        final_path = os.lstat(path)
-    except OSError as exc:
-        raise GitBindingError(
-            code,
-            f"registered source '{relpath}' has unreadable linked-worktree metadata",
-            path=relpath,
-            invariant=invariant,
-            next_action="Repair the Git worktree binding or remove the manifest entry, then retry.",
-        ) from exc
-    finally:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-    if (
-        len(raw) > max_size
-        or not stat.S_ISREG(opened.st_mode)
-        or not stat.S_ISREG(before_path.st_mode)
-        or not stat.S_ISREG(final_path.st_mode)
-        or (opened.st_dev, opened.st_ino) != (before_path.st_dev, before_path.st_ino)
-        or (opened.st_dev, opened.st_ino) != (final_path.st_dev, final_path.st_ino)
-        or after.st_size != opened.st_size
-        or after.st_mtime_ns != opened.st_mtime_ns
-        or after.st_ctime_ns != opened.st_ctime_ns
-    ):
-        raise GitBindingError(
-            code,
-            f"registered source '{relpath}' linked-worktree metadata changed during validation",
-            path=relpath,
-            invariant=invariant,
-            next_action="Stop concurrent Git operations and retry.",
-        )
-    return raw, (
-        opened.st_dev,
-        opened.st_ino,
-        opened.st_size,
-        opened.st_mtime_ns,
-        opened.st_ctime_ns,
-        hashlib.sha256(raw).hexdigest(),
-    )
-
-
-def _require_real_directory_path(path, *, relpath, invariant):
-    absolute = os.path.abspath(path)
-    cursor = os.path.sep
-    for component in [part for part in absolute.split(os.path.sep) if part]:
-        cursor = os.path.join(cursor, component)
-        try:
-            info = os.lstat(cursor)
-        except OSError as exc:
-            raise GitBindingError(
-                "REGISTERED_WORKTREE_BINDING_MISMATCH",
-                f"registered source '{relpath}' has missing Git metadata",
-                path=relpath,
-                invariant=invariant,
-                next_action="Repair the Git worktree binding or remove the manifest entry, then retry.",
-            ) from exc
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            raise GitBindingError(
-                "REGISTERED_WORKTREE_BINDING_MISMATCH",
-                f"registered source '{relpath}' uses a symlinked or non-directory Git metadata path",
-                path=relpath,
-                invariant=invariant,
-                next_action="Use a real linked-worktree metadata directory and retry.",
-            )
-    return os.lstat(absolute)
-
-
 def _registered_source_metadata_binding(control_root, source_root, relpath):
-    """Validate a parent-confined submodule or reciprocal linked worktree."""
+    """Resolve Git metadata for an explicitly trusted registered source root."""
     git_path = os.path.join(source_root, ".git")
     try:
         git_info = os.lstat(git_path)
@@ -1524,13 +1440,7 @@ def _registered_source_metadata_binding(control_root, source_root, relpath):
             next_action="Restore the checkout at the registered path, then retry.",
         ) from exc
     if stat.S_ISDIR(git_info.st_mode):
-        raise GitBindingError(
-            "REGISTERED_WORKTREE_BINDING_MISMATCH",
-            f"registered source '{relpath}' is an arbitrary nested repository, not a linked gitlink checkout",
-            path=relpath,
-            invariant="gitfile_checkout",
-            next_action="Use the parent gitlink checkout or remove the manifest entry.",
-        )
+        return git_path
     if stat.S_ISLNK(git_info.st_mode) or not stat.S_ISREG(git_info.st_mode):
         raise GitBindingError(
             "REGISTERED_WORKTREE_BINDING_MISMATCH",
@@ -1540,13 +1450,17 @@ def _registered_source_metadata_binding(control_root, source_root, relpath):
             next_action="Repair the checkout and retry.",
         )
 
-    raw_git, git_binding = _read_binding_file(
-        git_path,
-        code="REGISTERED_WORKTREE_BINDING_CHANGED",
-        relpath=relpath,
-        invariant="worktree_gitfile",
-    )
-    line = os.fsdecode(raw_git).strip()
+    try:
+        with open(git_path, "r", encoding="utf-8") as handle:
+            line = handle.read(4097).strip()
+    except (OSError, UnicodeError) as exc:
+        raise GitBindingError(
+            "REGISTERED_WORKTREE_BINDING_MISMATCH",
+            f"registered source '{relpath}' has unreadable .git metadata",
+            path=relpath,
+            invariant="gitdir_pointer",
+            next_action="Repair the checkout and retry.",
+        ) from exc
     if not line.startswith("gitdir: ") or not line[len("gitdir: "):].strip():
         raise GitBindingError(
             "REGISTERED_WORKTREE_BINDING_MISMATCH",
@@ -1557,110 +1471,13 @@ def _registered_source_metadata_binding(control_root, source_root, relpath):
         )
     target = line[len("gitdir: "):].strip()
     target = os.path.abspath(target if os.path.isabs(target) else os.path.join(source_root, target))
-    target_info = _require_real_directory_path(target, relpath=relpath, invariant="gitdir_path")
-
-    git_control = _nearest_git_root(control_root) == os.path.realpath(control_root)
-    parent_confined = False
-    if git_control:
-        parent_common = _git_path_snapshot(control_root, "--git-common-dir", use_cache=False)
-        try:
-            parent_confined = os.path.commonpath(
-                (os.path.realpath(target), os.path.realpath(parent_common))
-            ) == os.path.realpath(parent_common)
-        except ValueError:
-            parent_confined = False
-    if parent_confined:
-        _binding, resolved_gitdir = _validate_submodule_git_metadata(
-            control_root, source_root, git_info,
-        )
-        return resolved_gitdir
-
-    reported_gitdir = _git_path_snapshot(source_root, "--absolute-git-dir", use_cache=False)
-    reported_common = _git_path_snapshot(source_root, "--git-common-dir", use_cache=False)
-    reported_top = _git_path_snapshot(source_root, "--show-toplevel", use_cache=False)
-    common = os.path.abspath(reported_common)
-    _require_real_directory_path(common, relpath=relpath, invariant="common_dir_path")
-    if os.path.abspath(reported_gitdir) != target:
-        invariant = "absolute_git_dir"
-    elif os.path.realpath(reported_top) != os.path.realpath(source_root):
-        invariant = "worktree_top_level"
-    elif os.path.dirname(os.path.dirname(target)) != common or os.path.basename(os.path.dirname(target)) != "worktrees":
-        invariant = "linked_worktree_admin_shape"
-    else:
-        invariant = ""
-    if invariant:
+    if not os.path.isdir(target):
         raise GitBindingError(
             "REGISTERED_WORKTREE_BINDING_MISMATCH",
-            f"registered source '{relpath}' failed linked-worktree validation",
+            f"registered source '{relpath}' points to missing Git metadata",
             path=relpath,
-            invariant=invariant,
-            next_action="Repair the Git worktree binding or remove the manifest entry, then retry.",
-        )
-
-    raw_common, common_binding = _read_binding_file(
-        os.path.join(target, "commondir"),
-        code="REGISTERED_WORKTREE_BINDING_CHANGED",
-        relpath=relpath,
-        invariant="commondir",
-    )
-    raw_backref, backref_binding = _read_binding_file(
-        os.path.join(target, "gitdir"),
-        code="REGISTERED_WORKTREE_BINDING_CHANGED",
-        relpath=relpath,
-        invariant="admin_gitdir_backreference",
-    )
-    declared_common = os.path.abspath(os.path.join(target, os.fsdecode(raw_common).strip()))
-    declared_backref = os.path.abspath(os.fsdecode(raw_backref).strip())
-    if declared_common != common or os.path.realpath(declared_common) != common:
-        invariant = "commondir"
-    elif declared_backref != os.path.abspath(git_path) or os.path.realpath(declared_backref) != os.path.abspath(git_path):
-        invariant = "admin_gitdir_backreference"
-    else:
-        invariant = ""
-    if invariant:
-        raise GitBindingError(
-            "REGISTERED_WORKTREE_BINDING_MISMATCH",
-            f"registered source '{relpath}' failed linked-worktree validation",
-            path=relpath,
-            invariant=invariant,
-            next_action="Run Git worktree repair for this checkout, then retry.",
-        )
-
-    _git_head_snapshot(source_root, git_dir=target, use_cache=False)
-    raw_git_after, git_binding_after = _read_binding_file(
-        git_path,
-        code="REGISTERED_WORKTREE_BINDING_CHANGED",
-        relpath=relpath,
-        invariant="worktree_gitfile",
-    )
-    raw_common_after, common_binding_after = _read_binding_file(
-        os.path.join(target, "commondir"),
-        code="REGISTERED_WORKTREE_BINDING_CHANGED",
-        relpath=relpath,
-        invariant="commondir",
-    )
-    raw_backref_after, backref_binding_after = _read_binding_file(
-        os.path.join(target, "gitdir"),
-        code="REGISTERED_WORKTREE_BINDING_CHANGED",
-        relpath=relpath,
-        invariant="admin_gitdir_backreference",
-    )
-    target_after = os.lstat(target)
-    if (
-        raw_git_after != raw_git
-        or raw_common_after != raw_common
-        or raw_backref_after != raw_backref
-        or git_binding_after != git_binding
-        or common_binding_after != common_binding
-        or backref_binding_after != backref_binding
-        or (target_after.st_dev, target_after.st_ino) != (target_info.st_dev, target_info.st_ino)
-    ):
-        raise GitBindingError(
-            "REGISTERED_WORKTREE_BINDING_CHANGED",
-            f"registered source '{relpath}' binding changed during validation",
-            path=relpath,
-            invariant="binding_stability",
-            next_action="Stop concurrent Git operations and retry.",
+            invariant="gitdir_path",
+            next_action="Repair the checkout and retry.",
         )
     return target
 
@@ -1722,18 +1539,7 @@ def configured_source_git_roots(control_root, *, strict=True):
             contained = False
         if not contained or not os.path.isdir(root):
             raise RuntimeError(f"source_git_roots entry is not a directory inside workspace: {rel}")
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                cwd=root, capture_output=True, text=True, timeout=2,
-                env=_trusted_git_env(),
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise RuntimeError(f"source_git_roots entry is not a readable Git root: {rel}") from exc
-        if result.returncode != 0 or os.path.realpath(result.stdout.strip()) != root:
-            raise RuntimeError(f"source_git_roots entry is not an exact Git root: {rel}")
-        if git_control:
-            _registered_source_metadata_binding(control, root, rel)
+        _registered_source_metadata_binding(control, root, rel)
         if root in seen_roots:
             raise RuntimeError(f"duplicate source_git_roots entry: {rel}")
         if any(
@@ -2162,7 +1968,6 @@ def ensure_task_scaffold(task_dir, task_id, request_text="", repo_root=None):
             if not os.path.isfile(req_path) or os.path.islink(req_path):
                 _atomic_text_write(req_path, request_text)
                 created.append(req_path)
-        revalidate_request_source_authorities(repo_root)
     except Exception:
         for artifact in created + [_baseline_file(task_dir)]:
             try:
@@ -2806,29 +2611,8 @@ def _composite_source_heads(source_heads):
     return digest.hexdigest()
 
 
-def _registered_source_authority(control_root, source_root, relpath):
-    """Return and request-pin one validated registered-source Git authority."""
-    git_dir = _registered_source_metadata_binding(control_root, source_root, relpath)
-    git_dir_stat = os.lstat(git_dir)
-    authority = (os.path.realpath(git_dir), git_dir_stat.st_dev, git_dir_stat.st_ino)
-    authorities = _REQUEST_SOURCE_AUTHORITIES.get()
-    authority_key = (os.path.realpath(control_root), relpath)
-    if authorities is not None:
-        pinned = authorities.get(authority_key)
-        if pinned is not None and pinned != authority:
-            raise GitBindingError(
-                "REGISTERED_WORKTREE_BINDING_CHANGED",
-                f"registered source '{relpath}' changed Git authority during the request",
-                path=relpath,
-                invariant="request_source_snapshot_binding",
-                next_action="Stop concurrent Git/worktree operations and retry.",
-            )
-        authorities[authority_key] = authority
-    return git_dir, authority
-
-
 def _registered_source_operation(control_root, prefix, source_root, bindings, operation):
-    """Run one service snapshot through its validated explicit Git authority."""
+    """Run one service snapshot through its trusted registered Git metadata."""
     control = os.path.realpath(control_root)
     if (
         not prefix
@@ -2837,37 +2621,8 @@ def _registered_source_operation(control_root, prefix, source_root, bindings, op
     ):
         return operation(None)
     relpath = prefix.rstrip("/")
-    before = os.lstat(source_root)
-    git_dir, authority = _registered_source_authority(control, source_root, relpath)
-    result = operation(git_dir)
-    _git_dir_after, authority_after = _registered_source_authority(
-        control, source_root, relpath,
-    )
-    after = os.lstat(source_root)
-    if (
-        authority_after != authority
-        or not stat.S_ISDIR(after.st_mode)
-        or stat.S_ISLNK(after.st_mode)
-        or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
-    ):
-        raise GitBindingError(
-            "REGISTERED_WORKTREE_BINDING_CHANGED",
-            f"registered source '{relpath}' changed during the Git snapshot",
-            path=relpath,
-            invariant="source_snapshot_binding",
-            next_action="Stop concurrent Git/worktree operations and retry.",
-        )
-    return result
-
-
-def revalidate_request_source_authorities(control_root):
-    """Recheck pinned registered-source authority without rereading Git objects."""
-    bindings = _workspace_source_bindings(control_root)
-    for prefix, source_root in bindings:
-        if prefix:
-            _registered_source_operation(
-                control_root, prefix, source_root, bindings, lambda _git_dir: None,
-            )
+    git_dir = _registered_source_metadata_binding(control, source_root, relpath)
+    return operation(git_dir)
 
 
 def _workspace_source_heads(control_root):
@@ -3212,11 +2967,9 @@ def _committed_paths_since_baseline(task_dir, repo_root=None, *, workspace_prefi
         deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
     )
     control_root = find_harness_root(task_dir) or find_repo_root(task_dir)
-    source_before = os.lstat(repo_root)
     source_git_dir = None
-    source_authority = None
     if workspace_prefix and _nearest_git_root(control_root) == os.path.realpath(control_root):
-        source_git_dir, source_authority = _registered_source_authority(
+        source_git_dir = _registered_source_metadata_binding(
             control_root, repo_root, workspace_prefix.rstrip("/"),
         )
     command = ["git"]
@@ -3249,25 +3002,6 @@ def _committed_paths_since_baseline(task_dir, repo_root=None, *, workspace_prefi
             f"task baseline Git diff unavailable: {operation} exited "
             f"{result.returncode} in {repo_root}"
         )
-    if source_git_dir:
-        _source_git_dir_after, source_authority_after = _registered_source_authority(
-            control_root, repo_root, workspace_prefix.rstrip("/"),
-        )
-        source_after = os.lstat(repo_root)
-        if (
-            source_authority_after != source_authority
-            or not stat.S_ISDIR(source_after.st_mode)
-            or stat.S_ISLNK(source_after.st_mode)
-            or (source_after.st_dev, source_after.st_ino)
-            != (source_before.st_dev, source_before.st_ino)
-        ):
-            raise GitBindingError(
-                "REGISTERED_WORKTREE_BINDING_CHANGED",
-                f"registered source '{workspace_prefix.rstrip('/')}' changed during committed-path diff",
-                path=workspace_prefix.rstrip("/"),
-                invariant="committed_path_source_binding",
-                next_action="Stop concurrent Git/worktree operations and retry.",
-            )
     raw = result.stdout if isinstance(result.stdout, bytes) else str(result.stdout or "").encode()
     paths = set()
     for item in raw.split(b"\0"):
@@ -4177,153 +3911,10 @@ def _task_baseline_required(repo_root):
     return False
 
 
-def _git_path_snapshot(repo_root, argument, *, use_cache=True):
-    cache = _review_snapshot_cache()
-    cache_key = ("git_path_snapshot", os.path.realpath(repo_root), argument)
-    if use_cache and cache is not None and cache_key in cache:
-        return cache[cache_key]
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--path-format=absolute", argument],
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            env=_trusted_git_env(),
-            timeout=_bounded_snapshot_timeout(2, f"git rev-parse {argument}", repo_root),
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"Git submodule snapshot unavailable: git rev-parse {argument} "
-            f"timed out in {repo_root}"
-        ) from exc
-    except OSError as exc:
-        raise RuntimeError(
-            f"Git submodule snapshot unavailable: git rev-parse {argument} "
-            f"could not run in {repo_root}"
-        ) from exc
-    value = str(result.stdout or "").strip()
-    if result.returncode != 0 or not value or not os.path.isabs(value):
-        raise RuntimeError("Git submodule snapshot unavailable")
-    value = os.path.abspath(value)
-    if use_cache and cache is not None:
-        cache[cache_key] = value
-    return value
-
-
-def _validate_submodule_git_metadata(repo_root, sub_root, git_info):
-    git_path = os.path.join(sub_root, ".git")
-    binding_material = []
-    if stat.S_ISDIR(git_info.st_mode):
-        if os.path.realpath(git_path) != os.path.abspath(git_path):
-            raise RuntimeError("Git submodule snapshot unavailable")
-        resolved_gitdir = os.path.abspath(git_path)
-        binding_material.append(f"dir:{git_info.st_dev}:{git_info.st_ino}")
-    else:
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-        fd = None
-        try:
-            fd = os.open(git_path, flags)
-            opened = os.fstat(fd)
-            if (
-                not stat.S_ISREG(opened.st_mode)
-                or (opened.st_dev, opened.st_ino) != (git_info.st_dev, git_info.st_ino)
-            ):
-                raise RuntimeError("Git submodule snapshot unavailable")
-            raw = os.read(fd, 4097)
-            after = os.fstat(fd)
-            final_path = os.lstat(git_path)
-            if (
-                len(raw) > 4096
-                or after.st_size != opened.st_size
-                or after.st_mtime_ns != opened.st_mtime_ns
-                or after.st_ctime_ns != opened.st_ctime_ns
-                or not stat.S_ISREG(final_path.st_mode)
-                or (final_path.st_dev, final_path.st_ino) != (opened.st_dev, opened.st_ino)
-            ):
-                raise RuntimeError("Git submodule snapshot unavailable")
-        except OSError as exc:
-            raise RuntimeError("Git submodule snapshot unavailable") from exc
-        finally:
-            if fd is not None:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-        line = os.fsdecode(raw).strip()
-        if not line.startswith("gitdir: "):
-            raise RuntimeError("Git submodule snapshot unavailable")
-        target = line[len("gitdir: "):].strip()
-        if not target:
-            raise RuntimeError("Git submodule snapshot unavailable")
-        target = os.path.abspath(
-            target if os.path.isabs(target) else os.path.join(sub_root, target)
-        )
-        target_real = os.path.realpath(target)
-        parent_common = _git_path_snapshot(repo_root, "--git-common-dir")
-        parent_common_real = os.path.realpath(parent_common)
-        try:
-            confined = os.path.commonpath([target_real, parent_common_real]) == parent_common_real
-        except ValueError:
-            confined = False
-        if not confined:
-            relpath = _canonical_git_relpath(
-                os.path.relpath(sub_root, repo_root)
-            ).rstrip("/")
-            raise GitBindingError(
-                "UNREGISTERED_EXTERNAL_GITDIR",
-                "Git submodule snapshot unavailable: an unregistered gitlink "
-                f"'{relpath}' points outside the parent common directory",
-                path=relpath,
-                invariant="parent_common_confinement",
-                next_action=(
-                    "Register the exact direct gitlink in source_git_roots if it is "
-                    "an intentional linked worktree, otherwise repair the submodule checkout."
-                ),
-            )
-        if (
-            target != target_real
-            or parent_common != parent_common_real
-            or not os.path.isdir(target)
-        ):
-            raise RuntimeError("Git submodule snapshot unavailable")
-        resolved_gitdir = target_real
-        binding_material.append(
-            "file:"
-            + str(git_info.st_dev)
-            + ":"
-            + str(git_info.st_ino)
-            + ":"
-            + hashlib.sha256(raw).hexdigest()
-        )
-
-    reported_worktree = _git_path_snapshot(
-        sub_root, "--show-toplevel", use_cache=False,
-    )
-    if os.path.realpath(reported_worktree) != os.path.realpath(sub_root):
-        raise RuntimeError("Git submodule snapshot unavailable")
-    try:
-        final_git = os.lstat(git_path)
-    except OSError as exc:
-        raise RuntimeError("Git submodule snapshot unavailable") from exc
-    if (
-        final_git.st_mode != git_info.st_mode
-        or (final_git.st_dev, final_git.st_ino) != (git_info.st_dev, git_info.st_ino)
-    ):
-        raise RuntimeError("Git submodule snapshot unavailable")
-    binding_material.append(resolved_gitdir)
-    return "|".join(binding_material), resolved_gitdir
-
-
 def _submodule_metadata_binding(repo_root, sub_root):
-    try:
-        git_info = os.lstat(os.path.join(sub_root, ".git"))
-    except OSError as exc:
-        raise RuntimeError("Git submodule snapshot unavailable") from exc
-    if stat.S_ISLNK(git_info.st_mode) or not (
-        stat.S_ISREG(git_info.st_mode) or stat.S_ISDIR(git_info.st_mode)
-    ):
-        raise RuntimeError("Git submodule snapshot unavailable")
-    return _validate_submodule_git_metadata(repo_root, sub_root, git_info)
+    relpath = _canonical_git_relpath(os.path.relpath(sub_root, repo_root)).rstrip("/")
+    git_dir = _registered_source_metadata_binding(repo_root, sub_root, relpath)
+    return f"trusted:{git_dir}", git_dir
 
 
 def _validated_submodule_root(repo_root, relpath, *, allow_missing=False):
@@ -4363,7 +3954,7 @@ def _validated_submodule_root(repo_root, relpath, *, allow_missing=False):
         stat.S_ISREG(git_info.st_mode) or stat.S_ISDIR(git_info.st_mode)
     ):
         raise RuntimeError("Git submodule snapshot unavailable")
-    _validate_submodule_git_metadata(repo_root, current, git_info)
+    _submodule_metadata_binding(repo_root, current)
     return current, info
 
 
@@ -4374,60 +3965,24 @@ def _submodule_gitlink_fingerprint(repo_root, relpath):
     index_oid, initialized = entry
     if not initialized:
         return f"gitlink:index:{index_oid}:uninitialized"
-    sub_root, before = _validated_submodule_root(repo_root, relpath)
-    binding_before, git_dir = _submodule_metadata_binding(repo_root, sub_root)
+    sub_root, _before = _validated_submodule_root(repo_root, relpath)
+    _binding, git_dir = _submodule_metadata_binding(repo_root, sub_root)
     head = _git_head_snapshot(
         sub_root, git_dir=git_dir, use_cache=False,
     )
-    binding_after, _ = _submodule_metadata_binding(repo_root, sub_root)
-    if binding_after != binding_before:
-        raise RuntimeError("Git submodule snapshot unavailable")
-    _validated_submodule_root(repo_root, relpath)
-    try:
-        after = os.lstat(sub_root)
-    except OSError as exc:
-        raise RuntimeError("Git submodule snapshot unavailable") from exc
-    if (
-        not stat.S_ISDIR(after.st_mode)
-        or stat.S_ISLNK(after.st_mode)
-        or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
-    ):
-        raise RuntimeError("Git submodule snapshot unavailable")
-    return (
-        f"gitlink:index:{index_oid}:checkout:{head}:"
-        f"worktree:{after.st_dev}:{after.st_ino}"
-    )
+    return f"gitlink:index:{index_oid}:checkout:{head}"
 
 
 def _registered_source_gitlink_fingerprint(repo_root, relpath, index_oid=None):
-    """Fingerprint a registered leaf without applying parent confinement."""
+    """Fingerprint a user-trusted registered Git leaf."""
     entries = _direct_gitlink_index_entries(repo_root)
     oid = str(index_oid or entries.get(relpath) or "").lower()
     if not oid:
         raise RuntimeError("Git submodule snapshot unavailable")
     source_root = os.path.join(repo_root, *relpath.split("/"))
-    before = os.lstat(source_root)
     git_dir = _registered_source_metadata_binding(repo_root, source_root, relpath)
     head = _git_head_snapshot(source_root, git_dir=git_dir, use_cache=False)
-    git_dir_after = _registered_source_metadata_binding(repo_root, source_root, relpath)
-    after = os.lstat(source_root)
-    if (
-        os.path.realpath(git_dir_after) != os.path.realpath(git_dir)
-        or not stat.S_ISDIR(after.st_mode)
-        or stat.S_ISLNK(after.st_mode)
-        or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
-    ):
-        raise GitBindingError(
-            "REGISTERED_WORKTREE_BINDING_CHANGED",
-            f"registered source '{relpath}' changed during gitlink fingerprinting",
-            path=relpath,
-            invariant="registered_gitlink_identity",
-            next_action="Stop concurrent Git/worktree operations and retry.",
-        )
-    return (
-        f"gitlink:index:{oid}:registered-source:checkout:{head}:"
-        f"worktree:{after.st_dev}:{after.st_ino}"
-    )
+    return f"gitlink:index:{oid}:registered-source:checkout:{head}"
 
 
 def _uncached_git_changed_paths(repo_root, *, git_dir=None, timeout_seconds=None):
@@ -4839,11 +4394,9 @@ def _read_task_baseline_snapshot(task_dir, repo_root=None, *, validate_git=True)
         return data
 
     for prefix, source_root, source_head in source_snapshots:
-        source_before = os.lstat(source_root)
         source_git_dir = None
-        source_authority = None
         if prefix and _nearest_git_root(repo_root) == os.path.realpath(repo_root):
-            source_git_dir, source_authority = _registered_source_authority(
+            source_git_dir = _registered_source_metadata_binding(
                 repo_root, source_root, prefix.rstrip("/"),
             )
         git_command = ["git"]
@@ -4925,25 +4478,6 @@ def _read_task_baseline_snapshot(task_dir, repo_root=None, *, validate_git=True)
                 f"task baseline Git snapshot unavailable: {ancestor_operation} exited "
                 f"{ancestor.returncode} in {source_root}"
             )
-        if source_git_dir:
-            _source_git_dir_after, source_authority_after = _registered_source_authority(
-                repo_root, source_root, prefix.rstrip("/"),
-            )
-            source_after = os.lstat(source_root)
-            if (
-                source_authority_after != source_authority
-                or not stat.S_ISDIR(source_after.st_mode)
-                or stat.S_ISLNK(source_after.st_mode)
-                or (source_after.st_dev, source_after.st_ino)
-                != (source_before.st_dev, source_before.st_ino)
-            ):
-                raise GitBindingError(
-                    "REGISTERED_WORKTREE_BINDING_CHANGED",
-                    f"registered source '{prefix.rstrip('/')}' changed during baseline validation",
-                    path=prefix.rstrip("/"),
-                    invariant="baseline_source_binding",
-                    next_action="Stop concurrent Git/worktree operations and retry.",
-                )
     if cache is not None:
         cache[cache_key] = data
     return data

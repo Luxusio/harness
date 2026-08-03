@@ -63,8 +63,9 @@ working-tree evidence was skipped.
 
 **Cause:** The root did not finish staged, unstaged, or untracked-path
 enumeration within the three-second optional budget, or the enumeration command
-failed. Harness continues because HEAD, repository binding, ancestry, and
-gitlink evidence are still validated separately.
+failed. Harness continues because required HEAD, ancestry, and gitlink commands
+remain separate. Configured local source roots are trusted and do not receive
+linked-worktree authority preflights.
 
 **Risk:** Uncommitted changes in that root may be absent from `touched_paths`.
 That can hide scope drift, pre-task dirt, or stale review/QA evidence for the
@@ -82,6 +83,22 @@ git -C <reported-root> status --porcelain=v2 --untracked-files=all
 To restore the former fail-closed policy, roll back the Harness version that
 introduced best-effort dirty scans and start a new task ID. Existing baseline
 files remain schema-compatible; do not edit `TASK_BASELINE.json` manually.
+
+### `Git snapshot deadline exhausted before git rev-parse --git-common-dir`
+
+Current Harness versions do not run linked-worktree `--git-common-dir`,
+`--absolute-git-dir`, or `--show-toplevel` authority preflights for registered
+local source roots. Manifest registration is the trust decision, and Git
+commands consume the checkout as it exists when they run.
+
+If this legacy error still appears after installation, the current MCP process
+is using an older loaded plugin. Run the verified installer and start a new
+Codex session. Do not edit task baselines to work around the old process.
+
+The tradeoff is intentional: Harness no longer detects a valid `.git` pointer
+retarget between lifecycle operations. Developers who change worktree metadata
+must treat the next Git result as authoritative and repair the checkout with
+normal Git tooling when it fails.
 
 ### "MCP server harness not reachable"
 

@@ -1550,7 +1550,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                         {"task_id": "TASK__diff-failure"}
                     )
 
-    def test_new_task_start_rolls_back_after_final_authority_failure(self):
+    def test_new_task_start_rolls_back_after_partial_marker_publication(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._run_git(tmp, "init", "-q")
             self._run_git(tmp, "config", "user.email", "a@b")
@@ -1558,14 +1558,13 @@ class HarnessMcpServerTests(unittest.TestCase):
             (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
             self._run_git(tmp, "add", "README.md")
             self._run_git(tmp, "commit", "-qm", "init")
-            task_dir = Path(tmp) / "doc/harness/tasks/TASK__final-authority"
-            binding_error = harness_server.GitBindingError(
-                "REGISTERED_WORKTREE_BINDING_CHANGED",
-                "binding changed after marker",
-                path="services/front",
-                invariant="request_source_snapshot_binding",
-                next_action="retry",
-            )
+            task_dir = Path(tmp) / "doc/harness/tasks/TASK__partial-marker"
+            original_write_active_marker = harness_server.write_active_marker
+
+            def publish_then_fail(repo_root, published_task_dir):
+                original_write_active_marker(repo_root, published_task_dir)
+                raise OSError("marker publication interrupted")
+
             with (
                 mock.patch.object(
                     harness_server, "canonical_task_dir", return_value=str(task_dir)
@@ -1574,13 +1573,13 @@ class HarnessMcpServerTests(unittest.TestCase):
                 mock.patch.object(harness_server, "_env_snapshot", return_value=""),
                 mock.patch.object(
                     harness_server,
-                    "revalidate_request_source_authorities",
-                    side_effect=binding_error,
+                    "write_active_marker",
+                    side_effect=publish_then_fail,
                 ),
             ):
-                with self.assertRaises(harness_server.GitBindingError):
+                with self.assertRaisesRegex(OSError, "marker publication interrupted"):
                     harness_server.handle_task_start(
-                        {"task_id": "TASK__final-authority"}
+                        {"task_id": "TASK__partial-marker"}
                     )
 
             self.assertFalse((task_dir / "TASK_BASELINE.json").exists())
@@ -1614,22 +1613,17 @@ class HarnessMcpServerTests(unittest.TestCase):
                     else task_dir / "BLOCKED.md"
                 )
                 artifact.write_text("preserve\n", encoding="utf-8")
-                binding_error = harness_server.GitBindingError(
-                    "REGISTERED_WORKTREE_BINDING_CHANGED", "late failure",
-                    path="services/front", invariant="request_source_snapshot_binding",
-                    next_action="retry",
-                )
                 with (
                     mock.patch.object(
                         harness_server, "canonical_task_dir", return_value=str(task_dir)
                     ),
                     mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
                     mock.patch.object(
-                        harness_server, "revalidate_request_source_authorities",
-                        side_effect=binding_error,
+                        harness_server, "write_active_marker",
+                        side_effect=OSError("marker unavailable"),
                     ),
                 ):
-                    with self.assertRaises(harness_server.GitBindingError):
+                    with self.assertRaisesRegex(OSError, "marker unavailable"):
                         harness_server.handle_task_start(
                             {"task_id": f"TASK__resume-{terminal_status}"}
                         )
@@ -1737,22 +1731,23 @@ class HarnessMcpServerTests(unittest.TestCase):
                 str(task_dir), "TASK__active-resume", repo_root=tmp
             )
             harness_server.write_active_marker(tmp, str(task_dir))
-            binding_error = harness_server.GitBindingError(
-                "REGISTERED_WORKTREE_BINDING_CHANGED", "resume retarget",
-                path="services/front", invariant="request_source_snapshot_binding",
-                next_action="retry",
-            )
+            original_write_active_marker = harness_server.write_active_marker
+
+            def publish_then_fail(repo_root, published_task_dir):
+                original_write_active_marker(repo_root, published_task_dir)
+                raise OSError("resume marker interrupted")
+
             with (
                 mock.patch.object(
                     harness_server, "canonical_task_dir", return_value=str(task_dir)
                 ),
                 mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
                 mock.patch.object(
-                    harness_server, "revalidate_request_source_authorities",
-                    side_effect=binding_error,
+                    harness_server, "write_active_marker",
+                    side_effect=publish_then_fail,
                 ),
             ):
-                with self.assertRaises(harness_server.GitBindingError):
+                with self.assertRaisesRegex(OSError, "resume marker interrupted"):
                     harness_server.handle_task_start(
                         {"task_id": "TASK__active-resume"}
                     )
@@ -1776,22 +1771,23 @@ class HarnessMcpServerTests(unittest.TestCase):
                 str(task_a), "TASK__active-a", repo_root=tmp
             )
             harness_server.write_active_marker(tmp, str(task_a))
-            binding_error = harness_server.GitBindingError(
-                "REGISTERED_WORKTREE_BINDING_CHANGED", "task B retarget",
-                path="services/front", invariant="request_source_snapshot_binding",
-                next_action="retry",
-            )
+            original_write_active_marker = harness_server.write_active_marker
+
+            def publish_then_fail(repo_root, published_task_dir):
+                original_write_active_marker(repo_root, published_task_dir)
+                raise OSError("task B marker interrupted")
+
             with (
                 mock.patch.object(
                     harness_server, "canonical_task_dir", return_value=str(task_b)
                 ),
                 mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
                 mock.patch.object(
-                    harness_server, "revalidate_request_source_authorities",
-                    side_effect=binding_error,
+                    harness_server, "write_active_marker",
+                    side_effect=publish_then_fail,
                 ),
             ):
-                with self.assertRaises(harness_server.GitBindingError):
+                with self.assertRaisesRegex(OSError, "task B marker interrupted"):
                     harness_server.handle_task_start({"task_id": "TASK__failed-b"})
             self.assertEqual(
                 Path(harness_server.resolve_active_task_dir(tmp)).resolve(),
@@ -3147,57 +3143,23 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         self.assertTrue(result.get("isError"))
         self.assertIn("Git changed-path snapshot unavailable", result["content"][0]["text"])
 
-    def test_close_revalidates_authority_before_state_publication(self):
+    def test_close_rolls_back_when_attestation_publication_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(
-                tmp, "TASK__close-authority",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-            )
-            binding_error = harness_server.GitBindingError(
-                "REGISTERED_WORKTREE_BINDING_CHANGED", "late close retarget",
-                path="services/front", invariant="request_source_snapshot_binding",
-                next_action="retry",
-            )
-            self._patch(td)
-            try:
-                with mock.patch.object(
-                    harness_server, "revalidate_request_source_authorities",
-                    side_effect=binding_error,
-                ):
-                    result = harness_server.call_tool(
-                        "task_close", {"task_id": "TASK__close-authority"}
-                    )
-            finally:
-                self._unpatch()
-
-        self.assertTrue(result.get("isError"))
-        self.assertEqual(
-            result["structuredContent"]["code"],
-            "REGISTERED_WORKTREE_BINDING_CHANGED",
-        )
-
-    def test_close_rolls_back_when_authority_changes_during_publication(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__close-publication-authority",
+                tmp, "TASK__close-attestation-failure",
                 checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
             )
             before = harness_server.read_state(td)
-            binding_error = harness_server.GitBindingError(
-                "REGISTERED_WORKTREE_BINDING_CHANGED", "retarget during close write",
-                path="services/front", invariant="request_source_snapshot_binding",
-                next_action="retry",
-            )
             self._patch(td)
             try:
                 with mock.patch.object(
                     harness_server,
-                    "revalidate_request_source_authorities",
-                    side_effect=[None, binding_error],
+                    "write_task_close_attestation",
+                    side_effect=OSError("attestation unavailable"),
                 ):
                     result = harness_server.call_tool(
                         "task_close",
-                        {"task_id": "TASK__close-publication-authority"},
+                        {"task_id": "TASK__close-attestation-failure"},
                     )
             finally:
                 self._unpatch()
@@ -3208,36 +3170,36 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             self.assertEqual(restored["runtime_verdict"], before["runtime_verdict"])
             self.assertFalse(Path(td, "TASK_CLOSE_RECEIPT.json").exists())
 
-    def test_close_rolls_back_on_unexpected_publication_failures(self):
-        failures = (
-            ("authority-io", "revalidate_request_source_authorities", FileNotFoundError("gitdir gone")),
-            ("attestation-io", "write_task_close_attestation", OSError("attestation unavailable")),
-        )
-        for suffix, target, failure in failures:
-            with self.subTest(failure=suffix), tempfile.TemporaryDirectory() as tmp:
-                td = self._prepare_task(
-                    tmp, f"TASK__close-{suffix}",
-                    checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-                )
-                before = harness_server.read_state(td)
-                self._patch(td)
-                try:
-                    patcher = mock.patch.object(
-                        harness_server,
-                        target,
-                        side_effect=([None, failure] if target.startswith("revalidate") else failure),
+    def test_close_rolls_back_on_marker_cleanup_io_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__close-marker-io",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+            )
+            before = harness_server.read_state(td)
+            harness_server.write_active_marker(tmp, td)
+            self._patch(td)
+            try:
+                with mock.patch.object(
+                    harness_server,
+                    "clear_active_marker",
+                    side_effect=OSError("marker cleanup unavailable"),
+                ):
+                    result = harness_server.call_tool(
+                        "task_close", {"task_id": "TASK__close-marker-io"}
                     )
-                    with patcher:
-                        result = harness_server.call_tool(
-                            "task_close", {"task_id": f"TASK__close-{suffix}"}
-                        )
-                finally:
-                    self._unpatch()
-                self.assertTrue(result.get("isError"))
-                restored = harness_server.read_state(td)
-                self.assertEqual(restored["status"], before["status"])
-                self.assertEqual(restored["runtime_verdict"], before["runtime_verdict"])
-                self.assertFalse(Path(td, "TASK_CLOSE_RECEIPT.json").exists())
+            finally:
+                self._unpatch()
+            self.assertTrue(result.get("isError"))
+            restored = harness_server.read_state(td)
+            self.assertEqual(restored["status"], before["status"])
+            self.assertEqual(restored["runtime_verdict"], before["runtime_verdict"])
+            self.assertFalse(Path(td, "TASK_CLOSE_RECEIPT.json").exists())
+            legacy_marker = Path(tmp, "doc/harness/tasks/.active")
+            self.assertEqual(
+                Path(legacy_marker.read_text(encoding="utf-8").strip()).resolve(),
+                Path(td).resolve(),
+            )
 
     def test_close_rolls_back_goal_sync_and_marker_cleanup_failures(self):
         for failure_kind in ("goal", "marker"):

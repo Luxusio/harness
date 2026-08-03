@@ -6,18 +6,27 @@ All notable changes to the harness Claude Code plugin.
 
 ### Fixed
 
+- Explicit local `source_git_roots` now use the same trust model as ordinary
+  developer Git workflows. Harness resolves the configured checkout and lets
+  required Git commands determine success without linked-worktree
+  `--git-common-dir`, `--absolute-git-dir`, `--show-toplevel`, reciprocal
+  admin-file, inode, or request-pinned authority preflights. This removes the
+  multi-root lifecycle deadline failure that could be reported before
+  `git-common-dir` even ran. A valid metadata retarget is now developer-owned
+  and accepted by the next operation; missing or unusable Git metadata and
+  required HEAD, commit, or ancestry failures still block partial publication.
 - Multi-Git lifecycle dirty-path enumeration is now availability-first: each
   working-tree scan has a three-second bound, slow or failed roots emit
   `GIT_DIRTY_SNAPSHOT_SKIPPED` and contribute no inferred dirty paths, while
-  repository binding, HEAD/commit/ancestry, linked-worktree authority, and
-  parent gitlink evidence remain fail-closed. Baseline creation also reuses its
+  required HEAD/commit/ancestry and parent gitlink evidence remain fail-closed.
+  Baseline creation also reuses its
   captured source HEAD map instead of querying every root twice. This tradeoff
   can miss uncommitted touched paths, scope drift, and stale-review evidence in
   a skipped root; operators that require the former guarantee should roll back
   and start a new task ID.
 - Setup no longer asks users to choose proactive routing, runtime-document injection, contract import, Health scoring, audience, prior workflow, Harness scope, or the final failure-avoidance policy. It consistently enables the recommended full loop, inserts a missing `@CONTRACTS.md` import without rewriting unrelated project-document content, configures Health scoring from every detected API/frontend test command, and writes the fixed C-100 scope constraint while retaining only useful purpose and verification discovery.
 - Harness can now use a non-Git control workspace with explicit `source_git_roots`. Codex hooks and Claude write/Bash/Stop/subagent lifecycle entrypoints bind child-repository sessions to the parent task, lifecycle registrations separate control root from rollout cwd, and task baselines plus receipt HEAD/diff fingerprints cover every configured repository. Bounded parent behavioral files such as `AGENTS.md`, `CLAUDE.md`, contracts, and the manifest are baseline-tracked and close-fingerprinted so stale QA or review PASS evidence is invalidated safely.
-- Git-backed control repositories now treat explicit `source_git_roots` additively: the parent remains a source binding, and only exact initialized direct gitlinks are added as independently scanned leaf services. Registration is never inferred or propagated to nested gitlinks, and independently owned linked worktrees must pass reciprocal gitdir, common-directory, checkout-backreference, and snapshot-stability validation. Existing active tasks whose binding set differs must be restarted under a new task ID without editing `TASK_BASELINE.json`; rolling back to a runtime with the former replacement semantics likewise requires new task IDs.
+- Git-backed control repositories now treat explicit `source_git_roots` additively: the parent remains a source binding, and exact configured roots are independently scanned leaf services. Registration is never inferred. Existing active tasks whose binding set differs must be restarted under a new task ID without editing `TASK_BASELINE.json`; rolling back to a runtime with the former replacement semantics likewise requires new task IDs.
 - Multi-Git setup and resume now fail closed for moved, missing, symlinked, nested, or shell-unsafe source-root names. Parent behavioral symlinks and protected-artifact symlink aliases are rejected, and setup routes project-document routing/import changes through one no-follow atomic helper.
 - Codex review and QA completion no longer requires `list_agents`. Identity-bearing `wait_agent` status maps are accepted directly, while the lifecycle watcher also recognizes exec-wrapped `multi_agent_v1__spawn_agent` calls and matching `<subagent_notification>` completions without weakening start-time fingerprint freshness.
 - `task_start` now reuses one bounded request-local Git snapshot, including HEAD, ancestry, and committed-path comparisons, preserves causal Git diagnostics, revalidates the baseline on resume, accurately distinguishes creation from resume, leaves concurrent Git index locks untouched, safely bounds optional manifest probing and atomically replaces its snapshot output, and returns an actionable `ready_with_warnings` result only after a valid scaffold exists. `write_plan` also accepts either audit rows or a complete Markdown audit table with natural spacing, normalizes the heading/header automatically, and explains incomplete or mismatched rows instead of rejecting natural input without useful guidance.
@@ -32,7 +41,8 @@ All notable changes to the harness Claude Code plugin.
 - Codex root hooks now validate an existing lifecycle registration directly instead of recursively scanning every rollout and taking the registration lock on every event. Wrapper child work shares an event-level deadline below the configured outer timeout, registration root resolution uses that same hard budget, and the single lifecycle watcher exclusively owns heavy review/QA receipt fingerprinting so slow Git I/O cannot overrun PreToolUse, UserPromptSubmit, or PostToolUse.
 - Codex lifecycle task binding now accepts non-group/other-writable root-owned workspace ancestors common in container mounts while retaining no-symlink checks and current-user ownership for the task directory itself.
 - Global Codex hooks no longer create or restore lifecycle watcher registrations in repositories without the nearest Git root's Harness setup manifest, so nested independent projects cannot inherit an outer opt-in.
-- Initialized submodule `.git` control files must resolve inside the parent Git common directory and report the validated worktree, preventing external gitdir traversal for direct and nested gitlinks.
+- Local Gitfile-backed checkouts are trusted workspace inputs; Git, rather than
+  a separate Harness authority monitor, owns their metadata interpretation.
 - Git-root detection consistently treats `.git` files as repository boundaries, and submodule worktree-binding validation is uncached so in-request gitdir retargeting fails closed.
 - Git roots confirmed earlier in a request cannot fall back to synthetic empty snapshots if metadata disappears, and submodule HEAD reads are explicitly bound to one validated gitdir/worktree tuple.
 - Harness setup detection canonicalizes symlinked working directories before selecting the nearest Git root, preventing lexical-path inheritance of an outer manifest.

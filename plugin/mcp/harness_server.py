@@ -86,7 +86,6 @@ from _lib import (  # type: ignore
     receipt_runtime_verdict, subagent_receipt_summary, record_subagent_receipt,
     receipt_review_verdict, review_receipt_summary, required_review_lenses,
     review_snapshot_scope, refresh_review_snapshot, git_snapshot_warnings,
-    revalidate_request_source_authorities,
     receipt_stream_fingerprint,
     _workspace_changed_path_fingerprints, _control_root_touched_path_fingerprints,
     _git_head_for_receipt,
@@ -705,11 +704,8 @@ def handle_task_start(args: dict) -> dict:
             warning for warning in git_snapshot_warnings()
             if warning not in warnings
         )
-        # The active marker is the final publication step. Recheck pinned
-        # authorities immediately afterward so failure rolls back a new task.
         try:
             write_active_marker(repo_root, task_dir)
-            revalidate_request_source_authorities(repo_root)
             if terminal_resume_status == "closed":
                 clear_task_close_attestation(task_dir)
                 if os.path.lexists(os.path.join(task_dir, "TASK_CLOSE_RECEIPT.json")):
@@ -983,20 +979,6 @@ def handle_task_close(args: dict) -> dict:
                 "checks_invalid": final_checks_status == "invalid",
             })
 
-        try:
-            revalidate_request_source_authorities(control_root)
-        except GitBindingError as exc:
-            return close_error(
-                "task_close blocked: registered source authority changed",
-                {
-                    "task_dir": td,
-                    "code": exc.code,
-                    "path": exc.path,
-                    "invariant": exc.invariant,
-                    "next_action": exc.next_action,
-                },
-            )
-
         st = _validated_task_state(td)
         if not st:
             return _invalid_task_state_error("task_close", td)
@@ -1014,7 +996,6 @@ def handle_task_close(args: dict) -> dict:
                 head_sha=final_head,
                 receipt_fingerprint=final_receipts_after,
             )
-            revalidate_request_source_authorities(control_root)
             clear_active_marker(control_root, td)
             if os.path.realpath(resolve_active_task_dir(control_root) or "") == os.path.realpath(td):
                 raise RuntimeError("active task marker cleanup unavailable")

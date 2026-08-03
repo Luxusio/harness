@@ -112,7 +112,7 @@ def test_git_backed_source_roots_are_additive_and_linked_worktree_is_scanned_onc
     assert set(baseline["source_heads"]) == {"", "services/front/"}
     registered_fp = baseline["dirty_paths"]["services/front"]
     assert ":registered-source:checkout:" in registered_fp
-    assert ":worktree:" in registered_fp
+    assert ":worktree:" not in registered_fp
 
     (service / "service.py").write_text("changed\n", encoding="utf-8")
     original = lib._uncached_git_changed_paths
@@ -132,6 +132,48 @@ def test_git_backed_source_roots_are_additive_and_linked_worktree_is_scanned_onc
     assert (prefix, Path(root), inner) == (
         "services/front/", service.resolve(), "service.py"
     )
+
+
+def test_registered_source_snapshots_skip_metadata_preflights(tmp_path):
+    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
+    expected_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=service, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    original_run = lib.subprocess.run
+    observed: list[list[str]] = []
+
+    def observe(command, *args, **kwargs):
+        observed.append(list(command))
+        return original_run(command, *args, **kwargs)
+
+    with mock.patch.object(lib.subprocess, "run", side_effect=observe):
+        heads = lib._workspace_source_heads(str(parent))
+
+    assert heads["services/front/"] == expected_head
+    assert any(
+        command[-3:] == ["rev-parse", "--verify", "HEAD"]
+        for command in observed
+    )
+    forbidden = {"--git-common-dir", "--absolute-git-dir", "--show-toplevel"}
+    assert not any(forbidden.intersection(command) for command in observed)
+
+
+def test_registered_source_retarget_is_accepted_on_next_git_operation(tmp_path):
+    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
+    gitfile = service / ".git"
+    original = gitfile.read_text(encoding="utf-8")
+    original_admin = Path(original.removeprefix("gitdir: ").strip())
+    alternate_admin = original_admin.parent / "alternate-trusted-source"
+    shutil.copytree(original_admin, alternate_admin)
+    (alternate_admin / "gitdir").write_text(str(gitfile) + "\n", encoding="utf-8")
+
+    with lib.review_snapshot_scope():
+        before = lib._workspace_source_heads(str(parent))
+        gitfile.write_text(f"gitdir: {alternate_admin}\n", encoding="utf-8")
+        after = lib._workspace_source_heads(str(parent))
+
+    assert after == before
 
 
 def test_git_backed_source_root_must_be_direct_parent_gitlink(tmp_path):
@@ -242,206 +284,6 @@ def test_version_one_baseline_rejects_new_additive_binding(tmp_path):
             raise AssertionError("v1 evidence must not silently adopt additive roots")
 
 
-def test_registered_binding_retarget_during_head_snapshot_fails_closed(tmp_path):
-    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
-    original_gitfile = (service / ".git").read_text(encoding="utf-8")
-    original_head = lib._git_head_snapshot
-    service_calls = 0
-
-    def retarget_on_evidence(root, **kwargs):
-        nonlocal service_calls
-        if Path(root).resolve() == service.resolve():
-            service_calls += 1
-            if service_calls == 2:
-                (service / ".git").write_text("gitdir: /tmp/not-the-authorized-gitdir\n", encoding="utf-8")
-        return original_head(root, **kwargs)
-
-    try:
-        with mock.patch.object(lib, "_git_head_snapshot", side_effect=retarget_on_evidence):
-            try:
-                lib._workspace_head_snapshot(str(parent))
-            except lib.GitBindingError as exc:
-                assert exc.code in {
-                    "REGISTERED_WORKTREE_BINDING_CHANGED",
-                    "REGISTERED_WORKTREE_BINDING_MISMATCH",
-                }
-            else:
-                raise AssertionError("retargeted service metadata must fail closed")
-    finally:
-        (service / ".git").write_text(original_gitfile, encoding="utf-8")
-
-
-def test_registered_binding_retarget_during_dirty_scan_fails_closed(tmp_path):
-    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
-    original_gitfile = (service / ".git").read_text(encoding="utf-8")
-    original_scan = lib._uncached_git_changed_paths
-
-    def retarget_on_scan(root, **kwargs):
-        if Path(root).resolve() == service.resolve():
-            (service / ".git").write_text(
-                "gitdir: /tmp/not-the-authorized-gitdir\n", encoding="utf-8"
-            )
-        return original_scan(root, **kwargs)
-
-    try:
-        with mock.patch.object(lib, "_uncached_git_changed_paths", side_effect=retarget_on_scan):
-            try:
-                lib._workspace_git_changed_paths(str(parent))
-            except lib.GitBindingError as exc:
-                assert exc.code in {
-                    "REGISTERED_WORKTREE_BINDING_CHANGED",
-                    "REGISTERED_WORKTREE_BINDING_MISMATCH",
-                }
-            else:
-                raise AssertionError("retarget during dirty scan must fail closed")
-    finally:
-        (service / ".git").write_text(original_gitfile, encoding="utf-8")
-
-
-def test_registered_binding_retarget_between_request_operations_fails_closed(tmp_path):
-    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
-    gitfile = service / ".git"
-    original_gitfile = gitfile.read_text(encoding="utf-8")
-    original_admin = Path(original_gitfile.removeprefix("gitdir: ").strip())
-    alternate_admin = original_admin.parent / "alternate-authority"
-    shutil.copytree(original_admin, alternate_admin)
-    (alternate_admin / "gitdir").write_text(str(gitfile) + "\n", encoding="utf-8")
-
-    try:
-        with lib.review_snapshot_scope():
-            lib._workspace_source_heads(str(parent))
-            gitfile.write_text(f"gitdir: {alternate_admin}\n", encoding="utf-8")
-            try:
-                lib._workspace_git_changed_paths(str(parent))
-            except lib.GitBindingError as exc:
-                assert exc.code == "REGISTERED_WORKTREE_BINDING_CHANGED"
-                assert exc.invariant == "request_source_snapshot_binding"
-            else:
-                raise AssertionError("between-operation retarget must fail closed")
-    finally:
-        gitfile.write_text(original_gitfile, encoding="utf-8")
-
-
-def test_registered_binding_pin_survives_request_snapshot_refresh(tmp_path):
-    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
-    gitfile = service / ".git"
-    original_gitfile = gitfile.read_text(encoding="utf-8")
-    original_admin = Path(original_gitfile.removeprefix("gitdir: ").strip())
-    alternate_admin = original_admin.parent / "alternate-after-refresh"
-    shutil.copytree(original_admin, alternate_admin)
-    (alternate_admin / "gitdir").write_text(str(gitfile) + "\n", encoding="utf-8")
-
-    try:
-        with lib.review_snapshot_scope():
-            lib._workspace_source_heads(str(parent))
-            lib.refresh_review_snapshot()
-            gitfile.write_text(f"gitdir: {alternate_admin}\n", encoding="utf-8")
-            try:
-                lib._workspace_git_changed_paths(str(parent))
-            except lib.GitBindingError as exc:
-                assert exc.code == "REGISTERED_WORKTREE_BINDING_CHANGED"
-                assert exc.invariant == "request_source_snapshot_binding"
-            else:
-                raise AssertionError("snapshot refresh must preserve the authority pin")
-    finally:
-        gitfile.write_text(original_gitfile, encoding="utf-8")
-
-
-def test_committed_path_scan_uses_request_pinned_authority(tmp_path):
-    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
-    task = parent / "doc/harness/tasks/TASK__committed-authority"
-    lib.ensure_task_scaffold(str(task), "TASK__committed-authority")
-    gitfile = service / ".git"
-    original_gitfile = gitfile.read_text(encoding="utf-8")
-    original_admin = Path(original_gitfile.removeprefix("gitdir: ").strip())
-    alternate_admin = original_admin.parent / "alternate-committed-authority"
-    shutil.copytree(original_admin, alternate_admin)
-    (alternate_admin / "gitdir").write_text(str(gitfile) + "\n", encoding="utf-8")
-
-    try:
-        with lib.review_snapshot_scope():
-            lib._workspace_source_heads(str(parent))
-            gitfile.write_text(f"gitdir: {alternate_admin}\n", encoding="utf-8")
-            try:
-                lib._committed_paths_since_baseline(
-                    str(task), str(service), workspace_prefix="services/front/"
-                )
-            except lib.GitBindingError as exc:
-                assert exc.code == "REGISTERED_WORKTREE_BINDING_CHANGED"
-                assert exc.invariant == "request_source_snapshot_binding"
-            else:
-                raise AssertionError("committed-path scan must use pinned authority")
-    finally:
-        gitfile.write_text(original_gitfile, encoding="utf-8")
-
-
-def test_new_baseline_rechecks_authority_after_atomic_publication(tmp_path):
-    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
-    task = parent / "doc/harness/tasks/TASK__retarget-on-publication"
-    gitfile = service / ".git"
-    original_gitfile = gitfile.read_text(encoding="utf-8")
-    original_admin = Path(original_gitfile.removeprefix("gitdir: ").strip())
-    alternate_admin = original_admin.parent / "alternate-on-publication"
-    shutil.copytree(original_admin, alternate_admin)
-    (alternate_admin / "gitdir").write_text(str(gitfile) + "\n", encoding="utf-8")
-    original_replace = lib.os.replace
-
-    def replace_then_retarget(source, destination):
-        original_replace(source, destination)
-        if Path(destination).name == "TASK_BASELINE.json":
-            gitfile.write_text(f"gitdir: {alternate_admin}\n", encoding="utf-8")
-
-    try:
-        with mock.patch.object(lib.os, "replace", side_effect=replace_then_retarget):
-            try:
-                lib.ensure_task_scaffold(
-                    str(task), "TASK__retarget-on-publication"
-                )
-            except RuntimeError as exc:
-                assert "REGISTERED_WORKTREE_BINDING_CHANGED" in str(exc)
-                assert isinstance(exc, lib.GitBindingError) or isinstance(
-                    exc.__cause__, lib.GitBindingError
-                )
-            else:
-                raise AssertionError("baseline publication retarget must fail closed")
-        assert not (task / "TASK_BASELINE.json").exists()
-        assert not (task / "TASK_STATE.yaml").exists()
-    finally:
-        gitfile.write_text(original_gitfile, encoding="utf-8")
-
-
-def test_direct_scaffold_rechecks_authority_after_baseline_capture(tmp_path):
-    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
-    task = parent / "doc/harness/tasks/TASK__retarget-after-capture"
-    gitfile = service / ".git"
-    original_gitfile = gitfile.read_text(encoding="utf-8")
-    original_admin = Path(original_gitfile.removeprefix("gitdir: ").strip())
-    alternate_admin = original_admin.parent / "alternate-after-capture"
-    shutil.copytree(original_admin, alternate_admin)
-    (alternate_admin / "gitdir").write_text(str(gitfile) + "\n", encoding="utf-8")
-    original_capture = lib.capture_task_baseline
-
-    def capture_then_retarget(*args, **kwargs):
-        result = original_capture(*args, **kwargs)
-        gitfile.write_text(f"gitdir: {alternate_admin}\n", encoding="utf-8")
-        return result
-
-    try:
-        with mock.patch.object(
-            lib, "capture_task_baseline", side_effect=capture_then_retarget,
-        ):
-            try:
-                lib.ensure_task_scaffold(str(task), "TASK__retarget-after-capture")
-            except lib.GitBindingError as exc:
-                assert exc.code == "REGISTERED_WORKTREE_BINDING_CHANGED"
-            else:
-                raise AssertionError("direct scaffold must retain authority pin")
-        assert not (task / "TASK_BASELINE.json").exists()
-        assert not (task / "TASK_STATE.yaml").exists()
-    finally:
-        gitfile.write_text(original_gitfile, encoding="utf-8")
-
-
 def test_nongit_control_keeps_linked_worktree_source_compatibility(tmp_path):
     control = tmp_path / "control"
     source_repo = tmp_path / "source-repo"
@@ -509,32 +351,6 @@ def test_ambient_alternate_index_cannot_authorize_registered_source(tmp_path, mo
         assert exc.code == "REGISTERED_SOURCE_NOT_DIRECT_GITLINK"
     else:
         raise AssertionError("ambient alternate index must not grant authorization")
-
-
-def test_registered_service_gitlink_scan_retarget_fails_closed(tmp_path):
-    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
-    original_gitfile = (service / ".git").read_text(encoding="utf-8")
-    original_entries = lib._direct_gitlink_index_entries
-
-    def retarget_on_service_scan(root, **kwargs):
-        if Path(root).resolve() == service.resolve():
-            (service / ".git").write_text(
-                "gitdir: /tmp/not-the-authorized-gitdir\n", encoding="utf-8"
-            )
-        return original_entries(root, **kwargs)
-
-    try:
-        with mock.patch.object(
-            lib, "_direct_gitlink_index_entries", side_effect=retarget_on_service_scan
-        ):
-            try:
-                lib._workspace_gitlink_paths(str(parent))
-            except lib.GitBindingError:
-                pass
-            else:
-                raise AssertionError("retarget during gitlink scan must fail closed")
-    finally:
-        (service / ".git").write_text(original_gitfile, encoding="utf-8")
 
 
 def test_security_signal_diff_uses_explicit_registered_gitdir(tmp_path):

@@ -54,6 +54,9 @@ def invoke_hook(
     })
     env = os.environ.copy()
     env.setdefault("CLAUDE_PLUGIN_ROOT", os.path.join(REPO_ROOT, "plugin"))
+    # Keep hook subprocesses isolated from a real task_start-created
+    # default-session marker; fixtures intentionally own the legacy marker.
+    env.setdefault("HARNESS_SESSION_ID", "pytest-hook")
     if env_extra:
         env.update(env_extra)
     return subprocess.run(

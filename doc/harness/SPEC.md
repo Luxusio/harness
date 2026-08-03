@@ -61,8 +61,10 @@ changes and paths committed between the baseline HEAD and current HEAD, so a
 clean commit cannot erase the task's reviewed install payload.
 Present baselines are bounded regular files read without following symlinks;
 their version, repository binding, path/fingerprint map, commit identity, and
-HEAD ancestry must validate. Repository identity, commit, ancestry, linked
-worktree authority, and parent gitlink failures block the gate. Working-tree
+HEAD ancestry must validate. Required Git HEAD, commit, ancestry, and parent
+gitlink failures block the gate. Registered local source roots are explicitly
+trusted workspace configuration; Harness does not independently validate or
+pin their linked-worktree metadata authority. Working-tree
 dirty-path enumeration is intentionally weaker: each scan is bounded to three
 seconds and a timeout or command failure records
 `GIT_DIRTY_SNAPSHOT_SKIPPED`, contributes no inferred dirty paths for that
@@ -211,41 +213,32 @@ closed and require a fresh verification. An unavailable initial or final HEAD
 remains invalid evidence and blocks close. A failed or timed-out working-tree
 dirty scan is instead represented as empty optional evidence plus a
 `GIT_DIRTY_SNAPSHOT_SKIPPED` warning. Consequently close can miss an
-uncommitted change, scope drift, or stale review evidence in that root. Git roots confirmed
-earlier in a request remain trusted across cache refreshes, so temporarily
-removing `.git` or `HEAD` cannot downgrade a later command failure to synthetic
-fixture compatibility. Git changed paths use
+uncommitted change, scope drift, or stale review evidence in that root. Each
+Git operation resolves the configured checkout as it exists at that time. If
+its metadata changes, the developer owns that workspace transition and the
+next Git command is the source of truth. Git changed paths use
 NUL-delimited output so control characters remain unambiguous; regular files
 are opened without following symlinks, symlink targets are hashed directly,
 and the pathname identity is rechecked after reading so rename replacement,
 unreadable, or special path types invalidate the snapshot. Git path identity is
 preserved end to end; separator normalization is applied only on Windows.
 Every parent-index gitlink OID is fingerprinted, including uninitialized
-submodules. Initialized submodules additionally include checkout HEAD and
-worktree identity, so a staged gitlink update or clean checkout move is both
-review-routed and freshness-gated. Gitlink worktrees and their path components
-must be real directories rather than symlinks. By default, a submodule `.git`
-control file is read without following symlinks, must resolve inside the parent
-Git common directory, and Git must report the validated worktree itself as its
-top level. A Git-backed control repository may authorize an exception only by
-declaring a `source_git_roots` entry that exactly matches an initialized,
-direct, stage-0 mode-160000 entry in the parent index. Harness never infers or
+submodules. Initialized submodules additionally include checkout HEAD, so a
+staged gitlink update or clean checkout move is review-routed and
+freshness-gated when Git reports it. A configured `source_git_roots` path is
+an explicit trust decision: Harness reads its regular `.git` control file,
+passes the resolved Git directory and worktree to Git, and does not run
+`--git-common-dir`, `--absolute-git-dir`, or `--show-toplevel` authority
+preflights. It likewise does not compare worktree metadata inode identity or
+reciprocal admin files before and after an operation. Harness never infers or
 automatically registers a source root from a discovered repository or gitlink.
 
-For an authorized direct linked worktree, validation is reciprocal: the
-no-follow `.git` control-file target must equal Git's absolute git directory;
-Git must report the registered checkout as its exact top level and report the
-expected common directory; and the linked-worktree admin directory's
-`commondir` and `gitdir` files must point back to that common directory and the
-registered checkout. Metadata path components may not be symlinks, and the
-control-file and admin-file identities and bindings are compared before and
-after the snapshot. These worktree-binding queries are intentionally uncached
-so in-request retargeting fails closed. Submodule HEAD is read with the
-validated gitdir and worktree passed explicitly to Git. The registered parent
-edge is a leaf only for the parent's recursive scan: the registered service is
-scanned independently, and its own nested submodules remain subject to the
-default parent-common-directory confinement. Registration is therefore direct
-and non-transitive and cannot authorize an external nested gitdir.
+This availability-first model matches ordinary local Git use: checkout repair,
+retargeting, and concurrent worktree administration are developer-owned. A
+malformed or missing `.git` pointer still produces an actionable snapshot
+failure, and required HEAD, commit, and ancestry operations still fail when Git
+cannot read the selected checkout. A valid pointer that is intentionally
+retargeted is accepted on the next operation.
 
 Codex runtimes do not always forward collaboration tools to plugin
 `PostToolUse`. SessionStart and each installed Codex root hook therefore validate
