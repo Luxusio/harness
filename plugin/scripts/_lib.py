@@ -1883,6 +1883,35 @@ def write_active_marker(repo_root, task_dir, session_id=None):
     _atomic_text_write(_legacy_active_path(repo_root), task_dir)
 
 
+def active_marker_snapshot(repo_root, session_id=None):
+    """Capture exact current-session and legacy marker contents for rollback."""
+    paths = (
+        _session_active_path(repo_root, session_id),
+        _legacy_active_path(repo_root),
+    )
+    snapshot = {}
+    for path in paths:
+        snapshot[path] = (
+            _read_regular_text_file(path, max_size=256 * 1024)
+            if os.path.lexists(path)
+            else None
+        )
+    return snapshot
+
+
+def restore_active_marker_snapshot(snapshot):
+    """Restore an exact marker snapshot captured by active_marker_snapshot."""
+    for path, content in snapshot.items():
+        if content is None:
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            continue
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        _atomic_text_write(path, content)
+
+
 def _read_regular_marker(path, *, max_size=256 * 1024):
     return _read_regular_text_file(path, max_size=max_size)
 
