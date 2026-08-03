@@ -993,6 +993,7 @@ def handle_task_close(args: dict) -> dict:
         st = _validated_task_state(td)
         if not st:
             return _invalid_task_state_error("task_close", td)
+        preclose_state = dict(st)
         st["status"] = "closed"
         st["runtime_verdict"] = "PASS"
         st["closed_at"] = now_iso()
@@ -1004,6 +1005,21 @@ def handle_task_close(args: dict) -> dict:
             head_sha=final_head,
             receipt_fingerprint=final_receipts_after,
         )
+        try:
+            revalidate_request_source_authorities(control_root)
+        except GitBindingError as exc:
+            write_state(td, preclose_state)
+            clear_task_close_attestation(td)
+            return close_error(
+                "task_close blocked: registered source authority changed during publication",
+                {
+                    "task_dir": td,
+                    "code": exc.code,
+                    "path": exc.path,
+                    "invariant": exc.invariant,
+                    "next_action": exc.next_action,
+                },
+            )
 
         repo_root = _control_root()
         goal = read_current_goal(repo_root)

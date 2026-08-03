@@ -3012,6 +3012,38 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             "REGISTERED_WORKTREE_BINDING_CHANGED",
         )
 
+    def test_close_rolls_back_when_authority_changes_during_publication(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__close-publication-authority",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+            )
+            before = harness_server.read_state(td)
+            binding_error = harness_server.GitBindingError(
+                "REGISTERED_WORKTREE_BINDING_CHANGED", "retarget during close write",
+                path="services/front", invariant="request_source_snapshot_binding",
+                next_action="retry",
+            )
+            self._patch(td)
+            try:
+                with mock.patch.object(
+                    harness_server,
+                    "revalidate_request_source_authorities",
+                    side_effect=[None, binding_error],
+                ):
+                    result = harness_server.call_tool(
+                        "task_close",
+                        {"task_id": "TASK__close-publication-authority"},
+                    )
+            finally:
+                self._unpatch()
+
+            self.assertTrue(result.get("isError"))
+            restored = harness_server.read_state(td)
+            self.assertEqual(restored["status"], before["status"])
+            self.assertEqual(restored["runtime_verdict"], before["runtime_verdict"])
+            self.assertFalse(Path(td, "TASK_CLOSE_RECEIPT.json").exists())
+
     def test_close_blocks_when_final_git_head_is_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(
