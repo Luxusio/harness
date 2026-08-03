@@ -61,9 +61,13 @@ changes and paths committed between the baseline HEAD and current HEAD, so a
 clean commit cannot erase the task's reviewed install payload.
 Present baselines are bounded regular files read without following symlinks;
 their version, repository binding, path/fingerprint map, commit identity, and
-HEAD ancestry must validate. Invalid baselines and failed Git snapshots block
-the gate instead of degrading to an empty task scope. Dirt that existed at
-task start remains excluded when the identical content is later committed.
+HEAD ancestry must validate. Repository identity, commit, ancestry, linked
+worktree authority, and parent gitlink failures block the gate. Working-tree
+dirty-path enumeration is intentionally weaker: each scan is bounded to three
+seconds and a timeout or command failure records
+`GIT_DIRTY_SNAPSHOT_SKIPPED`, contributes no inferred dirty paths for that
+root, and lets the lifecycle continue. Dirt that existed at task start remains
+excluded when captured, but a skipped root has no such guarantee.
 For a newly scaffolded task in a Git repository, baseline capture is mandatory
 and the written artifact must pass the same bounded reader contract before
 `TASK_STATE.yaml` is created. A generated artifact that exceeds path or size
@@ -74,18 +78,17 @@ requires the baseline thereafter: missing baselines fail closed regardless of
 how they were removed. Older baseline-less tasks must be restarted as a new
 task, which is the explicit migration path and avoids ambiguous legacy inference.
 
-`task_start` captures the baseline and computes compact context inside one
+`task_start` captures source HEADs once, derives the baseline identity from
+that captured map, and computes compact context inside one
 request-local Git snapshot. Git subprocesses share a 40-second cumulative
 deadline, and repeated changed-path, committed-path, and gitlink queries reuse
-the request snapshot. Expensive enumeration commands may consume at most 15
-seconds each, including HEAD and baseline ancestry validation, but never more
-than the remaining Git subprocess budget. Timeout and nonzero-exit diagnostics
-name the failed operation and repository. This keeps an internal response
-reserve below the MCP transport timeout without treating a slow, otherwise
-valid repository as a missing HEAD. Filesystem hashing and artifact rendering
-remain outside that subprocess budget. Other handlers that do not establish
-the cumulative start deadline retain their prior two- or five-second
-per-command limits.
+the request snapshot. Mandatory Git evidence may consume at most 15 seconds per
+enumeration command under that deadline; optional dirty enumeration uses the
+smaller three-second bound. Timeout and nonzero-exit diagnostics name the
+failed operation and repository. Filesystem hashing and artifact rendering
+remain outside that subprocess budget. Other handlers retain their prior
+two- or five-second mandatory-command limits and the same three-second optional
+dirty bound.
 
 The initialization commit point is a validated baseline, a matching
 `TASK_STATE.yaml`, and the session active marker. Failures before that point
@@ -204,9 +207,11 @@ after those gates finish, it clears the cache again and requires the end-of-gate
 changed-path fingerprint map and HEAD to match the initial values. It also
 compares uncached raw review/QA receipt-stream fingerprints across the final
 gate. Source, receipt, or HEAD changes observed between them therefore fail
-closed and require a fresh verification. A failed or timed-out Git changed-path snapshot and an
-unavailable initial or final HEAD are invalid evidence and block close rather
-than being treated as an empty, stable repository state. Git roots confirmed
+closed and require a fresh verification. An unavailable initial or final HEAD
+remains invalid evidence and blocks close. A failed or timed-out working-tree
+dirty scan is instead represented as empty optional evidence plus a
+`GIT_DIRTY_SNAPSHOT_SKIPPED` warning. Consequently close can miss an
+uncommitted change, scope drift, or stale review evidence in that root. Git roots confirmed
 earlier in a request remain trusted across cache refreshes, so temporarily
 removing `.git` or `HEAD` cannot downgrade a later command failure to synthetic
 fixture compatibility. Git changed paths use
@@ -288,13 +293,14 @@ state validation and before the reviewed or QA child starts.
 
 `source_git_roots` has two control-root modes. For a non-Git control workspace,
 the configured roots are exhaustive: each registered repository contributes
-its HEAD and workspace-prefixed dirty paths, while the non-Git parent
+its HEAD and, when enumeration succeeds, workspace-prefixed dirty paths, while the non-Git parent
 contributes only the bounded behavioral surface described below. For a
 Git-backed control repository, configured roots are additive: the parent
 remains the empty-prefix source binding, and every configured root adds a
 service binding only after exact initialized-direct-gitlink authorization. The
 baseline therefore retains the parent HEAD and direct gitlink OID as well as
-each registered service's HEAD and dirty paths. The authorized parent edge is
+each registered service's HEAD and any dirty paths returned within the optional
+scan bound. The authorized parent edge is
 treated as a leaf to avoid scanning the service twice, and touched paths are
 routed to the longest matching registered prefix before the empty parent
 prefix.

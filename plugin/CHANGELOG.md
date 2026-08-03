@@ -6,6 +6,15 @@ All notable changes to the harness Claude Code plugin.
 
 ### Fixed
 
+- Multi-Git lifecycle dirty-path enumeration is now availability-first: each
+  working-tree scan has a three-second bound, slow or failed roots emit
+  `GIT_DIRTY_SNAPSHOT_SKIPPED` and contribute no inferred dirty paths, while
+  repository binding, HEAD/commit/ancestry, linked-worktree authority, and
+  parent gitlink evidence remain fail-closed. Baseline creation also reuses its
+  captured source HEAD map instead of querying every root twice. This tradeoff
+  can miss uncommitted touched paths, scope drift, and stale-review evidence in
+  a skipped root; operators that require the former guarantee should roll back
+  and start a new task ID.
 - Setup no longer asks users to choose proactive routing, runtime-document injection, contract import, Health scoring, audience, prior workflow, Harness scope, or the final failure-avoidance policy. It consistently enables the recommended full loop, inserts a missing `@CONTRACTS.md` import without rewriting unrelated project-document content, configures Health scoring from every detected API/frontend test command, and writes the fixed C-100 scope constraint while retaining only useful purpose and verification discovery.
 - Harness can now use a non-Git control workspace with explicit `source_git_roots`. Codex hooks and Claude write/Bash/Stop/subagent lifecycle entrypoints bind child-repository sessions to the parent task, lifecycle registrations separate control root from rollout cwd, and task baselines plus receipt HEAD/diff fingerprints cover every configured repository. Bounded parent behavioral files such as `AGENTS.md`, `CLAUDE.md`, contracts, and the manifest are baseline-tracked and close-fingerprinted so stale QA or review PASS evidence is invalidated safely.
 - Git-backed control repositories now treat explicit `source_git_roots` additively: the parent remains a source binding, and only exact initialized direct gitlinks are added as independently scanned leaf services. Registration is never inferred or propagated to nested gitlinks, and independently owned linked worktrees must pass reciprocal gitdir, common-directory, checkout-backreference, and snapshot-stability validation. Existing active tasks whose binding set differs must be restarted under a new task ID without editing `TASK_BASELINE.json`; rolling back to a runtime with the former replacement semantics likewise requires new task IDs.

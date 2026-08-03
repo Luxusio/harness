@@ -55,6 +55,34 @@ python3 install.py --codex-only
 
 ## Runtime errors
 
+### `GIT_DIRTY_SNAPSHOT_SKIPPED`
+
+**What you see:** `task_start`, `task_context`, `task_verify`, or `task_close`
+returns a `git_snapshot_warnings` or `warnings` entry naming a Git root whose
+working-tree evidence was skipped.
+
+**Cause:** The root did not finish staged, unstaged, or untracked-path
+enumeration within the three-second optional budget, or the enumeration command
+failed. Harness continues because HEAD, repository binding, ancestry, and
+gitlink evidence are still validated separately.
+
+**Risk:** Uncommitted changes in that root may be absent from `touched_paths`.
+That can hide scope drift, pre-task dirt, or stale review/QA evidence for the
+skipped paths.
+
+**Fix:** Make the worktree responsive. If the warning came from `task_start`,
+start a new task ID so the initial dirty baseline is recaptured. For
+`task_context`, `task_verify`, or `task_close`, retry that lifecycle call. To
+diagnose outside Harness:
+
+```bash
+git -C <reported-root> status --porcelain=v2 --untracked-files=all
+```
+
+To restore the former fail-closed policy, roll back the Harness version that
+introduced best-effort dirty scans and start a new task ID. Existing baseline
+files remain schema-compatible; do not edit `TASK_BASELINE.json` manually.
+
 ### "MCP server harness not reachable"
 
 **What you see:** `task_start` fails with "MCP server harness not reachable. Verify config.toml [mcp_servers.harness] command path; run: `codex mcp test harness`".
