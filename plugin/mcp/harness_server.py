@@ -82,6 +82,7 @@ from _lib import (  # type: ignore
     find_harness_root, harness_root_resolution, find_repo_root,
     runtime_is_stale as _runtime_is_stale,
     write_active_marker, clear_active_marker,
+    resolve_active_task_dir,
     receipt_runtime_verdict, subagent_receipt_summary, record_subagent_receipt,
     receipt_review_verdict, review_receipt_summary, required_review_lenses,
     review_snapshot_scope, refresh_review_snapshot, git_snapshot_warnings,
@@ -612,6 +613,10 @@ def handle_task_start(args: dict) -> dict:
     tid = canonical_task_id(task_dir=task_dir, repo_root=repo_root)
     existing_state_path = os.path.join(task_dir, "TASK_STATE.yaml")
     resumed_existing = os.path.lexists(existing_state_path)
+    marker_was_active = (
+        os.path.realpath(resolve_active_task_dir(repo_root) or "")
+        == os.path.realpath(task_dir)
+    )
     if resumed_existing:
         existing_state = read_state(task_dir)
         if existing_state.get("task_id") != tid:
@@ -636,7 +641,8 @@ def handle_task_start(args: dict) -> dict:
         original_resumed_state = read_state(task_dir) if resumed_existing else {}
 
         def rollback_new_start():
-            clear_active_marker(repo_root, task_dir)
+            if not marker_was_active:
+                clear_active_marker(repo_root, task_dir)
             if resumed_existing:
                 if original_resumed_state:
                     write_state(task_dir, original_resumed_state)
@@ -706,15 +712,17 @@ def handle_task_start(args: dict) -> dict:
         try:
             write_active_marker(repo_root, task_dir)
             revalidate_request_source_authorities(repo_root)
+            if terminal_resume:
+                clear_task_close_attestation(task_dir)
+                if os.path.lexists(os.path.join(task_dir, "TASK_CLOSE_RECEIPT.json")):
+                    raise RuntimeError("task close attestation cleanup unavailable")
+                try:
+                    os.unlink(os.path.join(task_dir, "BLOCKED.md"))
+                except FileNotFoundError:
+                    pass
         except Exception:
             rollback_new_start()
             raise
-        if terminal_resume:
-            clear_task_close_attestation(task_dir)
-            try:
-                os.unlink(os.path.join(task_dir, "BLOCKED.md"))
-            except FileNotFoundError:
-                pass
 
     # Best-effort environment snapshot runs after the coherent Git/context scope.
     snapshot_path = ""
@@ -998,28 +1006,27 @@ def handle_task_close(args: dict) -> dict:
         st["runtime_verdict"] = "PASS"
         st["closed_at"] = now_iso()
         st["updated"] = now_iso()
-        write_state(td, st)
-        write_task_close_attestation(
-            td,
-            st,
-            head_sha=final_head,
-            receipt_fingerprint=final_receipts_after,
-        )
         try:
+            write_state(td, st)
+            write_task_close_attestation(
+                td,
+                st,
+                head_sha=final_head,
+                receipt_fingerprint=final_receipts_after,
+            )
             revalidate_request_source_authorities(control_root)
-        except GitBindingError as exc:
+        except Exception as exc:
             write_state(td, preclose_state)
             clear_task_close_attestation(td)
-            return close_error(
-                "task_close blocked: registered source authority changed during publication",
-                {
-                    "task_dir": td,
+            data = {"task_dir": td, "detail": str(exc)[:500]}
+            if isinstance(exc, GitBindingError):
+                data.update({
                     "code": exc.code,
                     "path": exc.path,
                     "invariant": exc.invariant,
                     "next_action": exc.next_action,
-                },
-            )
+                })
+            return close_error("task_close blocked: close publication failed", data)
 
         repo_root = _control_root()
         goal = read_current_goal(repo_root)

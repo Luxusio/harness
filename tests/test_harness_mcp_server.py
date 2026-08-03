@@ -1683,6 +1683,84 @@ class HarnessMcpServerTests(unittest.TestCase):
                 harness_server.read_state(str(terminal_task))["status"], "closed"
             )
 
+    def test_terminal_resume_rolls_back_when_artifact_cleanup_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._run_git(tmp, "init", "-q")
+            self._run_git(tmp, "config", "user.email", "a@b")
+            self._run_git(tmp, "config", "user.name", "a")
+            (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
+            self._run_git(tmp, "add", "README.md")
+            self._run_git(tmp, "commit", "-qm", "init")
+            task_dir = Path(tmp) / "doc/harness/tasks/TASK__resume-cleanup"
+            lib_globals = harness_server.ensure_task_scaffold.__globals__
+            lib_globals["ensure_task_scaffold"](
+                str(task_dir), "TASK__resume-cleanup", repo_root=tmp
+            )
+            state = harness_server.read_state(str(task_dir))
+            state.update({
+                "status": "closed", "runtime_verdict": "PASS",
+                "closed_at": "2026-08-03T00:00:00Z",
+            })
+            harness_server.write_state(str(task_dir), state)
+            attestation = task_dir / "TASK_CLOSE_RECEIPT.json"
+            attestation.write_text("preserve\n", encoding="utf-8")
+            with (
+                mock.patch.object(
+                    harness_server, "canonical_task_dir", return_value=str(task_dir)
+                ),
+                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                mock.patch.object(
+                    harness_server, "clear_task_close_attestation",
+                    side_effect=OSError("cleanup unavailable"),
+                ),
+            ):
+                with self.assertRaisesRegex(OSError, "cleanup unavailable"):
+                    harness_server.handle_task_start(
+                        {"task_id": "TASK__resume-cleanup"}
+                    )
+            restored = harness_server.read_state(str(task_dir))
+            self.assertEqual(restored["status"], "closed")
+            self.assertEqual(restored["runtime_verdict"], "PASS")
+            self.assertTrue(attestation.exists())
+
+    def test_failed_resume_preserves_preexisting_active_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._run_git(tmp, "init", "-q")
+            self._run_git(tmp, "config", "user.email", "a@b")
+            self._run_git(tmp, "config", "user.name", "a")
+            (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
+            self._run_git(tmp, "add", "README.md")
+            self._run_git(tmp, "commit", "-qm", "init")
+            task_dir = Path(tmp) / "doc/harness/tasks/TASK__active-resume"
+            lib_globals = harness_server.ensure_task_scaffold.__globals__
+            lib_globals["ensure_task_scaffold"](
+                str(task_dir), "TASK__active-resume", repo_root=tmp
+            )
+            harness_server.write_active_marker(tmp, str(task_dir))
+            binding_error = harness_server.GitBindingError(
+                "REGISTERED_WORKTREE_BINDING_CHANGED", "resume retarget",
+                path="services/front", invariant="request_source_snapshot_binding",
+                next_action="retry",
+            )
+            with (
+                mock.patch.object(
+                    harness_server, "canonical_task_dir", return_value=str(task_dir)
+                ),
+                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                mock.patch.object(
+                    harness_server, "revalidate_request_source_authorities",
+                    side_effect=binding_error,
+                ),
+            ):
+                with self.assertRaises(harness_server.GitBindingError):
+                    harness_server.handle_task_start(
+                        {"task_id": "TASK__active-resume"}
+                    )
+            self.assertEqual(
+                Path(harness_server.resolve_active_task_dir(tmp)).resolve(),
+                task_dir.resolve(),
+            )
+
     def test_new_task_rolls_back_when_active_marker_write_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._run_git(tmp, "init", "-q")
@@ -3043,6 +3121,37 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             self.assertEqual(restored["status"], before["status"])
             self.assertEqual(restored["runtime_verdict"], before["runtime_verdict"])
             self.assertFalse(Path(td, "TASK_CLOSE_RECEIPT.json").exists())
+
+    def test_close_rolls_back_on_unexpected_publication_failures(self):
+        failures = (
+            ("authority-io", "revalidate_request_source_authorities", FileNotFoundError("gitdir gone")),
+            ("attestation-io", "write_task_close_attestation", OSError("attestation unavailable")),
+        )
+        for suffix, target, failure in failures:
+            with self.subTest(failure=suffix), tempfile.TemporaryDirectory() as tmp:
+                td = self._prepare_task(
+                    tmp, f"TASK__close-{suffix}",
+                    checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+                )
+                before = harness_server.read_state(td)
+                self._patch(td)
+                try:
+                    patcher = mock.patch.object(
+                        harness_server,
+                        target,
+                        side_effect=([None, failure] if target.startswith("revalidate") else failure),
+                    )
+                    with patcher:
+                        result = harness_server.call_tool(
+                            "task_close", {"task_id": f"TASK__close-{suffix}"}
+                        )
+                finally:
+                    self._unpatch()
+                self.assertTrue(result.get("isError"))
+                restored = harness_server.read_state(td)
+                self.assertEqual(restored["status"], before["status"])
+                self.assertEqual(restored["runtime_verdict"], before["runtime_verdict"])
+                self.assertFalse(Path(td, "TASK_CLOSE_RECEIPT.json").exists())
 
     def test_close_blocks_when_final_git_head_is_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:
