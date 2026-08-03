@@ -18,6 +18,7 @@ from _lib import (  # type: ignore
     GitBindingError,
     _direct_gitlink_index_entries,
     _registered_source_metadata_binding,
+    _trusted_git_env,
 )
 
 
@@ -285,6 +286,7 @@ def source_git_root_errors(repo: Path, manifest_text: str) -> list[str]:
             result = subprocess.run(
                 ["git", "-C", str(candidate), "rev-parse", "--show-toplevel"],
                 capture_output=True, text=True, timeout=5,
+                env=_trusted_git_env(),
             )
         except (OSError, subprocess.TimeoutExpired):
             errors.append(f"source_git_roots entry is not a readable Git root: {value}")

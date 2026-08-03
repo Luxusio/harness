@@ -494,6 +494,47 @@ def test_git_backed_source_root_validation_reports_uninitialized_gitlink(tmp_pat
     assert "next_action=Restore the checkout" in errors[0]
 
 
+def test_setup_ignores_ambient_alternate_git_index(tmp_path, monkeypatch):
+    setup_finalize = load_setup_finalize("setup_finalize_alternate_index_test")
+    parent = tmp_path / "parent"
+    source_repo = tmp_path / "source-repo"
+    for repo in (parent, source_repo):
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "setup@test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "Setup Test"], cwd=repo, check=True)
+    (source_repo / "tracked.py").write_text("service\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.py"], cwd=source_repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "service"], cwd=source_repo, check=True)
+    (parent / "parent.txt").write_text("parent\n", encoding="utf-8")
+    subprocess.run(["git", "add", "parent.txt"], cwd=parent, check=True)
+    subprocess.run(["git", "commit", "-qm", "parent"], cwd=parent, check=True)
+    service = parent / "service"
+    subprocess.run(
+        ["git", "worktree", "add", "-q", "--detach", str(service), "HEAD"],
+        cwd=source_repo, check=True,
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=service, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    alternate_index = tmp_path / "alternate-index"
+    alt_env = os.environ.copy()
+    alt_env["GIT_INDEX_FILE"] = str(alternate_index)
+    subprocess.run(["git", "read-tree", "HEAD"], cwd=parent, env=alt_env, check=True)
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", f"160000,{head},service"],
+        cwd=parent, env=alt_env, check=True,
+    )
+    monkeypatch.setenv("GIT_INDEX_FILE", str(alternate_index))
+
+    errors = setup_finalize.source_git_root_errors(
+        parent, "source_git_roots: [service]\n"
+    )
+    assert len(errors) == 1
+    assert "[REGISTERED_SOURCE_NOT_DIRECT_GITLINK]" in errors[0]
+
+
 def canonical_manifest(version: int = 5) -> str:
     return (
         f"version: {version}\n"

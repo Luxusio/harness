@@ -338,6 +338,81 @@ def test_uninitialized_registered_gitlink_has_stable_runtime_error(tmp_path):
         raise AssertionError("missing registered checkout must fail with recovery details")
 
 
+def test_ambient_alternate_index_cannot_authorize_registered_source(tmp_path, monkeypatch):
+    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=service, check=True,
+        capture_output=True, text=True,
+    ).stdout.strip()
+    alternate_index = tmp_path / "alternate-index"
+    alt_env = os.environ.copy()
+    alt_env["GIT_INDEX_FILE"] = str(alternate_index)
+    subprocess.run(["git", "read-tree", "HEAD"], cwd=parent, env=alt_env, check=True)
+    subprocess.run(
+        ["git", "update-index", "--add", "--cacheinfo", f"160000,{head},services/front"],
+        cwd=parent, env=alt_env, check=True,
+    )
+    subprocess.run(
+        ["git", "update-index", "--force-remove", "services/front"],
+        cwd=parent, check=True,
+    )
+    monkeypatch.setenv("GIT_INDEX_FILE", str(alternate_index))
+
+    try:
+        lib.configured_source_git_roots(str(parent))
+    except lib.GitBindingError as exc:
+        assert exc.code == "REGISTERED_SOURCE_NOT_DIRECT_GITLINK"
+    else:
+        raise AssertionError("ambient alternate index must not grant authorization")
+
+
+def test_registered_service_gitlink_scan_retarget_fails_closed(tmp_path):
+    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
+    original_gitfile = (service / ".git").read_text(encoding="utf-8")
+    original_entries = lib._direct_gitlink_index_entries
+
+    def retarget_on_service_scan(root, **kwargs):
+        if Path(root).resolve() == service.resolve():
+            (service / ".git").write_text(
+                "gitdir: /tmp/not-the-authorized-gitdir\n", encoding="utf-8"
+            )
+        return original_entries(root, **kwargs)
+
+    try:
+        with mock.patch.object(
+            lib, "_direct_gitlink_index_entries", side_effect=retarget_on_service_scan
+        ):
+            try:
+                lib._workspace_gitlink_paths(str(parent))
+            except lib.GitBindingError:
+                pass
+            else:
+                raise AssertionError("retarget during gitlink scan must fail closed")
+    finally:
+        (service / ".git").write_text(original_gitfile, encoding="utf-8")
+
+
+def test_security_signal_diff_uses_explicit_registered_gitdir(tmp_path):
+    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
+    task = parent / "doc/harness/tasks/TASK__security-diff-binding"
+    lib.ensure_task_scaffold(str(task), "TASK__security-diff-binding")
+    original_run = lib.subprocess.run
+    observed: list[list[str]] = []
+
+    def observe(command, *args, **kwargs):
+        if "--unified=0" in command:
+            observed.append(list(command))
+        return original_run(command, *args, **kwargs)
+
+    with mock.patch.object(lib.subprocess, "run", side_effect=observe):
+        lib._path_has_security_signal(
+            str(task), str(parent), "services/front/service.py"
+        )
+    assert len(observed) == 1
+    assert any(arg.startswith("--git-dir=") for arg in observed[0])
+    assert f"--work-tree={service.resolve()}" in observed[0]
+
+
 def test_workspace_baseline_and_fingerprint_cover_all_registered_git_roots(tmp_path):
     root, api, web = _workspace(tmp_path)
     task = root / "doc/harness/tasks/TASK__multi"

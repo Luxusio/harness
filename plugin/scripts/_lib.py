@@ -1227,6 +1227,15 @@ class GitBindingError(RuntimeError):
         super().__init__(f"[{code}] {message}")
 
 
+def _trusted_git_env():
+    """Return an environment without ambient Git repository/config overrides."""
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("GIT_")
+    }
+
+
 def _direct_gitlink_index_entries(repo_root, *, git_dir=None):
     """Return direct stage-0 gitlinks without traversing their worktrees."""
     cache = _review_snapshot_cache()
@@ -1246,6 +1255,7 @@ def _direct_gitlink_index_entries(repo_root, *, git_dir=None):
             command,
             capture_output=True,
             cwd=repo_root,
+            env=_trusted_git_env(),
             timeout=_bounded_snapshot_timeout(
                 5,
                 "direct gitlink index enumeration",
@@ -1586,6 +1596,7 @@ def configured_source_git_roots(control_root, *, strict=True):
             result = subprocess.run(
                 ["git", "rev-parse", "--show-toplevel"],
                 cwd=root, capture_output=True, text=True, timeout=2,
+                env=_trusted_git_env(),
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(f"source_git_roots entry is not a readable Git root: {rel}") from exc
@@ -2807,9 +2818,16 @@ def _workspace_gitlink_paths(control_root):
     bindings = _workspace_source_bindings(control_root)
     for prefix, root in bindings:
         leaves = _registered_leaves_for_binding(control_root, prefix, root, bindings)
-        for relpath, entry in _gitlink_index_snapshot(
-            root, registered_leaves=leaves,
-        ).items():
+        snapshot = _registered_source_operation(
+            control_root,
+            prefix,
+            root,
+            bindings,
+            lambda git_dir, root=root, leaves=leaves: _gitlink_index_snapshot(
+                root, registered_leaves=leaves, git_dir=git_dir,
+            ),
+        )
+        for relpath, entry in snapshot.items():
             paths[prefix + relpath] = (root, relpath, entry, relpath in leaves)
     return paths
 
@@ -3012,6 +3030,7 @@ def _committed_paths_since_baseline(task_dir, repo_root=None, *, workspace_prefi
         result = subprocess.run(
             command,
             cwd=repo_root, capture_output=True, timeout=timeout,
+            env=_trusted_git_env(),
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
@@ -3077,9 +3096,24 @@ def _path_has_security_signal(task_dir, repo_root, relpath):
         # unsafe exemption.
         return True
     try:
-        result = subprocess.run(
-            ["git", "diff", "--unified=0", "--end-of-options", baseline_head, "--", source_relpath],
-            cwd=source_root, capture_output=True, text=True, timeout=3,
+        bindings = _workspace_source_bindings(repo_root)
+        def security_diff(git_dir):
+            command = ["git"]
+            if git_dir:
+                command.extend([
+                    f"--git-dir={git_dir}", f"--work-tree={source_root}",
+                ])
+            command.extend([
+                "diff", "--no-ext-diff", "--no-textconv", "--unified=0",
+                "--end-of-options", baseline_head, "--", source_relpath,
+            ])
+            return subprocess.run(
+                command,
+                cwd=source_root, capture_output=True, text=True, timeout=3,
+                env=_trusted_git_env(),
+            )
+        result = _registered_source_operation(
+            repo_root, prefix, source_root, bindings, security_diff,
         )
         if result.returncode == 0 and result.stdout and _SECURITY_REVIEW_SIGNAL_RE.search(result.stdout):
             return True
@@ -3951,6 +3985,7 @@ def _git_path_snapshot(repo_root, argument, *, use_cache=True):
             cwd=repo_root,
             capture_output=True,
             text=True,
+            env=_trusted_git_env(),
             timeout=_bounded_snapshot_timeout(2, f"git rev-parse {argument}", repo_root),
         )
     except subprocess.TimeoutExpired as exc:
@@ -4213,6 +4248,7 @@ def _uncached_git_changed_paths(repo_root, *, git_dir=None):
             )
             r = subprocess.run(
                 cmd, capture_output=True, cwd=repo_root, timeout=timeout,
+                env=_trusted_git_env(),
             )
         except subprocess.TimeoutExpired as exc:
             if not _has_git_metadata(repo_root):
@@ -4332,6 +4368,7 @@ def _git_head_snapshot(repo_root, *, git_dir=None, use_cache=True):
             cwd=repo_root,
             capture_output=True,
             text=True,
+            env=_trusted_git_env(),
             timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
@@ -4550,14 +4587,15 @@ def _read_task_baseline_snapshot(task_dir, repo_root=None):
             deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
         )
         try:
-            commit = subprocess.run(
+                commit = subprocess.run(
                 git_command + [
                     "rev-parse", "--verify", "--end-of-options",
                     f"{source_head}^{{commit}}",
                 ],
                 cwd=source_root,
-                capture_output=True,
-                text=True,
+                    capture_output=True,
+                    text=True,
+                    env=_trusted_git_env(),
                 timeout=commit_timeout,
             )
         except subprocess.TimeoutExpired as exc:
@@ -4590,13 +4628,14 @@ def _read_task_baseline_snapshot(task_dir, repo_root=None):
             deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
         )
         try:
-            ancestor = subprocess.run(
+                ancestor = subprocess.run(
                 git_command + [
                     "merge-base", "--is-ancestor", source_head, "HEAD",
                 ],
                 cwd=source_root,
-                capture_output=True,
-                text=True,
+                    capture_output=True,
+                    text=True,
+                    env=_trusted_git_env(),
                 timeout=ancestor_timeout,
             )
         except subprocess.TimeoutExpired as exc:
