@@ -103,6 +103,62 @@ class TestTouchedPathBaseline(unittest.TestCase):
 
             self.assertEqual(run.call_args.kwargs["timeout"], 5.0)
 
+    def test_best_effort_dirty_scan_times_out_at_three_seconds_and_warns(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            with mock.patch.object(
+                lib.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired(["git", "diff"], 3),
+            ) as run:
+                with lib.review_snapshot_scope():
+                    self.assertEqual(
+                        lib._git_changed_paths(str(repo), best_effort=True), set()
+                    )
+                    warnings = lib.git_snapshot_warnings()
+
+            self.assertGreater(run.call_args.kwargs["timeout"], 0)
+            self.assertLessEqual(run.call_args.kwargs["timeout"], 3.0)
+            self.assertEqual(warnings[0]["code"], "GIT_DIRTY_SNAPSHOT_SKIPPED")
+            self.assertEqual(warnings[0]["root"], str(repo.resolve()))
+            self.assertIn("may miss uncommitted changes", warnings[0]["risk"])
+            self.assertIn("new task ID", warnings[0]["retry_action"])
+
+    def test_best_effort_dirty_scan_uses_one_root_budget_and_discards_partial_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            completed = subprocess.CompletedProcess([], 0, stdout=b"first.txt\0")
+            with (
+                mock.patch.object(
+                    lib.time,
+                    "monotonic",
+                    side_effect=[100.0, 100.0, 101.0, 103.1],
+                ),
+                mock.patch.object(
+                    lib.subprocess, "run", return_value=completed,
+                ) as run,
+            ):
+                with lib.review_snapshot_scope():
+                    self.assertEqual(
+                        lib._git_changed_paths(str(repo), best_effort=True), set()
+                    )
+                    warnings = lib.git_snapshot_warnings()
+
+            self.assertEqual(run.call_count, 2)
+            self.assertIn("root dirty scan budget exhausted", warnings[0]["detail"])
+
+    def test_best_effort_dirty_scan_does_not_swallow_mandatory_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = _mk_repo(tmp)
+            with mock.patch.object(
+                lib,
+                "_uncached_git_changed_paths",
+                side_effect=RuntimeError("registered worktree binding mismatch"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "binding mismatch"):
+                    with lib.review_snapshot_scope():
+                        lib._git_changed_paths(str(repo), best_effort=True)
+
     def test_head_read_preserves_legacy_limit_without_deadline(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo = _mk_repo(tmp)

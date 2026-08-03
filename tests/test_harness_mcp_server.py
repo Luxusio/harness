@@ -1481,6 +1481,48 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(baseline_commit_calls, 1)
             self.assertEqual(baseline_ancestor_calls, 1)
 
+    def test_task_context_returns_warning_when_dirty_evidence_is_skipped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._run_git(tmp, "init", "-q")
+            self._run_git(tmp, "config", "user.email", "a@b")
+            self._run_git(tmp, "config", "user.name", "a")
+            (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
+            self._run_git(tmp, "add", "README.md")
+            self._run_git(tmp, "commit", "-qm", "init")
+            task_dir = Path(tmp) / "doc/harness/tasks/TASK__dirty-warning"
+            lib_globals = harness_server.ensure_task_scaffold.__globals__
+
+            with (
+                mock.patch.object(
+                    harness_server, "canonical_task_dir", return_value=str(task_dir)
+                ),
+                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                mock.patch.object(harness_server, "_env_snapshot", return_value=""),
+            ):
+                start = harness_server.handle_task_start(
+                    {"task_id": "TASK__dirty-warning"}
+                )
+                self.assertNotIn("isError", start)
+                with mock.patch.dict(
+                    lib_globals,
+                    {
+                        "_uncached_git_changed_paths": mock.Mock(
+                            side_effect=RuntimeError(
+                                "Git changed-path snapshot unavailable: "
+                                "working tree diff timed out after 3.0s in " + tmp
+                            )
+                        )
+                    },
+                ):
+                    result = harness_server.handle_task_context(
+                        {"task_id": "TASK__dirty-warning"}
+                    )
+
+            self.assertNotIn("isError", result)
+            warnings = result["structuredContent"]["git_snapshot_warnings"]
+            self.assertEqual(warnings[0]["code"], "GIT_DIRTY_SNAPSHOT_SKIPPED")
+            self.assertEqual(warnings[0]["root"], str(Path(tmp).resolve()))
+
     def test_write_plan_writes_plan_meta_checks_and_audit(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__planmcp")

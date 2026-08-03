@@ -84,7 +84,8 @@ from _lib import (  # type: ignore
     write_active_marker, clear_active_marker,
     receipt_runtime_verdict, subagent_receipt_summary, record_subagent_receipt,
     receipt_review_verdict, review_receipt_summary, required_review_lenses,
-    review_snapshot_scope, refresh_review_snapshot, receipt_stream_fingerprint,
+    review_snapshot_scope, refresh_review_snapshot, git_snapshot_warnings,
+    receipt_stream_fingerprint,
     _workspace_changed_path_fingerprints, _control_root_touched_path_fingerprints,
     _git_head_for_receipt,
     write_task_close_attestation, clear_task_close_attestation,
@@ -663,6 +664,10 @@ def handle_task_start(args: dict) -> dict:
                 "detail": str(exc)[:300],
                 "retry_action": ctx["next_action"],
             })
+        warnings.extend(
+            warning for warning in git_snapshot_warnings()
+            if warning not in warnings
+        )
 
     # Best-effort environment snapshot runs after the coherent Git/context scope.
     snapshot_path = ""
@@ -752,6 +757,7 @@ def handle_task_context(args: dict) -> dict:
             "task_context": ctx,
             "subagent_receipts": subagent_receipt_summary(td),
             "review_receipts": review_receipt_summary(td),
+            "git_snapshot_warnings": git_snapshot_warnings(),
         })
 
 
@@ -802,6 +808,7 @@ def handle_task_verify(args: dict) -> dict:
             "ac_reconcile": ac_reconcile,
             "subagent_receipts": subagent_receipt_summary(td),
             "review_receipts": review_receipt_summary(td),
+            "git_snapshot_warnings": git_snapshot_warnings(),
         }
         if verify_run is not None:
             payload["verify_run"] = verify_run
@@ -945,6 +952,7 @@ def handle_task_close(args: dict) -> dict:
         return _ok({
             "task_dir": td, "closed": True, "status": st.get("status"),
             "gate_artifact": _task_artifact_rel(td, "PLAN.md"),
+            "git_snapshot_warnings": git_snapshot_warnings(),
         })
 
 

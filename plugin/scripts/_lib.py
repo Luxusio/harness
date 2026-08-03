@@ -40,7 +40,12 @@ SCHEMA_FIELDS = (
 _REVIEW_SNAPSHOT_CACHE = ContextVar("harness_review_snapshot_cache", default=None)
 _REQUEST_GIT_ROOTS = ContextVar("harness_request_git_roots", default=None)
 _REQUEST_SNAPSHOT_DEADLINE = ContextVar("harness_request_snapshot_deadline", default=None)
+_REQUEST_SNAPSHOT_WARNINGS = ContextVar("harness_request_snapshot_warnings", default=None)
+_DIRTY_ENUMERATION_TIMEOUT_OVERRIDE = ContextVar(
+    "harness_dirty_enumeration_timeout_override", default=None,
+)
 _GIT_ENUMERATION_TIMEOUT_SECONDS = 15.0
+_GIT_DIRTY_ENUMERATION_TIMEOUT_SECONDS = 3.0
 
 
 @contextmanager
@@ -52,6 +57,7 @@ def review_snapshot_scope(deadline_seconds=None):
         return
     token = _REVIEW_SNAPSHOT_CACHE.set({})
     roots_token = _REQUEST_GIT_ROOTS.set(set())
+    warnings_token = _REQUEST_SNAPSHOT_WARNINGS.set([])
     deadline = (
         time.monotonic() + float(deadline_seconds)
         if deadline_seconds is not None
@@ -62,6 +68,7 @@ def review_snapshot_scope(deadline_seconds=None):
         yield
     finally:
         _REQUEST_SNAPSHOT_DEADLINE.reset(deadline_token)
+        _REQUEST_SNAPSHOT_WARNINGS.reset(warnings_token)
         _REQUEST_GIT_ROOTS.reset(roots_token)
         _REVIEW_SNAPSHOT_CACHE.reset(token)
 
@@ -75,6 +82,33 @@ def refresh_review_snapshot() -> None:
 
 def _review_snapshot_cache():
     return _REVIEW_SNAPSHOT_CACHE.get()
+
+
+def git_snapshot_warnings():
+    """Return evidence skipped in the active lifecycle snapshot."""
+    return list(_REQUEST_SNAPSHOT_WARNINGS.get() or [])
+
+
+def _record_dirty_snapshot_warning(repo_root, detail):
+    warnings = _REQUEST_SNAPSHOT_WARNINGS.get()
+    if warnings is None:
+        return
+    item = {
+        "code": "GIT_DIRTY_SNAPSHOT_SKIPPED",
+        "root": os.path.realpath(repo_root),
+        "message": "Working-tree dirty evidence was skipped for this Git root.",
+        "detail": str(detail)[:500],
+        "risk": (
+            "Touched-path, scope-drift, and stale-review checks may miss "
+            "uncommitted changes in this root."
+        ),
+        "retry_action": (
+            "After task_start, use a new task ID once the worktree is responsive; "
+            "for later lifecycle calls, retry that call."
+        ),
+    }
+    if item not in warnings:
+        warnings.append(item)
 
 
 def _remember_git_root(repo_root):
@@ -2653,11 +2687,36 @@ def _registered_source_operation(control_root, prefix, source_root, bindings, op
     relpath = prefix.rstrip("/")
     before = os.lstat(source_root)
     git_dir = _registered_source_metadata_binding(control, source_root, relpath)
+    git_dir_before = os.lstat(git_dir)
+    authority = (
+        os.path.realpath(git_dir), git_dir_before.st_dev, git_dir_before.st_ino,
+    )
+    cache = _review_snapshot_cache()
+    authority_key = (
+        "registered_source_authority", os.path.realpath(control), relpath,
+    )
+    if cache is not None:
+        pinned = cache.get(authority_key)
+        if pinned is not None and pinned != authority:
+            raise GitBindingError(
+                "REGISTERED_WORKTREE_BINDING_CHANGED",
+                f"registered source '{relpath}' changed Git authority during the request",
+                path=relpath,
+                invariant="request_source_snapshot_binding",
+                next_action="Stop concurrent Git/worktree operations and retry.",
+            )
+        cache[authority_key] = authority
     result = operation(git_dir)
     git_dir_after = _registered_source_metadata_binding(control, source_root, relpath)
+    git_dir_after_stat = os.lstat(git_dir_after)
+    authority_after = (
+        os.path.realpath(git_dir_after),
+        git_dir_after_stat.st_dev,
+        git_dir_after_stat.st_ino,
+    )
     after = os.lstat(source_root)
     if (
-        os.path.realpath(git_dir_after) != os.path.realpath(git_dir)
+        authority_after != authority
         or not stat.S_ISDIR(after.st_mode)
         or stat.S_ISLNK(after.st_mode)
         or (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
@@ -2796,7 +2855,9 @@ def _workspace_git_changed_paths(control_root):
     for prefix, root in bindings:
         leaves = _registered_leaves_for_binding(control_root, prefix, root, bindings)
         def source_changed(git_dir, *, root=root, prefix=prefix, leaves=leaves):
-            source_paths = set(_git_changed_paths(root, prefix=prefix, git_dir=git_dir))
+            source_paths = set(_git_changed_paths(
+                root, prefix=prefix, git_dir=git_dir, best_effort=True,
+            ))
             for sub_path in _initialized_submodule_paths(
                 root, registered_leaves=leaves, git_dir=git_dir,
             ):
@@ -2804,6 +2865,7 @@ def _workspace_git_changed_paths(control_root):
                 source_paths.update(_git_changed_paths(
                     sub_root,
                     prefix=prefix + sub_path.rstrip("/") + "/",
+                    best_effort=True,
                 ))
                 _validated_submodule_root(root, sub_path)
             return source_paths
@@ -3861,6 +3923,7 @@ def emit_compact_context(task_dir):
         "effective_close_gate": "micro" if micro_loop else "standard",
         "stale": stale,
         "stale_path": stale_path,
+        "git_snapshot_warnings": git_snapshot_warnings(),
     }
 
 
@@ -4227,8 +4290,15 @@ def _registered_source_gitlink_fingerprint(repo_root, relpath, index_oid=None):
     )
 
 
-def _uncached_git_changed_paths(repo_root, *, git_dir=None):
+def _uncached_git_changed_paths(repo_root, *, git_dir=None, timeout_seconds=None):
     """Read changed repository-relative path names from Git once."""
+    if timeout_seconds is None:
+        timeout_seconds = _DIRTY_ENUMERATION_TIMEOUT_OVERRIDE.get()
+    enumeration_deadline = (
+        time.monotonic() + float(timeout_seconds)
+        if timeout_seconds is not None
+        else None
+    )
     if _has_git_metadata(repo_root):
         _remember_git_root(repo_root)
     changed = set()
@@ -4242,9 +4312,23 @@ def _uncached_git_changed_paths(repo_root, *, git_dir=None):
     )
     for operation, cmd in commands:
         try:
+            command_allowance = timeout_seconds
+            if enumeration_deadline is not None:
+                command_allowance = enumeration_deadline - time.monotonic()
+                if command_allowance <= 0:
+                    raise RuntimeError(
+                        "Git changed-path snapshot unavailable: root dirty scan "
+                        f"budget exhausted before {operation} in {repo_root}"
+                    )
             timeout = _bounded_snapshot_timeout(
-                5, operation, repo_root,
-                deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
+                5 if command_allowance is None else command_allowance,
+                operation,
+                repo_root,
+                deadline_allowance_seconds=(
+                    _GIT_ENUMERATION_TIMEOUT_SECONDS
+                    if command_allowance is None
+                    else command_allowance
+                ),
             )
             r = subprocess.run(
                 cmd, capture_output=True, cwd=repo_root, timeout=timeout,
@@ -4280,18 +4364,44 @@ def _uncached_git_changed_paths(repo_root, *, git_dir=None):
     return changed
 
 
-def _git_changed_paths(repo_root, prefix="", with_fingerprints=False, *, git_dir=None):
+def _git_changed_paths(
+    repo_root, prefix="", with_fingerprints=False, *, git_dir=None,
+    best_effort=False,
+):
     cache = _review_snapshot_cache()
     binding_key = os.path.realpath(git_dir) if git_dir else ""
-    root_key = ("git_changed_path_names", os.path.realpath(repo_root), binding_key)
+    root_key = (
+        "git_changed_path_names", os.path.realpath(repo_root), binding_key,
+        bool(best_effort),
+    )
     if cache is not None and root_key in cache:
         raw_paths = set(cache[root_key])
     else:
-        raw_paths = (
-            _uncached_git_changed_paths(repo_root, git_dir=git_dir)
-            if git_dir
-            else _uncached_git_changed_paths(repo_root)
-        )
+        try:
+            timeout_token = None
+            if best_effort:
+                timeout_token = _DIRTY_ENUMERATION_TIMEOUT_OVERRIDE.set(
+                    _GIT_DIRTY_ENUMERATION_TIMEOUT_SECONDS
+                )
+            try:
+                raw_paths = (
+                    _uncached_git_changed_paths(repo_root, git_dir=git_dir)
+                    if git_dir
+                    else _uncached_git_changed_paths(repo_root)
+                )
+            finally:
+                if timeout_token is not None:
+                    _DIRTY_ENUMERATION_TIMEOUT_OVERRIDE.reset(timeout_token)
+        except RuntimeError as exc:
+            detail = str(exc)
+            optional_failure = (
+                detail.startswith("Git changed-path snapshot unavailable:")
+                or detail.startswith("Git snapshot deadline exhausted before ")
+            )
+            if not best_effort or not optional_failure:
+                raise
+            _record_dirty_snapshot_warning(repo_root, detail)
+            raw_paths = set()
         if cache is not None:
             cache[root_key] = frozenset(raw_paths)
 
@@ -4300,7 +4410,7 @@ def _git_changed_paths(repo_root, prefix="", with_fingerprints=False, *, git_dir
 
     cache_key = (
         "git_changed_path_fingerprints", os.path.realpath(repo_root), prefix,
-        binding_key,
+        binding_key, bool(best_effort),
     )
     if cache is not None and cache_key in cache:
         return dict(cache[cache_key])
@@ -4319,7 +4429,7 @@ def _baseline_file(task_dir):
 
 def _changed_path_fingerprints(repo_root, *, registered_leaves=(), git_dir=None):
     changed = _git_changed_paths(
-        repo_root, with_fingerprints=True, git_dir=git_dir,
+        repo_root, with_fingerprints=True, git_dir=git_dir, best_effort=True,
     )
     leaves = frozenset(registered_leaves)
     for sub_path, (index_oid, initialized) in _gitlink_index_snapshot(
@@ -4338,6 +4448,7 @@ def _changed_path_fingerprints(repo_root, *, registered_leaves=(), git_dir=None)
             sub_root,
             prefix=sub_path.rstrip("/") + "/",
             with_fingerprints=True,
+            best_effort=True,
         ))
         _validated_submodule_root(repo_root, sub_path)
     return changed
@@ -4426,11 +4537,12 @@ def capture_task_baseline(task_dir, repo_root=None):
             "dirty_paths": _changed_path_fingerprints(repo_root),
         }
     else:
+        head_sha = _composite_source_heads(source_heads)
         data = {
             "version": 2,
             "captured_at": now_iso(),
             "control_root": repo_root,
-            "head_sha": _workspace_head_snapshot(repo_root),
+            "head_sha": head_sha,
             "source_heads": source_heads,
             "dirty_paths": _workspace_changed_path_fingerprints(repo_root),
             "control_paths": _control_root_behavior_fingerprints(repo_root),
@@ -4443,7 +4555,9 @@ def capture_task_baseline(task_dir, repo_root=None):
             f.write("\n")
         os.replace(tmp, path)
         try:
-            _read_task_baseline_snapshot(task_dir, repo_root=repo_root)
+            _read_task_baseline_snapshot(
+                task_dir, repo_root=repo_root, validate_git=False,
+            )
         except Exception:
             try:
                 os.unlink(path)
@@ -4459,7 +4573,7 @@ def capture_task_baseline(task_dir, repo_root=None):
     return path
 
 
-def _read_task_baseline_snapshot(task_dir, repo_root=None):
+def _read_task_baseline_snapshot(task_dir, repo_root=None, *, validate_git=True):
     """Read and validate one task baseline without following its leaf."""
     path = _baseline_file(task_dir)
     repo_root = os.path.abspath(
@@ -4475,7 +4589,7 @@ def _read_task_baseline_snapshot(task_dir, repo_root=None):
         if _task_baseline_required(repo_root):
             raise RuntimeError("required task baseline missing")
         return None
-    if cache is not None and cache_key in cache:
+    if validate_git and cache is not None and cache_key in cache:
         return cache[cache_key]
     data = _read_json_file(path, max_size=2 * 1024 * 1024)
     head_sha = str(data.get("head_sha") or "").strip()
@@ -4566,6 +4680,9 @@ def _read_task_baseline_snapshot(task_dir, repo_root=None):
             (prefix, source_root, str(source_heads[prefix]))
             for prefix, source_root in bindings
         ]
+
+    if not validate_git:
+        return data
 
     for prefix, source_root, source_head in source_snapshots:
         source_before = os.lstat(source_root)

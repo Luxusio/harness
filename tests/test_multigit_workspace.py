@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -297,6 +298,30 @@ def test_registered_binding_retarget_during_dirty_scan_fails_closed(tmp_path):
         (service / ".git").write_text(original_gitfile, encoding="utf-8")
 
 
+def test_registered_binding_retarget_between_request_operations_fails_closed(tmp_path):
+    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
+    gitfile = service / ".git"
+    original_gitfile = gitfile.read_text(encoding="utf-8")
+    original_admin = Path(original_gitfile.removeprefix("gitdir: ").strip())
+    alternate_admin = original_admin.parent / "alternate-authority"
+    shutil.copytree(original_admin, alternate_admin)
+    (alternate_admin / "gitdir").write_text(str(gitfile) + "\n", encoding="utf-8")
+
+    try:
+        with lib.review_snapshot_scope():
+            lib._workspace_source_heads(str(parent))
+            gitfile.write_text(f"gitdir: {alternate_admin}\n", encoding="utf-8")
+            try:
+                lib._workspace_git_changed_paths(str(parent))
+            except lib.GitBindingError as exc:
+                assert exc.code == "REGISTERED_WORKTREE_BINDING_CHANGED"
+                assert exc.invariant == "request_source_snapshot_binding"
+            else:
+                raise AssertionError("between-operation retarget must fail closed")
+    finally:
+        gitfile.write_text(original_gitfile, encoding="utf-8")
+
+
 def test_nongit_control_keeps_linked_worktree_source_compatibility(tmp_path):
     control = tmp_path / "control"
     source_repo = tmp_path / "source-repo"
@@ -442,6 +467,32 @@ def test_workspace_baseline_and_fingerprint_cover_all_registered_git_roots(tmp_p
     subprocess.run(["git", "add", "api.py"], cwd=api, check=True)
     subprocess.run(["git", "commit", "-qm", "change api"], cwd=api, check=True)
     assert lib._git_head_for_receipt(str(task)) != first_head
+
+
+def test_new_multigit_baseline_reuses_source_heads_without_head_rescan(tmp_path):
+    root, _api, _web = _workspace(tmp_path)
+    task = root / "doc/harness/tasks/TASK__single-head-snapshot"
+    original = lib._workspace_source_heads
+    calls = 0
+
+    def counted(control_root):
+        nonlocal calls
+        calls += 1
+        return original(control_root)
+
+    with (
+        mock.patch.object(lib, "_workspace_source_heads", side_effect=counted),
+        mock.patch.object(
+            lib,
+            "_workspace_head_snapshot",
+            side_effect=AssertionError("baseline must reuse captured source heads"),
+        ),
+    ):
+        lib.ensure_task_scaffold(str(task), "TASK__single-head-snapshot")
+
+    assert calls == 1
+    baseline = json.loads((task / "TASK_BASELINE.json").read_text(encoding="utf-8"))
+    assert baseline["head_sha"] == lib._composite_source_heads(baseline["source_heads"])
 
 
 def test_workspace_missing_task_baseline_fails_closed(tmp_path):
