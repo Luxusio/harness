@@ -627,10 +627,13 @@ def handle_task_start(args: dict) -> dict:
         scaffold = ensure_task_scaffold(
             task_dir, tid, request_text=request_text, repo_root=repo_root
         )
+        original_resumed_state = read_state(task_dir) if resumed_existing else {}
 
         def rollback_new_start():
             clear_active_marker(repo_root, task_dir)
             if resumed_existing:
+                if original_resumed_state:
+                    write_state(task_dir, original_resumed_state)
                 return
             cleanup = list(scaffold.get("created") or [])
             cleanup.append(os.path.join(task_dir, "TASK_BASELINE.json"))
@@ -641,17 +644,15 @@ def handle_task_start(args: dict) -> dict:
                     pass
 
         resumed = read_state(task_dir)
-        if str(resumed.get("status") or "").lower() in {"blocked", "closed"}:
-            clear_task_close_attestation(task_dir)
+        terminal_resume = str(resumed.get("status") or "").lower() in {
+            "blocked", "closed",
+        }
+        if terminal_resume:
             resumed["status"] = "created"
             resumed["runtime_verdict"] = "pending"
             resumed["closed_at"] = None
             resumed["updated"] = now_iso()
             write_state(task_dir, resumed)
-            try:
-                os.unlink(os.path.join(task_dir, "BLOCKED.md"))
-            except FileNotFoundError:
-                pass
         execution_mode = _opt(args, "execution_mode")
         if execution_mode:
             mode = execution_mode.strip().lower()
@@ -703,6 +704,12 @@ def handle_task_start(args: dict) -> dict:
         except Exception:
             rollback_new_start()
             raise
+        if terminal_resume:
+            clear_task_close_attestation(task_dir)
+            try:
+                os.unlink(os.path.join(task_dir, "BLOCKED.md"))
+            except FileNotFoundError:
+                pass
 
     # Best-effort environment snapshot runs after the coherent Git/context scope.
     snapshot_path = ""
@@ -963,6 +970,20 @@ def handle_task_close(args: dict) -> dict:
                 "blocking_acs": final_blocking if final_checks_status == "blocked" else [],
                 "checks_invalid": final_checks_status == "invalid",
             })
+
+        try:
+            revalidate_request_source_authorities(control_root)
+        except GitBindingError as exc:
+            return close_error(
+                "task_close blocked: registered source authority changed",
+                {
+                    "task_dir": td,
+                    "code": exc.code,
+                    "path": exc.path,
+                    "invariant": exc.invariant,
+                    "next_action": exc.next_action,
+                },
+            )
 
         st = _validated_task_state(td)
         if not st:

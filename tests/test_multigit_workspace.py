@@ -392,10 +392,7 @@ def test_new_baseline_rechecks_authority_after_atomic_publication(tmp_path):
             gitfile.write_text(f"gitdir: {alternate_admin}\n", encoding="utf-8")
 
     try:
-        with (
-            lib.review_snapshot_scope(),
-            mock.patch.object(lib.os, "replace", side_effect=replace_then_retarget),
-        ):
+        with mock.patch.object(lib.os, "replace", side_effect=replace_then_retarget):
             try:
                 lib.ensure_task_scaffold(
                     str(task), "TASK__retarget-on-publication"

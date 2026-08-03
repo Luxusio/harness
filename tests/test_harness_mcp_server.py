@@ -1589,6 +1589,57 @@ class HarnessMcpServerTests(unittest.TestCase):
             sessions = Path(tmp) / "doc/harness/tasks/.active_sessions"
             self.assertFalse(sessions.exists() and any(sessions.iterdir()))
 
+    def test_failed_terminal_resume_restores_state_and_artifacts(self):
+        for terminal_status in ("closed", "blocked"):
+            with self.subTest(status=terminal_status), tempfile.TemporaryDirectory() as tmp:
+                self._run_git(tmp, "init", "-q")
+                self._run_git(tmp, "config", "user.email", "a@b")
+                self._run_git(tmp, "config", "user.name", "a")
+                (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
+                self._run_git(tmp, "add", "README.md")
+                self._run_git(tmp, "commit", "-qm", "init")
+                task_dir = Path(tmp) / f"doc/harness/tasks/TASK__resume-{terminal_status}"
+                lib_globals = harness_server.ensure_task_scaffold.__globals__
+                lib_globals["ensure_task_scaffold"](
+                    str(task_dir), f"TASK__resume-{terminal_status}", repo_root=tmp
+                )
+                state = harness_server.read_state(str(task_dir))
+                state["status"] = terminal_status
+                state["runtime_verdict"] = "PASS" if terminal_status == "closed" else "BLOCKED_ENV"
+                state["closed_at"] = "2026-08-03T00:00:00Z" if terminal_status == "closed" else None
+                harness_server.write_state(str(task_dir), state)
+                artifact = (
+                    task_dir / "TASK_CLOSE_RECEIPT.json"
+                    if terminal_status == "closed"
+                    else task_dir / "BLOCKED.md"
+                )
+                artifact.write_text("preserve\n", encoding="utf-8")
+                binding_error = harness_server.GitBindingError(
+                    "REGISTERED_WORKTREE_BINDING_CHANGED", "late failure",
+                    path="services/front", invariant="request_source_snapshot_binding",
+                    next_action="retry",
+                )
+                with (
+                    mock.patch.object(
+                        harness_server, "canonical_task_dir", return_value=str(task_dir)
+                    ),
+                    mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                    mock.patch.object(
+                        harness_server, "revalidate_request_source_authorities",
+                        side_effect=binding_error,
+                    ),
+                ):
+                    with self.assertRaises(harness_server.GitBindingError):
+                        harness_server.handle_task_start(
+                            {"task_id": f"TASK__resume-{terminal_status}"}
+                        )
+
+                restored = harness_server.read_state(str(task_dir))
+                self.assertEqual(restored["status"], terminal_status)
+                self.assertEqual(restored["runtime_verdict"], state["runtime_verdict"])
+                self.assertEqual(restored["closed_at"], state["closed_at"])
+                self.assertTrue(artifact.exists())
+
     def test_task_context_returns_warning_when_dirty_evidence_is_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._run_git(tmp, "init", "-q")
@@ -2862,6 +2913,35 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
 
         self.assertTrue(result.get("isError"))
         self.assertIn("Git changed-path snapshot unavailable", result["content"][0]["text"])
+
+    def test_close_revalidates_authority_before_state_publication(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            td = self._prepare_task(
+                tmp, "TASK__close-authority",
+                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
+            )
+            binding_error = harness_server.GitBindingError(
+                "REGISTERED_WORKTREE_BINDING_CHANGED", "late close retarget",
+                path="services/front", invariant="request_source_snapshot_binding",
+                next_action="retry",
+            )
+            self._patch(td)
+            try:
+                with mock.patch.object(
+                    harness_server, "revalidate_request_source_authorities",
+                    side_effect=binding_error,
+                ):
+                    result = harness_server.call_tool(
+                        "task_close", {"task_id": "TASK__close-authority"}
+                    )
+            finally:
+                self._unpatch()
+
+        self.assertTrue(result.get("isError"))
+        self.assertEqual(
+            result["structuredContent"]["code"],
+            "REGISTERED_WORKTREE_BINDING_CHANGED",
+        )
 
     def test_close_blocks_when_final_git_head_is_unavailable(self):
         with tempfile.TemporaryDirectory() as tmp:

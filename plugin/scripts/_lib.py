@@ -4530,6 +4530,9 @@ def capture_task_baseline(task_dir, repo_root=None):
     Existing valid baselines are preserved on resume. Git-backed tasks require
     a valid baseline; absence or invalid contents are integrity failures.
     """
+    if _review_snapshot_cache() is None:
+        with review_snapshot_scope():
+            return capture_task_baseline(task_dir, repo_root=repo_root)
     path = _baseline_file(task_dir)
     if os.path.lexists(path):
         _read_task_baseline_snapshot(task_dir, repo_root=repo_root)
