@@ -601,6 +601,12 @@ def handle_task_start(args: dict) -> dict:
     if not td and not ti and not sl:
         raise ValueError("task_start requires task_dir, task_id, or slug")
 
+    execution_mode = _opt(args, "execution_mode")
+    if execution_mode:
+        execution_mode = execution_mode.strip().lower()
+        if execution_mode not in {"standard", "micro"}:
+            raise ValueError("execution_mode must be standard or micro")
+
     repo_root = _control_root()
     task_dir = canonical_task_dir(task_id=ti, slug=sl, task_dir=td, repo_root=repo_root)
     tid = canonical_task_id(task_dir=task_dir, repo_root=repo_root)
@@ -643,23 +649,22 @@ def handle_task_start(args: dict) -> dict:
                 except FileNotFoundError:
                     pass
 
-        resumed = read_state(task_dir)
-        terminal_resume = str(resumed.get("status") or "").lower() in {
-            "blocked", "closed",
-        }
-        if terminal_resume:
-            resumed["status"] = "created"
-            resumed["runtime_verdict"] = "pending"
-            resumed["closed_at"] = None
-            resumed["updated"] = now_iso()
-            write_state(task_dir, resumed)
-        execution_mode = _opt(args, "execution_mode")
-        if execution_mode:
-            mode = execution_mode.strip().lower()
-            if mode not in {"standard", "micro"}:
-                raise ValueError("execution_mode must be standard or micro")
-            if mode == "micro":
+        try:
+            resumed = read_state(task_dir)
+            terminal_resume = str(resumed.get("status") or "").lower() in {
+                "blocked", "closed",
+            }
+            if terminal_resume:
+                resumed["status"] = "created"
+                resumed["runtime_verdict"] = "pending"
+                resumed["closed_at"] = None
+                resumed["updated"] = now_iso()
+                write_state(task_dir, resumed)
+            if execution_mode == "micro":
                 set_state_field(task_dir, "plan_session_state", "micro_loop")
+        except Exception:
+            rollback_new_start()
+            raise
 
         try:
             ctx = emit_compact_context(task_dir)
@@ -698,8 +703,8 @@ def handle_task_start(args: dict) -> dict:
         )
         # The active marker is the final publication step. Recheck pinned
         # authorities immediately afterward so failure rolls back a new task.
-        write_active_marker(repo_root, task_dir)
         try:
+            write_active_marker(repo_root, task_dir)
             revalidate_request_source_authorities(repo_root)
         except Exception:
             rollback_new_start()

@@ -410,6 +410,38 @@ def test_new_baseline_rechecks_authority_after_atomic_publication(tmp_path):
         gitfile.write_text(original_gitfile, encoding="utf-8")
 
 
+def test_direct_scaffold_rechecks_authority_after_baseline_capture(tmp_path):
+    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
+    task = parent / "doc/harness/tasks/TASK__retarget-after-capture"
+    gitfile = service / ".git"
+    original_gitfile = gitfile.read_text(encoding="utf-8")
+    original_admin = Path(original_gitfile.removeprefix("gitdir: ").strip())
+    alternate_admin = original_admin.parent / "alternate-after-capture"
+    shutil.copytree(original_admin, alternate_admin)
+    (alternate_admin / "gitdir").write_text(str(gitfile) + "\n", encoding="utf-8")
+    original_capture = lib.capture_task_baseline
+
+    def capture_then_retarget(*args, **kwargs):
+        result = original_capture(*args, **kwargs)
+        gitfile.write_text(f"gitdir: {alternate_admin}\n", encoding="utf-8")
+        return result
+
+    try:
+        with mock.patch.object(
+            lib, "capture_task_baseline", side_effect=capture_then_retarget,
+        ):
+            try:
+                lib.ensure_task_scaffold(str(task), "TASK__retarget-after-capture")
+            except lib.GitBindingError as exc:
+                assert exc.code == "REGISTERED_WORKTREE_BINDING_CHANGED"
+            else:
+                raise AssertionError("direct scaffold must retain authority pin")
+        assert not (task / "TASK_BASELINE.json").exists()
+        assert not (task / "TASK_STATE.yaml").exists()
+    finally:
+        gitfile.write_text(original_gitfile, encoding="utf-8")
+
+
 def test_nongit_control_keeps_linked_worktree_source_compatibility(tmp_path):
     control = tmp_path / "control"
     source_repo = tmp_path / "source-repo"

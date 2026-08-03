@@ -1996,6 +1996,11 @@ def clear_active_marker(repo_root, task_dir=None, session_id=None):
 
 def ensure_task_scaffold(task_dir, task_id, request_text="", repo_root=None):
     """Create task dir with minimal 7-field TASK_STATE.yaml. Preserves existing state on resume."""
+    if _review_snapshot_cache() is None:
+        with review_snapshot_scope():
+            return ensure_task_scaffold(
+                task_dir, task_id, request_text=request_text, repo_root=repo_root,
+            )
     os.makedirs(task_dir, exist_ok=True)
     expected_tid = _normalize_task_id(task_id, task_dir=task_dir) or task_id
     if os.path.lexists(state_file(task_dir)):
@@ -2038,14 +2043,23 @@ def ensure_task_scaffold(task_dir, task_id, request_text="", repo_root=None):
         raise RuntimeError(
             "task baseline capture unavailable; create or restore a valid Git HEAD and retry task_start"
         )
-    write_state(task_dir, fields)
-
-    created = [state_file(task_dir)]
-    if request_text:
-        req_path = os.path.join(task_dir, "REQUEST.md")
-        if not os.path.isfile(req_path) or os.path.islink(req_path):
-            _atomic_text_write(req_path, request_text)
-            created.append(req_path)
+    created = []
+    try:
+        write_state(task_dir, fields)
+        created.append(state_file(task_dir))
+        if request_text:
+            req_path = os.path.join(task_dir, "REQUEST.md")
+            if not os.path.isfile(req_path) or os.path.islink(req_path):
+                _atomic_text_write(req_path, request_text)
+                created.append(req_path)
+        revalidate_request_source_authorities(repo_root)
+    except Exception:
+        for artifact in created + [_baseline_file(task_dir)]:
+            try:
+                os.unlink(artifact)
+            except FileNotFoundError:
+                pass
+        raise
     return {"created": created, "task_dir": task_dir, "task_id": tid}
 
 

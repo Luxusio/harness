@@ -1640,6 +1640,75 @@ class HarnessMcpServerTests(unittest.TestCase):
                 self.assertEqual(restored["closed_at"], state["closed_at"])
                 self.assertTrue(artifact.exists())
 
+    def test_invalid_execution_mode_does_not_create_or_reopen_task(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            new_task = Path(tmp) / "doc/harness/tasks/TASK__invalid-mode-new"
+            with (
+                mock.patch.object(
+                    harness_server, "canonical_task_dir", return_value=str(new_task)
+                ),
+                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+            ):
+                with self.assertRaisesRegex(ValueError, "execution_mode"):
+                    harness_server.handle_task_start({
+                        "task_id": "TASK__invalid-mode-new",
+                        "execution_mode": "bogus",
+                    })
+            self.assertFalse((new_task / "TASK_STATE.yaml").exists())
+
+            terminal_task = Path(tmp) / "doc/harness/tasks/TASK__invalid-mode-closed"
+            terminal_task.mkdir(parents=True)
+            original = {
+                "task_id": "TASK__invalid-mode-closed",
+                "status": "closed",
+                "runtime_verdict": "PASS",
+                "touched_paths": [],
+                "plan_session_state": "closed",
+                "closed_at": "2026-08-03T00:00:00Z",
+                "updated": "2026-08-03T00:00:00Z",
+            }
+            harness_server.write_state(str(terminal_task), original)
+            with (
+                mock.patch.object(
+                    harness_server, "canonical_task_dir", return_value=str(terminal_task)
+                ),
+                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+            ):
+                with self.assertRaisesRegex(ValueError, "execution_mode"):
+                    harness_server.handle_task_start({
+                        "task_id": "TASK__invalid-mode-closed",
+                        "execution_mode": "bogus",
+                    })
+            self.assertEqual(
+                harness_server.read_state(str(terminal_task))["status"], "closed"
+            )
+
+    def test_new_task_rolls_back_when_active_marker_write_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._run_git(tmp, "init", "-q")
+            self._run_git(tmp, "config", "user.email", "a@b")
+            self._run_git(tmp, "config", "user.name", "a")
+            (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
+            self._run_git(tmp, "add", "README.md")
+            self._run_git(tmp, "commit", "-qm", "init")
+            task_dir = Path(tmp) / "doc/harness/tasks/TASK__marker-failure"
+            with (
+                mock.patch.object(
+                    harness_server, "canonical_task_dir", return_value=str(task_dir)
+                ),
+                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                mock.patch.object(
+                    harness_server, "write_active_marker",
+                    side_effect=OSError("marker unavailable"),
+                ),
+            ):
+                with self.assertRaisesRegex(OSError, "marker unavailable"):
+                    harness_server.handle_task_start(
+                        {"task_id": "TASK__marker-failure"}
+                    )
+            self.assertFalse((task_dir / "TASK_BASELINE.json").exists())
+            self.assertFalse((task_dir / "TASK_STATE.yaml").exists())
+
     def test_task_context_returns_warning_when_dirty_evidence_is_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._run_git(tmp, "init", "-q")
