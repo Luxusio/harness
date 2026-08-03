@@ -238,7 +238,11 @@ retargeting, and concurrent worktree administration are developer-owned. A
 malformed or missing `.git` pointer still produces an actionable snapshot
 failure, and required HEAD, commit, and ancestry operations still fail when Git
 cannot read the selected checkout. A valid pointer that is intentionally
-retargeted is accepted on the next operation.
+retargeted is accepted on the next operation. The same policy applies to
+initialized direct and nested submodules discovered from the parent index:
+their index OID and checkout HEAD remain evidence, but external Gitfile targets,
+reciprocal admin metadata, and worktree inode identity are not independently
+policed by Harness.
 
 Codex runtimes do not always forward collaboration tools to plugin
 `PostToolUse`. SessionStart and each installed Codex root hook therefore validate
