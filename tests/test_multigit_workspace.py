@@ -347,6 +347,34 @@ def test_registered_binding_pin_survives_request_snapshot_refresh(tmp_path):
         gitfile.write_text(original_gitfile, encoding="utf-8")
 
 
+def test_committed_path_scan_uses_request_pinned_authority(tmp_path):
+    parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
+    task = parent / "doc/harness/tasks/TASK__committed-authority"
+    lib.ensure_task_scaffold(str(task), "TASK__committed-authority")
+    gitfile = service / ".git"
+    original_gitfile = gitfile.read_text(encoding="utf-8")
+    original_admin = Path(original_gitfile.removeprefix("gitdir: ").strip())
+    alternate_admin = original_admin.parent / "alternate-committed-authority"
+    shutil.copytree(original_admin, alternate_admin)
+    (alternate_admin / "gitdir").write_text(str(gitfile) + "\n", encoding="utf-8")
+
+    try:
+        with lib.review_snapshot_scope():
+            lib._workspace_source_heads(str(parent))
+            gitfile.write_text(f"gitdir: {alternate_admin}\n", encoding="utf-8")
+            try:
+                lib._committed_paths_since_baseline(
+                    str(task), str(service), workspace_prefix="services/front/"
+                )
+            except lib.GitBindingError as exc:
+                assert exc.code == "REGISTERED_WORKTREE_BINDING_CHANGED"
+                assert exc.invariant == "request_source_snapshot_binding"
+            else:
+                raise AssertionError("committed-path scan must use pinned authority")
+    finally:
+        gitfile.write_text(original_gitfile, encoding="utf-8")
+
+
 def test_new_baseline_rechecks_authority_after_atomic_publication(tmp_path):
     parent, _service_repo, service = _git_backed_linked_workspace(tmp_path)
     task = parent / "doc/harness/tasks/TASK__retarget-on-publication"
@@ -374,7 +402,9 @@ def test_new_baseline_rechecks_authority_after_atomic_publication(tmp_path):
                 )
             except RuntimeError as exc:
                 assert "REGISTERED_WORKTREE_BINDING_CHANGED" in str(exc)
-                assert isinstance(exc.__cause__, lib.GitBindingError)
+                assert isinstance(exc, lib.GitBindingError) or isinstance(
+                    exc.__cause__, lib.GitBindingError
+                )
             else:
                 raise AssertionError("baseline publication retarget must fail closed")
         assert not (task / "TASK_BASELINE.json").exists()

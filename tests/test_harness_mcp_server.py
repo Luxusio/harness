@@ -1517,6 +1517,78 @@ class HarnessMcpServerTests(unittest.TestCase):
                         {"task_id": "TASK__binding-failure"}
                     )
 
+    def test_task_start_does_not_defer_committed_diff_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "doc/harness/tasks/TASK__diff-failure"
+            task_dir.mkdir(parents=True)
+            (task_dir / "TASK_STATE.yaml").write_text(
+                "task_id: TASK__diff-failure\nstatus: created\n"
+                "runtime_verdict: pending\ntouched_paths: []\n"
+                "plan_session_state: closed\nclosed_at: null\n"
+                "updated: 2026-08-03T00:00:00Z\n",
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(
+                    harness_server, "canonical_task_dir", return_value=str(task_dir)
+                ),
+                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                mock.patch.object(
+                    harness_server, "ensure_task_scaffold",
+                    return_value={"created": [str(task_dir / "TASK_STATE.yaml")]},
+                ),
+                mock.patch.object(
+                    harness_server,
+                    "emit_compact_context",
+                    side_effect=RuntimeError(
+                        "task baseline Git diff unavailable: committed path diff timed out"
+                    ),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "Git diff unavailable"):
+                    harness_server.handle_task_start(
+                        {"task_id": "TASK__diff-failure"}
+                    )
+
+    def test_new_task_start_rolls_back_after_final_authority_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._run_git(tmp, "init", "-q")
+            self._run_git(tmp, "config", "user.email", "a@b")
+            self._run_git(tmp, "config", "user.name", "a")
+            (Path(tmp) / "README.md").write_text("# repo\n", encoding="utf-8")
+            self._run_git(tmp, "add", "README.md")
+            self._run_git(tmp, "commit", "-qm", "init")
+            task_dir = Path(tmp) / "doc/harness/tasks/TASK__final-authority"
+            binding_error = harness_server.GitBindingError(
+                "REGISTERED_WORKTREE_BINDING_CHANGED",
+                "binding changed after marker",
+                path="services/front",
+                invariant="request_source_snapshot_binding",
+                next_action="retry",
+            )
+            with (
+                mock.patch.object(
+                    harness_server, "canonical_task_dir", return_value=str(task_dir)
+                ),
+                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                mock.patch.object(harness_server, "_env_snapshot", return_value=""),
+                mock.patch.object(
+                    harness_server,
+                    "revalidate_request_source_authorities",
+                    side_effect=binding_error,
+                ),
+            ):
+                with self.assertRaises(harness_server.GitBindingError):
+                    harness_server.handle_task_start(
+                        {"task_id": "TASK__final-authority"}
+                    )
+
+            self.assertFalse((task_dir / "TASK_BASELINE.json").exists())
+            self.assertFalse((task_dir / "TASK_STATE.yaml").exists())
+            self.assertFalse((Path(tmp) / "doc/harness/tasks/.active").exists())
+            sessions = Path(tmp) / "doc/harness/tasks/.active_sessions"
+            self.assertFalse(sessions.exists() and any(sessions.iterdir()))
+
     def test_task_context_returns_warning_when_dirty_evidence_is_skipped(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._run_git(tmp, "init", "-q")

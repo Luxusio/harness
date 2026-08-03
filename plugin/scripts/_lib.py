@@ -2030,6 +2030,8 @@ def ensure_task_scaffold(task_dir, task_id, request_text="", repo_root=None):
     )
     try:
         baseline_path = capture_task_baseline(task_dir, repo_root=repo_root)
+    except GitBindingError:
+        raise
     except Exception as exc:
         raise RuntimeError(f"task baseline capture unavailable: {exc}") from exc
     if _task_baseline_required(repo_root) and not baseline_path:
@@ -2680,26 +2682,13 @@ def _composite_source_heads(source_heads):
     return digest.hexdigest()
 
 
-def _registered_source_operation(control_root, prefix, source_root, bindings, operation):
-    """Run one service snapshot through its validated explicit Git authority."""
-    control = os.path.realpath(control_root)
-    if (
-        not prefix
-        or _nearest_git_root(control) != control
-        or os.path.realpath(source_root) == control
-    ):
-        return operation(None)
-    relpath = prefix.rstrip("/")
-    before = os.lstat(source_root)
-    git_dir = _registered_source_metadata_binding(control, source_root, relpath)
-    git_dir_before = os.lstat(git_dir)
-    authority = (
-        os.path.realpath(git_dir), git_dir_before.st_dev, git_dir_before.st_ino,
-    )
+def _registered_source_authority(control_root, source_root, relpath):
+    """Return and request-pin one validated registered-source Git authority."""
+    git_dir = _registered_source_metadata_binding(control_root, source_root, relpath)
+    git_dir_stat = os.lstat(git_dir)
+    authority = (os.path.realpath(git_dir), git_dir_stat.st_dev, git_dir_stat.st_ino)
     authorities = _REQUEST_SOURCE_AUTHORITIES.get()
-    authority_key = (
-        os.path.realpath(control), relpath,
-    )
+    authority_key = (os.path.realpath(control_root), relpath)
     if authorities is not None:
         pinned = authorities.get(authority_key)
         if pinned is not None and pinned != authority:
@@ -2711,13 +2700,24 @@ def _registered_source_operation(control_root, prefix, source_root, bindings, op
                 next_action="Stop concurrent Git/worktree operations and retry.",
             )
         authorities[authority_key] = authority
+    return git_dir, authority
+
+
+def _registered_source_operation(control_root, prefix, source_root, bindings, operation):
+    """Run one service snapshot through its validated explicit Git authority."""
+    control = os.path.realpath(control_root)
+    if (
+        not prefix
+        or _nearest_git_root(control) != control
+        or os.path.realpath(source_root) == control
+    ):
+        return operation(None)
+    relpath = prefix.rstrip("/")
+    before = os.lstat(source_root)
+    git_dir, authority = _registered_source_authority(control, source_root, relpath)
     result = operation(git_dir)
-    git_dir_after = _registered_source_metadata_binding(control, source_root, relpath)
-    git_dir_after_stat = os.lstat(git_dir_after)
-    authority_after = (
-        os.path.realpath(git_dir_after),
-        git_dir_after_stat.st_dev,
-        git_dir_after_stat.st_ino,
+    _git_dir_after, authority_after = _registered_source_authority(
+        control, source_root, relpath,
     )
     after = os.lstat(source_root)
     if (
@@ -2734,6 +2734,16 @@ def _registered_source_operation(control_root, prefix, source_root, bindings, op
             next_action="Stop concurrent Git/worktree operations and retry.",
         )
     return result
+
+
+def revalidate_request_source_authorities(control_root):
+    """Recheck pinned registered-source authority without rereading Git objects."""
+    bindings = _workspace_source_bindings(control_root)
+    for prefix, source_root in bindings:
+        if prefix:
+            _registered_source_operation(
+                control_root, prefix, source_root, bindings, lambda _git_dir: None,
+            )
 
 
 def _workspace_source_heads(control_root):
@@ -3080,8 +3090,9 @@ def _committed_paths_since_baseline(task_dir, repo_root=None, *, workspace_prefi
     control_root = find_harness_root(task_dir) or find_repo_root(task_dir)
     source_before = os.lstat(repo_root)
     source_git_dir = None
+    source_authority = None
     if workspace_prefix and _nearest_git_root(control_root) == os.path.realpath(control_root):
-        source_git_dir = _registered_source_metadata_binding(
+        source_git_dir, source_authority = _registered_source_authority(
             control_root, repo_root, workspace_prefix.rstrip("/"),
         )
     command = ["git"]
@@ -3115,12 +3126,12 @@ def _committed_paths_since_baseline(task_dir, repo_root=None, *, workspace_prefi
             f"{result.returncode} in {repo_root}"
         )
     if source_git_dir:
-        source_git_dir_after = _registered_source_metadata_binding(
+        _source_git_dir_after, source_authority_after = _registered_source_authority(
             control_root, repo_root, workspace_prefix.rstrip("/"),
         )
         source_after = os.lstat(repo_root)
         if (
-            os.path.realpath(source_git_dir_after) != os.path.realpath(source_git_dir)
+            source_authority_after != source_authority
             or not stat.S_ISDIR(source_after.st_mode)
             or stat.S_ISLNK(source_after.st_mode)
             or (source_after.st_dev, source_after.st_ino)
@@ -4703,8 +4714,9 @@ def _read_task_baseline_snapshot(task_dir, repo_root=None, *, validate_git=True)
     for prefix, source_root, source_head in source_snapshots:
         source_before = os.lstat(source_root)
         source_git_dir = None
+        source_authority = None
         if prefix and _nearest_git_root(repo_root) == os.path.realpath(repo_root):
-            source_git_dir = _registered_source_metadata_binding(
+            source_git_dir, source_authority = _registered_source_authority(
                 repo_root, source_root, prefix.rstrip("/"),
             )
         git_command = ["git"]
@@ -4787,12 +4799,12 @@ def _read_task_baseline_snapshot(task_dir, repo_root=None, *, validate_git=True)
                 f"{ancestor.returncode} in {source_root}"
             )
         if source_git_dir:
-            source_git_dir_after = _registered_source_metadata_binding(
+            _source_git_dir_after, source_authority_after = _registered_source_authority(
                 repo_root, source_root, prefix.rstrip("/"),
             )
             source_after = os.lstat(source_root)
             if (
-                os.path.realpath(source_git_dir_after) != os.path.realpath(source_git_dir)
+                source_authority_after != source_authority
                 or not stat.S_ISDIR(source_after.st_mode)
                 or stat.S_ISLNK(source_after.st_mode)
                 or (source_after.st_dev, source_after.st_ino)

@@ -85,6 +85,7 @@ from _lib import (  # type: ignore
     receipt_runtime_verdict, subagent_receipt_summary, record_subagent_receipt,
     receipt_review_verdict, review_receipt_summary, required_review_lenses,
     review_snapshot_scope, refresh_review_snapshot, git_snapshot_warnings,
+    revalidate_request_source_authorities,
     receipt_stream_fingerprint,
     _workspace_changed_path_fingerprints, _control_root_touched_path_fingerprints,
     _git_head_for_receipt,
@@ -623,9 +624,22 @@ def handle_task_start(args: dict) -> dict:
 
     warnings = []
     with review_snapshot_scope(deadline_seconds=40):
-        ensure_task_scaffold(
+        scaffold = ensure_task_scaffold(
             task_dir, tid, request_text=request_text, repo_root=repo_root
         )
+
+        def rollback_new_start():
+            clear_active_marker(repo_root, task_dir)
+            if resumed_existing:
+                return
+            cleanup = list(scaffold.get("created") or [])
+            cleanup.append(os.path.join(task_dir, "TASK_BASELINE.json"))
+            for artifact in cleanup:
+                try:
+                    os.unlink(artifact)
+                except FileNotFoundError:
+                    pass
+
         resumed = read_state(task_dir)
         if str(resumed.get("status") or "").lower() in {"blocked", "closed"}:
             clear_task_close_attestation(task_dir)
@@ -646,24 +660,25 @@ def handle_task_start(args: dict) -> dict:
             if mode == "micro":
                 set_state_field(task_dir, "plan_session_state", "micro_loop")
 
-        # The active marker is the final required task-start commit step.
-        write_active_marker(repo_root, task_dir)
         try:
             ctx = emit_compact_context(task_dir)
             if "error" in ctx:
                 raise RuntimeError(str(ctx.get("error") or "compact context unavailable"))
         except GitBindingError:
+            rollback_new_start()
             raise
         except Exception as exc:
             detail = str(exc)
             if detail.startswith((
                 "Git HEAD snapshot unavailable:",
                 "task baseline Git snapshot unavailable:",
+                "task baseline Git diff unavailable:",
                 "Git submodule snapshot unavailable",
                 "required task baseline missing",
                 "task baseline integrity unavailable",
                 "Git snapshot deadline exhausted before ",
             )):
+                rollback_new_start()
                 raise
             ctx = _minimal_task_start_context(task_dir, tid)
             warnings.append({
@@ -680,6 +695,14 @@ def handle_task_start(args: dict) -> dict:
             warning for warning in git_snapshot_warnings()
             if warning not in warnings
         )
+        # The active marker is the final publication step. Recheck pinned
+        # authorities immediately afterward so failure rolls back a new task.
+        write_active_marker(repo_root, task_dir)
+        try:
+            revalidate_request_source_authorities(repo_root)
+        except Exception:
+            rollback_new_start()
+            raise
 
     # Best-effort environment snapshot runs after the coherent Git/context scope.
     snapshot_path = ""
