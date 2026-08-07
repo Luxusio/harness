@@ -118,11 +118,28 @@ def _javascript_code_only(source: str) -> str:
     return "".join(chars)
 
 
-def _exec_lifecycle_calls(source: str) -> list[str]:
-    return re.findall(
+def _exec_lifecycle_invocations(source: str) -> list[tuple[str, str]]:
+    code = _javascript_code_only(source)
+    pattern = re.compile(
         r"\btools\s*\.\s*multi_agent_v1__(spawn_agent|wait_agent|close_agent)\s*\(",
-        _javascript_code_only(source),
     )
+    invocations: list[tuple[str, str]] = []
+    for match in pattern.finditer(code):
+        opening = code.find("(", match.start(), match.end())
+        depth = 0
+        closing = -1
+        for index in range(opening, len(code)):
+            if code[index] == "(":
+                depth += 1
+            elif code[index] == ")":
+                depth -= 1
+                if depth == 0:
+                    closing = index
+                    break
+        if opening < 0 or closing < 0:
+            return []
+        invocations.append((match.group(1), source[opening + 1:closing]))
+    return invocations
 
 
 def _authorized_control_root(session_cwd: str) -> str:
@@ -770,7 +787,29 @@ def _raw_field_values(
         rf"""(?:(?P<quote>["'])(?P<quoted>{value_pattern})(?P=quote)|"""
         rf"""(?P<bare>{value_pattern})(?=\s*(?:[,}})]|$)))""",
     )
-    return [match.group("quoted") or match.group("bare") for match in pattern.finditer(source)]
+    code = _javascript_code_only(source)
+    depths: list[int] = []
+    depth = 0
+    for char in code:
+        depths.append(depth)
+        if char == "{":
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+    values: list[str] = []
+    for match in pattern.finditer(source):
+        start = match.start()
+        delimiter = source[start] if start < len(source) else ""
+        if code[start:start + 1].isspace():
+            continue
+        if delimiter == "{" and depths[start] != 0:
+            continue
+        if delimiter == "," and depths[start] != 1:
+            continue
+        if delimiter not in {"{", ","} and (start != 0 or depths[start] != 0):
+            continue
+        values.append(match.group("quoted") or match.group("bare"))
+    return values
 
 
 def _raw_json_string_values(source: str, field_names: tuple[str, ...]) -> list[str]:
@@ -779,8 +818,27 @@ def _raw_json_string_values(source: str, field_names: tuple[str, ...]) -> list[s
     pattern = re.compile(
         rf'''(?:^|[{{,]\s*){key}\s*[:=]\s*("(?:\\.|[^"\\])*")''',
     )
+    code = _javascript_code_only(source)
+    depths: list[int] = []
+    depth = 0
+    for char in code:
+        depths.append(depth)
+        if char == "{":
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
     values: list[str] = []
     for match in pattern.finditer(source):
+        start = match.start()
+        delimiter = source[start] if start < len(source) else ""
+        if code[start:start + 1].isspace():
+            continue
+        if delimiter == "{" and depths[start] != 0:
+            continue
+        if delimiter == "," and depths[start] != 1:
+            continue
+        if delimiter not in {"{", ","} and (start != 0 or depths[start] != 0):
+            continue
         try:
             decoded = json.loads(match.group(1))
         except json.JSONDecodeError:
@@ -791,8 +849,10 @@ def _raw_json_string_values(source: str, field_names: tuple[str, ...]) -> list[s
 
 
 def _exec_spawn_arguments(source: str) -> dict[str, Any] | None:
-    if _exec_lifecycle_calls(source) != ["spawn_agent"]:
+    invocations = _exec_lifecycle_invocations(source)
+    if len(invocations) != 1 or invocations[0][0] != "spawn_agent":
         return None
+    source = invocations[0][1]
     task_names = _raw_field_values(
         source, ("task_name",), value_pattern=r"[A-Za-z0-9_.-]{1,120}",
     )
@@ -848,7 +908,7 @@ def _spawn_call(event: dict[str, Any]) -> tuple[str, str, bool] | None:
     return call_id, task_name, current_protocol
 
 
-def _unsupported_current_spawn(event: dict[str, Any]) -> tuple[str, str] | None:
+def _unsupported_current_spawn(event: dict[str, Any]) -> tuple[str, str, str] | None:
     """Identify a recognizable current spawn that failed strict normalization."""
     payload = _event_payload(event, "response_item")
     if not payload:
@@ -861,7 +921,8 @@ def _unsupported_current_spawn(event: dict[str, Any]) -> tuple[str, str] | None:
         arguments = _json_arguments(payload)
     elif payload.get("type") == "custom_tool_call" and payload.get("name") == "exec":
         source = str(payload.get("input") or "")
-        if _exec_lifecycle_calls(source) != ["spawn_agent"]:
+        invocations = _exec_lifecycle_invocations(source)
+        if len(invocations) != 1 or invocations[0][0] != "spawn_agent":
             return None
         arguments = _exec_spawn_arguments(source)
     else:
@@ -877,12 +938,13 @@ def _unsupported_current_spawn(event: dict[str, Any]) -> tuple[str, str] | None:
         if "task_name" in line.lower()
     ]
     candidates = [raw_name, *marker_lines]
-    receipt_intended = any(
-        _infer_receipt_lens(candidate).startswith(("review-", "qa-", "ux-"))
-        for candidate in candidates if candidate
-    )
-    if receipt_intended:
-        return call_id, "strict task_name field or first-line marker was invalid"
+    lenses = list(dict.fromkeys(
+        lens for lens in (_infer_receipt_lens(candidate) for candidate in candidates if candidate)
+        if lens.startswith(("review-", "qa-", "ux-"))
+    ))
+    if lenses:
+        lens = lenses[0] if len(lenses) == 1 else "adapter-unknown"
+        return call_id, "strict task_name field or first-line marker was invalid", lens
     return None
 
 
@@ -969,13 +1031,13 @@ def _completion_call(event: dict[str, Any]) -> tuple[str, str, str] | None:
             return None
     elif payload.get("type") == "custom_tool_call" and payload.get("name") == "exec":
         source = str(payload.get("input") or "")
-        matches = _exec_lifecycle_calls(source)
-        if len(matches) != 1 or matches[0] not in {"wait_agent", "close_agent"}:
+        invocations = _exec_lifecycle_invocations(source)
+        if len(invocations) != 1 or invocations[0][0] not in {"wait_agent", "close_agent"}:
             return None
-        name = matches[0]
+        name, argument_source = invocations[0]
         arguments = {}
         if name == "close_agent":
-            targets = _raw_field_values(source, ("agent_id", "target"))
+            targets = _raw_field_values(argument_source, ("agent_id", "target"))
             if len(targets) != 1:
                 return None
             arguments = {"agent_id": targets[0]}
@@ -1299,10 +1361,13 @@ class Watcher:
             return str(item.get("output_path") or "")
         return str(item.get("activity_path") or "")
 
-    def _record_adapter_diagnostic(self, call_id: str, reason: str) -> None:
-        task_dir = self.task_dir or _active_task_for_session(
-            self.repo_root, self.root_id,
-        )
+    @staticmethod
+    def _receipt_source(item: dict[str, Any]) -> str:
+        protocol = "multi_agent_v1" if item.get("current_protocol") else "collaboration"
+        return f"codex_session_watcher:{protocol}"
+
+    def _record_adapter_diagnostic(self, call_id: str, reason: str, lens: str) -> None:
+        task_dir = _active_task_for_session(self.repo_root, self.root_id) or self.task_dir
         if not task_dir:
             return
         event_id = call_id + ":adapter"
@@ -1314,10 +1379,11 @@ class Watcher:
             f"reason={reason}"
         )
         record_subagent_receipt(task_dir, {
-            "source": "codex_session_watcher",
+            "source": "codex_session_watcher:multi_agent_v1",
             "status": "adapter_unsupported",
             "agent_id": call_id,
             "agent_type": "multi_agent_v1__spawn_agent",
+            "lens": lens,
             "summary": summary,
             "runtime_event_id": event_id,
             "runtime_session_id": self.root_id,
@@ -1335,7 +1401,7 @@ class Watcher:
             summary += "\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=1 OPTIONAL=0"
         summary += f"\nRuntime watcher invalidated: {reason}"
         record_subagent_receipt(item["task_dir"], {
-            "source": "codex_session_watcher",
+            "source": self._receipt_source(item),
             "status": "completed",
             "agent_id": self._receipt_agent_id(item),
             "agent_type": item.get("task_name", ""),
@@ -1387,9 +1453,14 @@ class Watcher:
                 return
         if item.get("invalid") or item.get("started"):
             return
-        task_dir = self.task_dir or _active_task_for_session(self.repo_root, self.root_id)
+        task_dir = str(item.get("task_dir") or "")
+        active_task = _active_task_for_session(self.repo_root, self.root_id) or self.task_dir
         lens = _infer_receipt_lens(item["task_name"])
-        if not task_dir or not lens.startswith(("review-", "qa-", "ux-")):
+        if (
+            not task_dir
+            or active_task != task_dir
+            or not lens.startswith(("review-", "qa-", "ux-"))
+        ):
             item["invalid"] = True
             return
         event_id = f"{self.root_id}:{call_id}:{item['child_id']}"
@@ -1426,7 +1497,7 @@ class Watcher:
                 self._invalidate(item, "child evidence was invalid or already complete at start capture")
                 return
             receipt = existing or record_subagent_receipt(task_dir, {
-                    "source": "codex_session_watcher",
+                    "source": self._receipt_source(item),
                     "status": "started",
                     "agent_id": self._receipt_agent_id(item),
                     "agent_type": item["task_name"],
@@ -1452,6 +1523,10 @@ class Watcher:
         root_final = str(item.get("root_final") or "")
         if not root_final or item.get("completed") or item.get("invalid"):
             return
+        current_task = _active_task_for_session(self.repo_root, self.root_id) or self.task_dir
+        if current_task != item.get("task_dir"):
+            self._invalidate(item, "active task changed while agent was running")
+            return
         status, transcript, child_final = _child_status(
             item["child_id"], self.root_id, item["activity_path"], self.session_cwd,
             item["task_name"],
@@ -1474,7 +1549,7 @@ class Watcher:
             agent_path=self._receipt_agent_id(item), lens=lens, summary=child_final,
         ) is None:
             record_subagent_receipt(item["task_dir"], {
-                "source": "codex_session_watcher",
+                "source": self._receipt_source(item),
                 "status": "completed",
                 "agent_id": self._receipt_agent_id(item),
                 "agent_type": item["task_name"],
@@ -1501,6 +1576,10 @@ class Watcher:
     def feed(self, event: dict[str, Any]) -> None:
         task_dir = _task_binding(event, self.repo_root)
         if task_dir:
+            if self.task_dir and self.task_dir != task_dir:
+                for item in self.calls.values():
+                    if not item.get("completed"):
+                        self._invalidate(item, "active task changed after spawn")
             self.task_dir = task_dir
             self.retry()
             return
@@ -1508,8 +1587,13 @@ class Watcher:
         if spawn:
             call_id, task_name, current_protocol = spawn
             item = self.calls.setdefault(call_id, {})
+            active_task = _active_task_for_session(self.repo_root, self.root_id) or self.task_dir
+            if not active_task or (self.task_dir and self.task_dir != active_task):
+                item["invalid"] = True
+                return
             self._set_once(item, "task_name", task_name)
             self._set_once(item, "current_protocol", current_protocol)
+            self._set_once(item, "task_dir", active_task)
             self._maybe_start(call_id)
             return
         unsupported_spawn = _unsupported_current_spawn(event)
@@ -1576,6 +1660,7 @@ class Watcher:
             if item.get("current_protocol") and not item.get("output_path"):
                 self._record_adapter_diagnostic(
                     output_call_id, "spawn output did not contain a valid agent_id",
+                    _infer_receipt_lens(str(item.get("task_name") or "")) or "adapter-unknown",
                 )
                 return
         delivery = _root_delivery(event)

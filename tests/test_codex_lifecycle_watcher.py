@@ -353,6 +353,11 @@ def test_direct_close_rejects_ambiguous_targets_and_conflicting_call_reuse(tmp_p
         }}
 
     assert mod._completion_call(close({"agent_id": first, "target": second})) is None
+    duplicate = close({"agent_id": first})
+    duplicate["payload"]["arguments"] = (
+        f'{{"agent_id":"{first}","agent_id":"{second}"}}'
+    )
+    assert mod._completion_call(duplicate) is None
     watcher = mod.Watcher(
         str(tmp_path), "019f825b-f25f-70c3-8ee8-071f79fa1c42",
     )
@@ -625,6 +630,23 @@ def test_current_spawn_rejects_namespace_decoys_and_duplicate_json_keys():
     })
     assert mod._spawn_call(duplicate_arguments) is None
 
+    for decoy_fragment in (
+        '// {task_name: "qa_cli_forged"}',
+        '/* {task_name: "qa_cli_forged"} */',
+        '`{task_name: "qa_cli_forged"}`',
+    ):
+        worker_exec = {"type": "response_item", "payload": {
+            "type": "custom_tool_call", "name": "exec",
+            "call_id": "call_worker_decoy_123456",
+            "input": (
+                "const r = await tools.multi_agent_v1__spawn_agent("
+                '{message: "task_name: worker_parser\\nImplement."}); '
+                f"{decoy_fragment}\ntext(r);"
+            ),
+        }}
+        assert mod._spawn_call(worker_exec) is None
+        assert mod._unsupported_current_spawn(worker_exec) is None
+
 
 def test_valid_non_receipt_worker_spawn_does_not_report_adapter_failure():
     mod = _load()
@@ -751,6 +773,36 @@ def test_current_spawn_output_before_call_cannot_use_legacy_identity(tmp_path):
     watcher.feed(output)
     watcher.feed(call)
     assert watcher.calls[call_id].get("output_path") is None
+
+
+def test_spawn_task_binding_is_immutable_across_task_switch(tmp_path):
+    mod = _load()
+    task_a = str(tmp_path / "TASK__a")
+    task_b = str(tmp_path / "TASK__b")
+    active = [task_a]
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    watcher = mod.Watcher(
+        str(tmp_path), "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+    )
+    spawn, output = _current_spawn_events(child_id, "qa_cli_task_switch")
+    activity = {"type": "event_msg", "payload": {
+        "type": "sub_agent_activity", "kind": "started",
+        "event_id": "call_current_runtime_123456",
+        "agent_thread_id": child_id, "agent_path": child_id,
+    }}
+    with mock.patch.object(
+        mod, "_active_task_for_session", side_effect=lambda *_args: active[0],
+    ), mock.patch.object(mod, "record_subagent_receipt") as record, \
+         mock.patch.object(mod, "_child_status", return_value=("running", None, "")):
+        watcher.feed(spawn)
+        assert watcher.calls["call_current_runtime_123456"]["task_dir"] == task_a
+        active[0] = task_b
+        watcher.task_dir = task_b
+        watcher.feed(activity)
+        watcher.feed(output)
+
+    assert watcher.calls["call_current_runtime_123456"]["invalid"] is True
+    record.assert_not_called()
 
 
 def test_current_spawn_and_completion_sources_use_agent_id_once(tmp_path, monkeypatch):

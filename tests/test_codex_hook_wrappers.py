@@ -248,18 +248,19 @@ class TestCodexHookWrappers(unittest.TestCase):
     def test_adapter_diagnostic_is_resolved_only_by_later_valid_start(self):
         lib = _load("_lib")
         diagnostic = {
-            "source": "codex_session_watcher",
+            "source": "codex_session_watcher:multi_agent_v1",
             "status": "adapter_unsupported",
+            "lens": "qa-cli",
             "summary": "Receipt adapter unsupported: observed=multi_agent_v1__spawn_agent",
         }
         valid_qa_start = {
-            "source": "codex_session_watcher",
+            "source": "codex_session_watcher:multi_agent_v1",
             "status": "started",
             "lens": "qa-cli",
             "ts": "2026-08-07T00:00:02Z",
         }
         valid_review_start = {
-            "source": "codex_session_watcher",
+            "source": "codex_session_watcher:multi_agent_v1",
             "status": "started",
             "lens": "review-code",
             "ts": "2026-08-07T00:00:02Z",
@@ -280,7 +281,24 @@ class TestCodexHookWrappers(unittest.TestCase):
         ), mock.patch.object(
             lib, "list_review_receipts", return_value=[valid_review_start],
         ):
-            self.assertEqual(lib.active_receipt_adapter_diagnostic("/task"), "")
+            self.assertEqual(
+                lib.active_receipt_adapter_diagnostic("/task"), diagnostic["summary"],
+            )
+
+        matching_review_diagnostic = {
+            **diagnostic,
+            "lens": "review-code",
+            "ts": "2026-08-07T00:00:00Z",
+        }
+        with mock.patch.object(
+            lib, "list_subagent_receipts", return_value=[diagnostic],
+        ), mock.patch.object(
+            lib, "list_review_receipts",
+            return_value=[matching_review_diagnostic, valid_review_start],
+        ):
+            self.assertEqual(
+                lib.active_receipt_adapter_diagnostic("/task"), diagnostic["summary"],
+            )
 
     def test_all_codex_hook_wrappers_restore_registration(self):
         modules = [

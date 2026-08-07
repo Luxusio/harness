@@ -3410,18 +3410,22 @@ def subagent_receipt_summary(task_dir):
 
 def active_receipt_adapter_diagnostic(task_dir):
     """Return the latest unresolved watcher adapter diagnostic, if any."""
-    active = ""
+    active = {}
     events = list_subagent_receipts(task_dir) + list_review_receipts(task_dir)
     events.sort(key=lambda item: str(item.get("ts") or ""))
     for item in events:
+        source = str(item.get("source") or "")
+        protocol = source.split(":", 1)[1] if source.startswith("codex_session_watcher:") else "generic"
+        lens = str(item.get("lens") or "")
         if (
-            item.get("source") == "codex_session_watcher"
+            source.startswith("codex_session_watcher")
             and item.get("status") == "adapter_unsupported"
         ):
-            active = str(item.get("summary") or "")
-        elif active and item.get("status") == "started" and item.get("lens"):
-            active = ""
-    return active
+            active[(protocol, lens)] = str(item.get("summary") or "")
+        elif item.get("status") == "started" and lens:
+            active.pop((protocol, lens), None)
+            active.pop((protocol, "adapter-unknown"), None)
+    return next(reversed(active.values()), "") if active else ""
 
 
 def review_receipt_summary(task_dir):
