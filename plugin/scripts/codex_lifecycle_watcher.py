@@ -811,8 +811,9 @@ def _spawn_output(
         try:
             output = json.loads(output)
         except json.JSONDecodeError:
+            identity_field = "agent_id" if require_agent_id else "(?:agent_id|agent_name)"
             match = re.search(
-                r"""["']?(?:agent_id|agent_name)["']?\s*[:=]\s*["']?([A-Za-z0-9_./:-]{6,160})""",
+                rf"""["']?{identity_field}["']?\s*[:=]\s*["']?([A-Za-z0-9_./:-]{{6,160}})""",
                 output,
             )
             output = {"agent_id": match.group(1)} if match else {}

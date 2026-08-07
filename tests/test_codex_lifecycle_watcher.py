@@ -125,6 +125,31 @@ def test_spawn_output_uses_agent_id_not_display_nickname():
     assert mod._spawn_output(event) == ("call_runtime_123456", child_id)
 
 
+def test_current_raw_spawn_output_requires_explicit_agent_id():
+    mod = _load()
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+
+    def event(output):
+        return {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "call_runtime_123456",
+                "output": output,
+            },
+        }
+
+    assert mod._spawn_output(
+        event("agent_name: '/root/display_only'"), require_agent_id=True,
+    ) is None
+    assert mod._spawn_output(
+        event(f"agent_id: '{child_id}'"), require_agent_id=True,
+    ) == ("call_runtime_123456", child_id)
+    assert mod._spawn_output(event("agent_name: '/root/legacy_display'")) == (
+        "call_runtime_123456", "/root/legacy_display",
+    )
+
+
 def _delivery(agent_path: str, final: str):
     return {"type": "response_item", "payload": {
         "type": "agent_message", "author": agent_path, "recipient": "/root",
