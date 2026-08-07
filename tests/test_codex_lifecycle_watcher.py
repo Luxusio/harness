@@ -145,6 +145,10 @@ def test_current_raw_spawn_output_requires_explicit_agent_id():
     assert mod._spawn_output(
         event(f"agent_id: '{child_id}'"), require_agent_id=True,
     ) == ("call_runtime_123456", child_id)
+    for alias in ("not_agent_id", "parent_agent_id", "display_agent_id"):
+        assert mod._spawn_output(
+            event(f"{alias}: '{child_id}'"), require_agent_id=True,
+        ) is None
     assert mod._spawn_output(event("agent_name: '/root/legacy_display'")) == (
         "call_runtime_123456", "/root/legacy_display",
     )
