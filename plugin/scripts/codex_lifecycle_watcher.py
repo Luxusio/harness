@@ -123,23 +123,36 @@ def _exec_lifecycle_invocations(source: str) -> list[tuple[str, str]]:
     pattern = re.compile(
         r"\btools\s*\.\s*multi_agent_v1__(spawn_agent|wait_agent|close_agent)\s*\(",
     )
-    invocations: list[tuple[str, str]] = []
-    for match in pattern.finditer(code):
-        opening = code.find("(", match.start(), match.end())
-        depth = 0
-        closing = -1
-        for index in range(opening, len(code)):
-            if code[index] == "(":
-                depth += 1
-            elif code[index] == ")":
-                depth -= 1
-                if depth == 0:
-                    closing = index
-                    break
-        if opening < 0 or closing < 0:
-            return []
-        invocations.append((match.group(1), source[opening + 1:closing]))
-    return invocations
+    matches = list(pattern.finditer(code))
+    if len(matches) != 1:
+        return []
+    match = matches[0]
+    assignment = re.fullmatch(
+        r"\s*(?:const|let)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*await\s*",
+        code[:match.start()],
+    )
+    if assignment is None:
+        return []
+    opening = code.find("(", match.start(), match.end())
+    depth = 0
+    closing = -1
+    for index in range(opening, len(code)):
+        if code[index] == "(":
+            depth += 1
+        elif code[index] == ")":
+            depth -= 1
+            if depth == 0:
+                closing = index
+                break
+    if opening < 0 or closing < 0:
+        return []
+    variable = re.escape(assignment.group(1))
+    if re.fullmatch(
+        rf"\s*;\s*text\s*\(\s*{variable}\s*\)\s*;?\s*",
+        code[closing + 1:],
+    ) is None:
+        return []
+    return [(match.group(1), source[opening + 1:closing])]
 
 
 def _authorized_control_root(session_cwd: str) -> str:

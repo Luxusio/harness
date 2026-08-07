@@ -648,6 +648,27 @@ def test_current_spawn_rejects_namespace_decoys_and_duplicate_json_keys():
         assert mod._unsupported_current_spawn(worker_exec) is None
 
 
+def test_exec_lifecycle_requires_one_unconditional_await_and_direct_forward():
+    mod = _load()
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    call = (
+        'tools.multi_agent_v1__spawn_agent({task_name: "qa_cli_forged"})'
+    )
+    rejected = (
+        f"if (false) {{ {call}; }} text({{agent_id: '{child_id}'}});",
+        f"function later() {{ return {call}; }} text({{agent_id: '{child_id}'}});",
+        f"const r = false ? {call} : {{agent_id: '{child_id}'}}; text(r);",
+        f"const r = await {call}; text({{agent_id: '{child_id}'}});",
+    )
+    for source in rejected:
+        assert mod._exec_lifecycle_invocations(source) == []
+
+    accepted = f"const result = await {call}; text(result);"
+    invocations = mod._exec_lifecycle_invocations(accepted)
+    assert len(invocations) == 1
+    assert invocations[0][0] == "spawn_agent"
+
+
 def test_valid_non_receipt_worker_spawn_does_not_report_adapter_failure():
     mod = _load()
     structured = {
