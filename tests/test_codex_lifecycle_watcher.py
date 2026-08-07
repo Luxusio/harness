@@ -392,6 +392,47 @@ def test_direct_close_rejects_ambiguous_targets_and_conflicting_call_reuse(tmp_p
     assert call_id in watcher.invalid_completion_calls
 
 
+def test_call_id_cannot_change_between_spawn_and_completion_roles(tmp_path):
+    mod = _load()
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    call_id = "call_role_collision_123456"
+
+    def spawn():
+        return {"type": "response_item", "payload": {
+            "type": "function_call", "namespace": "multi_agent_v1",
+            "name": "spawn_agent", "call_id": call_id,
+            "arguments": json.dumps({"task_name": "qa_cli_collision"}),
+        }}
+
+    def close():
+        return {"type": "response_item", "payload": {
+            "type": "function_call", "namespace": "multi_agent_v1",
+            "name": "close_agent", "call_id": call_id,
+            "arguments": json.dumps({"agent_id": child_id}),
+        }}
+
+    watcher = mod.Watcher(
+        str(tmp_path), "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+    )
+    completed = {"completed": True, "task_dir": str(tmp_path)}
+    watcher.calls[call_id] = completed
+    with mock.patch.object(watcher, "_invalidate") as invalidate:
+        watcher.feed(close())
+        invalidate.assert_called_once_with(
+            completed, "call id changed from spawn to completion",
+        )
+    assert call_id in watcher.invalid_completion_calls
+
+    reverse = mod.Watcher(
+        str(tmp_path), "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+    )
+    reverse.completion_calls[call_id] = ("close_agent", child_id)
+    reverse.feed(spawn())
+    assert reverse.calls[call_id]["invalid"] is True
+    assert call_id not in reverse.completion_calls
+    assert call_id in reverse.invalid_completion_calls
+
+
 def test_current_completion_without_recorded_start_is_ignored(tmp_path):
     mod = _load()
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"

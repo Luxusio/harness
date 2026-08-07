@@ -1662,6 +1662,13 @@ class Watcher:
         if spawn:
             call_id, task_name, current_protocol = spawn
             item = self.calls.setdefault(call_id, {})
+            if call_id in self.completion_calls or call_id in self.invalid_completion_calls:
+                self.completion_calls.pop(call_id, None)
+                self.invalid_completion_calls.add(call_id)
+                item["invalid"] = True
+                for delivered in self.completion_items.pop(call_id, []):
+                    self._invalidate(delivered, "call id changed from completion to spawn")
+                return
             active_task = _active_task_for_session(self.repo_root, self.root_id) or self.task_dir
             if not active_task or (self.task_dir and self.task_dir != active_task):
                 item["invalid"] = True
@@ -1678,6 +1685,14 @@ class Watcher:
         completion = _completion_call(event)
         if completion:
             call_id, kind, target = completion
+            if call_id in self.calls:
+                self.invalid_completion_calls.add(call_id)
+                self._invalidate(
+                    self.calls[call_id], "call id changed from spawn to completion",
+                )
+                for delivered in self.completion_items.pop(call_id, []):
+                    self._invalidate(delivered, "call id changed from spawn to completion")
+                return
             if call_id in self.invalid_completion_calls:
                 return
             existing = self.completion_calls.get(call_id)
