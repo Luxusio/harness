@@ -2729,16 +2729,6 @@ def _control_root_changed_paths(task_dir, control_root):
     }
 
 
-def _control_root_touched_path_fingerprints(task_dir, control_root):
-    """Fingerprint bounded behavioral paths outside child Git roots.
-
-    This is intentionally independent of TASK_STATE.touched_paths so a parent
-    file changed concurrently before synchronization still invalidates close.
-    """
-    del task_dir  # Signature stays task-close friendly; discovery is state-independent.
-    return _control_root_behavior_fingerprints(control_root)
-
-
 def _workspace_git_changed_paths(control_root):
     changed = set()
     bindings = _workspace_source_bindings(control_root)

@@ -2842,30 +2842,6 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         self.assertTrue(result.get("isError"))
         self.assertIn("invalid", result["structuredContent"]["error"])
 
-    def test_close_blocks_if_checks_become_invalid_during_final_reread(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp,
-                "TASK__checks-toctou",
-                checks_yaml="- id: AC-001\n  status: passed\n",
-            )
-            self._patch(td)
-            try:
-                with mock.patch.object(
-                    harness_server,
-                    "_checks_gate_status",
-                    side_effect=[("ok", []), ("invalid", [])],
-                ):
-                    result = harness_server.call_tool(
-                        "task_close", {"task_id": "TASK__checks-toctou"}
-                    )
-            finally:
-                self._unpatch()
-            state = Path(td, "TASK_STATE.yaml").read_text(encoding="utf-8")
-        self.assertTrue(result.get("isError"))
-        self.assertTrue(result["structuredContent"]["checks_invalid"])
-        self.assertNotIn("status: closed", state)
-
     def test_close_warn_passes_without_checks_yaml(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(tmp, "TASK__pr2-003", checks_yaml=None)
@@ -2976,29 +2952,6 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         self.assertNotIn("isError", result,
                          f"deleted touched path should not be permanently stale: {result}")
 
-    def test_close_refreshes_snapshot_and_blocks_if_final_gate_changes(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__close-race",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-            )
-            initial = {"missing_for_close": [], "next_action": "close"}
-            changed = {"missing_for_close": ["fresh review receipt"], "next_action": "verify"}
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
-                mock.patch.object(harness_server, "emit_compact_context", side_effect=[initial, changed]) as emit,
-                mock.patch.object(harness_server, "_runtime_is_stale", side_effect=[(False, ""), (False, "")]),
-                mock.patch.object(harness_server, "_checks_gate_status", side_effect=[("passed", []), ("passed", [])]),
-                mock.patch.object(harness_server, "refresh_review_snapshot") as refresh,
-            ):
-                result = harness_server.handle_task_close({"task_id": "TASK__close-race"})
-
-        self.assertTrue(result.get("isError"))
-        self.assertIn("final freshness changed", result["content"][0]["text"])
-        self.assertEqual(emit.call_count, 2)
-        self.assertEqual(refresh.call_count, 2)
-
     def test_close_marks_active_goal_child_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(
@@ -3023,10 +2976,8 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
                 mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
                 mock.patch.object(harness_server, "emit_compact_context", return_value=clean),
-                mock.patch.object(harness_server, "_runtime_is_stale", return_value=(False, "")),
                 mock.patch.object(harness_server, "_checks_gate_status", return_value=("passed", [])),
                 mock.patch.object(harness_server, "_git_head_for_receipt", return_value="a" * 40),
-                mock.patch.object(harness_server, "_workspace_changed_path_fingerprints", return_value={}),
             ):
                 result = harness_server.handle_task_close({"task_id": "TASK__goal-close-sync"})
 
@@ -3064,10 +3015,8 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                     mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
                     mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
                     mock.patch.object(harness_server, "emit_compact_context", return_value=clean),
-                    mock.patch.object(harness_server, "_runtime_is_stale", return_value=(False, "")),
                     mock.patch.object(harness_server, "_checks_gate_status", return_value=("passed", [])),
                     mock.patch.object(harness_server, "_git_head_for_receipt", return_value="a" * 40),
-                    mock.patch.object(harness_server, "_workspace_changed_path_fingerprints", return_value={}),
                 ):
                     closed = harness_server.handle_task_close({"task_id": task_id})
                 self.assertNotIn("isError", closed)
@@ -3123,25 +3072,6 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         self.assertTrue(result.get("isError"))
         warnings = result["structuredContent"]["git_snapshot_warnings"]
         self.assertEqual(warnings[0]["code"], "GIT_DIRTY_SNAPSHOT_SKIPPED")
-
-    def test_close_blocks_when_initial_git_snapshot_fails(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__initial-git-failure",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-            )
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
-                mock.patch.object(
-                    harness_server, "_workspace_changed_path_fingerprints",
-                    side_effect=RuntimeError("snapshot unavailable"),
-                ),
-            ):
-                result = harness_server.handle_task_close({"task_id": "TASK__initial-git-failure"})
-
-        self.assertTrue(result.get("isError"))
-        self.assertIn("Git changed-path snapshot unavailable", result["content"][0]["text"])
 
     def test_close_rolls_back_when_attestation_publication_fails(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -3248,61 +3178,6 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                     Path(td).resolve(),
                 )
 
-    def test_close_blocks_when_final_git_head_is_unavailable(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__final-head-unavailable",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-            )
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
-                mock.patch.object(harness_server, "_git_head_for_receipt", side_effect=["a" * 40, ""]),
-            ):
-                result = harness_server.handle_task_close({"task_id": "TASK__final-head-unavailable"})
-
-        self.assertTrue(result.get("isError"))
-        self.assertIn("final freshness changed", result["content"][0]["text"])
-
-    def test_close_blocks_when_final_git_snapshot_fails(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__final-git-failure",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-            )
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
-                mock.patch.object(
-                    harness_server, "_workspace_changed_path_fingerprints",
-                    side_effect=[set(), RuntimeError("snapshot unavailable")],
-                ),
-            ):
-                result = harness_server.handle_task_close({"task_id": "TASK__final-git-failure"})
-
-        self.assertTrue(result.get("isError"))
-        self.assertIn("final Git changed-path snapshot unavailable", result["content"][0]["text"])
-
-    def test_close_blocks_when_changed_path_fingerprint_map_changes(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__snapshot-map-race",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-            )
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
-                mock.patch.object(
-                    harness_server, "_workspace_changed_path_fingerprints",
-                    side_effect=[{"src/a.py": "sha256:old"}, {"src/a.py": "sha256:new"}],
-                ),
-            ):
-                result = harness_server.handle_task_close({"task_id": "TASK__snapshot-map-race"})
-
-        self.assertTrue(result.get("isError"))
-        self.assertTrue(result["structuredContent"]["snapshot_changed"])
-        self.assertIn("final freshness changed", result["content"][0]["text"])
-
     def test_handlers_compute_git_path_snapshot_once_per_phase(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(
@@ -3334,198 +3209,39 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 calls = 0
                 closed = harness_server.handle_task_close({"task_id": "TASK__snapshot-count"})
                 self.assertNotIn("isError", closed)
-                self.assertEqual(calls, 3)
+                self.assertEqual(calls, 1)
 
-    def test_close_real_source_change_during_refresh_fails_closed(self):
+    def test_close_evaluates_each_success_gate_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(
-                tmp, "TASK__source-race",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-                touched_paths=["plugin/scripts/health.py"],
-            )
-            source = Path(tmp) / "plugin/scripts/health.py"
-            original_refresh = harness_server.refresh_review_snapshot
-
-            def mutate_then_refresh():
-                source.write_text("# changed during close\n", encoding="utf-8")
-                original_refresh()
-
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
-                mock.patch.object(harness_server, "refresh_review_snapshot", side_effect=mutate_then_refresh),
-            ):
-                result = harness_server.handle_task_close({"task_id": "TASK__source-race"})
-
-        self.assertTrue(result.get("isError"))
-        self.assertIn("final freshness changed", result["content"][0]["text"])
-
-    def test_close_new_untracked_source_during_refresh_fails_closed(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__untracked-race",
+                tmp, "TASK__single-pass-close",
                 checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
             )
-            source = Path(tmp) / "plugin/scripts/new_during_close.py"
-            original_refresh = harness_server.refresh_review_snapshot
-
-            def create_then_refresh():
-                source.write_text("VALUE = 1\n", encoding="utf-8")
-                original_refresh()
-
+            clean = {
+                "missing_for_close": [],
+                "next_action": "close",
+                "stale": False,
+                "stale_path": "",
+            }
             with (
                 mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
-                mock.patch.object(harness_server, "refresh_review_snapshot", side_effect=create_then_refresh),
+                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]) as sync,
+                mock.patch.object(harness_server, "emit_compact_context", return_value=clean) as context,
+                mock.patch.object(harness_server, "_checks_gate_status", return_value=("passed", [])) as checks,
+                mock.patch.object(harness_server, "_git_head_for_receipt", return_value="a" * 40) as head,
+                mock.patch.object(
+                    harness_server,
+                    "receipt_stream_fingerprint",
+                    return_value="sha256:" + "b" * 64,
+                ) as receipts,
             ):
-                result = harness_server.handle_task_close({"task_id": "TASK__untracked-race"})
+                result = harness_server.handle_task_close(
+                    {"task_id": "TASK__single-pass-close"}
+                )
 
-        self.assertTrue(result.get("isError"))
-        self.assertIn("final freshness changed", result["content"][0]["text"])
-
-    def test_close_head_change_during_refresh_fails_closed(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__head-race",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-            )
-            readme = Path(tmp) / "README.md"
-            original_refresh = harness_server.refresh_review_snapshot
-            mutated = False
-
-            def commit_then_refresh():
-                nonlocal mutated
-                if not mutated:
-                    readme.write_text("# committed during close\n", encoding="utf-8")
-                    subprocess.run(["git", "add", "README.md"], cwd=tmp, check=True)
-                    subprocess.run(["git", "commit", "-qm", "race commit"], cwd=tmp, check=True)
-                    mutated = True
-                original_refresh()
-
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
-                mock.patch.object(harness_server, "refresh_review_snapshot", side_effect=commit_then_refresh),
-            ):
-                result = harness_server.handle_task_close({"task_id": "TASK__head-race"})
-
-        self.assertTrue(result.get("isError"))
-        self.assertIn("final freshness changed", result["content"][0]["text"])
-
-    def test_close_head_change_during_final_context_fails_closed(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__late-head-race",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-            )
-            readme = Path(tmp) / "README.md"
-            original_emit = harness_server.emit_compact_context
-            calls = 0
-
-            def emit_then_commit(task_dir):
-                nonlocal calls
-                calls += 1
-                result = original_emit(task_dir)
-                if calls == 2:
-                    readme.write_text("# committed during final context\n", encoding="utf-8")
-                    subprocess.run(["git", "add", "README.md"], cwd=tmp, check=True)
-                    subprocess.run(["git", "commit", "-qm", "late race commit"], cwd=tmp, check=True)
-                return result
-
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
-                mock.patch.object(harness_server, "emit_compact_context", side_effect=emit_then_commit),
-            ):
-                result = harness_server.handle_task_close({"task_id": "TASK__late-head-race"})
-
-        self.assertEqual(calls, 2)
-        self.assertTrue(result.get("isError"))
-        self.assertIn("final freshness changed", result["content"][0]["text"])
-
-    def test_close_uncommitted_change_during_final_context_fails_closed(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__late-source-race",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-            )
-            source = Path(tmp) / "plugin/scripts/health.py"
-            original_emit = harness_server.emit_compact_context
-            calls = 0
-
-            def emit_then_mutate(task_dir):
-                nonlocal calls
-                calls += 1
-                result = original_emit(task_dir)
-                if calls == 2:
-                    source.write_text("# uncommitted during final context\n", encoding="utf-8")
-                return result
-
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
-                mock.patch.object(harness_server, "emit_compact_context", side_effect=emit_then_mutate),
-            ):
-                result = harness_server.handle_task_close({"task_id": "TASK__late-source-race"})
-
-        self.assertEqual(calls, 2)
-        self.assertTrue(result.get("isError"))
-        self.assertTrue(result["structuredContent"]["snapshot_changed"])
-        self.assertIn("final freshness changed", result["content"][0]["text"])
-
-    def test_close_live_receipt_change_during_refresh_fails_closed(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__receipt-race",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-            )
-            receipts = Path(td) / "SUBAGENT_RECEIPTS.jsonl"
-            original_refresh = harness_server.refresh_review_snapshot
-
-            def remove_receipts_then_refresh():
-                receipts.write_text("", encoding="utf-8")
-                original_refresh()
-
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
-                mock.patch.object(harness_server, "refresh_review_snapshot", side_effect=remove_receipts_then_refresh),
-            ):
-                result = harness_server.handle_task_close({"task_id": "TASK__receipt-race"})
-
-        self.assertTrue(result.get("isError"))
-        self.assertIn("final freshness changed", result["content"][0]["text"])
-
-    def test_close_receipt_change_during_final_context_fails_closed(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__late-receipt-race",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-            )
-            receipts = Path(td) / "SUBAGENT_RECEIPTS.jsonl"
-            original_emit = harness_server.emit_compact_context
-            calls = 0
-
-            def emit_then_remove_receipts(task_dir):
-                nonlocal calls
-                calls += 1
-                result = original_emit(task_dir)
-                if calls == 2:
-                    receipts.write_text("", encoding="utf-8")
-                return result
-
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
-                mock.patch.object(harness_server, "emit_compact_context", side_effect=emit_then_remove_receipts),
-            ):
-                result = harness_server.handle_task_close({"task_id": "TASK__late-receipt-race"})
-
-        self.assertEqual(calls, 2)
-        self.assertTrue(result.get("isError"))
-        self.assertTrue(result["structuredContent"]["receipt_stream_changed"])
-        self.assertIn("final freshness changed", result["content"][0]["text"])
-
+            self.assertNotIn("isError", result)
+            for gate in (sync, context, checks, head, receipts):
+                self.assertEqual(gate.call_count, 1)
 
 class HarnessTouchedPathSubmoduleTests(unittest.TestCase):
     def _git(self, cwd: str, *args: str):
@@ -3621,173 +3337,6 @@ class HarnessTouchedPathSubmoduleTests(unittest.TestCase):
 
             touched = harness_server.sync_from_git_diff(str(task_dir))
             self.assertIn("services/api space/api.py", touched)
-
-    def test_close_blocks_clean_submodule_checkout_change(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            sub_src = Path(tmp) / "sub-src"
-            parent = Path(tmp) / "parent"
-            sub_src.mkdir()
-            parent.mkdir()
-            self._git(str(sub_src), "init", "-q")
-            self._git(str(sub_src), "config", "user.email", "t@example.com")
-            self._git(str(sub_src), "config", "user.name", "T")
-            (sub_src / "api.py").write_text("v1\n", encoding="utf-8")
-            self._git(str(sub_src), "add", "api.py")
-            self._git(str(sub_src), "commit", "-qm", "v1")
-            first = self._git(str(sub_src), "rev-parse", "HEAD").stdout.strip()
-            (sub_src / "api.py").write_text("v2\n", encoding="utf-8")
-            self._git(str(sub_src), "commit", "-qam", "v2")
-            second = self._git(str(sub_src), "rev-parse", "HEAD").stdout.strip()
-            self._git(str(sub_src), "checkout", "-q", first)
-
-            self._git(str(parent), "init", "-q")
-            self._git(str(parent), "config", "user.email", "t@example.com")
-            self._git(str(parent), "config", "user.name", "T")
-            self._git(
-                str(parent), "-c", "protocol.file.allow=always",
-                "submodule", "add", "-q", str(sub_src), "services/api space",
-            )
-            self._git(str(parent), "commit", "-qm", "add submodule")
-
-            gate = HarnessMcpServerPR2CloseGate()
-            td = gate._prepare_task(
-                str(parent), "TASK__submodule-head-race",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-            )
-            initial = {"missing_for_close": [], "next_action": "close"}
-            calls = 0
-
-            def emit_then_checkout(task_dir):
-                nonlocal calls
-                calls += 1
-                if calls == 2:
-                    self._git(str(parent / "services/api space"), "checkout", "-q", second)
-                return initial
-
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
-                mock.patch.object(harness_server, "emit_compact_context", side_effect=emit_then_checkout),
-                mock.patch.object(harness_server, "_runtime_is_stale", side_effect=[(False, ""), (False, "")]),
-                mock.patch.object(harness_server, "_checks_gate_status", side_effect=[("passed", []), ("passed", [])]),
-            ):
-                result = harness_server.handle_task_close({"task_id": "TASK__submodule-head-race"})
-
-            self.assertTrue(result.get("isError"))
-            self.assertTrue(result["structuredContent"]["snapshot_changed"])
-
-    def test_close_blocks_staged_gitlink_change(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            sub_src = Path(tmp) / "sub-src"
-            parent = Path(tmp) / "parent"
-            sub_src.mkdir()
-            parent.mkdir()
-            self._git(str(sub_src), "init", "-q")
-            self._git(str(sub_src), "config", "user.email", "t@example.com")
-            self._git(str(sub_src), "config", "user.name", "T")
-            (sub_src / "api.py").write_text("v1\n", encoding="utf-8")
-            self._git(str(sub_src), "add", "api.py")
-            self._git(str(sub_src), "commit", "-qm", "v1")
-            first = self._git(str(sub_src), "rev-parse", "HEAD").stdout.strip()
-            (sub_src / "api.py").write_text("v2\n", encoding="utf-8")
-            self._git(str(sub_src), "commit", "-qam", "v2")
-            second = self._git(str(sub_src), "rev-parse", "HEAD").stdout.strip()
-            self._git(str(sub_src), "checkout", "-q", first)
-
-            self._git(str(parent), "init", "-q")
-            self._git(str(parent), "config", "user.email", "t@example.com")
-            self._git(str(parent), "config", "user.name", "T")
-            self._git(
-                str(parent), "-c", "protocol.file.allow=always",
-                "submodule", "add", "-q", str(sub_src), "services/api space",
-            )
-            self._git(str(parent), "commit", "-qm", "add submodule")
-
-            gate = HarnessMcpServerPR2CloseGate()
-            td = gate._prepare_task(
-                str(parent), "TASK__submodule-index-race",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-            )
-            initial = {"missing_for_close": [], "next_action": "close"}
-            calls = 0
-
-            def emit_then_stage_gitlink(task_dir):
-                nonlocal calls
-                calls += 1
-                if calls == 2:
-                    self._git(
-                        str(parent), "update-index", "--cacheinfo",
-                        f"160000,{second},services/api space",
-                    )
-                return initial
-
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
-                mock.patch.object(harness_server, "emit_compact_context", side_effect=emit_then_stage_gitlink),
-                mock.patch.object(harness_server, "_runtime_is_stale", side_effect=[(False, ""), (False, "")]),
-                mock.patch.object(harness_server, "_checks_gate_status", side_effect=[("passed", []), ("passed", [])]),
-            ):
-                result = harness_server.handle_task_close({"task_id": "TASK__submodule-index-race"})
-
-            self.assertTrue(result.get("isError"))
-            self.assertTrue(result["structuredContent"]["snapshot_changed"])
-
-    def test_close_blocks_uninitialized_gitlink_index_change(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            sub_src = Path(tmp) / "sub-src"
-            parent = Path(tmp) / "parent"
-            sub_src.mkdir()
-            parent.mkdir()
-            for repo in (sub_src, parent):
-                self._git(str(repo), "init", "-q")
-                self._git(str(repo), "config", "user.email", "t@example.com")
-                self._git(str(repo), "config", "user.name", "T")
-            (sub_src / "api.py").write_text("v1\n", encoding="utf-8")
-            self._git(str(sub_src), "add", "api.py")
-            self._git(str(sub_src), "commit", "-qm", "v1")
-            first = self._git(str(sub_src), "rev-parse", "HEAD").stdout.strip()
-            (sub_src / "api.py").write_text("v2\n", encoding="utf-8")
-            self._git(str(sub_src), "commit", "-qam", "v2")
-            second = self._git(str(sub_src), "rev-parse", "HEAD").stdout.strip()
-            self._git(
-                str(parent), "update-index", "--add", "--cacheinfo",
-                f"160000,{first},ghost-sub",
-            )
-            self._git(str(parent), "commit", "-qm", "add uninitialized gitlink")
-
-            gate = HarnessMcpServerPR2CloseGate()
-            td = gate._prepare_task(
-                str(parent), "TASK__uninitialized-gitlink-race",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n  kind: functional\n',
-            )
-            initial = {"missing_for_close": [], "next_action": "close"}
-            calls = 0
-
-            def emit_then_stage_gitlink(task_dir):
-                nonlocal calls
-                calls += 1
-                if calls == 2:
-                    self._git(
-                        str(parent), "update-index", "--add", "--cacheinfo",
-                        f"160000,{second},ghost-sub",
-                    )
-                return initial
-
-            with (
-                mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
-                mock.patch.object(harness_server, "sync_from_git_diff", return_value=[]),
-                mock.patch.object(harness_server, "emit_compact_context", side_effect=emit_then_stage_gitlink),
-                mock.patch.object(harness_server, "_runtime_is_stale", side_effect=[(False, ""), (False, "")]),
-                mock.patch.object(harness_server, "_checks_gate_status", side_effect=[("passed", []), ("passed", [])]),
-            ):
-                result = harness_server.handle_task_close(
-                    {"task_id": "TASK__uninitialized-gitlink-race"},
-                )
-
-            self.assertTrue(result.get("isError"))
-            self.assertTrue(result["structuredContent"]["snapshot_changed"])
-
 
 if __name__ == "__main__":
     unittest.main()

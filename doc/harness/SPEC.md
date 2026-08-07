@@ -208,14 +208,14 @@ specific correction instead of an undocumented row-only requirement.
 `task_context`, `task_verify`, and `task_close` reuse one request-local snapshot
 of source-derived Git paths and review fingerprints. The snapshot is isolated by
 execution context, is discarded on success or exception, and never caches review
-or QA receipts. Before `task_close` writes closed state, it clears that snapshot
-and reruns the complete context, receipt, runtime-freshness, and CHECKS gates;
-after those gates finish, it clears the cache again and requires the end-of-gate
-changed-path fingerprint map and HEAD to match the initial values. It also
-compares uncached raw review/QA receipt-stream fingerprints across the final
-gate. Source, receipt, or HEAD changes observed between them therefore fail
-closed and require a fresh verification. An unavailable initial or final HEAD
-remains invalid evidence and blocks close. A failed or timed-out working-tree
+or QA receipts. `task_close` performs one best-effort source sync, evaluates the
+context, runtime-freshness, and CHECKS gates once, then reads HEAD and the receipt
+stream once for its close attestation. It does not rescan the worktree or rerun
+the gates to detect an external mutation that races with that same close call.
+Developers own that short concurrency window; a later lifecycle call observes
+the resulting workspace state. Evidence that is missing, stale, or invalid when
+the single close evaluation begins still blocks close. An unavailable HEAD or
+receipt stream remains invalid evidence. A failed or timed-out working-tree
 dirty scan is instead represented as empty optional evidence plus a
 `GIT_DIRTY_SNAPSHOT_SKIPPED` warning. Consequently close can miss an
 uncommitted change, scope drift, or stale review evidence in that root. Each
@@ -324,8 +324,9 @@ Claude write, Bash, Stop, and subagent lifecycle hooks resolve a registered
 child Git cwd back to this control root. Multi-Git baselines also fingerprint a
 bounded parent behavioral surface (`AGENTS.md`, `CLAUDE.md`, contracts, and the
 Harness manifest); normal synchronization discovers changes to those files,
-and `task_close` compares them independently of `touched_paths` to close the
-final-gate race.
+including changes already present when `task_close` begins. Close does not
+independently rescan that surface during its developer-owned same-call
+concurrency window.
 Runtime project-document edits reject symlink components and use a bounded,
 atomic helper for routing and contract-import changes. Registered source-root
 names are restricted to `[A-Za-z0-9._/-]+` before any control-root-relative

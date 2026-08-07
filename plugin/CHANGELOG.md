@@ -4,6 +4,16 @@ All notable changes to the harness Claude Code plugin.
 
 ## [Unreleased]
 
+### Changed
+
+- `task_close` now uses one source sync and one context/freshness/CHECKS gate
+  evaluation, followed by one HEAD and receipt-stream read for close
+  attestation. The former initial/final worktree, control-root, HEAD, and
+  receipt comparisons were removed, reducing dirty enumeration from three
+  phases to one per Git root. External mutations racing with an in-progress
+  close call are now developer-owned; invalid or stale evidence already
+  present when close begins still blocks normally.
+
 ### Fixed
 
 - Codex lifecycle receipts now normalize both legacy `collaboration` and current

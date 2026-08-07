@@ -86,9 +86,7 @@ from _lib import (  # type: ignore
     receipt_runtime_verdict, subagent_receipt_summary, record_subagent_receipt,
     receipt_review_verdict, review_receipt_summary, required_review_lenses,
     review_snapshot_scope, refresh_review_snapshot, git_snapshot_warnings,
-    receipt_stream_fingerprint,
-    _workspace_changed_path_fingerprints, _control_root_touched_path_fingerprints,
-    _git_head_for_receipt,
+    receipt_stream_fingerprint, _git_head_for_receipt,
     write_task_close_attestation, clear_task_close_attestation,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
@@ -879,18 +877,14 @@ def handle_task_close(args: dict) -> dict:
         try:
             sync_from_git_diff(td)
             control_root = find_harness_root(td) or find_repo_root(td)
-            initial_snapshot = _workspace_changed_path_fingerprints(control_root)
-            initial_control_snapshot = _control_root_touched_path_fingerprints(
-                td, control_root
-            )
         except RuntimeError:
             return close_error("task_close blocked: Git changed-path snapshot unavailable", {
                 "task_dir": td, "git_snapshot_unavailable": True,
             })
-        initial_head = _git_head_for_receipt(td)
         ctx = emit_compact_context(td)
         missing = ctx.get("missing_for_close") or []
-        stale, stale_path = _runtime_is_stale(td)
+        stale = bool(ctx.get("stale"))
+        stale_path = str(ctx.get("stale_path") or "")
         checks_status, blocking = _checks_gate_status(td)
         if checks_status == "invalid":
             return close_error(
@@ -919,64 +913,17 @@ def handle_task_close(args: dict) -> dict:
                 "task_dir": td, "blocking_acs": blocking,
             })
 
-        if not initial_head:
+        head_sha = _git_head_for_receipt(td)
+        if not head_sha:
             return close_error("task_close blocked: Git HEAD unavailable", {
                 "task_dir": td, "head_unavailable": True,
             })
 
-        # Rebuild source-derived state and reread live receipts immediately
-        # before granting close. This catches changes during the first gate.
-        refresh_review_snapshot()
         try:
-            final_receipts_before = receipt_stream_fingerprint(td)
+            receipt_fingerprint = receipt_stream_fingerprint(td)
         except RuntimeError:
             return close_error("task_close blocked: receipt stream snapshot unavailable", {
                 "task_dir": td, "receipt_snapshot_unavailable": True,
-            })
-        final_ctx = emit_compact_context(td)
-        final_missing = final_ctx.get("missing_for_close") or []
-        final_stale, final_stale_path = _runtime_is_stale(td)
-        final_checks_status, final_blocking = _checks_gate_status(td)
-        # The final gates can take long enough for an uncommitted edit to land.
-        # Rebuild once more after they finish, then compare the end snapshot.
-        refresh_review_snapshot()
-        try:
-            final_snapshot = _workspace_changed_path_fingerprints(control_root)
-            final_control_snapshot = _control_root_touched_path_fingerprints(
-                td, control_root
-            )
-        except RuntimeError:
-            return close_error("task_close blocked: final Git changed-path snapshot unavailable", {
-                "task_dir": td, "git_snapshot_unavailable": True,
-            })
-        final_head = _git_head_for_receipt(td)
-        try:
-            final_receipts_after = receipt_stream_fingerprint(td)
-        except RuntimeError:
-            return close_error("task_close blocked: final receipt stream snapshot unavailable", {
-                "task_dir": td, "receipt_snapshot_unavailable": True,
-            })
-        receipt_stream_changed = final_receipts_after != final_receipts_before
-        snapshot_changed = final_snapshot != initial_snapshot
-        control_snapshot_changed = (
-            final_control_snapshot != initial_control_snapshot
-        )
-        head_unavailable = not final_head
-        head_changed = final_head != initial_head
-        if receipt_stream_changed or snapshot_changed or control_snapshot_changed or head_unavailable or head_changed or final_missing or final_stale or final_checks_status in {"blocked", "invalid"}:
-            return close_error("task_close blocked: final freshness changed — re-run task_verify", {
-                "task_dir": td,
-                "receipt_stream_changed": receipt_stream_changed,
-                "snapshot_changed": snapshot_changed,
-                "control_snapshot_changed": control_snapshot_changed,
-                "head_unavailable": head_unavailable,
-                "head_changed": head_changed,
-                "missing_for_close": final_missing,
-                "task_context": final_ctx,
-                "stale": final_stale,
-                "stale_path": final_stale_path,
-                "blocking_acs": final_blocking if final_checks_status == "blocked" else [],
-                "checks_invalid": final_checks_status == "invalid",
             })
 
         st = _validated_task_state(td)
@@ -993,8 +940,8 @@ def handle_task_close(args: dict) -> dict:
             write_task_close_attestation(
                 td,
                 st,
-                head_sha=final_head,
-                receipt_fingerprint=final_receipts_after,
+                head_sha=head_sha,
+                receipt_fingerprint=receipt_fingerprint,
             )
             clear_active_marker(control_root, td)
             if os.path.realpath(resolve_active_task_dir(control_root) or "") == os.path.realpath(td):
