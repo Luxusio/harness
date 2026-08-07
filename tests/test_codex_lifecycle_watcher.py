@@ -298,6 +298,25 @@ def test_exec_wrapped_current_completion_calls_normalize():
         ),
     }}
     assert mod._completion_call(ambiguous) is None
+    dynamic_close = {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "name": "exec",
+        "call_id": "call_close_dynamic_123456",
+        "input": (
+            "const r = await tools.multi_agent_v1__close_agent("
+            f'false ? {{agent_id: "{child_id}"}} : JSON.parse("{{}}")'
+            "); text(r);"
+        ),
+    }}
+    assert mod._completion_call(dynamic_close) is None
+    dynamic_wait = {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "name": "exec",
+        "call_id": "call_wait_dynamic_123456",
+        "input": (
+            "const r = await tools.multi_agent_v1__wait_agent(JSON.parse(\"{}\")); "
+            "text(r);"
+        ),
+    }}
+    assert mod._completion_call(dynamic_wait) is None
 
     final = "VERDICT: PASS\nQA completed"
     wait_output = {"type": "response_item", "payload": {
@@ -659,14 +678,44 @@ def test_exec_lifecycle_requires_one_unconditional_await_and_direct_forward():
         f"function later() {{ return {call}; }} text({{agent_id: '{child_id}'}});",
         f"const r = false ? {call} : {{agent_id: '{child_id}'}}; text(r);",
         f"const r = await {call}; text({{agent_id: '{child_id}'}});",
+        (
+            "const r = await tools.multi_agent_v1__spawn_agent("
+            'false ? {message: "task_name: qa_cli_forged\\nRun QA"} : '
+            "JSON.parse('{\"message\":\"task_name: worker_impl\\\\nImplement\"}')"
+            "); text(r);"
+        ),
+        (
+            "const r = await tools.multi_agent_v1__spawn_agent("
+            '{...other, message: "task_name: qa_cli_forged\\nRun QA"}'
+            "); text(r);"
+        ),
+        (
+            "const r = await tools.multi_agent_v1__spawn_agent("
+            '{[name]: "qa_cli_forged", message: "task_name: qa_cli_forged\\nRun QA"}'
+            "); text(r);"
+        ),
+        (
+            "`${await tools.multi_agent_v1__close_agent("
+            f'{{target: "{child_id}"}})}}`\n'
+            f"const r = await {call}; text(r);"
+        ),
     )
     for source in rejected:
-        assert mod._exec_lifecycle_invocations(source) == []
+        invocations = mod._exec_lifecycle_invocations(source)
+        if invocations:
+            assert mod._exec_spawn_arguments(source) is None
 
     accepted = f"const result = await {call}; text(result);"
     invocations = mod._exec_lifecycle_invocations(accepted)
     assert len(invocations) == 1
     assert invocations[0][0] == "spawn_agent"
+
+    static_args = invocations[0][1]
+    assert mod._static_exec_object(static_args, {"task_name"}) is True
+    assert mod._static_exec_object(
+        '{message: "x", items: ["one", "two"], fork_context: true}',
+        {"message", "items", "fork_context"},
+    ) is True
 
 
 def test_valid_non_receipt_worker_spawn_does_not_report_adapter_failure():

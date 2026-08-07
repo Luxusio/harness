@@ -119,6 +119,8 @@ def _javascript_code_only(source: str) -> str:
 
 
 def _exec_lifecycle_invocations(source: str) -> list[tuple[str, str]]:
+    if "`" in source:
+        return []
     code = _javascript_code_only(source)
     pattern = re.compile(
         r"\btools\s*\.\s*multi_agent_v1__(spawn_agent|wait_agent|close_agent)\s*\(",
@@ -153,6 +155,51 @@ def _exec_lifecycle_invocations(source: str) -> list[tuple[str, str]]:
     ) is None:
         return []
     return [(match.group(1), source[opening + 1:closing])]
+
+
+def _static_exec_object(source: str, allowed_fields: set[str]) -> bool:
+    """Accept a closed JSON-like object with scalar or scalar-array values."""
+    string = r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')'''
+    scalar = rf"(?:{string}|true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?)"
+    array = rf"\[\s*(?:{scalar}(?:\s*,\s*{scalar})*)?\s*\]"
+    value = rf"(?:{scalar}|{array})"
+    key = rf"(?:[A-Za-z_][A-Za-z0-9_]*|{string})"
+    pair = rf"{key}\s*:\s*{value}"
+    if re.fullmatch(rf"\s*{{\s*(?:{pair}(?:\s*,\s*{pair})*\s*,?)?}}\s*", source) is None:
+        return False
+    key_pattern = re.compile(rf"(?:^|[{{,])\s*({string}|[A-Za-z_][A-Za-z0-9_]*)\s*:")
+    code = _javascript_code_only(source)
+    depths: list[int] = []
+    depth = 0
+    for char in code:
+        depths.append(depth)
+        if char == "{":
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+    keys: list[str] = []
+    for match in key_pattern.finditer(source):
+        start = match.start()
+        if code[start:start + 1].isspace():
+            continue
+        if source[start:start + 1] == "{" and depths[start] != 0:
+            continue
+        if source[start:start + 1] == "," and depths[start] != 1:
+            continue
+        raw_key = match.group(1)
+        if raw_key[:1] in {'"', "'"}:
+            if raw_key[0] == '"':
+                try:
+                    decoded = json.loads(raw_key)
+                except json.JSONDecodeError:
+                    return False
+                key_name = decoded if isinstance(decoded, str) else ""
+            else:
+                key_name = raw_key[1:-1]
+        else:
+            key_name = raw_key
+        keys.append(key_name)
+    return len(keys) == len(set(keys)) and all(key in allowed_fields for key in keys)
 
 
 def _authorized_control_root(session_cwd: str) -> str:
@@ -866,6 +913,11 @@ def _exec_spawn_arguments(source: str) -> dict[str, Any] | None:
     if len(invocations) != 1 or invocations[0][0] != "spawn_agent":
         return None
     source = invocations[0][1]
+    if not _static_exec_object(source, {
+        "task_name", "message", "items", "fork_context", "fork_turns",
+        "model", "reasoning_effort", "agent_type",
+    }):
+        return None
     task_names = _raw_field_values(
         source, ("task_name",), value_pattern=r"[A-Za-z0-9_.-]{1,120}",
     )
@@ -1048,6 +1100,13 @@ def _completion_call(event: dict[str, Any]) -> tuple[str, str, str] | None:
         if len(invocations) != 1 or invocations[0][0] not in {"wait_agent", "close_agent"}:
             return None
         name, argument_source = invocations[0]
+        allowed = (
+            {"agent_id", "target"}
+            if name == "close_agent"
+            else {"agent_ids", "ids", "timeout", "timeout_ms"}
+        )
+        if not _static_exec_object(argument_source, allowed):
+            return None
         arguments = {}
         if name == "close_agent":
             targets = _raw_field_values(argument_source, ("agent_id", "target"))
