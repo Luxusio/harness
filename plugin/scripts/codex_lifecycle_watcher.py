@@ -795,6 +795,32 @@ def _unsupported_current_spawn(event: dict[str, Any]) -> tuple[str, str] | None:
     return None
 
 
+def _structured_tool_output(output: Any) -> dict[str, Any] | None:
+    """Decode exactly one structured result from direct or exec content output."""
+    if isinstance(output, dict):
+        return output
+    candidates: list[str] = []
+    if isinstance(output, str):
+        candidates.append(output)
+    elif isinstance(output, list):
+        for item in output:
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "input_text"
+                and isinstance(item.get("text"), str)
+            ):
+                candidates.append(item["text"])
+    decoded: list[dict[str, Any]] = []
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            decoded.append(value)
+    return decoded[0] if len(decoded) == 1 else None
+
+
 def _spawn_output(
     event: dict[str, Any], *, require_agent_id: bool = False,
 ) -> tuple[str, str] | None:
@@ -806,20 +832,25 @@ def _spawn_output(
     call_id = str(payload.get("call_id") or "")
     if not CALL_RE.fullmatch(call_id):
         return None
-    output = payload.get("output")
-    if isinstance(output, str):
+    raw_output = payload.get("output")
+    output = _structured_tool_output(raw_output)
+    if output is None and isinstance(raw_output, str):
+        output = raw_output
         try:
-            output = json.loads(output)
+            output = json.loads(raw_output)
         except json.JSONDecodeError:
             identity_field = "agent_id" if require_agent_id else "(?:agent_id|agent_name)"
             identity_key = (
                 rf"(?:[\"']{identity_field}[\"']|{identity_field})"
             )
             match = re.search(
-                rf"""(?:^|[{{,]\s*){identity_key}\s*[:=]\s*["']?([A-Za-z0-9_./:-]{{6,160}})""",
-                output,
+                rf"""(?:^|[{{,]\s*){identity_key}\s*[:=]\s*"""
+                rf"""(?:(?P<quote>["'])(?P<quoted>[A-Za-z0-9_./:-]{{6,160}})(?P=quote)|"""
+                rf"""(?P<bare>[A-Za-z0-9_./:-]{{6,160}})(?=\s*(?:[,}}]|$)))""",
+                raw_output,
             )
-            output = {"agent_id": match.group(1)} if match else {}
+            identity = (match.group("quoted") or match.group("bare")) if match else ""
+            output = {"agent_id": identity} if identity else {}
     if not isinstance(output, dict):
         return None
     if require_agent_id:
@@ -886,12 +917,7 @@ def _completion_output(
         "function_call_output", "custom_tool_call_output",
     }:
         return []
-    output = payload.get("output")
-    if isinstance(output, str):
-        try:
-            output = json.loads(output)
-        except json.JSONDecodeError:
-            return []
+    output = _structured_tool_output(payload.get("output"))
     if not isinstance(output, dict):
         return []
     kind, target = completion_call

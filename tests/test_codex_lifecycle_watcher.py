@@ -155,11 +155,19 @@ def test_current_raw_spawn_output_requires_explicit_agent_id():
     assert mod._spawn_output(
         event(f"{{ agent_id: '{child_id}' }}"), require_agent_id=True,
     ) == ("call_runtime_123456", child_id)
+    for suffix in ("@junk", "#junk"):
+        assert mod._spawn_output(
+            event(f"agent_id: '{child_id}{suffix}'"), require_agent_id=True,
+        ) is None
+        assert mod._spawn_output(
+            event(f"agent_id: {child_id}{suffix}"), require_agent_id=True,
+        ) is None
     assert mod._spawn_output(event("agent_name: '/root/legacy_display'")) == (
         "call_runtime_123456", "/root/legacy_display",
     )
     for alias in ("display-agent_name", "parent.agent_name", "display/agent_name"):
         assert mod._spawn_output(event(f"{alias}: '/root/display_only'")) is None
+    assert mod._spawn_output(event("agent_name: '/root/legacy_display@junk'")) is None
 
 
 def _delivery(agent_path: str, final: str):
@@ -199,7 +207,10 @@ def _exec_spawn_events(child_id: str, task_name: str):
         }},
         {"type": "response_item", "payload": {
             "type": "custom_tool_call_output", "call_id": call_id,
-            "output": json.dumps({"agent_id": child_id}),
+            "output": [
+                {"type": "input_text", "text": "Script completed\n"},
+                {"type": "input_text", "text": json.dumps({"agent_id": child_id})},
+            ],
         }},
     ]
 
@@ -263,6 +274,41 @@ def test_exec_wrapped_current_completion_calls_normalize():
     assert mod._completion_call(close_event) == (
         "call_close_wrapped_123", "close_agent", child_id,
     )
+
+    final = "VERDICT: PASS\nQA completed"
+    wait_output = {"type": "response_item", "payload": {
+        "type": "custom_tool_call_output", "call_id": "call_wait_wrapped_123",
+        "output": [
+            {"type": "input_text", "text": "Script completed\n"},
+            {"type": "input_text", "text": json.dumps({
+                "status": {child_id: {"completed": final}},
+            })},
+        ],
+    }}
+    close_output = {"type": "response_item", "payload": {
+        "type": "custom_tool_call_output", "call_id": "call_close_wrapped_123",
+        "output": [
+            {"type": "input_text", "text": "Script completed\n"},
+            {"type": "input_text", "text": json.dumps({
+                "previous_status": {"completed": final},
+            })},
+        ],
+    }}
+    assert mod._completion_output(
+        wait_output, ("wait_agent", ""),
+    ) == [(child_id, final)]
+    assert mod._completion_output(
+        close_output, ("close_agent", child_id),
+    ) == [(child_id, final)]
+
+
+def test_exec_output_rejects_ambiguous_structured_results():
+    mod = _load()
+    output = [
+        {"type": "input_text", "text": json.dumps({"agent_id": "a" * 16})},
+        {"type": "input_text", "text": json.dumps({"agent_id": "b" * 16})},
+    ]
+    assert mod._structured_tool_output(output) is None
 
 
 def test_current_completion_without_recorded_start_is_ignored(tmp_path):
