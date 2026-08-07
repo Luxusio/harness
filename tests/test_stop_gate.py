@@ -171,7 +171,7 @@ def test_blocks_for_active_background_subagent_without_manual_command(tmp_path):
             "id": "agent-bg",
             "kind": "subagent",
             "status": "active",
-            "session_id": "default",
+            "session_id": os.environ.get("CODEX_THREAD_ID") or "default",
             "task_id": "TASK__with-bg",
             "agent_type": "harness:qa-cli",
             "updated_ts": time.time(),

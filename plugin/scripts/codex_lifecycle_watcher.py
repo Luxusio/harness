@@ -45,6 +45,8 @@ from _lib import (  # type: ignore
 THREAD_RE = re.compile(r"^[0-9a-fA-F-]{16,80}$")
 CALL_RE = re.compile(r"^[A-Za-z0-9_.:-]{6,160}$")
 AGENT_PATH_RE = re.compile(r"^/root/[A-Za-z0-9_.-]{1,120}$")
+TASK_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
+TASK_NAME_LINE_RE = re.compile(r"^task_name: ([A-Za-z0-9_.-]{1,120})$")
 MAX_LINE_BYTES = 2 * 1024 * 1024
 MAX_CHILD_BYTES = 64 * 1024 * 1024
 POLL_SECONDS = 0.20
@@ -646,41 +648,146 @@ def _valid_agent_identity(value: str) -> bool:
     return bool(AGENT_PATH_RE.fullmatch(value) or THREAD_RE.fullmatch(value))
 
 
-def _spawn_call(event: dict[str, Any]) -> tuple[str, str] | None:
+def _json_arguments(payload: dict[str, Any]) -> dict[str, Any] | None:
+    arguments = payload.get("arguments")
+    if isinstance(arguments, dict):
+        return arguments
+    if not isinstance(arguments, str):
+        return None
+    try:
+        decoded = json.loads(arguments or "{}")
+    except json.JSONDecodeError:
+        return None
+    return decoded if isinstance(decoded, dict) else None
+
+
+def _prompt_texts(arguments: dict[str, Any]) -> list[str]:
+    texts: list[str] = []
+    message = arguments.get("message")
+    if isinstance(message, str):
+        texts.append(message)
+    items = arguments.get("items")
+    if not isinstance(items, list):
+        return texts
+    for item in items:
+        if isinstance(item, str):
+            texts.append(item)
+        elif isinstance(item, dict):
+            for key in ("message", "text"):
+                value = item.get(key)
+                if isinstance(value, str):
+                    texts.append(value)
+    return texts
+
+
+def _prompt_task_name(arguments: dict[str, Any]) -> str:
+    """Accept exactly one task marker, and only as a prompt's first line."""
+    markers: list[tuple[int, str]] = []
+    for text in _prompt_texts(arguments):
+        for line_number, line in enumerate(text.splitlines()):
+            match = TASK_NAME_LINE_RE.fullmatch(line)
+            if match:
+                markers.append((line_number, match.group(1)))
+    if len(markers) != 1 or markers[0][0] != 0:
+        return ""
+    return markers[0][1]
+
+
+def _exec_spawn_arguments(source: str) -> dict[str, Any] | None:
+    if len(re.findall(r"multi_agent_v1__spawn_agent\s*\(", source)) != 1:
+        return None
+    structured = re.search(
+        r"""(?:["']?task_name["']?)\s*:\s*["']([A-Za-z0-9_.-]{1,120})["']""",
+        source,
+    )
+    if structured:
+        return {"task_name": structured.group(1)}
+    encoded_message = re.search(
+        r'''(?:["']?message["']?)\s*:\s*("(?:\\.|[^"\\])*")''',
+        source,
+    )
+    if not encoded_message:
+        return None
+    try:
+        message = json.loads(encoded_message.group(1))
+    except json.JSONDecodeError:
+        return None
+    return {"message": message} if isinstance(message, str) else None
+
+
+def _tool_identity(payload: dict[str, Any]) -> tuple[str, str]:
+    namespace = str(payload.get("namespace") or "")
+    name = str(payload.get("name") or "")
+    if name.startswith("multi_agent_v1__"):
+        return "multi_agent_v1", name.removeprefix("multi_agent_v1__")
+    return namespace, name
+
+
+def _spawn_call(event: dict[str, Any]) -> tuple[str, str, bool] | None:
     payload = _event_payload(event, "response_item")
     if not payload:
         return None
-    arguments: Any
-    if (
-        payload.get("type") == "function_call"
-        and payload.get("namespace") == "collaboration"
-        and payload.get("name") == "spawn_agent"
+    namespace, name = _tool_identity(payload)
+    current_protocol = namespace == "multi_agent_v1" and name == "spawn_agent"
+    if payload.get("type") == "function_call" and (
+        (namespace == "collaboration" and name == "spawn_agent") or current_protocol
     ):
-        try:
-            arguments = json.loads(payload.get("arguments") or "{}")
-        except (TypeError, json.JSONDecodeError):
+        arguments = _json_arguments(payload)
+        if arguments is None:
             return None
     elif payload.get("type") == "custom_tool_call" and payload.get("name") == "exec":
         source = str(payload.get("input") or "")
-        if len(re.findall(r"multi_agent_v1__spawn_agent\s*\(", source)) != 1:
+        arguments = _exec_spawn_arguments(source)
+        if arguments is None:
             return None
-        match = re.search(
-            r"""(?:["']?task_name["']?)\s*:\s*["']([A-Za-z0-9_.-]{1,120})["']""",
-            source,
-        )
-        if not match:
-            return None
-        arguments = {"task_name": match.group(1)}
+        current_protocol = True
     else:
         return None
     call_id = str(payload.get("call_id") or "")
     if not CALL_RE.fullmatch(call_id):
         return None
-    task_name = str(arguments.get("task_name") or "") if isinstance(arguments, dict) else ""
+    task_name = str(arguments.get("task_name") or "")
+    if task_name and not TASK_NAME_RE.fullmatch(task_name):
+        return None
+    if not task_name:
+        task_name = _prompt_task_name(arguments)
     lens = _infer_receipt_lens(task_name)
     if not lens.startswith(("review-", "qa-", "ux-")):
         return None
-    return call_id, task_name
+    return call_id, task_name, current_protocol
+
+
+def _unsupported_current_spawn(event: dict[str, Any]) -> tuple[str, str] | None:
+    """Identify a recognizable current spawn that failed strict normalization."""
+    payload = _event_payload(event, "response_item")
+    if not payload:
+        return None
+    namespace, name = _tool_identity(payload)
+    arguments: dict[str, Any] | None = None
+    if payload.get("type") == "function_call" and (
+        namespace == "multi_agent_v1" and name == "spawn_agent"
+    ):
+        arguments = _json_arguments(payload)
+    elif payload.get("type") == "custom_tool_call" and payload.get("name") == "exec":
+        source = str(payload.get("input") or "")
+        if len(re.findall(r"multi_agent_v1__spawn_agent\s*\(", source)) != 1:
+            return None
+        arguments = _exec_spawn_arguments(source)
+    else:
+        return None
+    call_id = str(payload.get("call_id") or "")
+    if not CALL_RE.fullmatch(call_id):
+        return None
+    if arguments is None:
+        return call_id, "arguments could not be decoded"
+    raw_name = str(arguments.get("task_name") or "")
+    marker_lines = [
+        line for text in _prompt_texts(arguments) for line in text.splitlines()
+        if "task_name" in line.lower()
+    ]
+    if raw_name or marker_lines:
+        return call_id, "strict task_name field or first-line marker was invalid"
+    return None
 
 
 def _spawn_output(event: dict[str, Any]) -> tuple[str, str] | None:
@@ -705,13 +812,91 @@ def _spawn_output(event: dict[str, Any]) -> tuple[str, str] | None:
     if not isinstance(output, dict):
         return None
     identity = str(
-        output.get("agent_name")
+        output.get("agent_id")
+        or output.get("agent_name")
         or output.get("agentName")
         or output.get("task_name")
-        or output.get("agent_id")
         or ""
     )
     return (call_id, identity) if _valid_agent_identity(identity) else None
+
+
+def _completion_call(event: dict[str, Any]) -> tuple[str, str, str] | None:
+    payload = _event_payload(event, "response_item")
+    if not payload:
+        return None
+    call_id = str(payload.get("call_id") or "")
+    if not CALL_RE.fullmatch(call_id):
+        return None
+    if payload.get("type") == "function_call":
+        namespace, name = _tool_identity(payload)
+        if namespace not in {"collaboration", "multi_agent_v1"} or name not in {
+            "wait_agent", "close_agent",
+        }:
+            return None
+        arguments = _json_arguments(payload)
+        if arguments is None:
+            return None
+    elif payload.get("type") == "custom_tool_call" and payload.get("name") == "exec":
+        source = str(payload.get("input") or "")
+        matches = re.findall(r"multi_agent_v1__(wait_agent|close_agent)\s*\(", source)
+        if len(matches) != 1:
+            return None
+        name = matches[0]
+        arguments = {}
+        if name == "close_agent":
+            target_match = re.search(
+                r'''(?:["']?(?:agent_id|target)["']?)\s*:\s*["']([A-Za-z0-9_./:-]{6,160})["']''',
+                source,
+            )
+            if not target_match:
+                return None
+            arguments = {"agent_id": target_match.group(1)}
+    else:
+        return None
+    target = ""
+    if name == "close_agent":
+        target = str(arguments.get("agent_id") or arguments.get("target") or "")
+        if not _valid_agent_identity(target):
+            return None
+    return call_id, name, target
+
+
+def _completion_output(
+    event: dict[str, Any], completion_call: tuple[str, str] | None,
+) -> list[tuple[str, str]]:
+    if completion_call is None:
+        return []
+    payload = _event_payload(event, "response_item")
+    if not payload or payload.get("type") not in {
+        "function_call_output", "custom_tool_call_output",
+    }:
+        return []
+    output = payload.get("output")
+    if isinstance(output, str):
+        try:
+            output = json.loads(output)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(output, dict):
+        return []
+    kind, target = completion_call
+    deliveries: list[tuple[str, str]] = []
+    if kind == "wait_agent":
+        statuses = output.get("status")
+        if not isinstance(statuses, dict):
+            return []
+        for identity, status in statuses.items():
+            final = status.get("completed") if isinstance(status, dict) else None
+            identity = str(identity)
+            if _valid_agent_identity(identity) and isinstance(final, str) and final:
+                deliveries.append((identity, final.strip()))
+    elif kind == "close_agent":
+        previous = output.get("previous_status")
+        final = previous.get("completed") if isinstance(previous, dict) else None
+        if _valid_agent_identity(target) and isinstance(final, str) and final:
+            deliveries.append((target, final.strip()))
+    return deliveries
 
 
 def _started_activity(event: dict[str, Any]) -> tuple[str, str, str] | None:
@@ -731,6 +916,14 @@ def _started_activity(event: dict[str, Any]) -> tuple[str, str, str] | None:
 def _root_delivery(event: dict[str, Any]) -> tuple[str, str] | None:
     payload = _event_payload(event, "response_item")
     if not payload:
+        payload = _event_payload(event, "event_msg")
+        if not payload or payload.get("type") != "subagent_notification":
+            return None
+        identity = str(payload.get("agent_id") or payload.get("agent_path") or "")
+        status = payload.get("status")
+        final = status.get("completed") if isinstance(status, dict) else None
+        if _valid_agent_identity(identity) and isinstance(final, str) and final:
+            return identity, final.strip()
         return None
     if payload.get("type") == "agent_message":
         author = str(payload.get("author") or "")
@@ -761,7 +954,7 @@ def _root_delivery(event: dict[str, Any]) -> tuple[str, str] | None:
             notification = json.loads(encoded)
         except json.JSONDecodeError:
             continue
-        identity = str(notification.get("agent_path") or "")
+        identity = str(notification.get("agent_id") or notification.get("agent_path") or "")
         status = notification.get("status")
         final = status.get("completed") if isinstance(status, dict) else None
         if _valid_agent_identity(identity) and isinstance(final, str) and final:
@@ -968,7 +1161,35 @@ class Watcher:
         self.session_cwd = os.path.realpath(session_cwd or repo_root)
         self.task_dir = ""
         self.calls: dict[str, dict[str, Any]] = {}
+        self.completion_calls: dict[str, tuple[str, str]] = {}
         self.by_path: dict[str, dict[str, Any]] = {}
+
+    @staticmethod
+    def _receipt_agent_id(item: dict[str, Any]) -> str:
+        if item.get("current_protocol"):
+            return str(item.get("output_path") or "")
+        return str(item.get("activity_path") or "")
+
+    def _record_adapter_diagnostic(self, call_id: str, reason: str) -> None:
+        if not self.task_dir:
+            return
+        event_id = call_id + ":adapter"
+        if _matching_receipt(self.task_dir, event_id, "adapter_unsupported"):
+            return
+        summary = (
+            "Receipt adapter unsupported: observed=multi_agent_v1__spawn_agent "
+            "supported=collaboration.spawn_agent,multi_agent_v1.spawn_agent "
+            f"reason={reason}"
+        )
+        record_subagent_receipt(self.task_dir, {
+            "source": "codex_session_watcher",
+            "status": "adapter_unsupported",
+            "agent_id": call_id,
+            "agent_type": "multi_agent_v1__spawn_agent",
+            "summary": summary,
+            "runtime_event_id": event_id,
+            "runtime_session_id": self.root_id,
+        })
 
     def _invalidate(self, item: dict[str, Any], reason: str) -> None:
         if item.get("invalid"):
@@ -984,7 +1205,7 @@ class Watcher:
         record_subagent_receipt(item["task_dir"], {
             "source": "codex_session_watcher",
             "status": "completed",
-            "agent_id": item.get("activity_path", ""),
+            "agent_id": self._receipt_agent_id(item),
             "agent_type": item.get("task_name", ""),
             "lens": lens,
             "verdict": "PENDING",
@@ -995,7 +1216,7 @@ class Watcher:
             "runtime_event_id": item.get("event_id", "") + ":conflict",
             "runtime_session_id": self.root_id,
             "runtime_thread_id": item.get("child_id", ""),
-            "runtime_agent_path": item.get("activity_path", ""),
+            "runtime_agent_path": self._receipt_agent_id(item),
         })
 
     def _set_once(self, item: dict[str, Any], key: str, value: Any) -> bool:
@@ -1007,9 +1228,28 @@ class Watcher:
 
     def _maybe_start(self, call_id: str) -> None:
         item = self.calls.get(call_id) or {}
+        if (
+            item.get("current_protocol")
+            and item.get("output_path")
+            and not item.get("child_id")
+            and not item.get("activity_path")
+        ):
+            identity = item["output_path"]
+            status, _, _ = _child_status(
+                identity, self.root_id, identity, self.session_cwd,
+                str(item.get("task_name") or ""),
+            )
+            if status != "running":
+                return
+            item.setdefault("child_id", identity)
+            item.setdefault("activity_path", identity)
+            item["synthetic_activity"] = True
         if not all(item.get(key) for key in ("task_name", "output_path", "child_id", "activity_path")):
             return
-        if item["output_path"] != item["activity_path"]:
+        if item.get("current_protocol") and item["output_path"] != item["child_id"]:
+            self._invalidate(item, "spawn output identity did not match child thread")
+            return
+        if not item.get("current_protocol") and item["output_path"] != item["activity_path"]:
             if item["output_path"] != item["child_id"]:
                 self._invalidate(item, "spawn output identity did not match child activity")
                 return
@@ -1027,11 +1267,11 @@ class Watcher:
             "started",
             root_id=self.root_id,
             child_id=item["child_id"],
-            agent_path=item["activity_path"],
+            agent_path=self._receipt_agent_id(item),
             lens=lens,
         )
         existing = _matching_receipt(
-            task_dir, event_id, "started", agent_path=item["activity_path"], lens=lens
+            task_dir, event_id, "started", agent_path=self._receipt_agent_id(item), lens=lens
         )
         if (
             existing is not None
@@ -1056,14 +1296,14 @@ class Watcher:
             receipt = existing or record_subagent_receipt(task_dir, {
                     "source": "codex_session_watcher",
                     "status": "started",
-                    "agent_id": item["activity_path"],
+                    "agent_id": self._receipt_agent_id(item),
                     "agent_type": item["task_name"],
                     "lens": lens,
                     "summary": "Codex runtime spawn observed before child completion",
                     "runtime_event_id": event_id,
                     "runtime_session_id": self.root_id,
                     "runtime_thread_id": item["child_id"],
-                    "runtime_agent_path": item["activity_path"],
+                    "runtime_agent_path": self._receipt_agent_id(item),
                 })
         item.update({
             "started": True,
@@ -1099,12 +1339,12 @@ class Watcher:
         lens = _infer_receipt_lens(item["task_name"])
         if _matching_receipt(
             item["task_dir"], item["event_id"], "completed",
-            agent_path=item["activity_path"], lens=lens, summary=child_final,
+            agent_path=self._receipt_agent_id(item), lens=lens, summary=child_final,
         ) is None:
             record_subagent_receipt(item["task_dir"], {
                 "source": "codex_session_watcher",
                 "status": "completed",
-                "agent_id": item["activity_path"],
+                "agent_id": self._receipt_agent_id(item),
                 "agent_type": item["task_name"],
                 "lens": lens,
                 "verdict": verdict,
@@ -1116,7 +1356,7 @@ class Watcher:
                 "runtime_event_id": item["event_id"],
                 "runtime_session_id": self.root_id,
                 "runtime_thread_id": item["child_id"],
-                "runtime_agent_path": item["activity_path"],
+                "runtime_agent_path": self._receipt_agent_id(item),
             })
         item["completed"] = True
 
@@ -1134,18 +1374,45 @@ class Watcher:
             return
         spawn = _spawn_call(event)
         if spawn:
-            call_id, task_name = spawn
+            call_id, task_name, current_protocol = spawn
             item = self.calls.setdefault(call_id, {})
             self._set_once(item, "task_name", task_name)
+            self._set_once(item, "current_protocol", current_protocol)
             self._maybe_start(call_id)
+            return
+        unsupported_spawn = _unsupported_current_spawn(event)
+        if unsupported_spawn:
+            self._record_adapter_diagnostic(*unsupported_spawn)
+            return
+        completion = _completion_call(event)
+        if completion:
+            call_id, kind, target = completion
+            if call_id not in self.completion_calls:
+                self.completion_calls[call_id] = (kind, target)
             return
         activity = _started_activity(event)
         if activity:
             call_id, child_id, agent_path = activity
             item = self.calls.setdefault(call_id, {})
-            self._set_once(item, "child_id", child_id)
-            self._set_once(item, "activity_path", agent_path)
+            if item.get("synthetic_activity"):
+                if child_id != item.get("child_id"):
+                    self._invalidate(item, "spawn output identity did not match child activity")
+                    return
+                item["activity_path"] = agent_path
+                item["synthetic_activity"] = False
+            else:
+                self._set_once(item, "child_id", child_id)
+                self._set_once(item, "activity_path", agent_path)
             self._maybe_start(call_id)
+            return
+        payload = _event_payload(event, "response_item")
+        output_call_id = str(payload.get("call_id") or "") if payload else ""
+        completion_deliveries = _completion_output(
+            event, self.completion_calls.get(output_call_id),
+        )
+        if completion_deliveries:
+            for identity, root_final in completion_deliveries:
+                self._deliver(identity, root_final)
             return
         output = _spawn_output(event)
         if output:
@@ -1154,14 +1421,26 @@ class Watcher:
             self._set_once(item, "output_path", agent_path)
             self._maybe_start(call_id)
             return
+        if output_call_id:
+            item = self.calls.get(output_call_id) or {}
+            if item.get("current_protocol") and not item.get("output_path"):
+                self._record_adapter_diagnostic(
+                    output_call_id, "spawn output did not contain a valid agent_id",
+                )
+                return
         delivery = _root_delivery(event)
         if not delivery:
             return
         agent_path, root_final = delivery
+        self._deliver(agent_path, root_final)
+
+    def _deliver(self, agent_path: str, root_final: str) -> None:
         item = self.by_path.get(agent_path)
         if not item:
             return
         if item.get("root_final") is not None:
+            if item["root_final"] == root_final:
+                return
             self._invalidate(item, "duplicate or ambiguous root completion delivery")
             return
         item["root_final"] = root_final

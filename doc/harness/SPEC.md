@@ -188,10 +188,15 @@ tool set. A structurally identified `wait_agent` result such as
 only a fallback when it exists and the wait response omitted identities or
 final responses. When Codex does not forward collaboration calls to
 PostToolUse, the registered root-rollout watcher also recognizes an
-`exec`-wrapped `multi_agent_v1__spawn_agent`, the returned `agent_id`, matching
-child metadata and final/task-complete pair, and the root
-`<subagent_notification>`. The watcher captures source freshness at start and
-requires every identity and final response to agree before recording PASS.
+`exec`-wrapped or direct `multi_agent_v1__spawn_agent`, the returned `agent_id`,
+matching child metadata and final/task-complete pair, and correlated completion
+from `wait_agent.status[agent_id].completed`, `<subagent_notification>`, or
+`close_agent.previous_status.completed`. A schema without `task_name` must
+provide exactly one strict `task_name: <name>` first prompt line; nickname and
+arbitrary prose never supply identity. The watcher captures source freshness at
+start, requires every identity and final response to agree, and deduplicates
+equivalent completion sources before recording PASS. An unsupported observed
+adapter is reported explicitly rather than presented as another QA retry.
 
 `write_plan` owns the canonical audit header but accepts both convenient caller
 forms: audit data rows only, or a complete Markdown audit table with an optional
@@ -287,6 +292,9 @@ Because Codex MCP processes do not receive the root thread id as process state,
 the watcher binds a root to a task only from that root rollout's successful
 Harness `task_start` or `task_context` completion event, after canonical task
 state validation and before the reviewed or QA child starts.
+Session marker selection uses the hook payload, explicit Harness/Codex session
+ids, and then `CODEX_THREAD_ID`; the thread fallback is valid even when
+`HARNESS_RUNTIME` is unset.
 
 `source_git_roots` has two control-root modes. For a non-Git control workspace,
 the configured roots are exhaustive: each registered repository contributes

@@ -41,7 +41,7 @@ that can run without touching the same files. Use concrete Codex calls like:
 ```text
 spawn_agent {
   task_name: "qa_cli_<task_slug>_<run_id>",
-  message: "You are the qa-cli lens for <task_id>. Read <task_dir>/PLAN.md, CHECKS.yaml, and changed files. Run focused verification. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with concrete findings and evidence.",
+  message: "task_name: qa_cli_<task_slug>_<run_id>\nYou are the qa-cli lens for <task_id>. Read <task_dir>/PLAN.md, CHECKS.yaml, and changed files. Run focused verification. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with concrete findings and evidence.",
   fork_turns: "all"
 }
 ```
@@ -73,13 +73,21 @@ path and keep the fallback reason in task state or the final response;
 `task_close` will still require a real completed QA PASS receipt for
 verification-gated work when `spawn_agent` was available.
 
+Every review or QA spawn message must begin with the exact line
+`task_name: <same-structured-name>`, even when the active tool schema also has
+a `task_name` argument. On runtimes whose spawn schema omits that argument,
+omit the unsupported argument but retain the first-line marker. The lifecycle
+watcher accepts only this strict first-line fallback and binds the returned
+`agent_id`; it never guesses a lens from prose or from a nickname.
+
 On Codex builds that do not forward collaboration tools to PostToolUse,
 SessionStart creates the exact root-rollout registration and every installed
 root hook idempotently restores it. The existing Harness MCP server hosts the
 thread-scoped watcher as a daemon thread. The hook/runtime
 path, not a model-callable MCP tool, owns receipts. Give review/QA agents
-structured `task_name` values containing their exact lens and await the final
-response normally. A registration created after completion cannot retroactively
+structured task names containing their exact lens in the first-line marker and,
+when supported, the tool argument; then await the final response normally. A
+registration created after completion cannot retroactively
 attest the source snapshot; recovery covers only future subagent starts.
 
 Subagent lifecycle cleanup: track every `agent_id` returned by `spawn_agent`.
@@ -225,7 +233,7 @@ QA subagent pattern on Codex:
 ```text
 spawn_agent {
   task_name: "qa_<lens>_<task_slug>_<run_id>",
-  message: "You are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, CHECKS.yaml, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with command/browser evidence and concrete findings.",
+  message: "task_name: qa_<lens>_<task_slug>_<run_id>\nYou are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, CHECKS.yaml, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with command/browser evidence and concrete findings.",
   fork_turns: "all"
 }
 ```

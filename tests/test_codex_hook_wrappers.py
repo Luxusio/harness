@@ -199,6 +199,74 @@ class TestCodexHookWrappers(unittest.TestCase):
 
         ensure.assert_not_called()
 
+    def test_thread_id_selects_active_marker_without_runtime_flag(self):
+        lib = _load("_lib")
+        thread_id = "thread/id:current"
+        with tempfile.TemporaryDirectory() as repo, \
+             mock.patch.dict(
+                 "os.environ", {"CODEX_THREAD_ID": thread_id}, clear=True
+             ), \
+             mock.patch.object(lib, "_LAST_HOOK_INPUT", {}):
+            task = Path(repo) / "doc/harness/tasks/TASK__thread-marker"
+            task.mkdir(parents=True)
+            lib.write_active_marker(repo, str(task))
+
+            marker = (
+                Path(repo)
+                / "doc/harness/tasks/.active_sessions/thread_id_current.json"
+            )
+            self.assertTrue(marker.is_file())
+            self.assertEqual(
+                json.loads(marker.read_text())["session_id"],
+                "thread_id_current",
+            )
+
+    def test_explicit_session_ids_take_precedence_over_thread_id(self):
+        lib = _load("_lib")
+        with mock.patch.object(lib, "_LAST_HOOK_INPUT", {}):
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "HARNESS_SESSION_ID": "harness-session",
+                    "CODEX_SESSION_ID": "codex-session",
+                    "CODEX_THREAD_ID": "codex-thread",
+                },
+                clear=True,
+            ):
+                self.assertEqual(lib.current_session_id(), "harness-session")
+
+            with mock.patch.dict(
+                "os.environ",
+                {
+                    "CODEX_SESSION_ID": "codex-session",
+                    "CODEX_THREAD_ID": "codex-thread",
+                },
+                clear=True,
+            ):
+                self.assertEqual(lib.current_session_id(), "codex-session")
+
+    def test_adapter_diagnostic_is_resolved_only_by_later_valid_start(self):
+        lib = _load("_lib")
+        diagnostic = {
+            "source": "codex_session_watcher",
+            "status": "adapter_unsupported",
+            "summary": "Receipt adapter unsupported: observed=multi_agent_v1__spawn_agent",
+        }
+        valid_start = {
+            "source": "codex_session_watcher",
+            "status": "started",
+            "lens": "qa-cli",
+        }
+        with mock.patch.object(lib, "list_subagent_receipts", return_value=[diagnostic]):
+            self.assertEqual(
+                lib.active_receipt_adapter_diagnostic("/task"),
+                diagnostic["summary"],
+            )
+        with mock.patch.object(
+            lib, "list_subagent_receipts", return_value=[diagnostic, valid_start],
+        ):
+            self.assertEqual(lib.active_receipt_adapter_diagnostic("/task"), "")
+
     def test_all_codex_hook_wrappers_restore_registration(self):
         modules = [
             ("hook_session_start", {}, {"retry_seconds": 1.0, "budget_seconds": 1.25}),

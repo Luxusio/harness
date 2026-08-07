@@ -6,6 +6,13 @@ All notable changes to the harness Claude Code plugin.
 
 ### Fixed
 
+- Codex lifecycle receipts now normalize both legacy `collaboration` and current
+  `multi_agent_v1` spawn/completion contracts. Runtimes without a structured
+  task-name field use a strict first-line marker, returned `agent_id` remains
+  canonical, wait/notification/close completion signals deduplicate to one
+  receipt, and `CODEX_THREAD_ID` supplies the session marker even when
+  `HARNESS_RUNTIME` is unset. Unsupported adapters are diagnosed without
+  weakening start, parent, task, fingerprint, or verdict gates.
 - Explicit local `source_git_roots` now use the same trust model as ordinary
   developer Git workflows. Harness resolves the configured checkout and lets
   required Git commands determine success without linked-worktree

@@ -106,6 +106,25 @@ def test_spawn_output_accepts_collaboration_agent_name():
     )
 
 
+def test_spawn_output_uses_agent_id_not_display_nickname():
+    mod = _load()
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    event = {
+        "type": "response_item",
+        "payload": {
+            "type": "function_call_output",
+            "call_id": "call_runtime_123456",
+            "output": json.dumps({
+                "agent_id": child_id,
+                "agent_name": "/root/wrong_display_identity",
+                "nickname": "DisplayOnly",
+            }),
+        },
+    }
+
+    assert mod._spawn_output(event) == ("call_runtime_123456", child_id)
+
+
 def _delivery(agent_path: str, final: str):
     return {"type": "response_item", "payload": {
         "type": "agent_message", "author": agent_path, "recipient": "/root",
@@ -148,6 +167,83 @@ def _exec_spawn_events(child_id: str, task_name: str):
     ]
 
 
+def _current_spawn_events(child_id: str, task_name: str):
+    call_id = "call_current_runtime_123456"
+    return [
+        {"type": "response_item", "payload": {
+            "type": "function_call", "namespace": "multi_agent_v1", "name": "spawn_agent",
+            "call_id": call_id,
+            "arguments": json.dumps({
+                "message": f"task_name: {task_name}\nReview the final snapshot.",
+                "items": [],
+            }),
+        }},
+        {"type": "response_item", "payload": {
+            "type": "function_call_output", "call_id": call_id,
+            "output": json.dumps({"agent_id": child_id, "nickname": "DisplayOnly"}),
+        }},
+    ]
+
+
+def _current_completion_events(kind: str, child_id: str, final: str):
+    call_id = f"call_{kind}_runtime_123456"
+    arguments = {"agent_ids": [child_id]}
+    if kind == "close_agent":
+        arguments = {"agent_id": child_id}
+    output = {"status": {child_id: {"completed": final}}}
+    if kind == "close_agent":
+        output = {"previous_status": {"completed": final}}
+    return [
+        {"type": "response_item", "payload": {
+            "type": "function_call", "name": f"multi_agent_v1__{kind}",
+            "call_id": call_id, "arguments": json.dumps(arguments),
+        }},
+        {"type": "response_item", "payload": {
+            "type": "function_call_output", "call_id": call_id,
+            "output": json.dumps(output),
+        }},
+    ]
+
+
+def test_exec_wrapped_current_completion_calls_normalize():
+    mod = _load()
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    wait_event = {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "name": "exec", "call_id": "call_wait_wrapped_123",
+        "input": "const r = await tools.multi_agent_v1__wait_agent({}); text(r);",
+    }}
+    close_event = {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "name": "exec", "call_id": "call_close_wrapped_123",
+        "input": (
+            "const r = await tools.multi_agent_v1__close_agent("
+            f'{{agent_id: "{child_id}"}}); text(r);'
+        ),
+    }}
+
+    assert mod._completion_call(wait_event) == (
+        "call_wait_wrapped_123", "wait_agent", "",
+    )
+    assert mod._completion_call(close_event) == (
+        "call_close_wrapped_123", "close_agent", child_id,
+    )
+
+
+def test_current_completion_without_recorded_start_is_ignored(tmp_path):
+    mod = _load()
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    watcher = mod.Watcher(
+        str(tmp_path), "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+    )
+
+    with mock.patch.object(mod, "record_subagent_receipt") as record:
+        for event in _current_completion_events(
+            "wait_agent", child_id, "VERDICT: PASS\nQA passed",
+        ):
+            watcher.feed(event)
+
+    record.assert_not_called()
+
+
 def _status_notification(agent_id: str, final: str):
     return {"type": "response_item", "payload": {
         "type": "message", "role": "user",
@@ -160,8 +256,15 @@ def _status_notification(agent_id: str, final: str):
 
 
 def _status_child_events(
-    root_id: str, child_id: str, task_name: str, cwd: str, final: str | None = None
+    root_id: str,
+    child_id: str,
+    task_name: str,
+    cwd: str,
+    final: str | None = None,
+    *,
+    agent_path: str | None = None,
 ):
+    agent_path = agent_path or child_id
     events = [{
         "type": "session_meta",
         "payload": {
@@ -170,11 +273,11 @@ def _status_child_events(
             "parent_thread_id": root_id,
             "cwd": cwd,
             "thread_source": "subagent",
-            "agent_path": child_id,
+            "agent_path": agent_path,
             "source": {"subagent": {"thread_spawn": {
                 "parent_thread_id": root_id,
                 "depth": 1,
-                "agent_path": child_id,
+                "agent_path": agent_path,
             }}},
         },
     }, {
@@ -314,6 +417,192 @@ def test_watcher_records_exec_wrapped_spawn_and_status_notification(tmp_path, mo
         ("started", ""), ("completed", "PASS"),
     ]
     assert receipts[-1]["agent_id"] == child_id
+
+
+def test_current_spawn_requires_one_strict_first_line_task_marker():
+    mod = _load()
+    base = {
+        "type": "response_item",
+        "payload": {
+            "type": "function_call", "namespace": "multi_agent_v1", "name": "spawn_agent",
+            "call_id": "call_current_runtime_123456",
+        },
+    }
+
+    def parsed(arguments):
+        event = json.loads(json.dumps(base))
+        event["payload"]["arguments"] = json.dumps(arguments)
+        return mod._spawn_call(event)
+
+    assert parsed({"message": "task_name: qa_cli_current\nRun QA."}) == (
+        "call_current_runtime_123456", "qa_cli_current", True,
+    )
+    assert parsed({"message": "Run QA.\ntask_name: qa_cli_late"}) is None
+    assert parsed({"message": "Run QA without a marker."}) is None
+    assert parsed({
+        "message": "task_name: qa_cli_first\nRun QA.",
+        "items": [{"text": "task_name: qa_cli_second\nRun QA."}],
+    }) is None
+    assert parsed({"message": " task_name: qa_cli_indented\nRun QA."}) is None
+
+    exec_event = {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "name": "exec",
+        "call_id": "call_exec_prompt_123456",
+        "input": (
+            "const r = await tools.multi_agent_v1__spawn_agent({message: "
+            + json.dumps("task_name: qa_cli_exec_prompt\nRun QA.")
+            + "}); text(r);"
+        ),
+    }}
+    assert mod._spawn_call(exec_event) == (
+        "call_exec_prompt_123456", "qa_cli_exec_prompt", True,
+    )
+
+
+def test_malformed_current_spawn_records_actionable_adapter_diagnostic(tmp_path, monkeypatch):
+    mod = _load()
+    repo = tmp_path / "repo"
+    task_dir = repo / "doc/harness/tasks/TASK__adapter-diagnostic"
+    task_dir.mkdir(parents=True)
+    watcher = mod.Watcher(
+        str(repo), "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+    )
+    watcher.task_dir = str(task_dir)
+    receipts = []
+
+    event = {
+        "type": "response_item",
+        "payload": {
+            "type": "function_call",
+            "namespace": "multi_agent_v1",
+            "name": "spawn_agent",
+            "call_id": "call_bad_adapter_123456",
+            "arguments": json.dumps({
+                "message": "Run QA.\ntask_name: qa_cli_too_late",
+            }),
+        },
+    }
+    with mock.patch.object(
+        mod, "record_subagent_receipt",
+        side_effect=lambda _td, receipt: receipts.append(receipt) or receipt,
+    ), mock.patch.object(mod, "list_review_receipts", return_value=[]), \
+         mock.patch.object(mod, "list_subagent_receipts", return_value=[]):
+        watcher.feed(event)
+
+    assert len(receipts) == 1
+    assert receipts[0]["status"] == "adapter_unsupported"
+    assert receipts[0]["runtime_event_id"] == "call_bad_adapter_123456:adapter"
+    assert receipts[0]["summary"].startswith(
+        "Receipt adapter unsupported: observed=multi_agent_v1__spawn_agent"
+    )
+
+
+def test_current_spawn_invalid_output_records_adapter_diagnostic(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    task_dir = repo / "doc/harness/tasks/TASK__adapter-output"
+    task_dir.mkdir(parents=True)
+    watcher = mod.Watcher(
+        str(repo), "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+    )
+    watcher.task_dir = str(task_dir)
+    receipts = []
+    spawn = _current_spawn_events(
+        "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f", "qa_cli_output",
+    )[0]
+    bad_output = {
+        "type": "response_item",
+        "payload": {
+            "type": "function_call_output",
+            "call_id": "call_current_runtime_123456",
+            "output": json.dumps({"nickname": "DisplayOnly"}),
+        },
+    }
+    with mock.patch.object(
+        mod, "record_subagent_receipt",
+        side_effect=lambda _td, receipt: receipts.append(receipt) or receipt,
+    ), mock.patch.object(mod, "list_review_receipts", return_value=[]), \
+         mock.patch.object(mod, "list_subagent_receipts", return_value=[]):
+        watcher.feed(spawn)
+        watcher.feed(bad_output)
+
+    assert [item["status"] for item in receipts] == ["adapter_unsupported"]
+    assert "valid agent_id" in receipts[0]["summary"]
+
+
+def test_current_spawn_and_completion_sources_use_agent_id_once(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    task_dir = repo / "doc/harness/tasks/TASK__watcher-current"
+    task_dir.mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    completions = (
+        ("wait_agent", "PASS"),
+        ("notification", "FAIL"),
+        ("close_agent", "BLOCKED_ENV"),
+    )
+
+    for index, (completion, expected_verdict) in enumerate(completions):
+        child_id = f"019f82a6-ce64-75a3-b01d-92f7b0b4fe{70 + index:02d}"
+        task_name = f"qa_cli_current_{completion}"
+        activity_path = "/root/qa_cli_current_wait" if completion == "wait_agent" else child_id
+        child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+        _write_jsonl(child, _status_child_events(
+            root_id, child_id, task_name, str(repo), agent_path=activity_path,
+        ))
+        receipts = []
+
+        def record(_task_dir, receipt):
+            entry = {
+                **receipt,
+                "head_sha": receipt.get("head_sha") or "a" * 40,
+                "base_sha": receipt.get("base_sha") or "a" * 40,
+                "diff_fingerprint": receipt.get("diff_fingerprint") or "sha256:before",
+            }
+            receipts.append(entry)
+            return entry
+
+        watcher = mod.Watcher(str(repo), root_id)
+        final = f"VERDICT: {expected_verdict}\nQA completed"
+        with mock.patch.object(mod, "_active_task_for_session", return_value=str(task_dir)), \
+             mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"), \
+             mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
+             mock.patch.object(mod, "list_review_receipts", return_value=[]), \
+             mock.patch.object(mod, "list_subagent_receipts", side_effect=lambda _td: receipts):
+            spawn_events = _current_spawn_events(child_id, task_name)
+            if activity_path != child_id:
+                spawn_events.insert(1, {"type": "event_msg", "payload": {
+                    "type": "sub_agent_activity", "kind": "started",
+                    "event_id": "call_current_runtime_123456",
+                    "agent_thread_id": child_id, "agent_path": activity_path,
+                }})
+            for event in spawn_events:
+                watcher.feed(event)
+            assert [(item["status"], item["agent_id"]) for item in receipts] == [
+                ("started", child_id),
+            ]
+            _write_jsonl(
+                child, _status_child_events(
+                    root_id, child_id, task_name, str(repo), final,
+                    agent_path=activity_path,
+                ),
+            )
+            if completion == "notification":
+                delivery_events = [_status_notification(child_id, final)]
+            else:
+                delivery_events = _current_completion_events(completion, child_id, final)
+            for event in delivery_events:
+                watcher.feed(event)
+            for event in delivery_events:
+                watcher.feed(event)
+
+        assert [(item["status"], item.get("verdict", "")) for item in receipts] == [
+            ("started", ""), ("completed", expected_verdict),
+        ]
+        assert receipts[-1]["agent_id"] == child_id
+        assert receipts[-1]["runtime_agent_path"] == child_id
 
 
 def test_watcher_records_sequential_unique_qa_names_in_one_root(tmp_path, monkeypatch):
@@ -1296,7 +1585,7 @@ def test_watcher_reuses_classic_posttooluse_start_receipt(tmp_path, monkeypatch)
     assert watcher.by_path[agent_path]["diff_fingerprint"] == "sha256:before"
 
 
-def test_duplicate_root_delivery_invalidates_completed_pass(tmp_path, monkeypatch):
+def test_duplicate_identical_root_delivery_is_idempotent(tmp_path, monkeypatch):
     mod = _load()
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
@@ -1328,4 +1617,9 @@ def test_duplicate_root_delivery_invalidates_completed_pass(tmp_path, monkeypatc
         delivery = _delivery(agent_path, final)
         watcher.feed(delivery)
         watcher.feed(delivery)
-    assert [item.get("verdict") for item in receipts[-2:]] == ["PASS", "PENDING"]
+        assert [item.get("verdict") for item in receipts] == [None, "PASS"]
+        watcher.feed(_delivery(
+            agent_path,
+            "VERDICT: FAIL\nFINDING_COUNTS: FIX_NOW=1 INVESTIGATE=0 OPTIONAL=0",
+        ))
+    assert [item.get("verdict") for item in receipts] == [None, "PASS", "PENDING"]

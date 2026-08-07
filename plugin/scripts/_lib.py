@@ -902,11 +902,7 @@ def current_session_id(default="default"):
         or _LAST_HOOK_INPUT.get("sessionId")
         or os.environ.get("HARNESS_SESSION_ID")
         or os.environ.get("CODEX_SESSION_ID")
-        or (
-            os.environ.get("CODEX_THREAD_ID")
-            if str(os.environ.get("HARNESS_RUNTIME") or "").lower() == "codex"
-            else None
-        )
+        or os.environ.get("CODEX_THREAD_ID")
         or os.environ.get("CLAUDE_SESSION_ID")
         or default
     )
@@ -3412,6 +3408,20 @@ def subagent_receipt_summary(task_dir):
     }
 
 
+def active_receipt_adapter_diagnostic(task_dir):
+    """Return the latest unresolved watcher adapter diagnostic, if any."""
+    active = ""
+    for item in list_subagent_receipts(task_dir):
+        if (
+            item.get("source") == "codex_session_watcher"
+            and item.get("status") == "adapter_unsupported"
+        ):
+            active = str(item.get("summary") or "")
+        elif active and item.get("status") == "started" and item.get("lens"):
+            active = ""
+    return active
+
+
 def review_receipt_summary(task_dir):
     receipts = list_review_receipts(task_dir)
     by_lens = {}
@@ -3692,6 +3702,7 @@ def emit_compact_context(task_dir):
     if not has_plan and not micro_loop:
         missing_for_close.append("PLAN.md")
     receipt_summary = subagent_receipt_summary(task_dir)
+    adapter_diagnostic = active_receipt_adapter_diagnostic(task_dir)
     review_summary = review_receipt_summary(task_dir)
     required_reviews = required_review_lenses(task_dir, st)
     review_verdict = receipt_review_verdict(task_dir, st)
@@ -3746,6 +3757,8 @@ def emit_compact_context(task_dir):
 
     if not has_plan and not micro_loop:
         next_action = "Create PLAN.md via plan skill before source writes."
+    elif adapter_diagnostic:
+        next_action = adapter_diagnostic
     elif review_verdict not in {"PASS", "NOT_APPLICABLE"}:
         next_action = (
             "Run and await the required read-only review subagent(s); completion hooks "

@@ -166,6 +166,30 @@ If `payload_keys` differs from the documented schema, you may be on a Codex vers
 
 ---
 
+### "Receipt adapter unsupported"
+
+**What you see:** A review or QA agent returns `VERDICT: PASS`, but
+`task_verify` reports `Receipt adapter unsupported: observed=<tool>
+supported=collaboration.spawn_agent,multi_agent_v1.spawn_agent` instead of
+asking you to run the same agent again.
+
+**Cause:** The lifecycle watcher observed a spawn protocol it could not bind to
+a strict start event. For a current `multi_agent_v1` schema, the most common
+cause is a missing or malformed first prompt line. The line must be exactly
+`task_name: <name>` with a name made only of letters, digits, `_`, `-`, or `.`.
+The watcher does not trust a nickname or infer a QA lens from prose.
+
+**Fix:** Upgrade and restart Codex so the newly installed watcher is loaded,
+then start one fresh review or QA agent whose message begins with the marker.
+Do not edit receipt files or reuse the completion from before the restart.
+
+```bash
+python3 install.py --codex-only --force
+# Restart Codex/MCP, then retry the affected review or QA once.
+```
+
+---
+
 ### "Sync drift — plugin-codex/skills/X.md was hand-edited"
 
 **What you see:** CI fails with "content hash mismatch. Run: `python3 plugin/runtime-sync/transform_skill.py --regenerate X`".

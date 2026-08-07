@@ -401,8 +401,11 @@ SessionStart creates the exact root-rollout registration, every installed root
 hook idempotently restores it, and the Harness MCP server hosts the lifecycle
 watcher as a daemon thread. Receipt ownership stays with the
 hook/runtime path; no model-callable MCP receipt writer exists. Use structured
-`task_name` values containing `code_review` or `security_review`; do not use a
-generic worker name for a required reviewer. The watcher must observe the spawn
+task names containing `code_review` or `security_review` both as the exact
+first line `task_name: <name>` in the message and, when the active schema
+supports it, in the `task_name` argument. Omit an unsupported argument, never
+the first-line marker. Do not use a generic worker name for a required reviewer.
+The watcher must observe the spawn
 while the child is still running to bind the start-time fingerprint.
 Registration after a reviewer finishes cannot recover a PASS.
 
@@ -424,7 +427,7 @@ judge shippability without reverse-engineering the change.
 ```text
 spawn_agent {
   task_name: "qa_<lens>_<task_slug>_<run_id>",
-  message: "You are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, CHECKS.yaml, TASK_STATE.yaml, changed files, durable docs named in PLAN or touched paths, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence and concrete findings.",
+  message: "task_name: qa_<lens>_<task_slug>_<run_id>\nYou are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, CHECKS.yaml, TASK_STATE.yaml, changed files, durable docs named in PLAN or touched paths, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence and concrete findings.",
   fork_turns: "all"
 }
 ```
