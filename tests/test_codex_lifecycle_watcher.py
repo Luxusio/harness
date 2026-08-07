@@ -145,13 +145,21 @@ def test_current_raw_spawn_output_requires_explicit_agent_id():
     assert mod._spawn_output(
         event(f"agent_id: '{child_id}'"), require_agent_id=True,
     ) == ("call_runtime_123456", child_id)
-    for alias in ("not_agent_id", "parent_agent_id", "display_agent_id"):
+    for alias in (
+        "not_agent_id", "parent_agent_id", "display_agent_id",
+        "display-agent_id", "parent.agent_id", "display/agent_id",
+    ):
         assert mod._spawn_output(
             event(f"{alias}: '{child_id}'"), require_agent_id=True,
         ) is None
+    assert mod._spawn_output(
+        event(f"{{ agent_id: '{child_id}' }}"), require_agent_id=True,
+    ) == ("call_runtime_123456", child_id)
     assert mod._spawn_output(event("agent_name: '/root/legacy_display'")) == (
         "call_runtime_123456", "/root/legacy_display",
     )
+    for alias in ("display-agent_name", "parent.agent_name", "display/agent_name"):
+        assert mod._spawn_output(event(f"{alias}: '/root/display_only'")) is None
 
 
 def _delivery(agent_path: str, final: str):
@@ -527,7 +535,6 @@ def test_malformed_current_spawn_records_actionable_adapter_diagnostic(tmp_path,
     watcher = mod.Watcher(
         str(repo), "019f825b-f25f-70c3-8ee8-071f79fa1c42",
     )
-    watcher.task_dir = str(task_dir)
     receipts = []
 
     event = {
@@ -543,6 +550,8 @@ def test_malformed_current_spawn_records_actionable_adapter_diagnostic(tmp_path,
         },
     }
     with mock.patch.object(
+        mod, "_active_task_for_session", return_value=str(task_dir),
+    ), mock.patch.object(
         mod, "record_subagent_receipt",
         side_effect=lambda _td, receipt: receipts.append(receipt) or receipt,
     ), mock.patch.object(mod, "list_review_receipts", return_value=[]), \
@@ -565,7 +574,6 @@ def test_current_spawn_invalid_output_records_adapter_diagnostic(tmp_path):
     watcher = mod.Watcher(
         str(repo), "019f825b-f25f-70c3-8ee8-071f79fa1c42",
     )
-    watcher.task_dir = str(task_dir)
     receipts = []
     spawn = _current_spawn_events(
         "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f", "qa_cli_output",
@@ -582,6 +590,8 @@ def test_current_spawn_invalid_output_records_adapter_diagnostic(tmp_path):
         },
     }
     with mock.patch.object(
+        mod, "_active_task_for_session", return_value=str(task_dir),
+    ), mock.patch.object(
         mod, "record_subagent_receipt",
         side_effect=lambda _td, receipt: receipts.append(receipt) or receipt,
     ), mock.patch.object(mod, "list_review_receipts", return_value=[]), \

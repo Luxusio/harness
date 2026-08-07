@@ -813,11 +813,10 @@ def _spawn_output(
         except json.JSONDecodeError:
             identity_field = "agent_id" if require_agent_id else "(?:agent_id|agent_name)"
             identity_key = (
-                rf"(?:[\"']{identity_field}[\"']|"
-                rf"(?<![A-Za-z0-9_]){identity_field}(?![A-Za-z0-9_]))"
+                rf"(?:[\"']{identity_field}[\"']|{identity_field})"
             )
             match = re.search(
-                rf"""{identity_key}\s*[:=]\s*["']?([A-Za-z0-9_./:-]{{6,160}})""",
+                rf"""(?:^|[{{,]\s*){identity_key}\s*[:=]\s*["']?([A-Za-z0-9_./:-]{{6,160}})""",
                 output,
             )
             output = {"agent_id": match.group(1)} if match else {}
@@ -1186,17 +1185,20 @@ class Watcher:
         return str(item.get("activity_path") or "")
 
     def _record_adapter_diagnostic(self, call_id: str, reason: str) -> None:
-        if not self.task_dir:
+        task_dir = self.task_dir or _active_task_for_session(
+            self.repo_root, self.root_id,
+        )
+        if not task_dir:
             return
         event_id = call_id + ":adapter"
-        if _matching_receipt(self.task_dir, event_id, "adapter_unsupported"):
+        if _matching_receipt(task_dir, event_id, "adapter_unsupported"):
             return
         summary = (
             "Receipt adapter unsupported: observed=multi_agent_v1__spawn_agent "
             "supported=collaboration.spawn_agent,multi_agent_v1.spawn_agent "
             f"reason={reason}"
         )
-        record_subagent_receipt(self.task_dir, {
+        record_subagent_receipt(task_dir, {
             "source": "codex_session_watcher",
             "status": "adapter_unsupported",
             "agent_id": call_id,
