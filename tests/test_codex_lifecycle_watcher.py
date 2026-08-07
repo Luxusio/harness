@@ -333,6 +333,33 @@ def test_exec_output_rejects_ambiguous_structured_results():
         {"type": "input_text", "text": json.dumps({"agent_id": "b" * 16})},
     ]
     assert mod._structured_tool_output(output) is None
+    assert mod._structured_tool_output(
+        '{"agent_id":"aaaaaaaaaaaaaaaa",'
+        '"agent_id":"019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"}'
+    ) is None
+
+
+def test_direct_close_rejects_ambiguous_targets_and_conflicting_call_reuse(tmp_path):
+    mod = _load()
+    first = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    second = "019f82a6-ce64-75a3-b01d-92f7b0b4fe70"
+    call_id = "call_direct_close_123456"
+
+    def close(arguments):
+        return {"type": "response_item", "payload": {
+            "type": "function_call", "namespace": "multi_agent_v1",
+            "name": "close_agent", "call_id": call_id,
+            "arguments": json.dumps(arguments),
+        }}
+
+    assert mod._completion_call(close({"agent_id": first, "target": second})) is None
+    watcher = mod.Watcher(
+        str(tmp_path), "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+    )
+    watcher.feed(close({"agent_id": first}))
+    watcher.feed(close({"agent_id": second}))
+    assert call_id not in watcher.completion_calls
+    assert call_id in watcher.invalid_completion_calls
 
 
 def test_current_completion_without_recorded_start_is_ignored(tmp_path):
@@ -566,6 +593,39 @@ def test_current_spawn_requires_one_strict_first_line_task_marker():
     )
 
 
+def test_current_spawn_rejects_namespace_decoys_and_duplicate_json_keys():
+    mod = _load()
+    base = {
+        "type": "response_item",
+        "payload": {
+            "type": "function_call",
+            "namespace": "evil",
+            "name": "multi_agent_v1__spawn_agent",
+            "call_id": "call_namespace_decoy_123",
+            "arguments": json.dumps({"task_name": "qa_cli_decoy"}),
+        },
+    }
+    assert mod._spawn_call(base) is None
+
+    decoy = {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "name": "exec",
+        "call_id": "call_lexical_decoy_123456",
+        "input": (
+            'const decoy = "tools.multi_agent_v1__spawn_agent("; '
+            'const task_name = "qa_cli_decoy";'
+        ),
+    }}
+    assert mod._spawn_call(decoy) is None
+
+    duplicate_arguments = json.loads(json.dumps(base))
+    duplicate_arguments["payload"].update({
+        "namespace": "multi_agent_v1",
+        "name": "spawn_agent",
+        "arguments": '{"task_name":"qa_cli_one","task_name":"qa_cli_two"}',
+    })
+    assert mod._spawn_call(duplicate_arguments) is None
+
+
 def test_valid_non_receipt_worker_spawn_does_not_report_adapter_failure():
     mod = _load()
     structured = {
@@ -671,6 +731,26 @@ def test_current_spawn_invalid_output_records_adapter_diagnostic(tmp_path):
 
     assert [item["status"] for item in receipts] == ["adapter_unsupported"]
     assert "valid agent_id" in receipts[0]["summary"]
+
+
+def test_current_spawn_output_before_call_cannot_use_legacy_identity(tmp_path):
+    mod = _load()
+    watcher = mod.Watcher(
+        str(tmp_path), "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+    )
+    call_id = "call_output_first_123456"
+    output = {"type": "response_item", "payload": {
+        "type": "function_call_output", "call_id": call_id,
+        "output": json.dumps({"agent_name": "/root/display_only"}),
+    }}
+    call = {"type": "response_item", "payload": {
+        "type": "function_call", "namespace": "multi_agent_v1",
+        "name": "spawn_agent", "call_id": call_id,
+        "arguments": json.dumps({"task_name": "qa_cli_output_first"}),
+    }}
+    watcher.feed(output)
+    watcher.feed(call)
+    assert watcher.calls[call_id].get("output_path") is None
 
 
 def test_current_spawn_and_completion_sources_use_agent_id_once(tmp_path, monkeypatch):

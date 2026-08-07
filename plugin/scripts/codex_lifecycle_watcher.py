@@ -62,6 +62,69 @@ OLDER_REGISTRATION_VERSION = 2
 OLDER_REGISTRATION_OWNER = "session_start_hook"
 
 
+def _strict_json_loads(raw: str) -> Any:
+    def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key: {key}")
+            result[key] = value
+        return result
+
+    return json.loads(raw, object_pairs_hook=unique_object)
+
+
+def _javascript_code_only(source: str) -> str:
+    """Mask JS strings/comments so lifecycle detection sees executable code only."""
+    chars = list(source)
+    index = 0
+    state = "code"
+    quote = ""
+    while index < len(chars):
+        char = chars[index]
+        nxt = chars[index + 1] if index + 1 < len(chars) else ""
+        if state == "code":
+            if char in {'"', "'", "`"}:
+                quote = char
+                chars[index] = " "
+                state = "string"
+            elif char == "/" and nxt == "/":
+                chars[index] = chars[index + 1] = " "
+                index += 1
+                state = "line_comment"
+            elif char == "/" and nxt == "*":
+                chars[index] = chars[index + 1] = " "
+                index += 1
+                state = "block_comment"
+        elif state == "string":
+            chars[index] = " "
+            if char == "\\" and nxt:
+                chars[index + 1] = " "
+                index += 1
+            elif char == quote:
+                state = "code"
+        elif state == "line_comment":
+            if char == "\n":
+                state = "code"
+            else:
+                chars[index] = " "
+        elif state == "block_comment":
+            chars[index] = " "
+            if char == "*" and nxt == "/":
+                chars[index + 1] = " "
+                index += 1
+                state = "code"
+        index += 1
+    return "".join(chars)
+
+
+def _exec_lifecycle_calls(source: str) -> list[str]:
+    return re.findall(
+        r"\btools\s*\.\s*multi_agent_v1__(spawn_agent|wait_agent|close_agent)\s*\(",
+        _javascript_code_only(source),
+    )
+
+
 def _authorized_control_root(session_cwd: str) -> str:
     """Resolve an enabled workspace, preserving direct Git-root compatibility."""
     resolved = find_harness_root(session_cwd)
@@ -206,8 +269,8 @@ def _load_json_line(raw: bytes) -> dict[str, Any] | None:
     if not raw.endswith(b"\n") or len(raw) > MAX_LINE_BYTES:
         return None
     try:
-        value = json.loads(raw)
-    except (UnicodeDecodeError, json.JSONDecodeError):
+        value = _strict_json_loads(raw)
+    except (UnicodeDecodeError, ValueError):
         return None
     return value if isinstance(value, dict) else None
 
@@ -655,8 +718,8 @@ def _json_arguments(payload: dict[str, Any]) -> dict[str, Any] | None:
     if not isinstance(arguments, str):
         return None
     try:
-        decoded = json.loads(arguments or "{}")
-    except json.JSONDecodeError:
+        decoded = _strict_json_loads(arguments or "{}")
+    except ValueError:
         return None
     return decoded if isinstance(decoded, dict) else None
 
@@ -728,7 +791,7 @@ def _raw_json_string_values(source: str, field_names: tuple[str, ...]) -> list[s
 
 
 def _exec_spawn_arguments(source: str) -> dict[str, Any] | None:
-    if len(re.findall(r"multi_agent_v1__spawn_agent\s*\(", source)) != 1:
+    if _exec_lifecycle_calls(source) != ["spawn_agent"]:
         return None
     task_names = _raw_field_values(
         source, ("task_name",), value_pattern=r"[A-Za-z0-9_.-]{1,120}",
@@ -746,7 +809,7 @@ def _exec_spawn_arguments(source: str) -> dict[str, Any] | None:
 def _tool_identity(payload: dict[str, Any]) -> tuple[str, str]:
     namespace = str(payload.get("namespace") or "")
     name = str(payload.get("name") or "")
-    if name.startswith("multi_agent_v1__"):
+    if namespace in {"", "multi_agent_v1"} and name.startswith("multi_agent_v1__"):
         return "multi_agent_v1", name.removeprefix("multi_agent_v1__")
     return namespace, name
 
@@ -798,7 +861,7 @@ def _unsupported_current_spawn(event: dict[str, Any]) -> tuple[str, str] | None:
         arguments = _json_arguments(payload)
     elif payload.get("type") == "custom_tool_call" and payload.get("name") == "exec":
         source = str(payload.get("input") or "")
-        if len(re.findall(r"multi_agent_v1__spawn_agent\s*\(", source)) != 1:
+        if _exec_lifecycle_calls(source) != ["spawn_agent"]:
             return None
         arguments = _exec_spawn_arguments(source)
     else:
@@ -841,8 +904,8 @@ def _structured_tool_output(output: Any) -> dict[str, Any] | None:
     decoded: list[dict[str, Any]] = []
     for candidate in candidates:
         try:
-            value = json.loads(candidate)
-        except json.JSONDecodeError:
+            value = _strict_json_loads(candidate)
+        except ValueError:
             continue
         if isinstance(value, dict):
             decoded.append(value)
@@ -865,8 +928,8 @@ def _spawn_output(
     if output is None and isinstance(raw_output, str):
         output = raw_output
         try:
-            output = json.loads(raw_output)
-        except json.JSONDecodeError:
+            output = _strict_json_loads(raw_output)
+        except ValueError:
             field_names = ("agent_id",) if require_agent_id else (
                 "agent_id", "agent_name",
             )
@@ -906,8 +969,8 @@ def _completion_call(event: dict[str, Any]) -> tuple[str, str, str] | None:
             return None
     elif payload.get("type") == "custom_tool_call" and payload.get("name") == "exec":
         source = str(payload.get("input") or "")
-        matches = re.findall(r"multi_agent_v1__(wait_agent|close_agent)\s*\(", source)
-        if len(matches) != 1:
+        matches = _exec_lifecycle_calls(source)
+        if len(matches) != 1 or matches[0] not in {"wait_agent", "close_agent"}:
             return None
         name = matches[0]
         arguments = {}
@@ -920,7 +983,13 @@ def _completion_call(event: dict[str, Any]) -> tuple[str, str, str] | None:
         return None
     target = ""
     if name == "close_agent":
-        target = str(arguments.get("agent_id") or arguments.get("target") or "")
+        targets = [
+            str(arguments[key]) for key in ("agent_id", "target")
+            if isinstance(arguments.get(key), str) and arguments.get(key)
+        ]
+        if len(targets) != 1:
+            return None
+        target = targets[0]
         if not _valid_agent_identity(target):
             return None
     return call_id, name, target
@@ -1010,8 +1079,8 @@ def _root_delivery(event: dict[str, Any]) -> tuple[str, str] | None:
             continue
         encoded = text[len("<subagent_notification>"):-len("</subagent_notification>")].strip()
         try:
-            notification = json.loads(encoded)
-        except json.JSONDecodeError:
+            notification = _strict_json_loads(encoded)
+        except ValueError:
             continue
         identity = str(notification.get("agent_id") or notification.get("agent_path") or "")
         status = notification.get("status")
@@ -1221,6 +1290,7 @@ class Watcher:
         self.task_dir = ""
         self.calls: dict[str, dict[str, Any]] = {}
         self.completion_calls: dict[str, tuple[str, str]] = {}
+        self.invalid_completion_calls: set[str] = set()
         self.by_path: dict[str, dict[str, Any]] = {}
 
     @staticmethod
@@ -1449,8 +1519,14 @@ class Watcher:
         completion = _completion_call(event)
         if completion:
             call_id, kind, target = completion
-            if call_id not in self.completion_calls:
+            if call_id in self.invalid_completion_calls:
+                return
+            existing = self.completion_calls.get(call_id)
+            if existing is None:
                 self.completion_calls[call_id] = (kind, target)
+            elif existing != (kind, target):
+                self.completion_calls.pop(call_id, None)
+                self.invalid_completion_calls.add(call_id)
             return
         activity = _started_activity(event)
         if activity:
@@ -1469,12 +1545,21 @@ class Watcher:
             return
         payload = _event_payload(event, "response_item")
         output_call_id = str(payload.get("call_id") or "") if payload else ""
+        if output_call_id in self.invalid_completion_calls:
+            return
         completion_deliveries = _completion_output(
             event, self.completion_calls.get(output_call_id),
         )
         if completion_deliveries:
             for identity, root_final in completion_deliveries:
                 self._deliver(identity, root_final)
+            return
+        if (
+            output_call_id
+            and payload
+            and payload.get("type") in {"function_call_output", "custom_tool_call_output"}
+            and not (self.calls.get(output_call_id) or {}).get("task_name")
+        ):
             return
         output_item = self.calls.get(output_call_id) or {}
         output = _spawn_output(

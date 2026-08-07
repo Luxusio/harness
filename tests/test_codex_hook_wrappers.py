@@ -252,18 +252,33 @@ class TestCodexHookWrappers(unittest.TestCase):
             "status": "adapter_unsupported",
             "summary": "Receipt adapter unsupported: observed=multi_agent_v1__spawn_agent",
         }
-        valid_start = {
+        valid_qa_start = {
             "source": "codex_session_watcher",
             "status": "started",
             "lens": "qa-cli",
+            "ts": "2026-08-07T00:00:02Z",
         }
+        valid_review_start = {
+            "source": "codex_session_watcher",
+            "status": "started",
+            "lens": "review-code",
+            "ts": "2026-08-07T00:00:02Z",
+        }
+        diagnostic["ts"] = "2026-08-07T00:00:01Z"
         with mock.patch.object(lib, "list_subagent_receipts", return_value=[diagnostic]):
-            self.assertEqual(
-                lib.active_receipt_adapter_diagnostic("/task"),
-                diagnostic["summary"],
-            )
+            with mock.patch.object(lib, "list_review_receipts", return_value=[]):
+                self.assertEqual(
+                    lib.active_receipt_adapter_diagnostic("/task"),
+                    diagnostic["summary"],
+                )
         with mock.patch.object(
-            lib, "list_subagent_receipts", return_value=[diagnostic, valid_start],
+            lib, "list_subagent_receipts", return_value=[diagnostic, valid_qa_start],
+        ), mock.patch.object(lib, "list_review_receipts", return_value=[]):
+            self.assertEqual(lib.active_receipt_adapter_diagnostic("/task"), "")
+        with mock.patch.object(
+            lib, "list_subagent_receipts", return_value=[diagnostic],
+        ), mock.patch.object(
+            lib, "list_review_receipts", return_value=[valid_review_start],
         ):
             self.assertEqual(lib.active_receipt_adapter_diagnostic("/task"), "")
 

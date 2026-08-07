@@ -3411,7 +3411,9 @@ def subagent_receipt_summary(task_dir):
 def active_receipt_adapter_diagnostic(task_dir):
     """Return the latest unresolved watcher adapter diagnostic, if any."""
     active = ""
-    for item in list_subagent_receipts(task_dir):
+    events = list_subagent_receipts(task_dir) + list_review_receipts(task_dir)
+    events.sort(key=lambda item: str(item.get("ts") or ""))
+    for item in events:
         if (
             item.get("source") == "codex_session_watcher"
             and item.get("status") == "adapter_unsupported"
