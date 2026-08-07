@@ -381,7 +381,13 @@ def test_direct_close_rejects_ambiguous_targets_and_conflicting_call_reuse(tmp_p
         str(tmp_path), "019f825b-f25f-70c3-8ee8-071f79fa1c42",
     )
     watcher.feed(close({"agent_id": first}))
-    watcher.feed(close({"agent_id": second}))
+    delivered = {"completed": True, "task_dir": str(tmp_path)}
+    watcher.completion_items[call_id] = [delivered]
+    with mock.patch.object(watcher, "_invalidate") as invalidate:
+        watcher.feed(close({"agent_id": second}))
+        invalidate.assert_called_once_with(
+            delivered, "completion call identity changed after delivery",
+        )
     assert call_id not in watcher.completion_calls
     assert call_id in watcher.invalid_completion_calls
 
@@ -854,7 +860,12 @@ def test_spawn_task_binding_is_immutable_across_task_switch(tmp_path):
     watcher = mod.Watcher(
         str(tmp_path), "019f825b-f25f-70c3-8ee8-071f79fa1c42",
     )
-    spawn, output = _current_spawn_events(child_id, "qa_cli_task_switch")
+    spawn = _current_spawn_events(child_id, "qa_cli_task_switch")[0]
+    output = {"type": "response_item", "payload": {
+        "type": "function_call_output",
+        "call_id": "call_current_runtime_123456",
+        "output": json.dumps({"agent_name": "/root/display_only"}),
+    }}
     activity = {"type": "event_msg", "payload": {
         "type": "sub_agent_activity", "kind": "started",
         "event_id": "call_current_runtime_123456",

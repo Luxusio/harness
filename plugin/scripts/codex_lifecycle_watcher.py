@@ -1425,6 +1425,7 @@ class Watcher:
         self.calls: dict[str, dict[str, Any]] = {}
         self.completion_calls: dict[str, tuple[str, str]] = {}
         self.invalid_completion_calls: set[str] = set()
+        self.completion_items: dict[str, list[dict[str, Any]]] = {}
         self.by_path: dict[str, dict[str, Any]] = {}
 
     @staticmethod
@@ -1438,8 +1439,10 @@ class Watcher:
         protocol = "multi_agent_v1" if item.get("current_protocol") else "collaboration"
         return f"codex_session_watcher:{protocol}"
 
-    def _record_adapter_diagnostic(self, call_id: str, reason: str, lens: str) -> None:
-        task_dir = _active_task_for_session(self.repo_root, self.root_id) or self.task_dir
+    def _record_adapter_diagnostic(
+        self, call_id: str, reason: str, lens: str, *, task_dir: str = "",
+    ) -> None:
+        task_dir = task_dir or _active_task_for_session(self.repo_root, self.root_id) or self.task_dir
         if not task_dir:
             return
         event_id = call_id + ":adapter"
@@ -1683,6 +1686,10 @@ class Watcher:
             elif existing != (kind, target):
                 self.completion_calls.pop(call_id, None)
                 self.invalid_completion_calls.add(call_id)
+                for delivered in self.completion_items.pop(call_id, []):
+                    self._invalidate(
+                        delivered, "completion call identity changed after delivery",
+                    )
             return
         activity = _started_activity(event)
         if activity:
@@ -1708,7 +1715,11 @@ class Watcher:
         )
         if completion_deliveries:
             for identity, root_final in completion_deliveries:
-                self._deliver(identity, root_final)
+                delivered = self._deliver(identity, root_final)
+                if delivered is not None:
+                    items = self.completion_items.setdefault(output_call_id, [])
+                    if delivered not in items:
+                        items.append(delivered)
             return
         if (
             output_call_id
@@ -1730,9 +1741,14 @@ class Watcher:
         if output_call_id:
             item = self.calls.get(output_call_id) or {}
             if item.get("current_protocol") and not item.get("output_path"):
+                active_task = _active_task_for_session(self.repo_root, self.root_id) or self.task_dir
+                if item.get("invalid") or item.get("task_dir") != active_task:
+                    item["invalid"] = True
+                    return
                 self._record_adapter_diagnostic(
                     output_call_id, "spawn output did not contain a valid agent_id",
                     _infer_receipt_lens(str(item.get("task_name") or "")) or "adapter-unknown",
+                    task_dir=str(item.get("task_dir") or ""),
                 )
                 return
         delivery = _root_delivery(event)
@@ -1741,17 +1757,18 @@ class Watcher:
         agent_path, root_final = delivery
         self._deliver(agent_path, root_final)
 
-    def _deliver(self, agent_path: str, root_final: str) -> None:
+    def _deliver(self, agent_path: str, root_final: str) -> dict[str, Any] | None:
         item = self.by_path.get(agent_path)
         if not item:
-            return
+            return None
         if item.get("root_final") is not None:
             if item["root_final"] == root_final:
-                return
+                return item
             self._invalidate(item, "duplicate or ambiguous root completion delivery")
-            return
+            return item
         item["root_final"] = root_final
         self._maybe_complete(item)
+        return item
 
 
 def watch(
