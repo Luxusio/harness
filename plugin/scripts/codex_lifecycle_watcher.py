@@ -779,18 +779,25 @@ def _unsupported_current_spawn(event: dict[str, Any]) -> tuple[str, str] | None:
     if not CALL_RE.fullmatch(call_id):
         return None
     if arguments is None:
-        return call_id, "arguments could not be decoded"
+        return None
     raw_name = str(arguments.get("task_name") or "")
     marker_lines = [
         line for text in _prompt_texts(arguments) for line in text.splitlines()
         if "task_name" in line.lower()
     ]
-    if raw_name or marker_lines:
+    candidates = [raw_name, *marker_lines]
+    receipt_intended = any(
+        _infer_receipt_lens(candidate).startswith(("review-", "qa-", "ux-"))
+        for candidate in candidates if candidate
+    )
+    if receipt_intended:
         return call_id, "strict task_name field or first-line marker was invalid"
     return None
 
 
-def _spawn_output(event: dict[str, Any]) -> tuple[str, str] | None:
+def _spawn_output(
+    event: dict[str, Any], *, require_agent_id: bool = False,
+) -> tuple[str, str] | None:
     payload = _event_payload(event, "response_item")
     if not payload or payload.get("type") not in {
         "function_call_output", "custom_tool_call_output",
@@ -811,13 +818,16 @@ def _spawn_output(event: dict[str, Any]) -> tuple[str, str] | None:
             output = {"agent_id": match.group(1)} if match else {}
     if not isinstance(output, dict):
         return None
-    identity = str(
-        output.get("agent_id")
-        or output.get("agent_name")
-        or output.get("agentName")
-        or output.get("task_name")
-        or ""
-    )
+    if require_agent_id:
+        identity = str(output.get("agent_id") or "")
+    else:
+        identity = str(
+            output.get("agent_id")
+            or output.get("agent_name")
+            or output.get("agentName")
+            or output.get("task_name")
+            or ""
+        )
     return (call_id, identity) if _valid_agent_identity(identity) else None
 
 
@@ -1414,7 +1424,10 @@ class Watcher:
             for identity, root_final in completion_deliveries:
                 self._deliver(identity, root_final)
             return
-        output = _spawn_output(event)
+        output_item = self.calls.get(output_call_id) or {}
+        output = _spawn_output(
+            event, require_agent_id=bool(output_item.get("current_protocol")),
+        )
         if output:
             call_id, agent_path = output
             item = self.calls.setdefault(call_id, {})

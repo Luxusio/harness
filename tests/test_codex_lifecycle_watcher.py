@@ -459,6 +459,37 @@ def test_current_spawn_requires_one_strict_first_line_task_marker():
     )
 
 
+def test_valid_non_receipt_worker_spawn_does_not_report_adapter_failure():
+    mod = _load()
+    structured = {
+        "type": "response_item",
+        "payload": {
+            "type": "function_call",
+            "namespace": "multi_agent_v1",
+            "name": "spawn_agent",
+            "call_id": "call_worker_structured_123",
+            "arguments": json.dumps({"task_name": "worker_parse_protocol"}),
+        },
+    }
+    marker = {
+        "type": "response_item",
+        "payload": {
+            "type": "function_call",
+            "namespace": "multi_agent_v1",
+            "name": "spawn_agent",
+            "call_id": "call_worker_marker_123456",
+            "arguments": json.dumps({
+                "message": "task_name: worker_parse_protocol\nImplement the parser.",
+            }),
+        },
+    }
+
+    assert mod._spawn_call(structured) is None
+    assert mod._unsupported_current_spawn(structured) is None
+    assert mod._spawn_call(marker) is None
+    assert mod._unsupported_current_spawn(marker) is None
+
+
 def test_malformed_current_spawn_records_actionable_adapter_diagnostic(tmp_path, monkeypatch):
     mod = _load()
     repo = tmp_path / "repo"
@@ -515,7 +546,10 @@ def test_current_spawn_invalid_output_records_adapter_diagnostic(tmp_path):
         "payload": {
             "type": "function_call_output",
             "call_id": "call_current_runtime_123456",
-            "output": json.dumps({"nickname": "DisplayOnly"}),
+            "output": json.dumps({
+                "agent_name": "/root/display_only",
+                "nickname": "DisplayOnly",
+            }),
         },
     }
     with mock.patch.object(
