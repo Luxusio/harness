@@ -162,6 +162,10 @@ def test_current_raw_spawn_output_requires_explicit_agent_id():
         assert mod._spawn_output(
             event(f"agent_id: {child_id}{suffix}"), require_agent_id=True,
         ) is None
+    assert mod._spawn_output(
+        event(f"{{agent_id: '{child_id}', agent_id: '{child_id}'}}"),
+        require_agent_id=True,
+    ) is None
     assert mod._spawn_output(event("agent_name: '/root/legacy_display'")) == (
         "call_runtime_123456", "/root/legacy_display",
     )
@@ -274,6 +278,26 @@ def test_exec_wrapped_current_completion_calls_normalize():
     assert mod._completion_call(close_event) == (
         "call_close_wrapped_123", "close_agent", child_id,
     )
+
+    for alias in ("not_agent_id", "parent_agent_id", "parent.target", "retarget"):
+        invalid = {"type": "response_item", "payload": {
+            "type": "custom_tool_call", "name": "exec",
+            "call_id": "call_close_alias_123456",
+            "input": (
+                "const r = await tools.multi_agent_v1__close_agent("
+                f'{{{alias}: "{child_id}"}}); text(r);'
+            ),
+        }}
+        assert mod._completion_call(invalid) is None
+    ambiguous = {"type": "response_item", "payload": {
+        "type": "custom_tool_call", "name": "exec",
+        "call_id": "call_close_ambiguous_123456",
+        "input": (
+            "const r = await tools.multi_agent_v1__close_agent("
+            f'{{agent_id: "{child_id}", target: "{child_id}"}}); text(r);'
+        ),
+    }}
+    assert mod._completion_call(ambiguous) is None
 
     final = "VERDICT: PASS\nQA completed"
     wait_output = {"type": "response_item", "payload": {

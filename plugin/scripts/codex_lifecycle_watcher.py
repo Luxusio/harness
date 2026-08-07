@@ -693,26 +693,54 @@ def _prompt_task_name(arguments: dict[str, Any]) -> str:
     return markers[0][1]
 
 
+def _raw_field_values(
+    source: str,
+    field_names: tuple[str, ...],
+    *,
+    value_pattern: str = r"[A-Za-z0-9_./:-]{6,160}",
+) -> list[str]:
+    """Return values for exact object fields; partial keys/values do not match."""
+    fields = "(?:" + "|".join(re.escape(name) for name in field_names) + ")"
+    key = rf"(?:[\"']{fields}[\"']|{fields})"
+    pattern = re.compile(
+        rf"""(?:^|[{{,]\s*){key}\s*[:=]\s*"""
+        rf"""(?:(?P<quote>["'])(?P<quoted>{value_pattern})(?P=quote)|"""
+        rf"""(?P<bare>{value_pattern})(?=\s*(?:[,}})]|$)))""",
+    )
+    return [match.group("quoted") or match.group("bare") for match in pattern.finditer(source)]
+
+
+def _raw_json_string_values(source: str, field_names: tuple[str, ...]) -> list[str]:
+    fields = "(?:" + "|".join(re.escape(name) for name in field_names) + ")"
+    key = rf"(?:[\"']{fields}[\"']|{fields})"
+    pattern = re.compile(
+        rf'''(?:^|[{{,]\s*){key}\s*[:=]\s*("(?:\\.|[^"\\])*")''',
+    )
+    values: list[str] = []
+    for match in pattern.finditer(source):
+        try:
+            decoded = json.loads(match.group(1))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(decoded, str):
+            values.append(decoded)
+    return values
+
+
 def _exec_spawn_arguments(source: str) -> dict[str, Any] | None:
     if len(re.findall(r"multi_agent_v1__spawn_agent\s*\(", source)) != 1:
         return None
-    structured = re.search(
-        r"""(?:["']?task_name["']?)\s*:\s*["']([A-Za-z0-9_.-]{1,120})["']""",
-        source,
+    task_names = _raw_field_values(
+        source, ("task_name",), value_pattern=r"[A-Za-z0-9_.-]{1,120}",
     )
-    if structured:
-        return {"task_name": structured.group(1)}
-    encoded_message = re.search(
-        r'''(?:["']?message["']?)\s*:\s*("(?:\\.|[^"\\])*")''',
-        source,
-    )
-    if not encoded_message:
+    if len(task_names) == 1:
+        return {"task_name": task_names[0]}
+    if len(task_names) > 1:
         return None
-    try:
-        message = json.loads(encoded_message.group(1))
-    except json.JSONDecodeError:
+    messages = _raw_json_string_values(source, ("message",))
+    if len(messages) != 1:
         return None
-    return {"message": message} if isinstance(message, str) else None
+    return {"message": messages[0]}
 
 
 def _tool_identity(payload: dict[str, Any]) -> tuple[str, str]:
@@ -839,17 +867,11 @@ def _spawn_output(
         try:
             output = json.loads(raw_output)
         except json.JSONDecodeError:
-            identity_field = "agent_id" if require_agent_id else "(?:agent_id|agent_name)"
-            identity_key = (
-                rf"(?:[\"']{identity_field}[\"']|{identity_field})"
+            field_names = ("agent_id",) if require_agent_id else (
+                "agent_id", "agent_name",
             )
-            match = re.search(
-                rf"""(?:^|[{{,]\s*){identity_key}\s*[:=]\s*"""
-                rf"""(?:(?P<quote>["'])(?P<quoted>[A-Za-z0-9_./:-]{{6,160}})(?P=quote)|"""
-                rf"""(?P<bare>[A-Za-z0-9_./:-]{{6,160}})(?=\s*(?:[,}}]|$)))""",
-                raw_output,
-            )
-            identity = (match.group("quoted") or match.group("bare")) if match else ""
+            identities = _raw_field_values(raw_output, field_names)
+            identity = identities[0] if len(identities) == 1 else ""
             output = {"agent_id": identity} if identity else {}
     if not isinstance(output, dict):
         return None
@@ -890,13 +912,10 @@ def _completion_call(event: dict[str, Any]) -> tuple[str, str, str] | None:
         name = matches[0]
         arguments = {}
         if name == "close_agent":
-            target_match = re.search(
-                r'''(?:["']?(?:agent_id|target)["']?)\s*:\s*["']([A-Za-z0-9_./:-]{6,160})["']''',
-                source,
-            )
-            if not target_match:
+            targets = _raw_field_values(source, ("agent_id", "target"))
+            if len(targets) != 1:
                 return None
-            arguments = {"agent_id": target_match.group(1)}
+            arguments = {"agent_id": targets[0]}
     else:
         return None
     target = ""
