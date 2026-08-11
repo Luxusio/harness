@@ -30,12 +30,11 @@ and duplicate reviewers create noisy fix churn.
 After Phase 6 commits and the Phase 6.5 checkpoint, read `task_context` and use
 its canonical `required_review_lenses` routing.
 
-- No source changes: explicit docs/non-code exemption; continue to QA when QA
-  is otherwise applicable.
-- `review-code`: always spawn `harness:code-reviewer` for source changes.
-- `review-security`: additionally spawn `harness:security-reviewer` when path or
-  diff-content security signals match. Security is never adaptive-hit-rate
-  gated.
+- `review-code`: spawn `harness:code-reviewer` whenever routed; mutating tasks
+  default to this lens even when no path inventory exists.
+- `review-security`: additionally spawn `harness:security-reviewer` when PLAN
+  metadata or task routing requires it. Security is never inferred from a Git
+  diff or adaptive-hit-rate gated.
 
 When both lenses apply, spawn them in one message so they run independently in
 parallel. Reviewers are read-only. They must read PLAN/REQUEST, linked durable
@@ -65,8 +64,8 @@ that argument; the exact first-line marker in `message` remains required.
 
 Lifecycle hooks record starts and matched completions in
 `REVIEW_RECEIPTS.jsonl`. A start, unmatched wait, missing verdict, FAIL,
-BLOCKED_ENV, stale HEAD, or changed worktree fingerprint is not PASS. Do not
-write or repair receipts manually.
+BLOCKED_ENV, a mismatched `TASK_RUN`, or invalid event ordering is not PASS. Do
+not write or repair receipts manually.
 On Codex, runtime capabilities vary. When `wait_agent` returns a structural
 `status[agent_id].completed` map, the post-tool hook correlates those completed
 agents directly and `list_agents` is unnecessary. If the wait response omits
@@ -85,10 +84,11 @@ safe correction.
 - `OPTIONAL`: report as advisory. Never send it into an automatic code-growth
   loop.
 
-Any source edit invalidates all review receipts. After a fix, repeat checkpoint
-or commit as applicable, rerun every routed reviewer, and require fresh PASS.
-Only then begin Phase 7 QA. QA must start after the latest review PASS; an early
-or concurrent QA receipt cannot close the task.
+After fixing a reviewer finding, rerun that routed review before QA. Harness
+does not detect later source edits; deciding whether an unrelated or post-QA
+edit needs another review is developer-owned. QA must start after the latest review PASS
+for every required lens in the current `TASK_RUN`; an early or
+concurrent QA receipt cannot close the task.
 
 ## Phase 4.8: Near-zero-cost scan
 

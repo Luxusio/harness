@@ -51,7 +51,7 @@ def test_install_requires_fresh_review_and_qa(tmp_path):
         mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
         mock.patch.object(mod, "_validate_task_dir", return_value=(True, "")),
         mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
-        mock.patch.object(mod, "_reviewable_source_paths", return_value=["plugin/file.py"]),
+        mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global.lock"),
         mock.patch.object(mod, "_verification_state", return_value=(False, "fresh QA PASS required", "fp")),
         mock.patch.object(mod.subprocess, "run") as run,
@@ -68,17 +68,14 @@ def test_success_marker_skips_same_fingerprint_and_reinstalls_changed_diff(tmp_p
         mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
         mock.patch.object(mod, "_validate_task_dir", return_value=(True, "")),
         mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
-        mock.patch.object(mod, "_reviewable_source_paths", return_value=["plugin/file.py"]),
+        mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global.lock"),
-        mock.patch.object(mod, "_git_head_for_receipt", return_value="head"),
-        mock.patch.object(mod, "_unreviewed_dirty_payload", return_value=[]),
-        mock.patch.object(mod, "_unreviewed_tracked_payload", return_value=[]),
         mock.patch.object(mod, "_tracked_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_payload_fingerprint", return_value="payload-1"),
         mock.patch.object(mod, "_copy_payload_snapshot"),
         mock.patch.object(mod, "_payload_modes_match_index", return_value=True),
     )
-    with common[0], common[1], common[2], common[3], common[4], common[5], common[6], common[7], common[8], common[9], common[10], common[11], common[12], mock.patch.object(
+    with common[0], common[1], common[2], common[3], common[4], common[5], common[6], common[7], common[8], common[9], mock.patch.object(
         mod, "_verification_state", return_value=(True, "", "fp-1")
     ), mock.patch.object(mod.subprocess, "run", return_value=installer) as run:
         assert mod.install_verified(task) == 0
@@ -86,18 +83,15 @@ def test_success_marker_skips_same_fingerprint_and_reinstalls_changed_diff(tmp_p
         assert run.call_count == 1
 
     receipt = json.loads((task / mod.RECEIPT_NAME).read_text())
-    assert receipt["diff_fingerprint"] == "fp-1"
+    assert receipt["verification_id"] == "fp-1"
     with (
         mock.patch.object(mod, "find_repo_root", return_value=str(repo)),
         mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
         mock.patch.object(mod, "_validate_task_dir", return_value=(True, "")),
         mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
-        mock.patch.object(mod, "_reviewable_source_paths", return_value=["plugin/file.py"]),
+        mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global-2.lock"),
         mock.patch.object(mod, "_verification_state", return_value=(True, "", "fp-2")),
-        mock.patch.object(mod, "_git_head_for_receipt", return_value="head"),
-        mock.patch.object(mod, "_unreviewed_dirty_payload", return_value=[]),
-        mock.patch.object(mod, "_unreviewed_tracked_payload", return_value=[]),
         mock.patch.object(mod, "_tracked_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_payload_fingerprint", return_value="payload-2"),
         mock.patch.object(mod, "_copy_payload_snapshot"),
@@ -106,72 +100,6 @@ def test_success_marker_skips_same_fingerprint_and_reinstalls_changed_diff(tmp_p
     ):
         assert mod.install_verified(task) == 0
         assert run.call_count == 1
-
-
-def test_unreviewed_dirty_payload_blocks_install(tmp_path):
-    repo, task = _repo(tmp_path)
-    with (
-        mock.patch.object(mod, "find_repo_root", return_value=str(repo)),
-        mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
-        mock.patch.object(mod, "_validate_task_dir", return_value=(True, "")),
-        mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/old.py"}),
-        mock.patch.object(mod, "_reviewable_source_paths", return_value=["plugin/old.py"]),
-        mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global.lock"),
-        mock.patch.object(mod, "_verification_state", return_value=(True, "", "fp")),
-        mock.patch.object(mod, "_unreviewed_dirty_payload", return_value=["plugin/old.py"]),
-        mock.patch.object(mod, "_unreviewed_tracked_payload", return_value=[]),
-        mock.patch.object(mod, "_tracked_install_payload", return_value={"plugin/old.py"}),
-        mock.patch.object(mod.subprocess, "run") as run,
-    ):
-        assert mod.install_verified(task) == 4
-    run.assert_not_called()
-
-
-def test_unreviewed_dirty_payload_allows_nonbehavioral_metadata(tmp_path):
-    repo, task = _repo(tmp_path)
-    dirty = {
-        "plugin-codex/README.md",
-        "plugin/scripts/README.md",
-        "plugin/CHANGELOG.md",
-        "plugin/unreviewed.bin",
-        "plugin/reviewed.py",
-    }
-    allowed = {
-        "plugin-codex/README.md",
-        "plugin/scripts/README.md",
-        "plugin/CHANGELOG.md",
-    }
-    with (
-        mock.patch.object(mod, "_dirty_install_payload", return_value=dirty),
-        mock.patch.object(mod, "read_state", return_value={}),
-        mock.patch.object(mod, "_reviewable_source_paths", return_value=["plugin/reviewed.py"]),
-        mock.patch.object(
-            mod, "_is_nonbehavioral_payload_metadata",
-            side_effect=lambda _repo, path: path in allowed,
-        ),
-    ):
-        assert mod._unreviewed_dirty_payload(repo, task) == ["plugin/unreviewed.bin"]
-
-
-def test_nonbehavioral_metadata_requires_exact_safe_tracked_file(tmp_path):
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    readme = repo / "plugin-codex/README.md"
-    readme.parent.mkdir(parents=True)
-    readme.write_text("documentation\n", encoding="utf-8")
-    readme.chmod(0o644)
-    subprocess.run(["git", "add", "plugin-codex/README.md"], cwd=repo, check=True)
-
-    assert mod._is_nonbehavioral_payload_metadata(repo, "plugin-codex/README.md")
-    assert not mod._is_nonbehavioral_payload_metadata(repo, "plugin/nested/README.md")
-    assert not mod._is_nonbehavioral_payload_metadata(repo, "plugin-codex/readme.md")
-
-    readme.chmod(0o755)
-    assert not mod._is_nonbehavioral_payload_metadata(repo, "plugin-codex/README.md")
-    readme.unlink()
-    readme.symlink_to(repo / "outside")
-    assert not mod._is_nonbehavioral_payload_metadata(repo, "plugin-codex/README.md")
 
 
 def test_payload_fingerprint_includes_mode_and_rejects_symlink(tmp_path):
@@ -242,20 +170,16 @@ def test_payload_mode_check_fails_closed_on_git_index_error(tmp_path):
         assert not mod._payload_modes_match_index(repo, {"plugin/file.py"})
 
 
-def test_source_change_during_install_withholds_success_marker(tmp_path):
+def test_payload_change_during_install_withholds_success_marker(tmp_path):
     repo, task = _repo(tmp_path)
     with (
         mock.patch.object(mod, "find_repo_root", return_value=str(repo)),
         mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
         mock.patch.object(mod, "_validate_task_dir", return_value=(True, "")),
         mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
-        mock.patch.object(mod, "_reviewable_source_paths", return_value=["plugin/file.py"]),
+        mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global.lock"),
-        mock.patch.object(mod, "_verification_state", side_effect=[
-            (True, "", "fp-1"), (True, "", "fp-2"),
-        ]),
-        mock.patch.object(mod, "_unreviewed_dirty_payload", return_value=[]),
-        mock.patch.object(mod, "_unreviewed_tracked_payload", return_value=[]),
+        mock.patch.object(mod, "_verification_state", return_value=(True, "", "fp-1")),
         mock.patch.object(mod, "_tracked_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(
             mod, "_payload_fingerprint",
@@ -278,7 +202,7 @@ def test_task_dir_must_be_canonical_and_active(tmp_path):
     assert "not canonical" in reason
 
 
-def test_snapshot_paths_use_tracked_and_task_reviewed_files_only(tmp_path):
+def test_snapshot_paths_use_tracked_and_dirty_payload_files(tmp_path):
     repo, task = _repo(tmp_path)
     for rel in ("plugin/tracked.py", "plugin/new.py"):
         path = repo / rel
@@ -286,56 +210,21 @@ def test_snapshot_paths_use_tracked_and_task_reviewed_files_only(tmp_path):
         path.write_text("ok\n", encoding="utf-8")
     with (
         mock.patch.object(mod, "_tracked_install_payload", return_value={"plugin/tracked.py"}),
-        mock.patch.object(mod, "_reviewable_source_paths", return_value=["plugin/new.py"]),
+        mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/new.py"}),
     ):
         paths = mod._snapshot_paths(repo, task)
     assert paths == {"plugin/tracked.py", "plugin/new.py"}
     assert "plugin/.omc/ignored-secret" not in paths
 
 
-def test_snapshot_paths_exclude_reviewed_deletions(tmp_path):
+def test_snapshot_paths_exclude_deleted_payload(tmp_path):
     repo, task = _repo(tmp_path)
     with (
         mock.patch.object(mod, "_tracked_install_payload", return_value={"plugin/deleted.py"}),
-        mock.patch.object(mod, "_reviewable_source_paths", return_value=["plugin/deleted.py"]),
+        mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/deleted.py"}),
     ):
         paths = mod._snapshot_paths(repo, task)
     assert paths == set()
-
-
-def test_reviewable_payload_survives_clean_commit_after_task_baseline(tmp_path):
-    repo, task = _repo(tmp_path)
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "T"], cwd=repo, check=True)
-    (repo / ".gitignore").write_text("doc/harness/tasks/\n", encoding="utf-8")
-    payload = repo / "plugin/runtime.py"
-    payload.parent.mkdir(parents=True, exist_ok=True)
-    payload.write_text("VALUE = 1\n", encoding="utf-8")
-    (task / "TASK_STATE.yaml").write_text(
-        "task_id: TASK__install\nstatus: active\nruntime_verdict: pending\n"
-        "touched_paths: []\n",
-        encoding="utf-8",
-    )
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "baseline"], cwd=repo, check=True)
-    baseline = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
-        capture_output=True, text=True,
-    ).stdout.strip()
-    (task / "TASK_BASELINE.json").write_text(
-        json.dumps({
-            "version": 1, "repo_root": str(repo),
-            "head_sha": baseline, "dirty_paths": {},
-        }),
-        encoding="utf-8",
-    )
-
-    payload.write_text("VALUE = 2\n", encoding="utf-8")
-    subprocess.run(["git", "add", "plugin/runtime.py"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-qm", "task payload"], cwd=repo, check=True)
-
-    assert mod._reviewable_source_paths(str(task)) == ["plugin/runtime.py"]
 
 
 def test_global_lock_ignores_xdg_cache_and_follows_installer_home(tmp_path, monkeypatch):
@@ -353,11 +242,9 @@ def test_active_task_switch_during_install_withholds_marker(tmp_path):
             (True, ""), (False, "task is not active"),
         ]),
         mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
-        mock.patch.object(mod, "_reviewable_source_paths", return_value=["plugin/file.py"]),
+        mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global.lock"),
         mock.patch.object(mod, "_verification_state", return_value=(True, "", "fp")),
-        mock.patch.object(mod, "_unreviewed_dirty_payload", return_value=[]),
-        mock.patch.object(mod, "_unreviewed_tracked_payload", return_value=[]),
         mock.patch.object(mod, "_tracked_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_payload_fingerprint", return_value="payload"),
         mock.patch.object(mod, "_copy_payload_snapshot"),
@@ -366,62 +253,3 @@ def test_active_task_switch_during_install_withholds_marker(tmp_path):
     ):
         assert mod.install_verified(task) == 5
     assert not (task / mod.RECEIPT_NAME).exists()
-
-
-def test_tracked_worktree_drift_hidden_from_status_requires_review(tmp_path):
-    repo, task = _repo(tmp_path)
-    hidden = repo / "plugin/hidden.py"
-    hidden.write_text("changed\n", encoding="utf-8")
-    stage = subprocess.CompletedProcess(
-        [], 0, b"100644 indexhash 0\tplugin/hidden.py\0", b""
-    )
-    work = subprocess.CompletedProcess([], 0, b"workhash\n", b"")
-    with (
-        mock.patch.object(mod.subprocess, "run", side_effect=[stage, work]),
-        mock.patch.object(mod, "_reviewable_source_paths", return_value=[]),
-    ):
-        uncovered = mod._unreviewed_tracked_payload(
-            repo, task, {"plugin/hidden.py"}
-        )
-    assert uncovered == ["plugin/hidden.py"]
-
-
-def test_reviewed_deletion_does_not_shift_hashes_for_later_files(tmp_path):
-    repo, task = _repo(tmp_path)
-    normal = repo / "plugin/z-normal.py"
-    normal.write_text("normal\n", encoding="utf-8")
-    stage = subprocess.CompletedProcess(
-        [], 0,
-        b"100644 deletedhash 0\tplugin/a-deleted.py\0"
-        b"100644 normalhash 0\tplugin/z-normal.py\0",
-        b"",
-    )
-    work = subprocess.CompletedProcess([], 0, b"normalhash\n", b"")
-    with (
-        mock.patch.object(mod.subprocess, "run", side_effect=[stage, work]),
-        mock.patch.object(
-            mod, "_reviewable_source_paths", return_value=["plugin/a-deleted.py"]
-        ),
-    ):
-        uncovered = mod._unreviewed_tracked_payload(
-            repo, task, {"plugin/a-deleted.py", "plugin/z-normal.py"}
-        )
-    assert uncovered == []
-
-
-def test_tracked_hash_uses_git_path_filters(tmp_path):
-    repo, task = _repo(tmp_path)
-    filtered = repo / "plugin/filtered.txt"
-    filtered.write_bytes(b"line\r\n")
-    stage = subprocess.CompletedProcess(
-        [], 0, b"100644 samehash 0\tplugin/filtered.txt\0", b""
-    )
-    work = subprocess.CompletedProcess([], 0, b"samehash\n", b"")
-    with (
-        mock.patch.object(mod.subprocess, "run", side_effect=[stage, work]) as run,
-        mock.patch.object(mod, "_reviewable_source_paths", return_value=[]),
-    ):
-        assert mod._unreviewed_tracked_payload(
-            repo, task, {"plugin/filtered.txt"}
-        ) == []
-    assert "--no-filters" not in run.call_args_list[1].args[0]

@@ -2,8 +2,7 @@
 """Observe Codex subagent lifecycle events that plugin PostToolUse omits.
 
 Trusted Codex root hooks register or restore the current root rollout. The Harness
-MCP server hosts the watcher as daemon threads, captures the source fingerprint
-before a child finishes, and accepts a completion only when root delivery and
+MCP server hosts the watcher as daemon threads and accepts a completion only when root delivery and
 the child rollout agree.  It never reconstructs a PASS from historical finals
 and never launches a detached operating-system process.
 """
@@ -24,6 +23,7 @@ import sys
 import tempfile
 import threading
 import time
+from datetime import datetime
 from typing import Any
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -37,9 +37,10 @@ from _lib import (  # type: ignore
     list_review_receipts,
     list_subagent_receipts,
     record_subagent_receipt,
+    read_task_run,
     read_state,
     resolve_active_task_dir,
-    review_diff_fingerprint,
+    review_diff_fingerprint,  # compatibility symbol; watcher does not inspect source state
 )
 
 THREAD_RE = re.compile(r"^[0-9a-fA-F-]{16,80}$")
@@ -777,6 +778,40 @@ def _active_task_for_session(repo_root: str, root_id: str) -> str:
     return task_dir
 
 
+def _active_task_binding_for_session(repo_root: str, root_id: str) -> dict[str, str]:
+    task_dir = _active_task_for_session(repo_root, root_id)
+    if not task_dir:
+        return {}
+    tasks_root = (Path(repo_root) / "doc/harness/tasks").resolve()
+    marker = tasks_root / ".active_sessions" / f"{root_id}.json"
+    marker_data = _read_owned_json(marker, tasks_root)
+    task_run = read_task_run(task_dir)
+    marker_run_id = str(marker_data.get("task_run_id") or "")
+    marker_started_at = str(marker_data.get("run_started_at") or "")
+    if (
+        not task_run
+        or marker_run_id != task_run.get("task_run_id")
+        or marker_started_at != task_run.get("started_at")
+    ):
+        return {}
+    return {
+        "task_dir": task_dir,
+        "task_run_id": marker_run_id,
+        "run_started_at": marker_started_at,
+    }
+def _event_precedes_run(event: dict[str, Any], started_at: str) -> bool:
+    if not started_at:
+        return False
+    try:
+        event_time = datetime.fromisoformat(
+            str(event.get("timestamp") or "").replace("Z", "+00:00")
+        )
+        run_time = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return True
+    return event_time < run_time
+
+
 def _event_payload(event: dict[str, Any], expected_type: str) -> dict[str, Any] | None:
     payload = event.get("payload")
     if event.get("type") != expected_type or not isinstance(payload, dict):
@@ -1442,7 +1477,8 @@ class Watcher:
     def _record_adapter_diagnostic(
         self, call_id: str, reason: str, lens: str, *, task_dir: str = "",
     ) -> None:
-        task_dir = task_dir or _active_task_for_session(self.repo_root, self.root_id) or self.task_dir
+        binding = _active_task_binding_for_session(self.repo_root, self.root_id)
+        task_dir = task_dir or binding.get("task_dir", "")
         if not task_dir:
             return
         event_id = call_id + ":adapter"
@@ -1459,6 +1495,7 @@ class Watcher:
             "agent_id": call_id,
             "agent_type": "multi_agent_v1__spawn_agent",
             "lens": lens,
+            "task_run_id": binding.get("task_run_id", ""),
             "summary": summary,
             "runtime_event_id": event_id,
             "runtime_session_id": self.root_id,
@@ -1481,11 +1518,9 @@ class Watcher:
             "agent_id": self._receipt_agent_id(item),
             "agent_type": item.get("task_name", ""),
             "lens": lens,
+            "task_run_id": item.get("task_run_id", ""),
             "verdict": "PENDING",
             "summary": summary,
-            "head_sha": item.get("head_sha", ""),
-            "base_sha": item.get("base_sha", ""),
-            "diff_fingerprint": item.get("diff_fingerprint", ""),
             "runtime_event_id": item.get("event_id", "") + ":conflict",
             "runtime_session_id": self.root_id,
             "runtime_thread_id": item.get("child_id", ""),
@@ -1529,11 +1564,14 @@ class Watcher:
         if item.get("invalid") or item.get("started"):
             return
         task_dir = str(item.get("task_dir") or "")
-        active_task = _active_task_for_session(self.repo_root, self.root_id) or self.task_dir
+        binding = _active_task_binding_for_session(self.repo_root, self.root_id)
+        active_task = binding.get("task_dir") or self.task_dir
         lens = _infer_receipt_lens(item["task_name"])
         if (
             not task_dir
             or active_task != task_dir
+            or not item.get("task_run_id")
+            or binding.get("task_run_id") != item.get("task_run_id")
             or not lens.startswith(("review-", "qa-", "ux-"))
         ):
             item["invalid"] = True
@@ -1577,6 +1615,7 @@ class Watcher:
                     "agent_id": self._receipt_agent_id(item),
                     "agent_type": item["task_name"],
                     "lens": lens,
+                    "task_run_id": item.get("task_run_id", ""),
                     "summary": "Codex runtime spawn observed before child completion",
                     "runtime_event_id": event_id,
                     "runtime_session_id": self.root_id,
@@ -1587,9 +1626,6 @@ class Watcher:
             "started": True,
             "task_dir": task_dir,
             "event_id": event_id,
-            "head_sha": receipt.get("head_sha") or "",
-            "base_sha": receipt.get("base_sha") or "",
-            "diff_fingerprint": receipt.get("diff_fingerprint") or "",
         })
         self.by_path[item["activity_path"]] = item
         self.by_path[item["output_path"]] = item
@@ -1598,8 +1634,13 @@ class Watcher:
         root_final = str(item.get("root_final") or "")
         if not root_final or item.get("completed") or item.get("invalid"):
             return
-        current_task = _active_task_for_session(self.repo_root, self.root_id) or self.task_dir
-        if current_task != item.get("task_dir"):
+        binding = _active_task_binding_for_session(self.repo_root, self.root_id)
+        current_task = binding.get("task_dir") or self.task_dir
+        if (
+            current_task != item.get("task_dir")
+            or not item.get("task_run_id")
+            or binding.get("task_run_id") != item.get("task_run_id")
+        ):
             self._invalidate(item, "active task changed while agent was running")
             return
         status, transcript, child_final = _child_status(
@@ -1615,9 +1656,6 @@ class Watcher:
         if not verdict:
             self._invalidate(item, "child final did not contain one exact verdict")
             return
-        if item["diff_fingerprint"] != review_diff_fingerprint(item["task_dir"]):
-            verdict = "PENDING"
-            child_final += "\nRuntime watcher invalidated: source changed while agent was running."
         lens = _infer_receipt_lens(item["task_name"])
         if _matching_receipt(
             item["task_dir"], item["event_id"], "completed",
@@ -1629,12 +1667,10 @@ class Watcher:
                 "agent_id": self._receipt_agent_id(item),
                 "agent_type": item["task_name"],
                 "lens": lens,
+                "task_run_id": item.get("task_run_id", ""),
                 "verdict": verdict,
                 "summary": child_final,
                 "transcript_path": str(transcript),
-                "head_sha": item["head_sha"],
-                "base_sha": item["base_sha"],
-                "diff_fingerprint": item["diff_fingerprint"],
                 "runtime_event_id": item["event_id"],
                 "runtime_session_id": self.root_id,
                 "runtime_thread_id": item["child_id"],
@@ -1669,13 +1705,23 @@ class Watcher:
                 for delivered in self.completion_items.pop(call_id, []):
                     self._invalidate(delivered, "call id changed from completion to spawn")
                 return
-            active_task = _active_task_for_session(self.repo_root, self.root_id) or self.task_dir
-            if not active_task or (self.task_dir and self.task_dir != active_task):
+            binding = _active_task_binding_for_session(self.repo_root, self.root_id)
+            active_task = binding.get("task_dir") or self.task_dir
+            if (
+                not active_task
+                or not binding.get("task_run_id")
+                or not binding.get("run_started_at")
+                or (self.task_dir and self.task_dir != active_task)
+            ):
+                item["invalid"] = True
+                return
+            if _event_precedes_run(event, binding.get("run_started_at", "")):
                 item["invalid"] = True
                 return
             self._set_once(item, "task_name", task_name)
             self._set_once(item, "current_protocol", current_protocol)
             self._set_once(item, "task_dir", active_task)
+            self._set_once(item, "task_run_id", binding.get("task_run_id", ""))
             self._maybe_start(call_id)
             return
         unsupported_spawn = _unsupported_current_spawn(event)
@@ -1756,8 +1802,13 @@ class Watcher:
         if output_call_id:
             item = self.calls.get(output_call_id) or {}
             if item.get("current_protocol") and not item.get("output_path"):
-                active_task = _active_task_for_session(self.repo_root, self.root_id) or self.task_dir
-                if item.get("invalid") or item.get("task_dir") != active_task:
+                binding = _active_task_binding_for_session(self.repo_root, self.root_id)
+                active_task = binding.get("task_dir", "")
+                if (
+                    item.get("invalid")
+                    or item.get("task_dir") != active_task
+                    or item.get("task_run_id") != binding.get("task_run_id")
+                ):
                     item["invalid"] = True
                     return
                 self._record_adapter_diagnostic(
@@ -1900,6 +1951,18 @@ class WatcherManager:
         except Exception:
             return 0
         with self._lock:
+            # Failed workers must be restartable from the registration's
+            # immutable offset.  In particular, a late receipt for a task that
+            # has already closed is rejected by the receipt writer; that must
+            # not permanently disable observation for later tasks in the same
+            # root session.  Successful workers remain in ``seen`` so an idle
+            # registration is not replayed continuously.
+            for thread_id, worker in list(self.workers.items()):
+                if worker.is_alive():
+                    continue
+                self.workers.pop(thread_id, None)
+                if self.worker_results.get(thread_id, 0) != 0:
+                    self.seen.discard(thread_id)
             for item in items:
                 active = sum(1 for worker in self.workers.values() if worker.is_alive())
                 if active >= self.max_workers:

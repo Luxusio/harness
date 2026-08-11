@@ -14,7 +14,7 @@ Two pressures govern this harness — in this order:
 1. **Protocol compliance is non-negotiable.** Contracts listed below MUST be
    followed exactly. A "lighter" solution that violates a contract is not
    lighter — it is broken. Skipping the canonical loop, writing a protected
-   artifact without its owner, closing with stale PASS, or bypassing the
+   artifact without its owner, closing without ordered review/QA PASS, or bypassing the
    prewrite gate are hard failures regardless of task size.
 2. **Within that constraint, pick the lightest path.** Fewer phases, shorter
    SKILL files, fewer parallel agents, fewer hooks — all preferred when they
@@ -39,7 +39,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 | 답변 레인 → mutation 레인 전환 | [C-07](#c-07), [C-08](#c-08) | hard |
 | develop Phase 4.5 병렬 에이전트 | [C-13](#c-13) | soft |
 | 신규 훅 추가 | [C-12](#c-12) | hard |
-| `doc/` 노트 파일 변경 | [C-06](#c-06) | auto |
+| `doc/` 노트 freshness 점검 | [C-06](#c-06) | soft |
 | `CLAUDE.md` 편집 필요 | [C-10](#c-10), [C-11](#c-11), [C-15](#c-15) | hard |
 | Maintenance 태스크 (MAINTENANCE 마커) | C-01 완화, [C-05](#c-05) 유지 | — |
 | `doc/changes/` 또는 `doc/common/` 자동 정리 | [C-16](#c-16) | auto |
@@ -63,7 +63,7 @@ contract — move it to design notes.
 **Enforced by:** `plugin/scripts/prewrite_gate.py` (source write blocked
 without PLAN.md), MCP `task_close` (rejects pending `runtime_verdict`).
 **On violation:** hard-block.
-**Why:** Skipping steps loses evidence and provenance — stale verdicts,
+**Why:** Skipping steps loses evidence and provenance — unordered verdicts,
 missing regression tests, orphan artifacts.
 
 ### C-02
@@ -87,13 +87,13 @@ Hand-edits break audit trail and close-gate accounting.
 
 ### C-04
 
-**Title:** `task_close` requires fresh `runtime_verdict: PASS`.
+**Title:** `task_close` requires receipt-backed `runtime_verdict: PASS`.
 **When:** Task is about to be marked closed.
-**Enforced by:** MCP `task_close` — re-syncs touched paths, rejects stale
-PASS after any file change post-verify.
+**Enforced by:** MCP `task_close` — checks the task-bound review/QA receipt
+sequence and the resulting runtime verdict. It does not inspect Git state.
 **On violation:** hard-block.
-**Why:** A PASS issued before the last edit proves nothing about the current
-state of the repo.
+**Why:** Independent completion evidence is required, while post-verification
+edits and source-scope discipline remain the developer's responsibility.
 
 ### C-05
 
@@ -116,12 +116,12 @@ validation, the observer phase, and `hygiene_restore.py`.
 
 ### C-06
 
-**Title:** Note freshness — `invalidated_by_paths` flips `current → suspect`.
-**When:** Any SessionStart after files changed in the last commit.
-**Enforced by:** `plugin/scripts/note_freshness.py` (SessionStart hook).
-**On violation:** auto — stale notes keep `freshness: current` until the
-next hook run. Writer-role agents must verify `freshness: current` before
-citing a note as authoritative.
+**Title:** Note freshness is an explicit developer check.
+**When:** A writer relies on a note with `invalidated_by_paths`.
+**Enforced by:** Workflow guidance and optional
+`plugin/scripts/note_freshness.py --paths ...` invocation.
+**On violation:** soft — the writer may rely on an outdated note. Normal
+lifecycle calls do not discover paths from Git or update note freshness.
 **Why:** Notes referencing changed source become dangerous if trusted.
 
 ### C-07
@@ -148,7 +148,7 @@ unwanted changes.
 **When:** A second mutating request arrives while a task is open.
 **Enforced by:** Harness agent + MCP `task_start` (queues new task).
 **On violation:** soft-warn. New task is queued, not merged into current.
-**Why:** Parallel mutations corrupt touched-path tracking and verdicts.
+**Why:** Parallel mutations make task ownership and review ordering ambiguous.
 
 ### C-10
 
@@ -197,14 +197,17 @@ extra phase is a new failure point.
 
 ### C-14
 
-**Title:** PASS verdicts require fresh hook-owned QA completion receipts.
+**Title:** PASS verdicts require ordered hook-owned review and QA receipts.
 **When:** `runtime_verdict` transitions to `PASS`.
-**Enforced by:** `SUBAGENT_RECEIPTS.jsonl` lifecycle entries, written by
-runtime hooks when QA subagents start and complete.
-**On violation:** `task_close` blocks until every applicable QA lens completes
-with an explicit `VERDICT: PASS` after the latest source edit and
-`task_verify` observes those receipts. A start-only receipt never passes.
-**Why:** A PASS without evidence is indistinguishable from hallucination.
+**Enforced by:** `REVIEW_RECEIPTS.jsonl` and `SUBAGENT_RECEIPTS.jsonl`
+lifecycle entries, written by runtime hooks. `task_verify` checks task, agent,
+lens, explicit completion verdict, and review-before-QA ordering; PLAN metadata
+declares the applicable lenses.
+**On violation:** `task_close` blocks until every required reviewer and QA lens
+has an ordered explicit PASS completion. A start-only receipt never passes.
+**Why:** A PASS without independent evidence is indistinguishable from
+hallucination. Source fingerprints are intentionally excluded; post-QA edits
+and scope drift are developer-owned risks.
 
 ### C-15
 
@@ -262,10 +265,10 @@ Archive commit message always embeds the copy-pasteable restore command.
 delegation is available and isolation materially reduces context or process
 load. No generic PreToolUse hook inspects or blocks browser calls. Targeted
 tests, diagnostics, and browser interaction may run inline when that is the
-lightest available verification path. Receipt-backed review and QA freshness
+lightest available verification path. Receipt-backed review-before-QA ordering
 requirements at `task_verify` remain unchanged.
 **On violation:** advisory only. Inline execution is allowed; the orchestrator
-owns the resulting context growth and must still provide the required fresh
+owns the resulting context growth and must still provide the required ordered
 verification evidence before close.
 **Why:** Delegation isolates large browser and test output, but running an
 extra process on every tool call to enforce that preference costs more than

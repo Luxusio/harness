@@ -16,17 +16,17 @@ import subprocess
 import tempfile
 import json
 import hashlib
-import time
+import secrets
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 
 TASK_DIR = "doc/harness/tasks"
 MANIFEST_PATH = "doc/harness/manifest.yaml"
-TASK_BASELINE_NAME = "TASK_BASELINE.json"
 SUBAGENT_RECEIPTS_NAME = "SUBAGENT_RECEIPTS.jsonl"
 REVIEW_RECEIPTS_NAME = "REVIEW_RECEIPTS.jsonl"
 TASK_CLOSE_RECEIPT_NAME = "TASK_CLOSE_RECEIPT.json"
+TASK_RUN_NAME = "TASK_RUN.json"
 CONVERSATION_NAME = "CONVERSATION.md"
 CONVERSATION_TEXT_CAP = 2000
 CONVERSATION_READ_CAP = 256 * 1024
@@ -36,106 +36,6 @@ SCHEMA_FIELDS = (
     "touched_paths", "plan_session_state",
     "closed_at", "updated",
 )
-
-_REVIEW_SNAPSHOT_CACHE = ContextVar("harness_review_snapshot_cache", default=None)
-_REQUEST_GIT_ROOTS = ContextVar("harness_request_git_roots", default=None)
-_REQUEST_SNAPSHOT_DEADLINE = ContextVar("harness_request_snapshot_deadline", default=None)
-_REQUEST_SNAPSHOT_WARNINGS = ContextVar("harness_request_snapshot_warnings", default=None)
-_DIRTY_ENUMERATION_TIMEOUT_OVERRIDE = ContextVar(
-    "harness_dirty_enumeration_timeout_override", default=None,
-)
-_GIT_ENUMERATION_TIMEOUT_SECONDS = 15.0
-_GIT_DIRTY_ENUMERATION_TIMEOUT_SECONDS = 3.0
-
-
-@contextmanager
-def review_snapshot_scope(deadline_seconds=None):
-    """Reuse source-derived review work only within one caller request."""
-    current = _REVIEW_SNAPSHOT_CACHE.get()
-    if current is not None:
-        yield
-        return
-    token = _REVIEW_SNAPSHOT_CACHE.set({})
-    roots_token = _REQUEST_GIT_ROOTS.set(set())
-    warnings_token = _REQUEST_SNAPSHOT_WARNINGS.set([])
-    deadline = (
-        time.monotonic() + float(deadline_seconds)
-        if deadline_seconds is not None
-        else None
-    )
-    deadline_token = _REQUEST_SNAPSHOT_DEADLINE.set(deadline)
-    try:
-        yield
-    finally:
-        _REQUEST_SNAPSHOT_DEADLINE.reset(deadline_token)
-        _REQUEST_SNAPSHOT_WARNINGS.reset(warnings_token)
-        _REQUEST_GIT_ROOTS.reset(roots_token)
-        _REVIEW_SNAPSHOT_CACHE.reset(token)
-
-
-def refresh_review_snapshot() -> None:
-    """Discard the current request snapshot before a final freshness gate."""
-    cache = _REVIEW_SNAPSHOT_CACHE.get()
-    if cache is not None:
-        cache.clear()
-
-
-def _review_snapshot_cache():
-    return _REVIEW_SNAPSHOT_CACHE.get()
-
-
-def git_snapshot_warnings():
-    """Return evidence skipped in the active lifecycle snapshot."""
-    return list(_REQUEST_SNAPSHOT_WARNINGS.get() or [])
-
-
-def _record_dirty_snapshot_warning(repo_root, detail):
-    warnings = _REQUEST_SNAPSHOT_WARNINGS.get()
-    if warnings is None:
-        return
-    item = {
-        "code": "GIT_DIRTY_SNAPSHOT_SKIPPED",
-        "root": os.path.realpath(repo_root),
-        "message": "Working-tree dirty evidence was skipped for this Git root.",
-        "detail": str(detail)[:500],
-        "risk": (
-            "Touched-path, scope-drift, and stale-review checks may miss "
-            "uncommitted changes in this root."
-        ),
-        "retry_action": (
-            "After task_start, use a new task ID once the worktree is responsive; "
-            "for later lifecycle calls, retry that call."
-        ),
-    }
-    if item not in warnings:
-        warnings.append(item)
-
-
-def _remember_git_root(repo_root):
-    roots = _REQUEST_GIT_ROOTS.get()
-    if roots is not None:
-        roots.add(os.path.realpath(repo_root))
-
-
-def _bounded_snapshot_timeout(
-    default_seconds, operation, repo_root, *, deadline_allowance_seconds=None
-):
-    """Return the legacy timeout, or a larger allowance under a request deadline."""
-    deadline = _REQUEST_SNAPSHOT_DEADLINE.get()
-    if deadline is None:
-        return float(default_seconds)
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise RuntimeError(
-            f"Git snapshot deadline exhausted before {operation} in {repo_root}"
-        )
-    allowance = (
-        default_seconds
-        if deadline_allowance_seconds is None
-        else deadline_allowance_seconds
-    )
-    return min(float(allowance), remaining)
-
 
 # ── Plugin-root env var (AC-006 of TASK__dual-runtime-plugin-claude-codex) ─
 #
@@ -1276,6 +1176,42 @@ def set_state_field(task_dir, field, value):
     return write_state(task_dir, fields)
 
 
+def task_run_file(task_dir):
+    return os.path.join(task_dir, TASK_RUN_NAME)
+
+
+def read_task_run(task_dir):
+    """Read the non-Git lifecycle generation bound to current receipts."""
+    text = _read_regular_text_file(task_run_file(task_dir), max_size=16 * 1024)
+    try:
+        data = json.loads(text) if text else {}
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    run_id = str(data.get("task_run_id") or "")
+    started_at = str(data.get("started_at") or "")
+    if not re.fullmatch(r"[0-9a-f]{32}", run_id) or not started_at:
+        return {}
+    return {"task_run_id": run_id, "started_at": started_at}
+
+
+def begin_task_run(task_dir):
+    """Rotate the lifecycle generation and return an exact rollback snapshot."""
+    path = task_run_file(task_dir)
+    snapshot = {path: _strict_regular_text_snapshot(path, max_size=16 * 1024)}
+    started_at = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace(
+        "+00:00", "Z"
+    )
+    payload = {"task_run_id": secrets.token_hex(16), "started_at": started_at}
+    _atomic_text_write(path, json.dumps(payload, sort_keys=True) + "\n")
+    return payload, snapshot
+
+
+def restore_task_run(snapshot):
+    _restore_text_snapshots(snapshot)
+
+
 # ── Path resolution ──────────────────────────────────────────────────────
 
 
@@ -1291,50 +1227,6 @@ def find_repo_root(start_dir=None):
             return d
         d = os.path.dirname(d)
     return os.path.abspath(start_dir or os.getcwd())
-
-
-def _nearest_git_root(start_dir):
-    """Return the nearest containing Git root, or an empty string."""
-    current = os.path.realpath(start_dir or _hook_payload_cwd() or os.getcwd())
-    while True:
-        git_path = os.path.join(current, ".git")
-        if os.path.isdir(git_path) or os.path.isfile(git_path):
-            return current
-        parent = os.path.dirname(current)
-        if parent == current:
-            return ""
-        current = parent
-
-
-def _manifest_array_field(repo_root, key):
-    """Read one top-level scalar or block YAML string array, stdlib-only."""
-    path = os.path.join(repo_root, MANIFEST_PATH)
-    text = _read_regular_text_file(path, max_size=256 * 1024)
-    if not text:
-        return []
-    lines = text.splitlines()
-    prefix = key + ":"
-    for index, line in enumerate(lines):
-        if not line.startswith(prefix):
-            continue
-        rest = line[len(prefix):].strip()
-        if rest.startswith("[") and rest.endswith("]"):
-            inner = rest[1:-1].strip()
-            if not inner:
-                return []
-            return [
-                item.strip().strip('"').strip("'")
-                for item in inner.split(",")
-                if item.strip()
-            ]
-        values = []
-        for child in lines[index + 1:]:
-            match = re.match(r"^  -\s+(.+?)\s*$", child)
-            if not match:
-                break
-            values.append(match.group(1).strip().strip('"').strip("'"))
-        return values
-    return []
 
 
 class GitBindingError(RuntimeError):
@@ -1357,16 +1249,18 @@ def _trusted_git_env():
     }
 
 
+def _canonical_git_relpath(value):
+    """Normalize an explicitly returned Git path without resolving it."""
+    rel = str(value or "")
+    if os.sep == "\\":
+        rel = rel.replace("\\", "/")
+    while rel.startswith("./"):
+        rel = rel[2:]
+    return rel
+
+
 def _direct_gitlink_index_entries(repo_root, *, git_dir=None):
     """Return direct stage-0 gitlinks without traversing their worktrees."""
-    cache = _review_snapshot_cache()
-    cache_key = (
-        "direct_gitlink_index_entries",
-        os.path.realpath(repo_root),
-        os.path.realpath(git_dir) if git_dir else "",
-    )
-    if cache is not None and cache_key in cache:
-        return dict(cache[cache_key])
     try:
         command = ["git"]
         if git_dir:
@@ -1377,12 +1271,7 @@ def _direct_gitlink_index_entries(repo_root, *, git_dir=None):
             capture_output=True,
             cwd=repo_root,
             env=_trusted_git_env(),
-            timeout=_bounded_snapshot_timeout(
-                5,
-                "direct gitlink index enumeration",
-                repo_root,
-                deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
-            ),
+            timeout=5,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise RuntimeError(
@@ -1417,8 +1306,6 @@ def _direct_gitlink_index_entries(repo_root, *, git_dir=None):
         ):
             raise RuntimeError("Git submodule snapshot unavailable")
         found[path] = oid.lower()
-    if cache is not None:
-        cache[cache_key] = dict(found)
     return found
 
 
@@ -1478,81 +1365,17 @@ def _registered_source_metadata_binding(control_root, source_root, relpath):
     return target
 
 
-def configured_source_git_roots(control_root, *, strict=True):
-    """Return deterministic ``(workspace prefix, Git root)`` source bindings.
-
-    A normal Git-backed Harness repository needs no manifest field and maps to
-    the empty prefix. A non-Git control workspace must explicitly declare
-    ``source_git_roots`` in its manifest. Runtime discovery is intentionally
-    forbidden so an outer manifest cannot capture an unrelated nested repo.
-    """
-    control = os.path.realpath(control_root)
-    configured = _manifest_array_field(control, "source_git_roots")
-    git_control = _nearest_git_root(control) == control
-    if not configured and git_control:
-        return [("", control)]
-    if not configured:
-        if strict:
-            raise RuntimeError(
-                "Harness workspace has no Git root; manifest source_git_roots is required"
-            )
-        return []
-
-    bindings = [("", control)] if git_control else []
-    seen_roots = set()
-    direct_gitlinks = _direct_gitlink_index_entries(control) if git_control else {}
-    for raw in configured:
-        rel = _canonical_git_relpath(raw).rstrip("/")
-        if (
-            not rel
-            or os.path.isabs(rel)
-            or rel in {".", ".."}
-            or rel.startswith("../")
-            or not re.fullmatch(r"[A-Za-z0-9._/-]+", rel)
-            or any(part in {"", ".", ".."} for part in rel.split("/"))
-        ):
-            raise RuntimeError(f"invalid source_git_roots entry: {raw}")
-        candidate = os.path.join(control, *rel.split("/"))
-        cursor = control
-        for part in rel.split("/"):
-            cursor = os.path.join(cursor, part)
-            if os.path.islink(cursor):
-                raise RuntimeError(f"source_git_roots entry contains symlink: {rel}")
-        if git_control and rel not in direct_gitlinks:
-            raise GitBindingError(
-                "REGISTERED_SOURCE_NOT_DIRECT_GITLINK",
-                f"source_git_roots entry '{rel}' is not an exact direct mode-160000 entry in the control repository index",
-                path=rel,
-                invariant="direct_parent_gitlink",
-                next_action=f"Check: git ls-files --stage -- '{rel}'. Fix the parent gitlink or remove the manifest entry.",
-            )
-        if git_control and not os.path.isdir(candidate):
-            _registered_source_metadata_binding(control, candidate, rel)
-        root = os.path.realpath(candidate)
-        try:
-            contained = os.path.commonpath((control, root)) == control
-        except ValueError:
-            contained = False
-        if not contained or not os.path.isdir(root):
-            raise RuntimeError(f"source_git_roots entry is not a directory inside workspace: {rel}")
-        _registered_source_metadata_binding(control, root, rel)
-        if root in seen_roots:
-            raise RuntimeError(f"duplicate source_git_roots entry: {rel}")
-        if any(
-            os.path.commonpath((root, prior)) in {root, prior}
-            for prior in seen_roots
-        ):
-            raise RuntimeError(f"nested source_git_roots entries are not allowed: {rel}")
-        seen_roots.add(root)
-        bindings.append((rel + "/", root))
-    return sorted(bindings)
-
-
 def harness_root_resolution(start_dir=None):
-    """Return ``(root, error)`` for valid/none/invalid Harness ancestry."""
+    """Return ``(root, error)`` for valid/none/invalid Harness ancestry.
+
+    A trusted ancestor manifest owns nested repositories only while that
+    control root has an explicit active task marker. This lets a delegated
+    agent finish from an ignored child repository without causing unrelated
+    nested repositories to inherit an outer Harness installation.
+    """
     start = os.path.realpath(start_dir or _hook_payload_cwd() or os.getcwd())
-    nearest_git = _nearest_git_root(start)
     current = start
+    nearest_git = ""
     while True:
         manifest_path = os.path.join(current, MANIFEST_PATH)
         if os.path.lexists(manifest_path):
@@ -1579,41 +1402,22 @@ def harness_root_resolution(start_dir=None):
                 or not stat.S_ISREG(manifest_info.st_mode)
             ):
                 return current, "Harness manifest must be a regular non-symlink file"
-            configured = _manifest_array_field(current, "source_git_roots")
-            if configured:
+            if nearest_git and nearest_git != current:
                 try:
-                    bindings = configured_source_git_roots(current)
-                except RuntimeError as exc:
-                    return current, str(exc)
-            elif _nearest_git_root(current) == current:
-                bindings = [("", current)]
-            else:
-                raw_version = _read_top_manifest_field(current, "version")
-                try:
-                    legacy_manifest = 1 <= int(str(raw_version)) < 5
-                except (TypeError, ValueError):
-                    legacy_manifest = False
-                if not legacy_manifest:
-                    return current, (
-                        "Harness workspace has no Git root; manifest "
-                        "source_git_roots is required"
-                    )
-                # Versioned pre-v5 manifests remain readable for migration.
-                try:
-                    if os.path.commonpath((current, start)) == current:
-                        return current, ""
-                except ValueError:
+                    sid = current_session_id()
+                    marker = _read_session_marker(_session_active_path(current, sid), sid)
+                    bound_task = _live_active_task_dir(current, marker.get("task_dir"))
+                    if not bound_task or marker.get("task_id") != os.path.basename(bound_task):
+                        return "", ""
+                except (OSError, RuntimeError, ValueError):
                     return "", ""
-                bindings = []
-            if nearest_git:
-                if any(os.path.realpath(root) == nearest_git for _prefix, root in bindings):
+            try:
+                if os.path.commonpath((current, start)) == current:
                     return current, ""
-            else:
-                try:
-                    if os.path.commonpath((current, start)) == current:
-                        return current, ""
-                except ValueError:
-                    return "", ""
+            except ValueError:
+                return "", ""
+        if not nearest_git and os.path.lexists(os.path.join(current, ".git")):
+            nearest_git = current
         parent = os.path.dirname(current)
         if parent == current:
             return "", ""
@@ -1755,10 +1559,13 @@ def write_active_marker(repo_root, task_dir, session_id=None):
     os.makedirs(tasks_dir, exist_ok=True)
     os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
     sid = current_session_id() if session_id is None else sanitize_session_id(session_id)
+    task_run = read_task_run(task_dir)
     payload = {
         "session_id": sid,
         "task_dir": task_dir,
         "task_id": os.path.basename(os.path.normpath(task_dir)),
+        "task_run_id": task_run.get("task_run_id", ""),
+        "run_started_at": task_run.get("started_at", ""),
         "updated": now_iso(),
     }
     fd, tmp = tempfile.mkstemp(dir=_active_sessions_dir(repo_root), prefix=".", suffix=".tmp")
@@ -1908,11 +1715,6 @@ def clear_active_marker(repo_root, task_dir=None, session_id=None):
 
 def ensure_task_scaffold(task_dir, task_id, request_text="", repo_root=None):
     """Create task dir with minimal 7-field TASK_STATE.yaml. Preserves existing state on resume."""
-    if _review_snapshot_cache() is None:
-        with review_snapshot_scope():
-            return ensure_task_scaffold(
-                task_dir, task_id, request_text=request_text, repo_root=repo_root,
-            )
     os.makedirs(task_dir, exist_ok=True)
     expected_tid = _normalize_task_id(task_id, task_dir=task_dir) or task_id
     if os.path.lexists(state_file(task_dir)):
@@ -1921,13 +1723,6 @@ def ensure_task_scaffold(task_dir, task_id, request_text="", repo_root=None):
             raise ValueError(
                 "existing TASK_STATE.yaml must be a regular file whose task_id matches its canonical directory"
             )
-        control_root = (
-            os.path.realpath(repo_root)
-            if repo_root
-            else find_harness_root(task_dir) or find_repo_root(task_dir)
-        )
-        if os.path.lexists(_baseline_file(task_dir)) or _task_baseline_required(control_root):
-            _read_task_baseline_snapshot(task_dir, repo_root=control_root)
         created = [state_file(task_dir)]
         return {"created": created, "task_dir": task_dir, "task_id": expected_tid}
     tid = expected_tid
@@ -1940,32 +1735,20 @@ def ensure_task_scaffold(task_dir, task_id, request_text="", repo_root=None):
         "closed_at": None,
         "updated": now_iso(),
     }
-    repo_root = (
-        os.path.realpath(repo_root)
-        if repo_root
-        else find_harness_root(task_dir) or find_repo_root(task_dir)
-    )
-    try:
-        baseline_path = capture_task_baseline(task_dir, repo_root=repo_root)
-    except GitBindingError:
-        raise
-    except Exception as exc:
-        raise RuntimeError(f"task baseline capture unavailable: {exc}") from exc
-    if _task_baseline_required(repo_root) and not baseline_path:
-        raise RuntimeError(
-            "task baseline capture unavailable; create or restore a valid Git HEAD and retry task_start"
-        )
     created = []
     try:
         write_state(task_dir, fields)
         created.append(state_file(task_dir))
+        _, run_snapshot = begin_task_run(task_dir)
+        if not run_snapshot[task_run_file(task_dir)]["exists"]:
+            created.append(task_run_file(task_dir))
         if request_text:
             req_path = os.path.join(task_dir, "REQUEST.md")
             if not os.path.isfile(req_path) or os.path.islink(req_path):
                 _atomic_text_write(req_path, request_text)
                 created.append(req_path)
     except Exception:
-        for artifact in created + [_baseline_file(task_dir)]:
+        for artifact in created:
             try:
                 os.unlink(artifact)
             except FileNotFoundError:
@@ -2184,26 +1967,11 @@ def _durable_docs_touched(touched_paths):
 
 
 def _effective_touched_paths(task_dir, touched_paths):
-    """Merge task paths with committed and current changes since task start."""
-    out = set(touched_paths or [])
-    try:
-        control_root = find_harness_root(task_dir) or find_repo_root(task_dir)
-        changed = set()
-        for prefix, source_root in _workspace_source_bindings(control_root):
-            changed.update(
-                prefix + path
-                for path in _committed_paths_since_baseline(
-                    task_dir, source_root, workspace_prefix=prefix
-                )
-            )
-        changed.update(_workspace_git_changed_paths(control_root))
-        changed.update(_control_root_changed_paths(task_dir, control_root))
-        out.update(_filter_baseline_unchanged(task_dir, control_root, changed))
-    except RuntimeError:
-        raise
-    except Exception:
-        pass
-    return sorted(p for p in out if isinstance(p, str))
+    """Return only explicitly recorded compatibility paths.
+
+    Lifecycle routing never expands this list from Git or the filesystem.
+    """
+    return sorted(set(path for path in (touched_paths or []) if isinstance(path, str)))
 
 
 def _task_req_detector_texts(task_dir):
@@ -2344,6 +2112,7 @@ def _review_receipts_path(task_dir):
 
 
 _RECEIPT_STREAM_MAX_BYTES = 16 * 1024 * 1024
+_RECEIPT_LOCK_HELD = ContextVar("harness_receipt_lock_held", default="")
 
 
 def _validated_receipt_task_dir(task_dir):
@@ -2366,6 +2135,9 @@ def _validated_receipt_task_dir(task_dir):
 @contextmanager
 def _receipt_stream_lock(task_dir):
     task_dir = _validated_receipt_task_dir(task_dir)
+    if _RECEIPT_LOCK_HELD.get() == task_dir:
+        yield
+        return
     lock_path = os.path.join(task_dir, ".receipts.lock")
     flags = os.O_CREAT | os.O_RDWR
     flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -2386,7 +2158,11 @@ def _receipt_stream_lock(task_dir):
             fcntl.flock(fd, fcntl.LOCK_EX)
         except (ImportError, OSError) as exc:
             raise RuntimeError("receipt storage integrity unavailable") from exc
-        yield
+        token = _RECEIPT_LOCK_HELD.set(task_dir)
+        try:
+            yield
+        finally:
+            _RECEIPT_LOCK_HELD.reset(token)
     finally:
         os.close(fd)
 
@@ -2444,6 +2220,45 @@ def _append_receipt_stream_unlocked(path, payload):
 def _append_receipt_stream(path, payload):
     with _receipt_stream_lock(os.path.dirname(path)):
         _append_receipt_stream_unlocked(path, payload)
+
+
+@contextmanager
+def receipt_stream_transaction(task_dir):
+    """Hold the receipt stream stable across verdict and state publication."""
+    with _receipt_stream_lock(task_dir):
+        yield
+
+
+def reset_receipt_streams_for_new_run(task_dir):
+    """Remove prior-run receipt streams under their hardened storage lock."""
+    task_dir = _validated_receipt_task_dir(task_dir)
+    paths = (_review_receipts_path(task_dir), _subagent_receipts_path(task_dir))
+    with _receipt_stream_lock(task_dir):
+        snapshots = {}
+        for path in paths:
+            _receipt_stream_info(path)
+            snapshots[path] = _strict_regular_text_snapshot(
+                path, max_size=_RECEIPT_STREAM_MAX_BYTES,
+            )
+        try:
+            for path in paths:
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
+        except BaseException:
+            _restore_text_snapshots(snapshots)
+            raise
+    return snapshots
+
+
+def restore_receipt_streams(snapshot):
+    """Restore an exact prior-run receipt snapshot under the receipt lock."""
+    if not snapshot:
+        return
+    task_dir = os.path.dirname(next(iter(snapshot)))
+    with _receipt_stream_lock(task_dir):
+        _restore_text_snapshots(snapshot)
 
 
 def _read_receipt_stream_unlocked(path, kind):
@@ -2540,587 +2355,47 @@ def extract_qa_verdict(value):
     return verdicts[0] if matches[0] and len(verdicts) == 1 else ""
 
 
-def _git_head_for_receipt(task_dir):
-    try:
-        control_root = find_harness_root(task_dir) or find_repo_root(task_dir)
-        return _workspace_head_snapshot(control_root)
-    except Exception:
-        return ""
-
-
-def _workspace_source_bindings(control_root):
-    control_root = os.path.realpath(control_root)
-    cache = _review_snapshot_cache()
-    cache_key = ("workspace_source_bindings", control_root)
-    manifest_path = os.path.join(control_root, MANIFEST_PATH)
-    try:
-        manifest_info = os.lstat(manifest_path)
-        manifest_token = (
-            manifest_info.st_dev,
-            manifest_info.st_ino,
-            manifest_info.st_size,
-            manifest_info.st_mtime_ns,
-            manifest_info.st_ctime_ns,
-        )
-    except FileNotFoundError:
-        manifest_token = None
-    except OSError as exc:
-        raise RuntimeError("Harness manifest binding snapshot unavailable") from exc
-    if cache is not None and cache_key in cache:
-        prior_token, prior_bindings = cache[cache_key]
-        if prior_token != manifest_token:
-            raise GitBindingError(
-                "REGISTERED_WORKTREE_BINDING_CHANGED",
-                "source_git_roots authorization changed during the Git snapshot",
-                path=MANIFEST_PATH,
-                invariant="manifest_binding_set",
-                next_action="Stop concurrent manifest edits and retry.",
-            )
-        return list(prior_bindings)
-    nearest_git = _nearest_git_root(control_root)
-    has_manifest = os.path.isfile(os.path.join(control_root, MANIFEST_PATH))
-    configured = _manifest_array_field(control_root, "source_git_roots") if has_manifest else []
-    if not nearest_git and not configured:
-        if not has_manifest:
-            return []
-        raw_version = _read_top_manifest_field(control_root, "version")
-        try:
-            if 1 <= int(str(raw_version)) < 5:
-                return []
-        except (TypeError, ValueError):
-            pass
-        bindings = configured_source_git_roots(control_root, strict=True)
-    else:
-        bindings = configured_source_git_roots(control_root, strict=True)
-    if cache is not None:
-        cache[cache_key] = (manifest_token, tuple(bindings))
-    return bindings
-
-
-def _composite_source_heads(source_heads):
-    digest = hashlib.sha1()
-    for prefix, head in sorted(source_heads.items()):
-        digest.update(prefix.encode("utf-8"))
-        digest.update(b"\0")
-        digest.update(str(head).lower().encode("ascii"))
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
-def _registered_source_operation(control_root, prefix, source_root, bindings, operation):
-    """Run one service snapshot through its trusted registered Git metadata."""
-    control = os.path.realpath(control_root)
-    if (
-        not prefix
-        or _nearest_git_root(control) != control
-        or os.path.realpath(source_root) == control
-    ):
-        return operation(None)
-    relpath = prefix.rstrip("/")
-    git_dir = _registered_source_metadata_binding(control, source_root, relpath)
-    return operation(git_dir)
-
-
-def _workspace_source_heads(control_root):
-    bindings = _workspace_source_bindings(control_root)
-    if not bindings:
-        return {}
-    heads = [
-        (
-            prefix,
-            _registered_source_operation(
-                control_root,
-                prefix,
-                root,
-                bindings,
-                lambda git_dir, root=root: _git_head_snapshot(
-                    root, git_dir=git_dir, use_cache=False,
-                ),
-            ),
-        )
-        for prefix, root in bindings
-    ]
-    return dict(heads)
-
-
-def _workspace_head_snapshot(control_root):
-    """Return one stable 40-hex identity for all configured source HEADs."""
-    heads = _workspace_source_heads(control_root)
-    if not heads:
-        return ""
-    if set(heads) == {""}:
-        return heads[""]
-    return _composite_source_heads(heads)
-
-
-def _workspace_changed_path_fingerprints(control_root):
-    changed = {}
-    bindings = _workspace_source_bindings(control_root)
-    for prefix, root in bindings:
-        leaves = _registered_leaves_for_binding(control_root, prefix, root, bindings)
-        fingerprints = _registered_source_operation(
-            control_root,
-            prefix,
-            root,
-            bindings,
-            lambda git_dir, root=root, leaves=leaves: _changed_path_fingerprints(
-                root, registered_leaves=leaves, git_dir=git_dir,
-            ),
-        )
-        for relpath, fingerprint in fingerprints.items():
-            changed[prefix + relpath] = fingerprint
-    return changed
-
-
-_CONTROL_ROOT_BEHAVIOR_PATHS = (
-    "AGENTS.md",
-    "CLAUDE.md",
-    "CONTRACTS.md",
-    "CONTRACTS.local.md",
-    "CONTRACTS.user.md",
-    MANIFEST_PATH,
-)
-
-
-def _control_root_behavior_fingerprint(control_root, relpath):
-    current = os.path.realpath(control_root)
-    for component in relpath.split("/"):
-        current = os.path.join(current, component)
-        try:
-            info = os.lstat(current)
-        except FileNotFoundError:
-            return "missing"
-        except OSError as exc:
-            raise RuntimeError(
-                "control-root behavior fingerprint unavailable"
-            ) from exc
-        if stat.S_ISLNK(info.st_mode):
-            raise RuntimeError("control-root behavior path must not be a symlink")
-    return _fingerprint_path(control_root, relpath)
-
-
-def _control_root_behavior_fingerprints(control_root):
-    """Fingerprint the bounded behavioral surface of every Harness root."""
-    control = os.path.realpath(control_root)
-    if (
-        not os.path.lexists(os.path.join(control, MANIFEST_PATH))
-        and not _nearest_git_root(control)
-    ):
-        return {}
-    return {
-        relpath: _control_root_behavior_fingerprint(control, relpath)
-        for relpath in _CONTROL_ROOT_BEHAVIOR_PATHS
-    }
-
-
-def _control_root_changed_paths(task_dir, control_root):
-    """Return bounded parent-workspace behavior paths changed since baseline."""
-    baseline = _read_task_baseline_snapshot(task_dir, repo_root=control_root)
-    if not baseline or baseline.get("version") != 2:
-        return set()
-    before = baseline.get("control_paths")
-    if not isinstance(before, dict):
-        return set()
-    current = _control_root_behavior_fingerprints(control_root)
-    return {
-        relpath
-        for relpath in set(before) | set(current)
-        if before.get(relpath, "missing") != current.get(relpath, "missing")
-    }
-
-
-def _workspace_git_changed_paths(control_root):
-    changed = set()
-    bindings = _workspace_source_bindings(control_root)
-    for prefix, root in bindings:
-        leaves = _registered_leaves_for_binding(control_root, prefix, root, bindings)
-        def source_changed(git_dir, *, root=root, prefix=prefix, leaves=leaves):
-            source_paths = set(_git_changed_paths(
-                root, prefix=prefix, git_dir=git_dir, best_effort=True,
-            ))
-            for sub_path in _initialized_submodule_paths(
-                root, registered_leaves=leaves, git_dir=git_dir,
-            ):
-                sub_root, _ = _validated_submodule_root(root, sub_path)
-                source_paths.update(_git_changed_paths(
-                    sub_root,
-                    prefix=prefix + sub_path.rstrip("/") + "/",
-                    best_effort=True,
-                ))
-                _validated_submodule_root(root, sub_path)
-            return source_paths
-        changed.update(_registered_source_operation(
-            control_root, prefix, root, bindings, source_changed,
-        ))
-    return changed
-
-
-def _workspace_gitlink_paths(control_root):
-    paths = {}
-    bindings = _workspace_source_bindings(control_root)
-    for prefix, root in bindings:
-        leaves = _registered_leaves_for_binding(control_root, prefix, root, bindings)
-        snapshot = _registered_source_operation(
-            control_root,
-            prefix,
-            root,
-            bindings,
-            lambda git_dir, root=root, leaves=leaves: _gitlink_index_snapshot(
-                root, registered_leaves=leaves, git_dir=git_dir,
-            ),
-        )
-        for relpath, entry in snapshot.items():
-            paths[prefix + relpath] = (root, relpath, entry, relpath in leaves)
-    return paths
-
-
-def _registered_leaves_for_binding(control_root, prefix, root, bindings):
-    """Return direct gitlink leaves owned by sibling source bindings."""
-    control = os.path.realpath(control_root)
-    if prefix or os.path.realpath(root) != control or _nearest_git_root(control) != control:
-        return ()
-    return tuple(sorted(
-        child_prefix.rstrip("/")
-        for child_prefix, _child_root in bindings
-        if child_prefix
-    ))
-
-
-def _workspace_path_binding_with_prefix(control_root, relpath):
-    rel = _canonical_git_relpath(relpath)
-    bindings = _workspace_source_bindings(control_root)
-    for prefix, root in sorted(bindings, key=lambda item: len(item[0]), reverse=True):
-        if rel.startswith(prefix):
-            inner = rel[len(prefix):]
-            if inner:
-                return prefix, root, inner
-    for prefix, root in bindings:
-        if not prefix:
-            return prefix, root, rel
-    control = os.path.realpath(control_root)
-    candidate = os.path.realpath(os.path.join(control, rel))
-    try:
-        if os.path.commonpath((control, candidate)) != control:
-            raise RuntimeError(f"path is outside Harness control root: {rel}")
-    except ValueError as exc:
-        raise RuntimeError(f"path is outside Harness control root: {rel}") from exc
-    nearest_git = _nearest_git_root(
-        candidate if os.path.isdir(candidate) else os.path.dirname(candidate)
+def _plan_meta(task_dir):
+    """Read bounded task-declared workflow metadata, defaulting safely."""
+    payload = _read_json_file(
+        os.path.join(task_dir, "PLAN.meta.json"), max_size=256 * 1024,
     )
-    if nearest_git and all(nearest_git != root for _prefix, root in bindings):
-        raise RuntimeError(f"path is inside an unregistered Git root: {rel}")
-    return "", control, rel
+    meta = payload.get("plan_meta") if isinstance(payload, dict) else None
+    return meta if isinstance(meta, dict) else {}
 
 
-def _workspace_path_binding(control_root, relpath):
-    _prefix, root, inner = _workspace_path_binding_with_prefix(control_root, relpath)
-    return root, inner
-
-
-_DEPENDENCY_REVIEW_FILES = {
-    "composer.json", "composer.lock", "gemfile", "gemfile.lock", "go.mod", "go.sum",
-    "package-lock.json", "package.json", "pipfile", "pipfile.lock", "poetry.lock",
-    "pyproject.toml", "cargo.lock", "cargo.toml",
-}
-
-_AGENT_INSTRUCTION_FILES = {"agents.md", "claude.md"}
-
-
-def _canonical_git_relpath(value):
-    """Preserve Git path identity while accepting an explicit ./ prefix."""
-    rel = str(value or "")
-    if os.sep == "\\":
-        rel = rel.replace("\\", "/")
-    while rel.startswith("./"):
-        rel = rel[2:]
-    return rel
-
-
-def _is_dependency_manifest(path):
-    basename = os.path.basename(str(path or "").lower())
-    return basename in _DEPENDENCY_REVIEW_FILES or bool(
-        re.fullmatch(r"(?:requirements|constraints)(?:[-_.][a-z0-9_-]+)?\.txt", basename)
-    )
-
-
-def _reviewable_source_paths(task_dir, state=None):
-    """Return task paths whose behavior merits independent static review."""
-    st = state or read_state(task_dir)
-    cache = _review_snapshot_cache()
-    cache_key = (
-        "reviewable_paths",
-        os.path.realpath(task_dir),
-        tuple(sorted(str(path) for path in (st.get("touched_paths") or []))),
-    )
-    if cache is not None and cache_key in cache:
-        return list(cache[cache_key])
-    repo_root = find_harness_root(task_dir) or find_repo_root(task_dir)
-    gitlink_paths = set(_workspace_gitlink_paths(repo_root))
-    candidates = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
-    candidates = _filter_baseline_unchanged(task_dir, repo_root, candidates)
-    paths = []
-    executable_suffixes = {
-        ".c", ".cc", ".conf", ".config", ".cpp", ".cs", ".css", ".go", ".h",
-        ".hpp", ".html", ".ini", ".java", ".js", ".json", ".jsx", ".kt", ".lock",
-        ".php", ".pl", ".properties", ".py", ".rb", ".rs", ".sh", ".sql", ".swift",
-        ".toml", ".ts", ".tsx", ".vue", ".xml", ".yaml", ".yml",
-    }
-    for raw in candidates:
-        rel = _canonical_git_relpath(raw)
-        if not rel:
-            continue
-        lower = rel.lower()
-        basename = os.path.basename(lower)
-        suffix = os.path.splitext(lower)[1]
-        is_agent_instruction = basename in _AGENT_INSTRUCTION_FILES
-        is_reviewable_artifact = (
-            suffix in executable_suffixes
-            or _is_dependency_manifest(lower)
-            or is_agent_instruction
-            or rel.rstrip("/") in gitlink_paths
-        )
-        if lower.startswith("doc/") and not is_reviewable_artifact:
-            continue
-        if lower.endswith((".pyc", ".pyo", ".pyd")) or "__pycache__/" in lower:
-            continue
-        if lower.endswith((".md", ".rst", ".txt")) and not (
-            lower.startswith(("plugin/", "plugin-codex/"))
-            or _is_dependency_manifest(lower)
-            or is_agent_instruction
-        ):
-            continue
-        if basename in {"readme", "readme.md", "changelog", "changelog.md", "license"}:
-            continue
-        paths.append(rel)
-    result = sorted(set(paths))
-    if cache is not None:
-        cache[cache_key] = tuple(result)
-    return result
-
-
-_SECURITY_REVIEW_SIGNAL_RE = re.compile(
-    r"(?i)(?:auth(?:entication|orization)?|session|token|secret|password|permission|"
-    r"credential|oauth|jwt|csrf|cors|xss|injection|encrypt|crypto|payment|pii|"
-    r"upload|file.?path|subprocess|shell|command|sql|database|migration|transaction|"
-    r"concurren|race|lock|serialize|deserializ|external.?url|ssrf|dependency|"
-    r"tls|ssl|certificate|cookie|rbac|acl|sanitize|verify[_-]?ssl|verify\s*=\s*false|"
-    r"requirements|package(?:-lock)?\.json|pyproject|poetry\.lock|pipfile|cargo\.(?:toml|lock)|"
-    r"gemfile|go\.(?:mod|sum)|composer\.(?:json|lock)|admin|privilege|"
-    r"access[_-]?(?:control|policy)|user[_-]?role|role[_-]?(?:id|name|check))"
-)
-
-
-def _task_baseline_head_sha(task_dir):
-    baseline = _read_task_baseline_snapshot(task_dir)
-    if not baseline:
-        return ""
-    if baseline.get("version") == 2:
-        return str((baseline.get("source_heads") or {}).get("") or "")
-    return str(baseline.get("head_sha") or "")
-
-
-def _task_baseline_source_head(task_dir, workspace_prefix=""):
-    if not workspace_prefix:
-        return _task_baseline_head_sha(task_dir)
-    baseline = _read_task_baseline_snapshot(task_dir)
-    if not baseline:
-        return ""
-    if baseline.get("version") == 1:
-        return ""
-    source_heads = baseline.get("source_heads") or {}
-    return str(source_heads.get(workspace_prefix) or "")
-
-
-def _committed_paths_since_baseline(task_dir, repo_root=None, *, workspace_prefix=""):
-    """Return repository paths committed after the task baseline."""
-    repo_root = repo_root or find_harness_root(task_dir) or find_repo_root(task_dir)
-    baseline_head = _task_baseline_source_head(task_dir, workspace_prefix)
-    if not baseline_head:
-        return set()
-    cache = _review_snapshot_cache()
-    cache_key = (
-        "committed_paths_since_baseline",
-        os.path.realpath(task_dir),
-        os.path.realpath(repo_root),
-        workspace_prefix,
-        baseline_head,
-    )
-    if cache is not None and cache_key in cache:
-        return set(cache[cache_key])
-    operation = "committed path diff"
-    timeout = _bounded_snapshot_timeout(
-        5, operation, repo_root,
-        deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
-    )
-    control_root = find_harness_root(task_dir) or find_repo_root(task_dir)
-    source_git_dir = None
-    if workspace_prefix and _nearest_git_root(control_root) == os.path.realpath(control_root):
-        source_git_dir = _registered_source_metadata_binding(
-            control_root, repo_root, workspace_prefix.rstrip("/"),
-        )
-    command = ["git"]
-    if source_git_dir:
-        command.extend([
-            f"--git-dir={source_git_dir}", f"--work-tree={repo_root}",
-        ])
-    command.extend([
-        "diff", "--name-only", "-z", "--no-renames",
-        "--end-of-options", baseline_head, "HEAD", "--",
-    ])
-    try:
-        result = subprocess.run(
-            command,
-            cwd=repo_root, capture_output=True, timeout=timeout,
-            env=_trusted_git_env(),
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"task baseline Git diff unavailable: {operation} timed out "
-            f"after {timeout:.1f}s in {repo_root}"
-        ) from exc
-    except OSError as exc:
-        raise RuntimeError(
-            f"task baseline Git diff unavailable: {operation} could not run "
-            f"in {repo_root}: {exc}"
-        ) from exc
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"task baseline Git diff unavailable: {operation} exited "
-            f"{result.returncode} in {repo_root}"
-        )
-    raw = result.stdout if isinstance(result.stdout, bytes) else str(result.stdout or "").encode()
-    paths = set()
-    for item in raw.split(b"\0"):
-        if not item:
-            continue
-        rel = _canonical_git_relpath(os.fsdecode(item))
-        if rel and not os.path.isabs(rel) and rel != ".." and not rel.startswith("../"):
-            paths.add(rel)
-    if cache is not None:
-        cache[cache_key] = frozenset(paths)
-    return paths
-
-
-def _path_has_security_signal(task_dir, repo_root, relpath):
-    if (
-        os.path.basename(str(relpath or "").lower()) in _AGENT_INSTRUCTION_FILES
-        or _is_dependency_manifest(relpath)
-        or _SECURITY_REVIEW_SIGNAL_RE.search(relpath)
-    ):
-        return True
-    prefix, source_root, source_relpath = _workspace_path_binding_with_prefix(
-        repo_root, relpath
-    )
-    baseline_head = _task_baseline_source_head(task_dir, prefix)
-    if not baseline_head:
-        # Legacy/corrupt baselines cannot prove that committed deleted lines
-        # were inspected. Route the security reviewer rather than granting an
-        # unsafe exemption.
-        return True
-    try:
-        bindings = _workspace_source_bindings(repo_root)
-        def security_diff(git_dir):
-            command = ["git"]
-            if git_dir:
-                command.extend([
-                    f"--git-dir={git_dir}", f"--work-tree={source_root}",
-                ])
-            command.extend([
-                "diff", "--no-ext-diff", "--no-textconv", "--unified=0",
-                "--end-of-options", baseline_head, "--", source_relpath,
-            ])
-            return subprocess.run(
-                command,
-                cwd=source_root, capture_output=True, text=True, timeout=3,
-                env=_trusted_git_env(),
-            )
-        result = _registered_source_operation(
-            repo_root, prefix, source_root, bindings, security_diff,
-        )
-        if result.returncode == 0 and result.stdout and _SECURITY_REVIEW_SIGNAL_RE.search(result.stdout):
-            return True
-        if result.returncode != 0:
-            return True
-    except Exception:
-        return True
-    path = os.path.join(source_root, source_relpath)
-    try:
-        if os.path.isfile(path):
-            overlap = ""
-            with open(path, encoding="utf-8", errors="replace") as f:
-                while True:
-                    chunk = f.read(65536)
-                    if not chunk:
-                        break
-                    text = overlap + chunk
-                    if _SECURITY_REVIEW_SIGNAL_RE.search(text):
-                        return True
-                    overlap = text[-512:]
-    except OSError:
-        pass
-    return False
+def _declared_lenses(task_dir, key, *, allowed, default):
+    value = _plan_meta(task_dir).get(key)
+    if not isinstance(value, list):
+        return list(default)
+    lenses = []
+    for item in value:
+        lens = str(item or "").strip().lower()
+        if lens in allowed and lens not in lenses:
+            lenses.append(lens)
+    return lenses or list(default)
 
 
 def required_review_lenses(task_dir, state=None):
-    """Route always-on code review plus conditional deep security review."""
-    st = state or read_state(task_dir)
-    paths = _reviewable_source_paths(task_dir, st)
-    if not paths:
-        return []
-    lenses = ["review-code"]
-    repo_root = find_harness_root(task_dir) or find_repo_root(task_dir)
-    for relpath in paths:
-        if _path_has_security_signal(task_dir, repo_root, relpath):
-            lenses.append("review-security")
-            break
+    """Return plan-declared review lenses without inspecting source state."""
+    meta = _plan_meta(task_dir)
+    lenses = _declared_lenses(
+        task_dir,
+        "review_lenses",
+        allowed={"review-code", "review-security"},
+        default=("review-code",),
+    )
+    if "review-code" not in lenses:
+        lenses.insert(0, "review-code")
+    security = str(meta.get("security_review") or "").strip().lower()
+    if security == "required" and "review-security" not in lenses:
+        lenses.append("review-security")
     return lenses
 
 
 def review_diff_fingerprint(task_dir, state=None):
-    """Hash every task-owned path for review/QA completion freshness."""
-    st = state or read_state(task_dir)
-    cache = _review_snapshot_cache()
-    cache_key = (
-        "review_fingerprint",
-        os.path.realpath(task_dir),
-        tuple(sorted(str(path) for path in (st.get("touched_paths") or []))),
-    )
-    if cache is not None and cache_key in cache:
-        return cache[cache_key]
-    repo_root = find_harness_root(task_dir) or find_repo_root(task_dir)
-    gitlink_paths = _workspace_gitlink_paths(repo_root)
-    h = hashlib.sha256()
-    candidates = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
-    candidates = _filter_baseline_unchanged(task_dir, repo_root, candidates)
-    for relpath in sorted(set(_canonical_git_relpath(path) for path in candidates if path)):
-        h.update(os.fsencode(relpath))
-        h.update(b"\0")
-        if relpath.rstrip("/") in gitlink_paths:
-            source_root, source_relpath, entry, registered = gitlink_paths[relpath.rstrip("/")]
-            fingerprint = (
-                _registered_source_gitlink_fingerprint(
-                    source_root, source_relpath, entry[0],
-                )
-                if registered
-                else _submodule_gitlink_fingerprint(source_root, source_relpath)
-            )
-        else:
-            source_root, source_relpath = _workspace_path_binding(repo_root, relpath)
-            fingerprint = _fingerprint_path(source_root, source_relpath)
-        h.update(fingerprint.encode("ascii"))
-        h.update(b"\0")
-    for relpath, fingerprint in sorted(
-        _control_root_behavior_fingerprints(repo_root).items()
-    ):
-        h.update(b"@control\0")
-        h.update(os.fsencode(relpath))
-        h.update(b"\0")
-        h.update(fingerprint.encode("ascii"))
-        h.update(b"\0")
-    result = "sha256:" + h.hexdigest()
-    if cache is not None:
-        cache[cache_key] = result
-    return result
+    """Backward-compatible receipt field with no source-state inspection."""
+    return "sha256:" + hashlib.sha256(b"").hexdigest()
 
 
 def _receipt_stream_fingerprint_unlocked(task_dir):
@@ -3185,21 +2460,21 @@ def receipt_stream_fingerprint(task_dir):
         return _receipt_stream_fingerprint_unlocked(task_dir)
 
 
-def write_task_close_attestation(task_dir, state, *, head_sha, receipt_fingerprint):
-    """Persist the task_close evidence needed after later Goal work changes Git."""
+def write_task_close_attestation(
+    task_dir, state, *, receipt_fingerprint, head_sha=None,
+):
+    """Persist close evidence without binding lifecycle state to Git HEAD."""
     payload = {
-        "version": 1,
+        "version": 2,
         "task_id": str(state.get("task_id") or ""),
         "closed_at": str(state.get("closed_at") or ""),
         "runtime_verdict": str(state.get("runtime_verdict") or "").upper(),
-        "head_sha": str(head_sha or ""),
         "receipt_stream_fingerprint": str(receipt_fingerprint or ""),
     }
     if (
         not re.fullmatch(r"TASK__[A-Za-z0-9._-]+", payload["task_id"])
         or not payload["closed_at"]
         or payload["runtime_verdict"] != "PASS"
-        or not re.fullmatch(r"[0-9a-f]{40}", payload["head_sha"])
         or not re.fullmatch(r"sha256:[0-9a-f]{64}", payload["receipt_stream_fingerprint"])
     ):
         raise ValueError("invalid task close attestation inputs")
@@ -3221,12 +2496,16 @@ def task_close_attestation_valid(task_dir, state):
         os.path.join(task_dir, TASK_CLOSE_RECEIPT_NAME),
         max_size=16 * 1024,
     )
+    version = payload.get("version")
     if (
-        payload.get("version") != 1
+        version not in {1, 2}
         or payload.get("task_id") != state.get("task_id")
         or payload.get("closed_at") != state.get("closed_at")
         or payload.get("runtime_verdict") != "PASS"
-        or not re.fullmatch(r"[0-9a-f]{40}", str(payload.get("head_sha") or ""))
+        or (
+            version == 1
+            and not re.fullmatch(r"[0-9a-f]{40}", str(payload.get("head_sha") or ""))
+        )
         or not re.fullmatch(
             r"sha256:[0-9a-f]{64}",
             str(payload.get("receipt_stream_fingerprint") or ""),
@@ -3303,6 +2582,13 @@ def record_subagent_receipt(task_dir, receipt):
             verdict = "PENDING"
         if verdict == "BLOCKED_ENV" and not finding_counts["investigate"]:
             verdict = "PENDING"
+    current_run = read_task_run(task_dir)
+    if not current_run:
+        raise RuntimeError("valid TASK_RUN.json required for receipt append")
+    supplied_run_id = _receipt_short(receipt.get("task_run_id"), 64)
+    task_run_id = str(current_run["task_run_id"])
+    if supplied_run_id and supplied_run_id != task_run_id:
+        raise RuntimeError("receipt task_run_id does not match current task run")
     entry = {
         "receipt_id": "",
         "ts": now,
@@ -3313,6 +2599,7 @@ def record_subagent_receipt(task_dir, receipt):
         "source": source,
         "status": status,
         "task_id": os.path.basename(os.path.normpath(task_dir)),
+        "task_run_id": task_run_id,
         "agent_id": agent_id,
         "agent_type": agent_type,
         "lens": lens,
@@ -3323,14 +2610,6 @@ def record_subagent_receipt(task_dir, receipt):
         "prompt_hash": hashlib.sha256(
             _receipt_short(receipt.get("prompt"), 10000).encode("utf-8")
         ).hexdigest() if receipt.get("prompt") else "",
-        "head_sha": _receipt_short(
-            receipt.get("head_sha") or receipt.get("commit_sha") or _git_head_for_receipt(task_dir),
-            80,
-        ),
-        "diff_fingerprint": _receipt_short(
-            receipt.get("diff_fingerprint") or review_diff_fingerprint(task_dir), 100
-        ),
-        "base_sha": _receipt_short(receipt.get("base_sha") or _git_head_for_receipt(task_dir), 80),
         "started_at": "" if is_completed else now,
         "finished_at": now if is_completed else "",
         "finding_counts": finding_counts,
@@ -3345,7 +2624,11 @@ def record_subagent_receipt(task_dir, receipt):
     path = _review_receipts_path(task_dir) if is_review else _subagent_receipts_path(task_dir)
     _validated_receipt_task_dir(task_dir)
     payload = (json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
-    _append_receipt_stream(path, payload)
+    with receipt_stream_transaction(task_dir):
+        state = read_state(task_dir)
+        if str(state.get("status") or "").lower() in {"closed", "blocked"}:
+            raise RuntimeError("receipt stream is terminal")
+        _append_receipt_stream_unlocked(path, payload)
     return entry
 
 
@@ -3441,10 +2724,13 @@ def review_receipt_summary(task_dir):
 
 def _completed_review_by_lens(task_dir):
     receipts = list_review_receipts(task_dir)
+    current_run_id = str(read_task_run(task_dir).get("task_run_id") or "")
+    if not current_run_id:
+        return {}
     latest_events = {}
     for item in receipts:
         lens = str(item.get("lens") or "").lower()
-        if lens.startswith("review-"):
+        if lens.startswith("review-") and item.get("task_run_id") == current_run_id:
             latest_events[lens] = item
     completed = {}
     for lens, item in latest_events.items():
@@ -3452,19 +2738,16 @@ def _completed_review_by_lens(task_dir):
             continue
         if str(item.get("verdict") or "").upper() not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING"}:
             continue
+        completion_index = receipts.index(item)
         matching_starts = [
-            prior for prior in receipts
+            prior for prior in receipts[:completion_index]
             if prior is not item
             and prior.get("lens") == lens
             and prior.get("agent_id") == item.get("agent_id")
             and str(prior.get("status") or "").lower() == "started"
+            and _receipt_runtime_identity_matches(prior, item)
         ]
         if not matching_starts:
-            continue
-        start = matching_starts[-1]
-        if start.get("diff_fingerprint") != item.get("diff_fingerprint"):
-            continue
-        if start.get("head_sha") != item.get("head_sha"):
             continue
         completed[lens] = item
     return completed
@@ -3477,6 +2760,21 @@ def _receipt_timestamp(item):
         return 0.0
 
 
+def _receipt_runtime_identity_matches(start, completion):
+    """Require exact runtime correlation whenever either event supplies it."""
+    keys = (
+        "task_run_id",
+        "runtime_event_id", "runtime_session_id", "runtime_thread_id",
+        "runtime_agent_path",
+    )
+    for key in keys:
+        start_value = str(start.get(key) or "")
+        completion_value = str(completion.get(key) or "")
+        if (start_value or completion_value) and start_value != completion_value:
+            return False
+    return True
+
+
 def _latest_review_pass_timestamp(task_dir, state=None):
     st = state or read_state(task_dir)
     if receipt_review_verdict(task_dir, st) != "PASS":
@@ -3486,15 +2784,19 @@ def _latest_review_pass_timestamp(task_dir, state=None):
 
 
 def _qa_started_after_review(task_dir, lens, completion, review_ts):
-    if review_ts <= 0:
-        return True
     agent_id = completion.get("agent_id")
+    receipts = list_subagent_receipts(task_dir)
+    try:
+        completion_index = receipts.index(completion)
+    except ValueError:
+        return False
     return any(
         item.get("lens") == lens
         and item.get("agent_id") == agent_id
         and str(item.get("status") or "").lower() == "started"
-        and _receipt_timestamp(item) >= review_ts
-        for item in list_subagent_receipts(task_dir)
+        and _receipt_runtime_identity_matches(item, completion)
+        and (review_ts <= 0 or _receipt_timestamp(item) >= review_ts)
+        for item in receipts[:completion_index]
     )
 
 
@@ -3504,16 +2806,10 @@ def receipt_review_verdict(task_dir, state=None):
     if not required:
         return "NOT_APPLICABLE"
     completed = _completed_review_by_lens(task_dir)
-    current_fingerprint = review_diff_fingerprint(task_dir, st)
-    current_head = _git_head_for_receipt(task_dir)
     verdicts = []
     for lens in required:
         item = completed.get(lens)
-        if (
-            not item
-            or item.get("diff_fingerprint") != current_fingerprint
-            or item.get("head_sha") != current_head
-        ):
+        if not item:
             return "PENDING"
         verdicts.append(str(item.get("verdict") or "").upper())
     if any(verdict == "FAIL" for verdict in verdicts):
@@ -3524,27 +2820,23 @@ def receipt_review_verdict(task_dir, state=None):
 
 
 def _required_qa_lenses(task_dir, state=None):
-    st = state or read_state(task_dir)
-    touched = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
-    repo_root = find_harness_root(task_dir) or find_repo_root(task_dir)
-    project_type = (_read_top_manifest_field(repo_root, "type") or "").lower()
-    lenses = []
-    if _manifest_bool(repo_root, "qa", "desktop_qa_supported") or _desktop_touched(touched):
-        lenses.append("qa-desktop")
-    if _manifest_bool(repo_root, "qa", "browser_qa_supported") and _frontend_touched(touched):
-        lenses.append("qa-browser")
-    if project_type == "api" or _api_touched(touched):
-        lenses.append("qa-api")
-    if project_type in {"cli", "library"}:
-        lenses.append("qa-cli")
-    return list(dict.fromkeys(lenses or ["qa-cli"]))
+    """Return plan-declared QA lenses without inspecting changed paths."""
+    return _declared_lenses(
+        task_dir,
+        "qa_lenses",
+        allowed={"qa-api", "qa-browser", "qa-cli", "qa-desktop"},
+        default=("qa-cli",),
+    )
 
 
 def _completed_qa_by_lens(task_dir):
+    current_run_id = str(read_task_run(task_dir).get("task_run_id") or "")
+    if not current_run_id:
+        return {}
     latest_events = {}
     for item in list_subagent_receipts(task_dir):
         lens = str(item.get("lens") or "").lower()
-        if not lens.startswith("qa-"):
+        if not lens.startswith("qa-") or item.get("task_run_id") != current_run_id:
             continue
         latest_events[lens] = item
     latest = {}
@@ -3571,15 +2863,11 @@ def receipt_runtime_verdict(task_dir, state=None):
     required = _required_qa_lenses(task_dir, st)
     completed = _completed_qa_by_lens(task_dir)
     review_ts = _latest_review_pass_timestamp(task_dir, st)
-    current_head = _git_head_for_receipt(task_dir)
-    current_fingerprint = review_diff_fingerprint(task_dir)
     valid = {
         lens: completed[lens] for lens in required
         if (
             lens in completed
             and _qa_started_after_review(task_dir, lens, completed[lens], review_ts)
-            and str(completed[lens].get("head_sha") or "") == current_head
-            and str(completed[lens].get("diff_fingerprint") or "") == current_fingerprint
         )
     }
     verdicts = [str(valid[lens].get("verdict") or "").upper() for lens in required if lens in valid]
@@ -3595,82 +2883,8 @@ def receipt_runtime_verdict(task_dir, state=None):
 # ── Task context ─────────────────────────────────────────────────────────
 
 
-# ── Runtime-verdict staleness check ─────────────────────────────────────
-#
-# Runtime verification is receipt-backed. Completion timestamps are compared
-# with touched paths so edits made after QA invalidate the close signal.
-
-_STALE_CHECK_SKIP_SUFFIXES = (
-    ".pyc", ".pyo", ".pyd",
-)
-_STALE_CHECK_SKIP_FRAGMENTS = (
-    "__pycache__/", "/.DS_Store", ".swp", ".swo",
-)
-_STALE_CHECK_SKIP_PREFIXES = (
-    "doc/harness/",
-    "doc/changes/",
-)
-_STALE_CHECK_SKIP_BASENAMES = {
-    SUBAGENT_RECEIPTS_NAME,
-    REVIEW_RECEIPTS_NAME,
-    "TASK_STATE.yaml",
-    "PLAN.meta.json",
-    "PLAN_SESSION.json",
-    "PROGRESS.md",
-    "DOGFOOD.md",
-    "ENVIRONMENT_SNAPSHOT.md",
-}
-_STALE_CHECK_PATH_CAP = 1000  # bound mtime scan in pathological cases
-
-
-def _stale_skip(relpath: str) -> bool:
-    if not relpath:
-        return True
-    norm = _canonical_git_relpath(relpath)
-    base = os.path.basename(norm)
-    if base in _STALE_CHECK_SKIP_BASENAMES:
-        return True
-    for prefix in _STALE_CHECK_SKIP_PREFIXES:
-        if norm.startswith(prefix):
-            return True
-    for suf in _STALE_CHECK_SKIP_SUFFIXES:
-        if norm.endswith(suf):
-            return True
-    for frag in _STALE_CHECK_SKIP_FRAGMENTS:
-        if frag in norm or norm.endswith(frag.strip("/")):
-            return True
-    return False
-
-
 def runtime_is_stale(task_dir: str) -> tuple[bool, str]:
-    st = read_state(task_dir)
-    required = _required_qa_lenses(task_dir, st)
-    completed = _completed_qa_by_lens(task_dir)
-    passing = [completed.get(lens) for lens in required]
-    if not passing or any(not item or item.get("verdict") != "PASS" for item in passing):
-        return False, ""
-    try:
-        completed_at = min(
-            datetime.fromisoformat(str(item.get("ts") or "").replace("Z", "+00:00")).timestamp()
-            for item in passing if item
-        )
-    except (TypeError, ValueError):
-        return True, SUBAGENT_RECEIPTS_NAME
-    repo_root = find_harness_root(task_dir) or find_repo_root(task_dir)
-    touched = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
-    for relpath in touched[:_STALE_CHECK_PATH_CAP]:
-        if _stale_skip(relpath):
-            continue
-        try:
-            source_root, source_relpath = _workspace_path_binding(repo_root, relpath)
-        except RuntimeError:
-            continue
-        path = os.path.join(source_root, source_relpath)
-        try:
-            if os.path.getmtime(path) > completed_at:
-                return True, relpath
-        except OSError:
-            continue
+    """Source mutations no longer invalidate lifecycle receipts."""
     return False, ""
 
 
@@ -3708,7 +2922,7 @@ def emit_compact_context(task_dir):
         if missing_reviews:
             missing_for_close.append("completed review verdict: " + ", ".join(missing_reviews))
         else:
-            missing_for_close.append("completed review verdict PASS for current diff")
+            missing_for_close.append("completed review verdict PASS for current task run")
     required_qa_lenses = _required_qa_lenses(task_dir, st)
     completed_qa = _completed_qa_by_lens(task_dir)
     missing_qa_lenses = [lens for lens in required_qa_lenses if lens not in completed_qa]
@@ -3758,7 +2972,7 @@ def emit_compact_context(task_dir):
     elif review_verdict not in {"PASS", "NOT_APPLICABLE"}:
         next_action = (
             "Run and await the required read-only review subagent(s); completion hooks "
-            "must record an explicit PASS for the current diff before QA."
+            "must record an explicit PASS for the current task run before QA."
         )
     elif runtime_verdict != "PASS":
         next_action = (
@@ -3806,816 +3020,41 @@ def emit_compact_context(task_dir):
         "effective_close_gate": "micro" if micro_loop else "standard",
         "stale": stale,
         "stale_path": stale_path,
-        "git_snapshot_warnings": git_snapshot_warnings(),
     }
 
 
-# ── Path sync ────────────────────────────────────────────────────────────
-
-
-def sync_touched_paths(task_dir, new_paths=None):
-    """Merge new paths into touched_paths."""
-    st = read_state(task_dir)
-    existing = st.get("touched_paths") or []
-    incoming = [p for p in (new_paths or []) if p]
-    merged = list(dict.fromkeys(existing + incoming))
-    set_state_field(task_dir, "touched_paths", merged)
-    return merged
-
-
-def _fingerprint_path(repo_root, relpath):
-    """Return a stable fingerprint for current path contents.
-
-    Missing paths use a sentinel so deleted-at-baseline files do not keep
-    reappearing as task-owned changes. Symlinks hash their link target without
-    following it. Unreadable or unsupported path types fail closed.
-    """
-    path = os.path.join(repo_root, relpath)
-    try:
-        path_info = os.lstat(path)
-    except FileNotFoundError:
-        return "missing"
-    except OSError as exc:
-        raise RuntimeError("changed path fingerprint unavailable") from exc
-    if stat.S_ISDIR(path_info.st_mode):
-        return "dir"
-    if stat.S_ISLNK(path_info.st_mode):
-        try:
-            target = os.readlink(path)
-            after = os.lstat(path)
-        except OSError as exc:
-            raise RuntimeError("changed path fingerprint unavailable") from exc
-        if (after.st_dev, after.st_ino) != (path_info.st_dev, path_info.st_ino):
-            raise RuntimeError("changed path fingerprint unavailable")
-        return "symlink-sha256:" + hashlib.sha256(os.fsencode(target)).hexdigest()
-    if not stat.S_ISREG(path_info.st_mode):
-        raise RuntimeError("changed path fingerprint unavailable")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
-    fd = None
-    try:
-        fd = os.open(path, flags)
-        opened = os.fstat(fd)
-        if (
-            not stat.S_ISREG(opened.st_mode)
-            or (opened.st_dev, opened.st_ino) != (path_info.st_dev, path_info.st_ino)
-        ):
-            raise RuntimeError("changed path fingerprint unavailable")
-        h = hashlib.sha256()
-        handle = os.fdopen(fd, "rb")
-        fd = None
-        with handle as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                h.update(chunk)
-            after = os.fstat(f.fileno())
-        final_path = os.lstat(path)
-        if (
-            after.st_size != opened.st_size
-            or after.st_mtime_ns != opened.st_mtime_ns
-            or after.st_ctime_ns != opened.st_ctime_ns
-            or not stat.S_ISREG(final_path.st_mode)
-            or (final_path.st_dev, final_path.st_ino) != (opened.st_dev, opened.st_ino)
-        ):
-            raise RuntimeError("changed path fingerprint unavailable")
-        return "sha256:" + h.hexdigest()
-    except OSError as exc:
-        raise RuntimeError("changed path fingerprint unavailable") from exc
-    finally:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-
-
-def _has_git_metadata(repo_root):
-    git_path = os.path.join(repo_root, ".git")
-    roots = _REQUEST_GIT_ROOTS.get()
-    direct = (
-        os.path.isfile(git_path)
-        or os.path.isfile(os.path.join(git_path, "HEAD"))
-        or roots is not None and os.path.realpath(repo_root) in roots
-    )
-    if direct:
-        return True
-    if (
-        os.path.isfile(os.path.join(repo_root, MANIFEST_PATH))
-        and _manifest_array_field(repo_root, "source_git_roots")
-    ):
-        try:
-            return bool(configured_source_git_roots(repo_root, strict=False))
-        except RuntimeError:
-            return False
-    return False
-
-
-def _task_baseline_required(repo_root):
-    """Require baseline evidence for real Git or explicit multi-Git controls."""
-    if _has_git_metadata(repo_root):
-        return True
-    if _manifest_array_field(repo_root, "source_git_roots"):
-        # Preserve the strict configuration error (missing/moved/symlinked root)
-        # instead of degrading an existing multi-Git task to a non-Git fixture.
-        configured_source_git_roots(repo_root, strict=True)
-        return True
-    return False
-
-
-def _submodule_metadata_binding(repo_root, sub_root):
-    relpath = _canonical_git_relpath(os.path.relpath(sub_root, repo_root)).rstrip("/")
-    git_dir = _registered_source_metadata_binding(repo_root, sub_root, relpath)
-    return f"trusted:{git_dir}", git_dir
-
-
-def _validated_submodule_root(repo_root, relpath, *, allow_missing=False):
-    """Return an initialized submodule root without following worktree symlinks."""
-    canonical = _canonical_git_relpath(relpath).rstrip("/")
-    if (
-        not canonical
-        or os.path.isabs(canonical)
-        or canonical == ".."
-        or canonical.startswith("../")
-    ):
-        raise RuntimeError("Git submodule snapshot unavailable")
-    current = repo_root
-    for component in canonical.split("/"):
-        if component in ("", ".", ".."):
-            raise RuntimeError("Git submodule snapshot unavailable")
-        current = os.path.join(current, component)
-        try:
-            info = os.lstat(current)
-        except FileNotFoundError:
-            if allow_missing:
-                return None, None
-            raise RuntimeError("Git submodule snapshot unavailable")
-        except OSError as exc:
-            raise RuntimeError("Git submodule snapshot unavailable") from exc
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
-            raise RuntimeError("Git submodule snapshot unavailable")
-    try:
-        git_info = os.lstat(os.path.join(current, ".git"))
-    except FileNotFoundError:
-        if allow_missing:
-            return None, None
-        raise RuntimeError("Git submodule snapshot unavailable")
-    except OSError as exc:
-        raise RuntimeError("Git submodule snapshot unavailable") from exc
-    if stat.S_ISLNK(git_info.st_mode) or not (
-        stat.S_ISREG(git_info.st_mode) or stat.S_ISDIR(git_info.st_mode)
-    ):
-        raise RuntimeError("Git submodule snapshot unavailable")
-    _submodule_metadata_binding(repo_root, current)
-    return current, info
-
-
-def _submodule_gitlink_fingerprint(repo_root, relpath):
-    entry = _gitlink_index_snapshot(repo_root).get(relpath)
-    if not entry:
-        raise RuntimeError("Git submodule snapshot unavailable")
-    index_oid, initialized = entry
-    if not initialized:
-        return f"gitlink:index:{index_oid}:uninitialized"
-    sub_root, _before = _validated_submodule_root(repo_root, relpath)
-    _binding, git_dir = _submodule_metadata_binding(repo_root, sub_root)
-    head = _git_head_snapshot(
-        sub_root, git_dir=git_dir, use_cache=False,
-    )
-    return f"gitlink:index:{index_oid}:checkout:{head}"
-
-
-def _registered_source_gitlink_fingerprint(repo_root, relpath, index_oid=None):
-    """Fingerprint a user-trusted registered Git leaf."""
-    entries = _direct_gitlink_index_entries(repo_root)
-    oid = str(index_oid or entries.get(relpath) or "").lower()
-    if not oid:
-        raise RuntimeError("Git submodule snapshot unavailable")
-    source_root = os.path.join(repo_root, *relpath.split("/"))
-    git_dir = _registered_source_metadata_binding(repo_root, source_root, relpath)
-    head = _git_head_snapshot(source_root, git_dir=git_dir, use_cache=False)
-    return f"gitlink:index:{oid}:registered-source:checkout:{head}"
-
-
-def _uncached_git_changed_paths(repo_root, *, git_dir=None, timeout_seconds=None):
-    """Read changed repository-relative path names from Git once."""
-    if timeout_seconds is None:
-        timeout_seconds = _DIRTY_ENUMERATION_TIMEOUT_OVERRIDE.get()
-    enumeration_deadline = (
-        time.monotonic() + float(timeout_seconds)
-        if timeout_seconds is not None
-        else None
-    )
-    if _has_git_metadata(repo_root):
-        _remember_git_root(repo_root)
-    changed = set()
+# ── Explicit installer Git payload helper ──────────────────────────────
+def _git_changed_paths(repo_root):
+    """Return dirty paths for the explicit verified-install payload."""
+    if not os.path.lexists(os.path.join(repo_root, ".git")):
+        return set()
     base = ["git", "-c", f"safe.directory={repo_root}"]
-    if git_dir:
-        base.extend([f"--git-dir={git_dir}", f"--work-tree={repo_root}"])
     commands = (
-        ("working tree diff", base + ["diff", "--name-only", "-z", "HEAD"]),
-        ("staged diff", base + ["diff", "--cached", "--name-only", "-z", "HEAD"]),
-        ("untracked files", base + ["ls-files", "--others", "--exclude-standard", "-z"]),
+        base + ["diff", "--name-only", "-z", "HEAD"],
+        base + ["diff", "--cached", "--name-only", "-z", "HEAD"],
+        base + ["ls-files", "--others", "--exclude-standard", "-z"],
     )
-    for operation, cmd in commands:
+    changed = set()
+    for command in commands:
         try:
-            command_allowance = timeout_seconds
-            if enumeration_deadline is not None:
-                command_allowance = enumeration_deadline - time.monotonic()
-                if command_allowance <= 0:
-                    raise RuntimeError(
-                        "Git changed-path snapshot unavailable: root dirty scan "
-                        f"budget exhausted before {operation} in {repo_root}"
-                    )
-            timeout = _bounded_snapshot_timeout(
-                5 if command_allowance is None else command_allowance,
-                operation,
-                repo_root,
-                deadline_allowance_seconds=(
-                    _GIT_ENUMERATION_TIMEOUT_SECONDS
-                    if command_allowance is None
-                    else command_allowance
-                ),
-            )
-            r = subprocess.run(
-                cmd, capture_output=True, cwd=repo_root, timeout=timeout,
+            result = subprocess.run(
+                command,
+                cwd=repo_root,
+                capture_output=True,
+                timeout=5,
                 env=_trusted_git_env(),
             )
-        except subprocess.TimeoutExpired as exc:
-            if not _has_git_metadata(repo_root):
-                return set()
+        except (OSError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(
-                f"Git changed-path snapshot unavailable: {operation} timed out "
-                f"after {timeout:.1f}s in {repo_root}"
+                f"Git changed-path query unavailable in {repo_root}"
             ) from exc
-        except OSError as exc:
-            if not _has_git_metadata(repo_root):
-                return set()
+        if result.returncode != 0:
             raise RuntimeError(
-                f"Git changed-path snapshot unavailable: {operation} could not run "
-                f"in {repo_root}"
-            ) from exc
-        if r.returncode != 0:
-            if not _has_git_metadata(repo_root):
-                return set()
-            raise RuntimeError(
-                f"Git changed-path snapshot unavailable: {operation} failed "
-                f"in {repo_root}"
+                f"Git changed-path query failed in {repo_root}"
             )
-        raw_output = r.stdout
-        if isinstance(raw_output, bytes):
-            paths = (os.fsdecode(item) for item in raw_output.split(b"\0"))
-        else:
-            paths = str(raw_output or "").split("\0")
-        changed.update(path for path in paths if path)
+        output = result.stdout if isinstance(result.stdout, bytes) else os.fsencode(result.stdout or "")
+        changed.update(os.fsdecode(path) for path in output.split(b"\0") if path)
     return changed
-
-
-def _git_changed_paths(
-    repo_root, prefix="", with_fingerprints=False, *, git_dir=None,
-    best_effort=False,
-):
-    cache = _review_snapshot_cache()
-    binding_key = os.path.realpath(git_dir) if git_dir else ""
-    root_key = (
-        "git_changed_path_names", os.path.realpath(repo_root), binding_key,
-        bool(best_effort),
-    )
-    if cache is not None and root_key in cache:
-        raw_paths = set(cache[root_key])
-    else:
-        try:
-            timeout_token = None
-            if best_effort:
-                timeout_token = _DIRTY_ENUMERATION_TIMEOUT_OVERRIDE.set(
-                    _GIT_DIRTY_ENUMERATION_TIMEOUT_SECONDS
-                )
-            try:
-                raw_paths = (
-                    _uncached_git_changed_paths(repo_root, git_dir=git_dir)
-                    if git_dir
-                    else _uncached_git_changed_paths(repo_root)
-                )
-            finally:
-                if timeout_token is not None:
-                    _DIRTY_ENUMERATION_TIMEOUT_OVERRIDE.reset(timeout_token)
-        except RuntimeError as exc:
-            detail = str(exc)
-            optional_failure = (
-                detail.startswith("Git changed-path snapshot unavailable:")
-                or detail.startswith("Git snapshot deadline exhausted before ")
-            )
-            if not best_effort or not optional_failure:
-                raise
-            _record_dirty_snapshot_warning(repo_root, detail)
-            raw_paths = set()
-        if cache is not None:
-            cache[root_key] = frozenset(raw_paths)
-
-    if not with_fingerprints:
-        return {prefix + path for path in raw_paths}
-
-    cache_key = (
-        "git_changed_path_fingerprints", os.path.realpath(repo_root), prefix,
-        binding_key, bool(best_effort),
-    )
-    if cache is not None and cache_key in cache:
-        return dict(cache[cache_key])
-    changed = {
-        prefix + path: _fingerprint_path(repo_root, path)
-        for path in raw_paths
-    }
-    if cache is not None:
-        cache[cache_key] = dict(changed)
-    return changed
-
-
-def _baseline_file(task_dir):
-    return os.path.join(task_dir, TASK_BASELINE_NAME)
-
-
-def _changed_path_fingerprints(repo_root, *, registered_leaves=(), git_dir=None):
-    changed = _git_changed_paths(
-        repo_root, with_fingerprints=True, git_dir=git_dir, best_effort=True,
-    )
-    leaves = frozenset(registered_leaves)
-    for sub_path, (index_oid, initialized) in _gitlink_index_snapshot(
-        repo_root, registered_leaves=leaves, git_dir=git_dir,
-    ).items():
-        if sub_path in leaves:
-            changed[sub_path] = _registered_source_gitlink_fingerprint(
-                repo_root, sub_path, index_oid,
-            )
-            continue
-        changed[sub_path] = _submodule_gitlink_fingerprint(repo_root, sub_path)
-        if not initialized:
-            continue
-        sub_root, _ = _validated_submodule_root(repo_root, sub_path)
-        changed.update(_git_changed_paths(
-            sub_root,
-            prefix=sub_path.rstrip("/") + "/",
-            with_fingerprints=True,
-            best_effort=True,
-        ))
-        _validated_submodule_root(repo_root, sub_path)
-    return changed
-
-
-def _git_head_snapshot(repo_root, *, git_dir=None, use_cache=True):
-    """Return an exact repository HEAD for source snapshot comparison."""
-    cache = _review_snapshot_cache()
-    cache_key = (
-        "git_head_snapshot",
-        os.path.realpath(repo_root),
-        os.path.realpath(git_dir) if git_dir else "",
-    )
-    if use_cache and cache is not None and cache_key in cache:
-        return cache[cache_key]
-    command = ["git"]
-    if git_dir:
-        command.extend([f"--git-dir={git_dir}", f"--work-tree={repo_root}"])
-    command.extend(["rev-parse", "--verify", "HEAD"])
-    operation = "git HEAD read"
-    timeout = _bounded_snapshot_timeout(
-        2, operation, repo_root,
-        deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
-    )
-    try:
-        result = subprocess.run(
-            command,
-            cwd=repo_root,
-            capture_output=True,
-            text=True,
-            env=_trusted_git_env(),
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"Git HEAD snapshot unavailable: {operation} timed out after "
-            f"{timeout:.1f}s in {repo_root}"
-        ) from exc
-    except OSError as exc:
-        raise RuntimeError(
-            f"Git HEAD snapshot unavailable: {operation} could not run "
-            f"in {repo_root}: {exc}"
-        ) from exc
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"Git HEAD snapshot unavailable: {operation} exited "
-            f"{result.returncode} in {repo_root}"
-        )
-    head = result.stdout.strip()
-    if not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", head):
-        raise RuntimeError(
-            f"Git HEAD snapshot unavailable: {operation} returned an invalid "
-            f"object id in {repo_root}"
-        )
-    if use_cache and cache is not None:
-        cache[cache_key] = head
-    return head
-
-
-def capture_task_baseline(task_dir, repo_root=None):
-    """Write task-start dirty-path fingerprints.
-
-    Existing valid baselines are preserved on resume. Git-backed tasks require
-    a valid baseline; absence or invalid contents are integrity failures.
-    """
-    if _review_snapshot_cache() is None:
-        with review_snapshot_scope():
-            return capture_task_baseline(task_dir, repo_root=repo_root)
-    path = _baseline_file(task_dir)
-    if os.path.lexists(path):
-        _read_task_baseline_snapshot(task_dir, repo_root=repo_root)
-        return path
-    repo_root = repo_root or find_harness_root(task_dir) or find_repo_root(task_dir)
-    if (
-        not _has_git_metadata(repo_root)
-        and not os.path.isfile(os.path.join(repo_root, MANIFEST_PATH))
-    ):
-        return ""
-    bindings = _workspace_source_bindings(repo_root)
-    if not bindings:
-        return ""
-    source_heads = _workspace_source_heads(repo_root)
-    if len(bindings) == 1 and bindings[0][0] == "":
-        data = {
-            "version": 1,
-            "captured_at": now_iso(),
-            "repo_root": repo_root,
-            "head_sha": source_heads[""],
-            "dirty_paths": _changed_path_fingerprints(repo_root),
-        }
-    else:
-        head_sha = _composite_source_heads(source_heads)
-        data = {
-            "version": 2,
-            "captured_at": now_iso(),
-            "control_root": repo_root,
-            "head_sha": head_sha,
-            "source_heads": source_heads,
-            "dirty_paths": _workspace_changed_path_fingerprints(repo_root),
-            "control_paths": _control_root_behavior_fingerprints(repo_root),
-        }
-    os.makedirs(task_dir, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=task_dir, prefix=".baseline.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, sort_keys=True)
-            f.write("\n")
-        os.replace(tmp, path)
-        try:
-            _read_task_baseline_snapshot(
-                task_dir, repo_root=repo_root, validate_git=False,
-            )
-        except Exception:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
-            raise
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-    return path
-
-
-def _read_task_baseline_snapshot(task_dir, repo_root=None, *, validate_git=True):
-    """Read and validate one task baseline without following its leaf."""
-    path = _baseline_file(task_dir)
-    repo_root = os.path.abspath(
-        repo_root or find_harness_root(task_dir) or find_repo_root(task_dir)
-    )
-    cache = _review_snapshot_cache()
-    cache_key = (
-        "validated_task_baseline",
-        os.path.realpath(task_dir),
-        os.path.realpath(repo_root),
-    )
-    if not os.path.lexists(path):
-        if _task_baseline_required(repo_root):
-            raise RuntimeError("required task baseline missing")
-        return None
-    if validate_git and cache is not None and cache_key in cache:
-        return cache[cache_key]
-    data = _read_json_file(path, max_size=2 * 1024 * 1024)
-    head_sha = str(data.get("head_sha") or "").strip()
-    dirty = data.get("dirty_paths")
-    control_paths = data.get("control_paths", {})
-    version = data.get("version")
-    stored_root = str(
-        data.get("repo_root") if version == 1 else data.get("control_root") or ""
-    )
-    valid_paths = isinstance(dirty, dict) and len(dirty) <= 10000 and all(
-        isinstance(key, str)
-        and key == _canonical_git_relpath(key)
-        and key
-        and not os.path.isabs(key)
-        and key != ".."
-        and not key.startswith("../")
-        and all(part not in {"", ".", ".."} for part in key.split("/"))
-        and isinstance(value, str)
-        and bool(re.fullmatch(
-            r"(?:missing|dir|(?:sha256|symlink-sha256):[0-9a-f]{64}|gitlink:[A-Za-z0-9:._/-]{1,500})",
-            value,
-        ))
-        for key, value in (dirty.items() if isinstance(dirty, dict) else [])
-    )
-    valid_control_paths = (
-        isinstance(control_paths, dict)
-        and set(control_paths).issubset(_CONTROL_ROOT_BEHAVIOR_PATHS)
-        and all(
-            isinstance(value, str)
-            and bool(re.fullmatch(
-                r"(?:missing|dir|(?:sha256|symlink-sha256):[0-9a-f]{64})",
-                value,
-            ))
-            for value in control_paths.values()
-        )
-    )
-    if (
-        version not in {1, 2}
-        or not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", head_sha)
-        or not stored_root
-        or not os.path.isabs(stored_root)
-        or os.path.realpath(stored_root) != os.path.realpath(repo_root)
-        or not valid_paths
-        or not valid_control_paths
-    ):
-        raise RuntimeError("task baseline integrity unavailable")
-    if version == 1:
-        current_bindings = _workspace_source_bindings(repo_root)
-        if current_bindings != [("", os.path.realpath(repo_root))]:
-            raise GitBindingError(
-                "SOURCE_BINDINGS_CHANGED_RESTART_REQUIRED",
-                "This task was started before the current additive source binding set",
-                invariant="task_baseline_source_bindings",
-                next_action=(
-                    "Do not edit TASK_BASELINE.json. Validate the manifest, then start "
-                    "a new Harness task ID."
-                ),
-            )
-        source_snapshots = [("", repo_root, head_sha)]
-        source_bindings = current_bindings
-    else:
-        source_heads = data.get("source_heads")
-        bindings = _workspace_source_bindings(repo_root)
-        expected_prefixes = {prefix for prefix, _root in bindings}
-        actual_prefixes = set(source_heads) if isinstance(source_heads, dict) else set()
-        if isinstance(source_heads, dict) and actual_prefixes != expected_prefixes:
-            added = sorted(expected_prefixes - actual_prefixes)
-            removed = sorted(actual_prefixes - expected_prefixes)
-            raise GitBindingError(
-                "SOURCE_BINDINGS_CHANGED_RESTART_REQUIRED",
-                "This task was started with a different source binding set "
-                f"(added: {added}; removed: {removed})",
-                invariant="task_baseline_source_bindings",
-                next_action=(
-                    "Do not edit TASK_BASELINE.json. Validate the manifest, then start "
-                    "a new Harness task ID."
-                ),
-            )
-        if (
-            not isinstance(source_heads, dict)
-            or any(
-                not re.fullmatch(r"[0-9a-fA-F]{40}|[0-9a-fA-F]{64}", str(value))
-                for value in source_heads.values()
-            )
-            or _composite_source_heads(source_heads) != head_sha.lower()
-        ):
-            raise RuntimeError("task baseline integrity unavailable")
-        source_snapshots = [
-            (prefix, source_root, str(source_heads[prefix]))
-            for prefix, source_root in bindings
-        ]
-        source_bindings = bindings
-
-    if not validate_git:
-        for prefix, source_root, _source_head in source_snapshots:
-            if prefix:
-                _registered_source_operation(
-                    repo_root,
-                    prefix,
-                    source_root,
-                    source_bindings,
-                    lambda _git_dir: None,
-                )
-        return data
-
-    for prefix, source_root, source_head in source_snapshots:
-        source_git_dir = None
-        if prefix and _nearest_git_root(repo_root) == os.path.realpath(repo_root):
-            source_git_dir = _registered_source_metadata_binding(
-                repo_root, source_root, prefix.rstrip("/"),
-            )
-        git_command = ["git"]
-        if source_git_dir:
-            git_command.extend([
-                f"--git-dir={source_git_dir}", f"--work-tree={source_root}",
-            ])
-        commit_operation = "baseline commit validation"
-        if prefix:
-            commit_operation += f" ({prefix})"
-        commit_timeout = _bounded_snapshot_timeout(
-            2, commit_operation, source_root,
-            deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
-        )
-        try:
-                commit = subprocess.run(
-                git_command + [
-                    "rev-parse", "--verify", "--end-of-options",
-                    f"{source_head}^{{commit}}",
-                ],
-                cwd=source_root,
-                    capture_output=True,
-                    text=True,
-                    env=_trusted_git_env(),
-                timeout=commit_timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
-                f"task baseline Git snapshot unavailable: {commit_operation} timed "
-                f"out after {commit_timeout:.1f}s in {source_root}"
-            ) from exc
-        except OSError as exc:
-            raise RuntimeError(
-                f"task baseline Git snapshot unavailable: {commit_operation} could "
-                f"not run in {source_root}: {exc}"
-            ) from exc
-        if commit.returncode != 0:
-            raise RuntimeError(
-                f"task baseline Git snapshot unavailable: {commit_operation} exited "
-                f"{commit.returncode} in {source_root}"
-            )
-        if commit.stdout.strip().lower() != source_head.lower():
-            raise RuntimeError(
-                f"task baseline Git snapshot unavailable: {commit_operation} "
-                f"returned a mismatched object id "
-                f"in {source_root}"
-            )
-
-        ancestor_operation = "baseline ancestry validation"
-        if prefix:
-            ancestor_operation += f" ({prefix})"
-        ancestor_timeout = _bounded_snapshot_timeout(
-            2, ancestor_operation, source_root,
-            deadline_allowance_seconds=_GIT_ENUMERATION_TIMEOUT_SECONDS,
-        )
-        try:
-                ancestor = subprocess.run(
-                git_command + [
-                    "merge-base", "--is-ancestor", source_head, "HEAD",
-                ],
-                cwd=source_root,
-                    capture_output=True,
-                    text=True,
-                    env=_trusted_git_env(),
-                timeout=ancestor_timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(
-                f"task baseline Git snapshot unavailable: {ancestor_operation} timed "
-                f"out after {ancestor_timeout:.1f}s in {source_root}"
-            ) from exc
-        except OSError as exc:
-            raise RuntimeError(
-                f"task baseline Git snapshot unavailable: {ancestor_operation} could "
-                f"not run in {source_root}: {exc}"
-            ) from exc
-        if ancestor.returncode != 0:
-            raise RuntimeError(
-                f"task baseline Git snapshot unavailable: {ancestor_operation} exited "
-                f"{ancestor.returncode} in {source_root}"
-            )
-    if cache is not None:
-        cache[cache_key] = data
-    return data
-
-
-def _read_task_baseline(task_dir):
-    baseline = _read_task_baseline_snapshot(task_dir)
-    return baseline.get("dirty_paths") if baseline else None
-
-
-def _filter_baseline_unchanged(task_dir, repo_root, changed):
-    baseline = _read_task_baseline(task_dir)
-    if baseline is None:
-        return changed
-    current = _workspace_changed_path_fingerprints(repo_root)
-    gitlink_paths = _workspace_gitlink_paths(repo_root)
-    out = set()
-    for rel in changed:
-        if rel not in baseline:
-            out.add(rel)
-            continue
-        current_fp = current.get(rel)
-        if current_fp is None:
-            if rel.rstrip("/") in gitlink_paths:
-                source_root, source_relpath, entry, registered = gitlink_paths[rel.rstrip("/")]
-                current_fp = (
-                    _registered_source_gitlink_fingerprint(
-                        source_root, source_relpath, entry[0],
-                    )
-                    if registered
-                    else _submodule_gitlink_fingerprint(source_root, source_relpath)
-                )
-            else:
-                source_root, source_relpath = _workspace_path_binding(repo_root, rel)
-                current_fp = _fingerprint_path(source_root, source_relpath)
-        if current_fp != baseline.get(rel):
-            out.add(rel)
-    return out
-
-
-def _gitlink_index_snapshot(repo_root, *, registered_leaves=(), git_dir=None):
-    registered_leaves = tuple(sorted(set(registered_leaves)))
-    cache = _review_snapshot_cache()
-    cache_key = (
-        "gitlink_index_snapshot",
-        os.path.realpath(repo_root),
-        registered_leaves,
-        os.path.realpath(git_dir) if git_dir else "",
-    )
-    if cache is not None and cache_key in cache:
-        return dict(cache[cache_key])
-
-    def walk(worktree, prefix, seen):
-        real_worktree = os.path.realpath(worktree)
-        if real_worktree in seen:
-            raise RuntimeError("Git submodule snapshot unavailable")
-        seen.add(real_worktree)
-        if _has_git_metadata(worktree):
-            _remember_git_root(worktree)
-        found = {}
-        try:
-            direct_entries = _direct_gitlink_index_entries(
-                worktree, git_dir=git_dir if not prefix else None,
-            )
-        except RuntimeError:
-            if not _has_git_metadata(worktree):
-                return {}
-            raise
-        for path, oid in direct_entries.items():
-            full_path = prefix + path
-            if not prefix and path in registered_leaves:
-                initialized = os.path.isdir(os.path.join(worktree, path)) and os.path.lexists(
-                    os.path.join(worktree, path, ".git")
-                )
-                found[full_path] = (oid, initialized)
-                continue
-            sub_root, _ = _validated_submodule_root(
-                worktree, path, allow_missing=True,
-            )
-            initialized = sub_root is not None
-            found[full_path] = (oid.lower(), initialized)
-            if initialized:
-                found.update(walk(sub_root, full_path + "/", seen))
-        return found
-
-    out = walk(repo_root, "", set())
-    if cache is not None:
-        cache[cache_key] = dict(out)
-    return out
-
-
-def _initialized_submodule_paths(repo_root, *, registered_leaves=(), git_dir=None):
-    return [
-        path for path, (_, initialized) in _gitlink_index_snapshot(
-            repo_root, registered_leaves=registered_leaves, git_dir=git_dir,
-        ).items()
-        if initialized and path not in set(registered_leaves)
-    ]
-
-
-def sync_from_git_diff(task_dir):
-    """Sync touched paths from git state.
-
-    Four sources:
-      1. Paths committed after the task-start HEAD baseline.
-      2. Unstaged modifications (``git diff --name-only HEAD``).
-      3. Staged modifications (``git diff --cached --name-only HEAD``).
-      4. Untracked-but-not-ignored files (``git ls-files --others --exclude-standard``).
-
-    Untracked inclusion matters for the PR2 stale-verdict check: a new file
-    created after ``runtime_verdict: PASS`` must show up in ``touched_paths``
-    so mtime comparison can refuse ``task_close``. ``.gitignore`` entries
-    stay excluded via ``--exclude-standard``.
-    """
-    repo_root = find_harness_root(task_dir) or find_repo_root(task_dir)
-    changed = set()
-    for prefix, source_root in _workspace_source_bindings(repo_root):
-        changed.update(
-            prefix + path
-            for path in _committed_paths_since_baseline(
-                task_dir, source_root, workspace_prefix=prefix
-            )
-        )
-    changed.update(_workspace_git_changed_paths(repo_root))
-    changed.update(_control_root_changed_paths(task_dir, repo_root))
-    changed = _filter_baseline_unchanged(task_dir, repo_root, changed)
-    if not changed:
-        return []
-    return sync_touched_paths(task_dir, changed)
 
 
 # ── Artifact helpers ─────────────────────────────────────────────────────

@@ -20,9 +20,9 @@ No step skipped. Smallest coherent diff per step.
 ## 2. MCP tools
 
 **Core (task driver — main session or run skill):**
-- `task_start` — create/resume task, return fresh context
+- `task_start` — create/resume task, return task context
 - `task_context` — refresh task state (only when needed)
-- `task_verify` — sync changed paths + compute verification from fresh review completions followed by fresh QA completions
+- `task_verify` — compute verification from ordered review completions followed by QA completions
 - `task_close` — gate: runtime verdict PASS → close
 - `task_blocked` — park unfinished work on a real environment blocker; writes BLOCKED.md and clears this session's active marker
 
@@ -32,7 +32,8 @@ No step skipped. Smallest coherent diff per step.
 
 Static review provenance = `REVIEW_RECEIPTS.jsonl`; runtime QA provenance =
 `SUBAGENT_RECEIPTS.jsonl`. Codex/Claude lifecycle hooks own both. Starts prove
-delegation only; fresh matched completions with explicit PASS drive the gates.
+delegation only; ordered matched completions with explicit PASS drive the gates.
+Applicable lenses come from `PLAN.meta.json`; receipts do not bind Git state.
 
 ## 3. TASK_STATE (7 fields only)
 
@@ -47,6 +48,8 @@ updated: 2026-04-14T00:00:00Z
 ```
 
 Routing is computed on-the-fly from manifest + artifacts. Never stored in TASK_STATE.
+`touched_paths` is schema-compatible legacy state and is not populated by
+automatic Git inspection.
 
 ## 4. Plan-first rule
 
@@ -115,15 +118,16 @@ apply to read-only answers or ordinary non-harness work.
 
 ## 7. Verification
 
-`task_verify` syncs paths and checks hook-recorded review and QA lifecycles.
+`task_verify` checks hook-recorded review and QA lifecycles.
 Do not claim success from static inspection when runtime verification is required.
 
 ## 8. Finish cleanly
 
-Source changes require fresh `REVIEW_RECEIPTS.jsonl` PASS for the always-on code
-reviewer and any conditionally routed security reviewer. Runtime verdict becomes
+The plan declares required review and QA lenses. Required
+`REVIEW_RECEIPTS.jsonl` entries must PASS before QA starts. Runtime verdict becomes
 PASS only when every applicable QA lens then starts and completes with explicit
-PASS after the latest review PASS.
+PASS. Receipts attest task, agent, lens, verdict, and ordering—not HEAD, diffs,
+or source fingerprints. Post-QA edits and scope drift are developer-owned.
 Use `task_close`. If blocked, fix the stated gate.
 Captured user feedback is stored in task-local `USER_FEEDBACK.jsonl`; it is prompt context, not a close-gate evidence document.
 Task-local `CONVERSATION.md` is human-readable history. The close gate reads
@@ -143,10 +147,9 @@ invalidated_by_paths:
 ---
 ```
 
-On every SessionStart (and whenever explicitly run), the hook
-`scripts/note_freshness.py` scans `git diff HEAD~1 HEAD`. If any changed path
-matches a note's `invalidated_by_paths`, that note's `freshness` flips from
-`current` to `suspect` and `freshness_updated` is stamped.
+When explicitly run with `--paths`, `scripts/note_freshness.py` can flip a
+matching note from `current` to `suspect`. Normal Harness lifecycle calls do not
+run Git to discover changed paths.
 
 Writer-role agents must verify `freshness: current` before citing a note as
 authoritative. `suspect` notes are still readable but require re-validation
@@ -181,7 +184,7 @@ orchestrator reads the subagent's final response for findings and uses
 This is workflow guidance, not a PreToolUse gate. Short diagnostics and browser
 verification may run inline when delegation is unavailable or the inline path
 is materially simpler. Harness accepts the resulting context-growth risk; the
-caller still owns complete evidence and fresh review/QA receipts required by
+caller still owns complete ordered review/QA receipts required by
 `task_verify`.
 
 Allowed inline:

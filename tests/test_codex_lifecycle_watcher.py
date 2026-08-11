@@ -19,6 +19,14 @@ def _load():
     return module
 
 
+def _active_binding(task_dir):
+    return {
+        "task_dir": str(task_dir),
+        "task_run_id": "a" * 32,
+        "run_started_at": "2026-08-11T04:00:00Z",
+    }
+
+
 def _write_jsonl(path: Path, events: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
@@ -74,7 +82,7 @@ def _child_events(root_id: str, child_id: str, agent_path: str, cwd: str, final:
 def _spawn_events(root_id: str, child_id: str, task_name: str, agent_path: str):
     call_id = "call_runtime_123456"
     return [
-        {"type": "response_item", "payload": {
+        {"timestamp": "2026-08-11T05:00:00Z", "type": "response_item", "payload": {
             "type": "function_call", "namespace": "collaboration", "name": "spawn_agent",
             "call_id": call_id, "arguments": json.dumps({"task_name": task_name, "message": "encrypted"}),
         }},
@@ -198,7 +206,7 @@ def _intermediate_message(agent_path: str):
 def _exec_spawn_events(child_id: str, task_name: str):
     call_id = "call_exec_runtime_123456"
     return [
-        {"type": "response_item", "payload": {
+        {"timestamp": "2026-08-11T05:00:00Z", "type": "response_item", "payload": {
             "type": "custom_tool_call", "name": "exec", "call_id": call_id,
             "input": (
                 "const result = await tools.multi_agent_v1__spawn_agent("
@@ -222,7 +230,7 @@ def _exec_spawn_events(child_id: str, task_name: str):
 def _current_spawn_events(child_id: str, task_name: str):
     call_id = "call_current_runtime_123456"
     return [
-        {"type": "response_item", "payload": {
+        {"timestamp": "2026-08-11T05:00:00Z", "type": "response_item", "payload": {
             "type": "function_call", "namespace": "multi_agent_v1", "name": "spawn_agent",
             "call_id": call_id,
             "arguments": json.dumps({
@@ -552,7 +560,7 @@ def test_watcher_records_start_then_correlated_review_completion(tmp_path, monke
 
     watcher = mod.Watcher(str(repo), root_id)
     patches = (
-        mock.patch.object(mod, "_active_task_for_session", return_value=str(task_dir)),
+        mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)),
         mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"),
         mock.patch.object(mod, "record_subagent_receipt", side_effect=record),
         mock.patch.object(mod, "list_review_receipts", side_effect=lambda _td: receipts),
@@ -605,7 +613,7 @@ def test_watcher_records_exec_wrapped_spawn_and_status_notification(tmp_path, mo
 
     watcher = mod.Watcher(str(repo), root_id)
     final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nClean"
-    with mock.patch.object(mod, "_active_task_for_session", return_value=str(task_dir)), \
+    with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
          mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"), \
          mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
          mock.patch.object(mod, "list_review_receipts", side_effect=lambda _td: receipts), \
@@ -819,7 +827,7 @@ def test_malformed_current_spawn_records_actionable_adapter_diagnostic(tmp_path,
         },
     }
     with mock.patch.object(
-        mod, "_active_task_for_session", return_value=str(task_dir),
+        mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir),
     ), mock.patch.object(
         mod, "record_subagent_receipt",
         side_effect=lambda _td, receipt: receipts.append(receipt) or receipt,
@@ -859,7 +867,7 @@ def test_current_spawn_invalid_output_records_adapter_diagnostic(tmp_path):
         },
     }
     with mock.patch.object(
-        mod, "_active_task_for_session", return_value=str(task_dir),
+        mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir),
     ), mock.patch.object(
         mod, "record_subagent_receipt",
         side_effect=lambda _td, receipt: receipts.append(receipt) or receipt,
@@ -913,7 +921,8 @@ def test_spawn_task_binding_is_immutable_across_task_switch(tmp_path):
         "agent_thread_id": child_id, "agent_path": child_id,
     }}
     with mock.patch.object(
-        mod, "_active_task_for_session", side_effect=lambda *_args: active[0],
+        mod, "_active_task_binding_for_session",
+        side_effect=lambda *_args: _active_binding(active[0]),
     ), mock.patch.object(mod, "record_subagent_receipt") as record, \
          mock.patch.object(mod, "_child_status", return_value=("running", None, "")):
         watcher.feed(spawn)
@@ -925,6 +934,34 @@ def test_spawn_task_binding_is_immutable_across_task_switch(tmp_path):
 
     assert watcher.calls["call_current_runtime_123456"]["invalid"] is True
     record.assert_not_called()
+
+
+def test_replayed_spawn_before_current_task_run_is_rejected(tmp_path):
+    mod = _load()
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    watcher = mod.Watcher(str(tmp_path), root_id)
+    spawn = _current_spawn_events(
+        "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f", "qa_cli_prior_run"
+    )[0]
+    spawn["timestamp"] = "2026-08-11T01:00:00Z"
+    with mock.patch.object(mod, "_active_task_binding_for_session", return_value={
+        "task_dir": "/task",
+        "task_run_id": "a" * 32,
+        "run_started_at": "2026-08-11T02:00:00Z",
+    }):
+        watcher.feed(spawn)
+
+    item = watcher.calls["call_current_runtime_123456"]
+    assert item["invalid"] is True
+    assert not item.get("started")
+
+
+def test_replayed_spawn_earlier_in_same_second_is_rejected():
+    mod = _load()
+    assert mod._event_precedes_run(
+        {"timestamp": "2026-08-11T05:00:00.100000Z"},
+        "2026-08-11T05:00:00.900000Z",
+    )
 
 
 def test_current_spawn_and_completion_sources_use_agent_id_once(tmp_path, monkeypatch):
@@ -963,7 +1000,7 @@ def test_current_spawn_and_completion_sources_use_agent_id_once(tmp_path, monkey
 
         watcher = mod.Watcher(str(repo), root_id)
         final = f"VERDICT: {expected_verdict}\nQA completed"
-        with mock.patch.object(mod, "_active_task_for_session", return_value=str(task_dir)), \
+        with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
              mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"), \
              mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
              mock.patch.object(mod, "list_review_receipts", return_value=[]), \
@@ -1027,7 +1064,7 @@ def test_watcher_records_sequential_unique_qa_names_in_one_root(tmp_path, monkey
         return entry
 
     watcher = mod.Watcher(str(repo), root_id)
-    with mock.patch.object(mod, "_active_task_for_session", return_value=str(task_dir)), \
+    with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
          mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"), \
          mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
          mock.patch.object(mod, "list_review_receipts", return_value=[]), \
@@ -1079,7 +1116,7 @@ def test_watcher_ignores_intermediate_message_before_final_delivery(tmp_path, mo
 
     watcher = mod.Watcher(str(repo), root_id)
     final = "VERDICT: PASS\nQA passed"
-    with mock.patch.object(mod, "_active_task_for_session", return_value=str(task_dir)), \
+    with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
          mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"), \
          mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
          mock.patch.object(mod, "list_review_receipts", return_value=[]), \
@@ -1110,7 +1147,7 @@ def test_watcher_rejects_child_that_completed_before_start_capture(tmp_path, mon
     _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo), final))
     receipts = []
     watcher = mod.Watcher(str(repo), root_id)
-    with mock.patch.object(mod, "_active_task_for_session", return_value="/task"), \
+    with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding("/task")), \
          mock.patch.object(mod, "record_subagent_receipt", side_effect=lambda td, item: receipts.append(item)), \
          mock.patch.object(mod, "list_review_receipts", return_value=[]), \
          mock.patch.object(mod, "list_subagent_receipts", return_value=[]):
@@ -1147,7 +1184,7 @@ def test_watcher_restart_replays_persisted_exact_start_after_child_completes(tmp
         return receipt
 
     watcher = mod.Watcher(str(repo), root_id)
-    with mock.patch.object(mod, "_active_task_for_session", return_value=str(task_dir)), \
+    with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
          mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"), \
          mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
          mock.patch.object(mod, "list_review_receipts", side_effect=lambda _td: receipts), \
@@ -1161,7 +1198,7 @@ def test_watcher_restart_replays_persisted_exact_start_after_child_completes(tmp
     ]
 
 
-def test_watcher_marks_completion_pending_when_source_changes(tmp_path, monkeypatch):
+def test_watcher_keeps_completion_pass_when_source_changes(tmp_path, monkeypatch):
     mod = _load()
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
@@ -1183,7 +1220,7 @@ def test_watcher_marks_completion_pending_when_source_changes(tmp_path, monkeypa
         return entry
 
     watcher = mod.Watcher(str(repo), root_id)
-    with mock.patch.object(mod, "_active_task_for_session", return_value=str(task_dir)), \
+    with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
          mock.patch.object(mod, "review_diff_fingerprint", side_effect=lambda _td: fingerprint[0]), \
          mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
          mock.patch.object(mod, "list_review_receipts", side_effect=lambda _td: receipts), \
@@ -1194,7 +1231,7 @@ def test_watcher_marks_completion_pending_when_source_changes(tmp_path, monkeypa
         final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
         _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo), final))
         watcher.feed(_delivery(agent_path, final))
-    assert receipts[-1]["verdict"] == "PENDING"
+    assert receipts[-1]["verdict"] == "PASS"
 
 
 def test_watcher_records_child_repo_receipt_for_parent_control_workspace(tmp_path, monkeypatch):
@@ -1231,7 +1268,7 @@ def test_watcher_records_child_repo_receipt_for_parent_control_workspace(tmp_pat
         str(control_root), root_id, session_cwd=str(session_cwd)
     )
     with mock.patch.object(
-        mod, "_active_task_for_session", return_value=str(task_dir)
+        mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)
     ), mock.patch.object(
         mod, "review_diff_fingerprint", return_value="sha256:stable"
     ), mock.patch.object(
@@ -1348,8 +1385,8 @@ def test_record_receipt_preserves_runtime_provenance(tmp_path):
 
     task = tmp_path / "TASK__provenance"
     task.mkdir()
-    with mock.patch.object(_lib, "review_diff_fingerprint", return_value="sha256:x"), \
-         mock.patch.object(_lib, "_git_head_for_receipt", return_value="a" * 40):
+    _lib.begin_task_run(task)
+    with mock.patch.object(_lib, "review_diff_fingerprint", return_value="sha256:x"):
         entry = _lib.record_subagent_receipt(task, {
             "agent_id": "/root/qa_cli", "agent_type": "qa_cli", "status": "started",
             "runtime_event_id": "session:call:thread", "runtime_session_id": "session",
@@ -1699,6 +1736,36 @@ def test_manager_restart_replays_immutable_registration_offset(tmp_path):
     assert calls == [777, 777]
 
 
+def test_manager_restarts_failed_worker_in_same_manager(tmp_path):
+    mod = _load()
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    registration = {
+        "thread_id": "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+        "rollout": "/root-rollout",
+        "offset": 777,
+    }
+    calls = []
+
+    def fake_watch(_repo, _thread, _rollout, offset, *, stop_event, **_kwargs):
+        calls.append(offset)
+        if len(calls) == 1:
+            raise RuntimeError("late terminal receipt rejected")
+        return 0
+
+    manager = mod.WatcherManager(str(repo))
+    with mock.patch.object(mod, "registrations", return_value=[registration]), \
+         mock.patch.object(mod, "watch", side_effect=fake_watch):
+        assert manager.scan_once() == 1
+        manager.workers[registration["thread_id"]].join()
+        assert manager.worker_results[registration["thread_id"]] == 4
+        assert manager.scan_once() == 1
+        manager.workers[registration["thread_id"]].join()
+
+    assert calls == [777, 777]
+    assert manager.worker_results[registration["thread_id"]] == 0
+
+
 def test_managers_use_cross_process_lease_for_same_registration(tmp_path):
     mod = _load()
     repo = tmp_path / "repo"
@@ -1771,10 +1838,14 @@ def test_active_task_requires_exact_session_marker_and_state(tmp_path):
         "touched_paths: []\nplan_session_state: closed\nclosed_at: null\nupdated: now\n"
     )
     import _lib
+    _lib.begin_task_run(task)
     _lib.write_active_marker(str(repo), str(task), session_id=root_id)
     marker = tasks / _lib.ACTIVE_SESSIONS_DIRNAME / f"{root_id}.json"
     with mock.patch.object(mod, "resolve_active_task_dir", return_value=str(task)):
         assert mod._active_task_for_session(str(repo), root_id) == str(task.resolve())
+        assert mod._active_task_binding_for_session(str(repo), root_id)["task_run_id"]
+        _lib.begin_task_run(task)
+        assert mod._active_task_binding_for_session(str(repo), root_id) == {}
     marker.write_text(json.dumps({
         "session_id": "other", "task_dir": str(task), "task_id": "TASK__active",
     }))
@@ -1872,7 +1943,7 @@ def test_validated_task_dir_rejects_writable_root_owned_ancestor(tmp_path):
         ) == ""
 
 
-def test_watcher_binds_task_from_successful_root_mcp_context_without_session_marker(tmp_path, monkeypatch):
+def test_watcher_context_without_session_run_marker_cannot_start_receipt(tmp_path, monkeypatch):
     mod = _load()
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
@@ -1907,7 +1978,7 @@ def test_watcher_binds_task_from_successful_root_mcp_context_without_session_mar
             watcher.feed(event)
 
     assert watcher.task_dir == str(task_dir.resolve())
-    assert [(item["status"], item["lens"]) for item in receipts] == [("started", "review-code")]
+    assert receipts == []
 
 
 def test_watcher_rejects_failed_or_invalid_root_mcp_task_binding(tmp_path):
@@ -1972,14 +2043,14 @@ def test_watcher_reuses_classic_posttooluse_start_receipt(tmp_path, monkeypatch)
         "base_sha": "a" * 40, "diff_fingerprint": "sha256:before",
     }]
     watcher = mod.Watcher(str(repo), root_id)
-    with mock.patch.object(mod, "_active_task_for_session", return_value=str(task_dir)), \
+    with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
          mock.patch.object(mod, "record_subagent_receipt") as record, \
          mock.patch.object(mod, "list_review_receipts", return_value=classic), \
          mock.patch.object(mod, "list_subagent_receipts", return_value=[]):
         for event in _spawn_events(root_id, child_id, "code_review", agent_path):
             watcher.feed(event)
     record.assert_not_called()
-    assert watcher.by_path[agent_path]["diff_fingerprint"] == "sha256:before"
+    assert "diff_fingerprint" not in watcher.by_path[agent_path]
 
 
 def test_duplicate_identical_root_delivery_is_idempotent(tmp_path, monkeypatch):
@@ -2003,7 +2074,7 @@ def test_duplicate_identical_root_delivery_is_idempotent(tmp_path, monkeypatch):
         return entry
     watcher = mod.Watcher(str(repo), root_id)
     final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
-    with mock.patch.object(mod, "_active_task_for_session", return_value=str(task_dir)), \
+    with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
          mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"), \
          mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
          mock.patch.object(mod, "list_review_receipts", side_effect=lambda _td: receipts), \

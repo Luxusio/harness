@@ -12,6 +12,7 @@ from conftest import SCRIPTS_DIR
 
 sys.path.insert(0, SCRIPTS_DIR)
 import background_registry  # noqa: E402
+import _lib  # noqa: E402
 
 
 def _repo(tmp_path):
@@ -19,6 +20,7 @@ def _repo(tmp_path):
     tasks = tmp_path / "doc" / "harness" / "tasks"
     task_dir = tasks / "TASK__bg"
     task_dir.mkdir(parents=True)
+    _lib.begin_task_run(str(task_dir))
     (tasks / ".active").write_text(str(task_dir), encoding="utf-8")
     return str(tmp_path), str(task_dir)
 
@@ -344,7 +346,7 @@ def test_unmatched_stop_records_nonblocking_diagnostic(tmp_path):
     assert record["status"] == "unmatched_stop"
     assert record["agent_id"] == "agent-missing"
     assert record["transcript_path"] == "/tmp/missing.jsonl"
-    assert record["diff_fingerprint"] == ""
+    assert "diff_fingerprint" not in record
     assert background_registry.active_records(repo, task_id="TASK__bg", session_id="sess-1") == []
 
 

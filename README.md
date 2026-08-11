@@ -50,7 +50,7 @@ plan → develop → verify → close
 |------|-------------|
 | **plan** | 7-phase dual-voice review pipeline writes PLAN.md + CHECKS.yaml |
 | **develop** | Implement per-AC, checkpoint progress, run quality audit, dogfood |
-| **verify** | QA/UX subagent starts are hook-recorded in SUBAGENT_RECEIPTS.jsonl |
+| **verify** | Ordered review/QA completions are hook-recorded and checked against PLAN metadata |
 | **close** | Gate: PLAN.md exists + runtime_verdict = PASS + CHECKS terminal + no open CONVERSATION.md items |
 
 After close, the Goal child-task executor performs a self-improvement pass — surfaces friction signals into `learnings.jsonl`, promotes recurring keys into Tier 2 patterns, and prunes stale entries.
@@ -67,7 +67,10 @@ closed_at: null
 updated: <ISO8601>
 ```
 
-`BLOCKED_ENV` keeps the task open — QA has surfaced an environmental blocker that cannot be resolved without user action. `task_close` refuses to close anything except fresh `PASS`.
+`touched_paths` is retained for schema compatibility but is not populated by
+automatic Git inspection. `BLOCKED_ENV` keeps the task open — QA has surfaced
+an environmental blocker that cannot be resolved without user action.
+`task_close` refuses to close anything except receipt-backed `PASS`.
 
 ## Acceptance ledger (CHECKS.yaml)
 
@@ -109,14 +112,21 @@ All under `plugin/agents/`. Narrow tool surface — each agent gets only what it
 | `ux-browser` / `ux-api` / `ux-cli` / `ux-desktop` | Surface-specific UX review; judges whether the implemented experience is shippable |
 
 QA/UX agents return findings in their final response. Codex and Claude hooks
-record subagent starts to `SUBAGENT_RECEIPTS.jsonl`; when Codex collaboration
+record matched subagent starts and completions to receipt streams; when Codex collaboration
 PostToolUse events are unavailable, every installed Codex root hook restores an
 idempotent root-rollout registration and
 the existing Harness MCP server hosts `codex_lifecycle_watcher.py` as passive
 daemon threads. `task_verify(reconcile_acs=true)`
-uses that hook-owned receipt to set runtime verification and promote open
+uses task/agent/lens identity plus review-before-QA ordering to set runtime verification and promote open
 CHECKS.yaml entries. QA agents never hold `Edit`/`Write` on source files.
 Dogfooder remains a non-gating backlog pass after QA/UX.
+
+Task lifecycle calls do not run Git change detection, capture HEAD baselines,
+or invalidate receipts after source edits. Nested repositories and submodules
+therefore need no special tracking. The plan declares applicable lenses;
+post-QA edits and scope drift are developer-owned. Explicit setup, installer,
+release, and diagnostic commands may still inspect Git or their concrete
+payload when needed.
 
 ## Quality scripts
 
@@ -145,7 +155,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | stdout |
 | `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |
 | `update_checks.py` | Atomic CHECKS.yaml AC status transitions (plan-first) | task-local |
-| `install_verified.py` | Trusted post-QA harness installer with review/QA freshness, snapshot, global lock, and fingerprint deduplication | task-local `INSTALL_RECEIPT.json` |
+| `install_verified.py` | Trusted post-QA harness installer with ordered review/QA receipts, explicit payload snapshot, global lock, and payload deduplication | task-local `INSTALL_RECEIPT.json` |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
 | `hygiene_scan.py` | Close-time hygiene scan: Tier A/B auto-apply + doc archive pass | `doc/harness/.hygiene-pending.json` |
 | `doc_hygiene.py` | Content-signal KEEP/REMOVE/REVIEW classifier; archives stale docs via `git mv` | `doc/harness/.hygiene-pending.json` |
@@ -174,18 +184,18 @@ The post-close self-improvement pass in the Goal child-task executor auto-promot
 
 | Hook | Script | Purpose |
 |------|--------|---------|
-| SessionStart | `note_freshness.py` | Flip changed notes current → suspect |
 | Stop | `stop_gate.py` | Warn if open tasks remain |
 | SubagentStart | `background_hook.py` | Register active Claude subagent work for Stop hook auto-wait |
 | SubagentStop | `background_hook.py` | Mark Claude subagent work complete |
 | PreToolUse (direct writes) | `prewrite_gate.py` | Artifact ownership + plan-first rule |
 | PreToolUse (selected mutation/lifecycle tools) | `hook_pre_tool_use.py` | Codex wrapper for direct-write/Bash gates and spawn registration recovery |
 | PreToolUse (Bash) | `mcp_bash_guard.py` | Block Bash-layer mutations of source / protected / workflow-control paths |
-| UserPromptSubmit | `prompt_memory.py` | Inject stored `[harness-context]` state without Git; authoritative freshness stays in verify/close gates |
+| UserPromptSubmit | `prompt_memory.py` | Inject stored `[harness-context]` state without Git |
 | UserPromptSubmit | `hook_user_prompt_submit.py` | Codex wrapper that injects `$harness:run` routing plus prompt memory |
 | PostToolUse (Bash) | `tool_routing.py` | Emit `[harness-hint]` on known failures (wrong test command, missing script) |
 | PostToolUse (Bash/Goal/agent lifecycle) | `hook_post_tool_use.py` | Route Bash failures, native `create_goal` synchronization, and Codex reviewer/QA receipts |
 | SessionStart | `hook_session_start.py` | Codex plugin wrapper for startup context |
+| Explicit note maintenance | `note_freshness.py --paths ...` | Mark selected durable notes suspect without automatic Git scanning |
 | Codex root hooks + MCP background | `codex_hook_registration.py`, `codex_lifecycle_watcher.py` | Restore the root-rollout registration, then bind runtime subagent starts and completions from MCP-hosted daemon threads without a detached process |
 | Stop | `hook_stop.py` | Codex plugin wrapper for stop gating |
 | (task_start) | `environment_snapshot.py` | One-shot probe invoked from `task_start`; writes `ENVIRONMENT_SNAPSHOT.md` into the task dir |
@@ -200,7 +210,7 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 |------|---------|
 | `task_start` | Create/resume task, return context |
 | `task_context` | Refresh task state |
-| `task_verify` | Sync paths, compute verification from subagent-start receipts, optionally reconcile ACs |
+| `task_verify` | Compute verification from ordered review/QA completion receipts, optionally reconcile ACs |
 | `task_close` | Gate: all verdicts PASS → close |
 | `task_blocked` | Park a task on a genuine environment blocker |
 | `goal_start` | Start/sync native goal state |

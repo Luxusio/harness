@@ -27,11 +27,6 @@ spec.loader.exec_module(env_snapshot_mod)
 
 def _mk_git_repo(base: Path) -> None:
     (base / ".git").mkdir()
-    # Shim: environment_snapshot calls `git branch --show-current` via
-    # subprocess. Actually init a real git repo so this command succeeds.
-    subprocess.run(["git", "init", "-q"], cwd=base, check=True)
-    subprocess.run(["git", "-c", "user.email=a@b", "-c", "user.name=a",
-                    "commit", "--allow-empty", "-qm", "init"], cwd=base, check=True)
 
 
 def _mk_manifest(base: Path, body: str) -> None:
@@ -81,9 +76,9 @@ class TestEnvironmentSnapshot(unittest.TestCase):
         self.assertIn("python3 -m pytest", body)
         self.assertIn("ast_grep_ready: true", body)
         self.assertIn("project_shape: `library`", body)
-        self.assertIn("- git: `git version", body)
+        self.assertIn("branch: `not-probed`", body)
 
-    def test_snapshot_does_not_call_git_status_or_render_dirty_bit(self):
+    def test_snapshot_does_not_call_git_or_render_dirty_bit(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             _mk_git_repo(base)
@@ -96,7 +91,7 @@ class TestEnvironmentSnapshot(unittest.TestCase):
 
             def guarded_run(cmd, *args, **kwargs):
                 calls.append(list(cmd))
-                self.assertNotEqual(list(cmd)[:2], ["git", "status"])
+                self.assertNotEqual(list(cmd)[:1], ["git"])
                 return real_run(cmd, *args, **kwargs)
 
             with mock.patch.object(env_snapshot_mod.subprocess, "run", side_effect=guarded_run):
@@ -104,7 +99,7 @@ class TestEnvironmentSnapshot(unittest.TestCase):
 
             body = Path(path).read_text(encoding="utf-8")
         self.assertNotIn("dirty:", body)
-        self.assertIn(["git", "branch", "--show-current"], calls)
+        self.assertFalse(any(call and call[0] == "git" for call in calls))
 
     def test_no_manifest_fallback(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -209,7 +204,7 @@ class TestEnvironmentSnapshot(unittest.TestCase):
         self.assertEqual([timeout for _, timeout in calls], [3.0, 2.5, 1.0])
         self.assertEqual(now[0], 14.0)
         self.assertIn("- volta: `missing`", body)
-        self.assertIn("- git: `missing`", body)
+        self.assertNotIn("- git:", body)
 
     @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO regression requires POSIX")
     def test_snapshot_rejects_fifo_manifest_without_blocking(self):
@@ -223,7 +218,6 @@ class TestEnvironmentSnapshot(unittest.TestCase):
 
             started = time.monotonic()
             with (
-                mock.patch.object(env_snapshot_mod, "_git_branch", return_value="main"),
                 mock.patch.object(env_snapshot_mod, "_tool_managers", return_value={}),
                 mock.patch.object(env_snapshot_mod, "_tool_versions", return_value={}),
             ):
@@ -246,7 +240,6 @@ class TestEnvironmentSnapshot(unittest.TestCase):
             output.symlink_to(sentinel)
 
             with (
-                mock.patch.object(env_snapshot_mod, "_git_branch", return_value="main"),
                 mock.patch.object(env_snapshot_mod, "_tool_managers", return_value={}),
                 mock.patch.object(env_snapshot_mod, "_tool_versions", return_value={}),
             ):
@@ -268,7 +261,6 @@ class TestEnvironmentSnapshot(unittest.TestCase):
 
             started = time.monotonic()
             with (
-                mock.patch.object(env_snapshot_mod, "_git_branch", return_value="main"),
                 mock.patch.object(env_snapshot_mod, "_tool_managers", return_value={}),
                 mock.patch.object(env_snapshot_mod, "_tool_versions", return_value={}),
             ):

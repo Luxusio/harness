@@ -167,7 +167,7 @@ def test_develop_installs_harness_after_fresh_qa_before_close():
         body = path.read_text(encoding="utf-8")
         install_at = body.index("### Phase 7.8: Harness source auto-install")
         close_heading = (
-            "### Phase 9: Final freshness, install, close, and response"
+            "### Phase 9: Final verification, install, close, and response"
             if "plugin-codex" in str(path)
             else "### Phase 8: Close and final response"
         )
@@ -176,7 +176,7 @@ def test_develop_installs_harness_after_fresh_qa_before_close():
         section = body[install_at:close_at]
         assert "plugin/scripts/install_verified.py" in section
         assert "python3 install.py --force" in section
-        assert "terminal fresh" in section
+        assert "terminal ordered" in section
         assert "failed install blocks completion" in section.lower()
 
 

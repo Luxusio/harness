@@ -4,6 +4,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 DEVELOP = REPO / "plugin" / "skills" / "develop" / "SKILL.md"
 VERIFY = REPO / "plugin" / "skills" / "develop" / "verification-gate.md"
+QUALITY = REPO / "plugin" / "skills" / "develop" / "quality-audit-pipeline.md"
+PARALLEL = REPO / "plugin" / "skills" / "develop" / "parallel-fanout.md"
 CONTRACTS = REPO / "CONTRACTS.md"
 
 
@@ -35,3 +37,17 @@ def test_contract_records_highest_available_verification_rule():
     assert "Highest available verification is part of the task" in body
     assert "asking the user whether to verify" in body
     assert "external/destructive blocker" in body
+
+
+def test_develop_workflow_uses_task_run_and_plan_routing_not_git_freshness():
+    body = "\n".join(_text(path) for path in (DEVELOP, QUALITY, PARALLEL))
+
+    assert "current `TASK_RUN`" in body
+    assert "PLAN.meta.json.plan_meta.surfaces" in body
+    for obsolete in (
+        "PASS verdict must be fresh after the last edit",
+        "Source of truth: `TASK_STATE.yaml touched_paths`",
+        "stale HEAD, or changed worktree fingerprint",
+        "Any source edit invalidates all review receipts",
+    ):
+        assert obsolete not in body

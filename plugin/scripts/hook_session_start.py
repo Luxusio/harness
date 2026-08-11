@@ -51,7 +51,6 @@ def main() -> int:
     if restore_watcher_registration is not None:
         restore_watcher_registration(payload, retry_seconds=1.0, budget_seconds=1.25)
     commands = [
-        ["note_freshness.py", "--from-git", "1", "--quiet"],
         ["verification_gap_check.py"],
     ]
     for command in commands:

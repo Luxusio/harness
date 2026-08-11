@@ -29,6 +29,16 @@ def _load(name: str):
     return module
 
 
+def _write_task_run(task_dir: Path) -> None:
+    (task_dir / "TASK_RUN.json").write_text(
+        json.dumps({
+            "task_run_id": "a" * 32,
+            "started_at": "2026-08-11T05:00:00.000000Z",
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+
 class _BytesStdin:
     def __init__(self, text: str):
         self.buffer = io.BytesIO(text.encode("utf-8"))
@@ -786,6 +796,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             tasks_dir = root / "doc" / "harness" / "tasks"
             task_dir = tasks_dir / "TASK__codex-subagent"
             task_dir.mkdir(parents=True)
+            _write_task_run(task_dir)
             (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
             payload = {
                 "cwd": repo,
@@ -813,6 +824,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             tasks_dir = root / "doc" / "harness" / "tasks"
             task_dir = tasks_dir / "TASK__codex-infer"
             task_dir.mkdir(parents=True)
+            _write_task_run(task_dir)
             (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
             payload = {
                 "cwd": repo,
@@ -845,6 +857,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             tasks_dir = root / "doc" / "harness" / "tasks"
             task_dir = tasks_dir / "TASK__codex-task-name"
             task_dir.mkdir(parents=True)
+            _write_task_run(task_dir)
             (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
             payload = {
                 "cwd": repo,
@@ -871,6 +884,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             tasks_dir = root / "doc" / "harness" / "tasks"
             task_dir = tasks_dir / "TASK__codex-complete"
             task_dir.mkdir(parents=True)
+            _write_task_run(task_dir)
             (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
             spawn_payload = {
                 "cwd": repo,
@@ -911,6 +925,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             tasks_dir = root / "doc" / "harness" / "tasks"
             task_dir = tasks_dir / "TASK__codex-list"
             task_dir.mkdir(parents=True)
+            _write_task_run(task_dir)
             (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
             for task_name in ("code_review", "security_review"):
                 spawn = {
@@ -951,6 +966,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             tasks_dir = root / "doc" / "harness" / "tasks"
             task_dir = tasks_dir / "TASK__codex-wait-status"
             task_dir.mkdir(parents=True)
+            _write_task_run(task_dir)
             (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
             agents = {
                 "agent-code-123": "code_review_wait_status",
@@ -996,7 +1012,7 @@ class TestCodexHookWrappers(unittest.TestCase):
                 [("agent-code-123", "PASS"), ("agent-security-456", "FAIL")],
             )
 
-    def test_post_tool_use_invalidates_wait_status_qa_after_source_change(self):
+    def test_post_tool_use_keeps_wait_status_qa_after_source_change(self):
         mod = _load("hook_post_tool_use")
 
         with tempfile.TemporaryDirectory() as repo:
@@ -1005,6 +1021,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             tasks_dir = root / "doc" / "harness" / "tasks"
             task_dir = tasks_dir / "TASK__codex-stale-qa"
             task_dir.mkdir(parents=True)
+            _write_task_run(task_dir)
             (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
             spawn = {
                 "cwd": repo,
@@ -1025,8 +1042,6 @@ class TestCodexHookWrappers(unittest.TestCase):
                 }},
             }
             with mock.patch.object(
-                mod, "review_diff_fingerprint", return_value="sha256:changed"
-            ), mock.patch.object(
                 sys, "stdin", _BytesStdin(json.dumps(waited))
             ), contextlib.redirect_stdout(io.StringIO()):
                 mod.main()
@@ -1035,8 +1050,7 @@ class TestCodexHookWrappers(unittest.TestCase):
                 json.loads(line)
                 for line in (task_dir / "SUBAGENT_RECEIPTS.jsonl").read_text().splitlines()
             ]
-            self.assertEqual(receipts[-1]["verdict"], "PENDING")
-            self.assertIn("source changed", receipts[-1]["summary"])
+            self.assertEqual(receipts[-1]["verdict"], "PASS")
 
     def test_post_tool_use_rejects_ambiguous_reused_agent_name(self):
         mod = _load("hook_post_tool_use")
@@ -1047,6 +1061,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             tasks_dir = root / "doc" / "harness" / "tasks"
             task_dir = tasks_dir / "TASK__codex-reused-name"
             task_dir.mkdir(parents=True)
+            _write_task_run(task_dir)
             (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
             for task_name in ("qa_cli_old", "qa_cli_new"):
                 spawn = {
@@ -1093,6 +1108,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             tasks_dir = root / "doc" / "harness" / "tasks"
             task_dir = tasks_dir / "TASK__codex-review"
             task_dir.mkdir(parents=True)
+            _write_task_run(task_dir)
             (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
             (task_dir / "TASK_STATE.yaml").write_text(
                 "task_id: TASK__codex-review\nstatus: created\nruntime_verdict: pending\n"
@@ -1127,7 +1143,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             self.assertEqual(receipts[-1]["lens"], "review-code")
             self.assertEqual(receipts[-1]["verdict"], "PASS")
 
-    def test_codex_reviewer_pass_is_invalidated_when_source_changes_during_review(self):
+    def test_codex_reviewer_pass_is_not_invalidated_by_source_changes(self):
         mod = _load("hook_post_tool_use")
 
         with tempfile.TemporaryDirectory() as repo:
@@ -1136,6 +1152,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             tasks_dir = root / "doc" / "harness" / "tasks"
             task_dir = tasks_dir / "TASK__codex-review-stale"
             task_dir.mkdir(parents=True)
+            _write_task_run(task_dir)
             (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
             (task_dir / "TASK_STATE.yaml").write_text(
                 "task_id: TASK__codex-review-stale\nstatus: created\nruntime_verdict: pending\n"
@@ -1156,7 +1173,7 @@ class TestCodexHookWrappers(unittest.TestCase):
                     mod.main()
 
             receipts = [json.loads(line) for line in (task_dir / "REVIEW_RECEIPTS.jsonl").read_text().splitlines()]
-            self.assertEqual(receipts[-1]["verdict"], "PENDING")
+            self.assertEqual(receipts[-1]["verdict"], "PASS")
 
     def test_post_tool_use_rejects_unmatched_wait_agent_completion(self):
         mod = _load("hook_post_tool_use")
@@ -1167,6 +1184,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             tasks_dir = root / "doc" / "harness" / "tasks"
             task_dir = tasks_dir / "TASK__codex-unmatched"
             task_dir.mkdir(parents=True)
+            _write_task_run(task_dir)
             (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
             payload = {
                 "cwd": repo,
@@ -1192,6 +1210,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             tasks_dir = root / "doc" / "harness" / "tasks"
             task_dir = tasks_dir / "TASK__active"
             task_dir.mkdir(parents=True)
+            _write_task_run(task_dir)
             (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
             payload = {
                 "cwd": repo,

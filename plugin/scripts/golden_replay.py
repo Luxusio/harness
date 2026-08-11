@@ -340,14 +340,11 @@ def test_task_close_blocks_on_failed_ac() -> TestResult:
             ),
         )
         orig = hs.canonical_task_dir
-        orig_sync = hs.sync_from_git_diff
         hs.canonical_task_dir = lambda task_id=None, **kw: task_dir
-        hs.sync_from_git_diff = lambda td: []
         try:
             result = hs.call_tool("task_close", {"task_id": "TASK__gr-pr2-failed-ac"})
         finally:
             hs.canonical_task_dir = orig
-            hs.sync_from_git_diff = orig_sync
     if not result.get("isError"):
         return TestResult("task_close_blocks_on_failed_ac", False,
                           f"expected error, got: {result!r}")

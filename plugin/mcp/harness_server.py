@@ -77,16 +77,17 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from _lib import (  # type: ignore
     GitBindingError,
     now_iso, read_state, write_state, set_state_field,
-    ensure_task_scaffold, emit_compact_context, sync_from_git_diff,
+    ensure_task_scaffold, emit_compact_context,
     artifact_exists, canonical_task_dir, canonical_task_id,
     find_harness_root, harness_root_resolution, find_repo_root,
-    runtime_is_stale as _runtime_is_stale,
     write_active_marker, clear_active_marker,
     resolve_active_task_dir, active_marker_snapshot, restore_active_marker_snapshot,
     receipt_runtime_verdict, subagent_receipt_summary, record_subagent_receipt,
     receipt_review_verdict, review_receipt_summary, required_review_lenses,
-    review_snapshot_scope, refresh_review_snapshot, git_snapshot_warnings,
-    receipt_stream_fingerprint, _git_head_for_receipt,
+    receipt_stream_fingerprint,
+    reset_receipt_streams_for_new_run, restore_receipt_streams,
+    receipt_stream_transaction,
+    read_task_run, begin_task_run, restore_task_run,
     write_task_close_attestation, clear_task_close_attestation,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
@@ -172,12 +173,7 @@ def _atomic_write_text(path: str, text: str) -> None:
         raise
 
 
-# ── PR2 close-gate helpers ──────────────────────────────────────────────
-#
-# `_runtime_is_stale` lives in `_lib.runtime_is_stale` so both the MCP
-# server (close + verify) and `stop_gate.py` can reach it without
-# cross-import from `mcp/` into `scripts/`. Imported at the top of this
-# file. See `_lib.py` for the full helper + skip-list constants.
+# ── Close-gate helpers ─────────────────────────────────────────────────
 
 
 _CHECKS_VALID_STATUSES = {"open", "implemented_candidate", "passed", "failed", "deferred"}
@@ -628,94 +624,83 @@ def handle_task_start(args: dict) -> dict:
                 pass
 
     warnings = []
-    with review_snapshot_scope(deadline_seconds=40):
-        scaffold = ensure_task_scaffold(
-            task_dir, tid, request_text=request_text, repo_root=repo_root
-        )
-        original_resumed_state = read_state(task_dir) if resumed_existing else {}
+    scaffold = ensure_task_scaffold(
+        task_dir, tid, request_text=request_text, repo_root=repo_root
+    )
+    original_resumed_state = read_state(task_dir) if resumed_existing else {}
+    terminal_receipt_snapshot = {}
+    task_run_snapshot = {}
 
-        def rollback_new_start():
-            if resumed_existing:
-                if original_resumed_state:
-                    write_state(task_dir, original_resumed_state)
-                restore_active_marker_snapshot(prior_marker_snapshot)
-                return
-            cleanup = list(scaffold.get("created") or [])
-            cleanup.append(os.path.join(task_dir, "TASK_BASELINE.json"))
-            for artifact in cleanup:
-                try:
-                    os.unlink(artifact)
-                except FileNotFoundError:
-                    pass
+    def rollback_new_start():
+        if resumed_existing:
+            if original_resumed_state:
+                write_state(task_dir, original_resumed_state)
+            restore_receipt_streams(terminal_receipt_snapshot)
+            restore_task_run(task_run_snapshot)
             restore_active_marker_snapshot(prior_marker_snapshot)
+            return
+        cleanup = list(scaffold.get("created") or [])
+        for artifact in cleanup:
+            try:
+                os.unlink(artifact)
+            except FileNotFoundError:
+                pass
+        restore_active_marker_snapshot(prior_marker_snapshot)
 
-        try:
-            resumed = read_state(task_dir)
-            terminal_resume_status = str(resumed.get("status") or "").lower()
-            terminal_resume = terminal_resume_status in {
-                "blocked", "closed",
-            }
-            if terminal_resume:
-                resumed["status"] = "created"
-                resumed["runtime_verdict"] = "pending"
-                resumed["closed_at"] = None
-                resumed["updated"] = now_iso()
-                write_state(task_dir, resumed)
-            if execution_mode == "micro":
-                set_state_field(task_dir, "plan_session_state", "micro_loop")
-        except Exception:
-            rollback_new_start()
-            raise
+    try:
+        resumed = read_state(task_dir)
+        terminal_resume_status = str(resumed.get("status") or "").lower()
+        terminal_resume = terminal_resume_status in {
+            "blocked", "closed",
+        }
+        if resumed_existing and (terminal_resume or not read_task_run(task_dir)):
+            _, task_run_snapshot = begin_task_run(task_dir)
+        if terminal_resume:
+            # A new lifecycle run must not inherit PASS receipts from the
+            # prior closed/blocked run now that source fingerprints are no
+            # longer part of receipt authority.
+            terminal_receipt_snapshot = reset_receipt_streams_for_new_run(task_dir)
+            resumed["status"] = "created"
+            resumed["runtime_verdict"] = "pending"
+            resumed["closed_at"] = None
+            resumed["updated"] = now_iso()
+            write_state(task_dir, resumed)
+        if execution_mode == "micro":
+            set_state_field(task_dir, "plan_session_state", "micro_loop")
+    except Exception:
+        rollback_new_start()
+        raise
 
-        try:
-            ctx = emit_compact_context(task_dir)
-            if "error" in ctx:
-                raise RuntimeError(str(ctx.get("error") or "compact context unavailable"))
-        except GitBindingError:
-            rollback_new_start()
-            raise
-        except Exception as exc:
-            detail = str(exc)
-            if detail.startswith((
-                "Git HEAD snapshot unavailable:",
-                "task baseline Git snapshot unavailable:",
-                "task baseline Git diff unavailable:",
-                "Git submodule snapshot unavailable",
-                "required task baseline missing",
-                "task baseline integrity unavailable",
-                "Git snapshot deadline exhausted before ",
-            )):
-                rollback_new_start()
-                raise
-            ctx = _minimal_task_start_context(task_dir, tid)
-            warnings.append({
-                "code": "TASK_CONTEXT_DEFERRED",
-                "stage": "task_context",
-                "message": (
-                    "Task ready; full routing context was deferred "
-                    "to keep task_start responsive."
-                ),
+    try:
+        ctx = emit_compact_context(task_dir)
+        if "error" in ctx:
+            raise RuntimeError(str(ctx.get("error") or "compact context unavailable"))
+    except Exception as exc:
+        ctx = _minimal_task_start_context(task_dir, tid)
+        warnings.append({
+            "code": "TASK_CONTEXT_DEFERRED",
+            "stage": "task_context",
+            "message": (
+                "Task ready; full routing context was deferred "
+                "to keep task_start responsive."
+            ),
                 "detail": str(exc)[:300],
                 "retry_action": ctx["next_action"],
             })
-        warnings.extend(
-            warning for warning in git_snapshot_warnings()
-            if warning not in warnings
-        )
-        try:
-            write_active_marker(repo_root, task_dir)
-            if terminal_resume_status == "closed":
-                clear_task_close_attestation(task_dir)
-                if os.path.lexists(os.path.join(task_dir, "TASK_CLOSE_RECEIPT.json")):
-                    raise RuntimeError("task close attestation cleanup unavailable")
-            elif terminal_resume_status == "blocked":
-                try:
-                    os.unlink(os.path.join(task_dir, "BLOCKED.md"))
-                except FileNotFoundError:
-                    pass
-        except Exception:
-            rollback_new_start()
-            raise
+    try:
+        write_active_marker(repo_root, task_dir)
+        if terminal_resume_status == "closed":
+            clear_task_close_attestation(task_dir)
+            if os.path.lexists(os.path.join(task_dir, "TASK_CLOSE_RECEIPT.json")):
+                raise RuntimeError("task close attestation cleanup unavailable")
+        elif terminal_resume_status == "blocked":
+            try:
+                os.unlink(os.path.join(task_dir, "BLOCKED.md"))
+            except FileNotFoundError:
+                pass
+    except Exception:
+        rollback_new_start()
+        raise
 
     # Best-effort environment snapshot runs after the coherent Git/context scope.
     snapshot_path = ""
@@ -796,17 +781,15 @@ def handle_task_context(args: dict) -> dict:
     td = canonical_task_dir(task_id=ti, repo_root=_control_root())
     if not _validated_task_state(td):
         return _invalid_task_state_error("task_context", td)
-    with review_snapshot_scope():
-        ctx = emit_compact_context(td)
-        if "error" in ctx:
-            return _err("task_context failed", data=ctx)
-        return _ok({
-            "task_dir": td,
-            "task_context": ctx,
-            "subagent_receipts": subagent_receipt_summary(td),
-            "review_receipts": review_receipt_summary(td),
-            "git_snapshot_warnings": git_snapshot_warnings(),
-        })
+    ctx = emit_compact_context(td)
+    if "error" in ctx:
+        return _err("task_context failed", data=ctx)
+    return _ok({
+        "task_dir": td,
+        "task_context": ctx,
+        "subagent_receipts": subagent_receipt_summary(td),
+        "review_receipts": review_receipt_summary(td),
+    })
 
 
 def handle_task_verify(args: dict) -> dict:
@@ -814,53 +797,46 @@ def handle_task_verify(args: dict) -> dict:
     td = canonical_task_dir(task_id=ti, repo_root=_control_root())
     if not _validated_task_state(td):
         return _invalid_task_state_error("task_verify", td)
-    with review_snapshot_scope():
-        sync_from_git_diff(td)
-        verify_run = None
-        if _truthy(args.get("run_commands")):
-            max_workers_raw = args.get("max_workers")
-            max_workers = int(max_workers_raw) if isinstance(max_workers_raw, int) and max_workers_raw > 0 else None
-            verify_run = _run_verify_runner(
-                td,
-                parallel=_truthy(args.get("parallel")) or args.get("parallel") is None,
-                max_workers=max_workers,
-            )
-            # Verification commands may mutate generated or source files.
-            refresh_review_snapshot()
+    verify_run = None
+    if _truthy(args.get("run_commands")):
+        max_workers_raw = args.get("max_workers")
+        max_workers = int(max_workers_raw) if isinstance(max_workers_raw, int) and max_workers_raw > 0 else None
+        verify_run = _run_verify_runner(
+            td,
+            parallel=_truthy(args.get("parallel")) or args.get("parallel") is None,
+            max_workers=max_workers,
+        )
+    st = read_state(td)
+    effective_verdict = receipt_runtime_verdict(td, st)
+    if (st.get("runtime_verdict") or "pending").upper() != effective_verdict:
+        set_state_field(td, "runtime_verdict", effective_verdict if effective_verdict != "PENDING" else "pending")
 
-        stale, stale_path = _runtime_is_stale(td)
-        st = read_state(td)
-        effective_verdict = receipt_runtime_verdict(td, st)
-        if (st.get("runtime_verdict") or "pending").upper() != effective_verdict:
-            set_state_field(td, "runtime_verdict", effective_verdict if effective_verdict != "PENDING" else "pending")
+    ac_reconcile = {"promoted_acs": [], "reason": "not requested"}
+    if _truthy(args.get("reconcile_acs")):
+        ac_reconcile = _reconcile_acs_from_qa(td)
 
-        ac_reconcile = {"promoted_acs": [], "reason": "not requested"}
-        if _truthy(args.get("reconcile_acs")):
-            ac_reconcile = _reconcile_acs_from_qa(td)
-
-        st = read_state(td)
-        rv = receipt_runtime_verdict(td, st)
-        review_verdict = receipt_review_verdict(td, st)
-        ctx = emit_compact_context(td)
-        payload = {
-            "task_dir": td, "runtime_verdict": rv,
-            "touched_paths": st.get("touched_paths") or [],
-            "next_action": ctx.get("next_action", ""),
-            "missing_for_close": ctx.get("missing_for_close", []),
-            "report_path": _task_artifact_rel(td, "SUBAGENT_RECEIPTS.jsonl"),
-            "review_verdict": review_verdict,
-            "required_review_lenses": required_review_lenses(td, st),
-            "review_report_path": _task_artifact_rel(td, "REVIEW_RECEIPTS.jsonl"),
-            "stale": stale,
-            "stale_path": stale_path,
-            "ac_reconcile": ac_reconcile,
-            "subagent_receipts": subagent_receipt_summary(td),
-            "review_receipts": review_receipt_summary(td),
-            "git_snapshot_warnings": git_snapshot_warnings(),
-        }
-        if verify_run is not None:
-            payload["verify_run"] = verify_run
-        return _ok(payload)
+    st = read_state(td)
+    rv = receipt_runtime_verdict(td, st)
+    review_verdict = receipt_review_verdict(td, st)
+    ctx = emit_compact_context(td)
+    payload = {
+        "task_dir": td, "runtime_verdict": rv,
+        "touched_paths": st.get("touched_paths") or [],
+        "next_action": ctx.get("next_action", ""),
+        "missing_for_close": ctx.get("missing_for_close", []),
+        "report_path": _task_artifact_rel(td, "SUBAGENT_RECEIPTS.jsonl"),
+        "review_verdict": review_verdict,
+        "required_review_lenses": required_review_lenses(td, st),
+        "review_report_path": _task_artifact_rel(td, "REVIEW_RECEIPTS.jsonl"),
+        "stale": False,
+        "stale_path": "",
+        "ac_reconcile": ac_reconcile,
+        "subagent_receipts": subagent_receipt_summary(td),
+        "review_receipts": review_receipt_summary(td),
+    }
+    if verify_run is not None:
+        payload["verify_run"] = verify_run
+    return _ok(payload)
 
 
 def handle_task_close(args: dict) -> dict:
@@ -868,19 +844,11 @@ def handle_task_close(args: dict) -> dict:
     td = canonical_task_dir(task_id=ti, repo_root=_control_root())
     if not _validated_task_state(td):
         return _invalid_task_state_error("task_close", td)
-    with review_snapshot_scope():
+    with receipt_stream_transaction(td):
         def close_error(message, data):
-            payload = dict(data)
-            payload["git_snapshot_warnings"] = git_snapshot_warnings()
-            return _err(message, data=payload)
+            return _err(message, data=dict(data))
 
-        try:
-            sync_from_git_diff(td)
-            control_root = find_harness_root(td) or find_repo_root(td)
-        except RuntimeError:
-            return close_error("task_close blocked: Git changed-path snapshot unavailable", {
-                "task_dir": td, "git_snapshot_unavailable": True,
-            })
+        control_root = find_harness_root(td) or find_repo_root(td)
         ctx = emit_compact_context(td)
         missing = ctx.get("missing_for_close") or []
         stale = bool(ctx.get("stale"))
@@ -913,12 +881,6 @@ def handle_task_close(args: dict) -> dict:
                 "task_dir": td, "blocking_acs": blocking,
             })
 
-        head_sha = _git_head_for_receipt(td)
-        if not head_sha:
-            return close_error("task_close blocked: Git HEAD unavailable", {
-                "task_dir": td, "head_unavailable": True,
-            })
-
         try:
             receipt_fingerprint = receipt_stream_fingerprint(td)
         except RuntimeError:
@@ -940,7 +902,6 @@ def handle_task_close(args: dict) -> dict:
             write_task_close_attestation(
                 td,
                 st,
-                head_sha=head_sha,
                 receipt_fingerprint=receipt_fingerprint,
             )
             clear_active_marker(control_root, td)
@@ -973,7 +934,6 @@ def handle_task_close(args: dict) -> dict:
         return _ok({
             "task_dir": td, "closed": True, "status": st.get("status"),
             "gate_artifact": _task_artifact_rel(td, "PLAN.md"),
-            "git_snapshot_warnings": git_snapshot_warnings(),
         })
 
 
@@ -1247,11 +1207,11 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id"], "additionalProperties": False},
      "handler": handle_task_context},
     {"name": "task_verify", "title": "Run task verification",
-     "description": "Sync changed paths and compute verification state from fresh hook-owned review completion receipts followed by QA completion receipts. Optional reconcile_acs promotes open CHECKS.yaml ACs only after ordered review and QA gates pass.",
+     "description": "Compute verification state from ordered hook-owned review and QA completion receipts. Optional reconcile_acs promotes open CHECKS.yaml ACs only after those gates pass.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"},
          "run_commands": {"type": "boolean"},
-         "reconcile_acs": {"type": "boolean", "description": "Optional. When true, promote open CHECKS.yaml ACs only after all required QA completion receipts report a fresh PASS. Failed/deferred ACs are never promoted."},
+         "reconcile_acs": {"type": "boolean", "description": "Optional. When true, promote open CHECKS.yaml ACs only after all required current-run review and QA receipts report PASS. Failed/deferred ACs are never promoted."},
          "parallel": {"type": "boolean"},
          "max_workers": {"type": "integer"}},
          "required": ["task_id"], "additionalProperties": False},

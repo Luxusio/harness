@@ -27,7 +27,6 @@ try:
         list_subagent_receipts,
         record_subagent_receipt,
         read_current_goal,
-        review_diff_fingerprint,
         resolve_active_task_dir,
     )
 except Exception:  # pragma: no cover - hook must fail open
@@ -40,7 +39,6 @@ except Exception:  # pragma: no cover - hook must fail open
     resolve_active_task_dir = None
     list_subagent_receipts = None
     list_review_receipts = None
-    review_diff_fingerprint = None
 
 HOOK_TIMEOUT_SECONDS = 3.0
 TOTAL_BUDGET_SECONDS = 2.4
@@ -297,18 +295,6 @@ def _record_one_completion(task_dir, target: str, final_text: str) -> None:
         for item in receipts
     ):
         return
-    started_fingerprint = str(started.get("diff_fingerprint") or "")
-    lens = str(started.get("lens") or "")
-    if (
-        lens.startswith(("review-", "qa-", "ux-"))
-        and review_diff_fingerprint is not None
-        and started_fingerprint != review_diff_fingerprint(task_dir)
-    ):
-        verdict = "PENDING"
-        final_text = (
-            final_text
-            + "\nAgent result invalidated: source changed while it was running."
-        ).strip()
     record_subagent_receipt(
         task_dir,
         {
@@ -318,9 +304,6 @@ def _record_one_completion(task_dir, target: str, final_text: str) -> None:
             "agent_type": str(started.get("agent_type") or ""),
             "verdict": verdict,
             "summary": final_text,
-            "head_sha": str(started.get("head_sha") or ""),
-            "base_sha": str(started.get("base_sha") or ""),
-            "diff_fingerprint": started_fingerprint,
         },
     )
 

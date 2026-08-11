@@ -6,6 +6,12 @@ All notable changes to the harness Claude Code plugin.
 
 ### Changed
 
+- Task lifecycle no longer runs automatic Git change detection or maintains
+  HEAD/diff/source baselines. Review and QA receipts now attest task, agent,
+  lens, explicit verdict, and review-before-QA ordering only; applicable lenses
+  come from PLAN metadata. Post-QA edits and scope drift are developer-owned,
+  while explicit setup and verified-install operations may still inspect their
+  concrete Git or payload state.
 - Claude PreToolUse hooks now dispatch only to their relevant mutation
   surfaces: direct-write tools run `prewrite_gate.py` and Bash runs
   `mcp_bash_guard.py`. The generic browser-delegation hook was removed;

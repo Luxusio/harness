@@ -28,7 +28,6 @@ try:
         now_iso,
         record_subagent_receipt,
         extract_qa_verdict,
-        review_diff_fingerprint,
         resolve_active_task_dir,
     )
 except Exception:  # pragma: no cover - imported only inside harness scripts
@@ -47,9 +46,6 @@ except Exception:  # pragma: no cover - imported only inside harness scripts
         return {}
 
     def extract_qa_verdict(value: str) -> str:
-        return ""
-
-    def review_diff_fingerprint(task_dir: str, state=None) -> str:
         return ""
 
     def append_conversation_entry(task_dir: str, **kwargs: Any) -> bool:
@@ -196,7 +192,6 @@ def _diagnostic_record(
         "payload_keys": keys,
         "updated_at": now_iso(),
         "updated_ts": ts,
-        "diff_fingerprint": review_diff_fingerprint(task_dir) if task_dir else "",
     }
     transcript = _payload_value(payload, "agent_transcript_path", "transcript_path")
     if transcript:
@@ -253,7 +248,6 @@ def register_subagent_start(
         "started_at": now_iso(),
         "updated_at": now_iso(),
         "updated_ts": ts,
-        "diff_fingerprint": review_diff_fingerprint(task_dir),
     }
 
     def upsert(data: dict[str, Any]):
@@ -275,7 +269,6 @@ def register_subagent_start(
                 "agent_id": aid,
                 "agent_type": _agent_type(payload),
                 "summary": "subagent start hook observed",
-                "diff_fingerprint": result.get("diff_fingerprint") or "",
                 "transcript_path": _payload_value(payload, "agent_transcript_path", "transcript_path"),
             },
         )
@@ -326,14 +319,6 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
         final_message = result.get("last_assistant_message") or ""
         verdict = extract_qa_verdict(final_message)
         if result.get("status") == "done" and result.get("task_dir"):
-            started_fingerprint = result.get("diff_fingerprint") or ""
-            if (
-                str(result.get("agent_type") or "").lower().replace("_", "-").find("review") >= 0
-                and started_fingerprint
-                and started_fingerprint != review_diff_fingerprint(result.get("task_dir") or "")
-            ):
-                verdict = "PENDING"
-                final_message = (final_message + "\nReview invalidated: source changed while reviewer was running.").strip()
             completion = record_subagent_receipt(
                 result.get("task_dir") or "",
                 {
@@ -343,7 +328,6 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
                     "agent_type": result.get("agent_type") or _agent_type(payload),
                     "verdict": verdict or "UNKNOWN",
                     "summary": final_message,
-                    "diff_fingerprint": started_fingerprint,
                     "transcript_path": result.get("transcript_path") or "",
                 },
             )

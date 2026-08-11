@@ -68,7 +68,6 @@ _VERSION_COMMANDS = {
     "java": ["java", "-version"],
     "gradle": ["gradle", "--version"],
     "docker": ["docker", "--version"],
-    "git": ["git", "--version"],
     "gh": ["gh", "--version"],
     "mise": ["mise", "--version"],
     "asdf": ["asdf", "--version"],
@@ -110,10 +109,6 @@ def _short_version(raw: str) -> str:
     if len(first) > 120:
         first = first[:117].rstrip() + "..."
     return first or "missing"
-
-
-def _git_branch(repo_root: str, deadline: float) -> str:
-    return _run(["git", "branch", "--show-current"], repo_root, deadline) or "unknown"
 
 
 def _read_manifest(repo_root: str) -> str:
@@ -345,7 +340,7 @@ def snapshot(task_dir: str, repo_root: str | None = None) -> str:
         ctx = {
             "repo": {
                 "root": repo_root,
-                "branch": _git_branch(repo_root, deadline),
+                "branch": "not-probed",
             },
             "manifest": _manifest_fields(manifest),
             "tooling": _tooling_block(manifest),

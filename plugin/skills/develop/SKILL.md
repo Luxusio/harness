@@ -39,7 +39,7 @@ Bad: "I have successfully completed the implementation of AC-003 and the changes
 
 ## Anti-shortcut clause
 
-CHECKS.yaml `passed` is evidence the gate ran, not a substitute for fresh runtime verification (C-04 IRON LAW: PASS verdict must be fresh after the last edit). PROGRESS.md is the scope-lock contract for this task. Hand-editing CHECKS.yaml or skipping `update_checks.py` produces a plausible-looking ledger that lies about `reopen_count` and `last_updated` (the May 2026 update_checks indent bug — `learnings.jsonl` 2026-05-08 — silently corrupted CHECKS.yaml across 6 tasks before detection; that incident is the precise failure mode this clause prevents). If you find yourself wanting to mark something `passed` because the previous run was green, stop — re-verify against the current state of the repo. Stale evidence is worse than no evidence.
+CHECKS.yaml `passed` is evidence the gate ran, not a substitute for ordered review and QA receipts in the current `TASK_RUN`. PROGRESS.md is the scope-lock contract for this task. Hand-editing CHECKS.yaml or skipping `update_checks.py` produces a plausible-looking ledger that lies about `reopen_count` and `last_updated` (the May 2026 update_checks indent bug — `learnings.jsonl` 2026-05-08 — silently corrupted CHECKS.yaml across 6 tasks before detection; that incident is the precise failure mode this clause prevents). Harness does not inspect source state after a receipt. If code changes after review or QA, the developer owns the decision to rerun the affected evidence.
 
 **Highest-tier verification mandate.** If a task creates, unblocks, or documents a verification path, using that path is part of the same task. Do not ask "should I verify it?" when the required services, rebuild, seed, token, browser, API, or CLI route are locally available. Execute the highest available tier yourself, then report the tier reached and any concrete blocker. Ask only when verification would require destructive state changes, paid/external credentials, production resources, or a genuine product choice between valid approaches.
 
@@ -401,7 +401,7 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 
 ### Phase 6.5: Verification Gate
 
-- **6.5 IRON LAW** — PASS = PASS. No stale PASS. No unverified claim. Runtime verdict must be fresh after last file change.
+- **6.5 IRON LAW** — PASS = PASS. No unverified claim. Runtime verdict must come from the current task receipt run.
 - Use the current quality score to decide whether to continue fixing or proceed.
   Do not write a project stats series for per-task scores.
 
@@ -409,8 +409,8 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 
 Read `quality-audit-pipeline.md` § Phase 6.6. Call `task_context`, spawn every
 required read-only review lens in parallel, await explicit verdicts, and require
-fresh `REVIEW_RECEIPTS.jsonl` PASS for the current HEAD and worktree
-fingerprint. Send only `FIX_NOW` findings to the original minimum-sufficient
+`REVIEW_RECEIPTS.jsonl` PASS entries correlated to starts in the current task
+run. Send only `FIX_NOW` findings to the original minimum-sufficient
 implementer. Any edit loops through focused tests/checkpoint and all required
 reviewers again. Do not start Phase 7 QA until review PASS.
 
@@ -485,49 +485,19 @@ The dogfooder does NOT gate task completion. Its output is:
 Skip conditions:
 - `runtime_verdict` is not PASS (QA must pass first).
 - Task is maintenance-only (no user-facing change).
-- `git diff --name-only` against the **user-facing globs** below produces an empty intersection (pure infra/refactor).
+- `PLAN.meta.json.plan_meta.surfaces` declares no user-facing surface and
+  `dogfood_required` is not explicitly true.
 
-**User-facing globs** (used by the diff intersection check):
-
-```
-**/*.{tsx,jsx,vue,svelte,html,css,scss}
-plugin/agents/**
-plugin/skills/**
-**/routes/**
-**/api/**
-bin/**
-cli/**
-README.md
-doc/changes/**
-```
-
-Exact shell predicate. **Source of truth: `TASK_STATE.yaml touched_paths`** (refreshed every `task_verify` call). The previous `git diff --name-only HEAD~1 HEAD` reading was unreliable — it returned the last single commit only, missing uncommitted task changes and earlier commits in multi-commit batches, so Phase 7.7 routinely read the previous task's files.
-
-```bash
-_USER_FACING=$(python3 - <<'PY' 2>/dev/null || echo ""
-import yaml, sys, re, pathlib
-state_path = pathlib.Path("<task_dir>/TASK_STATE.yaml")
-if not state_path.exists():
-    sys.exit(0)
-state = yaml.safe_load(state_path.read_text()) or {}
-paths = state.get("touched_paths") or []
-pat = re.compile(r"(\.tsx|\.jsx|\.vue|\.svelte|\.html|\.css|\.scss)$|^(plugin/agents/|plugin/skills/|.*/routes/|.*/api/|bin/|cli/|README\.md|doc/changes/)")
-for p in paths:
-    if pat.search(p):
-        print(p)
-        break
-PY
-)
-[ -z "$_USER_FACING" ] && echo "SKIP_DOGFOOD" || echo "RUN_DOGFOOD"
-```
-
-`SKIP_DOGFOOD` short-circuits the spawn; `RUN_DOGFOOD` proceeds to the Agent call above. The predicate intentionally errs toward running the dogfooder when the intersection is non-empty even by one file — a false positive is cheaper than a missed user-facing regression. On TASK_STATE.yaml missing or parse error, the predicate emits empty → SKIP_DOGFOOD (safe default; a dogfooder skip is recoverable, a wrong-files dogfood run is noise).
+Dogfood routing is plan-owned. Use declared surfaces such as `frontend`, `api`,
+`cli`, or `desktop`; do not infer them from Git diff output or `touched_paths`.
+When the metadata is ambiguous, run the dogfooder or record an explicit plan
+decision. Lifecycle commands never scan the repository to make this choice.
 
 ### Phase 7.8: Harness source auto-install (post-QA, pre-close)
 
 When the repository being changed is the harness plugin source itself (root
-`install.py` plus `plugin/` and `plugin-codex/` are present), a terminal fresh
-review+QA PASS MUST immediately run:
+`install.py` plus `plugin/` and `plugin-codex/` are present), terminal ordered
+current-run review+QA PASS receipts MUST immediately run:
 
 ```bash
 python3 plugin/scripts/install_verified.py \
@@ -538,12 +508,12 @@ This is part of completion, not a suggestion. Run it after the last source
 edit and verification, before `task_close`, so stale installed hooks cannot
 prevent the task from reaching the close gate. Capture the installer exit code
 and runtime summaries. The trusted helper verifies canonical harness identity,
-fresh review+QA receipts, HEAD/worktree freshness, and a fingerprint-scoped
-success marker before it invokes `python3 install.py --force`. A failed install blocks completion; never claim the
+current-run review+QA receipts, and a byte-stable install-payload snapshot
+before it invokes `python3 install.py --force`. A failed install blocks completion; never claim the
 source is deployed. Do not rerun installation for docs-only edits after this
 step. The current process may retain already-loaded MCP/hooks, so report when a
 new session is required without forging receipts. The same successful
-fingerprint is skipped under a task-local lock. Skip only when the user
+receipt-run and payload fingerprint is skipped under a task-local lock. Skip only when the user
 explicitly opts out of installation.
 
 ### Phase 8: Close and final response
@@ -553,7 +523,7 @@ explicitly opts out of installation.
 Before `task_close`, verify these are true:
 
 1. Every AC is `passed` or explicitly `deferred` in CHECKS.yaml.
-2. `task_verify` reports a fresh PASS after the last edit.
+2. `task_verify` reports PASS from ordered receipts in the current `TASK_RUN`.
 3. Required QA/UX subagents were spawned when the runtime exposed them; hook-owned `SUBAGENT_RECEIPTS.jsonl` proves the start.
 4. User feedback events have terminal disposition in task state: `promoted`, `handled-local`, `deferred`, or `rejected`.
 5. `CONVERSATION.md` has no open `<!-- item: ... status=open -->` markers; captured items name a durable ref, rejected items name a reason, deferred items name a follow-up task/goal.

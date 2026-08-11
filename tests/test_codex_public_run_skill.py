@@ -74,6 +74,6 @@ def test_canonical_run_has_one_normal_qa_and_close_owner():
     develop = (REPO / "plugin-codex/internal-skills/develop/SKILL.md").read_text(encoding="utf-8")
     assert "Phase 9 is the only normal owner of `task_close`" in develop
     assert develop.index("### Phase 8.7: Distilled Change Doc") < develop.index("### Phase 9:")
-    assert "rerun the always-on code review" in develop
-    assert "only when an install-payload file changed" in develop
-    assert "for docs-only edits, retain the existing installed payload" in develop
+    assert "current task receipt run" in develop
+    assert "checks are not lifecycle gates" in develop
+    assert "Do not rerun installation for docs-only edits" in develop
