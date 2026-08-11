@@ -335,11 +335,11 @@ def main():
     data = read_hook_input()
     if not data:
         return 0
-    if data.get("tool_name") != "Bash":
+    if data.get("tool_name") not in ("Bash", "shell"):
         return 0
 
     tool_input = data.get("tool_input") or {}
-    command = tool_input.get("command", "")
+    command = tool_input.get("command") or tool_input.get("cmd") or ""
     if not isinstance(command, str) or not command:
         return 0
 

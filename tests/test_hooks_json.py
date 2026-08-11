@@ -1,4 +1,4 @@
-"""AC-004: plugin/hooks/hooks.json registers both gates with `|| true` preserved.
+"""Selective plugin hook registration remains bounded and fail-open.
 """
 from __future__ import annotations
 
@@ -16,16 +16,17 @@ class TestHooksJson(unittest.TestCase):
         with open(HOOKS, encoding="utf-8") as f:
             self.data = json.load(f)
 
-    def test_pretooluse_has_both_gates(self):
+    def test_pretooluse_dispatch_is_selective(self):
         entries = self.data["hooks"]["PreToolUse"]
         commands = []
         for entry in entries:
             for h in entry.get("hooks", []):
                 commands.append((entry.get("matcher"), h["command"]))
-        prewrite = [c for m, c in commands if "prewrite_gate.py" in c]
-        bash_guard = [c for m, c in commands if "mcp_bash_guard.py" in c]
-        self.assertEqual(len(prewrite), 1, f"expected one prewrite hook, got {prewrite}")
-        self.assertEqual(len(bash_guard), 1, f"expected one bash_guard hook, got {bash_guard}")
+        prewrite = [(m, c) for m, c in commands if "prewrite_gate.py" in c]
+        bash_guard = [(m, c) for m, c in commands if "mcp_bash_guard.py" in c]
+        self.assertEqual(prewrite, [("Write|Edit|MultiEdit", prewrite[0][1])])
+        self.assertEqual(bash_guard, [("Bash", bash_guard[0][1])])
+        self.assertFalse(any("qa_delegation_gate.py" in c for _, c in commands))
 
     def test_user_prompt_submit_registers_prompt_memory(self):
         """AC-007: UserPromptSubmit entry for prompt_memory with fail-safe."""
@@ -73,7 +74,7 @@ class TestHooksJson(unittest.TestCase):
         self.assertEqual(len(bash_entries), 1)
         self.assertEqual(bash_entries[0].get("matcher"), "Bash")
 
-    def test_both_gate_commands_have_fail_safe(self):
+    def test_hook_commands_have_fail_safe(self):
         """C-12: every hook must end with `|| true` (fail-safe)."""
         for event, entries in self.data["hooks"].items():
             for entry in entries:

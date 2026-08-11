@@ -5,18 +5,18 @@ Harness SessionStart/PreToolUse/PostToolUse/Stop/Subagent hooks must no-op silen
 
 ## Observable Behavior
 - In a directory whose nearest ancestor with .git lacks doc/harness/manifest.yaml, every harness hook script returns exit 0, prints nothing to stdout, and creates no files anywhere under that directory.
-- The covered hook scripts are: prewrite_gate.py, mcp_bash_guard.py, qa_delegation_gate.py, stop_gate.py, background_hook.py, prompt_memory.py, tool_routing.py, note_freshness.py, hygiene_scan.py, verification_gap_check.py, drift_warn.py.
+- The covered hook scripts are: prewrite_gate.py, mcp_bash_guard.py, stop_gate.py, background_hook.py, prompt_memory.py, tool_routing.py, note_freshness.py, hygiene_scan.py, verification_gap_check.py, drift_warn.py.
 - Specifically, none of doc/harness/learnings.jsonl, doc/harness/runtime/background.json, doc/harness/runtime/background.json.lock, doc/harness/.hygiene-*, doc/harness/timeline.jsonl, doc/harness/checkpoints/, or doc/harness/tasks/ appear after firing any of those hooks against a non-harness-enabled repo.
 - Detection happens through plugin/scripts/_lib.py::is_harness_enabled_repo, which checks for the manifest.yaml file path. Each hook script must call this guard before any write.
 
 ## Acceptance Signals
 - In a directory whose nearest ancestor with .git lacks doc/harness/manifest.yaml, every harness hook script returns exit 0, prints nothing to stdout, and creates no files anywhere under that directory.
-- The covered hook scripts are: prewrite_gate.py, mcp_bash_guard.py, qa_delegation_gate.py, stop_gate.py, background_hook.py, prompt_memory.py, tool_routing.py, note_freshness.py, hygiene_scan.py, verification_gap_check.py, drift_warn.py.
+- The covered hook scripts are: prewrite_gate.py, mcp_bash_guard.py, stop_gate.py, background_hook.py, prompt_memory.py, tool_routing.py, note_freshness.py, hygiene_scan.py, verification_gap_check.py, drift_warn.py.
 - Specifically, none of doc/harness/learnings.jsonl, doc/harness/runtime/background.json, doc/harness/runtime/background.json.lock, doc/harness/.hygiene-*, doc/harness/timeline.jsonl, doc/harness/checkpoints/, or doc/harness/tasks/ appear after firing any of those hooks against a non-harness-enabled repo.
 - Detection happens through plugin/scripts/_lib.py::is_harness_enabled_repo, which checks for the manifest.yaml file path. Each hook script must call this guard before any write.
 
 ## Verification Cues
-- tests/test_non_harness_hooks_noop.py covers prewrite_gate, qa_delegation_gate, mcp_bash_guard, tool_routing, stop_gate, note_freshness — all subprocess-invoke each hook with a tmp non-harness repo and assert stdout=='' and that no doc/harness/ tree is created.
+- tests/test_non_harness_hooks_noop.py covers prewrite_gate, mcp_bash_guard, tool_routing, stop_gate, note_freshness — all subprocess-invoke each hook with a tmp non-harness repo and assert stdout=='' and that no doc/harness/ tree is created.
 - A new test (this task) adds the same property to drift_warn.py via tests/test_drift_warn.py::test_drift_warn_noop_outside_harness_enabled_repo.
 - Manual: open a fresh terminal in a directory with .git but no doc/harness/manifest.yaml; start a Claude Code session; confirm ls -la doc/ shows no harness/ subdirectory after several tool calls and Stop events.
 - Drift surveillance: plugin/scripts/drift_warn.py compares source SHAs to installed SHAs for plugin/scripts/*.py in dev-of-harness repos; if the installed copy lags, it prints a one-line reminder so the no-op fix propagates promptly.

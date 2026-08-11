@@ -155,7 +155,6 @@ All under `plugin/scripts/`. Stdlib only.
 | `background_registry.py` | Shared registry for Claude subagent lifecycle records used by Stop hook auto-wait | `doc/harness/runtime/background.json` |
 | `background_hook.py` | SubagentStart/SubagentStop hook adapter for `background_registry.py` | `doc/harness/runtime/background.json` |
 | `_gate_response.py` | Shared hook deny/allow response helper | — |
-| `qa_delegation_gate.py` | Browser QA delegation guard for protected MCP calls | — |
 | `verification_gap_check.py` | Resume-time warning for missing verification evidence | — |
 | `drift_warn.py` | SessionStart drift detector: reminds dev-of-harness users when installed plugin lags source (silent in non-dev / non-harness repos) | — |
 
@@ -179,8 +178,8 @@ The post-close self-improvement pass in the Goal child-task executor auto-promot
 | Stop | `stop_gate.py` | Warn if open tasks remain |
 | SubagentStart | `background_hook.py` | Register active Claude subagent work for Stop hook auto-wait |
 | SubagentStop | `background_hook.py` | Mark Claude subagent work complete |
-| PreToolUse | `prewrite_gate.py` | Artifact ownership + plan-first rule |
-| PreToolUse | `hook_pre_tool_use.py` | Codex plugin wrapper for PreToolUse gates |
+| PreToolUse (direct writes) | `prewrite_gate.py` | Artifact ownership + plan-first rule |
+| PreToolUse (selected mutation/lifecycle tools) | `hook_pre_tool_use.py` | Codex wrapper for direct-write/Bash gates and spawn registration recovery |
 | PreToolUse (Bash) | `mcp_bash_guard.py` | Block Bash-layer mutations of source / protected / workflow-control paths |
 | UserPromptSubmit | `prompt_memory.py` | Inject stored `[harness-context]` state without Git; authoritative freshness stays in verify/close gates |
 | UserPromptSubmit | `hook_user_prompt_submit.py` | Codex wrapper that injects `$harness:run` routing plus prompt memory |

@@ -46,7 +46,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 | Maintenance 태스크 (MAINTENANCE 마커) | C-01 완화, [C-05](#c-05) 유지 | — |
 | `doc/changes/` 또는 `doc/common/` 자동 정리 | [C-16](#c-16) | auto |
 | Task in_progress 동안 turn 종결 시점 | [C-17](#c-17) | hard |
-| 메인 세션이 브라우저 MCP 도구 (`mcp__chrome-devtools__*`) 호출 시도 | [C-18](#c-18) | soft |
+| 브라우저 또는 full-suite 검증의 실행 위치 선택 | [C-18](#c-18) | soft |
 
 Levels:
 - **hard** — gate blocks or MCP refuses. Violation is impossible by default.
@@ -305,14 +305,23 @@ not to a narrative verdict file.
 
 ### C-18
 
-**Title:** Verification delegation — main session never drives browser MCP or full-suite verification inline.
-**When:** Any `mcp__chrome-devtools__*` tool invocation from the main (orchestrator) session (e.g. `take_snapshot`, `take_screenshot`, `evaluate_script`, `navigate_page`, `click`, `fill`), or Phase 7 full-suite verification.
-**Enforced by:** `plugin/scripts/qa_delegation_gate.py` (PreToolUse, no matcher — script self-filters by `tool_name` prefix `mcp__chrome-devtools__`). The gate allows delegated `harness:qa-browser` calls, then emits a deny envelope whose `permissionDecisionReason` surfaces as a system-reminder so non-delegated callers self-redirect to `Agent(subagent_type='harness:qa-browser')`. qa-browser detection prefers explicit agent fields when the runtime exposes them and falls back to a capped `transcript_path` prologue check for the qa-browser agent prompt. Bypass: `HARNESS_SKIP_QA_DELEGATION=1` one-shot. Bash test runners (`pytest`, `npm test`, `vitest`, `pnpm test`, `cargo test`, `go test`, `jest`, `mocha`, `rspec`, `phpunit`, …) are not hook-blocked because targeted per-AC and debug reruns are legitimate inline use; Phase 7 full-suite runs MUST be delegated to qa-* lenses and spawned in parallel when multiple lenses apply. Network probes (`curl`, `wget`, `httpie`) and DB probes (`psql -c`, `mysql -e`, `alembic`) also remain unblocked for targeted diagnostics.
-**On violation:** soft-warn. WARN logs to `learnings.jsonl` `type=qa-delegation-warn` each fire; weekly retro reads frequency to decide v2 escalation.
+**Title:** Verification delegation is workflow guidance, not a pre-tool gate.
+**When:** Choosing where to run browser-driving tools or a heavy full-suite verification pass.
+**Enforced by:** The develop workflow prefers the applicable `qa-*` lens when
+delegation is available and isolation materially reduces context or process
+load. No generic PreToolUse hook inspects or blocks browser calls. Targeted
+tests, diagnostics, and browser interaction may run inline when that is the
+lightest available verification path. Receipt-backed review and QA freshness
+requirements at `task_verify` remain unchanged.
+**On violation:** advisory only. Inline execution is allowed; the orchestrator
+owns the resulting context growth and must still provide the required fresh
+verification evidence before close.
 **Why:** Browser MCP payloads (DOM snapshots, screenshots, evaluate output)
 bloat main context with thousands of structured tokens per call. qa-browser
 isolates browser verification and returns findings in its final response while
-the hook records the subagent start receipt. Evidence: 2026-05-13
+the lifecycle hooks record the subagent receipt. Paying that cost on every
+PreToolUse event to prevent occasional inline browser use was a worse default
+than letting the workflow select the execution lane. Evidence: 2026-05-13
 user-observed catchy-secrets session where main agent ran `chrome-devtools`
 inline and stalled mid-task; user feedback 2026-05-14 narrowed scope to
 MCP-only after the Bash matcher fired on legitimate `pytest`/`vitest` use.

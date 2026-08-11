@@ -280,6 +280,10 @@ def test_task_dir_must_be_canonical_and_active(tmp_path):
 
 def test_snapshot_paths_use_tracked_and_task_reviewed_files_only(tmp_path):
     repo, task = _repo(tmp_path)
+    for rel in ("plugin/tracked.py", "plugin/new.py"):
+        path = repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("ok\n", encoding="utf-8")
     with (
         mock.patch.object(mod, "_tracked_install_payload", return_value={"plugin/tracked.py"}),
         mock.patch.object(mod, "_reviewable_source_paths", return_value=["plugin/new.py"]),
@@ -287,6 +291,16 @@ def test_snapshot_paths_use_tracked_and_task_reviewed_files_only(tmp_path):
         paths = mod._snapshot_paths(repo, task)
     assert paths == {"plugin/tracked.py", "plugin/new.py"}
     assert "plugin/.omc/ignored-secret" not in paths
+
+
+def test_snapshot_paths_exclude_reviewed_deletions(tmp_path):
+    repo, task = _repo(tmp_path)
+    with (
+        mock.patch.object(mod, "_tracked_install_payload", return_value={"plugin/deleted.py"}),
+        mock.patch.object(mod, "_reviewable_source_paths", return_value=["plugin/deleted.py"]),
+    ):
+        paths = mod._snapshot_paths(repo, task)
+    assert paths == set()
 
 
 def test_reviewable_payload_survives_clean_commit_after_task_baseline(tmp_path):

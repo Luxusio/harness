@@ -6,6 +6,17 @@ All notable changes to the harness Claude Code plugin.
 
 ### Changed
 
+- Claude PreToolUse hooks now dispatch only to their relevant mutation
+  surfaces: direct-write tools run `prewrite_gate.py` and Bash runs
+  `mcp_bash_guard.py`. The generic browser-delegation hook was removed;
+  qa-browser isolation remains preferred workflow guidance, while inline
+  browser context growth is an accepted caller-owned cost and verification
+  receipts remain required normally.
+- Codex aliases follow the same selective routing: `apply_patch` scans every
+  add/update/delete/move target (including CRLF envelopes), while `shell` runs
+  the Bash mutation guard. Verified installation snapshots now represent
+  reviewed payload deletions by omitting the deleted source so stale installed
+  copies are pruned.
 - `task_close` now uses one source sync and one context/freshness/CHECKS gate
   evaluation, followed by one HEAD and receipt-stream read for close
   attestation. The former initial/final worktree, control-root, HEAD, and

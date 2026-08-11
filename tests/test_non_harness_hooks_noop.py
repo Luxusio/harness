@@ -17,7 +17,6 @@ def _run(script: str, repo: Path, payload: dict | None = None, *args: str) -> su
     env["CLAUDE_PLUGIN_ROOT"] = str(REPO / "plugin")
     env.pop("HARNESS_SKIP_PREWRITE", None)
     env.pop("HARNESS_SKIP_MCP_GUARD", None)
-    env.pop("HARNESS_SKIP_QA_DELEGATION", None)
     return subprocess.run(
         [sys.executable, str(SCRIPTS / script), *args],
         input=json.dumps(payload or {}),
@@ -47,21 +46,6 @@ def test_mcp_bash_guard_noops_without_manifest(tmp_path: Path):
     }
 
     result = _run("mcp_bash_guard.py", repo, payload)
-
-    assert result.returncode == 0
-    assert result.stdout == ""
-    _assert_no_harness_files(repo)
-
-
-def test_qa_delegation_gate_noops_without_manifest(tmp_path: Path):
-    repo = _repo(tmp_path)
-    payload = {
-        "cwd": str(repo),
-        "tool_name": "mcp__chrome-devtools__take_snapshot",
-        "tool_input": {},
-    }
-
-    result = _run("qa_delegation_gate.py", repo, payload)
 
     assert result.returncode == 0
     assert result.stdout == ""

@@ -303,7 +303,6 @@ class TestCodexHookWrappers(unittest.TestCase):
     def test_all_codex_hook_wrappers_restore_registration(self):
         modules = [
             ("hook_session_start", {}, {"retry_seconds": 1.0, "budget_seconds": 1.25}),
-            ("hook_pre_tool_use", {"tool_name": "Read"}, {"budget_seconds": 0.5}),
             ("hook_post_tool_use", {"tool_name": "wait_agent"}, {"budget_seconds": 0.4}),
             ("hook_user_prompt_submit", {}, {"budget_seconds": 0.5}),
             ("hook_stop", {}, {"budget_seconds": 0.5}),
@@ -538,9 +537,10 @@ class TestCodexHookWrappers(unittest.TestCase):
         self.assertEqual(calls[0]["timeout"], mod.CHILD_TIMEOUT_SECONDS)
 
     def test_codex_wrapper_budgets_fit_outer_hook_timeouts(self):
-        for name in (
-            "hook_pre_tool_use", "hook_post_tool_use", "hook_user_prompt_submit",
-        ):
+        pre = _load("hook_pre_tool_use")
+        self.assertLess(pre.REGISTRATION_BUDGET_SECONDS, pre.HOOK_TIMEOUT_SECONDS)
+        self.assertLess(pre.CHILD_TIMEOUT_SECONDS, pre.HOOK_TIMEOUT_SECONDS)
+        for name in ("hook_post_tool_use", "hook_user_prompt_submit"):
             mod = _load(name)
             self.assertLess(mod.TOTAL_BUDGET_SECONDS, mod.HOOK_TIMEOUT_SECONDS, name)
             self.assertLess(mod.REGISTRATION_BUDGET_SECONDS, mod.TOTAL_BUDGET_SECONDS, name)
@@ -573,24 +573,54 @@ class TestCodexHookWrappers(unittest.TestCase):
         spawn_record.assert_not_called()
         completion_record.assert_not_called()
 
-    def test_pre_tool_children_consume_one_shared_deadline(self):
+    def test_pre_tool_dispatches_at_most_one_child(self):
         mod = _load("hook_pre_tool_use")
-        calls: list[float] = []
+        calls: list[str] = []
 
         def fake_run(*args, **kwargs):
-            calls.append(kwargs["timeout"])
+            calls.append(Path(args[0][1]).name)
+            self.assertEqual(kwargs["timeout"], mod.CHILD_TIMEOUT_SECONDS)
             return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
 
-        with tempfile.TemporaryDirectory() as repo, \
-             mock.patch.object(mod, "restore_watcher_registration"), \
-             mock.patch.object(mod.time, "monotonic", side_effect=[0.0, 0.0, 1.5, 3.9]), \
-             mock.patch("subprocess.run", side_effect=fake_run), \
-             mock.patch.object(sys, "stdin", _BytesStdin(json.dumps({"cwd": repo, "tool_name": "Bash"}))), \
-             contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(mod.main(), 0)
+        expected = {
+            "Read": [],
+            "mcp__chrome-devtools__take_snapshot": [],
+            "Write": ["prewrite_gate.py"],
+            "Edit": ["prewrite_gate.py"],
+            "MultiEdit": ["prewrite_gate.py"],
+            "apply_patch": ["prewrite_gate.py"],
+            "Bash": ["mcp_bash_guard.py"],
+            "shell": ["mcp_bash_guard.py"],
+        }
+        with tempfile.TemporaryDirectory() as repo:
+            for tool_name, child_names in expected.items():
+                calls.clear()
+                with mock.patch("subprocess.run", side_effect=fake_run), \
+                     mock.patch.object(sys, "stdin", _BytesStdin(json.dumps({"cwd": repo, "tool_name": tool_name}))), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(mod.main(), 0)
+                self.assertEqual(calls, child_names, tool_name)
 
-        self.assertEqual(calls[:2], [mod.CHILD_TIMEOUT_SECONDS] * 2)
-        self.assertAlmostEqual(calls[2], 0.25)
+    def test_pre_tool_registration_runs_only_for_spawn(self):
+        mod = _load("hook_pre_tool_use")
+        with tempfile.TemporaryDirectory() as repo:
+            for tool_name in ("Read", "Write", "Bash"):
+                raw = json.dumps({"cwd": repo, "tool_name": tool_name})
+                with mock.patch.object(mod, "restore_watcher_registration") as restore, \
+                     mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")), \
+                     mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(mod.main(), 0)
+                restore.assert_not_called()
+            for tool_name in ("collaboration.spawn_agent", "multi_agent_v1__spawn_agent", "functions.spawn_agent"):
+                raw = json.dumps({"cwd": repo, "tool_name": tool_name})
+                with mock.patch.object(mod, "restore_watcher_registration") as restore, \
+                     mock.patch("subprocess.run") as run_child, \
+                     mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(mod.main(), 0)
+                restore.assert_called_once_with(raw.encode(), budget_seconds=0.5)
+                run_child.assert_not_called()
 
     def test_wrapper_constants_match_installed_outer_timeouts(self):
         spec = importlib.util.spec_from_file_location(
@@ -601,6 +631,10 @@ class TestCodexHookWrappers(unittest.TestCase):
         sys.modules[spec.name] = install
         spec.loader.exec_module(install)
         config = install._codex_hooks_config(REPO_ROOT / "installed")
+        self.assertEqual(
+            config["hooks"]["PreToolUse"][0]["matcher"],
+            "Write|Edit|MultiEdit|Bash|apply_patch|shell|.*spawn_agent",
+        )
         for event, name in (
             ("PreToolUse", "hook_pre_tool_use"),
             ("PostToolUse", "hook_post_tool_use"),
@@ -609,7 +643,9 @@ class TestCodexHookWrappers(unittest.TestCase):
             mod = _load(name)
             outer = config["hooks"][event][0]["hooks"][0]["timeout"]
             self.assertEqual(mod.HOOK_TIMEOUT_SECONDS, outer)
-            self.assertLess(mod.TOTAL_BUDGET_SECONDS, outer)
+            if hasattr(mod, "TOTAL_BUDGET_SECONDS"):
+                self.assertLess(mod.TOTAL_BUDGET_SECONDS, outer)
+            self.assertLess(mod.CHILD_TIMEOUT_SECONDS, outer)
 
     def test_codex_prompt_wrapper_injects_public_run_route(self):
         mod = _load("hook_user_prompt_submit")

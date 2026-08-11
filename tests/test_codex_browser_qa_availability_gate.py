@@ -44,7 +44,7 @@ def test_codex_develop_browser_visual_phases_are_not_blanket_deferred():
         assert phrase not in body
 
     assert "Browser tools are availability-gated on Codex" in body
-    assert "run the qa-browser methodology inline" in body
+    assert "run `plugin-codex/agents/qa-browser.md` inline" in body
     assert "task_verify" in body
     assert "state the fallback in task state or final response" in body
 
@@ -55,5 +55,6 @@ def test_claude_policy_still_requires_qa_browser_delegation():
 
     assert "MUST spawn qa-browser" in run_body
     assert "Skipping leaves no completed qa-browser receipt" in run_body
-    assert "Browser MCP tools (`mcp__chrome-devtools__*`) MUST be delegated" in develop_body
+    assert "Prefer delegating Browser MCP tools (`mcp__chrome-devtools__*`)" in develop_body
+    assert "inline use is allowed" in develop_body
     assert "harness:qa-browser" in develop_body

@@ -397,6 +397,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
             ],
             "PreToolUse": [
                 {
+                    "matcher": "Write|Edit|MultiEdit|Bash|apply_patch|shell|.*spawn_agent",
                     "hooks": [
                         {
                             "type": "command",

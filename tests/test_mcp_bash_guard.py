@@ -30,6 +30,10 @@ def _run_bash(command, env_extra=None):
     return invoke_hook(GUARD, "Bash", {"command": command}, env_extra=env_extra)
 
 
+def _run_codex_shell(command, env_extra=None):
+    return invoke_hook(GUARD, "shell", {"cmd": command}, env_extra=env_extra)
+
+
 # Target-path anchors for each gated category.
 SRC_PATH = "plugin/scripts/health.py"                  # source file
 PROT_PATH = None   # filled at runtime — needs a task dir
@@ -62,6 +66,12 @@ MUTATION_VERBS_WORKFLOW = [
 
 
 class TestMutationsAgainstSource(unittest.TestCase):
+    def test_codex_shell_alias_denies_source(self):
+        r = _run_codex_shell(f"touch {SRC_PATH}")
+        decision, reason = parse_decision(r.stdout)
+        self.assertEqual(decision, "deny")
+        self.assertIn("rule=source", reason)
+
     def test_each_verb_denies_source(self):
         for name, cmd in MUTATION_VERBS_SOURCE:
             with self.subTest(verb=name, cmd=cmd):

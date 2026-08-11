@@ -276,7 +276,14 @@ def _snapshot_paths(repo_root: Path, task_dir: Path) -> set[str]:
         rel for path in reviewed
         if (rel := _normalize_payload_path(path)) and _is_install_payload_path(rel)
     }
-    return _tracked_install_payload(repo_root) | reviewed_payload
+    candidates = _tracked_install_payload(repo_root) | reviewed_payload
+    # A reviewed deletion must remain absent from the isolated source snapshot;
+    # install.py then prunes the stale target copy. Unreviewed deletions are
+    # rejected separately by _unreviewed_tracked_payload before installation.
+    return {
+        path for path in candidates
+        if os.path.lexists(repo_root / path)
+    }
 
 
 def _payload_fingerprint(repo_root: Path, paths: set[str]) -> str:

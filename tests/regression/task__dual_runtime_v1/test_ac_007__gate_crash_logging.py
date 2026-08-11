@@ -92,7 +92,7 @@ def test_log_gate_crash_skips_non_harness_repo(tmp_path):
 
 def test_gate_script_imports_resolve():
     """All 4 gate scripts must import log_gate_crash + last_hook_input cleanly."""
-    for script in ["prewrite_gate", "mcp_bash_guard", "qa_delegation_gate", "stop_gate"]:
+    for script in ["prewrite_gate", "mcp_bash_guard", "stop_gate"]:
         r = subprocess.run(
             [sys.executable, "-c",
              f"import sys; sys.path.insert(0, '{SCRIPTS}'); import {script}; "

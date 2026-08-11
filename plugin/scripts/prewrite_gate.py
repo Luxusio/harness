@@ -22,7 +22,10 @@ from __future__ import annotations
 import fnmatch
 import json
 import os
+import re
 import sys
+from contextlib import redirect_stdout
+from io import StringIO
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
@@ -513,28 +516,7 @@ def _has_open_tasks(tasks_dir: str) -> bool:
 # ── Main ───────────────────────────────────────────────────────────────────
 
 
-def main():
-    # One-shot escape hatch: log and allow (silent stdout).
-    if os.environ.get("HARNESS_SKIP_PREWRITE") == "1":
-        data = read_hook_input()
-        tool_input = data.get("tool_input") or {}
-        fp = tool_input.get("file_path") or tool_input.get("path") or ""
-        log_gate_bypass(GATE_NAME, fp)
-        return 0
-
-    data = read_hook_input()
-    if not data:
-        return 0
-
-    tool_name = data.get("tool_name", "")
-    if tool_name not in ("Write", "Edit", "MultiEdit"):
-        return 0
-
-    tool_input = data.get("tool_input") or {}
-    file_path = tool_input.get("file_path") or tool_input.get("path") or ""
-    if not file_path:
-        return 0
-
+def _check_path(data: dict, file_path: str) -> None:
     payload_cwd = str(data.get("cwd") or "").strip()
     hook_cwd = os.path.realpath(payload_cwd or os.getcwd())
     requested_path = os.path.abspath(
@@ -713,6 +695,51 @@ def main():
     except Exception as exc:
         _log_gate_parse_fail(repo_root, f"scope-lock enforcement error: {exc}")
 
+    return 0
+
+
+_PATCH_PATH_RE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$", re.MULTILINE)
+_PATCH_MOVE_RE = re.compile(r"^\*\*\* Move to: (.+)$", re.MULTILINE)
+
+
+def _write_paths(data: dict) -> list[str]:
+    tool_name = str(data.get("tool_name") or "")
+    tool_input = data.get("tool_input") or {}
+    if tool_name in ("Write", "Edit", "MultiEdit") and isinstance(tool_input, dict):
+        path = tool_input.get("file_path") or tool_input.get("path") or ""
+        return [str(path)] if path else []
+    if tool_name != "apply_patch":
+        return []
+    if isinstance(tool_input, str):
+        patch = tool_input
+    elif isinstance(tool_input, dict):
+        patch = tool_input.get("patch") or tool_input.get("input") or ""
+    else:
+        patch = ""
+    if not isinstance(patch, str):
+        return []
+    paths = _PATCH_PATH_RE.findall(patch) + _PATCH_MOVE_RE.findall(patch)
+    return list(dict.fromkeys(path.removesuffix("\r") for path in paths))
+
+
+def main():
+    data = read_hook_input()
+    if not data:
+        return 0
+    paths = _write_paths(data)
+
+    # One-shot escape hatch: log and allow (silent stdout).
+    if os.environ.get("HARNESS_SKIP_PREWRITE") == "1":
+        log_gate_bypass(GATE_NAME, ",".join(paths)[:400])
+        return 0
+
+    for file_path in paths:
+        decision = StringIO()
+        with redirect_stdout(decision):
+            _check_path(data, file_path)
+        if decision.getvalue():
+            sys.stdout.write(decision.getvalue())
+            return 0
     return 0
 
 

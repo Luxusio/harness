@@ -43,6 +43,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 | `CLAUDE.md` 편집 필요 | [C-10](#c-10), [C-11](#c-11), [C-15](#c-15) | hard |
 | Maintenance 태스크 (MAINTENANCE 마커) | C-01 완화, [C-05](#c-05) 유지 | — |
 | `doc/changes/` 또는 `doc/common/` 자동 정리 | [C-16](#c-16) | auto |
+| 브라우저 또는 full-suite 검증의 실행 위치 선택 | [C-18](#c-18) | soft |
 
 Levels:
 - **hard** — gate blocks or MCP refuses. Violation is impossible by default.
@@ -252,6 +253,23 @@ Archive commit message always embeds the copy-pasteable restore command.
   AND `reference_count == 0`, classify REMOVE.
 - `distilled_to: <path>` — key content promoted to `<path>`; if target exists
   AND `reference_count == 0`, classify REMOVE.
+
+### C-18
+
+**Title:** Verification delegation is workflow guidance, not a pre-tool gate.
+**When:** Choosing where to run browser-driving tools or a heavy full-suite verification pass.
+**Enforced by:** The develop workflow prefers the applicable `qa-*` lens when
+delegation is available and isolation materially reduces context or process
+load. No generic PreToolUse hook inspects or blocks browser calls. Targeted
+tests, diagnostics, and browser interaction may run inline when that is the
+lightest available verification path. Receipt-backed review and QA freshness
+requirements at `task_verify` remain unchanged.
+**On violation:** advisory only. Inline execution is allowed; the orchestrator
+owns the resulting context growth and must still provide the required fresh
+verification evidence before close.
+**Why:** Delegation isolates large browser and test output, but running an
+extra process on every tool call to enforce that preference costs more than
+the occasional inline context growth it prevents.
 
 <!-- harness:managed-end -->
 

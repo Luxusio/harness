@@ -182,6 +182,13 @@ summaries, or narrative evidence do not close the task. Commands and inline
 checks may still help debugging, but close authority comes from `task_verify`
 reading task state and the two lifecycle streams.
 
+Verification delegation is a workflow optimization, not a generic pre-tool
+policy. Browser and heavy full-suite work should use an applicable `qa-*` lens
+when isolation materially reduces context or process load. Inline browser use
+remains valid when it is the lighter available path; its potentially large DOM,
+screenshot, or evaluation payload is an accepted caller-owned context cost and
+does not relax the receipt-backed close requirements above.
+
 Codex collaboration APIs are capability-versioned rather than fixed to one
 tool set. A structurally identified `wait_agent` result such as
 `status[agent_id].completed` is a complete lifecycle signal; `list_agents` is
@@ -274,9 +281,14 @@ registration is validated from its
 exact state and rollout paths before discovery, so ordinary hook events do not
 recursively scan the session tree, acquire the registration lock, or rewrite
 state. Discovery for a missing registration is deadline-aware and registration
-locking is non-blocking. PreToolUse, UserPromptSubmit, and PostToolUse wrappers
-enforce one total child-work deadline strictly below their configured outer
-Codex hook timeout; individual subprocesses consume the remaining shared budget.
+locking is non-blocking. UserPromptSubmit and PostToolUse wrappers enforce one
+total child-work deadline below their configured outer Codex hook timeout.
+PreToolUse selects at most one gate child and gives it a fixed bounded timeout.
+PreToolUse dispatch is selective: plan-first/artifact ownership runs only for
+direct write tools (`Write|Edit|MultiEdit|apply_patch`), while the shell
+mutation guard runs only for `Bash|shell`.
+Read-only, browser, and unrelated tools do not launch either gate. Browser
+delegation has no generic PreToolUse enforcement.
 Lifecycle root resolution is included in that hard budget. PostToolUse performs
 no review/QA changed-path or fingerprint scan; the single lifecycle watcher
 exclusively observes ordered runtime spawn/completion events and owns that

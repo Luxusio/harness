@@ -6,7 +6,6 @@ import json
 import os
 import subprocess
 import sys
-import time
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
@@ -15,16 +14,6 @@ try:
     from codex_hook_registration import restore_watcher_registration  # type: ignore
 except Exception:  # pragma: no cover - registration recovery is best effort
     restore_watcher_registration = None
-
-try:
-    from _lib import find_harness_root, find_repo_root, resolve_active_task_dir  # type: ignore
-    from background_registry import register_subagent_start  # type: ignore
-except Exception:  # pragma: no cover - hook must fail open
-    find_harness_root = None
-    find_repo_root = None
-    resolve_active_task_dir = None
-    register_subagent_start = None
-
 
 def _payload_cwd(payload: bytes) -> str | None:
     try:
@@ -43,14 +32,6 @@ def _tool_name(payload: bytes) -> str:
     return str(data.get("tool_name") or data.get("tool") or "")
 
 
-def _json_payload(payload: bytes) -> dict:
-    try:
-        data = json.loads(payload.decode("utf-8") or "{}")
-    except Exception:
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
 def _is_subagent_spawn_tool(tool_name: str) -> bool:
     name = (tool_name or "").lower().replace("-", "_")
     return (
@@ -61,73 +42,19 @@ def _is_subagent_spawn_tool(tool_name: str) -> bool:
     )
 
 
-def _structured_task_id(tool_input: dict) -> str:
-    task_id = tool_input.get("task_id") or tool_input.get("taskId")
-    return str(task_id).strip() if task_id else ""
-
-
-def _record_codex_subagent_start(payload: bytes) -> None:
-    if register_subagent_start is None or find_harness_root is None or resolve_active_task_dir is None:
-        return
-    data = _json_payload(payload)
-    if not _is_subagent_spawn_tool(str(data.get("tool_name") or data.get("tool") or "")):
-        return
-    try:
-        cwd = _payload_cwd(payload) or os.getcwd()
-        repo_root = find_harness_root(cwd)
-        if not repo_root and find_repo_root is not None:
-            candidate = find_repo_root(cwd)
-            if resolve_active_task_dir(candidate):
-                repo_root = candidate
-        if not repo_root:
-            return
-        tool_input = data.get("tool_input") or data.get("input") or data.get("arguments") or {}
-        if isinstance(tool_input, dict):
-            expected_task_id = _structured_task_id(tool_input)
-            if expected_task_id:
-                active_task_dir = resolve_active_task_dir(repo_root)
-                if os.path.basename(os.path.normpath(active_task_dir or "")) != expected_task_id:
-                    return
-            payload_for_registry = dict(data)
-            payload_for_registry["agent_type"] = str(
-                tool_input.get("agent_type")
-                or tool_input.get("type")
-                or tool_input.get("task_name")
-                or "default"
-            )
-            payload_for_registry["agent_id"] = str(
-                data.get("tool_call_id")
-                or data.get("call_id")
-                or data.get("id")
-                or ""
-            )
-            payload_for_registry["hook_event_name"] = "CodexSubagentStart"
-        else:
-            payload_for_registry = dict(data)
-            payload_for_registry["hook_event_name"] = "CodexSubagentStart"
-        register_subagent_start(repo_root, payload_for_registry, allow_generated_id=True)
-    except Exception:
-        pass
-
-
 HOOK_TIMEOUT_SECONDS = 5.0
-TOTAL_BUDGET_SECONDS = 4.25
 REGISTRATION_BUDGET_SECONDS = 0.5
 CHILD_TIMEOUT_SECONDS = 1.5
-DEADLINE_MARGIN_SECONDS = 0.1
 
 
-def _run(script: str, payload: bytes, deadline: float) -> bytes:
-    remaining = deadline - time.monotonic() - DEADLINE_MARGIN_SECONDS
-    if remaining <= 0:
-        return b""
+def _run(script: str, payload: bytes) -> bytes:
     try:
         proc = subprocess.run(
             [sys.executable, os.path.join(SCRIPTS_DIR, script)],
             input=payload,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=min(CHILD_TIMEOUT_SECONDS, remaining),
+            timeout=CHILD_TIMEOUT_SECONDS,
             cwd=_payload_cwd(payload),
         )
         return proc.stdout or b""
@@ -136,22 +63,24 @@ def _run(script: str, payload: bytes, deadline: float) -> bytes:
 
 
 def main() -> int:
-    deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
     payload = sys.stdin.buffer.read()
-    if restore_watcher_registration is not None:
-        restore_watcher_registration(payload, budget_seconds=REGISTRATION_BUDGET_SECONDS)
-    # Codex exposes the durable runtime agent id only in the spawn result. The
-    # post-tool hook records that correlated start; registering the pre-call's
-    # tool_call_id here would create an active record that no completion event
-    # can safely close.
-    scripts = ["prewrite_gate.py", "qa_delegation_gate.py"]
-    if _tool_name(payload) == "Bash":
-        scripts.append("mcp_bash_guard.py")
-    for script in scripts:
-        out = _run(script, payload, deadline)
-        if out:
-            sys.stdout.buffer.write(out)
-            return 0
+    tool_name = _tool_name(payload)
+    if _is_subagent_spawn_tool(tool_name):
+        if restore_watcher_registration is not None:
+            restore_watcher_registration(payload, budget_seconds=REGISTRATION_BUDGET_SECONDS)
+        return 0
+
+    script = ""
+    if tool_name in {"Write", "Edit", "MultiEdit", "apply_patch"}:
+        script = "prewrite_gate.py"
+    elif tool_name in {"Bash", "shell"}:
+        script = "mcp_bash_guard.py"
+    if not script:
+        return 0
+
+    out = _run(script, payload)
+    if out:
+        sys.stdout.buffer.write(out)
     return 0
 
 

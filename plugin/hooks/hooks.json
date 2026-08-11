@@ -68,6 +68,7 @@
     ],
     "PreToolUse": [
       {
+        "matcher": "Write|Edit|MultiEdit",
         "hooks": [
           {
             "type": "command",
@@ -85,16 +86,6 @@
             "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/mcp_bash_guard.py || true",
             "timeout": 3,
             "statusMessage": "Checking bash mutation guard"
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/scripts/qa_delegation_gate.py || true",
-            "timeout": 3,
-            "statusMessage": "Checking MCP verification delegation (C-18)"
           }
         ]
       }

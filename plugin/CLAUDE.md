@@ -167,17 +167,22 @@ hand — the prewrite gate rejects direct writes.
 
 ## 8c. Verification delegation
 
-Main session NEVER calls browser MCP tools (`mcp__chrome-devtools__*`)
-inline. Browser-driving calls (`take_snapshot`, `take_screenshot`,
-`evaluate_script`, `navigate_page`, `click`, `fill`, ...) MUST be
-delegated to the `harness:qa-browser` subagent. The browser MCP surface
-is the actual context-bloat source — DOM snapshots, screenshots, and
-evaluate output add thousands of structured tokens per call.
+Prefer the `harness:qa-browser` subagent for a substantial browser verification
+pass when delegation is available. Browser-driving calls (`take_snapshot`,
+`take_screenshot`, `evaluate_script`, `navigate_page`, `click`, `fill`, ...)
+can add thousands of structured tokens to the caller's context, so an isolated
+lane is usually cheaper for multi-step QA.
 
 Why: qa-browser runs browser verification in an isolated context. The start
 hooks write start and completion entries to `SUBAGENT_RECEIPTS.jsonl`; the
 orchestrator reads the subagent's final response for findings and uses
 `task_verify` to compute the close signal.
+
+This is workflow guidance, not a PreToolUse gate. Short diagnostics and browser
+verification may run inline when delegation is unavailable or the inline path
+is materially simpler. Harness accepts the resulting context-growth risk; the
+caller still owns complete evidence and fresh review/QA receipts required by
+`task_verify`.
 
 Allowed inline:
 - **Bash test runners** (`pytest`, `npm test`, `pnpm test`, `yarn test`, `bun test`, `vitest`, `jest`, `mocha`, `cargo test`, `go test`, `mvn test`, `gradle test`, `rspec`, `phpunit`, `rake test`) — single PASS/FAIL lines do not bloat context; inline use is legitimate. For heavy full-suite runs, spawning `harness:qa-cli` (or `qa-api` / `qa-desktop` per project) keeps the main lane clean as a convention, not a gate.
@@ -186,20 +191,10 @@ Allowed inline:
 - Read-only inspection (`grep`, `find`, `git status`, `git diff`)
 - Ad-hoc HTTP / DB probes (`curl`, `wget`, `httpie`, `psql -c`, `mysql -e`, `alembic`) — too many legitimate uses (API exploration, schema inspection, debugging) for the gate to block
 
-Enforced by: `plugin/scripts/qa_delegation_gate.py` (PreToolUse, no
-matcher — the script self-filters by `tool_name` prefix). The gate
-allows delegated `harness:qa-browser` calls, then emits a deny envelope
-for non-delegated callers whose reason surfaces in system-reminder so
-the model self-redirects to spawn `harness:qa-browser`. Detection
-prefers explicit agent fields when the runtime exposes them and falls
-back to a capped `transcript_path` prologue check for the qa-browser
-agent prompt. Bypass: `HARNESS_SKIP_QA_DELEGATION=1` one-shot.
-
-History: prior to 2026-05-14 the gate also blocked Bash test runners.
-User feedback narrowed it to MCP-only after false-positive blocks on
-legitimate inline `pytest` / `vitest` / `pnpm test` use. The Bash test
-runner block was the wrong knob — Bash test output is bounded, browser
-MCP output is unbounded.
+History: an earlier generic PreToolUse hook blocked main-session browser calls
+and previously also blocked Bash test runners. False positives and the cost of
+self-filtering every tool call outweighed the context-isolation benefit, so
+delegation is now selected by the workflow instead.
 
 ## 9. Iron Law
 

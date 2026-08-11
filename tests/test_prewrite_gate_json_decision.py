@@ -78,6 +78,38 @@ class TestMultiEdit(unittest.TestCase):
             self.assertEqual(decision, "deny")
             self.assertIn("PLAN.md", reason)
 
+    def test_codex_apply_patch_checks_every_target(self):
+        with scratch_task_in_real_repo("pr1-apply-patch") as task_dir:
+            plan = os.path.join(task_dir, "PLAN.md")
+            patch = (
+                "*** Begin Patch\n"
+                "*** Update File: README.md\n"
+                "@@\n-old\n+new\n"
+                f"*** Update File: {plan}\n"
+                "@@\n-old\n+new\n"
+                "*** End Patch"
+            )
+            r = invoke_hook(GATE, "apply_patch", {"patch": patch})
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("PLAN.md", reason)
+
+    def test_codex_apply_patch_crlf_target_is_not_bypassed(self):
+        with scratch_task_in_real_repo("pr1-apply-patch-crlf") as task_dir:
+            plan = os.path.join(task_dir, "PLAN.md")
+            patch = (
+                "*** Begin Patch\r\n"
+                "*** Update File: README.md\r\n"
+                "@@\r\n-old\r\n+new\r\n"
+                f"*** Update File: {plan}\r\n"
+                "@@\r\n-old\r\n+new\r\n"
+                "*** End Patch\r\n"
+            )
+            r = invoke_hook(GATE, "apply_patch", {"patch": patch})
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("PLAN.md", reason)
+
 
 class TestPlanFirst(unittest.TestCase):
     def test_no_plan_blocks_source_write(self):
