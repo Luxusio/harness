@@ -33,13 +33,7 @@ def _tool_name(payload: bytes) -> str:
 
 
 def _is_subagent_spawn_tool(tool_name: str) -> bool:
-    name = (tool_name or "").lower().replace("-", "_")
-    return (
-        name == "spawn_agent"
-        or name.endswith(".spawn_agent")
-        or name.endswith("__spawn_agent")
-        or "multi_agent" in name and "spawn_agent" in name
-    )
+    return (tool_name or "").lower() == "collaboration.spawn_agent"
 
 
 HOOK_TIMEOUT_SECONDS = 5.0

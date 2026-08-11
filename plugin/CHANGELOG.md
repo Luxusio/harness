@@ -6,6 +6,22 @@ All notable changes to the harness Claude Code plugin.
 
 ### Changed
 
+- Task packs now use one `RECEIPTS.jsonl` stream for review and QA evidence.
+  New flows no longer generate `CHECKS.yaml` or `USER_FEEDBACK.jsonl`; PLAN owns
+  acceptance intent and live conversation owns feedback handling. Legacy
+  receipt streams remain readable, reducing normal task artifact count by
+  three files without removing review or QA gates.
+
+- Codex lifecycle evidence now has one owner and one protocol: the MCP-hosted
+  watcher consumes direct `collaboration` spawn/activity/output/final events.
+  JavaScript `exec` parsing, `multi_agent_v1`, wait/close/list completion
+  reconstruction, adapter diagnostics, and the dormant PostToolUse receipt
+  writer were removed. Runtime protocol drift now fails closed as a missing
+  receipt until Harness and Codex are upgraded together.
+- Codex watcher registration now runs only at SessionStart and immediately
+  before a supported spawn; prompt, PostToolUse, and Stop hooks no longer probe
+  registration state. The session marker plus current TASK_RUN is now the sole
+  watcher task binding, replacing MCP result parsing and watcher-local fallback.
 - Task lifecycle no longer runs automatic Git change detection or maintains
   HEAD/diff/source baselines. Review and QA receipts now attest task, agent,
   lens, explicit verdict, and review-before-QA ordering only; applicable lenses
@@ -33,13 +49,6 @@ All notable changes to the harness Claude Code plugin.
 
 ### Fixed
 
-- Codex lifecycle receipts now normalize both legacy `collaboration` and current
-  `multi_agent_v1` spawn/completion contracts. Runtimes without a structured
-  task-name field use a strict first-line marker, returned `agent_id` remains
-  canonical, wait/notification/close completion signals deduplicate to one
-  receipt, and `CODEX_THREAD_ID` supplies the session marker even when
-  `HARNESS_RUNTIME` is unset. Unsupported adapters are diagnosed without
-  weakening start, parent, task, fingerprint, or verdict gates.
 - Explicit local `source_git_roots` now use the same trust model as ordinary
   developer Git workflows. Harness resolves the configured checkout and lets
   required Git commands determine success without linked-worktree
@@ -62,7 +71,6 @@ All notable changes to the harness Claude Code plugin.
 - Harness can now use a non-Git control workspace with explicit `source_git_roots`. Codex hooks and Claude write/Bash/Stop/subagent lifecycle entrypoints bind child-repository sessions to the parent task, lifecycle registrations separate control root from rollout cwd, and task baselines plus receipt HEAD/diff fingerprints cover every configured repository. Bounded parent behavioral files such as `AGENTS.md`, `CLAUDE.md`, contracts, and the manifest are baseline-tracked and close-fingerprinted so stale QA or review PASS evidence is invalidated safely.
 - Git-backed control repositories now treat explicit `source_git_roots` additively: the parent remains a source binding, and exact configured roots are independently scanned leaf services. Registration is never inferred. Existing active tasks whose binding set differs must be restarted under a new task ID without editing `TASK_BASELINE.json`; rolling back to a runtime with the former replacement semantics likewise requires new task IDs.
 - Multi-Git setup and resume now fail closed for moved, missing, symlinked, nested, or shell-unsafe source-root names. Parent behavioral symlinks and protected-artifact symlink aliases are rejected, and setup routes project-document routing/import changes through one no-follow atomic helper.
-- Codex review and QA completion no longer requires `list_agents`. Identity-bearing `wait_agent` status maps are accepted directly, while the lifecycle watcher also recognizes exec-wrapped `multi_agent_v1__spawn_agent` calls and matching `<subagent_notification>` completions without weakening start-time fingerprint freshness.
 - `task_start` now reuses one bounded request-local Git snapshot, including HEAD, ancestry, and committed-path comparisons, preserves causal Git diagnostics, revalidates the baseline on resume, accurately distinguishes creation from resume, leaves concurrent Git index locks untouched, safely bounds optional manifest probing and atomically replaces its snapshot output, and returns an actionable `ready_with_warnings` result only after a valid scaffold exists. `write_plan` also accepts either audit rows or a complete Markdown audit table with natural spacing, normalizes the heading/header automatically, and explains incomplete or mismatched rows instead of rejecting natural input without useful guidance.
 - Setup now gitignores unapproved runbook-candidate staging and the local marker that enables sensitive Goal hook-payload capture, and rejects either artifact when it is already tracked.
 - `task_close` now writes a receipt-stream-bound close attestation that remains valid while later Goal children change the repository, and `task_start` clears it before reopening a closed task. Goal completion requires that bounded, no-follow artifact, rechecks it immediately before the terminal write, and fails closed for missing, damaged, or hand-labeled state.

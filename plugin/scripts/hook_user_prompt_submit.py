@@ -4,24 +4,15 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
 import time
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, SCRIPTS_DIR)
-try:
-    from codex_hook_registration import (  # type: ignore
-        _harness_enabled_cwd,
-        restore_watcher_registration,
-    )
-except Exception:  # pragma: no cover - hook must fail open
-    restore_watcher_registration = None
-    _harness_enabled_cwd = None
 
 HOOK_TIMEOUT_SECONDS = 8.0
 TOTAL_BUDGET_SECONDS = 7.0
-REGISTRATION_BUDGET_SECONDS = 0.5
 CHILD_TIMEOUT_SECONDS = 6.0
 DEADLINE_MARGIN_SECONDS = 0.1
 CODEX_ROUTE = (
@@ -40,17 +31,34 @@ def _payload_cwd(payload: bytes) -> str | None:
 
 
 def _is_harness_repo(cwd: str | None) -> bool:
-    """Detect setup from the filesystem only; never invoke Git in a prompt hook."""
-    if not cwd or _harness_enabled_cwd is None:
+    """Detect an ancestor manifest without importing lifecycle or Git code."""
+    if not cwd:
         return False
-    return _harness_enabled_cwd(cwd)
+    current = os.path.realpath(cwd)
+    nearest_git = ""
+    while True:
+        probe = current
+        try:
+            for component in ("doc", "harness", "manifest.yaml"):
+                probe = os.path.join(probe, component)
+                info = os.lstat(probe)
+                if stat.S_ISLNK(info.st_mode):
+                    return False
+            if stat.S_ISREG(info.st_mode) and (not nearest_git or nearest_git == current):
+                return True
+        except OSError:
+            pass
+        if not nearest_git and os.path.lexists(os.path.join(current, ".git")):
+            nearest_git = current
+        parent = os.path.dirname(current)
+        if parent == current:
+            return False
+        current = parent
 
 
 def main() -> int:
     deadline = time.monotonic() + TOTAL_BUDGET_SECONDS
     payload = sys.stdin.buffer.read()
-    if restore_watcher_registration is not None:
-        restore_watcher_registration(payload, budget_seconds=REGISTRATION_BUDGET_SECONDS)
     cwd = _payload_cwd(payload)
     harness_repo = _is_harness_repo(cwd)
     context = ""

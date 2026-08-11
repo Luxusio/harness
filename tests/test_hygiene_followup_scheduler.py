@@ -43,14 +43,13 @@ class HygieneFollowupSchedulerTests(unittest.TestCase):
             task_dir = root / "doc" / "harness" / "tasks" / "TASK__hygiene-review-pending-docs"
             request = (task_dir / "REQUEST.md").read_text(encoding="utf-8")
             plan = (task_dir / "PLAN.md").read_text(encoding="utf-8")
-            checks = (task_dir / "CHECKS.yaml").read_text(encoding="utf-8")
 
         self.assertEqual(result["action"], "run_followup")
         self.assertTrue(result["auto_run"])
         self.assertEqual(result["pending_count"], 2)
         self.assertIn("Do not combine this cleanup with unrelated feature work", request)
         self.assertIn("standalone cleanup task", plan)
-        self.assertIn("AC-001", checks)
+        self.assertFalse((task_dir / "CHECKS.yaml").exists())
 
     def test_create_followup_is_idempotent(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -106,22 +106,14 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             self.assertEqual(decision, "deny")
             self.assertIn("rule=protected-artifact", reason)
 
-    def test_redirect_into_checks_denies(self):
-        with scratch_task_in_real_repo("pr1-bg-checks") as task_dir:
-            checks = os.path.join(task_dir, "CHECKS.yaml")
-            r = _run_bash(f"echo x > {checks}")
-            decision, reason = parse_decision(r.stdout)
-            self.assertEqual(decision, "deny")
-            self.assertIn("rule=protected-artifact", reason)
-
     def test_redirect_into_subagent_receipt_denies_with_hook_hint(self):
         with scratch_task_in_real_repo("receipt-prot") as task_dir:
-            receipt = os.path.join(task_dir, "SUBAGENT_RECEIPTS.jsonl")
+            receipt = os.path.join(task_dir, "RECEIPTS.jsonl")
             r = _run_bash(f"echo x > {receipt}")
             decision, reason = parse_decision(r.stdout)
             self.assertEqual(decision, "deny")
             self.assertIn("rule=protected-artifact", reason)
-            self.assertIn("subagent-start hook", reason)
+            self.assertIn("review and QA lifecycle hook", reason)
 
     def test_redirect_into_task_baseline_denies_with_runtime_hint(self):
         with scratch_task_in_real_repo("baseline-prot") as task_dir:

@@ -232,7 +232,7 @@ def test_terminal_receipt_reset_rejects_unsafe_stream_leaves(tmp_path):
     task = _task(tmp_path)
     outside = tmp_path / "outside.jsonl"
     outside.write_text("preserve\n", encoding="utf-8")
-    stream = task / lib.REVIEW_RECEIPTS_NAME
+    stream = task / lib.RECEIPTS_NAME
     stream.symlink_to(outside)
     try:
         lib.reset_receipt_streams_for_new_run(task)
@@ -295,30 +295,21 @@ def test_missing_or_mismatched_task_run_fails_receipts_closed(tmp_path):
         raise AssertionError("missing task run must reject receipt append")
 
 
-def test_receipt_reset_restores_first_stream_if_second_unlink_fails(tmp_path):
+def test_receipt_reset_removes_unified_stream_and_preserves_legacy_inputs(tmp_path):
     task = _task(tmp_path)
     _pass_review(task)
-    _receipt(task, "qa-cli", "qa-1", "started")
-    review_path = task / lib.REVIEW_RECEIPTS_NAME
-    qa_path = task / lib.SUBAGENT_RECEIPTS_NAME
-    before = {review_path: review_path.read_bytes(), qa_path: qa_path.read_bytes()}
-    real_unlink = lib.os.unlink
+    unified = task / lib.RECEIPTS_NAME
+    legacy_review = task / lib.REVIEW_RECEIPTS_NAME
+    legacy_qa = task / lib.SUBAGENT_RECEIPTS_NAME
+    legacy_review.write_text('{"kind":"review"}\n', encoding="utf-8")
+    legacy_qa.write_text('{"kind":"subagent"}\n', encoding="utf-8")
 
-    def fail_second(path, *args, **kwargs):
-        if Path(path) == qa_path:
-            raise OSError("forced second unlink failure")
-        return real_unlink(path, *args, **kwargs)
+    snapshot = lib.reset_receipt_streams_for_new_run(task)
 
-    with mock.patch.object(lib.os, "unlink", side_effect=fail_second):
-        try:
-            lib.reset_receipt_streams_for_new_run(task)
-        except OSError as exc:
-            assert "forced second" in str(exc)
-        else:
-            raise AssertionError("forced unlink failure must propagate")
-
-    assert review_path.read_bytes() == before[review_path]
-    assert qa_path.read_bytes() == before[qa_path]
+    assert not unified.exists()
+    assert legacy_review.read_text(encoding="utf-8") == '{"kind":"review"}\n'
+    assert legacy_qa.read_text(encoding="utf-8") == '{"kind":"subagent"}\n'
+    assert set(snapshot) == {str(unified)}
 
 def test_symlinked_manifest_remains_untrusted(tmp_path):
     root = tmp_path / "workspace"
@@ -334,3 +325,16 @@ def test_symlinked_manifest_remains_untrusted(tmp_path):
     assert resolved == str(root.resolve())
     assert "non-symlink" in error
     assert lib.find_harness_root(child) == ""
+
+
+def test_review_and_qa_share_one_receipt_stream(tmp_path):
+    task = _task(tmp_path)
+    _pass_review(task)
+    _receipt(task, "qa-cli", "qa-1", "started")
+    _receipt(task, "qa-cli", "qa-1", "completed", "PASS")
+
+    assert (task / lib.RECEIPTS_NAME).is_file()
+    assert not (task / lib.LEGACY_REVIEW_RECEIPTS_NAME).exists()
+    assert not (task / lib.LEGACY_SUBAGENT_RECEIPTS_NAME).exists()
+    assert lib.receipt_review_verdict(task) == "PASS"
+    assert lib.receipt_runtime_verdict(task) == "PASS"

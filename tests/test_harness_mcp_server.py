@@ -128,10 +128,6 @@ class HarnessMcpServerTests(unittest.TestCase):
                 )
                 self.assertNotIn("isError", started)
                 (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
-                (task_dir / "CHECKS.yaml").write_text(
-                    '- id: AC-001\n  title: "x"\n  status: passed\n',
-                    encoding="utf-8",
-                )
                 self._write_subagent_receipt(str(task_dir))
                 context = harness_server.handle_task_context(
                     {"task_id": "TASK__no-git-handlers"}
@@ -957,112 +953,6 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertTrue(result.get("isError"), tool)
             self.assertIn("Unknown tool", result["structuredContent"]["error"], tool)
 
-    def test_task_verify_reconcile_skips_without_subagent_receipt(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__qapromote")
-            (Path(task_dir) / "CHECKS.yaml").write_text(
-                '- id: AC-001\n  title: "one"\n  status: open\n  kind: functional\n'
-                '  last_updated: 2026-01-01T00:00:00Z\n  evidence: ""\n'
-                '- id: AC-002\n  title: "two"\n  status: open\n  kind: functional\n'
-                '  last_updated: 2026-01-01T00:00:00Z\n  evidence: ""\n',
-                encoding="utf-8",
-            )
-            original_ctd = harness_server.canonical_task_dir
-            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
-            try:
-                result = harness_server.call_tool(
-                    "task_verify",
-                    {"task_id": "TASK__qapromote", "reconcile_acs": True},
-                )
-            finally:
-                harness_server.canonical_task_dir = original_ctd
-            body = (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8")
-        self.assertNotIn("isError", result)
-        self.assertEqual(result["structuredContent"]["ac_reconcile"]["promoted_acs"], [])
-        self.assertIn("QA completion", result["structuredContent"]["ac_reconcile"]["reason"])
-        self.assertEqual(body.count("status: open"), 2)
-
-    def test_task_verify_reconcile_promotes_open_acs_from_subagent_start_receipt(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__qareconcile")
-            (Path(task_dir) / "CHECKS.yaml").write_text(
-                '- id: AC-001\n  title: "one"\n  status: open\n  kind: functional\n'
-                '  last_updated: 2026-01-01T00:00:00Z\n  evidence: ""\n'
-                '- id: AC-002\n  title: "two"\n  status: open\n  kind: functional\n'
-                '  last_updated: 2026-01-01T00:00:00Z\n  evidence: ""\n',
-                encoding="utf-8",
-            )
-            self._write_subagent_receipt(task_dir)
-            original_ctd = harness_server.canonical_task_dir
-            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
-            try:
-                verify = harness_server.call_tool(
-                    "task_verify",
-                    {"task_id": "TASK__qareconcile", "reconcile_acs": True},
-                )
-            finally:
-                harness_server.canonical_task_dir = original_ctd
-            body = (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8")
-        self.assertNotIn("isError", verify)
-        self.assertEqual(verify["structuredContent"]["ac_reconcile"]["promoted_acs"], ["AC-001", "AC-002"])
-        self.assertEqual(body.count("status: passed"), 2)
-        self.assertIn("evidence: SUBAGENT_RECEIPTS.jsonl task_verify PASS", body)
-
-    def test_task_verify_reconcile_skips_failed_deferred_and_without_receipt(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__qaskip")
-            (Path(task_dir) / "CHECKS.yaml").write_text(
-                '- id: AC-001\n  title: "open"\n  status: open\n  kind: functional\n'
-                '  last_updated: 2026-01-01T00:00:00Z\n  evidence: ""\n'
-                '- id: AC-002\n  title: "failed"\n  status: failed\n  kind: functional\n'
-                '  last_updated: 2026-01-01T00:00:00Z\n  evidence: ""\n'
-                '- id: AC-003\n  title: "deferred"\n  status: deferred\n  kind: functional\n'
-                '  last_updated: 2026-01-01T00:00:00Z\n  evidence: ""\n',
-                encoding="utf-8",
-            )
-            original_ctd = harness_server.canonical_task_dir
-            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
-            try:
-                verify = harness_server.call_tool(
-                    "task_verify",
-                    {"task_id": "TASK__qaskip", "reconcile_acs": True},
-                )
-            finally:
-                harness_server.canonical_task_dir = original_ctd
-            body = (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8")
-        self.assertEqual(verify["structuredContent"]["ac_reconcile"]["promoted_acs"], [])
-        self.assertIn("QA completion", verify["structuredContent"]["ac_reconcile"]["reason"])
-        self.assertIn("status: open", body)
-        self.assertIn("status: failed", body)
-        self.assertIn("status: deferred", body)
-
-    def test_task_verify_reconcile_promotes_plan_writer_indented_checks(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__qaindent")
-            (Path(task_dir) / "CHECKS.yaml").write_text(
-                "version: 1\nchecks:\n"
-                "  - id: AC-001\n"
-                "    description: one\n"
-                "    status: open\n"
-                "    evidence: []\n",
-                encoding="utf-8",
-            )
-            self._write_subagent_receipt(task_dir)
-            original_ctd = harness_server.canonical_task_dir
-            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
-            try:
-                verify = harness_server.call_tool(
-                    "task_verify",
-                    {"task_id": "TASK__qaindent", "reconcile_acs": True},
-                )
-            finally:
-                harness_server.canonical_task_dir = original_ctd
-            body = (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8")
-        self.assertEqual(verify["structuredContent"]["ac_reconcile"]["promoted_acs"], ["AC-001"])
-        self.assertIn("status: passed", body)
-        self.assertRegex(body, r"(?m)^    last_updated: 2026-")
-        self.assertNotIn("P26-", body)
-
     def test_record_ac_evidence_is_not_exposed(self):
         result = harness_server.call_tool(
             "record_ac_evidence",
@@ -1101,9 +991,18 @@ class HarnessMcpServerTests(unittest.TestCase):
                     "task_verify",
                     {"task_id": "TASK__subagentreceipt"},
                 )
-                receipt_path = Path(task_dir) / "SUBAGENT_RECEIPTS.jsonl"
+                receipt_path = Path(task_dir) / "RECEIPTS.jsonl"
                 receipt_exists = receipt_path.is_file()
-                receipt = json.loads(receipt_path.read_text(encoding="utf-8").splitlines()[0]) if receipt_exists else {}
+                receipt = next(
+                    (
+                        item for item in (
+                            json.loads(line)
+                            for line in receipt_path.read_text(encoding="utf-8").splitlines()
+                        )
+                        if item.get("agent_id") == "agent-123"
+                    ),
+                    {},
+                ) if receipt_exists else {}
             finally:
                 harness_server.canonical_task_dir = original_ctd
         self.assertTrue(result.get("isError"))
@@ -1716,7 +1615,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertFalse((task_dir / "TASK_BASELINE.json").exists())
             self.assertFalse((task_dir / "TASK_STATE.yaml").exists())
 
-    def test_write_plan_writes_plan_meta_checks_and_audit(self):
+    def test_write_plan_writes_plan_meta_and_audit_without_checks(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__planmcp")
             result = self._call_in_repo(
@@ -1733,18 +1632,17 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertNotIn("isError", result)
             self.assertEqual(
                 result["structuredContent"]["written"],
-                ["PLAN.md", "PLAN.meta.json", "CHECKS.yaml", "AUDIT_TRAIL.md"],
+                ["PLAN.md", "PLAN.meta.json", "AUDIT_TRAIL.md"],
             )
             bytes_written = result["structuredContent"]["bytes_written"]
             self.assertGreater(bytes_written["PLAN.md"], 0)
             self.assertGreater(bytes_written["PLAN.meta.json"], 0)
-            self.assertGreater(bytes_written["CHECKS.yaml"], 0)
             self.assertGreater(bytes_written["AUDIT_TRAIL.md"], 0)
+            self.assertFalse((Path(task_dir) / "CHECKS.yaml").exists())
             self.assertEqual((Path(task_dir) / "PLAN.md").read_text(encoding="utf-8"), "# MCP Plan\n")
             meta = json.loads((Path(task_dir) / "PLAN.meta.json").read_text(encoding="utf-8"))
             self.assertEqual(meta["author_role"], "plan-skill")
             self.assertEqual(meta["plan_meta"]["routing"], "light")
-            self.assertIn("AC-001", (Path(task_dir) / "CHECKS.yaml").read_text(encoding="utf-8"))
             self.assertIn("| 1 |", (Path(task_dir) / "AUDIT_TRAIL.md").read_text(encoding="utf-8"))
 
     def test_write_plan_rejects_empty_plan(self):
@@ -1757,20 +1655,6 @@ class HarnessMcpServerTests(unittest.TestCase):
             )
             self.assertTrue(result.get("isError"))
             self.assertIn("empty PLAN.md", result["structuredContent"]["error"])
-
-    def test_write_plan_rejects_empty_optional_checks(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__emptychecks")
-            before = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
-            result = self._call_in_repo(
-                tmp,
-                "write_plan",
-                {"task_dir": task_dir, "plan": "# Plan\n", "checks": " \n\t"},
-            )
-            self.assertTrue(result.get("isError"))
-            self.assertIn("empty CHECKS.yaml", result["structuredContent"]["error"])
-            after = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
-            self.assertEqual(after, before)
 
     def test_write_plan_rejects_empty_optional_audit(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1987,217 +1871,8 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertIn("| 1 |", body)
             self.assertIn("| 2 |", body)
 
-    def test_write_plan_rejects_malformed_checks_before_any_write(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__malformedchecks")
-            before = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
-            result = self._call_in_repo(
-                tmp,
-                "write_plan",
-                {
-                    "task_dir": task_dir,
-                    "plan": "# Replacement\n",
-                    "checks": "- id: AC-001\n  title: missing status\n",
-                },
-            )
-            self.assertTrue(result.get("isError"))
-            self.assertIn("invalid CHECKS.yaml", result["structuredContent"]["error"])
-            after = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
-            self.assertEqual(after, before)
-
-    def test_present_invalid_checks_are_not_absent_or_auto_promoted(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__invalidchecks")
-            checks = Path(task_dir) / "CHECKS.yaml"
-            checks.write_text("- id: AC-001\n  status: mystery\n", encoding="utf-8")
-            self._write_subagent_receipt(task_dir)
-            self.assertEqual(harness_server._checks_gate_status(task_dir)[0], "invalid")
-            before = checks.read_bytes()
-            self.assertEqual(harness_server._auto_promote_open_acs(task_dir, "PASS"), [])
-            self.assertEqual(checks.read_bytes(), before)
-            original_ctd = harness_server.canonical_task_dir
-            harness_server.canonical_task_dir = lambda task_id=None, **kw: task_dir
-            try:
-                verify = harness_server.call_tool(
-                    "task_verify", {"task_id": "TASK__invalidchecks", "reconcile_acs": True}
-                )
-            finally:
-                harness_server.canonical_task_dir = original_ctd
-            self.assertIn("present but invalid", verify["structuredContent"]["ac_reconcile"]["reason"])
-
-    def test_checks_gate_rejects_symlink_and_non_regular_ledger_leaves(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__invalidchecksleaf")
-            checks = Path(task_dir) / "CHECKS.yaml"
-            external = Path(tmp) / "external-checks.yaml"
-            external.write_text("- id: AC-001\n  status: passed\n", encoding="utf-8")
-
-            checks.symlink_to(external)
-            self.assertEqual(harness_server._checks_gate_status(task_dir)[0], "invalid")
-            self.assertEqual(harness_server._auto_promote_open_acs(task_dir, "PASS"), [])
-            self.assertEqual(external.read_text(encoding="utf-8"), "- id: AC-001\n  status: passed\n")
-
-            checks.unlink()
-            checks.mkdir()
-            self.assertEqual(harness_server._checks_gate_status(task_dir)[0], "invalid")
-
-            if hasattr(os, "mkfifo"):
-                checks.rmdir()
-                os.mkfifo(checks)
-                self.assertEqual(harness_server._checks_gate_status(task_dir)[0], "invalid")
-                self.assertEqual(harness_server._auto_promote_open_acs(task_dir, "PASS"), [])
-
-    def test_checks_parser_rejects_empty_duplicate_missing_and_invalid_fields(self):
-        invalid_ledgers = (
-            " \n",
-            "- id: \n  status: open\n",
-            "- id: AC-001\n  status: open\n- id: AC-001\n  status: passed\n",
-            "- id: AC-001\n  title: no status\n",
-            "- id: AC-001\n  status: mystery\n",
-            "not-a-checks-ledger\n",
-            "- id: AC-001\n  status: open\nunindented garbage\n",
-            "- id: AC-001\n  status: open\n  - stray list item\n",
-            "- id: AC-001\n  status: open\n  status: passed\n",
-            "- id: AC-001\n  status: passed\n  - id: AC-002\n    status: passed\n",
-            '- id: "AC-001\n  status: open\n',
-            '- id: AC-001\n  status: "open\n',
-        )
-        for ledger in invalid_ledgers:
-            with self.subTest(ledger=ledger):
-                with self.assertRaises(ValueError):
-                    harness_server._parse_checks_text(ledger)
-
-    def test_malformed_quoted_checks_never_promote_or_pass_gate(self):
-        malformed = (
-            '- id: "AC-001\n  status: open\n',
-            '- id: AC-001\n  status: "open\n',
-        )
-        for ledger in malformed:
-            with self.subTest(ledger=ledger), tempfile.TemporaryDirectory() as tmp:
-                task_dir = self._make_task(tmp, "TASK__malformed-quotes")
-                checks = Path(task_dir) / "CHECKS.yaml"
-                checks.write_text(ledger, encoding="utf-8")
-                before = checks.read_bytes()
-                self.assertEqual(harness_server._checks_gate_status(task_dir)[0], "invalid")
-                self.assertEqual(harness_server._auto_promote_open_acs(task_dir, "PASS"), [])
-                self.assertEqual(checks.read_bytes(), before)
-
-    def test_checks_parser_preserves_supported_flat_and_wrapped_shapes(self):
-        flat = '- id: AC-001\n  title: "flat"\n  status: open\n  extra: kept\n'
-        wrapped = (
-            "version: 1\nchecks:\n"
-            "  - id: AC-002\n    description: wrapped\n    status: implemented_candidate\n"
-        )
-        self.assertEqual(harness_server._parse_checks_text(flat)[0]["title"], "flat")
-        self.assertEqual(
-            harness_server._parse_checks_text(wrapped)[0]["status"],
-            "implemented_candidate",
-        )
-        for legacy_wrapper in ("acs", "acceptance"):
-            with self.subTest(legacy_wrapper=legacy_wrapper):
-                legacy = (
-                    f"task_id: TASK__legacy\n{legacy_wrapper}:\n"
-                    "  - id: AC-LEGACY\n"
-                    "    description: repository-proven wrapper\n"
-                    "    status: open\n"
-                )
-                self.assertEqual(
-                    harness_server._parse_checks_text(legacy)[0]["id"],
-                    "AC-LEGACY",
-                )
-        nested_unknown = (
-            "task_id: TASK__compat\n"
-            "metadata:\n"
-            "  source: legacy\n"
-            "checks:\n"
-            "  - id: AC-003\n"
-            "    status: open\n"
-            "    files:\n"
-            "      - plugin/scripts/_lib.py\n"
-            "    checks:\n"
-            "      note: nested metadata\n"
-            "    evidence_log:\n"
-            "      - id: evidence-row\n"
-            "        path: tests/test_harness_mcp_server.py\n"
-        )
-        self.assertEqual(harness_server._parse_checks_text(nested_unknown)[0]["id"], "AC-003")
-
-        trailing_metadata = (
-            "version: 1\n"
-            "checks:\n"
-            "  - id: AC-TRAILING\n"
-            "    status: open\n"
-            "metadata:\n"
-            "  source: legacy\n"
-            "trailer: kept\n"
-        )
-        self.assertEqual(
-            harness_server._parse_checks_text(trailing_metadata)[0]["id"],
-            "AC-TRAILING",
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__trailing-metadata")
-            checks = Path(task_dir) / "CHECKS.yaml"
-            checks.write_text(trailing_metadata, encoding="utf-8")
-            self.assertEqual(
-                harness_server._auto_promote_open_acs(task_dir, "trailing compatibility"),
-                ["AC-TRAILING"],
-            )
-            result_text = checks.read_text(encoding="utf-8")
-            self.assertLess(result_text.index("checks:"), result_text.index("- id: AC-TRAILING"))
-            self.assertLess(result_text.index("- id: AC-TRAILING"), result_text.index("metadata:"))
-            self.assertIn("  source: legacy", result_text)
-            self.assertIn("trailer: kept", result_text)
-            self.assertEqual(harness_server._parse_checks_text(result_text)[0]["status"], "passed")
-
-        for wrapper, item_indent, field_indent in (("", "", "  "), ("checks:\n", "  ", "    ")):
-            with self.subTest(quoted_wrapper=bool(wrapper)), tempfile.TemporaryDirectory() as tmp:
-                task_dir = self._make_task(tmp, "TASK__quoted-promotion")
-                checks = Path(task_dir) / "CHECKS.yaml"
-                checks.write_text(
-                    wrapper
-                    + f'{item_indent}- id: "AC-QUOTED"\n'
-                    + f'{field_indent}status: "open"\n',
-                    encoding="utf-8",
-                )
-                self.assertEqual(
-                    harness_server._auto_promote_open_acs(task_dir, "quoted compatibility"),
-                    ["AC-QUOTED"],
-                )
-                self.assertEqual(harness_server._parse_checks_yaml(task_dir)[0]["status"], "passed")
-
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__nested-promotion")
-            checks = Path(task_dir) / "CHECKS.yaml"
-            checks.write_text(nested_unknown, encoding="utf-8")
-            promoted = harness_server._auto_promote_open_acs(task_dir, "nested compatibility")
-            result_text = checks.read_text(encoding="utf-8")
-            reparsed = harness_server._parse_checks_text(result_text)
-            self.assertEqual(promoted, ["AC-003"])
-            self.assertEqual([(item["id"], item["status"]) for item in reparsed], [("AC-003", "passed")])
-            self.assertIn("- id: evidence-row", result_text)
-
-        nested_collision = (
-            "- id: AC-004\n"
-            "  metadata:\n"
-            "    status: open\n"
-            "    last_updated: nested\n"
-            "    evidence: nested\n"
-            "  status: failed\n"
-            "  last_updated: direct\n"
-            "  evidence: direct\n"
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__nested-collision")
-            checks = Path(task_dir) / "CHECKS.yaml"
-            checks.write_text(nested_collision, encoding="utf-8")
-            before = checks.read_bytes()
-            self.assertEqual(harness_server._auto_promote_open_acs(task_dir, "must not promote"), [])
-            self.assertEqual(checks.read_bytes(), before)
-
-
 class HarnessMcpServerPR2CloseGate(unittest.TestCase):
-    """AC-001..AC-006: CHECKS gate + runtime-stale gate in task_close / task_verify."""
+    """Receipt and runtime-stale gates in task_close / task_verify."""
 
     def _prepare_task(self, base: str, task_id: str, *, checks_yaml: str | None,
                       write_receipt: bool = True, write_handoff: bool = True,
@@ -2320,29 +1995,6 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             self._orig_context_git_changed_paths
         )
 
-    def test_context_surfaces_feedback_ids_without_handoff_close_gate(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp,
-                "TASK__feedback-next-action-ids",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-            )
-            Path(td, "USER_FEEDBACK.jsonl").write_text(
-                json.dumps({"id": "ufe-needed", "prompt_excerpt": "remember this"}) + "\n",
-                encoding="utf-8",
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_context", {"task_id": "TASK__feedback-next-action-ids"}
-                )
-            finally:
-                self._unpatch()
-        ctx = result["structuredContent"]["task_context"]
-        self.assertEqual(ctx["unresolved_feedback_ids"], ["ufe-needed"])
-        self.assertNotIn("User feedback disposition", ctx["missing_for_close"])
-        self.assertNotIn("ufe-needed", ctx["next_action"])
-
     def test_conversation_open_item_blocks_close(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(
@@ -2394,47 +2046,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         self.assertNotIn("isError", result)
         self.assertTrue(result["structuredContent"]["closed"])
 
-    # ---- AC-001: failed AC blocks close ----
-    def test_close_rejects_failed_ac(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__pr2-001",
-                checks_yaml=(
-                    '- id: AC-001\n  title: "done"\n  status: passed\n  kind: functional\n'
-                    '- id: AC-002\n  title: "not done"\n  status: failed\n  kind: functional\n'
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool("task_close", {"task_id": "TASK__pr2-001"})
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        err = result["structuredContent"]
-        self.assertIn("CHECKS gate", err["error"])
-        blockers = err["blocking_acs"]
-        self.assertEqual(len(blockers), 1)
-        self.assertEqual(blockers[0]["id"], "AC-002")
-        self.assertEqual(blockers[0]["status"], "failed")
-
-    def test_close_rejects_open_ac(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp, "TASK__pr2-001b",
-                checks_yaml=(
-                    '- id: AC-001\n  title: "ac1"\n  status: open\n  kind: functional\n'
-                ),
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool("task_close", {"task_id": "TASK__pr2-001b"})
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        self.assertEqual(result["structuredContent"]["blocking_acs"][0]["status"], "open")
-
-    # ---- AC-002: all-passed closes cleanly ----
-    def test_close_passes_with_all_acs_terminal(self):
+    def test_close_ignores_legacy_checks_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(
                 tmp, "TASK__pr2-002",
@@ -2450,36 +2062,6 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 self._unpatch()
         self.assertNotIn("isError", result)
         self.assertTrue(result["structuredContent"]["closed"])
-
-    def test_close_requires_req_for_user_feedback_observable_behavior(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            (Path(tmp) / ".git").mkdir(exist_ok=True)
-            (Path(tmp) / "doc/harness").mkdir(parents=True, exist_ok=True)
-            (Path(tmp) / "doc/harness/manifest.yaml").write_text("type: browser\n", encoding="utf-8")
-            td = self._prepare_task(
-                tmp,
-                "TASK__req-feedback",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-                touched_paths=[],
-            )
-            (Path(td) / "USER_FEEDBACK.md").write_text(
-                "Native Android APK/emulator back-stack behavior for the reader "
-                "must be verified; browser mobile is not enough.\n",
-                encoding="utf-8",
-            )
-            self._patch(td)
-            self._patch_repo_root_for_context(tmp)
-            self._set_context_git_changed_paths([])
-            try:
-                result = harness_server.call_tool("task_close", {"task_id": "TASK__req-feedback"})
-            finally:
-                self._unpatch_repo_root_for_context()
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        self.assertIn(
-            "REQ durable doc for observable behavior or user feedback",
-            result["structuredContent"]["missing_for_close"],
-        )
 
     def test_close_uses_subagent_receipt_not_ux_critic_file_for_cli_surface(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -2553,7 +2135,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             )
             critic = Path(td) / "CRITIC__ux.md"
             critic.write_text("stale legacy critic\n", encoding="utf-8")
-            future = os.path.getmtime(Path(td) / "SUBAGENT_RECEIPTS.jsonl") + 10
+            future = os.path.getmtime(Path(td) / "RECEIPTS.jsonl") + 10
             os.utime(critic, (future, future))
             self._patch(td)
             self._patch_repo_root_for_context(tmp)
@@ -2590,25 +2172,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         self.assertNotIn("isError", result)
         self.assertTrue(result["structuredContent"]["closed"])
 
-    # ---- AC-003: missing CHECKS.yaml warn-passes + logs ----
-    def test_close_blocks_present_structurally_invalid_checks(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp,
-                "TASK__invalid-checks-close",
-                checks_yaml="- id: AC-001\n  status: passed\nunindented garbage\n",
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close", {"task_id": "TASK__invalid-checks-close"}
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        self.assertIn("invalid", result["structuredContent"]["error"])
-
-    def test_close_warn_passes_without_checks_yaml(self):
+    def test_close_passes_without_legacy_checks_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(tmp, "TASK__pr2-003", checks_yaml=None)
             self._patch(td)
@@ -2719,7 +2283,6 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
                 mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
                 mock.patch.object(harness_server, "emit_compact_context", return_value=clean),
-                mock.patch.object(harness_server, "_checks_gate_status", return_value=("passed", [])),
             ):
                 result = harness_server.handle_task_close({"task_id": "TASK__goal-close-sync"})
 
@@ -2756,7 +2319,6 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                     mock.patch.object(harness_server, "canonical_task_dir", return_value=task_dir),
                     mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
                     mock.patch.object(harness_server, "emit_compact_context", return_value=clean),
-                    mock.patch.object(harness_server, "_checks_gate_status", return_value=("passed", [])),
                 ):
                     closed = harness_server.handle_task_close({"task_id": task_id})
                 self.assertNotIn("isError", closed)
@@ -2886,7 +2448,6 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             with (
                 mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
                 mock.patch.object(harness_server, "emit_compact_context", return_value=clean) as context,
-                mock.patch.object(harness_server, "_checks_gate_status", return_value=("passed", [])) as checks,
                 mock.patch.object(
                     harness_server,
                     "receipt_stream_fingerprint",
@@ -2898,7 +2459,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 )
 
             self.assertNotIn("isError", result)
-            for gate in (context, checks, receipts):
+            for gate in (context, receipts):
                 self.assertEqual(gate.call_count, 1)
 
 if __name__ == "__main__":

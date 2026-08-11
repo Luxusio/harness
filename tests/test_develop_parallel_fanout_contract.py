@@ -30,7 +30,7 @@ def test_claude_develop_forbids_collapsing_independent_acs_into_one_executor():
     assert 'subagent_type="harness:ac-worker"' in body
     assert "Use one Agent per independent AC" in body
     assert "Do not assign multiple independent ACs to one" in body
-    assert "Do not edit PROGRESS.md or CHECKS.yaml" in body
+    assert "Do not edit PROGRESS.md" in body
     assert "For sequential batches, work **one AC at a time**" in body
     assert "1. **One AC at a time**, in order." not in body
 
@@ -43,7 +43,7 @@ def test_parallel_fanout_small_task_skip_requires_evidence_and_coordinator_merge
     assert "User request is not a condition\nfor parallel routing" in body
     assert "do not reduce worker count for independent ACs" in body
     assert "Executors return status, changed paths, and blockers in their final response" in body
-    assert "coordinator" in body and "only writer to PROGRESS.md and CHECKS.yaml" in body
+    assert "coordinator" in body and "only writer to PROGRESS.md" in body
     assert "Merge cost controls batch size only" in body
     assert "does not justify collapsing two or more" in body
     assert "For N>4, spawn batches of up to 4" in body
@@ -76,8 +76,8 @@ def test_harness_ac_worker_is_scoped_to_one_ac_and_no_shared_artifacts():
     body = _text(AC_WORKER)
 
     assert "Implement only the assigned AC or lane" in body
-    assert "Do not write `PLAN.md`, `SUBAGENT_RECEIPTS.jsonl`" in body
-    assert "`PROGRESS.md`, or `CHECKS.yaml`" in body
+    assert "Do not write `PLAN.md`, `PLAN.meta.json`, `RECEIPTS.jsonl`" in body
+    assert "or `PROGRESS.md`" in body
     assert "Do not collapse multiple independent ACs into your lane" in body
 
 

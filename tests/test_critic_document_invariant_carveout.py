@@ -32,19 +32,18 @@ def test_critic_document_invariant_has_no_mcp_write_carveout():
     assert "mcp__plugin_harness_harness__" not in after
 
 
-def test_critic_document_retrospective_req_pass_section_exists():
+def test_critic_document_conversation_requirement_pass_section_exists():
     text = _read_agent()
-    assert "Retrospective REQ pass" in text, (
-        "AC-002: critic-document.md must include a section titled 'Retrospective REQ pass'"
+    assert "Conversation requirement pass" in text, (
+        "critic-document.md must include a conversation requirement pass"
     )
 
 
-def test_critic_document_retrospective_references_user_feedback_jsonl():
+def test_critic_document_conversation_pass_uses_delegated_context_without_sidecar():
     text = _read_agent()
-    rsec_idx = text.find("Retrospective REQ pass")
+    rsec_idx = text.find("Conversation requirement pass")
     assert rsec_idx >= 0
-    section = text[rsec_idx : rsec_idx + 2000]
-    assert "USER_FEEDBACK.jsonl" in section, (
-        "Retrospective REQ pass must direct the agent to USER_FEEDBACK.jsonl"
-    )
+    section = text[rsec_idx : rsec_idx + 1200]
+    assert "delegation context" in section
+    assert "separate prompt-capture artifact" in section
     assert "write_req_doc" not in section

@@ -33,7 +33,7 @@ Lookup table. Find your current situation, apply the listed contracts.
 | 상황 | 적용 규약 | 수준 |
 |------|---------|------|
 | Repo-mutating 태스크 시작 | [C-01](#c-01), [C-02](#c-02), [C-09](#c-09) | hard |
-| 보호 아티팩트 쓰기 (PLAN/CHECKS/SUBAGENT_RECEIPTS) | [C-03](#c-03), [C-05](#c-05) | hard |
+| 보호 아티팩트 쓰기 (PLAN/RECEIPTS) | [C-03](#c-03), [C-05](#c-05) | hard |
 | `task_close` 시점 | [C-01](#c-01), [C-04](#c-04), [C-14](#c-14) | hard |
 | 짧은 승인 (`ㅇㅇ`, `ㄱ`) 수신 | [C-07](#c-07) | soft |
 | 답변 레인 → mutation 레인 전환 | [C-07](#c-07), [C-08](#c-08) | hard |
@@ -77,13 +77,12 @@ diffs.
 
 ### C-03
 
-**Title:** CHECKS.yaml updates go through `update_checks.py` only.
-**When:** Any AC status transition after plan close (develop, verify).
-**Enforced by:** `plugin/scripts/prewrite_gate.py` (direct Write/Edit of
-`CHECKS.yaml` is blocked); the CLI bypasses the gate via atomic rename.
-**On violation:** hard-block.
-**Why:** `reopen_count`, `last_updated`, `evidence` stay consistent.
-Hand-edits break audit trail and close-gate accounting.
+**Title:** Acceptance intent lives in PLAN.md.
+**When:** Planning and verification describe task acceptance.
+**Enforced by:** MCP `write_plan` owns PLAN.md; review and QA completion is
+recorded separately in `RECEIPTS.jsonl`.
+**On violation:** hard-block when PLAN.md is missing for a standard task.
+**Why:** Harness no longer creates or gates on a duplicate `CHECKS.yaml` ledger.
 
 ### C-04
 
@@ -98,16 +97,14 @@ edits and source-scope discipline remain the developer's responsibility.
 ### C-05
 
 **Title:** Protected artifact ownership.
-**When:** Any `Write`/`Edit` to PLAN.md, CHECKS.yaml, or
-SUBAGENT_RECEIPTS.jsonl — and any `Bash` mutation (sed -i,
+**When:** Any `Write`/`Edit` to PLAN.md or RECEIPTS.jsonl — and any `Bash` mutation (sed -i,
 redirect, cp, mv, tee, python -c open(…,'w'), …) targeting the same basenames.
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`
 (Write/Edit/MultiEdit surface) + `plugin/scripts/mcp_bash_guard.py`
 (Bash surface; same helper classifiers).
-**On violation:** hard-block. Agent must route through the owning skill or CLI.
+**On violation:** hard-block. Agent must route through the owning skill or lifecycle hook.
 **Why:** Provenance is derived from artifact existence. Wrong writer = wrong
-provenance = broken audit chain. The Bash surface was added in PR1
-(`TASK__gate-reliability-pr1`) to close the `sed -i PLAN.md` / `echo >> CHECKS.yaml` bypass.
+provenance = broken audit chain.
 
 **Note (AC-019):** `doc/changes/**` and `doc/common/**` writes by
 `hygiene_scan.py` and `doc_hygiene.py` are authorized via C-16. These paths
@@ -199,8 +196,8 @@ extra phase is a new failure point.
 
 **Title:** PASS verdicts require ordered hook-owned review and QA receipts.
 **When:** `runtime_verdict` transitions to `PASS`.
-**Enforced by:** `REVIEW_RECEIPTS.jsonl` and `SUBAGENT_RECEIPTS.jsonl`
-lifecycle entries, written by runtime hooks. `task_verify` checks task, agent,
+**Enforced by:** unified `RECEIPTS.jsonl` lifecycle entries, written by runtime
+hooks. `task_verify` checks task, agent,
 lens, explicit completion verdict, and review-before-QA ordering; PLAN metadata
 declares the applicable lenses.
 **On violation:** `task_close` blocks until every required reviewer and QA lens

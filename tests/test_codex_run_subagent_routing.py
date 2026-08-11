@@ -27,7 +27,7 @@ def test_codex_run_uses_capability_first_subagent_routing():
     assert "User request is not a condition for parallel routing" in body
     assert "the user does not need to request delegation" in body
     assert "spawn_agent {" in body
-    assert "SUBAGENT_RECEIPTS.jsonl" in body
+    assert "RECEIPTS.jsonl" in body
     assert "Do not call a harness receipt tool" in body
     assert "track every `agent_id` returned by `spawn_agent`" in body
     assert "`close_agent`" in body
@@ -93,7 +93,7 @@ def test_run_skills_document_parallel_ux_lens_routing():
         assert "ux-api" in body
         assert "ux-desktop" in body
         assert "final response" in body
-        assert "SUBAGENT_RECEIPTS.jsonl" in body
+        assert "RECEIPTS.jsonl" in body
         assert "runtime_verdict" in body
 
 
@@ -104,9 +104,9 @@ def test_run_skills_document_resume_detection_and_verify_reconciliation():
         assert "resume rather than creating a duplicate" in body or "resume instead of creating a duplicate" in body
         assert "PLAN.md missing → Phase 2 Plan" in body
         assert "runtime_verdict is not PASS → Phase 3 Develop/Verify" in body
-        assert "reconcile_acs" in body
+        assert "run `task_verify`" in body
         assert "task_verify" in body
-        assert "failed/deferred" in body
+        assert "PLAN.md" in body and "RECEIPTS.jsonl" in body
 
 
 def test_run_skills_document_separate_hygiene_followup_policy():

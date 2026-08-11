@@ -49,7 +49,7 @@ def _initialize_instructions(runtime: str) -> str:
         "Protocol tool names are bare: goal_start, goal_context, "
         "goal_add_task, goal_next_task, goal_finish, task_start, "
         "task_context, task_verify, task_close, task_blocked, and write_plan. "
-        "write_plan is the canonical task-local PLAN/CHECKS/AUDIT writer. "
+        "write_plan is the canonical task-local PLAN/AUDIT writer. "
     )
     if runtime == "codex":
         return (
@@ -173,187 +173,6 @@ def _atomic_write_text(path: str, text: str) -> None:
         raise
 
 
-# ── Close-gate helpers ─────────────────────────────────────────────────
-
-
-_CHECKS_VALID_STATUSES = {"open", "implemented_candidate", "passed", "failed", "deferred"}
-
-
-def _checks_scalar(value: str, *, label: str) -> str:
-    scalar = value.strip()
-    starts_quoted = bool(scalar) and scalar[0] in {'"', "'"}
-    ends_quoted = bool(scalar) and scalar[-1] in {'"', "'"}
-    if starts_quoted or ends_quoted:
-        if len(scalar) < 2 or not starts_quoted or scalar[0] != scalar[-1]:
-            raise ValueError(f"CHECKS.yaml contains malformed quoted {label}")
-        return scalar[1:-1]
-    return scalar
-
-
-def _checks_item_indent(lines: list[str]) -> int:
-    wrapper = next(
-        (re.match(r"^(?:checks|acceptance_criteria|acs|acceptance):\s*$", line) for line in lines
-         if re.match(r"^(?:checks|acceptance_criteria|acs|acceptance):\s*$", line)),
-        None,
-    )
-    return 2 if wrapper else 0
-
-
-def _parse_checks_text(text: str) -> list[dict]:
-    if not text.strip():
-        raise ValueError("CHECKS.yaml is empty")
-    lines = text.splitlines()
-    expected_item_indent = _checks_item_indent(lines)
-    blocks: list[str] = []
-    current: list[str] = []
-    prefix: list[str] = []
-    suffix_started = False
-    for line in lines:
-        item_match = re.match(r"^(\s*)-\s+id:\s*", line)
-        if item_match and len(item_match.group(1)) == expected_item_indent:
-            if suffix_started:
-                raise ValueError("CHECKS.yaml AC list cannot resume after top-level suffix metadata")
-            if current:
-                blocks.append("\n".join(current))
-            current = [line]
-        elif current:
-            leading = len(line) - len(line.lstrip())
-            if line.strip() and expected_item_indent > 0 and leading < expected_item_indent:
-                blocks.append("\n".join(current))
-                current = []
-                suffix_started = True
-                prefix.append(line)
-            else:
-                current.append(line)
-        else:
-            prefix.append(line)
-    if current:
-        blocks.append("\n".join(current))
-    prefix_nested_allowed = False
-    prefix_valid = True
-    for line in prefix:
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        leading = len(line) - len(line.lstrip())
-        if leading:
-            if not prefix_nested_allowed:
-                prefix_valid = False
-                break
-            continue
-        field_match = re.match(r"^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$", line)
-        if not field_match:
-            prefix_valid = False
-            break
-        prefix_nested_allowed = field_match.group(2).strip() in {"", "|", ">", "|-", ">-"}
-    if not prefix_valid or not blocks:
-        raise ValueError("CHECKS.yaml has no parseable AC list")
-
-    items: list[dict] = []
-    seen: set[str] = set()
-    for block in blocks:
-        block_lines = block.splitlines()
-        first_line = block_lines[0]
-        m_id = re.match(r"^(\s*)-\s+id:\s*(.*?)\s*$", first_line)
-        field_indent = len(m_id.group(1)) + 2 if m_id else 2
-        nested_allowed = False
-        direct_fields: list[tuple[str, str]] = []
-        for line in block_lines[1:]:
-            if not line.strip() or line.lstrip().startswith("#"):
-                continue
-            leading = len(line) - len(line.lstrip())
-            if leading < field_indent:
-                raise ValueError("CHECKS.yaml contains malformed content inside an AC block")
-            if leading > field_indent:
-                if not nested_allowed:
-                    raise ValueError("CHECKS.yaml contains malformed nested content inside an AC block")
-                continue
-            field_match = re.match(r"^\s+([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$", line)
-            if not field_match:
-                raise ValueError("CHECKS.yaml contains malformed content inside an AC block")
-            field_name, field_value = field_match.groups()
-            direct_fields.append((field_name, field_value.strip()))
-            nested_allowed = field_value.strip() in {"", "|", ">", "|-", ">-"}
-        status_matches = [value for name, value in direct_fields if name == "status"]
-        if len(status_matches) != 1:
-            raise ValueError("CHECKS.yaml AC has missing or duplicate status")
-        title_values = [value for name, value in direct_fields if name in {"title", "description"}]
-        ac_id = _checks_scalar(m_id.group(2) if m_id else "", label="AC id")
-        status = _checks_scalar(status_matches[0], label="status")
-        if not ac_id or not re.fullmatch(r"AC-[A-Za-z0-9_.-]+", ac_id):
-            raise ValueError("CHECKS.yaml contains an empty or invalid AC id")
-        if ac_id in seen:
-            raise ValueError(f"CHECKS.yaml contains duplicate AC id {ac_id}")
-        if status not in _CHECKS_VALID_STATUSES:
-            raise ValueError(f"CHECKS.yaml AC {ac_id} has missing or invalid status")
-        seen.add(ac_id)
-        title = _checks_scalar(title_values[0] if title_values else "", label="title")
-        items.append({"id": ac_id, "status": status, "title": title[:120]})
-    return items
-
-
-def _parse_checks_yaml(td: str) -> list[dict] | None:
-    """Parse CHECKS.yaml into [{id, status, title}, ...].
-
-    Returns ``None`` only when the file is missing (legacy compatibility), and
-    ``[]`` when a present ledger is invalid. Uses a narrow block scanner so the
-    control plane does not add a YAML dependency.
-    """
-    checks_path = os.path.join(td, "CHECKS.yaml")
-    flags = os.O_RDONLY
-    if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    if hasattr(os, "O_NONBLOCK"):
-        flags |= os.O_NONBLOCK
-    try:
-        fd = os.open(checks_path, flags)
-    except FileNotFoundError:
-        return None
-    except OSError:
-        return []
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            return []
-        with os.fdopen(fd, encoding="utf-8") as f:
-            fd = -1
-            text = f.read()
-    except (OSError, UnicodeError):
-        return []
-    finally:
-        if fd >= 0:
-            os.close(fd)
-
-    try:
-        return _parse_checks_text(text)
-    except ValueError:
-        return []
-
-
-_CHECKS_GATE_TERMINAL = {"passed", "deferred"}
-_AC_AUTO_PROMOTE_STATUSES = {"open"}
-
-
-def _split_checks_blocks(text: str) -> list[str]:
-    lines = text.splitlines(keepends=True)
-    blocks: list[list[str]] = [[]]
-    in_ac = False
-    for line in lines:
-        if re.match(r"^\s*-\s+id:\s*", line):
-            blocks.append([line])
-            in_ac = True
-        elif in_ac:
-            blocks[-1].append(line)
-        else:
-            blocks[-1].append(line)
-    return ["".join(block) for block in blocks]
-
-
-def _yaml_quote(value: str) -> str:
-    escaped = str(value or "").replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
-
-
 def _run_verify_runner(td: str, parallel: bool = True, max_workers: int | None = None) -> dict:
     script = SCRIPTS_DIR / "verify_runner.py"
     cmd = [sys.executable, str(script), "--json"]
@@ -379,147 +198,12 @@ def _run_verify_runner(td: str, parallel: bool = True, max_workers: int | None =
     return payload
 
 
-def _checks_gate_status(td: str) -> tuple[str, list[dict]]:
-    """Return (``"ok"``|``"blocked"``|``"absent"``, blocking_acs).
-
-    - ``ok``: CHECKS.yaml present, every AC in {passed, deferred}.
-    - ``blocked``: CHECKS.yaml present, at least one AC not terminal.
-      ``blocking_acs`` is the non-terminal subset (id, status, title).
-    - ``absent``: CHECKS.yaml missing — caller warn-logs and proceeds.
-    """
-    items = _parse_checks_yaml(td)
-    if items is None:
-        return "absent", []
-    if not items:
-        return "invalid", []
-    blocking = [ac for ac in items if ac["status"] not in _CHECKS_GATE_TERMINAL]
-    return ("blocked" if blocking else "ok"), blocking
-
-
 def _truthy(v: Any) -> bool:
     if isinstance(v, bool):
         return v
     if isinstance(v, str):
         return v.strip().lower() in {"1", "true", "yes", "y", "on"}
     return False
-
-
-def _set_block_field(block: str, field: str, value: str) -> str:
-    item_match = re.match(r"^(\s*)-\s+id:\s*", block)
-    indent = (item_match.group(1) if item_match else "") + "  "
-    pattern = rf"^{re.escape(indent)}{re.escape(field)}:\s*.*$"
-    replacement = f"{indent}{field}: {value}"
-    new, count = re.subn(pattern, replacement, block, count=1, flags=re.MULTILINE)
-    if count:
-        return new
-    suffix = "\n" if block.endswith("\n") else ""
-    return block.rstrip("\n") + f"\n{indent}{field}: {value}" + suffix
-
-
-def _auto_promote_open_acs(td: str, evidence: str) -> list[str]:
-    """Promote open CHECKS.yaml ACs to passed after an explicit QA PASS.
-
-    Only ``status: open`` is eligible. Failed/deferred/in-progress statuses are
-    left for explicit update_checks calls so a broad QA PASS cannot erase known
-    exceptions or previous failures.
-    """
-    checks_path = os.path.join(td, "CHECKS.yaml")
-    try:
-        text = _read_regular_text_no_follow(checks_path)
-    except (OSError, UnicodeError, ValueError):
-        return []
-    if not text.strip():
-        return []
-    try:
-        _parse_checks_text(text)
-    except ValueError:
-        return []
-
-    blocks: list[str] = []
-    current: list[str] = []
-    prefix_lines: list[str] = []
-    suffix_lines: list[str] = []
-    suffix_started = False
-    expected_item_indent = _checks_item_indent(text.splitlines())
-    for line in text.splitlines():
-        item_match = re.match(r"^(\s*)-\s+id:\s*", line)
-        if item_match and len(item_match.group(1)) == expected_item_indent:
-            if suffix_started:
-                return []
-            if current:
-                blocks.append("\n".join(current))
-            current = [line]
-        elif current:
-            leading = len(line) - len(line.lstrip())
-            if line.strip() and expected_item_indent > 0 and leading < expected_item_indent:
-                blocks.append("\n".join(current))
-                current = []
-                suffix_started = True
-                suffix_lines.append(line)
-            else:
-                current.append(line)
-        elif suffix_started:
-            suffix_lines.append(line)
-        else:
-            prefix_lines.append(line)
-    if current:
-        blocks.append("\n".join(current))
-    if not blocks:
-        return []
-
-    promoted: list[str] = []
-    new_blocks: list[str] = []
-    safe_evidence = (evidence or "SUBAGENT_RECEIPTS.jsonl").replace("\n", " ").strip()
-    if len(safe_evidence) > 240:
-        safe_evidence = safe_evidence[:237].rstrip() + "..."
-    for block in blocks:
-        m_id = re.match(r"^\s*-\s+id:\s*(\S+)", block)
-        item_match = re.match(r"^(\s*)-\s+id:\s*", block)
-        direct_indent = (item_match.group(1) if item_match else "") + "  "
-        m_status = re.search(
-            rf"^{re.escape(direct_indent)}status:\s*(\S+)", block, re.MULTILINE
-        )
-        try:
-            ac_id = _checks_scalar(m_id.group(1) if m_id else "", label="AC id")
-            status = _checks_scalar(m_status.group(1) if m_status else "open", label="status")
-        except ValueError:
-            return []
-        if ac_id and status in _AC_AUTO_PROMOTE_STATUSES:
-            block = _set_block_field(block, "status", "passed")
-            block = _set_block_field(block, "last_updated", now_iso())
-            block = _set_block_field(block, "evidence", safe_evidence)
-            promoted.append(ac_id)
-        new_blocks.append(block)
-    if not promoted:
-        return []
-    new_text = "\n".join(prefix_lines + new_blocks + suffix_lines).rstrip("\n") + "\n"
-    try:
-        _atomic_write_text(checks_path, new_text)
-    except OSError:
-        return []
-    return promoted
-
-
-def _reconcile_acs_from_qa(td: str) -> dict:
-    """Promote open ACs after all required QA completion receipts pass."""
-    checks_status, _ = _checks_gate_status(td)
-    if checks_status == "invalid":
-        return {
-            "promoted_acs": [],
-            "reason": "CHECKS.yaml is present but invalid; fix it before reconciliation",
-        }
-    st = read_state(td)
-    runtime_verdict = receipt_runtime_verdict(td, st)
-    if runtime_verdict != "PASS":
-        return {
-            "promoted_acs": [],
-            "reason": "required QA completion verdicts have not passed",
-        }
-    promoted = _auto_promote_open_acs(td, "SUBAGENT_RECEIPTS.jsonl task_verify PASS")
-    return {
-        "promoted_acs": promoted,
-        "reason": "promoted open ACs from completed QA PASS receipts" if promoted else "no open ACs to promote",
-    }
 
 
 def _log_gate_warn(task_id: str, key: str, insight: str) -> None:
@@ -811,10 +495,6 @@ def handle_task_verify(args: dict) -> dict:
     if (st.get("runtime_verdict") or "pending").upper() != effective_verdict:
         set_state_field(td, "runtime_verdict", effective_verdict if effective_verdict != "PENDING" else "pending")
 
-    ac_reconcile = {"promoted_acs": [], "reason": "not requested"}
-    if _truthy(args.get("reconcile_acs")):
-        ac_reconcile = _reconcile_acs_from_qa(td)
-
     st = read_state(td)
     rv = receipt_runtime_verdict(td, st)
     review_verdict = receipt_review_verdict(td, st)
@@ -824,13 +504,12 @@ def handle_task_verify(args: dict) -> dict:
         "touched_paths": st.get("touched_paths") or [],
         "next_action": ctx.get("next_action", ""),
         "missing_for_close": ctx.get("missing_for_close", []),
-        "report_path": _task_artifact_rel(td, "SUBAGENT_RECEIPTS.jsonl"),
+        "report_path": _task_artifact_rel(td, "RECEIPTS.jsonl"),
         "review_verdict": review_verdict,
         "required_review_lenses": required_review_lenses(td, st),
-        "review_report_path": _task_artifact_rel(td, "REVIEW_RECEIPTS.jsonl"),
+        "review_report_path": _task_artifact_rel(td, "RECEIPTS.jsonl"),
         "stale": False,
         "stale_path": "",
-        "ac_reconcile": ac_reconcile,
         "subagent_receipts": subagent_receipt_summary(td),
         "review_receipts": review_receipt_summary(td),
     }
@@ -853,32 +532,16 @@ def handle_task_close(args: dict) -> dict:
         missing = ctx.get("missing_for_close") or []
         stale = bool(ctx.get("stale"))
         stale_path = str(ctx.get("stale_path") or "")
-        checks_status, blocking = _checks_gate_status(td)
-        if checks_status == "invalid":
-            return close_error(
-                "task_close blocked: CHECKS.yaml is present but invalid",
-                {
-                    "task_dir": td,
-                    "next_action": "Repair CHECKS.yaml through write_plan or update_checks.py, then re-run task_verify.",
-                },
-            )
         if missing:
             data = {
                 "task_dir": td, "missing_for_close": missing, "task_context": ctx,
                 "stale": stale, "stale_path": stale_path,
             }
-            if checks_status == "blocked":
-                data["blocking_acs"] = blocking
             return close_error("task_close blocked", data)
 
         if stale:
             return close_error("task_close blocked: runtime verification stale — re-run task_verify", {
                 "task_dir": td, "stale_path": stale_path,
-            })
-
-        if checks_status == "blocked":
-            return close_error("task_close blocked: CHECKS gate", {
-                "task_dir": td, "blocking_acs": blocking,
             })
 
         try:
@@ -1080,8 +743,6 @@ def handle_write_plan(args: dict) -> dict:
         return _invalid_task_state_error("write_plan", td)
     raw_plan = args.get("plan")
     plan = raw_plan if isinstance(raw_plan, str) else ""
-    raw_checks = args.get("checks")
-    checks = raw_checks if isinstance(raw_checks, str) else None
     raw_audit = args.get("audit")
     audit = raw_audit if isinstance(raw_audit, str) else None
     meta = _coerce_meta(args.get("meta"))
@@ -1089,20 +750,6 @@ def handle_write_plan(args: dict) -> dict:
     if isinstance(checked_plan, dict):
         return checked_plan
     plan_meta = json.dumps(_plan_meta_dict(td, "PLAN.md", meta), indent=2, ensure_ascii=False) + "\n"
-    checked_checks = None
-    if checks is not None:
-        checked_checks = _nonempty_artifact_content(checks, artifact="checks", filename="CHECKS.yaml")
-        if isinstance(checked_checks, dict):
-            return checked_checks
-        try:
-            _parse_checks_text(checked_checks)
-        except ValueError as exc:
-            return _err(
-                f"write_plan refused invalid CHECKS.yaml: {exc}",
-                data={"artifact": "checks", "filename": "CHECKS.yaml", "written": [],
-                      "next_action": "Fix the named CHECKS ledger error and retry write_plan."},
-            )
-
     checked_audit = None
     audit_path = os.path.join(td, "AUDIT_TRAIL.md")
     audit_content = None
@@ -1145,8 +792,6 @@ def handle_write_plan(args: dict) -> dict:
     bytes_written: dict[str, int] = {}
     _record_write(os.path.join(td, "PLAN.md"), checked_plan, written, bytes_written)
     _record_write(os.path.join(td, "PLAN.meta.json"), plan_meta, written, bytes_written)
-    if checked_checks is not None:
-        _record_write(os.path.join(td, "CHECKS.yaml"), checked_checks, written, bytes_written)
     if audit_content is not None:
         _record_write(audit_path, audit_content, written, bytes_written)
 
@@ -1207,11 +852,11 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id"], "additionalProperties": False},
      "handler": handle_task_context},
     {"name": "task_verify", "title": "Run task verification",
-     "description": "Compute verification state from ordered hook-owned review and QA completion receipts. Optional reconcile_acs promotes open CHECKS.yaml ACs only after those gates pass.",
+     "description": "Compute verification state from ordered hook-owned review and QA completion receipts.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"},
          "run_commands": {"type": "boolean"},
-         "reconcile_acs": {"type": "boolean", "description": "Optional. When true, promote open CHECKS.yaml ACs only after all required current-run review and QA receipts report PASS. Failed/deferred ACs are never promoted."},
+         "reconcile_acs": {"type": "boolean", "description": "Deprecated compatibility field; ignored."},
          "parallel": {"type": "boolean"},
          "max_workers": {"type": "integer"}},
          "required": ["task_id"], "additionalProperties": False},
@@ -1232,7 +877,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "additionalProperties": False},
      "handler": handle_task_blocked},
     {"name": "write_plan", "title": "Write task plan artifacts",
-     "description": "Write the minimal task-local planning artifacts: PLAN.md and PLAN.meta.json, with optional CHECKS.yaml and AUDIT_TRAIL.md. This is the only MCP writer for plan-owned task artifacts.",
+     "description": "Write PLAN.md and PLAN.meta.json, with optional AUDIT_TRAIL.md. Legacy checks input is accepted but ignored.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"}, "task_dir": {"type": "string"},
          "plan": {"type": "string"},

@@ -136,7 +136,7 @@ def test_review_agents_are_read_only_and_have_exact_verdict_contract():
 
 def test_code_reviewer_core_requires_scope_claim_and_confidence_proof():
     required = (
-        "checks.yaml",
+        "plan.meta.json",
         "every acceptance criterion",
         "code, tests, and durable docs",
         "outside the approved scope",

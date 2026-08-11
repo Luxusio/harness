@@ -35,13 +35,13 @@ do not create tasks automatically. Do not use legacy autopilot commands.
   Do not create narrative task artifacts for routine task
   evidence.
 - Browser-first QA is default for web frontend projects when `browser_qa_supported: true` in manifest.
-- CHECKS.yaml is the per-task acceptance ledger. Plan creates ACs at `status: open`; develop promotes to `implemented_candidate`; the verification gate promotes to `passed` or reopens to `failed`. All CHECKS writes go through `plugin/scripts/update_checks.py`.
+- Acceptance criteria live in `PLAN.md`; current-run review and QA authority
+  comes only from lifecycle-owned `RECEIPTS.jsonl` entries.
 - Notes under `doc/**/*.md` may carry `freshness: current|suspect|stale` + optional `invalidated_by_paths`. Run `plugin/scripts/note_freshness.py --paths ...` explicitly when maintaining them; SessionStart does not inspect Git.
 - Protected artifacts (enforced by `plugin/scripts/prewrite_gate.py`):
-  PLAN.md/PLAN.meta.json/AUDIT_TRAIL.md via `write_plan`, CHECKS.yaml via
-  `write_plan` or `update_checks.py`, and SUBAGENT_RECEIPTS.jsonl via
-  Codex/Claude subagent-start hooks. CONVERSATION.md is append-only runtime
-  history owned by UserPromptSubmit/Subagent hooks.
+  PLAN.md/PLAN.meta.json/AUDIT_TRAIL.md via `write_plan`, and RECEIPTS.jsonl via
+  Codex/Claude lifecycle hooks. CONVERSATION.md is append-only runtime history
+  owned by UserPromptSubmit/Subagent hooks.
 - Pre-plan source writes are blocked until PLAN.md exists on the active task (plan-first rule).
 - Only one repo-mutating task may hold write focus at a time. A second mutating request creates or resumes a separate task that stays queued until the user switches focus or the current task closes.
 - Short approvals such as `ㅇㅇ ㄱ` approve only the last explicit transition the harness proposed; they never authorize skipping task creation, planning, or verify gates.
@@ -51,7 +51,8 @@ do not create tasks automatically. Do not use legacy autopilot commands.
 
 # Template sync rule (CRITICAL)
 - This repo IS the harness plugin source. Runtime lives under `plugin/`. Every change to runtime behavior (paths, hook schemas, agent definitions, skill logic, script APIs) MUST stay internally consistent across `plugin/` — grep for the constant/path before landing the change.
-- When a script API changes (e.g. `scripts/update_checks.py` flags, `_lib.SCHEMA_FIELDS`), grep `plugin/skills/` for every SKILL.md that calls the script and update the example invocations.
+- When a script API changes (e.g. `_lib.SCHEMA_FIELDS`), grep `plugin/skills/`
+  for every SKILL.md that calls the script and update the example invocations.
 - The setup skill lives at `plugin/skills/setup/SKILL.md`; its procedure text must stay consistent with actual generated output and with the current runtime loop described above.
 
 ## Memory

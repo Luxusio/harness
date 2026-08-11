@@ -397,7 +397,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
             ],
             "PreToolUse": [
                 {
-                    "matcher": "Write|Edit|MultiEdit|Bash|apply_patch|shell|.*spawn_agent",
+                    "matcher": "Write|Edit|MultiEdit|Bash|apply_patch|shell|collaboration\\.spawn_agent",
                     "hooks": [
                         {
                             "type": "command",
@@ -422,7 +422,7 @@ def _codex_hooks_config(plugin_root: Path) -> dict:
             ],
             "PostToolUse": [
                 {
-                    "matcher": "Bash|.*create_goal|.*spawn_agent|.*wait_agent|.*list_agents",
+                    "matcher": "Bash|.*create_goal",
                     "hooks": [
                         {
                             "type": "command",

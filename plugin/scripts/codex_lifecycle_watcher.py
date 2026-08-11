@@ -47,7 +47,6 @@ THREAD_RE = re.compile(r"^[0-9a-fA-F-]{16,80}$")
 CALL_RE = re.compile(r"^[A-Za-z0-9_.:-]{6,160}$")
 AGENT_PATH_RE = re.compile(r"^/root/[A-Za-z0-9_.-]{1,120}$")
 TASK_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
-TASK_NAME_LINE_RE = re.compile(r"^task_name: ([A-Za-z0-9_.-]{1,120})$")
 MAX_LINE_BYTES = 2 * 1024 * 1024
 MAX_CHILD_BYTES = 64 * 1024 * 1024
 POLL_SECONDS = 0.20
@@ -55,12 +54,8 @@ IDLE_SECONDS = 8 * 60 * 60
 REGISTRATION_TTL_SECONDS = IDLE_SECONDS
 MAX_WATCHER_THREADS = 16
 RUNTIME_SUBDIR = os.path.join("harness", "codex-watchers")
-REGISTRATION_VERSION = 4
+REGISTRATION_VERSION = 7
 REGISTRATION_OWNER = "codex_root_hook"
-LEGACY_REGISTRATION_VERSION = 3
-LEGACY_REGISTRATION_OWNER = "codex_root_hook"
-OLDER_REGISTRATION_VERSION = 2
-OLDER_REGISTRATION_OWNER = "session_start_hook"
 
 
 def _strict_json_loads(raw: str) -> Any:
@@ -73,134 +68,6 @@ def _strict_json_loads(raw: str) -> Any:
         return result
 
     return json.loads(raw, object_pairs_hook=unique_object)
-
-
-def _javascript_code_only(source: str) -> str:
-    """Mask JS strings/comments so lifecycle detection sees executable code only."""
-    chars = list(source)
-    index = 0
-    state = "code"
-    quote = ""
-    while index < len(chars):
-        char = chars[index]
-        nxt = chars[index + 1] if index + 1 < len(chars) else ""
-        if state == "code":
-            if char in {'"', "'", "`"}:
-                quote = char
-                chars[index] = " "
-                state = "string"
-            elif char == "/" and nxt == "/":
-                chars[index] = chars[index + 1] = " "
-                index += 1
-                state = "line_comment"
-            elif char == "/" and nxt == "*":
-                chars[index] = chars[index + 1] = " "
-                index += 1
-                state = "block_comment"
-        elif state == "string":
-            chars[index] = " "
-            if char == "\\" and nxt:
-                chars[index + 1] = " "
-                index += 1
-            elif char == quote:
-                state = "code"
-        elif state == "line_comment":
-            if char == "\n":
-                state = "code"
-            else:
-                chars[index] = " "
-        elif state == "block_comment":
-            chars[index] = " "
-            if char == "*" and nxt == "/":
-                chars[index + 1] = " "
-                index += 1
-                state = "code"
-        index += 1
-    return "".join(chars)
-
-
-def _exec_lifecycle_invocations(source: str) -> list[tuple[str, str]]:
-    if "`" in source:
-        return []
-    code = _javascript_code_only(source)
-    pattern = re.compile(
-        r"\btools\s*\.\s*multi_agent_v1__(spawn_agent|wait_agent|close_agent)\s*\(",
-    )
-    matches = list(pattern.finditer(code))
-    if len(matches) != 1:
-        return []
-    match = matches[0]
-    assignment = re.fullmatch(
-        r"\s*(?:const|let)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*await\s*",
-        code[:match.start()],
-    )
-    if assignment is None:
-        return []
-    opening = code.find("(", match.start(), match.end())
-    depth = 0
-    closing = -1
-    for index in range(opening, len(code)):
-        if code[index] == "(":
-            depth += 1
-        elif code[index] == ")":
-            depth -= 1
-            if depth == 0:
-                closing = index
-                break
-    if opening < 0 or closing < 0:
-        return []
-    variable = re.escape(assignment.group(1))
-    if re.fullmatch(
-        rf"\s*;\s*text\s*\(\s*{variable}\s*\)\s*;?\s*",
-        code[closing + 1:],
-    ) is None:
-        return []
-    return [(match.group(1), source[opening + 1:closing])]
-
-
-def _static_exec_object(source: str, allowed_fields: set[str]) -> bool:
-    """Accept a closed JSON-like object with scalar or scalar-array values."""
-    string = r'''(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')'''
-    scalar = rf"(?:{string}|true|false|null|-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?)"
-    array = rf"\[\s*(?:{scalar}(?:\s*,\s*{scalar})*)?\s*\]"
-    value = rf"(?:{scalar}|{array})"
-    key = rf"(?:[A-Za-z_][A-Za-z0-9_]*|{string})"
-    pair = rf"{key}\s*:\s*{value}"
-    if re.fullmatch(rf"\s*{{\s*(?:{pair}(?:\s*,\s*{pair})*\s*,?)?}}\s*", source) is None:
-        return False
-    key_pattern = re.compile(rf"(?:^|[{{,])\s*({string}|[A-Za-z_][A-Za-z0-9_]*)\s*:")
-    code = _javascript_code_only(source)
-    depths: list[int] = []
-    depth = 0
-    for char in code:
-        depths.append(depth)
-        if char == "{":
-            depth += 1
-        elif char == "}" and depth:
-            depth -= 1
-    keys: list[str] = []
-    for match in key_pattern.finditer(source):
-        start = match.start()
-        if code[start:start + 1].isspace():
-            continue
-        if source[start:start + 1] == "{" and depths[start] != 0:
-            continue
-        if source[start:start + 1] == "," and depths[start] != 1:
-            continue
-        raw_key = match.group(1)
-        if raw_key[:1] in {'"', "'"}:
-            if raw_key[0] == '"':
-                try:
-                    decoded = json.loads(raw_key)
-                except json.JSONDecodeError:
-                    return False
-                key_name = decoded if isinstance(decoded, str) else ""
-            else:
-                key_name = raw_key[1:-1]
-        else:
-            key_name = raw_key
-        keys.append(key_name)
-    return len(keys) == len(set(keys)) and all(key in allowed_fields for key in keys)
 
 
 def _authorized_control_root(session_cwd: str) -> str:
@@ -341,6 +208,82 @@ def _find_rollout(thread_id: str, *, deadline: float | None = None) -> Path | No
         return None
     valid = [path for path in candidates if _safe_regular_file(path, root)]
     return valid[0] if len(valid) == 1 else None
+
+
+def _child_identity_from_handle(
+    handle: Any,
+    root_id: str,
+    agent_path: str,
+    session_cwd: str,
+) -> str:
+    """Return the exact child id bound to one trusted child rollout."""
+    handle.seek(0)
+    matches: list[str] = []
+    for _ in range(8):
+        raw = handle.readline(MAX_LINE_BYTES + 1)
+        if not raw:
+            break
+        event = _load_json_line(raw)
+        if not event or event.get("type") != "session_meta":
+            continue
+        payload = event.get("payload") or {}
+        source = payload.get("source") or {}
+        spawn = (
+            source.get("subagent", {}).get("thread_spawn", {})
+            if isinstance(source, dict) else {}
+        )
+        child_id = str(payload.get("id") or "")
+        if (
+            THREAD_RE.fullmatch(child_id)
+            and payload.get("session_id") == root_id
+            and payload.get("parent_thread_id") == root_id
+            and os.path.realpath(str(payload.get("cwd") or "")) == session_cwd
+            and payload.get("thread_source") == "subagent"
+            and payload.get("agent_path") == agent_path
+            and spawn.get("parent_thread_id") == root_id
+            and spawn.get("agent_path") == agent_path
+            and spawn.get("depth") == 1
+        ):
+            matches.append(child_id)
+    return matches[0] if len(matches) == 1 else ""
+
+
+def _find_child_by_agent_path(
+    root_id: str,
+    agent_path: str,
+    session_cwd: str,
+) -> tuple[str, str] | None:
+    """Resolve current Codex spawn output when no activity event is emitted."""
+    if not AGENT_PATH_RE.fullmatch(agent_path):
+        return None
+    root = _sessions_root()
+    matches: list[tuple[str, str]] = []
+    try:
+        for directory, _subdirs, filenames in os.walk(root):
+            for name in filenames:
+                if not (name.startswith("rollout-") and name.endswith(".jsonl")):
+                    continue
+                path = Path(directory) / name
+                opened = _open_trusted_file(path, root, max_size=MAX_CHILD_BYTES)
+                if opened is None:
+                    continue
+                handle, _ = opened
+                try:
+                    child_id = _child_identity_from_handle(
+                        handle, root_id, agent_path, session_cwd,
+                    )
+                    identity_matches = _path_matches_handle(
+                        path, root, handle, max_size=MAX_CHILD_BYTES,
+                    )
+                finally:
+                    handle.close()
+                if child_id and identity_matches:
+                    matches.append((child_id, agent_path))
+                    if len(matches) > 1:
+                        return None
+    except OSError:
+        return None
+    return matches[0] if len(matches) == 1 else None
 
 
 def _load_json_line(raw: bytes) -> dict[str, Any] | None:
@@ -508,7 +451,7 @@ def _atomic_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def _valid_current_registration(repo_root: str, thread_id: str) -> bool:
-    """Validate the exact v3 state without discovery, locking, or rewriting."""
+    """Validate the exact current state without discovery, locking, or rewriting."""
     runtime = _trusted_runtime_dir(repo_root)
     if runtime is None:
         return False
@@ -634,15 +577,7 @@ def ensure(
             and state.get("session_cwd") == session_cwd
         ):
             return True
-        if tuple_valid and (
-            (state.get("version"), state.get("owner")) in {
-                (LEGACY_REGISTRATION_VERSION, LEGACY_REGISTRATION_OWNER),
-                (OLDER_REGISTRATION_VERSION, OLDER_REGISTRATION_OWNER),
-            }
-        ):
-            offset = state_offset
-        else:
-            registered_at = time.time()
+        registered_at = time.time()
         _atomic_json(state_path, {
             "version": REGISTRATION_VERSION,
             "repo_root": repo_root,
@@ -836,364 +771,60 @@ def _json_arguments(payload: dict[str, Any]) -> dict[str, Any] | None:
     return decoded if isinstance(decoded, dict) else None
 
 
-def _prompt_texts(arguments: dict[str, Any]) -> list[str]:
-    texts: list[str] = []
-    message = arguments.get("message")
-    if isinstance(message, str):
-        texts.append(message)
-    items = arguments.get("items")
-    if not isinstance(items, list):
-        return texts
-    for item in items:
-        if isinstance(item, str):
-            texts.append(item)
-        elif isinstance(item, dict):
-            for key in ("message", "text"):
-                value = item.get(key)
-                if isinstance(value, str):
-                    texts.append(value)
-    return texts
-
-
-def _prompt_task_name(arguments: dict[str, Any]) -> str:
-    """Accept exactly one task marker, and only as a prompt's first line."""
-    markers: list[tuple[int, str]] = []
-    for text in _prompt_texts(arguments):
-        for line_number, line in enumerate(text.splitlines()):
-            match = TASK_NAME_LINE_RE.fullmatch(line)
-            if match:
-                markers.append((line_number, match.group(1)))
-    if len(markers) != 1 or markers[0][0] != 0:
-        return ""
-    return markers[0][1]
-
-
-def _raw_field_values(
-    source: str,
-    field_names: tuple[str, ...],
-    *,
-    value_pattern: str = r"[A-Za-z0-9_./:-]{6,160}",
-) -> list[str]:
-    """Return values for exact object fields; partial keys/values do not match."""
-    fields = "(?:" + "|".join(re.escape(name) for name in field_names) + ")"
-    key = rf"(?:[\"']{fields}[\"']|{fields})"
-    pattern = re.compile(
-        rf"""(?:^|[{{,]\s*){key}\s*[:=]\s*"""
-        rf"""(?:(?P<quote>["'])(?P<quoted>{value_pattern})(?P=quote)|"""
-        rf"""(?P<bare>{value_pattern})(?=\s*(?:[,}})]|$)))""",
-    )
-    code = _javascript_code_only(source)
-    depths: list[int] = []
-    depth = 0
-    for char in code:
-        depths.append(depth)
-        if char == "{":
-            depth += 1
-        elif char == "}" and depth:
-            depth -= 1
-    values: list[str] = []
-    for match in pattern.finditer(source):
-        start = match.start()
-        delimiter = source[start] if start < len(source) else ""
-        if code[start:start + 1].isspace():
-            continue
-        if delimiter == "{" and depths[start] != 0:
-            continue
-        if delimiter == "," and depths[start] != 1:
-            continue
-        if delimiter not in {"{", ","} and (start != 0 or depths[start] != 0):
-            continue
-        values.append(match.group("quoted") or match.group("bare"))
-    return values
-
-
-def _raw_json_string_values(source: str, field_names: tuple[str, ...]) -> list[str]:
-    fields = "(?:" + "|".join(re.escape(name) for name in field_names) + ")"
-    key = rf"(?:[\"']{fields}[\"']|{fields})"
-    pattern = re.compile(
-        rf'''(?:^|[{{,]\s*){key}\s*[:=]\s*("(?:\\.|[^"\\])*")''',
-    )
-    code = _javascript_code_only(source)
-    depths: list[int] = []
-    depth = 0
-    for char in code:
-        depths.append(depth)
-        if char == "{":
-            depth += 1
-        elif char == "}" and depth:
-            depth -= 1
-    values: list[str] = []
-    for match in pattern.finditer(source):
-        start = match.start()
-        delimiter = source[start] if start < len(source) else ""
-        if code[start:start + 1].isspace():
-            continue
-        if delimiter == "{" and depths[start] != 0:
-            continue
-        if delimiter == "," and depths[start] != 1:
-            continue
-        if delimiter not in {"{", ","} and (start != 0 or depths[start] != 0):
-            continue
-        try:
-            decoded = json.loads(match.group(1))
-        except json.JSONDecodeError:
-            continue
-        if isinstance(decoded, str):
-            values.append(decoded)
-    return values
-
-
-def _exec_spawn_arguments(source: str) -> dict[str, Any] | None:
-    invocations = _exec_lifecycle_invocations(source)
-    if len(invocations) != 1 or invocations[0][0] != "spawn_agent":
-        return None
-    source = invocations[0][1]
-    if not _static_exec_object(source, {
-        "task_name", "message", "items", "fork_context", "fork_turns",
-        "model", "reasoning_effort", "agent_type",
-    }):
-        return None
-    task_names = _raw_field_values(
-        source, ("task_name",), value_pattern=r"[A-Za-z0-9_.-]{1,120}",
-    )
-    if len(task_names) == 1:
-        return {"task_name": task_names[0]}
-    if len(task_names) > 1:
-        return None
-    messages = _raw_json_string_values(source, ("message",))
-    if len(messages) != 1:
-        return None
-    return {"message": messages[0]}
-
-
-def _tool_identity(payload: dict[str, Any]) -> tuple[str, str]:
-    namespace = str(payload.get("namespace") or "")
-    name = str(payload.get("name") or "")
-    if namespace in {"", "multi_agent_v1"} and name.startswith("multi_agent_v1__"):
-        return "multi_agent_v1", name.removeprefix("multi_agent_v1__")
-    return namespace, name
-
-
-def _spawn_call(event: dict[str, Any]) -> tuple[str, str, bool] | None:
+def _spawn_call(event: dict[str, Any]) -> tuple[str, str] | None:
     payload = _event_payload(event, "response_item")
-    if not payload:
-        return None
-    namespace, name = _tool_identity(payload)
-    current_protocol = namespace == "multi_agent_v1" and name == "spawn_agent"
-    if payload.get("type") == "function_call" and (
-        (namespace == "collaboration" and name == "spawn_agent") or current_protocol
+    if (
+        not payload
+        or payload.get("type") != "function_call"
+        or payload.get("namespace") != "collaboration"
+        or payload.get("name") != "spawn_agent"
     ):
-        arguments = _json_arguments(payload)
-        if arguments is None:
-            return None
-    elif payload.get("type") == "custom_tool_call" and payload.get("name") == "exec":
-        source = str(payload.get("input") or "")
-        arguments = _exec_spawn_arguments(source)
-        if arguments is None:
-            return None
-        current_protocol = True
-    else:
+        return None
+    arguments = _json_arguments(payload)
+    if arguments is None:
         return None
     call_id = str(payload.get("call_id") or "")
     if not CALL_RE.fullmatch(call_id):
         return None
     task_name = str(arguments.get("task_name") or "")
-    if task_name and not TASK_NAME_RE.fullmatch(task_name):
+    if not TASK_NAME_RE.fullmatch(task_name):
         return None
-    if not task_name:
-        task_name = _prompt_task_name(arguments)
     lens = _infer_receipt_lens(task_name)
     if not lens.startswith(("review-", "qa-", "ux-")):
         return None
-    return call_id, task_name, current_protocol
-
-
-def _unsupported_current_spawn(event: dict[str, Any]) -> tuple[str, str, str] | None:
-    """Identify a recognizable current spawn that failed strict normalization."""
-    payload = _event_payload(event, "response_item")
-    if not payload:
-        return None
-    namespace, name = _tool_identity(payload)
-    arguments: dict[str, Any] | None = None
-    if payload.get("type") == "function_call" and (
-        namespace == "multi_agent_v1" and name == "spawn_agent"
-    ):
-        arguments = _json_arguments(payload)
-    elif payload.get("type") == "custom_tool_call" and payload.get("name") == "exec":
-        source = str(payload.get("input") or "")
-        invocations = _exec_lifecycle_invocations(source)
-        if len(invocations) != 1 or invocations[0][0] != "spawn_agent":
-            return None
-        arguments = _exec_spawn_arguments(source)
-    else:
-        return None
-    call_id = str(payload.get("call_id") or "")
-    if not CALL_RE.fullmatch(call_id):
-        return None
-    if arguments is None:
-        return None
-    raw_name = str(arguments.get("task_name") or "")
-    marker_lines = [
-        line for text in _prompt_texts(arguments) for line in text.splitlines()
-        if "task_name" in line.lower()
-    ]
-    candidates = [raw_name, *marker_lines]
-    lenses = list(dict.fromkeys(
-        lens for lens in (_infer_receipt_lens(candidate) for candidate in candidates if candidate)
-        if lens.startswith(("review-", "qa-", "ux-"))
-    ))
-    if lenses:
-        lens = lenses[0] if len(lenses) == 1 else "adapter-unknown"
-        return call_id, "strict task_name field or first-line marker was invalid", lens
-    return None
+    return call_id, task_name
 
 
 def _structured_tool_output(output: Any) -> dict[str, Any] | None:
-    """Decode exactly one structured result from direct or exec content output."""
+    """Decode one direct structured tool result."""
     if isinstance(output, dict):
         return output
-    candidates: list[str] = []
-    if isinstance(output, str):
-        candidates.append(output)
-    elif isinstance(output, list):
-        for item in output:
-            if (
-                isinstance(item, dict)
-                and item.get("type") == "input_text"
-                and isinstance(item.get("text"), str)
-            ):
-                candidates.append(item["text"])
-    decoded: list[dict[str, Any]] = []
-    for candidate in candidates:
-        try:
-            value = _strict_json_loads(candidate)
-        except ValueError:
-            continue
-        if isinstance(value, dict):
-            decoded.append(value)
-    return decoded[0] if len(decoded) == 1 else None
+    if not isinstance(output, str):
+        return None
+    try:
+        decoded = _strict_json_loads(output)
+    except ValueError:
+        return None
+    return decoded if isinstance(decoded, dict) else None
 
 
-def _spawn_output(
-    event: dict[str, Any], *, require_agent_id: bool = False,
-) -> tuple[str, str] | None:
+def _spawn_output(event: dict[str, Any]) -> tuple[str, str] | None:
     payload = _event_payload(event, "response_item")
-    if not payload or payload.get("type") not in {
-        "function_call_output", "custom_tool_call_output",
-    }:
+    if not payload or payload.get("type") != "function_call_output":
         return None
     call_id = str(payload.get("call_id") or "")
     if not CALL_RE.fullmatch(call_id):
         return None
-    raw_output = payload.get("output")
-    output = _structured_tool_output(raw_output)
-    if output is None and isinstance(raw_output, str):
-        output = raw_output
-        try:
-            output = _strict_json_loads(raw_output)
-        except ValueError:
-            field_names = ("agent_id",) if require_agent_id else (
-                "agent_id", "agent_name",
-            )
-            identities = _raw_field_values(raw_output, field_names)
-            identity = identities[0] if len(identities) == 1 else ""
-            output = {"agent_id": identity} if identity else {}
-    if not isinstance(output, dict):
-        return None
-    if require_agent_id:
-        identity = str(output.get("agent_id") or "")
-    else:
-        identity = str(
-            output.get("agent_id")
-            or output.get("agent_name")
-            or output.get("agentName")
-            or output.get("task_name")
-            or ""
-        )
-    return (call_id, identity) if _valid_agent_identity(identity) else None
-
-
-def _completion_call(event: dict[str, Any]) -> tuple[str, str, str] | None:
-    payload = _event_payload(event, "response_item")
-    if not payload:
-        return None
-    call_id = str(payload.get("call_id") or "")
-    if not CALL_RE.fullmatch(call_id):
-        return None
-    if payload.get("type") == "function_call":
-        namespace, name = _tool_identity(payload)
-        if namespace not in {"collaboration", "multi_agent_v1"} or name not in {
-            "wait_agent", "close_agent",
-        }:
-            return None
-        arguments = _json_arguments(payload)
-        if arguments is None:
-            return None
-    elif payload.get("type") == "custom_tool_call" and payload.get("name") == "exec":
-        source = str(payload.get("input") or "")
-        invocations = _exec_lifecycle_invocations(source)
-        if len(invocations) != 1 or invocations[0][0] not in {"wait_agent", "close_agent"}:
-            return None
-        name, argument_source = invocations[0]
-        allowed = (
-            {"agent_id", "target"}
-            if name == "close_agent"
-            else {"agent_ids", "ids", "timeout", "timeout_ms"}
-        )
-        if not _static_exec_object(argument_source, allowed):
-            return None
-        arguments = {}
-        if name == "close_agent":
-            targets = _raw_field_values(argument_source, ("agent_id", "target"))
-            if len(targets) != 1:
-                return None
-            arguments = {"agent_id": targets[0]}
-    else:
-        return None
-    target = ""
-    if name == "close_agent":
-        targets = [
-            str(arguments[key]) for key in ("agent_id", "target")
-            if isinstance(arguments.get(key), str) and arguments.get(key)
-        ]
-        if len(targets) != 1:
-            return None
-        target = targets[0]
-        if not _valid_agent_identity(target):
-            return None
-    return call_id, name, target
-
-
-def _completion_output(
-    event: dict[str, Any], completion_call: tuple[str, str] | None,
-) -> list[tuple[str, str]]:
-    if completion_call is None:
-        return []
-    payload = _event_payload(event, "response_item")
-    if not payload or payload.get("type") not in {
-        "function_call_output", "custom_tool_call_output",
-    }:
-        return []
     output = _structured_tool_output(payload.get("output"))
     if not isinstance(output, dict):
-        return []
-    kind, target = completion_call
-    deliveries: list[tuple[str, str]] = []
-    if kind == "wait_agent":
-        statuses = output.get("status")
-        if not isinstance(statuses, dict):
-            return []
-        for identity, status in statuses.items():
-            final = status.get("completed") if isinstance(status, dict) else None
-            identity = str(identity)
-            if _valid_agent_identity(identity) and isinstance(final, str) and final:
-                deliveries.append((identity, final.strip()))
-    elif kind == "close_agent":
-        previous = output.get("previous_status")
-        final = previous.get("completed") if isinstance(previous, dict) else None
-        if _valid_agent_identity(target) and isinstance(final, str) and final:
-            deliveries.append((target, final.strip()))
-    return deliveries
+        return None
+    identity = str(
+        output.get("agent_id")
+        or output.get("agent_name")
+        or output.get("task_name")
+        or ""
+    )
+    return (call_id, identity) if _valid_agent_identity(identity) else None
 
 
 def _started_activity(event: dict[str, Any]) -> tuple[str, str, str] | None:
@@ -1212,89 +843,21 @@ def _started_activity(event: dict[str, Any]) -> tuple[str, str, str] | None:
 
 def _root_delivery(event: dict[str, Any]) -> tuple[str, str] | None:
     payload = _event_payload(event, "response_item")
-    if not payload:
-        payload = _event_payload(event, "event_msg")
-        if not payload or payload.get("type") != "subagent_notification":
-            return None
-        identity = str(payload.get("agent_id") or payload.get("agent_path") or "")
-        status = payload.get("status")
-        final = status.get("completed") if isinstance(status, dict) else None
-        if _valid_agent_identity(identity) and isinstance(final, str) and final:
-            return identity, final.strip()
+    if not payload or payload.get("type") != "agent_message":
         return None
-    if payload.get("type") == "agent_message":
-        author = str(payload.get("author") or "")
-        if not _valid_agent_identity(author) or payload.get("recipient") != "/root":
-            return None
-        text_parts = []
-        for item in payload.get("content") or []:
-            if isinstance(item, dict) and item.get("type") == "input_text":
-                text_parts.append(str(item.get("text") or ""))
-        text = "\n".join(text_parts)
-        if not text.startswith("Message Type: FINAL_ANSWER\n"):
-            return None
-        marker = "Payload:\n"
-        final = text.split(marker, 1)[1] if marker in text else text
-        return author, final.strip()
-    if payload.get("type") != "message" or payload.get("role") != "user":
+    author = str(payload.get("author") or "")
+    if not _valid_agent_identity(author) or payload.get("recipient") != "/root":
         return None
+    text_parts = []
     for item in payload.get("content") or []:
-        if not isinstance(item, dict) or item.get("type") != "input_text":
-            continue
-        text = str(item.get("text") or "").strip()
-        if not text.startswith("<subagent_notification>") or not text.endswith(
-            "</subagent_notification>"
-        ):
-            continue
-        encoded = text[len("<subagent_notification>"):-len("</subagent_notification>")].strip()
-        try:
-            notification = _strict_json_loads(encoded)
-        except ValueError:
-            continue
-        identity = str(notification.get("agent_id") or notification.get("agent_path") or "")
-        status = notification.get("status")
-        final = status.get("completed") if isinstance(status, dict) else None
-        if _valid_agent_identity(identity) and isinstance(final, str) and final:
-            return identity, final.strip()
-    return None
-
-
-def _task_binding(event: dict[str, Any], repo_root: str) -> str:
-    """Return a task named by this root's successful Harness MCP event."""
-    payload = _event_payload(event, "event_msg")
-    if not payload or payload.get("type") != "mcp_tool_call_end":
-        return ""
-    invocation = payload.get("invocation")
-    result = payload.get("result")
-    if not isinstance(invocation, dict) or not isinstance(result, dict):
-        return ""
-    ok = result.get("Ok")
-    if not isinstance(ok, dict):
-        return ""
-    if invocation.get("server") != "harness" or invocation.get("tool") not in {"task_start", "task_context"}:
-        return ""
-    arguments = invocation.get("arguments")
-    if not isinstance(arguments, dict):
-        return ""
-    structured = ok.get("structuredContent") or ok.get("structured_content")
-    if not isinstance(structured, dict):
-        return ""
-    context = structured.get("task_context")
-    context_task_id = context.get("task_id") if isinstance(context, dict) else ""
-    result_ids = {
-        str(value) for value in (structured.get("task_id"), context_task_id) if value
-    }
-    if len(result_ids) != 1:
-        return ""
-    task_id = next(iter(result_ids))
-    argument_task_id = str(arguments.get("task_id") or "")
-    if argument_task_id and argument_task_id != task_id:
-        return ""
-    task_dir = _validated_task_dir(repo_root, task_id)
-    result_task_dir = structured.get("task_dir")
-    if not task_dir or not isinstance(result_task_dir, str):
-        return ""
-    return task_dir if os.path.realpath(result_task_dir) == task_dir else ""
+        if isinstance(item, dict) and item.get("type") == "input_text":
+            text_parts.append(str(item.get("text") or ""))
+    text = "\n".join(text_parts)
+    if not text.startswith("Message Type: FINAL_ANSWER\n"):
+        return None
+    marker = "Payload:\n"
+    final = text.split(marker, 1)[1] if marker in text else text
+    return author, final.strip()
 
 
 def _child_status(
@@ -1302,7 +865,6 @@ def _child_status(
     root_id: str,
     agent_path: str,
     session_cwd: str,
-    task_name: str = "",
 ) -> tuple[str, Path | None, str]:
     path = _find_rollout(child_id)
     trust_root = _sessions_root()
@@ -1356,26 +918,6 @@ def _child_status(
                         finals.clear()
                         completes.clear()
                         continue
-            if (
-                event.get("type") == "response_item"
-                and payload.get("type") == "message"
-                and payload.get("role") == "user"
-                and task_name
-            ):
-                texts = [
-                    str(item.get("text") or "") for item in payload.get("content") or []
-                    if isinstance(item, dict) and item.get("type") == "input_text"
-                ]
-                if any(
-                    (text.strip().splitlines() or [""])[0].strip()
-                    == f"task_name: {task_name}"
-                    for text in texts
-                ):
-                    child_boundaries += 1
-                    child_turn = True
-                    finals.clear()
-                    completes.clear()
-                    continue
             if child_turn and event.get("type") == "event_msg" and payload.get("type") == "agent_message" and payload.get("phase") == "final_answer":
                 finals.append(str(payload.get("message") or "").strip())
             if child_turn and event.get("type") == "event_msg" and payload.get("type") == "task_complete":
@@ -1397,35 +939,12 @@ def _child_status(
         return "invalid", path, ""
     if not finals and not completes:
         return "running", path, ""
-    if len(finals) != 1 or len(completes) != 1:
+    if len(finals) > 1 or len(completes) != 1:
         return "invalid", path, ""
-    if not finals[0] or finals[0] != completes[0]:
+    child_final = completes[0]
+    if not child_final or (finals and finals[0] != child_final):
         return "invalid", path, ""
-    return "complete", path, finals[0]
-
-
-def _matching_receipt(
-    task_dir: str,
-    event_id: str,
-    status: str,
-    *,
-    agent_path: str = "",
-    lens: str = "",
-    summary: str = "",
-) -> dict[str, Any] | None:
-    for item in list_review_receipts(task_dir) + list_subagent_receipts(task_dir):
-        if item.get("runtime_event_id") == event_id and item.get("status") == status:
-            return item
-        if (
-            agent_path
-            and lens
-            and item.get("agent_id") == agent_path
-            and item.get("lens") == lens
-            and item.get("status") == status
-            and (not summary or item.get("summary") == summary[:1000])
-        ):
-            return item
-    return None
+    return "complete", path, child_final
 
 
 def _exact_receipt(
@@ -1437,6 +956,8 @@ def _exact_receipt(
     child_id: str,
     agent_path: str,
     lens: str,
+    task_run_id: str,
+    agent_type: str,
 ) -> dict[str, Any] | None:
     for item in list_review_receipts(task_dir) + list_subagent_receipts(task_dir):
         if (
@@ -1446,6 +967,8 @@ def _exact_receipt(
             and item.get("runtime_thread_id") == child_id
             and item.get("runtime_agent_path") == agent_path
             and item.get("lens") == lens
+            and item.get("task_run_id") == task_run_id
+            and item.get("agent_type") == agent_type
         ):
             return item
     return None
@@ -1456,50 +979,16 @@ class Watcher:
         self.repo_root = repo_root
         self.root_id = root_id
         self.session_cwd = os.path.realpath(session_cwd or repo_root)
-        self.task_dir = ""
         self.calls: dict[str, dict[str, Any]] = {}
-        self.completion_calls: dict[str, tuple[str, str]] = {}
-        self.invalid_completion_calls: set[str] = set()
-        self.completion_items: dict[str, list[dict[str, Any]]] = {}
         self.by_path: dict[str, dict[str, Any]] = {}
 
     @staticmethod
     def _receipt_agent_id(item: dict[str, Any]) -> str:
-        if item.get("current_protocol"):
-            return str(item.get("output_path") or "")
         return str(item.get("activity_path") or "")
 
     @staticmethod
-    def _receipt_source(item: dict[str, Any]) -> str:
-        protocol = "multi_agent_v1" if item.get("current_protocol") else "collaboration"
-        return f"codex_session_watcher:{protocol}"
-
-    def _record_adapter_diagnostic(
-        self, call_id: str, reason: str, lens: str, *, task_dir: str = "",
-    ) -> None:
-        binding = _active_task_binding_for_session(self.repo_root, self.root_id)
-        task_dir = task_dir or binding.get("task_dir", "")
-        if not task_dir:
-            return
-        event_id = call_id + ":adapter"
-        if _matching_receipt(task_dir, event_id, "adapter_unsupported"):
-            return
-        summary = (
-            "Receipt adapter unsupported: observed=multi_agent_v1__spawn_agent "
-            "supported=collaboration.spawn_agent,multi_agent_v1.spawn_agent "
-            f"reason={reason}"
-        )
-        record_subagent_receipt(task_dir, {
-            "source": "codex_session_watcher:multi_agent_v1",
-            "status": "adapter_unsupported",
-            "agent_id": call_id,
-            "agent_type": "multi_agent_v1__spawn_agent",
-            "lens": lens,
-            "task_run_id": binding.get("task_run_id", ""),
-            "summary": summary,
-            "runtime_event_id": event_id,
-            "runtime_session_id": self.root_id,
-        })
+    def _receipt_source(_item: dict[str, Any]) -> str:
+        return "codex_session_watcher:collaboration"
 
     def _invalidate(self, item: dict[str, Any], reason: str) -> None:
         if item.get("invalid"):
@@ -1536,36 +1025,25 @@ class Watcher:
 
     def _maybe_start(self, call_id: str) -> None:
         item = self.calls.get(call_id) or {}
-        if (
-            item.get("current_protocol")
-            and item.get("output_path")
-            and not item.get("child_id")
-            and not item.get("activity_path")
-        ):
-            identity = item["output_path"]
-            status, _, _ = _child_status(
-                identity, self.root_id, identity, self.session_cwd,
-                str(item.get("task_name") or ""),
+        if not all(item.get(key) for key in ("task_name", "output_path")):
+            return
+        if not item.get("child_id") or not item.get("activity_path"):
+            discovered = _find_child_by_agent_path(
+                self.root_id, str(item["output_path"]), self.session_cwd,
             )
-            if status != "running":
+            if discovered is None:
                 return
-            item.setdefault("child_id", identity)
-            item.setdefault("activity_path", identity)
-            item["synthetic_activity"] = True
-        if not all(item.get(key) for key in ("task_name", "output_path", "child_id", "activity_path")):
+            child_id, activity_path = discovered
+            item.setdefault("child_id", child_id)
+            item.setdefault("activity_path", activity_path)
+        if item["output_path"] not in {item["activity_path"], item["child_id"]}:
+            self._invalidate(item, "spawn output identity did not match child activity")
             return
-        if item.get("current_protocol") and item["output_path"] != item["child_id"]:
-            self._invalidate(item, "spawn output identity did not match child thread")
-            return
-        if not item.get("current_protocol") and item["output_path"] != item["activity_path"]:
-            if item["output_path"] != item["child_id"]:
-                self._invalidate(item, "spawn output identity did not match child activity")
-                return
         if item.get("invalid") or item.get("started"):
             return
         task_dir = str(item.get("task_dir") or "")
         binding = _active_task_binding_for_session(self.repo_root, self.root_id)
-        active_task = binding.get("task_dir") or self.task_dir
+        active_task = binding.get("task_dir")
         lens = _infer_receipt_lens(item["task_name"])
         if (
             not task_dir
@@ -1585,22 +1063,12 @@ class Watcher:
             child_id=item["child_id"],
             agent_path=self._receipt_agent_id(item),
             lens=lens,
+            task_run_id=item["task_run_id"],
+            agent_type=item["task_name"],
         )
-        existing = _matching_receipt(
-            task_dir, event_id, "started", agent_path=self._receipt_agent_id(item), lens=lens
-        )
-        if (
-            existing is not None
-            and existing.get("runtime_event_id") == event_id
-            and exact_existing is None
-        ):
-            existing = None
-        if exact_existing is not None:
-            receipt = exact_existing
-        else:
+        if exact_existing is None:
             child_status, _, _ = _child_status(
                 item["child_id"], self.root_id, item["activity_path"], self.session_cwd,
-                item["task_name"],
             )
             if child_status == "pending":
                 return
@@ -1609,7 +1077,7 @@ class Watcher:
             if child_status != "running":
                 self._invalidate(item, "child evidence was invalid or already complete at start capture")
                 return
-            receipt = existing or record_subagent_receipt(task_dir, {
+            record_subagent_receipt(task_dir, {
                     "source": self._receipt_source(item),
                     "status": "started",
                     "agent_id": self._receipt_agent_id(item),
@@ -1635,7 +1103,7 @@ class Watcher:
         if not root_final or item.get("completed") or item.get("invalid"):
             return
         binding = _active_task_binding_for_session(self.repo_root, self.root_id)
-        current_task = binding.get("task_dir") or self.task_dir
+        current_task = binding.get("task_dir")
         if (
             current_task != item.get("task_dir")
             or not item.get("task_run_id")
@@ -1645,7 +1113,6 @@ class Watcher:
             return
         status, transcript, child_final = _child_status(
             item["child_id"], self.root_id, item["activity_path"], self.session_cwd,
-            item["task_name"],
         )
         if status == "pending":
             return
@@ -1657,9 +1124,16 @@ class Watcher:
             self._invalidate(item, "child final did not contain one exact verdict")
             return
         lens = _infer_receipt_lens(item["task_name"])
-        if _matching_receipt(
-            item["task_dir"], item["event_id"], "completed",
-            agent_path=self._receipt_agent_id(item), lens=lens, summary=child_final,
+        if _exact_receipt(
+            item["task_dir"],
+            item["event_id"],
+            "completed",
+            root_id=self.root_id,
+            child_id=item["child_id"],
+            agent_path=self._receipt_agent_id(item),
+            lens=lens,
+            task_run_id=item["task_run_id"],
+            agent_type=item["task_name"],
         ) is None:
             record_subagent_receipt(item["task_dir"], {
                 "source": self._receipt_source(item),
@@ -1685,33 +1159,16 @@ class Watcher:
             self._maybe_complete(item)
 
     def feed(self, event: dict[str, Any]) -> None:
-        task_dir = _task_binding(event, self.repo_root)
-        if task_dir:
-            if self.task_dir and self.task_dir != task_dir:
-                for item in self.calls.values():
-                    if not item.get("completed"):
-                        self._invalidate(item, "active task changed after spawn")
-            self.task_dir = task_dir
-            self.retry()
-            return
         spawn = _spawn_call(event)
         if spawn:
-            call_id, task_name, current_protocol = spawn
+            call_id, task_name = spawn
             item = self.calls.setdefault(call_id, {})
-            if call_id in self.completion_calls or call_id in self.invalid_completion_calls:
-                self.completion_calls.pop(call_id, None)
-                self.invalid_completion_calls.add(call_id)
-                item["invalid"] = True
-                for delivered in self.completion_items.pop(call_id, []):
-                    self._invalidate(delivered, "call id changed from completion to spawn")
-                return
             binding = _active_task_binding_for_session(self.repo_root, self.root_id)
-            active_task = binding.get("task_dir") or self.task_dir
+            active_task = binding.get("task_dir")
             if (
                 not active_task
                 or not binding.get("task_run_id")
                 or not binding.get("run_started_at")
-                or (self.task_dir and self.task_dir != active_task)
             ):
                 item["invalid"] = True
                 return
@@ -1719,104 +1176,34 @@ class Watcher:
                 item["invalid"] = True
                 return
             self._set_once(item, "task_name", task_name)
-            self._set_once(item, "current_protocol", current_protocol)
             self._set_once(item, "task_dir", active_task)
             self._set_once(item, "task_run_id", binding.get("task_run_id", ""))
             self._maybe_start(call_id)
-            return
-        unsupported_spawn = _unsupported_current_spawn(event)
-        if unsupported_spawn:
-            self._record_adapter_diagnostic(*unsupported_spawn)
-            return
-        completion = _completion_call(event)
-        if completion:
-            call_id, kind, target = completion
-            if call_id in self.calls:
-                self.invalid_completion_calls.add(call_id)
-                self._invalidate(
-                    self.calls[call_id], "call id changed from spawn to completion",
-                )
-                for delivered in self.completion_items.pop(call_id, []):
-                    self._invalidate(delivered, "call id changed from spawn to completion")
-                return
-            if call_id in self.invalid_completion_calls:
-                return
-            existing = self.completion_calls.get(call_id)
-            if existing is None:
-                self.completion_calls[call_id] = (kind, target)
-            elif existing != (kind, target):
-                self.completion_calls.pop(call_id, None)
-                self.invalid_completion_calls.add(call_id)
-                for delivered in self.completion_items.pop(call_id, []):
-                    self._invalidate(
-                        delivered, "completion call identity changed after delivery",
-                    )
             return
         activity = _started_activity(event)
         if activity:
             call_id, child_id, agent_path = activity
             item = self.calls.setdefault(call_id, {})
-            if item.get("synthetic_activity"):
-                if child_id != item.get("child_id"):
-                    self._invalidate(item, "spawn output identity did not match child activity")
-                    return
-                item["activity_path"] = agent_path
-                item["synthetic_activity"] = False
-            else:
-                self._set_once(item, "child_id", child_id)
-                self._set_once(item, "activity_path", agent_path)
+            self._set_once(item, "child_id", child_id)
+            self._set_once(item, "activity_path", agent_path)
             self._maybe_start(call_id)
             return
         payload = _event_payload(event, "response_item")
         output_call_id = str(payload.get("call_id") or "") if payload else ""
-        if output_call_id in self.invalid_completion_calls:
-            return
-        completion_deliveries = _completion_output(
-            event, self.completion_calls.get(output_call_id),
-        )
-        if completion_deliveries:
-            for identity, root_final in completion_deliveries:
-                delivered = self._deliver(identity, root_final)
-                if delivered is not None:
-                    items = self.completion_items.setdefault(output_call_id, [])
-                    if delivered not in items:
-                        items.append(delivered)
-            return
         if (
             output_call_id
             and payload
-            and payload.get("type") in {"function_call_output", "custom_tool_call_output"}
+            and payload.get("type") == "function_call_output"
             and not (self.calls.get(output_call_id) or {}).get("task_name")
         ):
             return
-        output_item = self.calls.get(output_call_id) or {}
-        output = _spawn_output(
-            event, require_agent_id=bool(output_item.get("current_protocol")),
-        )
+        output = _spawn_output(event)
         if output:
             call_id, agent_path = output
             item = self.calls.setdefault(call_id, {})
             self._set_once(item, "output_path", agent_path)
             self._maybe_start(call_id)
             return
-        if output_call_id:
-            item = self.calls.get(output_call_id) or {}
-            if item.get("current_protocol") and not item.get("output_path"):
-                binding = _active_task_binding_for_session(self.repo_root, self.root_id)
-                active_task = binding.get("task_dir", "")
-                if (
-                    item.get("invalid")
-                    or item.get("task_dir") != active_task
-                    or item.get("task_run_id") != binding.get("task_run_id")
-                ):
-                    item["invalid"] = True
-                    return
-                self._record_adapter_diagnostic(
-                    output_call_id, "spawn output did not contain a valid agent_id",
-                    _infer_receipt_lens(str(item.get("task_name") or "")) or "adapter-unknown",
-                    task_dir=str(item.get("task_dir") or ""),
-                )
-                return
         delivery = _root_delivery(event)
         if not delivery:
             return

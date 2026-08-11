@@ -13,7 +13,7 @@ experience the user flow.
 
 ## Inputs
 
-Read `doc/harness/manifest.yaml`, PLAN.md, CHECKS.yaml, REQUEST.md when present,
+Read `doc/harness/manifest.yaml`, PLAN.md, PLAN.meta.json, REQUEST.md when present,
 and README/help docs. Identify the intended user and core command path.
 
 ## Review Method

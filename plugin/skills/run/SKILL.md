@@ -8,6 +8,10 @@ allowed-tools: Read, Glob, Grep, Bash, Agent, Skill, AskUserQuestion, mcp__plugi
 
 Orchestrate the full harness development cycle for a task.
 
+> Current artifact model: `PLAN.md` owns acceptance intent and unified
+> `RECEIPTS.jsonl` owns review/QA evidence. Do not create or consume
+> `CHECKS.yaml` or `USER_FEEDBACK.jsonl`; later legacy wording is non-operative.
+
 Explicit user invocation or approval of this harness repo-mutating workflow
 authorizes the subagents required by the workflow's verification and review
 gates. Examples include "use harness", "run/continue/close the harness task",
@@ -99,17 +103,10 @@ Skill("harness:develop", "<task_id>")
 
 The develop skill reads PLAN.md, implements changes, runs plan completion audit, scope drift detection, bisectable commits, verification gate, runtime QA subagents, and any needed durable-doc updates. On completion, fresh hook-owned QA completion receipts exist and `task_verify` reports PASS. If BLOCKED: stop, report, ask user.
 
-Before entering develop, re-entering develop after QA/UX FAIL, entering verify,
-or closing, check `<task_dir>/USER_FEEDBACK.jsonl` when present. This file is
-automatic evidence from UserPromptSubmit, not durable truth by itself. If a
-feedback event changes what should be built, tested, or judged, reflect it
-before the next dependent action. Each event must end in one terminal state:
-`promoted`, `handled-local`, `deferred`, or `rejected`. Use `promoted` only
-when the feedback became a committed durable artifact such as a typed doc,
-skill, pattern, test, or script. Do not write a handoff artifact for this;
-`task_verify` and `task_close` surface unresolved feedback from task state.
-Close-time checking only catches missed feedback; it is not the primary moment
-to interpret user intent.
+Before entering develop, re-entering after QA/UX FAIL, verifying, or closing,
+incorporate explicit user corrections from the conversation. Promote durable
+rules directly into PLAN.md or the applicable project documentation; Harness
+does not maintain a separate feedback sidecar.
 
 ### Phase 4: Verify (QA agent)
 
@@ -117,7 +114,7 @@ Read `doc/harness/manifest.yaml` for project type. Spawn appropriate QA agent(s)
 Also spawn applicable UX review agents for user-facing surfaces. UX review is
 not a replacement for QA: qa-* proves correctness; ux-* judges whether the
 experience is shippable. Claude hooks record subagent lifecycle events in
-`SUBAGENT_RECEIPTS.jsonl`; `task_verify` requires a fresh completed explicit
+`RECEIPTS.jsonl`; `task_verify` requires a completed explicit
 PASS for every applicable QA lens. A start entry proves delegation only.
 
 **Strategy selection:**
@@ -174,10 +171,9 @@ Agent(
 )
 ```
 
-After awaiting every QA/UX subagent, run `task_verify` with
-`reconcile_acs=true`. The verify step promotes only CHECKS.yaml entries with
-`status: open` only when the required QA completion receipts report PASS;
-failed/deferred ACs still require explicit `update_checks.py` handling.
+After awaiting every QA/UX subagent, run `task_verify`. It computes the verdict
+from required ordered review and QA completions in `RECEIPTS.jsonl`; PLAN.md
+remains the sole acceptance document.
 
 After completion, check runtime_verdict:
 - **PASS**: proceed to Phase 5.

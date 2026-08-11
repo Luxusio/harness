@@ -119,7 +119,7 @@ Use when reviewing plans for Claude Code skills, MCP servers, or AI agent tools.
 
 - [ ] **AskUserQuestion design**: One issue per call. Re-ground context (project, branch, task). 4-rule body (Re-ground / Simplify / Recommend / Options). Hard cap at 4 options.
 - [ ] **State storage**: Under `doc/harness/` for persistent; `/tmp/` for transient. Append-only JSONL for audit trails (learnings.jsonl, AUDIT_TRAIL.md).
-- [ ] **Protected artifacts**: Owner role enforced by prewrite gate. PLAN.md = plan-skill. CHECKS.yaml = update_checks/write_plan. SUBAGENT_RECEIPTS.jsonl = runtime hook.
+- [ ] **Protected artifacts**: Owner role enforced by prewrite gate. PLAN.md/PLAN.meta.json = plan skill through `write_plan`; RECEIPTS.jsonl = runtime lifecycle hook.
 - [ ] **Auto-resume**: Session recovery via AUDIT_TRAIL phase-summary rows. Welcome-back prose synthesis. Checkpoint at auto-decide boundaries.
 - [ ] **Graceful degradation**: Missing tools skip cleanly, log reason to learnings.jsonl type `operational`. Never install missing tools automatically.
 - [ ] **Kill switches**: HARNESS_DISABLE_* env vars for every auto-behavior. Honored before CLI detection.

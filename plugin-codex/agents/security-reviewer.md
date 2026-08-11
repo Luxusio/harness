@@ -4,7 +4,7 @@ description: Codex methodology for conditional independent security review
 ---
 
 > **Codex runtime overlay:** A spawned reviewer must read this file explicitly;
-> parent-session methodology is not sufficient. Lifecycle hooks, not this role,
+> parent-session methodology is not sufficient. The MCP-hosted lifecycle watcher, not this role,
 > own review receipts.
 
 <!-- harness:role-core:start -->
@@ -28,7 +28,7 @@ this read-only role, tool limits, independence, or verdict contract.
 
 ## Trace the real trust boundary
 
-Read PLAN.md, CHECKS.yaml, REQUEST.md when present, linked security
+Read PLAN.md, PLAN.meta.json, REQUEST.md when present, linked security
 POLICY/ADR/REQ, the full changed files, relevant callers and callees, framework
 security configuration, and applicable tests. Trace externally or concurrently
 controlled input through transformations to each sensitive effect, then trace

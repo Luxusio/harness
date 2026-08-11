@@ -49,7 +49,7 @@ updated: 2026-06-12
 | 항목 | `/goal` | `stop_gate.py` |
 |---|---|---|
 | Evaluator | Haiku (자연어 transcript 판단) | Python 규칙 (`missing_for_close`, mtime staleness) |
-| 조건 입력 | 자연어 4000자 (`/goal …`) | 하드코딩 close-gate (PLAN.md / CHECKS.yaml / runtime_verdict) |
+| 조건 입력 | 자연어 4000자 (`/goal …`) | 하드코딩 close-gate (PLAN.md / RECEIPTS.jsonl / runtime_verdict) |
 | 초기 kickoff | 조건 텍스트가 first directive로 즉시 발사 | native Goal sync 후 Goal child task가 plan→develop 체이닝 |
 | 저장 위치 | 세션 메모리 (휘발) | `plugin/hooks/hooks.json` (영속) |
 | Turn cap | "or stop after N turns" 명시 가능 | 없음 (close-gate 충족까지 지속) |
@@ -63,7 +63,7 @@ updated: 2026-06-12
 Anthropic 실제 `/goal`을 함께 켜고 싶다면 develop 진입 시점에 수동으로:
 
 ```
-/goal harness task <task_id>이 닫힐 때까지 진행. HANDOFF.md와 DOC_SYNC.md 작성, CHECKS.yaml 모든 AC status: passed, runtime_verdict=PASS, task_close 성공. 또는 25 turn 후 중단.
+/goal harness task <task_id>이 닫힐 때까지 진행. PLAN.md의 acceptance intent를 충족하고, 필수 review/QA lifecycle receipt로 runtime_verdict=PASS를 만든 뒤 task_close 성공. 또는 25 turn 후 중단.
 ```
 
 매 turn 종료 시 Stop hook 두 개가 모두 발사된다:

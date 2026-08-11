@@ -1,7 +1,7 @@
 # REQ process controlled artifact writes
 summary: Agents must use the owning control surface for protected task artifacts
 status: accepted
-updated: 2026-06-22
+updated: 2026-08-12
 freshness: current
 confidence: high
 kind: process
@@ -15,9 +15,8 @@ provenance.
 
 | Artifact | Owner |
 |---|---|
-| `PLAN.md` / `PLAN.meta.json` / optional `CHECKS.yaml` / optional `AUDIT_TRAIL.md` | MCP `write_plan` |
-| `CHECKS.yaml` status transitions after plan | `plugin/scripts/update_checks.py` |
-| `SUBAGENT_RECEIPTS.jsonl` | Codex/Claude subagent-start hooks |
+| `PLAN.md` / `PLAN.meta.json` / optional `AUDIT_TRAIL.md` | MCP `write_plan` |
+| `RECEIPTS.jsonl` | Codex/Claude review and QA lifecycle hooks |
 | `CONVERSATION.md` | Codex/Claude UserPromptSubmit/Subagent hooks |
 | `TASK_STATE.yaml` lifecycle fields | harness MCP task tools and runtime scripts |
 | `doc/<area>/REQ__*.md` and other durable docs | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
@@ -26,8 +25,8 @@ provenance.
 
 - The MCP server must not expose manual evidence writers, critic writers,
   handoff writers, or REQ writers.
-- A PASS verdict must be backed by hook-observed subagent start receipts, not by
-  a narrative critic file.
+- A PASS verdict must be backed by ordered hook-observed review and QA start
+  and completion receipts, not by a narrative critic file.
 - Task-local conversation history is human-readable Markdown. Close gates may
   read only explicit `<!-- item: ... status=open -->` markers from it, never
   infer requirements from free-form prose.

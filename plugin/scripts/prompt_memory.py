@@ -2,8 +2,8 @@
 """UserPromptSubmit hook — inject compact harness state on every user prompt.
 
 Emits a short ``[harness-context]`` block on stdout when a harness task is
-active, so agents don't burn a turn re-reading ``TASK_STATE.yaml`` /
-``CHECKS.yaml`` to orient themselves in fix rounds.
+active, so agents don't burn a turn re-reading task artifacts to orient
+themselves in fix rounds.
 
 Pending hygiene and suspect-note summaries are intentionally not injected here.
 The post-close `hygiene_followup.py` scheduler turns hygiene output into a
@@ -21,7 +21,6 @@ import re
 import sys
 import json
 import time
-import hashlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
@@ -39,7 +38,6 @@ try:
         next_goal_task,
         start_harness_goal,
         write_goal_payload_probe,
-        append_conversation_entry,
         _goal_probe_runtime,
     )
 except Exception:
@@ -83,14 +81,7 @@ TASK_PACK_GATE = (
 )
 RESTORE_INJECT_CAP = 1400
 RESTORE_TOUCHED_CAP = 5
-RESTORE_ARTIFACTS = ("REVIEW_RECEIPTS.jsonl", "SUBAGENT_RECEIPTS.jsonl", "BLOCKED.md")
-FEEDBACK_FILE = "USER_FEEDBACK.jsonl"
-FEEDBACK_PROMPT_CAP = 1200
-FEEDBACK_TOUCHED_CAP = 5
-
-_AC_CAP = 3
-_AC_TERMINAL = {"passed", "deferred"}
-_TITLE_MAX = 24
+RESTORE_ARTIFACTS = ("RECEIPTS.jsonl", "BLOCKED.md")
 _REVIEWABLE_SUFFIXES = {
     ".c", ".cc", ".conf", ".config", ".cpp", ".cs", ".css", ".go", ".h",
     ".hpp", ".html", ".ini", ".java", ".js", ".json", ".jsx", ".kt",
@@ -141,57 +132,6 @@ def _find_active_task_dir(repo_root: str) -> str:
     return td if td and os.path.isdir(td) else ""
 
 
-_CHECKS_ID_RE = re.compile(r"^-\s+id:\s*(\S+)", re.MULTILINE)
-_CHECKS_BLOCK_RE = re.compile(r"^-\s+id:\s*", re.MULTILINE)
-
-
-def _open_acs(task_dir: str) -> "tuple[list[tuple[str, str]], int]":
-    """Return ``(non_terminal_acs, reopen_total)``."""
-    checks_path = os.path.join(task_dir, "CHECKS.yaml")
-    if not os.path.isfile(checks_path):
-        return [], 0
-    try:
-        text = open(checks_path, encoding="utf-8").read()
-    except OSError:
-        return [], 0
-    blocks: list = []
-    current: list = []
-    for line in text.splitlines():
-        if _CHECKS_BLOCK_RE.match(line):
-            if current:
-                blocks.append("\n".join(current))
-            current = [line]
-        elif current:
-            current.append(line)
-    if current:
-        blocks.append("\n".join(current))
-
-    out: list = []
-    reopen_total = 0
-    for block in blocks:
-        m_id = _CHECKS_ID_RE.match(block)
-        if not m_id:
-            continue
-        m_status = re.search(r"^\s+status:\s*(\S+)", block, re.MULTILINE)
-        status = (m_status.group(1) if m_status else "open").strip()
-        if status in _AC_TERMINAL:
-            continue
-        m_title = re.search(r'^\s+title:\s*"?(.*?)"?\s*$', block, re.MULTILINE)
-        title = (m_title.group(1) if m_title else "").strip().strip('"').strip("'")
-        if len(title) > _TITLE_MAX:
-            title = title[: _TITLE_MAX - 1] + "…"
-        m_reopen = re.search(r"^\s+reopen_count:\s*(\d+)", block, re.MULTILINE)
-        if m_reopen:
-            try:
-                reopen_total += int(m_reopen.group(1))
-            except ValueError:
-                pass
-        out.append((m_id.group(1), title))
-        if len(out) >= _AC_CAP:
-            break
-    return out, reopen_total
-
-
 def _truncate(block: str) -> str:
     if len(block) <= MAX_BLOCK_CHARS:
         return block
@@ -214,14 +154,6 @@ def _build_block(task_dir: str) -> str:
 
     pieces: list = [PREFIX, f"task={task_id}", f"status={status}"]
     pieces.append(f"recorded_verdict={verdict}")
-
-    acs, reopen_total = _open_acs(task_dir)
-    if acs:
-        ac_strs = [f"{ac_id}:{title}" if title else ac_id for ac_id, title in acs]
-        summary = "open=" + ",".join(ac_strs)
-        if reopen_total > 0:
-            summary += f" ⚠reopened={reopen_total}"
-        pieces.append(summary)
 
     block = " ".join(pieces)
     return _truncate(block)
@@ -401,76 +333,6 @@ def _build_task_pack_block(repo_root: str) -> str:
     return TASK_PACK_GATE
 
 
-def _extract_user_prompt(data: dict) -> str:
-    """Return the user prompt text from known Claude/Codex hook payload shapes."""
-    for key in ("prompt", "user_prompt", "message", "text", "content"):
-        value = data.get(key)
-        if isinstance(value, str) and value.strip():
-            return _sanitize_prompt_text(value)[:FEEDBACK_PROMPT_CAP]
-    return ""
-
-
-def _feedback_event_id(task_id: str, prompt: str) -> str:
-    ts_ns = str(time.time_ns())
-    digest = hashlib.sha1(f"{task_id}\0{ts_ns}\0{prompt}".encode("utf-8")).hexdigest()[:12]
-    return f"ufe-{digest}"
-
-
-def _append_feedback_event(task_dir: str, repo_root: str, data: dict) -> bool:
-    """Append a context-rich, task-local user-feedback event.
-
-    The hook only records evidence. It does not classify, promote, or mutate
-    durable docs because doing that without phase context would be unsafe.
-    """
-    prompt = _extract_user_prompt(data)
-    if not prompt:
-        return False
-    st = read_state(task_dir)
-    if not st:
-        return False
-    task_id = st.get("task_id") or os.path.basename(task_dir)
-    open_acs, _reopen_total = _open_acs(task_dir)
-    touched = [
-        _sanitize_path(str(p))
-        for p in (st.get("touched_paths") or [])[:FEEDBACK_TOUCHED_CAP]
-        if str(p).strip()
-    ]
-    event_id = _feedback_event_id(str(task_id), prompt)
-    event = {
-        "id": event_id,
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "task_id": task_id,
-        "status": st.get("status") or "unknown",
-        "plan_session_state": st.get("plan_session_state") or "",
-        "runtime_verdict": (st.get("runtime_verdict") or "pending").upper(),
-        # Keep UserPromptSubmit read-only and fast. The canonical next action
-        # remains available through task_context; recomputing its full receipt
-        # and Git-freshness graph here can consume the hook timeout.
-        "next_action": "Refresh task_context before the next phase transition.",
-        "open_acs": [
-            {"id": ac_id, "title": title}
-            for ac_id, title in open_acs
-        ],
-        "touched_paths": touched,
-        "prompt_excerpt": prompt,
-        "source": "user_prompt_hook",
-    }
-    path = os.path.join(task_dir, FEEDBACK_FILE)
-    try:
-        with open(path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
-        append_conversation_entry(
-            task_dir,
-            role="user",
-            text=prompt,
-            source="user_prompt_hook",
-            event_id=event_id,
-        )
-        return True
-    except OSError:
-        return False
-
-
 def main() -> int:
     data = read_hook_input()
     repo_root = find_repo_root()
@@ -499,7 +361,6 @@ def main() -> int:
     # Prompt submission is advisory and deliberately performs no Git queries.
     # Authoritative freshness/fingerprint checks remain in task_verify/task_close.
     if task_dir:
-        _append_feedback_event(task_dir, repo_root, data)
         review_gate = _build_review_gate(task_dir)
         if review_gate:
             output_parts.append(review_gate)

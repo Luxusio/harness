@@ -52,9 +52,9 @@ the agent grants resolve correctly.
 
 ## What to do (and not do)
 
-- For QA/review proof, spawn the required subagent. The Codex/Claude hook records
-  the start in `SUBAGENT_RECEIPTS.jsonl`; do not call a receipt writer or critic
-  writer yourself.
+- For QA/review proof, spawn the required subagent. Codex/Claude lifecycle hooks
+  record ordered start and completion events in `RECEIPTS.jsonl`; do not call a
+  receipt writer or critic writer yourself.
 - For task-local plan artifacts, call `write_plan`. For REQ docs, edit the
   committed `doc/<area>/REQ__*.md` directly or use `plugin/scripts/req_scaffold.py`.
 - Do NOT "fix" the dev artifact by adding `mcp__harness__` to `plugin/` agent

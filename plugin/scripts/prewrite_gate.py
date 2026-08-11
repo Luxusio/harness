@@ -59,14 +59,14 @@ except Exception:
 # ── Static policy ──────────────────────────────────────────────────────────
 
 # Owner values are space-free so the structured reason tail stays grep-stable.
-# Human text in the deny message names the concrete tool (e.g. update_checks.py).
+# Human text in the deny message names the concrete owning tool or lifecycle hook.
 PROTECTED_ARTIFACTS = {
     "PLAN.md": "plan-skill",
     "PLAN.meta.json": "plan-skill",
-    "CHECKS.yaml": "plan-skill-or-update_checks",
     "AUDIT_TRAIL.md": "plan-skill",
-    "SUBAGENT_RECEIPTS.jsonl": "subagent-start-hook",
-    "REVIEW_RECEIPTS.jsonl": "review-lifecycle-hook",
+    "RECEIPTS.jsonl": "receipt-lifecycle-hook",
+    "SUBAGENT_RECEIPTS.jsonl": "legacy-receipt-hook",
+    "REVIEW_RECEIPTS.jsonl": "legacy-receipt-hook",
     "INSTALL_RECEIPT.json": "verified-install-helper",
     "TASK_BASELINE.json": "task-start-runtime",
     "TASK_RUN.json": "task-start-runtime",
@@ -77,10 +77,10 @@ PROTECTED_ARTIFACTS = {
 PROTECTED_ARTIFACT_HUMAN = {
     "PLAN.md": "plan-skill (Skill(harness:plan))",
     "PLAN.meta.json": "plan-skill",
-    "CHECKS.yaml": "plan-skill (initial) + scripts/update_checks.py (updates)",
     "AUDIT_TRAIL.md": "plan-skill",
-    "SUBAGENT_RECEIPTS.jsonl": "Codex/Claude subagent-start hook",
-    "REVIEW_RECEIPTS.jsonl": "Codex/Claude review lifecycle hooks",
+    "RECEIPTS.jsonl": "Codex/Claude review and QA lifecycle hooks",
+    "SUBAGENT_RECEIPTS.jsonl": "legacy lifecycle hooks",
+    "REVIEW_RECEIPTS.jsonl": "legacy lifecycle hooks",
     "INSTALL_RECEIPT.json": "scripts/install_verified.py",
     "TASK_BASELINE.json": "task-start runtime",
     "TASK_RUN.json": "task-start runtime",
@@ -377,15 +377,10 @@ def _owner_to_next_action(owner: str) -> str:
     if not owner:
         return ""
     o = owner.lower()
-    if "plan-skill" in o and "update_checks" in o:
-        return ("write_plan { plan='...', checks='...' } for initial create or "
-                "python3 plugin/scripts/update_checks.py for AC updates")
     if "plan-skill" in o:
         return _tool_hint("write_plan", _runtime_name())
-    if "subagent-start-hook" in o:
-        return "Spawn the required subagent; the runtime hook records SUBAGENT_RECEIPTS.jsonl"
-    if "review-lifecycle-hook" in o:
-        return "Spawn and await the required reviewer; lifecycle hooks record REVIEW_RECEIPTS.jsonl"
+    if "receipt-lifecycle-hook" in o:
+        return "Spawn and await the required reviewer or QA agent; lifecycle hooks record RECEIPTS.jsonl"
     return ""
 
 
@@ -402,7 +397,7 @@ def _runtime_name() -> str:
 def _tool_hint(tool: str, runtime: str | None = None) -> str:
     runtime = runtime or _runtime_name()
     args = {
-        "write_plan": "task_id=..., plan=..., checks=..., audit=...",
+        "write_plan": "task_id=..., plan=..., audit=..., meta=...",
     }.get(tool, "...")
     if runtime == "codex":
         return f"{tool} {{ {args} }}"
@@ -579,7 +574,7 @@ def _check_path(data: dict, file_path: str) -> None:
         owner_human = PROTECTED_ARTIFACT_HUMAN.get(basename, owner)
         human = (
             f"{basename} is owned by {owner_human}. Use the owning skill or MCP "
-            f"tool (e.g. write_plan for PLAN.md/CHECKS.yaml)."
+            f"tool (e.g. write_plan for PLAN.md)."
         )
         _deny("C-05-protected-artifact", file_path, owner, human, repo_root)
         return 0

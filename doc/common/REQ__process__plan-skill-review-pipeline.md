@@ -2,12 +2,14 @@
 tags: [req, process, plan-skill, review-pipeline]
 summary: plan skill must run the 7-phase dual-voice review pipeline; old linear procedure is retired.
 freshness: current
-updated: 2026-04-11
-verified_at: 2026-04-11T00:00:00Z
+updated: 2026-08-12
+verified_at: 2026-08-12T00:00:00Z
 
 ## Requirement
 
-`plugin/skills/plan/SKILL.md` implements a **7-phase review pipeline**. The old 9-step linear procedure (compile routing → read → clarify → write PLAN.md → write CHECKS.yaml → close) is retired and must not be restored.
+`plugin/skills/plan/SKILL.md` implements a **7-phase review pipeline**. The old
+9-step linear procedure and its separate acceptance ledger are retired and
+must not be restored.
 
 ## Phase structure
 
@@ -21,7 +23,7 @@ verified_at: 2026-04-11T00:00:00Z
 | 4.5 | Outside Voice — Final Plan Challenge | always (skipped in light) |
 | 5 | Final Approval Gate | always |
 | 5.5 | Spec Review Loop | always (skipped in light) |
-| 6 | Write PLAN.md + CHECKS.yaml + PLAN.meta.json | always |
+| 6 | Write PLAN.md + PLAN.meta.json | always |
 
 ## Invariants
 
@@ -39,7 +41,9 @@ verified_at: 2026-04-11T00:00:00Z
 - `PLAN_SESSION.json` open/write/close lifecycle is required (not optional).
 - `plan_session_state` transitions in `TASK_STATE.yaml`: `context_open` → `write_open` → `closed`.
 - `PLAN.meta.json` with `author_role: plan-skill` is a required output.
-- `PLAN.md` and `CHECKS.yaml` are mandatory final outputs.
+- `PLAN.md` and `PLAN.meta.json` are mandatory final outputs. Acceptance intent
+  stays in PLAN.md; verification evidence comes from lifecycle-owned
+  `RECEIPTS.jsonl`.
 
 ## Why the old workflow was replaced
 

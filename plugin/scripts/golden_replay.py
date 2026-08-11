@@ -7,21 +7,19 @@ all-pass, 1 on any regression.
 
 Covered today:
    1. contract_lint.py — the shipped template must lint clean.
-   2. update_checks.py — AC lifecycle transitions are deterministic.
-   3. note_freshness.py — current → suspect flip on path match.
-   4. contract_lint.py --check-weight — flags over-budget SKILL.md files.
-   5. prewrite_gate.py — emits JSON permissionDecision=deny on protected artifact.
-   6. mcp_bash_guard.py — emits JSON permissionDecision=deny on `sed -i` into workflow-control-surface.
-   7. harness_server.task_close — blocks when any CHECKS.yaml AC is non-terminal.
-   8. harness_server.task_close — blocks when runtime verification is missing.
-   9. prompt_memory.py — emits [harness-context] with task/verdict/stale/ACs for an active task.
-  10. environment_snapshot.snapshot — writes ENVIRONMENT_SNAPSHOT.md with required sections.
-  11. tool_routing.py — emits [harness-hint] on `command not found: pytest`.
+   2. note_freshness.py — current → suspect flip on path match.
+   3. contract_lint.py --check-weight — flags over-budget SKILL.md files.
+   4. prewrite_gate.py — emits JSON permissionDecision=deny on protected artifact.
+   5. mcp_bash_guard.py — emits JSON permissionDecision=deny on `sed -i` into workflow-control-surface.
+   6. harness_server.task_close — blocks when runtime verification is missing.
+   7. prompt_memory.py — emits compact current task/verdict context.
+   8. environment_snapshot.snapshot — writes ENVIRONMENT_SNAPSHOT.md with required sections.
+   9. tool_routing.py — emits [harness-hint] on `command not found: pytest`.
 
 Invoke:
   python3 plugin/scripts/golden_replay.py           # all tests
   python3 plugin/scripts/golden_replay.py -v        # verbose
-  python3 plugin/scripts/golden_replay.py --only update_checks  # single
+  python3 plugin/scripts/golden_replay.py --only prompt_memory  # single
 
 Used by: CI / pre-release smoke / manual regression check after script
 edits. Never invoked from a hook (slow, writes tmp files).
@@ -67,79 +65,6 @@ def test_contract_lint_template() -> TestResult:
         return TestResult("contract_lint_template", False,
                           f"exit={r.returncode} stderr={r.stderr.strip()[:200]}")
     return TestResult("contract_lint_template", True)
-
-
-def test_update_checks_lifecycle() -> TestResult:
-    """AC lifecycle: open -> implemented_candidate -> passed (reopen_count stays 0)."""
-    with tempfile.TemporaryDirectory() as td:
-        task_dir = os.path.join(td, "task")
-        os.makedirs(task_dir)
-        checks = os.path.join(task_dir, "CHECKS.yaml")
-        with open(checks, "w") as f:
-            f.write(
-                "- id: AC-001\n"
-                "  title: test ac\n"
-                "  status: open\n"
-                "  kind: functional\n"
-                "  owner: developer\n"
-                "  reopen_count: 0\n"
-                "  last_updated: 2026-01-01T00:00:00Z\n"
-                "  evidence: ''\n"
-                "  note: ''\n"
-            )
-
-        for status, evidence in [("implemented_candidate", "pending"),
-                                 ("passed", "test_x passes")]:
-            r = _run(["python3", os.path.join(SCRIPTS, "update_checks.py"),
-                      "--task-dir", task_dir, "--ac", "AC-001",
-                      "--status", status, "--evidence", evidence,
-                      "--no-test-required",
-                      "golden replay exercises CHECKS lifecycle only"])
-            if r.returncode != 0:
-                return TestResult("update_checks_lifecycle", False,
-                                  f"{status} failed: {r.stderr.strip()[:200]}")
-
-        body = open(checks).read()
-        if "status: passed" not in body:
-            return TestResult("update_checks_lifecycle", False,
-                              "final status not 'passed'")
-        if "reopen_count: 0" not in body:
-            return TestResult("update_checks_lifecycle", False,
-                              "reopen_count drifted from 0 on clean path")
-
-    return TestResult("update_checks_lifecycle", True)
-
-
-def test_update_checks_reopen() -> TestResult:
-    """passed -> failed must increment reopen_count."""
-    with tempfile.TemporaryDirectory() as td:
-        task_dir = os.path.join(td, "task")
-        os.makedirs(task_dir)
-        checks = os.path.join(task_dir, "CHECKS.yaml")
-        with open(checks, "w") as f:
-            f.write(
-                "- id: AC-002\n"
-                "  title: reopen ac\n"
-                "  status: passed\n"
-                "  kind: functional\n"
-                "  owner: developer\n"
-                "  reopen_count: 0\n"
-                "  last_updated: 2026-01-01T00:00:00Z\n"
-                "  evidence: ''\n"
-                "  note: ''\n"
-            )
-
-        r = _run(["python3", os.path.join(SCRIPTS, "update_checks.py"),
-                  "--task-dir", task_dir, "--ac", "AC-002",
-                  "--status", "failed", "--note", "regressed"])
-        if r.returncode != 0:
-            return TestResult("update_checks_reopen", False, r.stderr.strip()[:200])
-        body = open(checks).read()
-        if "reopen_count: 1" not in body:
-            return TestResult("update_checks_reopen", False,
-                              f"reopen_count did not increment; body=\n{body}")
-
-    return TestResult("update_checks_reopen", True)
 
 
 def test_note_freshness_flip() -> TestResult:
@@ -304,63 +229,8 @@ def _load_mcp_server():
     return mod
 
 
-def _prepare_scratch_task(tmp: str, task_id: str, *,
-                          checks_yaml: str | None,
-                          touched_paths: list[str] | None = None) -> str:
-    import os as _os
-    task_dir = _os.path.join(tmp, task_id)
-    _os.makedirs(task_dir, exist_ok=True)
-    tp = touched_paths or []
-    tp_block = "[]" if not tp else "\n" + "\n".join(f"  - {p}" for p in tp)
-    with open(_os.path.join(task_dir, "TASK_STATE.yaml"), "w") as f:
-        f.write(
-            f"task_id: {task_id}\nstatus: created\nruntime_verdict: PASS\n"
-            f"touched_paths: {tp_block}\nplan_session_state: closed\n"
-            f"closed_at: null\nupdated: 2026-04-19T00:00:00Z\n"
-        )
-    with open(_os.path.join(task_dir, "PLAN.md"), "w") as f:
-        f.write("# plan\n")
-    with open(_os.path.join(task_dir, "SUBAGENT_RECEIPTS.jsonl"), "w") as f:
-        f.write('{"kind":"subagent","receipt_id":"subagent-gr","source":"subagent_start_hook","status":"started","agent_id":"gr","agent_type":"harness:qa-cli","lens":"qa-cli"}\n')
-    if checks_yaml is not None:
-        with open(_os.path.join(task_dir, "CHECKS.yaml"), "w") as f:
-            f.write(checks_yaml)
-    return task_dir
-
-
-def test_task_close_blocks_on_failed_ac() -> TestResult:
-    """task_close must refuse when any CHECKS.yaml AC is not in {passed, deferred}."""
-    hs = _load_mcp_server()
-    with tempfile.TemporaryDirectory() as tmp:
-        task_dir = _prepare_scratch_task(
-            tmp, "TASK__gr-pr2-failed-ac",
-            checks_yaml=(
-                '- id: AC-001\n  title: "ok"\n  status: passed\n  kind: functional\n'
-                '- id: AC-002\n  title: "bad"\n  status: failed\n  kind: functional\n'
-            ),
-        )
-        orig = hs.canonical_task_dir
-        hs.canonical_task_dir = lambda task_id=None, **kw: task_dir
-        try:
-            result = hs.call_tool("task_close", {"task_id": "TASK__gr-pr2-failed-ac"})
-        finally:
-            hs.canonical_task_dir = orig
-    if not result.get("isError"):
-        return TestResult("task_close_blocks_on_failed_ac", False,
-                          f"expected error, got: {result!r}")
-    err = result["structuredContent"]
-    if "CHECKS gate" not in err.get("error", ""):
-        return TestResult("task_close_blocks_on_failed_ac", False,
-                          f"error missing CHECKS gate marker: {err!r}")
-    blocking = err.get("blocking_acs", [])
-    if not blocking or blocking[0]["id"] != "AC-002":
-        return TestResult("task_close_blocks_on_failed_ac", False,
-                          f"blocking_acs missing AC-002: {blocking!r}")
-    return TestResult("task_close_blocks_on_failed_ac", True)
-
-
 def test_prompt_memory_emits_context_block() -> TestResult:
-    """prompt_memory.py emits [harness-context] with task / verdict / stale / ACs."""
+    """prompt_memory.py emits compact current task and verdict context."""
     import os as _os
     import time as _time
     prompt = _os.path.join(SCRIPTS, "prompt_memory.py")
@@ -382,14 +252,6 @@ def test_prompt_memory_emits_context_block() -> TestResult:
                 "touched_paths:\n  - src/foo.py\n"
                 "plan_session_state: closed\nclosed_at: null\n"
                 "updated: 2026-04-19T00:00:00Z\n"
-            )
-        with open(_os.path.join(task_dir, "SUBAGENT_RECEIPTS.jsonl"), "w") as f:
-            f.write('{"kind":"subagent","receipt_id":"subagent-gr","source":"subagent_start_hook","status":"started","agent_id":"gr","agent_type":"harness:qa-cli","lens":"qa-cli"}\n')
-        with open(_os.path.join(task_dir, "CHECKS.yaml"), "w") as f:
-            f.write(
-                '- id: AC-001\n  title: "first open"\n  status: open\n  kind: functional\n'
-                '- id: AC-002\n  title: "second failed"\n  status: failed\n  kind: functional\n'
-                '- id: AC-003\n  title: "done"\n  status: passed\n  kind: functional\n'
             )
         _os.makedirs(_os.path.join(base, "src"))
         src = _os.path.join(base, "src", "foo.py")
@@ -413,17 +275,13 @@ def test_prompt_memory_emits_context_block() -> TestResult:
         return TestResult("prompt_memory_context_block", False,
                           f"exit {r.returncode}: {r.stderr[:200]}")
     out = r.stdout
-    for needle in ("[harness-context]", "task=TASK__gr-pr3",
-                   "verdict=PASS", "AC-001:", "AC-002:"):
+    for needle in ("[harness-context]", "task=TASK__gr-pr3", "verdict=PASS"):
         if needle not in out:
             return TestResult("prompt_memory_context_block", False,
                               f"missing {needle!r} in stdout: {out!r}")
     if "doc/common/sus.md" in out:
         return TestResult("prompt_memory_context_block", False,
                           f"suspect note unexpectedly injected: {out!r}")
-    if "AC-003:" in out:
-        return TestResult("prompt_memory_context_block", False,
-                          f"terminal AC should be hidden: {out!r}")
     if len(out) > 400:
         return TestResult("prompt_memory_context_block", False,
                           f"output exceeded 400 chars: {len(out)}")
@@ -499,13 +357,10 @@ def test_tool_routing_suggests_test_command() -> TestResult:
 
 TESTS = [
     test_contract_lint_template,
-    test_update_checks_lifecycle,
-    test_update_checks_reopen,
     test_note_freshness_flip,
     test_check_weight_flags_oversized,
     test_prewrite_json_deny_on_protected_artifact,
     test_bash_guard_deny_on_sed_into_workflow_control,
-    test_task_close_blocks_on_failed_ac,
     test_prompt_memory_emits_context_block,
     test_environment_snapshot_writes_block,
     test_tool_routing_suggests_test_command,

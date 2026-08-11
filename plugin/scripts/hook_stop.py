@@ -9,10 +9,6 @@ import sys
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
-try:
-    from codex_hook_registration import restore_watcher_registration  # type: ignore
-except Exception:  # pragma: no cover - hook must fail open
-    restore_watcher_registration = None
 
 
 def _payload_cwd(payload: bytes) -> str | None:
@@ -26,8 +22,6 @@ def _payload_cwd(payload: bytes) -> str | None:
 
 def main() -> int:
     payload = sys.stdin.buffer.read()
-    if restore_watcher_registration is not None:
-        restore_watcher_registration(payload, budget_seconds=0.5)
     try:
         # Codex does not auto-resume after a Stop block. If we forward
         # stop_gate.py's block decision, Codex turns it into a hook_prompt that

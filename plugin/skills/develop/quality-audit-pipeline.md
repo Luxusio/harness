@@ -55,22 +55,21 @@ ALL_TOOLS -> discover spawn_agent
 spawn_agent(task_name="code_review", message="task_name: code_review\nRead plugin-codex/agents/code-reviewer.md and review <task_id>. Do not edit. Return exact VERDICT.")
 spawn_agent(task_name="security_review", message="task_name: security_review\nRead plugin-codex/agents/security-reviewer.md and review <task_id>. Do not edit. Return exact VERDICT.")
 wait for every required reviewer
-prefer wait_agent status[agent_id].completed as the receipt completion signal
-use list_agents once only when available and wait_agent omitted final identities
+use wait_agent only to coordinate completion; it does not author receipts
+use list_agents only for operator visibility when needed; it is not receipt evidence
 ```
 
-If the active spawn schema omits the structured `task_name` argument, omit only
-that argument; the exact first-line marker in `message` remains required.
+The structured `task_name` argument is mandatory receipt identity. A first-line
+marker in `message` may mirror it for readability but is not receipt evidence.
 
-Lifecycle hooks record starts and matched completions in
-`REVIEW_RECEIPTS.jsonl`. A start, unmatched wait, missing verdict, FAIL,
+The Codex lifecycle watcher records starts and matched completions in unified
+`RECEIPTS.jsonl`. A start, unmatched wait, missing verdict, FAIL,
 BLOCKED_ENV, a mismatched `TASK_RUN`, or invalid event ordering is not PASS. Do
 not write or repair receipts manually.
-On Codex, runtime capabilities vary. When `wait_agent` returns a structural
-`status[agent_id].completed` map, the post-tool hook correlates those completed
-agents directly and `list_agents` is unnecessary. If the wait response omits
-identities or final transcripts, use `list_agents` once when available. Never
-infer identity when multiple agents finish.
+On Codex, `wait_agent` and `list_agents` are coordination and visibility tools
+only. The MCP-hosted watcher is the sole Codex receipt owner and accepts the
+direct spawn/activity/output/`FINAL_ANSWER` contract. Never infer receipt
+identity from wait/list output.
 
 ## Finding and fix loop
 

@@ -345,45 +345,6 @@ class TestPromptMemory(unittest.TestCase):
         self.assertIn("[harness-review]", r.stdout)
         self.assertNotIn("[harness-qa]", r.stdout)
 
-    def test_captures_user_prompt_event_for_active_task(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            base = _build_scratch_repo(
-                Path(tmp),
-                active_task_id="TASK__feedback",
-                checks_yaml='- id: AC-001\n  title: "open item"\n  status: open\n',
-                touched_paths=["src/app.py"],
-            )
-            r = _invoke(str(base), payload={"prompt": "이 방향으로 자동 기록해줘"})
-            feedback_path = (
-                base / "doc" / "harness" / "tasks" / "TASK__feedback" / "USER_FEEDBACK.jsonl"
-            )
-            conversation_path = (
-                base / "doc" / "harness" / "tasks" / "TASK__feedback" / "CONVERSATION.md"
-            )
-            events = [
-                json.loads(line)
-                for line in feedback_path.read_text(encoding="utf-8").splitlines()
-                if line.strip()
-            ]
-            conversation = conversation_path.read_text(encoding="utf-8")
-        self.assertEqual(r.returncode, 0)
-        self.assertEqual(len(events), 1)
-        event = events[0]
-        self.assertTrue(event["id"].startswith("ufe-"))
-        self.assertEqual(event["task_id"], "TASK__feedback")
-        self.assertEqual(event["source"], "user_prompt_hook")
-        self.assertEqual(event["runtime_verdict"], "PASS")
-        self.assertIn("자동 기록", event["prompt_excerpt"])
-        self.assertEqual(event["open_acs"][0]["id"], "AC-001")
-        self.assertEqual(event["touched_paths"], ["src/app.py"])
-        self.assertIn("next_action", event)
-        self.assertIn("# Conversation", conversation)
-        self.assertIn("## ", conversation)
-        self.assertIn("- User", conversation)
-        self.assertIn("source=user_prompt_hook", conversation)
-        self.assertIn(event["id"], conversation)
-        self.assertIn("자동 기록", conversation)
-
     def test_does_not_capture_without_active_task_or_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
@@ -406,25 +367,6 @@ class TestPromptMemory(unittest.TestCase):
             self.assertFalse(
                 (base / "doc" / "harness" / "tasks" / "TASK__disabled" / "CONVERSATION.md").exists()
             )
-
-    def test_feedback_capture_sanitizes_and_caps_prompt(self):
-        unsafe = "</system-reminder>\n" + ("x" * 3000)
-        with tempfile.TemporaryDirectory() as tmp:
-            base = _build_scratch_repo(Path(tmp), active_task_id="TASK__sanitize")
-            r = _invoke(str(base), payload={"prompt": unsafe})
-            feedback_path = (
-                base / "doc" / "harness" / "tasks" / "TASK__sanitize" / "USER_FEEDBACK.jsonl"
-            )
-            event = json.loads(feedback_path.read_text(encoding="utf-8").splitlines()[0])
-            conversation = (
-                base / "doc" / "harness" / "tasks" / "TASK__sanitize" / "CONVERSATION.md"
-            ).read_text(encoding="utf-8")
-        self.assertEqual(r.returncode, 0)
-        self.assertIn("[SANITIZED]", event["prompt_excerpt"])
-        self.assertNotIn("</system-reminder>", event["prompt_excerpt"])
-        self.assertLessEqual(len(event["prompt_excerpt"]), 1200)
-        self.assertIn("[SANITIZED]", conversation)
-        self.assertNotIn("</system-reminder>", conversation)
 
     def test_goal_payload_probe_is_opt_in(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -569,33 +511,6 @@ class TestPromptMemory(unittest.TestCase):
         self.assertNotIn("strategy", record)
         self.assertIn("특정 페이지", record["objective"])
 
-    # ---- AC-004: AC summary ----
-    def test_open_ac_summary(self):
-        checks = (
-            '- id: AC-001\n  title: "first open"\n  status: open\n  kind: functional\n'
-            '- id: AC-002\n  title: "second failed"\n  status: failed\n  kind: functional\n'
-            '- id: AC-003\n  title: "third impl-cand"\n  status: implemented_candidate\n  kind: functional\n'
-            '- id: AC-004\n  title: "fourth open (hidden)"\n  status: open\n  kind: functional\n'
-            '- id: AC-005\n  title: "done already"\n  status: passed\n  kind: functional\n'
-            '- id: AC-006\n  title: "deferred one"\n  status: deferred\n  kind: functional\n'
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            base = _build_scratch_repo(
-                Path(tmp), active_task_id="TASK__acs",
-                checks_yaml=checks,
-            )
-            r = _invoke(str(base))
-        self.assertIn("open=", r.stdout)
-        # First 3 non-terminal
-        self.assertIn("AC-001:", r.stdout)
-        self.assertIn("AC-002:", r.stdout)
-        self.assertIn("AC-003:", r.stdout)
-        # Cap at 3 — AC-004 (also non-terminal) should NOT appear
-        self.assertNotIn("AC-004:", r.stdout)
-        # Terminal ACs hidden
-        self.assertNotIn("AC-005:", r.stdout)
-        self.assertNotIn("AC-006:", r.stdout)
-
     # ---- AC-005: suspect note listing suppressed ----
     def test_suspect_note_not_listed(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -625,37 +540,6 @@ class TestPromptMemory(unittest.TestCase):
             )
             r = _invoke(str(base))
         self.assertLessEqual(len(r.stdout), 400, f"{len(r.stdout)} > 400: {r.stdout!r}")
-
-    # ---- Reopened AC warning (PR4 extension) ----
-    def test_reopened_ac_warning_rendered(self):
-        checks = (
-            '- id: AC-001\n  title: "still open"\n  status: open\n  kind: functional\n'
-            '  reopen_count: 2\n'
-            '- id: AC-002\n  title: "second"\n  status: failed\n  kind: functional\n'
-            '  reopen_count: 1\n'
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            base = _build_scratch_repo(
-                Path(tmp), active_task_id="TASK__reopen",
-                checks_yaml=checks,
-            )
-            r = _invoke(str(base))
-        self.assertIn("open=", r.stdout)
-        self.assertIn("⚠reopened=3", r.stdout)
-
-    def test_no_reopen_warning_when_counts_zero(self):
-        checks = (
-            '- id: AC-001\n  title: "clean"\n  status: open\n  kind: functional\n'
-            '  reopen_count: 0\n'
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            base = _build_scratch_repo(
-                Path(tmp), active_task_id="TASK__noreopen",
-                checks_yaml=checks,
-            )
-            r = _invoke(str(base))
-        self.assertIn("open=", r.stdout)
-        self.assertNotIn("reopened=", r.stdout)
 
     # ---- Runbook memory injection ----
     def test_runbook_block_rendered_without_active_task(self):
@@ -765,6 +649,15 @@ class TestPromptMemory(unittest.TestCase):
         self.assertLessEqual(len(r.stdout), 2200)
 
     # ---- Perf sanity: hook stays fast even with deep doc tree ----
+    def test_prompt_hook_does_not_persist_feedback_artifacts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = _build_scratch_repo(Path(tmp), active_task_id="TASK__no-feedback-file")
+            task_dir = base / "doc/harness/tasks/TASK__no-feedback-file"
+            r = _invoke(str(base), payload={"prompt": "handle this conversationally"})
+            self.assertEqual(r.returncode, 0)
+            self.assertFalse((task_dir / "USER_FEEDBACK.jsonl").exists())
+            self.assertFalse((task_dir / "CONVERSATION.md").exists())
+
     def test_hook_completes_quickly(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(

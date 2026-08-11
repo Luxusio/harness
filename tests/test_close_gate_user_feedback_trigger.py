@@ -1,7 +1,4 @@
-"""AC-004 + AC-005: close-gate trigger text + C-101 contract are present.
-
-Mechanical text-level assertions over committed artifacts. No runtime spawn.
-"""
+"""Current task flow does not depend on a user-feedback sidecar artifact."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,23 +10,18 @@ CLAUDE_RUNTIME = REPO / "plugin" / "CLAUDE.md"
 CONTRACTS_LOCAL = REPO / "CONTRACTS.local.md"
 
 
-def test_develop_skill_phase_86_mentions_user_feedback_jsonl_trigger():
+def test_develop_skill_phase_86_uses_conversation_requirements():
     text = DEVELOP_SKILL.read_text(encoding="utf-8")
     idx = text.find("Phase 8.6")
     assert idx >= 0, "Phase 8.6 section header missing"
     section = text[idx : idx + 2500]
-    assert "USER_FEEDBACK.jsonl" in section, (
-        "Phase 8.6 must reference USER_FEEDBACK.jsonl as a critic-document trigger"
-    )
-    assert "C-101" in section or "Retrospective" in section, (
-        "Phase 8.6 must cite C-101 or the Retrospective REQ pass mechanism"
-    )
+    assert "conversation" in section.lower()
+    assert "USER_FEEDBACK.jsonl" not in section
 
 
-def test_plugin_claude_md_mentions_user_feedback_close_gate():
+def test_plugin_claude_md_declares_no_feedback_sidecar():
     text = CLAUDE_RUNTIME.read_text(encoding="utf-8")
-    assert "USER_FEEDBACK.jsonl" in text
-    assert "not a close-gate evidence document" in text
+    assert "does not create a separate user-feedback artifact" in text
 
 
 def test_contracts_local_c101_present_with_four_fields():
@@ -48,11 +40,9 @@ def test_contracts_local_c101_present_with_four_fields():
         assert len(body_text) >= 20, f"C-101 {field} content too short: {body_text!r}"
 
 
-def test_contracts_local_c101_references_user_feedback_jsonl_and_critic_document():
+def test_contracts_local_c101_uses_conversation_and_critic_document():
     text = CONTRACTS_LOCAL.read_text(encoding="utf-8")
     c101 = text[text.find("### C-101"):]
-    assert "USER_FEEDBACK.jsonl" in c101, (
-        "C-101 should name USER_FEEDBACK.jsonl as the per-task feedback source"
-    )
+    assert "current conversation" in c101
+    assert "USER_FEEDBACK.jsonl" not in c101
     assert "critic-document" in c101, "C-101 should name critic-document as the enforcer"
-    assert "candidate" in c101, "C-101 should mention status:candidate"

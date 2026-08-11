@@ -32,8 +32,9 @@ PLAN
 
 Code review is not another name for QA. Review checks whether the solution is
 the right shape, safe, and proportionate. QA checks whether the final solution
-actually works. Any source edit invalidates both receipts; review runs before
-QA so runtime verification is not spent on a statically rejected design.
+actually works. After a source edit, the developer starts a fresh review cycle
+before QA so runtime verification is not spent on a statically rejected design;
+receipt files themselves do not bind or detect source state.
 
 ## What the reference implementations establish
 
@@ -223,7 +224,7 @@ The review must not recommend an abstraction merely because a design principle
 can be named. It may require one only when current code has multiple consumers,
 duplicated policy, a documented boundary, or a volatile external interface.
 
-Before the paired lenses, the reviewer maps every CHECKS acceptance criterion
+Before the paired lenses, the reviewer maps every PLAN.md acceptance criterion
 to code, test, and durable-doc evidence, and maps every material changed path
 back to approved scope. It verifies suggested replacements against the current
 project before recommending them. Confidence below the blocking threshold
@@ -319,8 +320,9 @@ missing, incomplete, self-authored, or stale review.
 
 ## Lifecycle and evidence contract
 
-Create a separate `REVIEW_RECEIPTS.jsonl`; do not overload QA's
-`SUBAGENT_RECEIPTS.jsonl` semantics.
+Record review and QA lifecycle events in the single append-only
+`RECEIPTS.jsonl` stream. The `kind` and `lens` fields preserve their distinct
+semantics without separate files.
 
 Each required reviewer produces a hook-owned completion record containing:
 
@@ -328,12 +330,14 @@ Each required reviewer produces a hook-owned completion record containing:
 {
   "event": "review_completed",
   "task_id": "TASK__...",
+  "task_run_id": "...",
   "agent_id": "...",
+  "kind": "review",
   "lens": "review-code|review-security",
   "verdict": "PASS|FAIL|BLOCKED_ENV",
-  "base_sha": "...",
-  "head_sha": "...",
-  "diff_fingerprint": "sha256:...",
+  "runtime_session_id": "...",
+  "runtime_thread_id": "...",
+  "runtime_event_id": "...",
   "finished_at": "...",
   "finding_counts": {"fix_now": 0, "investigate": 0, "optional": 0}
 }
@@ -342,16 +346,21 @@ Each required reviewer produces a hook-owned completion record containing:
 The hook records starts and lifecycle completions. A start receipt is never a
 PASS. The close gate requires:
 
-- Codex completion collection uses `wait_agent` followed by `list_agents`,
-  because the wait result itself has neither a target identity nor transcript;
+- Codex completion authority comes from the registered root-rollout watcher
+  observing the direct child final delivery; `wait_agent` and `list_agents`
+  coordinate agents but do not author evidence;
 - reviewer line 1 is the exact verdict and line 2 is the single canonical
   `FINDING_COUNTS` record; missing or contradictory counts remain pending;
 
 - all routed review lenses completed with explicit PASS;
-- the completion belongs to the current task and spawned agent;
-- `head_sha` and the canonical worktree diff fingerprint still match;
-- no source edit occurred after the latest review;
+- the completion belongs to the current task run, spawned agent, root session,
+  child thread, event, and lens;
 - all required QA lenses subsequently completed with fresh PASS.
+
+Receipts intentionally do not bind HEAD or a worktree fingerprint. The
+developer owns source-drift detection and starts a fresh review cycle after
+edits; close authority comes from the ordered latest review/QA lifecycle for
+the current task run.
 
 `BLOCKED_ENV` remains a real non-PASS state. If the runtime cannot expose an
 independent reviewer, the task stays pending unless repository policy explicitly

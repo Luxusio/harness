@@ -276,9 +276,7 @@ def test_codex_hooks_config_uses_absolute_cache_python_and_reviews_all_events(tm
         assert hook["command"].startswith("/")
         assert hook["timeout"] > 0
         assert hook["statusMessage"]
-    assert hooks["PostToolUse"][0]["matcher"] == (
-        "Bash|.*create_goal|.*spawn_agent|.*wait_agent|.*list_agents"
-    )
+    assert hooks["PostToolUse"][0]["matcher"] == "Bash|.*create_goal"
     assert hooks["UserPromptSubmit"][0]["hooks"][0]["timeout"] == 8
 
 

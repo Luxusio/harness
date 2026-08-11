@@ -30,12 +30,10 @@ def test_develop_skills_require_feedback_rule_judgment():
         assert "user_decision:" in body
         assert "proposed_artifact:" in body
         assert "User Feedback Event Review" in body
-        assert "USER_FEEDBACK.jsonl" in body
+        assert "do not" in body and "USER_FEEDBACK.jsonl" in body
         assert "durable source of truth" in body
         assert "by itself" in body
         assert "before the next action that depends on it" in body
-        assert "promoted`, `handled-local`, `deferred`, or `rejected`" in body
-        assert "User feedback events have terminal disposition" in body
 
 
 def test_developer_prompts_do_not_reference_handoff_close_gate_guide():
@@ -54,10 +52,9 @@ def test_run_skills_check_feedback_events_before_dependent_actions():
     for rel in ("plugin/skills/run/SKILL.md", "plugin-codex/internal-skills/run/SKILL.md"):
         body = (REPO / rel).read_text(encoding="utf-8")
         assert "USER_FEEDBACK.jsonl" in body
-        assert "automatic evidence from UserPromptSubmit" in body
-        assert "before the next dependent action" in body
-        assert "`promoted`, `handled-local`, `deferred`, or `rejected`" in body
-        assert "Close-time checking only catches missed feedback" in body
+        assert "does not" in body
+        assert "separate feedback sidecar" in body
+        assert "explicit user corrections" in body
 
 
 def test_codex_subagent_waiting_avoids_rapid_polling_noise():
@@ -66,10 +63,10 @@ def test_codex_subagent_waiting_avoids_rapid_polling_noise():
     assert "Subagent wait UX" in run
     assert "rapid 10/20/30-second wait loops" in run
     assert "one compact status update" in run
-    assert "`status[agent_id].completed` result as the preferred completion signal" in run
-    assert "Only\ncall `list_agents` once" in run
+    assert "Use `wait_agent` only to coordinate" in run
+    assert "`wait_agent` and `list_agents` output do not author receipts" in run
     assert "never use rapid short polling" in develop
-    assert "Do not require `list_agents`" in develop
+    assert "and `list_agents` do not author receipts" in develop
 
 
 def test_qa_agents_surface_self_healing_candidates():

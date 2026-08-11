@@ -1,6 +1,6 @@
 """Canonical gate-response shape for all harness gate scripts.
 
-Every gate (stop_gate, prewrite_gate, mcp_bash_guard, update_checks, task_close)
+Every gate (stop_gate, prewrite_gate, mcp_bash_guard, task_close)
 emits the same JSON shape so the orchestrator can resolve a block in one step
 instead of grepping for the helper script. The retro from 2026-05-12 surfaced
 that error messages saying "blocked" without an actionable next step force the
@@ -40,7 +40,7 @@ def gate_response(
         string signals "no canonical next action known".
     owner_skill: which skill / subagent owns the resolution. Helps the
         orchestrator route to the right place ("plan-skill", "harness:developer",
-        "harness:qa-browser", "update_checks.py CLI", etc.).
+        "harness:qa-browser", "write_plan MCP", etc.).
     docs: optional path to authoritative doc (CONTRACTS.md, plugin/CLAUDE.md,
         agent definition, etc.). Helps future agents pull context without
         re-deriving from grep.

@@ -12,9 +12,13 @@ user-invocable: false
 
 Orchestrate the full harness development cycle for a task.
 
+> Current artifact model: `PLAN.md` owns acceptance intent and unified
+> `RECEIPTS.jsonl` owns review/QA evidence. Do not create or consume
+> `CHECKS.yaml` or `USER_FEEDBACK.jsonl`; later legacy wording is non-operative.
+
 > **Codex runtime notes** (delta from Claude):
 > - Claude's `Skill("harness:plan", task_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. Effect is identical (plan -> develop -> verify -> close), but the chain is sequential prose, not tool calls.
-> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. Check the deferred tool catalog (for example `ALL_TOOLS`) before declaring `spawn_agent` unavailable. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. For QA/review, `spawn_agent` is mandatory when available: the orchestrator must not self-author a PASS while skipping an available independent subagent. Codex lifecycle hooks record starts and observed completions in `SUBAGENT_RECEIPTS.jsonl`; do not call a receipt writer or critic writer yourself. If `spawn_agent` is unavailable after discovery, run the role methodology inline and state the fallback in task state or final response only when it affects verification.
+> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. Check the deferred tool catalog (for example `ALL_TOOLS`) before declaring `spawn_agent` unavailable. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. For QA/review, `spawn_agent` is mandatory when available: the orchestrator must not self-author a PASS while skipping an available independent subagent. The Codex lifecycle watcher records starts and observed completions in `RECEIPTS.jsonl`; do not call a receipt writer or critic writer yourself. If `spawn_agent` is unavailable after discovery, run the role methodology inline and state the fallback in task state or final response only when it affects verification.
 > - MCP tool names on Codex use bare form (`task_start`, `task_verify`, `task_close`) — not Claude-prefixed form. Where this skill mentions a prefixed name, read it as the bare form.
 > - `${CLAUDE_PLUGIN_ROOT}` is not injected on Codex. Use `${HARNESS_PLUGIN_ROOT}` (set by the Codex plugin install).
 > - AskUserQuestion (Phase 4 FAIL retry) is conversational prose on Codex — emit the question + options, read the reply from the next user turn.
@@ -41,7 +45,7 @@ that can run without touching the same files. Use concrete Codex calls like:
 ```text
 spawn_agent {
   task_name: "qa_cli_<task_slug>_<run_id>",
-  message: "task_name: qa_cli_<task_slug>_<run_id>\nYou are the qa-cli lens for <task_id>. Read <task_dir>/PLAN.md, CHECKS.yaml, and changed files. Run focused verification. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with concrete findings and evidence.",
+  message: "task_name: qa_cli_<task_slug>_<run_id>\nYou are the qa-cli lens for <task_id>. Read <task_dir>/PLAN.md and the planned target files. Run focused verification. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with concrete findings and evidence.",
   fork_turns: "all"
 }
 ```
@@ -66,29 +70,28 @@ spawn_agent {
 }
 ```
 
-The Codex PreToolUse hook records each `spawn_agent` start automatically in
-`SUBAGENT_RECEIPTS.jsonl`. Do not call a harness receipt tool and do not write
+The MCP-hosted Codex lifecycle watcher records each direct `collaboration`
+spawn and completion in the protected receipt streams. Do not call a harness receipt tool and do not write
 critic verdict artifacts. If no subagent was spawned, use the inline fallback
 path and keep the fallback reason in task state or the final response;
 `task_close` will still require a real completed QA PASS receipt for
 verification-gated work when `spawn_agent` was available.
 
-Every review or QA spawn message must begin with the exact line
-`task_name: <same-structured-name>`, even when the active tool schema also has
-a `task_name` argument. On runtimes whose spawn schema omits that argument,
-omit the unsupported argument but retain the first-line marker. The lifecycle
-watcher accepts only this strict first-line fallback and binds the returned
-`agent_id`; it never guesses a lens from prose or from a nickname.
+Every review or QA spawn must provide a valid structured `task_name` argument.
+The message may repeat `task_name: <same-structured-name>` on its first line for
+readability, but the watcher does not use prompt text as identity evidence. A
+runtime without the structured field is unsupported and leaves the receipt
+missing until Harness and Codex are upgraded together.
 
 On Codex builds that do not forward collaboration tools to PostToolUse,
-SessionStart creates the exact root-rollout registration and every installed
-root hook idempotently restores it. The existing Harness MCP server hosts the
-thread-scoped watcher as a daemon thread. The hook/runtime
-path, not a model-callable MCP tool, owns receipts. Give review/QA agents
-structured task names containing their exact lens in the first-line marker and,
-when supported, the tool argument; then await the final response normally. A
-registration created after completion cannot retroactively
-attest the source snapshot; recovery covers only future subagent starts.
+SessionStart creates the exact root-rollout registration and spawn-selective
+PreToolUse restores it immediately before delegation. The existing Harness MCP server hosts the
+thread-scoped watcher as a daemon thread. The watcher, not a model-callable MCP
+tool or PostToolUse result parser, owns receipts.
+Give review/QA agents structured task names containing their exact lens; then
+await the final response normally. A
+registration created after completion cannot retroactively establish ordered
+lifecycle evidence; recovery covers only future subagent starts.
 
 Subagent lifecycle cleanup: track every `agent_id` returned by `spawn_agent`.
 After a spawned agent completes, fails, is cancelled, or is no longer needed,
@@ -103,10 +106,9 @@ up to 60 seconds. Do not issue rapid 10/20/30-second wait loops or interleave
 agent-status polling between timeouts. After a timeout, give one compact status update
 before the next wait interval. Treat an agent's progress message and
 final response as one lifecycle; do not add an extra wait solely to collect a
-duplicate completion notification. Treat `wait_agent`'s structurally identified
-`status[agent_id].completed` result as the preferred completion signal. Only
-call `list_agents` once after the batch when that tool exists and the wait
-response did not already expose completed agent identities and final responses.
+duplicate completion notification. Use `wait_agent` only to coordinate
+completion. `wait_agent` and `list_agents` output do not author receipts; the
+direct lifecycle watcher owns that evidence.
 
 Use inline execution as the fallback for roles that normally benefit from independence only when `spawn_agent` is unavailable or the work is not actually independent. If independent work runs sequentially, state the concrete blocker and affected lanes in the lane table or final response; vague reasons such as lack of user request are invalid. Do not create a runtime fallback document just to record routing history.
 
@@ -184,19 +186,12 @@ Read `plugin-codex/internal-skills/develop/SKILL.md` and execute its phases, pas
 
 Multi-lens parallel QA (qa-browser + qa-api in one batch) should use `spawn_agent` when available. Browser MCP verification is availability-gated: if the current Codex session exposes browser tools (for example `chrome_devtools` or a future Playwright MCP), run the qa-browser methodology via subagent when possible or inline when no subagent path exists; if browser verification is required but no browser tool or reachable app exists, write a browser-lens `BLOCKED_ENV` verdict instead of silently falling back to CLI-only QA.
 
-On completion: hook-owned review and QA receipts are fresh, `task_verify` reports PASS, and the task is closed. If BLOCKED: stop, report, ask user.
+On completion: watcher-owned review and QA receipts are present, `task_verify` reports PASS, and the task is closed. If BLOCKED: stop, report, ask user.
 
-Before entering develop, re-entering develop after QA/UX FAIL, entering verify,
-or closing, check `<task_dir>/USER_FEEDBACK.jsonl` when present. This file is
-automatic evidence from UserPromptSubmit, not durable truth by itself. If a
-feedback event changes what should be built, tested, or judged, reflect it
-before the next dependent action. Each event must end in one terminal state:
-`promoted`, `handled-local`, `deferred`, or `rejected`. Use `promoted` only
-when the feedback became a committed durable artifact such as a typed doc,
-skill, pattern, test, or script. Do not write a handoff artifact for this;
-`task_verify` and `task_close` surface unresolved feedback from task state.
-Close-time checking only catches missed feedback; it is not the primary moment
-to interpret user intent.
+Before entering develop, re-entering after QA/UX FAIL, verifying, or closing,
+incorporate explicit user corrections from the conversation. Promote durable
+rules directly into PLAN.md or the applicable project documentation; Harness
+does not maintain a separate feedback sidecar.
 
 ### Phase 4: Verify recovery (only when develop returned before close)
 
@@ -206,7 +201,7 @@ interrupted or older develop flow, not a second QA pass. First call
 exist, call `task_verify` only; spawn QA below only for a missing, failed, or
 stale required lens.
 
-Read `doc/harness/manifest.yaml` for project type. On Codex, choose the appropriate QA lens and route it by current capability: discover deferred tools first, use `spawn_agent` when available, and use inline methodology only as fallback. If `spawn_agent` is available, the QA lens MUST run as a subagent; the orchestrator must not invent a PASS from its own context. Also route applicable UX review lenses for user-facing surfaces. Verification is recognized by fresh hook-recorded QA completions in `SUBAGENT_RECEIPTS.jsonl`; findings and the explicit verdict come from the subagent final response. A start entry alone cannot pass verification.
+Read `doc/harness/manifest.yaml` for project type. On Codex, choose the appropriate QA lens and route it by current capability: discover deferred tools first, use `spawn_agent` when available, and use inline methodology only as fallback. If `spawn_agent` is available, the QA lens MUST run as a subagent; the orchestrator must not invent a PASS from its own context. Also route applicable UX review lenses for user-facing surfaces. Verification is recognized by watcher-recorded QA completions in `RECEIPTS.jsonl`; findings and the explicit verdict come from the subagent final response. A start entry alone cannot pass verification.
 
 **Strategy selection:**
 - **qa-browser** — required when `manifest.qa.browser_qa_supported: true` AND the diff contains frontend files (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). On Codex, check the actual session tool surface first. If browser tools are available, route the qa-browser lens through `spawn_agent` when available; otherwise read `plugin-codex/agents/qa-browser.md` and run that methodology inline, including real page navigation/interactions/screenshots where the tools support it. If browser QA is required but no browser tool is available, the dev server cannot be reached, or a required browser setup is impossible, return `BLOCKED_ENV` with the exact blocker instead of fabricating a PASS.
@@ -233,7 +228,7 @@ QA subagent pattern on Codex:
 ```text
 spawn_agent {
   task_name: "qa_<lens>_<task_slug>_<run_id>",
-  message: "task_name: qa_<lens>_<task_slug>_<run_id>\nYou are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, CHECKS.yaml, and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with command/browser evidence and concrete findings.",
+  message: "task_name: qa_<lens>_<task_slug>_<run_id>\nYou are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with command/browser evidence and concrete findings.",
   fork_turns: "all"
 }
 ```
@@ -244,10 +239,9 @@ slug and run id. The watcher binds the lens from that prefix and the unique
 suffix prevents collaboration-tree name collisions across sequential tasks.
 Run at most one agent for each required QA lens in a single verification cycle.
 
-After awaiting QA/UX, run `task_verify` with `reconcile_acs: true`. The verify
-step reads `SUBAGENT_RECEIPTS.jsonl`, promotes only `status: open` checks when
-all required QA completion receipts report PASS, and leaves failed/deferred ACs to explicit
-`update_checks.py` handling. `task_verify` returns a `subagent_receipts` summary
+After awaiting QA/UX, run `task_verify`. The verify step reads `RECEIPTS.jsonl`
+and computes the verdict from all required ordered review and QA completions.
+`task_verify` returns a `subagent_receipts` summary
 so missing independent QA/UX calls are visible before close.
 
 QA inline fallback on Codex reads the relevant qa-* prompt, follows the same

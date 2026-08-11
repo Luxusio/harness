@@ -22,7 +22,7 @@ even though the useful work already finished.
   agent it spawned for the workflow unless the user explicitly asked to leave a
   still-running agent open.
 - Reading a result and closing the agent does not delete or replace the
-  hook-owned start receipt in `SUBAGENT_RECEIPTS.jsonl`.
+  hook-owned lifecycle entries in unified `RECEIPTS.jsonl`.
 - If close is unavailable or fails, the orchestrator reports the concrete
   blocker instead of silently leaving completed agents open.
 
@@ -44,7 +44,7 @@ even though the useful work already finished.
 ## Non-Goals
 
 - This does not require hooks to close agents automatically.
-- This does not remove hook-owned subagent start receipts.
+- This does not remove hook-owned review or QA lifecycle receipts.
 - This does not require closing a still-running agent that the user explicitly
   asked to keep open.
 

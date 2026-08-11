@@ -79,10 +79,8 @@ committed scaffold into a failed start.
 
 | Artifact | Writer |
 |---|---|
-| `PLAN.md`, `PLAN.meta.json`, optional `CHECKS.yaml`, optional `AUDIT_TRAIL.md` | MCP `write_plan` |
-| `CHECKS.yaml` status transitions after plan | `plugin/scripts/update_checks.py` |
-| `SUBAGENT_RECEIPTS.jsonl` | Codex/Claude subagent lifecycle hooks, including the root-hook-registered, MCP-hosted Codex watcher |
-| `REVIEW_RECEIPTS.jsonl` | Codex/Claude reviewer lifecycle hooks, including the root-hook-registered, MCP-hosted Codex watcher |
+| `PLAN.md`, `PLAN.meta.json`, optional `AUDIT_TRAIL.md` | MCP `write_plan` |
+| `RECEIPTS.jsonl` | Codex/Claude review and QA lifecycle hooks, including the root-hook-registered, MCP-hosted Codex watcher |
 | `CONVERSATION.md` | Codex/Claude UserPromptSubmit/Subagent hooks |
 | durable docs under `doc/<area>/<TYPE>__*.md` | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
 
@@ -102,13 +100,11 @@ Goal IDs use the same safe-name boundary, and Goal child entries persist the
 canonical repository-relative task path.
 
 `write_plan` validates the complete supplied bundle before its first write, so
-an invalid optional `CHECKS.yaml` or `AUDIT_TRAIL.md` cannot leave a new PLAN or
+an invalid optional `AUDIT_TRAIL.md` cannot leave a new PLAN or
 meta file behind. `task_blocked` requires an existing `TASK_STATE.yaml` before
-writing `BLOCKED.md`. Missing `CHECKS.yaml` remains compatible with task packs
-that predate the ledger; a present empty, malformed, duplicate-ID, or
-invalid-status ledger is invalid and cannot be reconciled or closed. AC field
-updates preserve the ledger's existing item indentation and use unambiguous
-regular-expression group replacement.
+writing `BLOCKED.md`. Legacy `CHECKS.yaml` files in old task packs are
+read-only compatibility artifacts: current verification and close do not parse,
+reconcile, rewrite, or gate on them.
 
 Per-session active markers are authoritative only while their canonical task
 state is live. Marker leaves must be regular files and are read without
@@ -138,11 +134,11 @@ Verification has two responsibilities:
 A source-changing task requires the read-only reviewers declared by its plan.
 The plan normally includes the code reviewer and adds security review when the
 planned work crosses a sensitive boundary. Their hook-owned
-`REVIEW_RECEIPTS.jsonl` completions must explicitly PASS for the current task.
+Review completions in `RECEIPTS.jsonl` must explicitly PASS for the current task.
 
 Only QA started after the latest required review PASS is eligible for runtime
 PASS. Every QA lens declared in `PLAN.meta.json` then needs a hook-owned
-`SUBAGENT_RECEIPTS.jsonl` completion with explicit `VERDICT: PASS`. A start
+`RECEIPTS.jsonl` completion with explicit `VERDICT: PASS`. A start
 receipt proves delegation only. FAIL, BLOCKED_ENV, missing verdicts, missing
 lenses, unmatched lifecycle events, and incorrect review-before-QA ordering
 prevent close. Receipts bind task, agent, lens, lifecycle identity, and event
@@ -151,6 +147,13 @@ Self-authored PASS notes, summaries, or narrative evidence do not close the
 task. Commands and inline checks may still help debugging, but close authority
 comes from `task_verify` reading task state and the lifecycle streams.
 
+New task packs use one append-only `RECEIPTS.jsonl` for both review and QA
+events. The `kind` and `lens` fields preserve separation inside the stream.
+Legacy `REVIEW_RECEIPTS.jsonl` and `SUBAGENT_RECEIPTS.jsonl` remain readable but
+are not generated. `CHECKS.yaml` and `USER_FEEDBACK.jsonl` are not part of the
+current runtime model: acceptance criteria live in `PLAN.md`, and user feedback
+is handled conversationally or promoted directly into durable docs.
+
 Verification delegation is a workflow optimization, not a generic pre-tool
 policy. Browser and heavy full-suite work should use an applicable `qa-*` lens
 when isolation materially reduces context or process load. Inline browser use
@@ -158,21 +161,17 @@ remains valid when it is the lighter available path; its potentially large DOM,
 screenshot, or evaluation payload is an accepted caller-owned context cost and
 does not relax the receipt-backed close requirements above.
 
-Codex collaboration APIs are capability-versioned rather than fixed to one
-tool set. A structurally identified `wait_agent` result such as
-`status[agent_id].completed` is a complete lifecycle signal; `list_agents` is
-only a fallback when it exists and the wait response omitted identities or
-final responses. When Codex does not forward collaboration calls to
-PostToolUse, the registered root-rollout watcher also recognizes an
-`exec`-wrapped or direct `multi_agent_v1__spawn_agent`, the returned `agent_id`,
-matching child metadata and final/task-complete pair, and correlated completion
-from `wait_agent.status[agent_id].completed`, `<subagent_notification>`, or
-`close_agent.previous_status.completed`. A schema without `task_name` must
-provide exactly one strict `task_name: <name>` first prompt line; nickname and
-arbitrary prose never supply identity. The watcher requires every task, agent,
-lens, and final response identity to agree, and deduplicates
-equivalent completion sources before recording PASS. An unsupported observed
-adapter is reported explicitly rather than presented as another QA retry.
+Codex lifecycle receipts use one explicit protocol. The registered root-rollout
+watcher accepts direct `collaboration.spawn_agent` with a structured
+`task_name`, structured spawn output, and either correlated child activity or
+one unambiguous trusted depth-1 child rollout discovered from session metadata,
+plus a direct `FINAL_ANSWER` delivery. It requires the active task run, root session, child
+thread, agent path, lens, child `task_complete` final text, and root final to
+agree before recording PASS. `exec`, `multi_agent_v1`, `wait_agent`,
+`close_agent`, list/status, XML notification, and prompt-marker fallbacks are
+not receipt authorities. A runtime protocol change therefore leaves the
+required receipt missing and task close fail-closed until Harness and Codex are
+updated together.
 
 `write_plan` owns the canonical audit header but accepts both convenient caller
 forms: audit data rows only, or a complete Markdown audit table with an optional
@@ -197,21 +196,24 @@ prevents a prior-run agent from satisfying a reopened task without restoring any
 source snapshot or change detector.
 
 Codex runtimes do not always forward collaboration tools to plugin
-`PostToolUse`. SessionStart and each installed Codex root hook therefore validate
+`PostToolUse`. SessionStart and spawn-selective PreToolUse therefore validate
 the current official `session_id` (with a matching environment fallback),
 canonical repository, root rollout, and initial offset, then writes a versioned
 registration under the current user's state directory. This restoration path is
 strictly opt-in and binds to an ancestor containing
-`doc/harness/manifest.yaml`; Git repository boundaries are not consulted.
+`doc/harness/manifest.yaml` without invoking a Git command. Nested `.git`
+boundaries still require the session-specific active-task marker described
+below.
 Registration stores the control root separately from the session cwd and
-validates the rollout against the latter. Registration retries
-briefly on SessionStart when rollout creation races hook delivery. Later hooks
-restore missing or invalid registration state without overwriting a valid
-initial offset; late recovery begins at the current offset and covers only
-future subagent starts. Root-owned workspace ancestors common in container
+validates the rollout against the latter. Registration retries briefly on
+SessionStart when rollout creation races hook delivery. PreToolUse restores
+missing or invalid registration immediately before a supported spawn without
+overwriting a valid current-version initial offset; late recovery begins at the
+current offset and covers only future subagent starts. UserPromptSubmit,
+PostToolUse, and Stop do no registration work. Root-owned workspace ancestors common in container
 mounts are accepted for task binding only when group/other write bits are
 absent, while symlink checks and current-user ownership of the task directory
-remain enforced. An existing version-4
+remain enforced. An existing current-version
 registration is validated from its
 exact state and rollout paths before discovery, so ordinary hook events do not
 recursively scan the session tree, acquire the registration lock, or rewrite
@@ -234,10 +236,10 @@ Root-delivered child messages become completion candidates only when their
 runtime envelope is `Message Type: FINAL_ANSWER`; intermediate progress
 `MESSAGE` deliveries are ignored so they cannot poison the later attested
 completion.
-Because Codex MCP processes do not receive the root thread id as process state,
-the watcher binds a root to a task only from that root rollout's successful
-Harness `task_start` or `task_context` completion event, after canonical task
-state validation and before the reviewed or QA child starts.
+The watcher binds a root to a task only through the root session's canonical
+active-task marker and its current `TASK_RUN.json`. Harness MCP completion
+events and watcher-local task fallbacks are not task authorities. A missing,
+stale, or malformed marker/run pair leaves the receipt missing.
 Session marker selection uses the hook payload, explicit Harness/Codex session
 ids, and then `CODEX_THREAD_ID`; the thread fallback is valid even when
 `HARNESS_RUNTIME` is unset.
@@ -270,14 +272,15 @@ per-registration interprocess lease ensures that concurrent MCP servers cannot
 tail and append evidence for the same root tuple at the same time.
 
 The watcher accepts completion only when the root-delivered message matches the
-correlated child rollout's final answer and task-complete record.
+correlated child rollout's `task_complete.last_agent_message`. When the runtime
+also emits a separate child final-answer event, it must match the same text.
 Historical finals, unrecognized lenses, cross-repository lineage, partial
 records, symlinks, unsafe registrations, and schema ambiguity cannot create
 PASS. The unresolved repository `doc/harness/tasks` directory chain is also
 owner/type checked with `lstat`; symlinked task roots cannot redirect receipts
 across repositories. No model-callable MCP tool can author review or QA evidence. The
-MCP-hosted watcher and classic PostToolUse path share the same protected receipt
-owner and ordering gates. No recovery hook converts a child that completed
+MCP-hosted watcher is the sole Codex receipt owner and uses the same protected
+receipt writer and ordering gates as other runtimes. No recovery hook converts a child that completed
 before start capture into evidence.
 
 ## Durable Knowledge

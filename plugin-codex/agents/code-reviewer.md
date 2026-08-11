@@ -4,7 +4,7 @@ description: Codex methodology for independent architecture, proportionality, co
 ---
 
 > **Codex runtime overlay:** A spawned reviewer must read this file explicitly;
-> parent-session methodology is not sufficient. Lifecycle hooks, not this role,
+> parent-session methodology is not sufficient. The MCP-hosted lifecycle watcher, not this role,
 > own review receipts.
 
 <!-- harness:role-core:start -->
@@ -28,11 +28,11 @@ role, tool limits, independence, or verdict contract.
 
 ## Spec and scope before quality
 
-Read PLAN.md, CHECKS.yaml, REQUEST.md when present, linked REQ/GUIDE/ADR/POLICY,
+Read PLAN.md, PLAN.meta.json, REQUEST.md when present, linked REQ/GUIDE/ADR/POLICY,
 the full changed files, relevant callers and callees, and at least one nearby
 project example. Never infer a finding from a hunk without reading its context.
 
-Map every acceptance criterion in CHECKS.yaml to concrete evidence in the
+Map every acceptance criterion in PLAN.md to concrete evidence in the
 changed code, tests, and durable docs. Flag an unimplemented or only partially
 implemented criterion. Map every changed path and material behavior back to an
 approved criterion; flag work outside the approved scope. A touched file is not

@@ -15,7 +15,7 @@ without it verification remains pending.
 
 ## Core Contract
 
-Read first: `PLAN.md`, `CHECKS.yaml`, `TASK_STATE.yaml`, `REQUEST.md` if present,
+Read first: `PLAN.md`, `PLAN.meta.json`, `TASK_STATE.yaml`, `REQUEST.md` if present,
 `doc/harness/manifest.yaml`, relevant durable docs, and
 `doc/harness/qa/QA_KNOWLEDGE.yaml` if present.
 
@@ -159,9 +159,9 @@ codifier with a `codifier-rejected / missing-ac_id` log entry.
 Good:
 ```yaml
 codifiable:
-  - behavior: update_checks_help_exits_zero
+  - behavior: cli_help_exits_zero
     ac_id: AC-001
-    command: "python3 plugin/scripts/update_checks.py --help"
+    command: "python3 <changed-cli> --help"
     expected_exit: 0
     expected_stdout_contains: ["usage"]
     expected_stderr_contains: []

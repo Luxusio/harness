@@ -28,7 +28,7 @@ the agreed bar.
 > - Use bare MCP tool names on Codex: `task_start`, `task_context`,
 >   `task_verify`, `task_close`, and goal tools.
 > - If `spawn_agent` is available, use it for independent QA/UX/review voices.
->   If not, run the methodology inline. Verification still needs a hook-owned subagent receipt.
+>   If not, run the methodology inline. Verification still needs a watcher-owned subagent receipt.
 
 Goal queue execution never bypasses harness. Each implementation slice goes through the
 harness run flow. QA/UX failures feed back into development. Missing product,
@@ -302,7 +302,7 @@ to build a scaffold.
 
 After all planned MVP slices pass:
 
-1. Re-read the product brief, stack decision, PLAN.md, CHECKS.yaml,
+1. Re-read the product brief, stack decision, PLAN.md, PLAN.meta.json,
    TASK_STATE.yaml, changed files, durable docs, and QA/UX subagent final
    responses.
 2. Look for missing workflows, broken end-to-end continuity, untested critical

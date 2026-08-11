@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Best-effort Codex root-rollout registration from any installed root hook."""
+"""Best-effort Codex root-rollout registration at startup and before spawn."""
 from __future__ import annotations
 
 import json
@@ -14,7 +14,12 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
 from codex_lifecycle_watcher import ensure
-from _lib import find_harness_root
+from _lib import (
+    find_harness_root,
+    read_state,
+    resolve_active_task_dir,
+    write_active_marker,
+)
 
 
 THREAD_RE = re.compile(r"^[0-9a-fA-F-]{16,80}$")
@@ -129,12 +134,35 @@ def _registration_identity(payload: bytes) -> tuple[str, str]:
     return (cwd, env_id) if THREAD_RE.fullmatch(env_id) else ("", "")
 
 
+def _bind_active_task_to_root_session(control_root: str, thread_id: str) -> bool:
+    """Bind the live default task to the trusted root rollout identity.
+
+    ``task_start`` can run in an MCP host that does not receive the Codex root
+    thread id, so it writes the conservative ``default`` marker.  The
+    pre-spawn hook does receive that identity.  Promote only a canonical live
+    task; never revive a terminal legacy marker.
+    """
+    task_dir = resolve_active_task_dir(control_root, session_id="default")
+    if not task_dir:
+        return False
+    state = read_state(task_dir)
+    if (
+        str(state.get("status") or "").lower()
+        not in {"created", "planning", "implementing", "verifying"}
+        or state.get("task_id") != os.path.basename(task_dir)
+    ):
+        return False
+    write_active_marker(control_root, task_dir, session_id=thread_id)
+    return True
+
+
 def restore_watcher_registration(
     payload: bytes,
     *,
     retry_seconds: float = 0.0,
     budget_seconds: float = 0.5,
     ensure_fn: Callable[[str, str], bool] = ensure,
+    bind_fn: Callable[[str, str], bool] | None = None,
 ) -> bool:
     """Restore registration without changing an existing immutable offset.
 
@@ -149,6 +177,19 @@ def restore_watcher_registration(
         if cwd else ""
     )
     if not cwd or not thread_id or not control_root:
+        return False
+    if bind_fn is None:
+        bind_fn = (
+            _bind_active_task_to_root_session
+            if ensure_fn is ensure
+            else lambda _root, _thread: True
+        )
+    # Publish the task binding before potentially expensive rollout discovery.
+    # The watcher cannot attest a spawn without this marker, while a missing
+    # registration can be retried safely from the next pre-spawn hook.
+    if not bool(_call_with_deadline(
+        lambda: bind_fn(control_root, thread_id), deadline, False
+    )):
         return False
     retry_deadline = started + min(
         max(0.0, float(retry_seconds)), max(0.0, float(budget_seconds))

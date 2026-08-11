@@ -15,7 +15,7 @@ without it verification remains pending.
 
 ## Core Contract
 
-Read first: `PLAN.md`, `CHECKS.yaml`, `TASK_STATE.yaml`, `REQUEST.md` if present,
+Read first: `PLAN.md`, `PLAN.meta.json`, `TASK_STATE.yaml`, `REQUEST.md` if present,
 `doc/harness/manifest.yaml`, `doc/harness/qa/QA_KNOWLEDGE.yaml`, and PLAN.md
 `Durable Docs Decision`. Read linked durable docs under
 `doc/<area>/<TYPE>__*.md`.
@@ -119,7 +119,7 @@ All four roles must pass:
 1. Bootstrap services. Prefer `runtime_services.py`; otherwise detect package
    manager before install. Prefer Docker for local backing services.
 2. Run PLAN verification commands.
-3. Compare REQUEST.md, PLAN.md, CHECKS.yaml, and linked REQ docs.
+3. Compare REQUEST.md, PLAN.md, PLAN.meta.json, and linked REQ docs.
 4. For each endpoint in scope, use curl/httpie for happy, missing-field, and
    invalid-input paths. Validate status, JSON shape, error body, and leaked
    internals.
@@ -167,9 +167,9 @@ codifier with a `codifier-rejected / missing-ac_id` log entry.
 Good:
 ```yaml
 codifiable:
-  - behavior: update_checks_help_exits_zero
+  - behavior: api_smoke_exits_zero
     ac_id: AC-001
-    command: "python3 plugin/scripts/update_checks.py --help"
+    command: "python3 <changed-api-smoke> --help"
     expected_exit: 0
     expected_stdout_contains: ["usage"]
     expected_stderr_contains: []

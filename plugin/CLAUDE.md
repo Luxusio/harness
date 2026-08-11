@@ -27,11 +27,11 @@ No step skipped. Smallest coherent diff per step.
 - `task_blocked` — park unfinished work on a real environment blocker; writes BLOCKED.md and clears this session's active marker
 
 **Artifact writes (role-owned):**
-- `write_plan` → PLAN.md / PLAN.meta.json / optional CHECKS.yaml / optional AUDIT_TRAIL.md (plan-skill)
+- `write_plan` → PLAN.md / PLAN.meta.json / optional AUDIT_TRAIL.md (plan-skill)
 - durable docs such as `doc/<area>/REQ__*.md` are normal repo docs, not MCP evidence tools
 
-Static review provenance = `REVIEW_RECEIPTS.jsonl`; runtime QA provenance =
-`SUBAGENT_RECEIPTS.jsonl`. Codex/Claude lifecycle hooks own both. Starts prove
+Static review and runtime QA provenance share `RECEIPTS.jsonl`.
+Codex/Claude lifecycle hooks own it. Starts prove
 delegation only; ordered matched completions with explicit PASS drive the gates.
 Applicable lenses come from `PLAN.meta.json`; receipts do not bind Git state.
 
@@ -82,10 +82,8 @@ Turn 종결 정당 사유 (runtime_verdict 기반):
 | Artifact | Owner |
 |----------|-------|
 | PLAN.md / PLAN.meta.json / AUDIT_TRAIL.md | plan-skill via `write_plan` MCP |
-| CHECKS.yaml | plan-skill (create) + update_checks.py CLI (develop/qa updates) |
 | source + durable docs | developer |
-| SUBAGENT_RECEIPTS.jsonl | Codex/Claude subagent-start hooks |
-| REVIEW_RECEIPTS.jsonl | Codex/Claude reviewer lifecycle hooks |
+| RECEIPTS.jsonl | Codex/Claude review and QA lifecycle hooks |
 | CONVERSATION.md | Codex/Claude UserPromptSubmit/Subagent hooks |
 
 Do not write another role's artifact. Prewrite gate enforces this.
@@ -124,12 +122,12 @@ Do not claim success from static inspection when runtime verification is require
 ## 8. Finish cleanly
 
 The plan declares required review and QA lenses. Required
-`REVIEW_RECEIPTS.jsonl` entries must PASS before QA starts. Runtime verdict becomes
+Required review entries in `RECEIPTS.jsonl` must PASS before QA starts. Runtime verdict becomes
 PASS only when every applicable QA lens then starts and completes with explicit
 PASS. Receipts attest task, agent, lens, verdict, and ordering—not HEAD, diffs,
 or source fingerprints. Post-QA edits and scope drift are developer-owned.
 Use `task_close`. If blocked, fix the stated gate.
-Captured user feedback is stored in task-local `USER_FEEDBACK.jsonl`; it is prompt context, not a close-gate evidence document.
+Harness does not create a separate user-feedback artifact; durable requirements belong in PLAN.md or project documentation.
 Task-local `CONVERSATION.md` is human-readable history. The close gate reads
 only explicit item markers such as `<!-- item: type=requirement status=open -->`
 and never infers requirements from prose.
@@ -156,17 +154,11 @@ authoritative. `suspect` notes are still readable but require re-validation
 against current source before trust. Use `--paths` arg to invalidate against
 an explicit file list when git history isn't the right source.
 
-## 8b. Acceptance Ledger (CHECKS.yaml)
+## 8b. Acceptance intent
 
-CHECKS.yaml is the per-task AC ledger. Plan-skill creates each AC with
-`status: open`. The develop skill promotes ACs to
-`implemented_candidate` after per-AC tests pass (Phase 3), then the
-verification gate (Phase 7) promotes them to `passed` — or reopens them
-to `failed` (auto-incrementing `reopen_count`). Only `passed` or
-`deferred` ACs satisfy the close gate.
-
-Writes go through `scripts/update_checks.py` only. Never edit CHECKS.yaml by
-hand — the prewrite gate rejects direct writes.
+PLAN.md is the single acceptance document. Verification is represented by
+ordered review and QA entries in `RECEIPTS.jsonl`; there is no mutable
+acceptance ledger to reconcile and `task_close` does not read `CHECKS.yaml`.
 
 ## 8c. Verification delegation
 
@@ -177,7 +169,7 @@ can add thousands of structured tokens to the caller's context, so an isolated
 lane is usually cheaper for multi-step QA.
 
 Why: qa-browser runs browser verification in an isolated context. The start
-hooks write start and completion entries to `SUBAGENT_RECEIPTS.jsonl`; the
+hooks write start and completion entries to `RECEIPTS.jsonl`; the
 orchestrator reads the subagent's final response for findings and uses
 `task_verify` to compute the close signal.
 
@@ -201,52 +193,11 @@ delegation is now selected by the workflow instead.
 
 ## 9. Iron Law
 
-The Iron Law has two parallel clauses, both enforced by `update_checks.py`. ACs
-cannot be promoted to `implemented_candidate` or `passed` until the artefact
-appropriate to the AC's kind is supplied.
-
-### 9a. Bugfix ACs require `root_cause`
-
-`kind: bugfix` ACs cannot be promoted unless `root_cause` is set:
-
-```bash
-python3 scripts/update_checks.py --task-dir TASK_DIR --ac AC-001 \
-  --status implemented_candidate --root-cause "off-by-one in loop bound"
-```
-
-Without `--root-cause`, the command exits 1 with an Iron Law violation message.
-Once set, `root_cause` persists across subsequent transitions.
-
-### 9b. Feature / functional ACs require test evidence
-
-`kind in {feature, functional}` ACs cannot be promoted unless `--test-evidence`
-points to a real regression test file. The path is validated at gate time:
-must exist, must not be a symlink, must resolve inside `repo_root`.
-
-```bash
-python3 scripts/update_checks.py --task-dir TASK_DIR --ac AC-001 \
-  --status implemented_candidate \
-  --test-evidence tests/regression/task_xx/test_ac_001__behavior.py
-```
-
-Bypass with a documented reason (logged to `doc/harness/learnings.jsonl` as
-`type=test-evidence-bypass`; reason capped at 400 chars):
-
-```bash
-python3 scripts/update_checks.py --task-dir TASK_DIR --ac AC-007 \
-  --status implemented_candidate \
-  --no-test-required "narration-only AC, no behavior to test"
-```
-
-**Skip allowlist:** `kind in {bugfix, doc, verification}` skip the
-test-evidence rule. Bugfix has its own gate (9a); doc / verification produce
-no functional code. ACs whose `kind:` field is missing default to `unknown`
-and skip the gate (preserves backward-compat with legacy CHECKS.yaml that
-pre-dates this rule).
-
-The error message includes a `Suggested:` line when exactly one file under
-`tests/` matches the AC id (e.g. `test_ac_001__*.py`) — turning the gate
-from a bare rejection into a helpful nudge.
+PLAN.md owns acceptance intent. Bug fixes record root-cause and regression
+evidence in the implementation review, while feature work includes concrete
+test evidence or a specific no-test rationale. Completion requires ordered,
+hook-owned review and QA PASS entries in `RECEIPTS.jsonl`; no agent may author
+or promote its own PASS.
 
 ## 10. Quality scripts
 

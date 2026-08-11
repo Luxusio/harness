@@ -25,8 +25,8 @@ def test_codex_run_browser_qa_is_availability_gated():
 
     assert "browser tools are available" in body
     assert "qa-browser" in body
-    assert "SUBAGENT_RECEIPTS.jsonl" in body
-    assert "hook-recorded QA completions" in body
+    assert "RECEIPTS.jsonl" in body
+    assert "watcher-recorded QA completions" in body
 
 
 def test_codex_develop_browser_visual_phases_are_not_blanket_deferred():

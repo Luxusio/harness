@@ -5,13 +5,12 @@ Minimal harness scripts. Self-contained — no plugin-legacy dependency.
 ## Files
 
 - `_lib.py` — core library (YAML helpers, scaffold, routing, context, path sync, frontmatter public API)
-- `update_checks.py` — post-plan AC status updater (develop/qa use this, not Edit)
 - `note_freshness.py` — flips `freshness: current -> suspect` on invalidated notes
 - `environment_snapshot.py` — task_start snapshot with manifest, tool manager, and tool version probes
 - `prompt_memory.py` — zero-Git UserPromptSubmit context injection from stored task/receipt state, including active-task restore digest, Goal routing, and runbook reminders
-- `hook_post_tool_use.py` — Codex PostToolUse adapter; reminds native `create_goal` callers to synchronize through harness and records reviewer/QA lifecycle evidence
-- `codex_hook_registration.py` — common fail-open registration recovery used by every Codex root-hook wrapper; preserves an existing initial offset and limits late recovery to future subagent starts
-- `codex_lifecycle_watcher.py` — trusted root hooks write or restore a safe root-rollout registration; the Harness MCP server hosts passive daemon watcher threads that normalize legacy `collaboration` and current `multi_agent_v1` spawn/completion events, bind the returned `agent_id` and start-time task fingerprint, and record strictly correlated review/QA completions exactly once when collaboration PostToolUse events are unavailable. A runtime without a structured task name must put `task_name: <strict-name>` on the first prompt line; nickname and free-form prose are never identity evidence.
+- `hook_post_tool_use.py` — Codex PostToolUse routing for native `create_goal` and Bash hints
+- `codex_hook_registration.py` — fail-open registration recovery used only by SessionStart and spawn-selective PreToolUse; preserves an existing current-version offset and limits late recovery to future subagent starts
+- `codex_lifecycle_watcher.py` — SessionStart and spawn-selective PreToolUse restore a safe root-rollout registration; MCP-hosted daemon threads accept only direct `collaboration.spawn_agent`, structured output plus either correlated child activity or one unambiguous trusted depth-1 child rollout, and direct `FINAL_ANSWER` delivery, then record strictly correlated review/QA completions once. The session marker and current TASK_RUN are the sole task binding. Protocol drift leaves receipts missing and close fail-closed until Harness and Codex are upgraded together.
 - `task_pack_runner.py` — ordered multi-task queue state for roadmap/stage requests that should continue without asking users to choose internal task sequence
 - `setup_finalize.py` — applies canonical operational ignores, migrates legacy manifests to schema v5, verifies setup resources and routing, and stamps `.version` only after success
 - `contract_lint.py` — CONTRACTS.md managed-block lint; `--check-weight` enforces C-13 SKILL.md budget

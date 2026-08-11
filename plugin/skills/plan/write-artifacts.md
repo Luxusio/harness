@@ -6,7 +6,7 @@ Sub-file for plan/SKILL.md Phase 6. Always runs.
 
 ## 6.1 Artifact writer
 
-PLAN.md, PLAN.meta.json, CHECKS.yaml, and AUDIT_TRAIL.md are written through
+PLAN.md, PLAN.meta.json, and AUDIT_TRAIL.md are written through
 the harness MCP `write_plan` tool. Do not use
 `scripts/write_plan.py`; it is a legacy compatibility shim.
 
@@ -153,36 +153,11 @@ write_plan {
 }
 ```
 
-## 6.6 Assemble CHECKS.yaml content
+## 6.6 Acceptance criteria
 
-Write `/tmp/checks_content.yaml` with all acceptance criteria from PLAN.md.
-
-**Schema per AC (Acceptance Ledger):**
-```yaml
-- id: AC-001
-  title: "<what passes when this AC is satisfied>"
-  status: open                    # open | implemented_candidate | passed | failed | deferred
-  kind: functional                # functional | verification | doc | performance | security | bugfix
-  owner: developer                # developer | qa-browser | qa-api | qa-cli | qa-desktop
-  completeness: 7                 # 0-10 plan-time completeness score (3=shortcut, 7=happy path, 10=all cases). Immutable after plan close.
-  root_cause: ""                  # REQUIRED when kind=bugfix. One-line confirmed cause (Iron Law). Update_checks blocks promotion to implemented_candidate without it.
-  reopen_count: 0                 # auto-increments on transition into 'failed'
-  last_updated: <ISO8601>
-  evidence: ""                    # file:line | test name | command/browser artifact
-  note: ""                        # optional free-form
-```
-
-All ACs start `status: open`, `reopen_count: 0`. Later skills (develop, qa) mutate via `${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py` — **never direct edit** (prewrite gate rejects).
-
-## 6.7 Write CHECKS.yaml via MCP
-
-```text
-write_plan {
-  task_id: "TASK__<id>",
-  artifact: "checks",
-  content: "<CHECKS.yaml content>"
-}
-```
+Keep the stable acceptance criteria directly in PLAN.md. Do not assemble or
+write a second status ledger; review and QA completion is recorded in the
+unified `RECEIPTS.jsonl` lifecycle stream.
 
 Audit rows from earlier phases are also written through MCP:
 
@@ -201,7 +176,7 @@ When you discover something genuinely useful during the task — a real bug, a w
 A good entry names a concrete fact + a concrete fix, both groundable in files / commands / outputs. Examples of what passes the bar:
 
 - `/plugin marketplace add` does NOT expand bash subshell `$(pwd)` — `/plugin` is a Claude Code slash command, not a shell command. Use `./` or a literal path.
-- `update_checks.py` `_set_field` previously appended missing fields at 2-space indent (list-item level), corrupting CHECKS.yaml YAML structure. Fixed at script:99 — derive indent from existing fields.
+- A duplicated task ledger can drift from PLAN.md; keep acceptance intent in one document.
 - Plan artifacts are MCP-owned; direct Write/Edit and legacy CLI handshakes are not the canonical path.
 
 Examples that do NOT pass the bar (do not log these):
@@ -226,28 +201,6 @@ Set `plan_session_state: closed` in TASK_STATE.yaml. Task is now ready for imple
 
 ## 6.10 Completion report
 
-**Lake Score computation** (from CHECKS.yaml per-AC `completeness` field):
-
-```bash
-python3 - <<'PY' 2>/dev/null || echo "Lake Score: n/a"
-import yaml, pathlib
-p = pathlib.Path("doc/harness/tasks/TASK__<id>/CHECKS.yaml")
-if not p.exists():
-    print("Lake Score: n/a (no CHECKS.yaml)")
-else:
-    acs = yaml.safe_load(p.read_text()) or []
-    scores = [ac.get("completeness") for ac in acs
-              if isinstance(ac, dict) and isinstance(ac.get("completeness"), (int, float))]
-    if not scores:
-        print("Lake Score: n/a (no completeness fields)")
-    else:
-        avg = round(sum(scores) / len(scores), 1)
-        print(f"Lake Score: {avg}/10 (from {len(scores)} ACs)")
-PY
-```
-
-The Lake Score is the mean plan-time completeness of every AC, rounded to one decimal. High (≥8) = every AC covers full edge surface; low (≤5) = plan has structural shortcuts.
-
 ```
 STATUS: <DONE | DONE_WITH_CONCERNS | BLOCKED>
 
@@ -261,7 +214,6 @@ Taste surfaced:    <N> items
 User Challenges:   <N> items
 Deferred scope:    <N> items (see deferred-scope.md)
 Review summary:    <N> phase-summary rows
-Lake Score:        <avg>/10 (from <N> ACs)   ← from the computation above; emit "n/a" if CHECKS.yaml absent or empty
 ```
 
 - **DONE_WITH_CONCERNS** — any of: phase ran single-voice degraded; User Challenge unresolved; convergence guard issues.

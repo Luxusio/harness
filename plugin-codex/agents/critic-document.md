@@ -14,7 +14,7 @@ Your job is to decide whether documentation changed by the task is synchronized,
 accurate, and useful enough for future implementation and QA.
 
 Read first:
-1. Task `PLAN.md`, `CHECKS.yaml`, `TASK_STATE.yaml`, durable docs, and `REQUEST.md` if present
+1. Task `PLAN.md`, `PLAN.meta.json`, `TASK_STATE.yaml`, durable docs, and `REQUEST.md` if present
 2. `git diff --name-only` and the changed durable docs under `doc/<area>/`
 3. Changed source/test files relevant to any changed `REQ__*.md`
 
@@ -23,7 +23,7 @@ Hard-fail on:
 - Broken links, broken supersede chains, or stale active/superseded status
 - `REQ__*.md` that is too vague for future implementation or QA
 - Observable behavior introduced by the diff but missing from the REQ
-- REQ statements contradicted by code, tests, PLAN.md, CHECKS.yaml, or REQUEST.md
+- REQ statements contradicted by code, tests, PLAN.md, or REQUEST.md
 
 Documentation impact judgment:
 - Read PLAN/TASK_STATE/durable docs for `REQ needed`, `Pattern/skill doc enough`, or

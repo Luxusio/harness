@@ -6,20 +6,20 @@ description: harness CLI QA agent — verifies operation, intent adequacy, UX qu
 ## Codex runtime notes
 
 This file is an inline role/methodology reference. Codex uses bare MCP tool
-names such as `task_verify`; do not call critic writer tools. Codex hooks
-record subagent starts automatically. Use `${HARNESS_PLUGIN_ROOT}` for plugin
+names such as `task_verify`; do not call critic writer tools. The MCP-hosted
+lifecycle watcher records subagent starts. Use `${HARNESS_PLUGIN_ROOT}` for plugin
 scripts if needed.
 
 Mission: verify every PLAN.md AC with concrete command evidence. Do not accept
 implementation claims, happy-path output, or CI as evidence for this host.
 
 The first line of the final response must be exactly `VERDICT: PASS`,
-`VERDICT: FAIL`, or `VERDICT: BLOCKED_ENV`. Lifecycle hooks parse this line;
+`VERDICT: FAIL`, or `VERDICT: BLOCKED_ENV`. The lifecycle watcher parses this line;
 without it verification remains pending.
 
 ## Core Contract
 
-Read first: `PLAN.md`, `CHECKS.yaml`, `TASK_STATE.yaml`, `REQUEST.md` if present,
+Read first: `PLAN.md`, `PLAN.meta.json`, `TASK_STATE.yaml`, `REQUEST.md` if present,
 `doc/harness/manifest.yaml`, relevant durable docs, and
 `doc/harness/qa/QA_KNOWLEDGE.yaml` if present.
 

@@ -166,22 +166,22 @@ If `payload_keys` differs from the documented schema, you may be on a Codex vers
 
 ---
 
-### "Receipt adapter unsupported"
+### Review or QA passed, but its receipt is missing
 
 **What you see:** A review or QA agent returns `VERDICT: PASS`, but
-`task_verify` reports `Receipt adapter unsupported: observed=<tool>
-supported=collaboration.spawn_agent,multi_agent_v1.spawn_agent` instead of
-asking you to run the same agent again.
+`task_verify` still reports a missing completed review or QA verdict.
 
-**Cause:** The lifecycle watcher observed a spawn protocol it could not bind to
-a strict start event. For a current `multi_agent_v1` schema, the most common
-cause is a missing or malformed first prompt line. The line must be exactly
-`task_name: <name>` with a name made only of letters, digits, `_`, `-`, or `.`.
-The watcher does not trust a nickname or infer a QA lens from prose.
+**Cause:** Codex did not emit the direct lifecycle contract supported by the
+watcher: `collaboration.spawn_agent` with a structured `task_name`, correlated
+structured output plus either child activity or one unambiguous trusted
+depth-1 child rollout discovered from session metadata, and direct
+`FINAL_ANSWER` delivery. Harness no longer
+guesses alternate `exec`, `multi_agent_v1`, wait/close/list, XML notification,
+or prompt-marker schemas.
 
-**Fix:** Upgrade and restart Codex so the newly installed watcher is loaded,
-then start one fresh review or QA agent whose message begins with the marker.
-Do not edit receipt files or reuse the completion from before the restart.
+**Fix:** Upgrade Harness and Codex together, reinstall, and restart Codex so the
+new watcher is loaded. Then start one fresh review or QA agent. Do not edit
+receipt files or reuse a completion from before the restart.
 
 ```bash
 python3 install.py --codex-only --force

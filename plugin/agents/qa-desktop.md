@@ -20,7 +20,7 @@ with a `.mcp.json` fix block instead of continuing.
 
 Read `doc/harness/manifest.yaml` for `desktop_qa_supported`,
 `app_launch_command`, and optional `display_command`; read
-`doc/harness/qa/QA_KNOWLEDGE.yaml` when present; then read PLAN.md, CHECKS.yaml,
+`doc/harness/qa/QA_KNOWLEDGE.yaml` when present; then read PLAN.md, PLAN.meta.json,
 and REQUEST.md when present. Use PLAN.md as the AC source and REQUEST.md for
 intent gaps.
 

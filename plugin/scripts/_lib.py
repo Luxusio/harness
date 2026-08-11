@@ -23,8 +23,12 @@ from datetime import datetime, timezone
 
 TASK_DIR = "doc/harness/tasks"
 MANIFEST_PATH = "doc/harness/manifest.yaml"
-SUBAGENT_RECEIPTS_NAME = "SUBAGENT_RECEIPTS.jsonl"
-REVIEW_RECEIPTS_NAME = "REVIEW_RECEIPTS.jsonl"
+RECEIPTS_NAME = "RECEIPTS.jsonl"
+LEGACY_SUBAGENT_RECEIPTS_NAME = "SUBAGENT_RECEIPTS.jsonl"
+LEGACY_REVIEW_RECEIPTS_NAME = "REVIEW_RECEIPTS.jsonl"
+# Public read-compat aliases for extensions that inspect legacy task packs.
+SUBAGENT_RECEIPTS_NAME = LEGACY_SUBAGENT_RECEIPTS_NAME
+REVIEW_RECEIPTS_NAME = LEGACY_REVIEW_RECEIPTS_NAME
 TASK_CLOSE_RECEIPT_NAME = "TASK_CLOSE_RECEIPT.json"
 TASK_RUN_NAME = "TASK_RUN.json"
 CONVERSATION_NAME = "CONVERSATION.md"
@@ -1975,17 +1979,7 @@ def _effective_touched_paths(task_dir, touched_paths):
 
 
 def _task_req_detector_texts(task_dir):
-    texts = []
-    for name in ("USER_FEEDBACK.md",):
-        path = os.path.join(task_dir, name)
-        if not os.path.isfile(path):
-            continue
-        try:
-            with open(path, encoding="utf-8") as f:
-                texts.append(f.read())
-        except OSError:
-            continue
-    return texts
+    return []
 
 
 def _req_detector_result(task_dir, touched_paths):
@@ -1994,37 +1988,6 @@ def _req_detector_result(task_dir, touched_paths):
         return detect_req_need(texts=_task_req_detector_texts(task_dir), paths=touched_paths)
     except Exception:
         return {"requires_req": False, "confidence": "low", "surfaces": [], "reasons": []}
-
-
-def _feedback_event_ids(task_dir):
-    """Return captured user-feedback event ids from task-local JSONL."""
-    path = os.path.join(task_dir, "USER_FEEDBACK.jsonl")
-    if not os.path.isfile(path):
-        return []
-    ids = []
-    seen = set()
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    event = json.loads(line)
-                except Exception:
-                    continue
-                event_id = str(event.get("id") or "").strip()
-                if not event_id or event_id in seen:
-                    continue
-                seen.add(event_id)
-                ids.append(event_id)
-    except OSError:
-        return []
-    return ids
-
-
-def _unresolved_feedback_event_ids(task_dir):
-    return _feedback_event_ids(task_dir)
 
 
 def is_maintenance_task(task_dir, repo_root=None):
@@ -2103,12 +2066,16 @@ def _atomic_json_write(path, data):
         raise
 
 
-def _subagent_receipts_path(task_dir):
-    return os.path.join(task_dir, SUBAGENT_RECEIPTS_NAME)
+def _receipts_path(task_dir):
+    return os.path.join(task_dir, RECEIPTS_NAME)
 
 
-def _review_receipts_path(task_dir):
-    return os.path.join(task_dir, REVIEW_RECEIPTS_NAME)
+def _legacy_subagent_receipts_path(task_dir):
+    return os.path.join(task_dir, LEGACY_SUBAGENT_RECEIPTS_NAME)
+
+
+def _legacy_review_receipts_path(task_dir):
+    return os.path.join(task_dir, LEGACY_REVIEW_RECEIPTS_NAME)
 
 
 _RECEIPT_STREAM_MAX_BYTES = 16 * 1024 * 1024
@@ -2230,9 +2197,9 @@ def receipt_stream_transaction(task_dir):
 
 
 def reset_receipt_streams_for_new_run(task_dir):
-    """Remove prior-run receipt streams under their hardened storage lock."""
+    """Remove only the current unified stream; legacy inputs stay read-only."""
     task_dir = _validated_receipt_task_dir(task_dir)
-    paths = (_review_receipts_path(task_dir), _subagent_receipts_path(task_dir))
+    paths = (_receipts_path(task_dir),)
     with _receipt_stream_lock(task_dir):
         snapshots = {}
         for path in paths:
@@ -2261,7 +2228,7 @@ def restore_receipt_streams(snapshot):
         _restore_text_snapshots(snapshot)
 
 
-def _read_receipt_stream_unlocked(path, kind):
+def _read_receipt_stream_unlocked(path, kind=None):
     prior = _receipt_stream_info(path)
     if prior is None:
         return []
@@ -2308,9 +2275,10 @@ def _read_receipt_stream_unlocked(path, kind):
             item = json.loads(line)
         except Exception as exc:
             raise RuntimeError("receipt storage integrity unavailable") from exc
-        if not isinstance(item, dict) or item.get("kind") != kind:
+        if not isinstance(item, dict) or item.get("kind") not in {"review", "subagent"}:
             raise RuntimeError("receipt storage integrity unavailable")
-        receipts.append(item)
+        if kind is None or item.get("kind") == kind:
+            receipts.append(item)
     return receipts
 
 
@@ -2401,7 +2369,11 @@ def review_diff_fingerprint(task_dir, state=None):
 def _receipt_stream_fingerprint_unlocked(task_dir):
     """Hash live review/QA receipt streams without request caching."""
     h = hashlib.sha256()
-    for name in (REVIEW_RECEIPTS_NAME, SUBAGENT_RECEIPTS_NAME):
+    for name in (
+        RECEIPTS_NAME,
+        LEGACY_REVIEW_RECEIPTS_NAME,
+        LEGACY_SUBAGENT_RECEIPTS_NAME,
+    ):
         path = os.path.join(task_dir, name)
         h.update(name.encode("utf-8"))
         h.update(b"\0")
@@ -2621,7 +2593,7 @@ def record_subagent_receipt(task_dir, receipt):
     }
     seed = "|".join([entry["ts"], entry["source"], entry["agent_id"], entry["agent_type"], entry["lens"]])
     entry["receipt_id"] = "subagent-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
-    path = _review_receipts_path(task_dir) if is_review else _subagent_receipts_path(task_dir)
+    path = _receipts_path(task_dir)
     _validated_receipt_task_dir(task_dir)
     payload = (json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
     with receipt_stream_transaction(task_dir):
@@ -2633,11 +2605,15 @@ def record_subagent_receipt(task_dir, receipt):
 
 
 def list_subagent_receipts(task_dir):
-    return _read_receipt_stream(_subagent_receipts_path(task_dir), "subagent")
+    receipts = _read_receipt_stream(_receipts_path(task_dir), "subagent")
+    receipts += _read_receipt_stream(_legacy_subagent_receipts_path(task_dir), "subagent")
+    return sorted(receipts, key=lambda item: str(item.get("ts") or ""))
 
 
 def list_review_receipts(task_dir):
-    return _read_receipt_stream(_review_receipts_path(task_dir), "review")
+    receipts = _read_receipt_stream(_receipts_path(task_dir), "review")
+    receipts += _read_receipt_stream(_legacy_review_receipts_path(task_dir), "review")
+    return sorted(receipts, key=lambda item: str(item.get("ts") or ""))
 
 
 def subagent_receipt_summary(task_dir):
@@ -2679,26 +2655,6 @@ def subagent_receipt_summary(task_dir):
         "by_verdict": by_verdict,
         "latest": latest,
     }
-
-
-def active_receipt_adapter_diagnostic(task_dir):
-    """Return the latest unresolved watcher adapter diagnostic, if any."""
-    active = {}
-    events = list_subagent_receipts(task_dir) + list_review_receipts(task_dir)
-    events.sort(key=lambda item: str(item.get("ts") or ""))
-    for item in events:
-        source = str(item.get("source") or "")
-        protocol = source.split(":", 1)[1] if source.startswith("codex_session_watcher:") else "generic"
-        lens = str(item.get("lens") or "")
-        if (
-            source.startswith("codex_session_watcher")
-            and item.get("status") == "adapter_unsupported"
-        ):
-            active[(protocol, lens)] = str(item.get("summary") or "")
-        elif item.get("status") == "started" and lens:
-            active.pop((protocol, lens), None)
-            active.pop((protocol, "adapter-unknown"), None)
-    return next(reversed(active.values()), "") if active else ""
 
 
 def review_receipt_summary(task_dir):
@@ -2912,7 +2868,6 @@ def emit_compact_context(task_dir):
     if not has_plan and not micro_loop:
         missing_for_close.append("PLAN.md")
     receipt_summary = subagent_receipt_summary(task_dir)
-    adapter_diagnostic = active_receipt_adapter_diagnostic(task_dir)
     review_summary = review_receipt_summary(task_dir)
     required_reviews = required_review_lenses(task_dir, st)
     review_verdict = receipt_review_verdict(task_dir, st)
@@ -2943,7 +2898,6 @@ def emit_compact_context(task_dir):
     api_touched = _api_touched(touched)
     durable_doc_paths = _durable_docs_touched(touched)
     req_detection = _req_detector_result(task_dir, touched)
-    unresolved_feedback = _unresolved_feedback_event_ids(task_dir)
     open_conversation_items = conversation_open_items(task_dir)
     if open_conversation_items:
         missing_for_close.append("CONVERSATION.md open items")
@@ -2967,8 +2921,6 @@ def emit_compact_context(task_dir):
 
     if not has_plan and not micro_loop:
         next_action = "Create PLAN.md via plan skill before source writes."
-    elif adapter_diagnostic:
-        next_action = adapter_diagnostic
     elif review_verdict not in {"PASS", "NOT_APPLICABLE"}:
         next_action = (
             "Run and await the required read-only review subagent(s); completion hooks "
@@ -3015,8 +2967,6 @@ def emit_compact_context(task_dir):
         "missing_for_close": missing_for_close,
         "next_action": next_action,
         "conversation_open_items": open_conversation_items[:10],
-        "unresolved_feedback_count": len(unresolved_feedback),
-        "unresolved_feedback_ids": unresolved_feedback[:5],
         "effective_close_gate": "micro" if micro_loop else "standard",
         "stale": stale,
         "stale_path": stale_path,
@@ -3066,7 +3016,10 @@ def artifact_exists(task_dir, filename):
 
 def provenance_from_artifacts(task_dir):
     """Derive provenance from artifact existence."""
-    has_subagent = artifact_exists(task_dir, SUBAGENT_RECEIPTS_NAME)
+    has_subagent = any((
+        artifact_exists(task_dir, RECEIPTS_NAME),
+        artifact_exists(task_dir, LEGACY_SUBAGENT_RECEIPTS_NAME),
+    ))
     completed = _completed_qa_by_lens(task_dir)
     reviews = _completed_review_by_lens(task_dir)
     return {

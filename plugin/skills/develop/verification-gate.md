@@ -319,35 +319,9 @@ A blocking finding can be cleared by either (a) fixing it (re-run gate) or
 (b) explicit user deferral with justification captured in task state or final response. Silent
 deferral is not permitted.
 
-## Step 4: Acceptance Ledger — promote or reopen
+## Step 4: Record the verification result
 
-After the verification gate runs (tests + browser + build checks), update each
-AC's status in CHECKS.yaml based on the outcome. Never edit CHECKS.yaml
-directly — always call the CLI:
-
-```bash
-# AC verified (its tests green, evidence captured)
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
-  --task-dir doc/harness/tasks/<task_id>/ \
-  --ac AC-00X --status passed \
-  --evidence "<test name | file:line>"
-
-# AC's own-code tests failed under verification — reopen
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
-  --task-dir doc/harness/tasks/<task_id>/ \
-  --ac AC-00X --status failed \
-  --note "<short reason>"
-```
-
-Transition rules:
-- `implemented_candidate -> passed` when the gate is green for that AC.
-- `implemented_candidate -> failed` when verification fails. `reopen_count`
-  auto-increments. Loop back to Phase 7 fix cycle; re-promote to
-  `implemented_candidate` after a successful fix, then `passed` on next gate.
-- `open -> deferred` only when the user has explicitly deferred an AC — record
-  the reason in `--note` and mention it in final response.
-
-**Close gate:** The task MUST NOT close while any AC remains in
-`open | implemented_candidate | failed`. Every AC must be `passed` or
-`deferred` before `task_close`. High-reopen ACs (`reopen_count >= 3`) should
-surface in final response so the user sees churn.
+Keep acceptance intent in PLAN.md and verification evidence in the ordered
+review/QA entries of `RECEIPTS.jsonl`. A failed AC loops back to the fix cycle;
+an explicitly deferred AC is named with its reason in the final response.
+`task_close` relies on the current task-run receipt verdict, not a second AC ledger.

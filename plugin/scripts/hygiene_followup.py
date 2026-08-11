@@ -100,24 +100,6 @@ def _plan_text(items: list[dict[str, Any]]) -> str:
     )
 
 
-def _checks_text() -> str:
-    return (
-        "acceptance_criteria:\n"
-        "  - id: AC-001\n"
-        "    description: Every pending hygiene item has an explicit keep/update/archive/defer/reject disposition.\n"
-        "    status: open\n"
-        "    evidence: []\n"
-        "  - id: AC-002\n"
-        "    description: Low-risk resolved items are removed from or marked resolved in the hygiene pending queue; unresolved items remain queued with rationale.\n"
-        "    status: open\n"
-        "    evidence: []\n"
-        "  - id: AC-003\n"
-        "    description: Documentation hygiene tests and prompt-memory tests pass after the queue work.\n"
-        "    status: open\n"
-        "    evidence: []\n"
-    )
-
-
 def _write_if_absent(path: Path, text: str) -> bool:
     if path.exists():
         return False
@@ -142,8 +124,6 @@ def create_followup(repo_root: str | None = None) -> dict[str, Any]:
 
     if _write_if_absent(task_dir / "PLAN.md", _plan_text(items)):
         written.append(str((task_dir / "PLAN.md").relative_to(root)))
-    if _write_if_absent(task_dir / "CHECKS.yaml", _checks_text()):
-        written.append(str((task_dir / "CHECKS.yaml").relative_to(root)))
     if _write_if_absent(
         task_dir / "FOLLOWUP.meta.json",
         json.dumps(

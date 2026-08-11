@@ -29,16 +29,6 @@ def _load(name: str):
     return module
 
 
-def _write_task_run(task_dir: Path) -> None:
-    (task_dir / "TASK_RUN.json").write_text(
-        json.dumps({
-            "task_run_id": "a" * 32,
-            "started_at": "2026-08-11T05:00:00.000000Z",
-        }) + "\n",
-        encoding="utf-8",
-    )
-
-
 class _BytesStdin:
     def __init__(self, text: str):
         self.buffer = io.BytesIO(text.encode("utf-8"))
@@ -101,8 +91,6 @@ class TestCodexHookWrappers(unittest.TestCase):
         })
         output = io.StringIO()
         with mock.patch.object(
-            mod, "restore_watcher_registration"
-        ), mock.patch.object(
             mod.subprocess, "run",
             side_effect=subprocess.TimeoutExpired(["goal-hint"], 0.01),
         ) as run, mock.patch.object(
@@ -255,80 +243,20 @@ class TestCodexHookWrappers(unittest.TestCase):
             ):
                 self.assertEqual(lib.current_session_id(), "codex-session")
 
-    def test_adapter_diagnostic_is_resolved_only_by_later_valid_start(self):
-        lib = _load("_lib")
-        diagnostic = {
-            "source": "codex_session_watcher:multi_agent_v1",
-            "status": "adapter_unsupported",
-            "lens": "qa-cli",
-            "summary": "Receipt adapter unsupported: observed=multi_agent_v1__spawn_agent",
-        }
-        valid_qa_start = {
-            "source": "codex_session_watcher:multi_agent_v1",
-            "status": "started",
-            "lens": "qa-cli",
-            "ts": "2026-08-07T00:00:02Z",
-        }
-        valid_review_start = {
-            "source": "codex_session_watcher:multi_agent_v1",
-            "status": "started",
-            "lens": "review-code",
-            "ts": "2026-08-07T00:00:02Z",
-        }
-        diagnostic["ts"] = "2026-08-07T00:00:01Z"
-        with mock.patch.object(lib, "list_subagent_receipts", return_value=[diagnostic]):
-            with mock.patch.object(lib, "list_review_receipts", return_value=[]):
-                self.assertEqual(
-                    lib.active_receipt_adapter_diagnostic("/task"),
-                    diagnostic["summary"],
-                )
-        with mock.patch.object(
-            lib, "list_subagent_receipts", return_value=[diagnostic, valid_qa_start],
-        ), mock.patch.object(lib, "list_review_receipts", return_value=[]):
-            self.assertEqual(lib.active_receipt_adapter_diagnostic("/task"), "")
-        with mock.patch.object(
-            lib, "list_subagent_receipts", return_value=[diagnostic],
-        ), mock.patch.object(
-            lib, "list_review_receipts", return_value=[valid_review_start],
-        ):
-            self.assertEqual(
-                lib.active_receipt_adapter_diagnostic("/task"), diagnostic["summary"],
-            )
-
-        matching_review_diagnostic = {
-            **diagnostic,
-            "lens": "review-code",
-            "ts": "2026-08-07T00:00:00Z",
-        }
-        with mock.patch.object(
-            lib, "list_subagent_receipts", return_value=[diagnostic],
-        ), mock.patch.object(
-            lib, "list_review_receipts",
-            return_value=[matching_review_diagnostic, valid_review_start],
-        ):
-            self.assertEqual(
-                lib.active_receipt_adapter_diagnostic("/task"), diagnostic["summary"],
-            )
-
-    def test_all_codex_hook_wrappers_restore_registration(self):
-        modules = [
-            ("hook_session_start", {}, {"retry_seconds": 1.0, "budget_seconds": 1.25}),
-            ("hook_post_tool_use", {"tool_name": "wait_agent"}, {"budget_seconds": 0.4}),
-            ("hook_user_prompt_submit", {}, {"budget_seconds": 0.5}),
-            ("hook_stop", {}, {"budget_seconds": 0.5}),
-        ]
+    def test_only_session_start_wrapper_restores_registration(self):
         root_id = "019f834e-1e91-7662-9024-f548103d751e"
-        for name, extra, registration_kwargs in modules:
-            mod = _load(name)
-            with tempfile.TemporaryDirectory() as repo:
-                payload = {**extra, "cwd": repo, "session_id": root_id}
-                raw = json.dumps(payload)
-                with mock.patch.object(mod, "restore_watcher_registration") as restore, \
-                     mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")), \
-                     mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
-                     contextlib.redirect_stdout(io.StringIO()):
-                    self.assertEqual(mod.main(), 0)
-            restore.assert_called_once_with(raw.encode(), **registration_kwargs)
+        mod = _load("hook_session_start")
+        with tempfile.TemporaryDirectory() as repo:
+            raw = json.dumps({"cwd": repo, "session_id": root_id})
+            with mock.patch.object(mod, "restore_watcher_registration") as restore, \
+                 mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, stdout=b"", stderr=b"")), \
+                 mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(mod.main(), 0)
+        restore.assert_called_once_with(raw.encode(), retry_seconds=1.0, budget_seconds=1.25)
+
+        for name in ("hook_post_tool_use", "hook_user_prompt_submit", "hook_stop"):
+            self.assertFalse(hasattr(_load(name), "restore_watcher_registration"), name)
 
     def test_registration_helper_retries_and_late_recovery_is_future_only(self):
         mod = _load("codex_hook_registration")
@@ -348,7 +276,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             with mock.patch.dict("os.environ", {}, clear=True), \
                  mock.patch.object(
                      mod.time, "monotonic",
-                     side_effect=[0.0, 0.0, 0.01, 0.02, 0.03, 0.04],
+                     side_effect=[index / 100 for index in range(50)],
                  ), \
                  mock.patch.object(mod.time, "sleep"):
                 self.assertTrue(mod.restore_watcher_registration(
@@ -356,6 +284,52 @@ class TestCodexHookWrappers(unittest.TestCase):
                 ))
         self.assertEqual(attempts, [(repo, root_id), (repo, root_id)])
         self.assertIn("only future subagent starts", mod.restore_watcher_registration.__doc__)
+
+    def test_pre_spawn_registration_binds_default_task_to_root_thread(self):
+        mod = _load("codex_hook_registration")
+        lib = _load("_lib")
+        root_id = "019f834e-1e91-7662-9024-f548103d751e"
+        with tempfile.TemporaryDirectory() as repo:
+            task = Path(repo) / "doc/harness/tasks/TASK__root-binding"
+            task.mkdir(parents=True)
+            lib.ensure_task_scaffold(
+                str(task), "TASK__root-binding", repo_root=repo
+            )
+            lib.write_active_marker(repo, str(task), session_id="default")
+
+            self.assertTrue(mod._bind_active_task_to_root_session(repo, root_id))
+
+            marker = (
+                Path(repo)
+                / "doc/harness/tasks/.active_sessions"
+                / f"{root_id}.json"
+            )
+            payload = json.loads(marker.read_text(encoding="utf-8"))
+            self.assertEqual(payload["session_id"], root_id)
+            self.assertEqual(payload["task_id"], "TASK__root-binding")
+            self.assertEqual(
+                payload["task_run_id"], lib.read_task_run(str(task))["task_run_id"]
+            )
+
+    def test_registration_binds_before_rollout_discovery(self):
+        mod = _load("codex_hook_registration")
+        root_id = "019f834e-1e91-7662-9024-f548103d751e"
+        order: list[str] = []
+        with tempfile.TemporaryDirectory() as repo:
+            (Path(repo) / ".git").mkdir()
+            manifest = Path(repo) / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("type: cli\n", encoding="utf-8")
+            payload = json.dumps({"cwd": repo, "session_id": root_id}).encode()
+
+            with mock.patch.dict("os.environ", {}, clear=True):
+                self.assertTrue(mod.restore_watcher_registration(
+                    payload,
+                    ensure_fn=lambda _root, _thread: order.append("ensure") or True,
+                    bind_fn=lambda _root, _thread: order.append("bind") or True,
+                ))
+
+        self.assertEqual(order, ["bind", "ensure"])
 
     def test_registration_helper_noops_without_harness_manifest(self):
         mod = _load("codex_hook_registration")
@@ -496,7 +470,10 @@ class TestCodexHookWrappers(unittest.TestCase):
                 with mock.patch.dict("os.environ", {}, clear=True):
                     with self.assertRaisesRegex(CallerDeadline, "caller deadline"):
                         mod.restore_watcher_registration(
-                            payload, budget_seconds=0.5, ensure_fn=slow_ensure,
+                            payload,
+                            budget_seconds=0.5,
+                            ensure_fn=slow_ensure,
+                            bind_fn=lambda _root, _thread: True,
                         )
         finally:
             mod.ensure = original_ensure
@@ -553,12 +530,10 @@ class TestCodexHookWrappers(unittest.TestCase):
         for name in ("hook_post_tool_use", "hook_user_prompt_submit"):
             mod = _load(name)
             self.assertLess(mod.TOTAL_BUDGET_SECONDS, mod.HOOK_TIMEOUT_SECONDS, name)
-            self.assertLess(mod.REGISTRATION_BUDGET_SECONDS, mod.TOTAL_BUDGET_SECONDS, name)
             self.assertLess(mod.CHILD_TIMEOUT_SECONDS, mod.HOOK_TIMEOUT_SECONDS, name)
 
-    def test_post_tool_agent_receipts_are_watcher_owned_not_inline(self):
+    def test_post_tool_spawn_does_no_work(self):
         mod = _load("hook_post_tool_use")
-        mod.RECEIPT_EVENT_MODE = "watcher"
         payload = json.dumps({
             "cwd": str(REPO_ROOT),
             "tool_name": "collaboration.spawn_agent",
@@ -566,22 +541,14 @@ class TestCodexHookWrappers(unittest.TestCase):
             "tool_response": {"agent_name": "/root/qa_cli"},
         })
         with mock.patch.object(
-            mod, "restore_watcher_registration"
-        ), mock.patch.object(
-            mod, "_record_codex_spawn_result",
-            side_effect=AssertionError("heavy receipt work ran inline"),
-        ) as spawn_record, mock.patch.object(
-            mod, "_record_codex_subagent_completion",
-            side_effect=AssertionError("heavy receipt work ran inline"),
-        ) as completion_record, mock.patch.object(
             mod, "_goal_routing_hint", return_value="",
+        ), mock.patch.object(
+            mod.subprocess, "run",
+            side_effect=AssertionError("spawn hook dispatched a child worker"),
         ), mock.patch.object(
             sys, "stdin", _BytesStdin(payload)
         ), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(mod.main(), 0)
-
-        spawn_record.assert_not_called()
-        completion_record.assert_not_called()
 
     def test_pre_tool_dispatches_at_most_one_child(self):
         mod = _load("hook_pre_tool_use")
@@ -622,14 +589,23 @@ class TestCodexHookWrappers(unittest.TestCase):
                      contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(mod.main(), 0)
                 restore.assert_not_called()
-            for tool_name in ("collaboration.spawn_agent", "multi_agent_v1__spawn_agent", "functions.spawn_agent"):
+            raw = json.dumps({"cwd": repo, "tool_name": "collaboration.spawn_agent"})
+            with mock.patch.object(mod, "restore_watcher_registration") as restore, \
+                 mock.patch("subprocess.run") as run_child, \
+                 mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(mod.main(), 0)
+            restore.assert_called_once_with(raw.encode(), budget_seconds=0.5)
+            run_child.assert_not_called()
+
+            for tool_name in ("multi_agent_v1__spawn_agent", "functions.spawn_agent"):
                 raw = json.dumps({"cwd": repo, "tool_name": tool_name})
                 with mock.patch.object(mod, "restore_watcher_registration") as restore, \
                      mock.patch("subprocess.run") as run_child, \
                      mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
                      contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(mod.main(), 0)
-                restore.assert_called_once_with(raw.encode(), budget_seconds=0.5)
+                restore.assert_not_called()
                 run_child.assert_not_called()
 
     def test_wrapper_constants_match_installed_outer_timeouts(self):
@@ -643,7 +619,11 @@ class TestCodexHookWrappers(unittest.TestCase):
         config = install._codex_hooks_config(REPO_ROOT / "installed")
         self.assertEqual(
             config["hooks"]["PreToolUse"][0]["matcher"],
-            "Write|Edit|MultiEdit|Bash|apply_patch|shell|.*spawn_agent",
+            "Write|Edit|MultiEdit|Bash|apply_patch|shell|collaboration\\.spawn_agent",
+        )
+        self.assertEqual(
+            config["hooks"]["PostToolUse"][0]["matcher"],
+            "Bash|.*create_goal",
         )
         for event, name in (
             ("PreToolUse", "hook_pre_tool_use"),
@@ -783,452 +763,6 @@ class TestCodexHookWrappers(unittest.TestCase):
 
         context = json.loads(output.getvalue())["hookSpecificOutput"]["additionalContext"]
         self.assertEqual(context, mod.CODEX_ROUTE)
-
-    def test_pre_tool_use_does_not_register_uncorrelatable_codex_agent_id(self):
-        mod = _load("hook_pre_tool_use")
-
-        def fake_run(*args, **kwargs):
-            return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
-
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            tasks_dir = root / "doc" / "harness" / "tasks"
-            task_dir = tasks_dir / "TASK__codex-subagent"
-            task_dir.mkdir(parents=True)
-            _write_task_run(task_dir)
-            (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
-            payload = {
-                "cwd": repo,
-                "tool_name": "multi_agent_v1.spawn_agent",
-                "tool_call_id": "call-123",
-                "tool_input": {"agent_type": "harness:qa-cli"},
-            }
-            with mock.patch("subprocess.run", side_effect=fake_run):
-                with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(payload))):
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        self.assertEqual(mod.main(), 0)
-
-            self.assertFalse((task_dir / "SUBAGENT_RECEIPTS.jsonl").exists())
-            self.assertFalse((root / "doc/harness/runtime/background.json").exists())
-
-    def test_pre_tool_use_does_not_infer_agent_type_from_message(self):
-        mod = _load("hook_post_tool_use")
-
-        def fake_run(*args, **kwargs):
-            return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
-
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            tasks_dir = root / "doc" / "harness" / "tasks"
-            task_dir = tasks_dir / "TASK__codex-infer"
-            task_dir.mkdir(parents=True)
-            _write_task_run(task_dir)
-            (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
-            payload = {
-                "cwd": repo,
-                "tool_name": "spawn_agent",
-                "tool_call_id": "call-browser",
-                "tool_input": {
-                    "agent_type": "default",
-                    "message": "You are the qa-browser lens for TASK__codex-infer.",
-                },
-                "tool_response": {"task_name": "/root/default_worker"},
-            }
-            with mock.patch("subprocess.run", side_effect=fake_run):
-                with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(payload))):
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        self.assertEqual(mod.main(), 0)
-
-            receipt = json.loads((task_dir / "SUBAGENT_RECEIPTS.jsonl").read_text(encoding="utf-8").splitlines()[0])
-            self.assertEqual(receipt["agent_type"], "default")
-            self.assertEqual(receipt["lens"], "")
-
-    def test_pre_tool_use_infers_qa_lens_from_structured_task_name(self):
-        mod = _load("hook_post_tool_use")
-
-        def fake_run(*args, **kwargs):
-            return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
-
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            tasks_dir = root / "doc" / "harness" / "tasks"
-            task_dir = tasks_dir / "TASK__codex-task-name"
-            task_dir.mkdir(parents=True)
-            _write_task_run(task_dir)
-            (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
-            payload = {
-                "cwd": repo,
-                "tool_name": "collaboration.spawn_agent",
-                "tool_call_id": "call-task-name",
-                "tool_input": {"task_name": "qa_cli"},
-                "tool_response": {"task_name": "/root/qa_cli"},
-            }
-            with mock.patch("subprocess.run", side_effect=fake_run):
-                with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(payload))):
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        self.assertEqual(mod.main(), 0)
-
-            receipt = json.loads((task_dir / "SUBAGENT_RECEIPTS.jsonl").read_text().splitlines()[0])
-            self.assertEqual(receipt["agent_type"], "qa_cli")
-            self.assertEqual(receipt["lens"], "qa-cli")
-
-    def test_post_tool_use_records_codex_wait_agent_completion(self):
-        mod = _load("hook_post_tool_use")
-
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            tasks_dir = root / "doc" / "harness" / "tasks"
-            task_dir = tasks_dir / "TASK__codex-complete"
-            task_dir.mkdir(parents=True)
-            _write_task_run(task_dir)
-            (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
-            spawn_payload = {
-                "cwd": repo,
-                "tool_name": "collaboration.spawn_agent",
-                "tool_input": {"task_name": "qa_cli"},
-                "tool_response": {"agent_name": "/root/qa_cli"},
-            }
-            with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(spawn_payload))):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    self.assertEqual(mod.main(), 0)
-
-            wait_payload = {
-                "cwd": repo,
-                "tool_name": "collaboration.wait_agent",
-                "tool_input": {"target": "/root/qa_cli"},
-                "tool_response": {"result": "VERDICT: PASS\n12 tests passed"},
-            }
-            with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(wait_payload))):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    self.assertEqual(mod.main(), 0)
-
-            receipts = [
-                json.loads(line)
-                for line in (task_dir / "SUBAGENT_RECEIPTS.jsonl").read_text().splitlines()
-            ]
-            self.assertEqual(receipts[0]["agent_id"], "/root/qa_cli")
-            receipt = receipts[-1]
-            self.assertEqual(receipt["status"], "completed")
-            self.assertEqual(receipt["verdict"], "PASS")
-            self.assertEqual(receipt["lens"], "qa-cli")
-
-    def test_post_tool_use_records_targetless_list_agents_completions(self):
-        mod = _load("hook_post_tool_use")
-
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            tasks_dir = root / "doc" / "harness" / "tasks"
-            task_dir = tasks_dir / "TASK__codex-list"
-            task_dir.mkdir(parents=True)
-            _write_task_run(task_dir)
-            (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
-            for task_name in ("code_review", "security_review"):
-                spawn = {
-                    "cwd": repo,
-                    "tool_name": "collaboration.spawn_agent",
-                    "tool_input": {"task_name": task_name},
-                    "tool_response": {"task_name": f"/root/{task_name}"},
-                }
-                with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(spawn))):
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        mod.main()
-            listed = {
-                "cwd": repo,
-                "tool_name": "collaboration.list_agents",
-                "tool_input": {},
-                "tool_response": {"agents": [
-                    {"agent_name": "/root/code_review", "agent_status": {"completed": "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nClean"}},
-                    {"agent_name": "/root/security_review", "agent_status": {"completed": "VERDICT: FAIL\nFINDING_COUNTS: FIX_NOW=1 INVESTIGATE=0 OPTIONAL=0\nFinding"}},
-                ]},
-            }
-            with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(listed))):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    mod.main()
-
-            receipts = [json.loads(line) for line in (task_dir / "REVIEW_RECEIPTS.jsonl").read_text().splitlines()]
-            completions = [item for item in receipts if item["status"] == "completed"]
-            self.assertEqual([(item["agent_id"], item["verdict"]) for item in completions], [
-                ("/root/code_review", "PASS"),
-                ("/root/security_review", "FAIL"),
-            ])
-
-    def test_post_tool_use_records_multi_target_wait_status_completions(self):
-        mod = _load("hook_post_tool_use")
-
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            tasks_dir = root / "doc" / "harness" / "tasks"
-            task_dir = tasks_dir / "TASK__codex-wait-status"
-            task_dir.mkdir(parents=True)
-            _write_task_run(task_dir)
-            (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
-            agents = {
-                "agent-code-123": "code_review_wait_status",
-                "agent-security-456": "security_review_wait_status",
-            }
-            for agent_id, task_name in agents.items():
-                spawn = {
-                    "cwd": repo,
-                    "tool_name": "multi_agent_v1__spawn_agent",
-                    "tool_input": {"task_name": task_name},
-                    "tool_response": {"agent_id": agent_id},
-                }
-                with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(spawn))):
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        mod.main()
-            waited = {
-                "cwd": repo,
-                "tool_name": "multi_agent_v1__wait_agent",
-                "tool_input": {"targets": list(agents)},
-                "tool_response": {
-                    "status": {
-                        "agent-code-123": {
-                            "completed": "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nClean"
-                        },
-                        "agent-security-456": {
-                            "completed": "VERDICT: FAIL\nFINDING_COUNTS: FIX_NOW=1 INVESTIGATE=0 OPTIONAL=0\nFinding"
-                        },
-                    },
-                    "timed_out": False,
-                },
-            }
-            with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(waited))):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    mod.main()
-
-            receipts = [
-                json.loads(line)
-                for line in (task_dir / "REVIEW_RECEIPTS.jsonl").read_text().splitlines()
-            ]
-            completions = [item for item in receipts if item["status"] == "completed"]
-            self.assertEqual(
-                [(item["agent_id"], item["verdict"]) for item in completions],
-                [("agent-code-123", "PASS"), ("agent-security-456", "FAIL")],
-            )
-
-    def test_post_tool_use_keeps_wait_status_qa_after_source_change(self):
-        mod = _load("hook_post_tool_use")
-
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            tasks_dir = root / "doc" / "harness" / "tasks"
-            task_dir = tasks_dir / "TASK__codex-stale-qa"
-            task_dir.mkdir(parents=True)
-            _write_task_run(task_dir)
-            (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
-            spawn = {
-                "cwd": repo,
-                "tool_name": "multi_agent_v1__spawn_agent",
-                "tool_input": {"task_name": "qa_cli_stale"},
-                "tool_response": {"agent_id": "agent-qa-stale-123"},
-            }
-            with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(spawn))):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    mod.main()
-
-            waited = {
-                "cwd": repo,
-                "tool_name": "multi_agent_v1__wait_agent",
-                "tool_input": {"targets": ["agent-qa-stale-123"]},
-                "tool_response": {"status": {
-                    "agent-qa-stale-123": {"completed": "VERDICT: PASS\nTests passed"}
-                }},
-            }
-            with mock.patch.object(
-                sys, "stdin", _BytesStdin(json.dumps(waited))
-            ), contextlib.redirect_stdout(io.StringIO()):
-                mod.main()
-
-            receipts = [
-                json.loads(line)
-                for line in (task_dir / "SUBAGENT_RECEIPTS.jsonl").read_text().splitlines()
-            ]
-            self.assertEqual(receipts[-1]["verdict"], "PASS")
-
-    def test_post_tool_use_rejects_ambiguous_reused_agent_name(self):
-        mod = _load("hook_post_tool_use")
-
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            tasks_dir = root / "doc" / "harness" / "tasks"
-            task_dir = tasks_dir / "TASK__codex-reused-name"
-            task_dir.mkdir(parents=True)
-            _write_task_run(task_dir)
-            (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
-            for task_name in ("qa_cli_old", "qa_cli_new"):
-                spawn = {
-                    "cwd": repo,
-                    "tool_name": "collaboration.spawn_agent",
-                    "tool_input": {"task_name": task_name},
-                    "tool_response": {"agent_name": "/root/qa_cli"},
-                }
-                with mock.patch.object(
-                    sys, "stdin", _BytesStdin(json.dumps(spawn))
-                ), contextlib.redirect_stdout(io.StringIO()):
-                    mod.main()
-
-            waited = {
-                "cwd": repo,
-                "tool_name": "collaboration.wait_agent",
-                "tool_input": {"targets": ["/root/qa_cli"]},
-                "tool_response": {"status": {
-                    "/root/qa_cli": {"completed": "VERDICT: PASS\nTests passed"}
-                }},
-            }
-            with mock.patch.object(
-                sys, "stdin", _BytesStdin(json.dumps(waited))
-            ), contextlib.redirect_stdout(io.StringIO()):
-                mod.main()
-
-            receipts = [
-                json.loads(line)
-                for line in (
-                    task_dir / "SUBAGENT_RECEIPTS.jsonl"
-                ).read_text().splitlines()
-            ]
-            self.assertEqual(
-                [item["status"] for item in receipts],
-                ["started", "started"],
-            )
-
-    def test_codex_reviewer_lifecycle_uses_separate_receipt_stream(self):
-        mod = _load("hook_post_tool_use")
-
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            tasks_dir = root / "doc" / "harness" / "tasks"
-            task_dir = tasks_dir / "TASK__codex-review"
-            task_dir.mkdir(parents=True)
-            _write_task_run(task_dir)
-            (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
-            (task_dir / "TASK_STATE.yaml").write_text(
-                "task_id: TASK__codex-review\nstatus: created\nruntime_verdict: pending\n"
-                "touched_paths:\n  - src/main.py\nplan_session_state: closed\nclosed_at: null\nupdated: now\n",
-                encoding="utf-8",
-            )
-            source = root / "src/main.py"
-            source.parent.mkdir()
-            source.write_text("VALUE = 1\n", encoding="utf-8")
-            spawn_payload = {
-                "cwd": repo,
-                "tool_name": "collaboration.spawn_agent",
-                "tool_input": {"task_name": "code_review"},
-                "tool_response": {"task_name": "/root/code_review"},
-            }
-            with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(spawn_payload))):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    self.assertEqual(mod.main(), 0)
-            wait_payload = {
-                "cwd": repo,
-                "tool_name": "collaboration.wait_agent",
-                "tool_input": {"target": "/root/code_review"},
-                "tool_response": {"result": "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nNo findings."},
-            }
-            with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(wait_payload))):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    self.assertEqual(mod.main(), 0)
-
-            self.assertTrue((task_dir / "REVIEW_RECEIPTS.jsonl").is_file())
-            self.assertFalse((task_dir / "SUBAGENT_RECEIPTS.jsonl").exists())
-            receipts = [json.loads(line) for line in (task_dir / "REVIEW_RECEIPTS.jsonl").read_text().splitlines()]
-            self.assertEqual(receipts[-1]["lens"], "review-code")
-            self.assertEqual(receipts[-1]["verdict"], "PASS")
-
-    def test_codex_reviewer_pass_is_not_invalidated_by_source_changes(self):
-        mod = _load("hook_post_tool_use")
-
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            tasks_dir = root / "doc" / "harness" / "tasks"
-            task_dir = tasks_dir / "TASK__codex-review-stale"
-            task_dir.mkdir(parents=True)
-            _write_task_run(task_dir)
-            (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
-            (task_dir / "TASK_STATE.yaml").write_text(
-                "task_id: TASK__codex-review-stale\nstatus: created\nruntime_verdict: pending\n"
-                "touched_paths:\n  - src/main.py\nplan_session_state: closed\nclosed_at: null\nupdated: now\n",
-                encoding="utf-8",
-            )
-            source = root / "src/main.py"
-            source.parent.mkdir()
-            source.write_text("VALUE = 1\n", encoding="utf-8")
-            spawn = {"cwd": repo, "tool_name": "spawn_agent", "tool_input": {"task_name": "code_review"}, "tool_response": {"task_name": "/root/code_review"}}
-            with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(spawn))):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    mod.main()
-            source.write_text("VALUE = 2\n", encoding="utf-8")
-            wait = {"cwd": repo, "tool_name": "wait_agent", "tool_input": {"target": "/root/code_review"}, "tool_response": {"result": "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"}}
-            with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(wait))):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    mod.main()
-
-            receipts = [json.loads(line) for line in (task_dir / "REVIEW_RECEIPTS.jsonl").read_text().splitlines()]
-            self.assertEqual(receipts[-1]["verdict"], "PASS")
-
-    def test_post_tool_use_rejects_unmatched_wait_agent_completion(self):
-        mod = _load("hook_post_tool_use")
-
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            tasks_dir = root / "doc" / "harness" / "tasks"
-            task_dir = tasks_dir / "TASK__codex-unmatched"
-            task_dir.mkdir(parents=True)
-            _write_task_run(task_dir)
-            (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
-            payload = {
-                "cwd": repo,
-                "tool_name": "collaboration.wait_agent",
-                "tool_input": {"target": "qa_cli"},
-                "tool_response": {"result": "VERDICT: PASS\nnot correlated"},
-            }
-            with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(payload))):
-                with contextlib.redirect_stdout(io.StringIO()):
-                    self.assertEqual(mod.main(), 0)
-
-            self.assertFalse((task_dir / "SUBAGENT_RECEIPTS.jsonl").exists())
-
-    def test_pre_tool_use_skips_receipt_when_structured_task_id_mismatches_active_task(self):
-        mod = _load("hook_pre_tool_use")
-
-        def fake_run(*args, **kwargs):
-            return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
-
-        with tempfile.TemporaryDirectory() as repo:
-            root = Path(repo)
-            (root / ".git").mkdir()
-            tasks_dir = root / "doc" / "harness" / "tasks"
-            task_dir = tasks_dir / "TASK__active"
-            task_dir.mkdir(parents=True)
-            _write_task_run(task_dir)
-            (tasks_dir / ".active").write_text(str(task_dir), encoding="utf-8")
-            payload = {
-                "cwd": repo,
-                "tool_name": "spawn_agent",
-                "tool_call_id": "call-other",
-                "tool_input": {
-                    "task_id": "TASK__other",
-                    "agent_type": "harness:qa-cli",
-                    "message": "Run QA for TASK__other.",
-                },
-            }
-            with mock.patch("subprocess.run", side_effect=fake_run):
-                with mock.patch.object(sys, "stdin", _BytesStdin(json.dumps(payload))):
-                    with contextlib.redirect_stdout(io.StringIO()):
-                        self.assertEqual(mod.main(), 0)
-
-            self.assertFalse((task_dir / "SUBAGENT_RECEIPTS.jsonl").exists())
-
 
 if __name__ == "__main__":
     unittest.main()

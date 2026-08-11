@@ -6,14 +6,18 @@ user-invocable: false
 
 Implement the plan for a harness task. Reads PLAN.md, implements changes, verifies completeness, captures durable learnings, and closes through MCP.
 
+> Current artifact model: use `PLAN.md` plus unified `RECEIPTS.jsonl`. Do not
+> create, read, or update `CHECKS.yaml` or `USER_FEEDBACK.jsonl`, and do not run
+> `update_checks.py`; later legacy ledger wording is non-operative.
+
 > **Codex runtime notes** (delta from Claude develop skill — read these first):
 > - **No `Skill()` chain.** Where Claude invokes `Skill("harness:plan", task_id)` etc., Codex orchestrator reads the relevant SKILL.md inline and executes its phases as part of the same conversation. The plan / verify / close transitions still happen — they're just prose flow, not tool calls.
 > - **Harness workflow authorization covers required subagents.** Treat explicit user invocation or approval of a harness repo-mutating workflow as authorization to use the subagents required by that workflow's verification and review gates. Examples include "use harness", "run/continue/close the harness task", native `/goal`, or clear approval to proceed with a harness task. This does not apply to read-only answers or ordinary non-harness work.
-> - **Agent fan-out is capability-gated, not user-request-gated.** Where Claude spawns `oh-my-claudecode:executor` (per-AC parallel implementation), `harness:qa-*` (verification), `harness:dogfooder` (post-PASS dogfooding), or haiku sub-agents (test-coverage trace, adversarial review, edge-case scan), Codex should check the deferred tool catalog (for example `ALL_TOOLS`) and use `spawn_agent` when exposed. The user does not need to ask for delegation. `user did not ask for delegation`, `delegation was not requested`, and equivalent rationale are invalid skip reasons. QA/review must not be self-authored when `spawn_agent` is available: Codex hooks record lifecycle receipts, and only ordered completed explicit PASS entries for PLAN-declared lenses satisfy verification. Do not write receipt or critic artifacts yourself. If `spawn_agent` is unavailable after discovery, run the equivalent role methodology inline in the orchestrator's own context and state the fallback in task state or final response only when it affects verification. Multi-AC implementation can remain sequential only when `spawn_agent` is unavailable, ACs are dependent or file-conflicting, or the documented `sequential-small-task` threshold applies; preserve independent QA/review by routing from current session capability.
+> - **Agent fan-out is capability-gated, not user-request-gated.** Where Claude spawns `oh-my-claudecode:executor` (per-AC parallel implementation), `harness:qa-*` (verification), `harness:dogfooder` (post-PASS dogfooding), or haiku sub-agents (test-coverage trace, adversarial review, edge-case scan), Codex should check the deferred tool catalog (for example `ALL_TOOLS`) and use `spawn_agent` when exposed. The user does not need to ask for delegation. `user did not ask for delegation`, `delegation was not requested`, and equivalent rationale are invalid skip reasons. QA/review must not be self-authored when `spawn_agent` is available: the Codex watcher records lifecycle receipts, and only ordered completed explicit PASS entries for PLAN-declared lenses satisfy verification. Do not write receipt or critic artifacts yourself. If `spawn_agent` is unavailable after discovery, run the equivalent role methodology inline in the orchestrator's own context and state the fallback in task state or final response only when it affects verification. Multi-AC implementation can remain sequential only when `spawn_agent` is unavailable, ACs are dependent or file-conflicting, or the documented `sequential-small-task` threshold applies; preserve independent QA/review by routing from current session capability.
 > - **Subagent lifecycle cleanup.** Track every `agent_id` returned by `spawn_agent`. After a spawned agent completes, fails, is cancelled, or is no longer needed, call `close_agent` when that tool is available. Before final response, `task_close`, or handoff, close every agent this workflow spawned unless the user explicitly asked to leave a still-running agent open. Completed agents can continue to count toward the concurrency limit until closed.
 > - **No `AskUserQuestion` structured tool.** Where Claude emits an AskUserQuestion with labeled options, Codex emits the question + options as plain prose and reads the user's reply on the next turn. Options stay numbered/lettered so the user can pick them by short response (e.g. "A", "B", "1", "2").
 > - **Browser tools are availability-gated on Codex.** Prefer `spawn_agent` for the qa-browser lens when available and isolation materially reduces context, or run `plugin-codex/agents/qa-browser.md` inline when that is the lightest available path. Browser delegation is workflow guidance rather than a pre-tool block, so inline browser context growth is an accepted caller-owned cost. If browser verification is required and tools or a reachable app are missing, return `BLOCKED_ENV` with the exact blocker instead of fabricating a PASS.
-> - **MCP tool names are bare** on Codex (`task_start`, `task_verify`, `task_close`, `task_context`, `update_checks`). The Claude long-form (Claude-prefixed) does not apply.
+> - **MCP tool names are bare** on Codex (`task_start`, `task_verify`, `task_close`, `task_context`). The Claude long-form (Claude-prefixed) does not apply.
 > - **Env var is `HARNESS_PLUGIN_ROOT`**, not `CLAUDE_PLUGIN_ROOT`. The Codex plugin install sets it; Bash blocks below use this variant.
 > - **Sub-file fallback.** This SKILL.md does NOT ship Codex-native sub-files in v1.5 (browser-verification.md, fix-first-pattern.md, parallel-fanout.md, quality-audit-pipeline.md, runtime-smoke.md, test-failure-triage.md, verification-gate.md). Where the Claude flow loads a sub-file, the Codex flow reads the same sub-file at `plugin/skills/develop/<name>.md` (Claude tree) and applies the sub-file's methodology with the runtime-substitution rules above. Codex-native sub-files are a v2 ergonomics improvement; v1.5 ships methodology parity by reference.
 
@@ -35,7 +39,7 @@ Bad: "I have successfully completed the implementation of AC-003 and the changes
 
 ## Anti-shortcut clause
 
-CHECKS.yaml `passed` is evidence the gate ran, not a substitute for ordered runtime verification. PROGRESS.md is the scope-lock contract for this task. Hand-editing CHECKS.yaml or skipping `update_checks.py` produces a plausible-looking ledger that lies about `reopen_count` and `last_updated`. Harness does not detect edits after QA; the developer decides when a change warrants rerunning review or QA.
+PROGRESS.md is the scope-lock contract for this task. PLAN.md owns acceptance intent, and ordered review/QA entries in the current task run provide close evidence. Harness does not detect edits after QA; the developer decides when a change warrants rerunning review or QA.
 
 ## Confusion Protocol
 
@@ -129,7 +133,7 @@ Read `doc/harness/tasks/<task_id>/`:
 **Durable Docs Preflight:** before source implementation, read PLAN.md `Durable Docs Decision` as a documentation-impact judgment, not a rote REQ checklist. Confirm whether the task is `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`, then run the REQ detector mentally or via `plugin/scripts/req_detector.py` when request, feedback, target files, or planned surfaces imply observable UI/API/mobile/native/desktop behavior. If a REQ path is selected or detector output is high-confidence, create or update that `doc/<area>/REQ__*.md` before editing source files, using a direct `doc/<area>/REQ__*.md` edit or `plugin/scripts/req_scaffold.py` when no existing REQ fits. If the task touches observable UI/API/backoffice/admin screens, routes, controllers, native navigation/back-stack behavior, or endpoints and PLAN says `REQ: n/a`, stop source implementation and amend/create the REQ first; do not wait for close or durable docs to discover the missing REQ. For harness process, agent instruction, testing guidance, or implementation-pattern changes, prefer `GUIDE` or skill/pattern docs and keep `REQ: n/a` with a specific reason.
 
 **User Feedback Event Review:** before each dependent build/test/review action
-at phase boundaries, read `<task_dir>/USER_FEEDBACK.jsonl` when present. The
+at phase boundaries, incorporate explicit user corrections from the conversation. The
 file is an automatic context-rich event log, not a durable source of truth by
 itself. For every new event, decide whether it changes the current task,
 verification criteria, product/design/domain direction, or future harness
@@ -177,7 +181,7 @@ spawn_agent {
 
 Use one worker per independent AC. Do not assign multiple independent ACs to one
 worker. Workers return status, changed paths, and blockers in their final
-response; the orchestrator merges PROGRESS.md and CHECKS.yaml after all
+response; the orchestrator merges PROGRESS.md after all
 siblings return.
 
 **Coordinator-review branch (before generic rollback).** If any worker returns
@@ -255,14 +259,7 @@ updated: <ISO timestamp>
 
 Any AC scoring <=7 MUST list `deferred_edges`. <=5 requires explicit justification in PROGRESS.md or the final response (MVP scope, user-deferred, etc.).
 
-**Acceptance Ledger update (after each AC):** once the AC's code is in and per-AC tests pass, mark it `implemented_candidate` in CHECKS.yaml. Only Phase 7 promotes to `passed`. Update CHECKS.yaml only through `update_checks.py`.
-
-```bash
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/update_checks.py \
-  --task-dir doc/harness/tasks/<task_id>/ \
-  --ac AC-00X --status implemented_candidate \
-  --evidence "<file:line | test name>"
-```
+After each AC, record implementation and targeted-test evidence in PROGRESS.md.
 
 **Per-AC test run:** use PLAN targets and the files implemented for the AC to find tests that import/reference them. If no tests exist for a changed module, write one (Phase 3.5 rule). If PLAN.md specifies per-AC verify commands, prefer those.
 
@@ -291,21 +288,7 @@ Runs continuously during Phase 3.
 
   *Regression rule:* if the diff modifies existing behavior and no test covers the changed path, write a regression test immediately. Commit separately: `test: regression test for <what>`.
 
-  *Test-Evidence Gate:* `update_checks.py` rejects promotion of `kind in {feature, functional}` ACs to `implemented_candidate` / `passed` unless `--test-evidence <path>` resolves to a real file inside the repo (no symlinks, no traversal). Use the bypass with a documented reason for ACs that genuinely have no test surface (configs, narration, migrations):
-  ```bash
-  # Promote with evidence:
-  python3 ${HARNESS_PLUGIN_ROOT}/scripts/update_checks.py \
-    --task-dir doc/harness/tasks/<task_id>/ --ac AC-001 \
-    --status implemented_candidate \
-    --test-evidence tests/regression/task_xx/test_ac_001__behavior.py
-
-  # Bypass with reason (logged to learnings.jsonl):
-  python3 ${HARNESS_PLUGIN_ROOT}/scripts/update_checks.py \
-    --task-dir doc/harness/tasks/<task_id>/ --ac AC-007 \
-    --status implemented_candidate \
-    --no-test-required "narration-only AC, no behavior to test"
-  ```
-  Allowlist (no evidence required): `kind in {bugfix, doc, verification}`. Bugfix is gated separately by Iron Law (`--root-cause`). Missing `kind:` field defaults to `unknown` and skips the gate.
+  *Test-evidence rule:* behavioral ACs require a concrete test path or a documented reason that no test surface exists. Record this in PROGRESS.md and final verification evidence.
 
   *QA codifier* (after Phase 7 PASS, before close):
   ```bash
@@ -382,10 +365,9 @@ Read the required review lenses from `PLAN.meta.json`. Discover deferred
 `spawn_agent` in `ALL_TOOLS`. Spawn each review lens declared by PLAN metadata
 `security_review` when declared, in one message; each reads its matching
 `plugin-codex/agents/*-reviewer.md`, stays read-only, and returns exact VERDICT.
-Await all reviewers. Prefer a `wait_agent` response containing the structural
-`status[agent_id].completed` map; if that signal is absent and `list_agents`
-exists, call it once to expose each runtime agent name and final response to
-the completion hook. Hook-owned `REVIEW_RECEIPTS.jsonl` must show PASS for the
+Await all reviewers. Use `wait_agent` only to coordinate completion; its output
+and `list_agents` do not author receipts. Watcher-owned
+review entries in `RECEIPTS.jsonl` must show PASS for the
 current task receipt run and declared lens. Send only FIX_NOW to the implementer; after an
 edit that affects a finding, rerun focused tests and the applicable review.
 Harness does not infer this need from Git. Inline
@@ -394,18 +376,16 @@ self-review is not a strict-compliance fallback.
 Apply the parent run skill's subagent wait UX rule: finish useful local work,
 then wait in one interval of up to 60 seconds; never use rapid short polling or
 agent-status tools as a progress poll. After a timeout, emit one compact user
-status before waiting again. Do not require `list_agents` when `wait_agent`
-already returns structurally identified completions.
+status before waiting again.
 
 For runtimes that omit collaboration events from PostToolUse, Codex
 SessionStart creates the exact root-rollout registration, every installed root
 hook idempotently restores it, and the Harness MCP server hosts the lifecycle
-watcher as a daemon thread. Receipt ownership stays with the
-hook/runtime path; no model-callable MCP receipt writer exists. Use structured
-task names containing `code_review` or `security_review` both as the exact
-first line `task_name: <name>` in the message and, when the active schema
-supports it, in the `task_name` argument. Omit an unsupported argument, never
-the first-line marker. Do not use a generic worker name for a required reviewer.
+watcher as a daemon thread. It is the sole Codex receipt owner; no PostToolUse
+result parser or model-callable MCP receipt writer exists. A valid structured
+`task_name` argument containing `code_review` or `security_review` is mandatory.
+A matching first message line is readable context only, not identity evidence.
+Do not use a generic worker name for a required reviewer.
 The watcher must observe the spawn while the child is still running to bind
 the task, agent, lens, and lifecycle ordering.
 Registration after a reviewer finishes cannot recover a PASS.
@@ -428,21 +408,19 @@ judge shippability without reverse-engineering the change.
 ```text
 spawn_agent {
   task_name: "qa_<lens>_<task_slug>_<run_id>",
-  message: "task_name: qa_<lens>_<task_slug>_<run_id>\nYou are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, PLAN.meta.json, CHECKS.yaml, TASK_STATE.yaml, the PLAN targets, and durable docs named in PLAN. Follow plugin-codex/agents/qa-<lens>.md. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence and concrete findings.",
+  message: "task_name: qa_<lens>_<task_slug>_<run_id>\nYou are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, PLAN.meta.json, TASK_STATE.yaml, the PLAN targets, and durable docs named in PLAN. Follow plugin-codex/agents/qa-<lens>.md. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence and concrete findings.",
   fork_turns: "all"
 }
 ```
 
-After awaiting QA/UX, use the structural completion results returned by
-`wait_agent`; call `list_agents` only as an available fallback when those
-results are absent, then run `task_verify` with `reconcile_acs: true`. The Codex
-hooks record observed lifecycle events automatically. If no subagent path exists, run
+After awaiting QA/UX, run `task_verify`.
+`wait_agent` and `list_agents` are coordination-only; the Codex watcher records
+direct lifecycle events automatically. If no subagent path exists, run
 the lens methodology in-conversation and state the fallback in task state or final response; do not
 call a critic writer.
 
 Use the same wait UX for QA/UX: useful local work first, one wait interval of
-up to 60 seconds and one status update after timeout. A final `list_agents`
-call is optional and only needed when the wait result lacks final identities.
+up to 60 seconds and one status update after timeout.
 
 Use structured QA/UX `task_name` values. These names are the runtime-visible
 lens binding when delegated prompt bodies are encrypted in Codex rollouts.
@@ -461,7 +439,7 @@ When durable docs changed under `doc/<area>/<TYPE>__*.md`, pass those paths to t
   - `critical` AND confidence >= 7
   - `high` AND confidence >= 8
   Lower severities may be deferred in final response or follow-up tasks — do not block close.
-- **Acceptance Ledger promotion** — on gate pass, `update_checks.py --status passed`. On gate fail, `--status failed` (auto-increments `reopen_count`), loop back to fix cycle. Close gate requires every AC to be `passed` or `deferred`.
+- **Acceptance result** — on gate fail, loop back to the fix cycle; on pass, retain evidence in the review/QA receipt stream.
 
 ### Phase 7.5: Auto-checkpoint (post verify gate)
 
@@ -526,13 +504,11 @@ explicitly opts out of installation.
 Prepare these completion checks now; the final phase revalidates them after
 durable-doc and learning work:
 
-1. Every AC is `passed` or explicitly `deferred` in CHECKS.yaml.
+1. PLAN.md acceptance criteria are addressed or explicitly deferred.
 2. `task_verify` reports PASS from the required ordered receipt sequence.
-3. Required QA/UX subagents were spawned when the runtime exposed them; hook-owned receipts prove start and explicit completion.
-4. User feedback events have terminal disposition in task state: `promoted`, `handled-local`, `deferred`, or `rejected`.
-5. `CONVERSATION.md` has no open `<!-- item: ... status=open -->` markers; captured items name a durable ref, rejected items name a reason, deferred items name a follow-up task/goal.
-6. Durable docs are updated when the task changed user-visible behavior, externally consumed API contracts, reusable guidance, significant decisions, external constraints, user-stated durable rules, or reusable implementation knowledge.
-7. Reusable EUREKA discoveries, user corrections, dogfood findings, setup recipes, and repeated friction are either promoted to committed artifacts or explicitly rejected/deferred with a concrete reason.
+3. Required QA/UX subagents were spawned when the runtime exposed them; watcher-owned receipts prove start and explicit completion.
+4. `CONVERSATION.md` has no open `<!-- item: ... status=open -->` markers.
+5. Durable docs are updated when the task changed user-visible behavior, externally consumed API contracts, or reusable guidance.
 
 Do not call `task_close` or emit the final response yet. Draft a concise
 completion report with:

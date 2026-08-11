@@ -38,9 +38,9 @@ Whenever two or more verification, judgment, or executor calls have no dependenc
 
 Concretely:
 - Issue every parallel `Agent(...)` call as a separate tool-use block in one assistant turn.
-- Collect every return value before mutating shared state (PROGRESS.md, CHECKS.yaml).
+- Collect every return value before mutating shared state (PROGRESS.md).
   Executors return status, changed paths, and blockers in their final response;
-  the coordinator is the only writer to PROGRESS.md and CHECKS.yaml.
+  the coordinator is the only writer to PROGRESS.md.
 - A `TeamCreate` + N `Task` worker spawns: emit `TeamCreate` in turn 1; emit all N `Task` calls in turn 2 — never split worker spawns across multiple turns.
 
 **Inline spawn template** (copyable):
@@ -55,7 +55,7 @@ Agent(name="<task_id>:AC-NNN", subagent_type="harness:ac-worker",
       prompt="Implement AC-NNN per PLAN.md ...")
 ```
 
-Cap parallel fanout at N=4 in a single batch. Past N=4, orchestrator-side merge cost (PROGRESS.md write contention, CHECKS.yaml update ordering) dominates the spawn-time savings. **The cap applies per batch, not per task** — broader trigger thresholds produce more batches, each still capped at 4.
+Cap parallel fanout at N=4 in a single batch. Past N=4, orchestrator-side PROGRESS.md merge cost dominates the spawn-time savings. **The cap applies per batch, not per task** — broader trigger thresholds produce more batches, each still capped at 4.
 For N>4, spawn batches of up to 4 in successive assistant turns; do not
 collapse remaining independent ACs into coordinator work.
 Merge cost controls batch size only. It does not justify collapsing two or more

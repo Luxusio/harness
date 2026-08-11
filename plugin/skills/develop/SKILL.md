@@ -8,6 +8,10 @@ allowed-tools: Read, Glob, Grep, Bash, Edit, Write, Agent, Skill, AskUserQuestio
 
 Implement the plan for a harness task. Reads PLAN.md, implements changes, verifies completeness, captures durable learnings, and closes through MCP.
 
+> Current artifact model: use `PLAN.md` and unified `RECEIPTS.jsonl`. Do not
+> create, read, or update `CHECKS.yaml` or `USER_FEEDBACK.jsonl`; later legacy
+> ledger wording is non-operative.
+
 Explicit user invocation or approval of this harness repo-mutating workflow
 authorizes the subagents required by the workflow's verification and review
 gates. Examples include "use harness", "run/continue/close the harness task",
@@ -39,7 +43,7 @@ Bad: "I have successfully completed the implementation of AC-003 and the changes
 
 ## Anti-shortcut clause
 
-CHECKS.yaml `passed` is evidence the gate ran, not a substitute for ordered review and QA receipts in the current `TASK_RUN`. PROGRESS.md is the scope-lock contract for this task. Hand-editing CHECKS.yaml or skipping `update_checks.py` produces a plausible-looking ledger that lies about `reopen_count` and `last_updated` (the May 2026 update_checks indent bug — `learnings.jsonl` 2026-05-08 — silently corrupted CHECKS.yaml across 6 tasks before detection; that incident is the precise failure mode this clause prevents). Harness does not inspect source state after a receipt. If code changes after review or QA, the developer owns the decision to rerun the affected evidence.
+PROGRESS.md is the scope-lock contract for this task. PLAN.md owns acceptance intent, while ordered review and QA entries in the current `TASK_RUN` provide close evidence. Harness does not inspect source state after a receipt. If code changes after review or QA, the developer owns the decision to rerun the affected evidence.
 
 **Highest-tier verification mandate.** If a task creates, unblocks, or documents a verification path, using that path is part of the same task. Do not ask "should I verify it?" when the required services, rebuild, seed, token, browser, API, or CLI route are locally available. Execute the highest available tier yourself, then report the tier reached and any concrete blocker. Ask only when verification would require destructive state changes, paid/external credentials, production resources, or a genuine product choice between valid approaches.
 
@@ -121,9 +125,8 @@ Read `doc/harness/tasks/<task_id>/`:
 **Durable Docs Preflight:** before source implementation, read PLAN.md `Durable Docs Decision` as a documentation-impact judgment, not a rote REQ checklist. Confirm whether the task is `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`, then run the REQ detector mentally or via `plugin/scripts/req_detector.py` when request, feedback, target files, or planned surfaces imply observable UI/API/mobile/native/desktop behavior. If a REQ path is selected or detector output is high-confidence, create or update that `doc/<area>/REQ__*.md` before editing source files, using `direct REQ doc edit` or `plugin/scripts/req_scaffold.py` when no existing REQ fits. If the task touches observable UI/API/backoffice/admin screens, routes, controllers, native navigation/back-stack behavior, or endpoints and PLAN says `REQ: n/a`, stop source implementation and amend/create the REQ first; do not wait for close or durable docs to discover the missing REQ. For harness process, agent instruction, testing guidance, or implementation-pattern changes, prefer `GUIDE` or skill/pattern docs and keep `REQ: n/a` with a specific reason.
 
 **User Feedback Event Review:** before each dependent build/test/review action
-at phase boundaries, read `<task_dir>/USER_FEEDBACK.jsonl` when present. The
-file is an automatic context-rich event log, not a durable source of truth by
-itself. For every new event, decide whether it changes the current task,
+at phase boundaries, incorporate explicit user corrections from the conversation. The
+conversation is not a durable source of truth by itself. For every correction, decide whether it changes the current task,
 verification criteria, product/design/domain direction, or future harness
 behavior. Reflect it before the next action that depends on it: update code,
 tests, PLAN/task state/durable docs, or the relevant REQ/GUIDE/ADR/POLICY; defer it to
@@ -199,16 +202,16 @@ Inline spawn template (copyable; one block per AC, ALL in one assistant turn):
 
 ```
 Agent(name="<task_id>:AC-NNN", subagent_type="harness:ac-worker",
-      prompt="Implement AC-NNN per PLAN.md target files <list>. Return changed paths, test results, and blockers in your final response. Do not edit PROGRESS.md or CHECKS.yaml.")
+      prompt="Implement AC-NNN per PLAN.md target files <list>. Return changed paths, test results, and blockers in your final response. Do not edit PROGRESS.md.")
 Agent(name="<task_id>:AC-001", subagent_type="harness:ac-worker",
-      prompt="Implement AC-001 per PLAN.md target files <list>. Return changed paths, test results, and blockers in your final response. Do not edit PROGRESS.md or CHECKS.yaml.")
+      prompt="Implement AC-001 per PLAN.md target files <list>. Return changed paths, test results, and blockers in your final response. Do not edit PROGRESS.md.")
 Agent(name="<task_id>:AC-002", subagent_type="harness:ac-worker",
-      prompt="Implement AC-002 per PLAN.md target files <list>. Return changed paths, test results, and blockers in your final response. Do not edit PROGRESS.md or CHECKS.yaml.")
+      prompt="Implement AC-002 per PLAN.md target files <list>. Return changed paths, test results, and blockers in your final response. Do not edit PROGRESS.md.")
 ```
 
 Use one Agent per independent AC. Do not assign multiple independent ACs to one
 executor. The coordinator reads subagent final responses and merges PROGRESS.md
-and CHECKS.yaml after all siblings return.
+after all siblings return.
 
 **Coordinator-review branch (before generic rollback).** If any worker returns
 the exact status `needs-coordinator-review`, handle it before generic rollback
@@ -224,14 +227,7 @@ See `plugin/skills/develop/parallel-fanout.md` for the full Parallelization Trig
 
 **Rollback protocol** — on ANY sibling Agent failure during a parallel batch:
 
-```bash
-for _AC in <list of siblings that had already promoted>; do
-  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
-    --task-dir <task_dir> --ac "$_AC" --status open --note parallel-fallback
-done
-# Then state the rollback reason in the conversation and sequential-retry the
-# failed batch.
-```
+Record the rollback reason in PROGRESS.md and sequential-retry the failed batch.
 
 After rollback, retry the failed batch sequentially. Do NOT re-fanout the same batch — that masks the underlying failure mode.
 
@@ -287,18 +283,11 @@ updated: <ISO timestamp>
 
 Any AC scoring ≤7 MUST list `deferred_edges`. ≤5 requires explicit justification in PROGRESS.md or the final response (MVP scope, user-deferred, etc.).
 
-**Acceptance Ledger update (after each AC):** once the AC's code is in and per-AC tests pass, mark it `implemented_candidate` in CHECKS.yaml. Only Phase 7 promotes to `passed`. Never hand-edit CHECKS.yaml.
+After each AC, record implementation and targeted-test evidence in PROGRESS.md.
 
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
-  --task-dir doc/harness/tasks/<task_id>/ \
-  --ac AC-00X --status implemented_candidate \
-  --evidence "<file:line | test name>"
-```
+**Per-AC test run:** each executor runs its own targeted tests for the AC it owns. `git diff --name-only HEAD~1` → for each changed source, find test files that import/reference it (mirror path or import search) → run only those. If no tests exist for changed module, write one (Phase 3.5 rule). If PLAN.md specifies per-AC verify commands, prefer those. For parallel AC batches, targeted tests run inside the sibling executor contexts before the coordinator touches PROGRESS.md.
 
-**Per-AC test run:** each executor runs its own targeted tests for the AC it owns. `git diff --name-only HEAD~1` → for each changed source, find test files that import/reference it (mirror path or import search) → run only those. If no tests exist for changed module, write one (Phase 3.5 rule). If PLAN.md specifies per-AC verify commands, prefer those. For parallel AC batches, targeted tests run inside the sibling executor contexts before the coordinator touches PROGRESS.md or CHECKS.yaml.
-
-**Delegation rule (C-18 / Verification delegation).** Prefer delegating Browser MCP tools (`mcp__chrome-devtools__*`) to `harness:qa-browser` so browser evidence does not consume the main context; inline use is allowed and its context cost is caller-owned. Bash test runners (`pytest`, `npm test`, `pnpm test`, `vitest`, `cargo test`, `go test`, …) are allowed inline only for small targeted per-AC runs; full-suite verification MUST be delegated to qa-* agents. Spawn every applicable lens (`qa-cli`, `qa-api`, `qa-browser`, `qa-desktop`) in one assistant message, let each lens run its commands in its own context, and await every lens. Claude/Codex hooks record lifecycle events in `SUBAGENT_RECEIPTS.jsonl`; `task_verify` requires fresh completed explicit PASS verdicts. See `plugin/CLAUDE.md` § 8c.
+**Delegation rule (C-18 / Verification delegation).** Prefer delegating Browser MCP tools (`mcp__chrome-devtools__*`) to `harness:qa-browser` so browser evidence does not consume the main context; inline use is allowed and its context cost is caller-owned. Bash test runners (`pytest`, `npm test`, `pnpm test`, `vitest`, `cargo test`, `go test`, …) are allowed inline only for small targeted per-AC runs; full-suite verification MUST be delegated to qa-* agents. Spawn every applicable lens (`qa-cli`, `qa-api`, `qa-browser`, `qa-desktop`) in one assistant message, let each lens run its commands in its own context, and await every lens. Claude/Codex hooks record lifecycle events in `RECEIPTS.jsonl`; `task_verify` requires completed explicit PASS verdicts. See `plugin/CLAUDE.md` § 8c.
 
 Per-AC test failures → fix immediately. These are free; only Phase 7 full-suite failures count toward the 3-cycle limit.
 
@@ -323,21 +312,7 @@ Runs continuously during Phase 3.
 
   *Regression rule:* if the diff modifies existing behavior and no test covers the changed path, write a regression test immediately. Commit separately: `test: regression test for <what>`.
 
-  *Test-Evidence Gate (since v2.3):* `update_checks.py` rejects promotion of `kind in {feature, functional}` ACs to `implemented_candidate` / `passed` unless `--test-evidence <path>` resolves to a real file inside the repo (no symlinks, no traversal). Use the bypass with a documented reason for ACs that genuinely have no test surface (configs, narration, migrations):
-  ```bash
-  # Promote with evidence:
-  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
-    --task-dir doc/harness/tasks/<task_id>/ --ac AC-001 \
-    --status implemented_candidate \
-    --test-evidence tests/regression/task_xx/test_ac_001__behavior.py
-
-  # Bypass with reason (logged to learnings.jsonl):
-  python3 ${CLAUDE_PLUGIN_ROOT}/scripts/update_checks.py \
-    --task-dir doc/harness/tasks/<task_id>/ --ac AC-007 \
-    --status implemented_candidate \
-    --no-test-required "narration-only AC, no behavior to test"
-  ```
-  Allowlist (no evidence required): `kind in {bugfix, doc, verification}`. Bugfix is gated separately by Iron Law (`--root-cause`). Missing `kind:` field defaults to `unknown` and skips the gate (backward-compat).
+  *Test-evidence rule:* behavioral ACs require a concrete test path or a documented reason that no test surface exists. Record this in PROGRESS.md and the final verification evidence.
 
   QA agents may include `codifiable:` YAML blocks in their final response for
   future regression-test extraction. Do not write critic artifacts for this.
@@ -409,7 +384,7 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 
 Read `quality-audit-pipeline.md` § Phase 6.6. Call `task_context`, spawn every
 required read-only review lens in parallel, await explicit verdicts, and require
-`REVIEW_RECEIPTS.jsonl` PASS entries correlated to starts in the current task
+review PASS entries in `RECEIPTS.jsonl` correlated to starts in the current task
 run. Send only `FIX_NOW` findings to the original minimum-sufficient
 implementer. Any edit loops through focused tests/checkpoint and all required
 reviewers again. Do not start Phase 7 QA until review PASS.
@@ -418,7 +393,7 @@ reviewers again. Do not start Phase 7 QA until review PASS.
 
 Read `verification-gate.md` in full. Delegates full-suite test commands from PLAN.md to all applicable qa-* agents in parallel, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit with investigate-skill escalation on cycle 3.
 
-**Main session MUST spawn the appropriate qa-* lens for full-suite verification (Verification delegation, C-18).** Browser delegation is workflow guidance rather than a PreTool denial; full-suite delegation remains required by the develop contract. Bash test runners remain allowed inline only for targeted per-AC runs and debug reruns. Heavy full-suite execution and background process state belong in qa-* isolated contexts. Let the qa-* lens execute, then run `task_verify`; the hook-recorded `SUBAGENT_RECEIPTS.jsonl` entry is the verification signal.
+**Main session MUST spawn the appropriate qa-* lens for full-suite verification (Verification delegation, C-18).** Browser delegation is workflow guidance rather than a PreTool denial; full-suite delegation remains required by the develop contract. Bash test runners remain allowed inline only for targeted per-AC runs and debug reruns. Heavy full-suite execution and background process state belong in qa-* isolated contexts. Let the qa-* lens execute, then run `task_verify`; the hook-recorded `RECEIPTS.jsonl` entry is the verification signal.
 
 QA must be spawned after Phase 6.6 PASS; a QA run started before the latest
 review PASS is stale evidence and cannot close the task.
@@ -440,7 +415,7 @@ When durable docs changed under `doc/<area>/<TYPE>__*.md`, pass those paths to t
   - `critical` AND confidence ≥ 7
   - `high` AND confidence ≥ 8
   Lower severities may be deferred in final response or follow-up tasks — do not block close.
-- **Acceptance Ledger promotion** — on gate pass, `update_checks.py --status passed`. On gate fail, `--status failed` (auto-increments `reopen_count`), loop back to fix cycle. Close gate requires every AC to be `passed` or `deferred`.
+- **Acceptance result** — on gate fail, loop back to the fix cycle; on pass, retain the evidence in the review/QA receipt stream.
 
 ### Phase 7.5: Auto-checkpoint (post verify gate)
 
@@ -522,13 +497,11 @@ explicitly opts out of installation.
 
 Before `task_close`, verify these are true:
 
-1. Every AC is `passed` or explicitly `deferred` in CHECKS.yaml.
+1. PLAN.md acceptance criteria are addressed or explicitly deferred.
 2. `task_verify` reports PASS from ordered receipts in the current `TASK_RUN`.
-3. Required QA/UX subagents were spawned when the runtime exposed them; hook-owned `SUBAGENT_RECEIPTS.jsonl` proves the start.
-4. User feedback events have terminal disposition in task state: `promoted`, `handled-local`, `deferred`, or `rejected`.
-5. `CONVERSATION.md` has no open `<!-- item: ... status=open -->` markers; captured items name a durable ref, rejected items name a reason, deferred items name a follow-up task/goal.
-6. Durable docs are updated when the task changed user-visible behavior, externally consumed API contracts, reusable guidance, significant decisions, external constraints, user-stated durable rules, or reusable implementation knowledge.
-7. Reusable EUREKA discoveries, user corrections, dogfood findings, setup recipes, and repeated friction are either promoted to committed artifacts or explicitly rejected/deferred with a concrete reason.
+3. Required QA/UX subagents were spawned when available; hook-owned `RECEIPTS.jsonl` proves their lifecycle.
+4. `CONVERSATION.md` has no open `<!-- item: ... status=open -->` markers.
+5. Durable docs are updated when the task changed user-visible behavior, external contracts, or reusable guidance.
 
 Call `task_close`, then provide a concise final response with:
 
@@ -696,10 +669,10 @@ and close produced no self-healing signal.
 Mechanical. Read `TASK_STATE.yaml` touched paths + `doc/CLAUDE.md` registered roots. For each file, map to doc root. Call `task_verify`.
 
 When the task changes `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or
-`POLICY__*.md` OR the task's `<task_dir>/USER_FEEDBACK.jsonl` is non-empty
+`POLICY__*.md` OR the current task contains explicit durable user corrections
 (per C-101 in `CONTRACTS.local.md`), spawn the documentation-review subagent after
 durable docs. It verifies both durable docs consistency and durable doc quality, and
-runs the Retrospective REQ pass over USER_FEEDBACK.jsonl to catch user-stated
+runs the Retrospective REQ pass over the conversation to catch user-stated
 requirements that closed without becoming durable REQ docs. The task cannot
 close with unresolved durable-doc gaps; a changed REQ with vague or missing
 observable behavior is a FAIL, not a warning. Candidate REQs written by the

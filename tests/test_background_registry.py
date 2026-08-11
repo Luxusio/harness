@@ -71,7 +71,7 @@ def test_subagent_start_records_task_local_receipt(tmp_path):
         task_dir=task_dir,
     )
 
-    receipt_path = os.path.join(task_dir, "SUBAGENT_RECEIPTS.jsonl")
+    receipt_path = os.path.join(task_dir, "RECEIPTS.jsonl")
     assert started["subagent_receipt_id"].startswith("subagent-")
     assert os.path.isfile(receipt_path)
     with open(receipt_path, encoding="utf-8") as f:
@@ -234,7 +234,7 @@ def test_official_subagent_stop_fields_are_preserved(tmp_path):
     assert stopped["agent_type"] == "general-purpose"
     assert stopped["transcript_path"] == "/tmp/agent.jsonl"
     assert stopped["last_assistant_message"] == "VERDICT: PASS\ndone"
-    receipts = [json.loads(line) for line in (Path(task_dir) / "SUBAGENT_RECEIPTS.jsonl").read_text().splitlines()]
+    receipts = [json.loads(line) for line in (Path(task_dir) / "RECEIPTS.jsonl").read_text().splitlines()]
     assert receipts[-1]["status"] == "completed"
     assert receipts[-1]["verdict"] == "PASS"
 

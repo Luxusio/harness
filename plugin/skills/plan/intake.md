@@ -158,12 +158,12 @@ cat >> doc/harness/tasks/TASK__<id>/restore-points/pre-plan-${_TS}.md << 'EOF'
 ## Re-run Instructions
 
 1. Copy the block below (`## Original Plan State`) back over `doc/harness/tasks/TASK__<id>/PLAN.md`.
-2. Clear AUDIT_TRAIL.md and CHECKS.yaml so the new run starts with a fresh ledger:
-   `rm -f doc/harness/tasks/TASK__<id>/AUDIT_TRAIL.md doc/harness/tasks/TASK__<id>/CHECKS.yaml`
+2. Clear AUDIT_TRAIL.md when the re-run should start with a fresh decision log:
+   `rm -f doc/harness/tasks/TASK__<id>/AUDIT_TRAIL.md`
 3. Re-invoke the plan skill with the original task slug:
    `Skill("harness:plan", "<original-task-slug>")`
 
-The re-run will pick up the restored PLAN.md as its starting point and rebuild AUDIT_TRAIL + CHECKS from scratch. Phase-transition summaries from the prior run are not replayed — only the plan content is.
+The re-run will pick up the restored PLAN.md as its starting point and rebuild AUDIT_TRAIL. Phase-transition summaries from the prior run are not replayed — only the plan content is.
 
 ## Original Plan State
 

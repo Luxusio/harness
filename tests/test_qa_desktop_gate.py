@@ -26,10 +26,10 @@ GATE = os.path.join(SCRIPTS_DIR, "prewrite_gate.py")
 
 
 class TestOwnerTokens(unittest.TestCase):
-    def test_subagent_receipt_owner_token_is_hook(self):
+    def test_unified_receipt_owner_token_is_hook(self):
         self.assertEqual(
-            prewrite_gate.PROTECTED_ARTIFACTS["SUBAGENT_RECEIPTS.jsonl"],
-            "subagent-start-hook",
+            prewrite_gate.PROTECTED_ARTIFACTS["RECEIPTS.jsonl"],
+            "receipt-lifecycle-hook",
         )
 
     def test_conversation_owner_token_is_hook(self):
@@ -38,9 +38,9 @@ class TestOwnerTokens(unittest.TestCase):
             "conversation-hook",
         )
 
-    def test_subagent_receipt_human_text_names_hooks(self):
-        human = prewrite_gate.PROTECTED_ARTIFACT_HUMAN["SUBAGENT_RECEIPTS.jsonl"]
-        self.assertIn("subagent-start hook", human)
+    def test_unified_receipt_human_text_names_hooks(self):
+        human = prewrite_gate.PROTECTED_ARTIFACT_HUMAN["RECEIPTS.jsonl"]
+        self.assertIn("review and QA lifecycle hooks", human)
 
     def test_conversation_human_text_names_hooks(self):
         human = prewrite_gate.PROTECTED_ARTIFACT_HUMAN["CONVERSATION.md"]
@@ -92,16 +92,16 @@ class TestProvenance(unittest.TestCase):
 
 
 class TestDenyDecisionSubagentReceipt(unittest.TestCase):
-    def test_write_subagent_receipt_denies_with_hook_owner(self):
+    def test_write_unified_receipt_denies_with_hook_owner(self):
         with scratch_task_in_real_repo("subagent-receipt") as task_dir:
-            receipt = os.path.join(task_dir, "SUBAGENT_RECEIPTS.jsonl")
+            receipt = os.path.join(task_dir, "RECEIPTS.jsonl")
             r = invoke_hook(GATE, "Write", {"file_path": receipt})
             self.assertEqual(r.returncode, 0)
             decision, reason = parse_decision(r.stdout)
             self.assertEqual(decision, "deny")
             self.assertIsNotNone(reason)
             self.assertIn("C-05-protected-artifact", reason)
-            self.assertIn("owner=subagent-start-hook", reason)
+            self.assertIn("owner=receipt-lifecycle-hook", reason)
 
 
 if __name__ == "__main__":

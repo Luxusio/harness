@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Write a task checkpoint snapshot for mid-task resume.
 
-Captures git state, TASK_STATE fields, open/failed ACs from CHECKS.yaml, and a
-next-action line into doc/harness/checkpoints/<TASK_ID>.md. Overwrites prior
+Captures git state, TASK_STATE fields, PROGRESS.md status, and a next-action
+line into doc/harness/checkpoints/<TASK_ID>.md. Overwrites prior
 checkpoint for the same task (one checkpoint per task — latest wins).
 
 The directory doc/harness/checkpoints/ is gitignored (see setup/bootstrap.md).
@@ -50,61 +50,26 @@ def _git_context(repo_root: str) -> dict:
     }
 
 
-def _pluck_acs(checks_path: str) -> tuple[list[dict], int]:
-    """Return [(id, status, title)] for non-terminal ACs, plus total count.
-
-    Parser mirrors update_checks.py — regex scan of `- id:` blocks. Only
-    surfaces status in {open, implemented_candidate, failed} since passed /
-    deferred don't block resume.
-    """
-    if not os.path.isfile(checks_path):
-        return [], 0
-    try:
-        with open(checks_path, "r", encoding="utf-8") as f:
-            text = f.read()
-    except OSError:
-        return [], 0
-
-    import re
-
-    blocks = re.split(r"(?m)^(?=-\s+id:\s*)", text)
-    active = []
-    total = 0
-    surface = {"open", "implemented_candidate", "failed"}
-    for blk in blocks:
-        m = re.match(r"^-\s+id:\s*(\S+)", blk)
-        if not m:
-            continue
-        total += 1
-        ac_id = m.group(1).strip().strip('"').strip("'")
-        sm = re.search(r"^\s+status:\s*(\S+)", blk, re.MULTILINE)
-        status = sm.group(1).strip() if sm else "unknown"
-        tm = re.search(r'^\s+title:\s*"?(.+?)"?\s*$', blk, re.MULTILINE)
-        title = tm.group(1).strip() if tm else ""
-        if status in surface:
-            active.append({"id": ac_id, "status": status, "title": title})
-    return active, total
-
-
-def _next_action(state: dict, active_acs: list[dict]) -> str:
+def _next_action(state: dict) -> str:
     status = (state.get("status") or "").lower()
     verdict = (state.get("runtime_verdict") or "pending").upper()
     if status in ("", "created"):
         return "Open plan skill — PLAN.md not yet created."
     if status == "planning":
         return "Resume plan skill — plan_session_state may be open."
-    failed = [a for a in active_acs if a["status"] == "failed"]
-    if failed:
-        return f"Address {len(failed)} failed AC(s): {', '.join(a['id'] for a in failed[:3])}"
-    open_acs = [a for a in active_acs if a["status"] == "open"]
-    if open_acs:
-        return f"{len(open_acs)} AC(s) still open — continue develop lane."
-    impl = [a for a in active_acs if a["status"] == "implemented_candidate"]
-    if impl:
-        return f"{len(impl)} AC(s) at implemented_candidate — run task_verify."
     if verdict != "PASS":
-        return "All ACs passed status-wise — run task_verify to gate runtime_verdict."
+        return "Resume the current PROGRESS.md step, then run ordered review and QA verification."
     return "runtime_verdict PASS — run task_close."
+
+
+def _progress_summary(task_dir: str) -> list[str]:
+    path = os.path.join(task_dir, "PROGRESS.md")
+    try:
+        with open(path, encoding="utf-8") as stream:
+            lines = [line.rstrip() for line in stream if line.startswith(("phase:", "current_ac:", "partial_ac:"))]
+    except OSError:
+        return ["(PROGRESS.md absent)"]
+    return lines or ["(PROGRESS.md has no compact phase fields)"]
 
 
 def write_checkpoint(task_dir: str, note: str = "") -> str:
@@ -116,8 +81,8 @@ def write_checkpoint(task_dir: str, note: str = "") -> str:
     task_id = os.path.basename(os.path.normpath(task_dir))
     state = read_state(task_dir) or {}
     git_ctx = _git_context(repo_root)
-    active_acs, total_acs = _pluck_acs(os.path.join(task_dir, "CHECKS.yaml"))
-    next_act = _next_action(state, active_acs)
+    progress = _progress_summary(task_dir)
+    next_act = _next_action(state)
 
     ck_dir = os.path.join(repo_root, "doc", "harness", "checkpoints")
     os.makedirs(ck_dir, exist_ok=True)
@@ -138,18 +103,10 @@ def write_checkpoint(task_dir: str, note: str = "") -> str:
         f"- plan_session_state: {state.get('plan_session_state') or 'unknown'}",
         f"- touched_paths: {len(state.get('touched_paths') or [])}",
         "",
-        "## Active ACs",
+        "## Progress",
         "",
     ]
-    if not active_acs:
-        lines.append(f"(none — {total_acs} AC(s) total, all passed/deferred or CHECKS absent)")
-    else:
-        lines.append(f"{len(active_acs)} of {total_acs} AC(s) non-terminal:")
-        lines.append("")
-        for ac in active_acs:
-            t = ac["title"]
-            t = (t[:80] + "…") if len(t) > 80 else t
-            lines.append(f"- **{ac['id']}** [{ac['status']}] {t}")
+    lines.extend(f"- {item}" for item in progress)
     lines.extend(["", "## Next action", "", next_act, ""])
     if note:
         lines.extend(["## Note", "", note, ""])

@@ -8,6 +8,9 @@ allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, Agent, mcp__plugin_harne
 
 Harness-native 7-phase dual-voice review pipeline. Runs structured review across CEO, Design, Engineering, and DX lenses; builds adversarial consensus via two independent voices; classifies every decision; surfaces only contested items to the user; writes the final task contract through the protected-artifact MCP.
 
+> Current artifact model: acceptance criteria live in `PLAN.md`. Do not create
+> `CHECKS.yaml`; `write_plan` ignores the legacy checks input.
+
 ## Sub-files
 
 This skill is split across four sub-files. Load on demand:
@@ -17,7 +20,7 @@ This skill is split across four sub-files. Load on demand:
 | `intake.md` | Phase 0 (spawned detection, session recovery, task pack read, git context, base branch, scope detection, execution-mode branch) |
 | `review-phases.md` | Phases 1-4 (dual-voice template + per-lens dimensions, checklists, degradation matrix) |
 | `decision-principles.md` | 6 Decision Principles, classification, auto-decide rules, completion status, repo ownership, AskUserQuestion format |
-| `write-artifacts.md` | Phase 6 (PLAN.md / PLAN.meta.json / CHECKS.yaml assembly + MCP writes, learnings, close) |
+| `write-artifacts.md` | Phase 6 (PLAN.md / PLAN.meta.json assembly + MCP writes, learnings, close) |
 
 Phase 5 (user-facing gate) stays inline below.
 
@@ -28,7 +31,7 @@ Phase 5 (user-facing gate) stays inline below.
 - **Dual Voice required.** Every review phase (1-4) spawns Voice A and Voice B via Agent. Single-voice is prohibited; degradation matrix applies when a voice fails.
 - **Premise gate mandatory.** Phase 1.1 emits exactly one AskUserQuestion before Phase 5. Premises are never auto-decided.
 - **Never-auto decisions.** User Challenge items get their own AskUserQuestion at Phase 5.3.
-- **Write via MCP only.** PLAN.md, PLAN.meta.json, CHECKS.yaml, AUDIT_TRAIL.md go through `write_plan`. Never Write/Edit directly. CHECKS.yaml post-plan mutations use `update_checks.py` only.
+- **Write via MCP only.** PLAN.md, PLAN.meta.json, and AUDIT_TRAIL.md go through `write_plan`. Never Write/Edit directly.
 - **Zero browser-flag participation.** Does not read/write/inspect the browser verification flag in TASK_STATE.yaml.
 - **Workflow-lock awareness.** Trusts coordinator; no redundant check.
 - **Read actual code.** Review phases MUST read source files, diffs, and referenced code. Reasoning from plan text alone is insufficient.
@@ -294,5 +297,5 @@ Capstone — restating six load-bearing rules in one place. Most also appear in 
 - **Two gates.** The non-auto-decided AskUserQuestions are: (1) premise confirmation in Phase 1.1, and (2) User Challenges in Phase 5.3 — when both voices agree the user's stated direction should change. Everything else is auto-decided via the 6 Decision Principles.
 - **Log every decision.** Every classification (Mechanical / Taste / User Challenge) gets a row in `AUDIT_TRAIL.md` via `write_plan { plan: "...", audit: "..." }`. No silent auto-decisions.
 - **Full depth means full depth.** Complete every loaded sub-skill methodology section with its required evidence and decisions. "Full depth" means: read the code the section asks you to read, produce the outputs the section requires, identify every issue, decide each one. Fewer than 3 sentences for any review section is a compression signal — expand.
-- **Artifacts are deliverables.** PLAN.md, PLAN.meta.json, CHECKS.yaml, AUDIT_TRAIL.md must exist on disk before Phase 6 closes the session. If any artifact is missing, the plan is incomplete. CHECKS.yaml mutations post-plan go through `update_checks.py` only.
+- **Artifacts are deliverables.** PLAN.md and PLAN.meta.json must exist on disk before Phase 6 closes the session; AUDIT_TRAIL.md is written when the plan records audit decisions.
 - **Sequential order.** Phase 0 → 1 → 2 → 3 → 4 → 5 → 6. Never parallel. Each phase builds on the last; transition summaries appended to AUDIT_TRAIL.md before the next phase begins.

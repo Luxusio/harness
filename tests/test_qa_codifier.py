@@ -393,7 +393,7 @@ FIXTURE_TRANSCRIPT_WITH_AC_ID = """
 codifiable:
   - behavior: gate_exits_zero_on_allowed
     ac_id: AC-001
-    command: "python3 plugin/scripts/update_checks.py --help"
+    command: "python3 plugin/scripts/qa_codifier.py --help"
     expected_exit: 0
     expected_stdout_contains: ["usage"]
     expected_stderr_contains: []
@@ -511,7 +511,7 @@ class TestCodifierAcIdFiltering(unittest.TestCase):
         """Block without ac_id must not produce a file; codifier-rejected log written."""
         txt = """codifiable:
   - behavior: no_ac
-    command: "python3 plugin/scripts/update_checks.py --help"
+    command: "python3 plugin/scripts/qa_codifier.py --help"
     expected_exit: 0
     expected_stdout_contains: []
     expected_stderr_contains: []
@@ -536,7 +536,7 @@ class TestCodifierAcIdFiltering(unittest.TestCase):
         txt = """codifiable:
   - behavior: blank_ac
     ac_id:
-    command: "python3 plugin/scripts/update_checks.py --help"
+    command: "python3 plugin/scripts/qa_codifier.py --help"
     expected_exit: 0
     expected_stdout_contains: []
     expected_stderr_contains: []
@@ -586,7 +586,7 @@ class TestCodifierAcIdFiltering(unittest.TestCase):
         txt = """codifiable:
   - behavior: list_ac_test
     ac_id: [AC-002, AC-001]
-    command: "python3 plugin/scripts/update_checks.py --help"
+    command: "python3 plugin/scripts/qa_codifier.py --help"
     expected_exit: 0
     expected_stdout_contains: ["usage"]
     expected_stderr_contains: []

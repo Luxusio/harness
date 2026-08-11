@@ -48,10 +48,10 @@ plan → develop → verify → close
 
 | Step | What happens |
 |------|-------------|
-| **plan** | 7-phase dual-voice review pipeline writes PLAN.md + CHECKS.yaml |
+| **plan** | 7-phase dual-voice review pipeline writes PLAN.md + PLAN.meta.json |
 | **develop** | Implement per-AC, checkpoint progress, run quality audit, dogfood |
 | **verify** | Ordered review/QA completions are hook-recorded and checked against PLAN metadata |
-| **close** | Gate: PLAN.md exists + runtime_verdict = PASS + CHECKS terminal + no open CONVERSATION.md items |
+| **close** | Gate: PLAN.md exists + ordered review/QA receipts yield runtime_verdict = PASS + no open CONVERSATION.md items |
 
 After close, the Goal child-task executor performs a self-improvement pass — surfaces friction signals into `learnings.jsonl`, promotes recurring keys into Tier 2 patterns, and prunes stale entries.
 
@@ -72,30 +72,11 @@ automatic Git inspection. `BLOCKED_ENV` keeps the task open — QA has surfaced
 an environmental blocker that cannot be resolved without user action.
 `task_close` refuses to close anything except receipt-backed `PASS`.
 
-## Acceptance ledger (CHECKS.yaml)
+## Acceptance criteria
 
-Each AC gets a stable ID and status lifecycle:
-
-```yaml
-- id: AC-001
-  title: "what passes when satisfied"
-  status: open → implemented_candidate → passed | failed | deferred
-  kind: functional | verification | doc | performance | security | bugfix
-  completeness: 7       # 0-10, plan-time score
-  root_cause: ""         # required for kind=bugfix (Iron Law)
-  reopen_count: 0
-```
-
-Writes go through `scripts/update_checks.py` only. Direct edits are blocked by the prewrite gate.
-
-### Iron Law
-
-`kind: bugfix` ACs cannot be promoted to `implemented_candidate` or `passed` without `root_cause`. No fix without confirmed cause.
-
-```bash
-python3 scripts/update_checks.py --task-dir TASK_DIR --ac AC-001 \
-  --status implemented_candidate --root-cause "off-by-one in loop bound"
-```
+Stable AC IDs and their success conditions live directly in `PLAN.md`.
+Independent review and QA completion is recorded in one `RECEIPTS.jsonl`;
+Harness does not create or reconcile a second acceptance ledger.
 
 ## Agents
 
@@ -111,14 +92,17 @@ All under `plugin/agents/`. Narrow tool surface — each agent gets only what it
 | `qa-desktop` | Native GUI runtime QA via X11 tooling |
 | `ux-browser` / `ux-api` / `ux-cli` / `ux-desktop` | Surface-specific UX review; judges whether the implemented experience is shippable |
 
-QA/UX agents return findings in their final response. Codex and Claude hooks
-record matched subagent starts and completions to receipt streams; when Codex collaboration
-PostToolUse events are unavailable, every installed Codex root hook restores an
-idempotent root-rollout registration and
-the existing Harness MCP server hosts `codex_lifecycle_watcher.py` as passive
-daemon threads. `task_verify(reconcile_acs=true)`
-uses task/agent/lens identity plus review-before-QA ordering to set runtime verification and promote open
-CHECKS.yaml entries. QA agents never hold `Edit`/`Write` on source files.
+QA/UX agents return findings in their final response. Claude hooks and the
+Codex root-rollout watcher record matched subagent starts and completions to
+the task's unified `RECEIPTS.jsonl` stream. Codex supports one explicit lifecycle contract: direct
+`collaboration.spawn_agent`, structured output plus either correlated child
+activity or one unambiguous trusted depth-1 child rollout, and direct
+`FINAL_ANSWER` delivery. SessionStart creates the registration and the
+spawn-selective PreToolUse hook restores it immediately before delegation; the
+Harness MCP server hosts `codex_lifecycle_watcher.py` as
+passive daemon threads. `task_verify`
+uses task/agent/lens identity plus review-before-QA ordering to set runtime verification.
+QA agents never hold `Edit`/`Write` on source files.
 Dogfooder remains a non-gating backlog pass after QA/UX.
 
 Task lifecycle calls do not run Git change detection, capture HEAD baselines,
@@ -154,7 +138,6 @@ All under `plugin/scripts/`. Stdlib only.
 | `verify_runner.py` | Deterministic manifest `verify_commands` runner with optional parallel execution | stdout |
 | `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | stdout |
 | `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |
-| `update_checks.py` | Atomic CHECKS.yaml AC status transitions (plan-first) | task-local |
 | `install_verified.py` | Trusted post-QA harness installer with ordered review/QA receipts, explicit payload snapshot, global lock, and payload deduplication | task-local `INSTALL_RECEIPT.json` |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
 | `hygiene_scan.py` | Close-time hygiene scan: Tier A/B auto-apply + doc archive pass | `doc/harness/.hygiene-pending.json` |
@@ -193,10 +176,10 @@ The post-close self-improvement pass in the Goal child-task executor auto-promot
 | UserPromptSubmit | `prompt_memory.py` | Inject stored `[harness-context]` state without Git |
 | UserPromptSubmit | `hook_user_prompt_submit.py` | Codex wrapper that injects `$harness:run` routing plus prompt memory |
 | PostToolUse (Bash) | `tool_routing.py` | Emit `[harness-hint]` on known failures (wrong test command, missing script) |
-| PostToolUse (Bash/Goal/agent lifecycle) | `hook_post_tool_use.py` | Route Bash failures, native `create_goal` synchronization, and Codex reviewer/QA receipts |
+| PostToolUse (Bash/Goal) | `hook_post_tool_use.py` | Route Bash failures and native `create_goal` synchronization |
 | SessionStart | `hook_session_start.py` | Codex plugin wrapper for startup context |
 | Explicit note maintenance | `note_freshness.py --paths ...` | Mark selected durable notes suspect without automatic Git scanning |
-| Codex root hooks + MCP background | `codex_hook_registration.py`, `codex_lifecycle_watcher.py` | Restore the root-rollout registration, then bind runtime subagent starts and completions from MCP-hosted daemon threads without a detached process |
+| Codex SessionStart/spawn PreToolUse + MCP background | `codex_hook_registration.py`, `codex_lifecycle_watcher.py` | Register the root rollout at startup or immediately before spawn, then bind runtime subagent starts and completions from MCP-hosted daemon threads without a detached process |
 | Stop | `hook_stop.py` | Codex plugin wrapper for stop gating |
 | (task_start) | `environment_snapshot.py` | One-shot probe invoked from `task_start`; writes `ENVIRONMENT_SNAPSHOT.md` into the task dir |
 
@@ -218,7 +201,7 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 | `goal_add_task` | Attach or update a child task under the goal |
 | `goal_next_task` | Return the next queued/active child task |
 | `goal_finish` | Mark the active goal complete or blocked |
-| `write_plan` | Write PLAN.md / PLAN.meta.json plus optional CHECKS.yaml / AUDIT_TRAIL.md |
+| `write_plan` | Write PLAN.md / PLAN.meta.json plus optional AUDIT_TRAIL.md |
 
 ## Skills
 

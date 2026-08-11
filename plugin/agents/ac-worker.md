@@ -65,7 +65,7 @@ clear to you, it does not go in.
 
 ## Always Do
 
-1. Read `PLAN.md`, `CHECKS.yaml`, and any files named in your assignment.
+1. Read `PLAN.md`, `PLAN.meta.json`, and any files named in your assignment.
 2. Implement the smallest coherent diff for your AC.
 3. Run scoped tests for the changed paths, plus any per-AC verification command
    named in `PLAN.md`.
@@ -78,8 +78,7 @@ clear to you, it does not go in.
 
 ## Never Do
 
-- Do not write `PLAN.md`, `SUBAGENT_RECEIPTS.jsonl`, `REVIEW_RECEIPTS.jsonl`,
-  `PROGRESS.md`, or `CHECKS.yaml`.
+- Do not write `PLAN.md`, `PLAN.meta.json`, `RECEIPTS.jsonl`, or `PROGRESS.md`.
 - Do not call harness MCP artifact writers.
 - Do not run full-suite QA unless your prompt explicitly assigns that lane.
 - Do not claim the AC is complete without test evidence or a documented

@@ -3,7 +3,7 @@
 This is the Codex-runtime tree for the harness plugin. **Opt-in.** It does NOT materialize automatically on existing Claude Code installs — set `harness.codex_enabled: true` in your `.claude-plugin/marketplace.json` or invoke `Skill(setup) --include-codex` to enable.
 
 Architecture lives in [`doc/harness/spike-report.md`](../doc/harness/spike-report.md) §3.6 — **MCP-only sharing**:
-- Shared across runtimes: MCP server, hook payload schemas, `plugin/scripts/` (gate scripts, helpers), contract artifacts (PLAN.md / CHECKS.yaml / REVIEW_RECEIPTS.jsonl / SUBAGENT_RECEIPTS.jsonl).
+- Shared across runtimes: MCP server, hook payload schemas, `plugin/scripts/` (gate scripts, helpers), and contract artifacts (`PLAN.md`, `PLAN.meta.json`, unified `RECEIPTS.jsonl`).
 - Single installer: repo-root `install.py` emits the `~/.codex/config.toml` MCP+hook block that wires the shared substrate into a Codex install.
 - Independent per runtime: SKILL.md trees, agent definitions. Hand-authored on each side, both consuming the same shared substrate.
 
@@ -41,7 +41,7 @@ Further references:
 - `skills/` — user-visible Codex entry skills: `setup` for bootstrap/repair and `run` for repository mutation. `run` is implicitly invocable and loads the canonical internal workflow before edits.
 - `internal-skills/` — hand-authored Codex methodology prompts hidden from the user skill menu (`run`, `goal-queue`, `plan`, `develop`, `plan-*-review`).
 - `agents/` — QA/UX/review methodology references. On Codex, the orchestrator checks the current and deferred tool catalogs and uses `spawn_agent` when available; inline execution is the explicit fallback when no independent agent route exists.
-- Codex hook config is emitted by `install.py` as plugin-local `hooks.json`. It intentionally omits Stop-loop control; Codex flow is prompt-controlled by the skills. Hook scripts provide prompt context, tool safety, and review/QA lifecycle receipts. Because some Codex builds do not forward collaboration tools to plugin PostToolUse, SessionStart creates the exact root-rollout registration and every installed root hook idempotently restores it if missing or invalid. The existing Harness MCP server hosts a passive thread-scoped watcher, records start-time fingerprints, and accepts only strictly correlated child completions through the protected receipt owner without launching another OS process. Late recovery covers future subagent starts only; it never promotes already-completed work.
+- Codex hook config is emitted by `install.py` as plugin-local `hooks.json`. It intentionally omits Stop-loop control; Codex flow is prompt-controlled by the skills. SessionStart creates the exact root-rollout registration and spawn-selective PreToolUse restores it immediately before delegation. Prompt, PostToolUse, and Stop hooks do no registration work. The Harness MCP server hosts the sole Codex receipt owner: a passive thread-scoped watcher over direct `collaboration` events. It accepts only strictly correlated child completions without launching another OS process. Late recovery covers future subagent starts only; it never promotes already-completed work.
 
 ## Skills and Internal Prompts
 
@@ -74,7 +74,7 @@ Further references:
 - **Browser MCP verification** — qa-browser methodology is ported, but runtime calls to `mcp__chrome-devtools__*` have no Codex equivalent yet. Wire Codex Playwright MCP in v2.
 - **Dual-voice plan-* reviews** — plan-skill's Voice A / Voice B fan-out for the 4 plan-* review lenses degrades to single-voice on Codex (no Agent primitive). v2 fix is multi_agent-based; until then, users wanting dual-voice fidelity should use native `/goal` on the Claude runtime, which routes through the full plan phase.
 - **AskUserQuestion** — every call site in the 9 ported skills converted to conversational prose with numbered/lettered options. Functional but UX-wise less discoverable than the structured tool. v2 may introduce a Codex helper that renders prose asks with a consistent shape.
-- **Inline fallback evidence** — verification receipts remain hook-owned. Inline fallback roles return final-response findings and do not write critic artifacts or satisfy strict independent PASS gates.
+- **Inline fallback evidence** — verification receipts remain watcher-owned. Inline fallback roles return final-response findings and do not write critic artifacts or satisfy strict independent PASS gates.
 - **Stop loop control** — disabled on Codex. Codex follows the prompt in `run` / `develop` to continue through verify and close inside the current turn when feasible. It does not rely on Stop-hook auto-resume.
 
 ## For Claude users

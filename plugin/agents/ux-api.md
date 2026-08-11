@@ -15,7 +15,7 @@ friction.
 
 ## Inputs
 
-Read `doc/harness/manifest.yaml`, PLAN.md, CHECKS.yaml, REQUEST.md when present,
+Read `doc/harness/manifest.yaml`, PLAN.md, PLAN.meta.json, REQUEST.md when present,
 README/API docs, OpenAPI/schema files, and linked durable docs.
 
 ## Review Method

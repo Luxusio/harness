@@ -58,16 +58,6 @@ class TestDenyProtectedArtifact(unittest.TestCase):
             self.assertIn("C-05-protected-artifact", reason)
             self.assertIn("HARNESS_SKIP_PREWRITE", reason)
 
-    def test_write_checks_yaml_denies(self):
-        with scratch_task_in_real_repo("pr1-checks") as task_dir:
-            checks = os.path.join(task_dir, "CHECKS.yaml")
-            r = invoke_hook(GATE, "Write", {"file_path": checks})
-            decision, reason = parse_decision(r.stdout)
-            self.assertEqual(decision, "deny")
-            self.assertIn("CHECKS.yaml", reason)
-            self.assertIn("update_checks.py", reason)
-
-
 class TestMultiEdit(unittest.TestCase):
     def test_multiedit_triggers_gate(self):
         """MultiEdit on a protected artifact must deny."""
@@ -183,7 +173,7 @@ class TestFailSafe(unittest.TestCase):
 class TestReasonFormat(unittest.TestCase):
     def test_every_deny_has_structured_tail(self):
         with scratch_task_in_real_repo("pr1-tail") as task_dir:
-            for basename in ("PLAN.md", "CHECKS.yaml", "SUBAGENT_RECEIPTS.jsonl", "CONVERSATION.md"):
+            for basename in ("PLAN.md", "RECEIPTS.jsonl", "CONVERSATION.md"):
                 target = os.path.join(task_dir, basename)
                 r = invoke_hook(GATE, "Write", {"file_path": target})
                 decision, reason = parse_decision(r.stdout)
