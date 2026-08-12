@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Harness MCP server — self-contained, exact six-field TASK.json.
+"""Harness MCP server — self-contained, exact four-field TASK.json.
 
 No plugin-legacy dependency. All operations are direct file I/O.
 MCP tools: goal_start, goal_context, goal_add_task, goal_next_task, goal_finish,
@@ -10,8 +10,6 @@ MCP tools: goal_start, goal_context, goal_add_task, goal_next_task, goal_finish,
 from __future__ import annotations
 import json
 import os
-import re
-import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -28,6 +26,9 @@ OBSOLETE_TASK_ARTIFACTS = (
     "PLAN.meta.json",
     "TASK_CLOSE_RECEIPT.json",
     "INSTALL_RECEIPT.json",
+    "AUDIT_TRAIL.md",
+    "ENVIRONMENT_SNAPSHOT.md",
+    ".receipts.lock",
 )
 
 
@@ -56,7 +57,7 @@ def _initialize_instructions(runtime: str) -> str:
         "Protocol tool names are bare: goal_start, goal_context, "
         "goal_add_task, goal_next_task, goal_finish, task_start, "
         "task_context, task_verify, task_close, task_blocked, and write_plan. "
-        "write_plan is the canonical task-local PLAN/AUDIT writer. "
+        "write_plan is the canonical task-local PLAN writer. "
     )
     if runtime == "codex":
         return (
@@ -97,6 +98,7 @@ from _lib import (  # type: ignore
     receipt_stream_transaction,
     begin_task_run, restore_task_control,
     _strict_regular_text_snapshot, _restore_text_snapshots,
+    LENS_ORDER, SUPPORTED_LENSES, QA_LENSES,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
 )
@@ -108,10 +110,6 @@ def _control_root() -> str:
     if error:
         raise RuntimeError(f"invalid Harness workspace at {root}: {error}")
     return root or candidate
-try:
-    from environment_snapshot import snapshot as _env_snapshot  # type: ignore
-except Exception:
-    _env_snapshot = None
 try:
     from codex_lifecycle_watcher import WatcherManager as _WatcherManager  # type: ignore
 except Exception:
@@ -152,12 +150,6 @@ def _selector_opt(args: dict, k: str) -> str | None:
 
 def _task_artifact_rel(td: str, fn: str) -> str:
     return f"doc/harness/tasks/{os.path.basename(td)}/{fn}" if artifact_exists(td, fn) else ""
-
-
-AUDIT_HEADER = (
-    "| # | phase | decision | classification | principle | rationale | rejected_option |\n"
-    "|---|---|---|---|---|---|---|\n"
-)
 
 
 def _atomic_write_text(path: str, text: str) -> None:
@@ -408,17 +400,8 @@ def handle_task_start(args: dict) -> dict:
         rollback_new_start()
         raise
 
-    # Best-effort environment snapshot runs after the coherent Git/context scope.
-    snapshot_path = ""
-    if _env_snapshot is not None:
-        try:
-            snapshot_path = _env_snapshot(task_dir, repo_root) or ""
-        except Exception:
-            snapshot_path = ""
-
     return _ok({
         "task_dir": task_dir, "task_id": tid, "task_context": ctx,
-        "environment_snapshot": snapshot_path,
         "start_status": "ready_with_warnings" if warnings else "ready",
         "task_created": not resumed_existing,
         "resumed": resumed_existing,
@@ -679,70 +662,6 @@ def _nonempty_artifact_content(value: str, *, artifact: str, filename: str) -> s
     return value
 
 
-def _normalize_audit_content(value: str) -> tuple[str, str]:
-    """Accept natural Markdown audit tables and return canonical data rows."""
-    lines = [line.strip() for line in value.splitlines() if line.strip()]
-    if lines and re.fullmatch(r"#{1,6}\s+audit trail", lines[0], re.IGNORECASE):
-        lines.pop(0)
-    canonical_header = (
-        "#", "phase", "decision", "classification", "principle", "rationale",
-        "rejected_option",
-    )
-    if lines and lines[0].startswith("|") and lines[0].endswith("|"):
-        first_cells = tuple(
-            cell.strip().lower() for cell in lines[0][1:-1].split("|")
-        )
-        if first_cells == canonical_header:
-            lines.pop(0)
-            if lines and re.fullmatch(r"\|(?:\s*:?-{3,}:?\s*\|)+", lines[0]):
-                lines.pop(0)
-        elif first_cells and first_cells[0] == "#":
-            return "", (
-                "Use the audit header columns '#, phase, decision, classification, "
-                "principle, rationale, rejected_option', or pass data rows only."
-            )
-    if not lines:
-        return "", "Pass at least one audit data row after the optional heading and table header."
-    valid_rows = True
-    for line in lines:
-        if not line.startswith("|") or not line.endswith("|"):
-            valid_rows = False
-            break
-        cells = [cell.strip() for cell in line[1:-1].split("|")]
-        if (
-            len(cells) < 3
-            or any(not cell for cell in cells)
-            or all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)
-        ):
-            valid_rows = False
-            break
-    if not valid_rows:
-        return "", (
-            "Pass at least one complete audit data row with three or more "
-            "non-empty cells, or a full Markdown table with an optional "
-            "'# Audit Trail' heading, header row, and separator."
-        )
-    return "\n".join(lines) + "\n", ""
-
-
-def _read_regular_text_no_follow(path: str) -> str:
-    flags = os.O_RDONLY
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    if hasattr(os, "O_NONBLOCK"):
-        flags |= os.O_NONBLOCK
-    fd = os.open(path, flags)
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise ValueError("existing audit artifact is not a regular file")
-        with os.fdopen(fd, "r", encoding="utf-8") as f:
-            fd = -1
-            return f.read()
-    finally:
-        if fd >= 0:
-            os.close(fd)
-
-
 def _record_write(path: str, text: str, written: list[str], bytes_written: dict[str, int]) -> None:
     _atomic_write_text(path, text)
     name = os.path.basename(path)
@@ -751,9 +670,7 @@ def _record_write(path: str, text: str, written: list[str], bytes_written: dict[
 
 
 def handle_write_plan(args: dict) -> dict:
-    allowed_args = {
-        "task_id", "task_dir", "plan", "audit", "review_lenses", "qa_lenses",
-    }
+    allowed_args = {"task_id", "task_dir", "plan", "required_lenses"}
     unknown_args = sorted(set(args) - allowed_args)
     if unknown_args:
         return _err(
@@ -796,57 +713,43 @@ def _handle_write_plan_locked(args: dict, td: str, *, preflight=None) -> dict:
 def _prepare_write_plan(args: dict, td: str, control: dict):
     raw_plan = args.get("plan")
     plan = raw_plan if isinstance(raw_plan, str) else ""
-    raw_audit = args.get("audit")
-    audit = raw_audit if isinstance(raw_audit, str) else None
     candidate_control = dict(control)
-    for key in ("review_lenses", "qa_lenses"):
-        if key in args:
-            candidate_control[key] = args[key]
+    if "required_lenses" in args:
+        requested = args["required_lenses"]
+        if (
+            isinstance(requested, list)
+            and requested
+            and all(isinstance(lens, str) and lens in SUPPORTED_LENSES for lens in requested)
+            and len(requested) == len(set(requested))
+            and "review-code" in requested
+            and any(lens in QA_LENSES for lens in requested)
+        ):
+            selected = set(requested)
+            candidate_control["required_lenses"] = [
+                lens for lens in LENS_ORDER if lens in selected
+            ]
+        else:
+            candidate_control["required_lenses"] = requested
     try:
         # Validate the exact lens declarations before changing any artifact.
         if not _validate_task_control(candidate_control):
             raise ValueError("invalid or empty lens declaration")
     except (TypeError, ValueError) as exc:
         return _err(
-            f"write_plan refused invalid lens declarations: {exc}",
-            data={"written": [], "allowed_review_lenses": ["review-code", "review-security"],
-                  "allowed_qa_lenses": ["qa-api", "qa-browser", "qa-cli", "qa-desktop"]},
+            f"write_plan refused invalid required_lenses: {exc}",
+            data={"written": [], "allowed_required_lenses": [
+                "review-code", "review-security", "qa-api", "qa-browser",
+                "qa-cli", "qa-desktop",
+            ]},
         )
     checked_plan = _nonempty_artifact_content(plan, artifact="plan", filename="PLAN.md")
     if isinstance(checked_plan, dict):
         return checked_plan
-    checked_audit = None
-    audit_path = os.path.join(td, "AUDIT_TRAIL.md")
-    if audit is not None:
-        checked_audit = _nonempty_artifact_content(audit, artifact="audit", filename="AUDIT_TRAIL.md")
-        if isinstance(checked_audit, dict):
-            return checked_audit
-        checked_audit, audit_error = _normalize_audit_content(checked_audit)
-        if audit_error:
-            return _err(
-                "write_plan refused invalid AUDIT_TRAIL.md; could not understand the supplied audit table",
-                data={"artifact": "audit", "filename": "AUDIT_TRAIL.md", "written": [],
-                      "next_action": audit_error,
-                      "example": "| 1 | phase | decision | classification | principle | rationale | rejected_option |"},
-            )
-        try:
-            if os.path.isfile(audit_path):
-                existing = _read_regular_text_no_follow(audit_path)
-            elif os.path.lexists(audit_path):
-                raise ValueError("existing audit artifact is not a regular file")
-            else:
-                existing = ""
-        except (OSError, ValueError) as exc:
-            return _err(
-                f"write_plan refused unsafe AUDIT_TRAIL.md: {exc}",
-                data={"artifact": "audit", "filename": "AUDIT_TRAIL.md", "written": [],
-                      "next_action": "Replace the audit leaf with a regular repository file, then retry."},
-            )
-    return control, candidate_control, checked_plan, audit_path, checked_audit
+    return control, candidate_control, checked_plan
 
 
 def _publish_write_plan(args, td, control, preflight):
-    expected_control, candidate_control, checked_plan, audit_path, checked_audit = preflight
+    expected_control, candidate_control, checked_plan = preflight
     # Recheck the exact authority while holding the receipt transaction.
     current = _validated_task_control(td)
     if current != expected_control or current != control or task_control_status(td, current) != "open":
@@ -855,28 +758,6 @@ def _publish_write_plan(args, td, control, preflight):
             data={"task_dir": td, "written": [],
                   "next_action": "Call task_context and retry only if the task is open."},
         )
-    audit_content = None
-    if checked_audit is not None:
-        try:
-            if os.path.isfile(audit_path):
-                existing = _read_regular_text_no_follow(audit_path)
-            elif os.path.lexists(audit_path):
-                raise ValueError("existing audit artifact is not a regular file")
-            else:
-                existing = ""
-        except (OSError, ValueError) as exc:
-            return _err(
-                f"write_plan refused unsafe AUDIT_TRAIL.md: {exc}",
-                data={"artifact": "audit", "filename": "AUDIT_TRAIL.md", "written": []},
-            )
-        first_line = existing.lstrip("\n").split("\n")[0] if existing.strip() else ""
-        has_header = first_line.startswith("| # |")
-        if not existing.strip():
-            audit_content = AUDIT_HEADER + checked_audit.rstrip("\n") + "\n"
-        elif has_header:
-            audit_content = existing.rstrip("\n") + "\n" + checked_audit.rstrip("\n") + "\n"
-        else:
-            audit_content = existing.rstrip("\n") + "\n\n" + AUDIT_HEADER + checked_audit.rstrip("\n") + "\n"
     written: list[str] = []
     bytes_written: dict[str, int] = {}
     plan_path = os.path.join(td, "PLAN.md")
@@ -884,11 +765,9 @@ def _publish_write_plan(args, td, control, preflight):
     try:
         snapshots = {
             path: _strict_regular_text_snapshot(path, max_size=1024 * 1024)
-            for path in (plan_path, audit_path, control_path)
+            for path in (plan_path, control_path)
         }
         _record_write(plan_path, checked_plan, written, bytes_written)
-        if audit_content is not None:
-            _record_write(audit_path, audit_content, written, bytes_written)
         write_task_control(td, candidate_control)
         written.append("TASK.json")
         bytes_written["TASK.json"] = len(
@@ -982,14 +861,12 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id", "blocked_reason", "unblock_condition"],
          "additionalProperties": False},
      "handler": handle_task_blocked},
-    {"name": "write_plan", "title": "Write task plan artifacts",
-     "description": "Write PLAN.md, optional AUDIT_TRAIL.md, and exact review/QA lens declarations in TASK.json.",
+    {"name": "write_plan", "title": "Write task plan",
+     "description": "Write PLAN.md and the exact required_lenses declaration in TASK.json.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"}, "task_dir": {"type": "string"},
          "plan": {"type": "string"},
-         "audit": {"type": "string"},
-         "review_lenses": {"type": "array", "items": {"type": "string"}},
-         "qa_lenses": {"type": "array", "items": {"type": "string"}}},
+         "required_lenses": {"type": "array", "items": {"type": "string"}}},
          "required": ["plan"],
          "additionalProperties": False},
      "handler": handle_write_plan},

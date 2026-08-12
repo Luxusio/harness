@@ -308,7 +308,7 @@ class TestCodexHookWrappers(unittest.TestCase):
             self.assertEqual(payload["session_id"], root_id)
             self.assertEqual(payload["task_id"], "TASK__root-binding")
             self.assertEqual(
-                payload["task_run_id"], lib.read_task_control(str(task))["task_run_id"]
+                payload["run_id"], lib.read_task_control(str(task))["run_id"]
             )
 
     def test_registration_binds_before_rollout_discovery(self):

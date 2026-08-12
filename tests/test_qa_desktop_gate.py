@@ -50,14 +50,12 @@ class TestOwnerTokens(unittest.TestCase):
 class TestProvenance(unittest.TestCase):
     def test_provenance_includes_qa_and_ux_keys_from_subagent_receipt(self):
         with tempfile.TemporaryDirectory() as td:
-            run_id = "a" * 32
+            run_id = "0198c349-5800-7000-8000-000000000001"
             with open(os.path.join(td, "TASK.json"), "w", encoding="utf-8") as f:
                 f.write(json.dumps({
-                    "task_run_id": run_id,
-                    "started_at": "2026-08-11T05:00:00.000000Z",
+                    "run_id": run_id,
                     "execution_mode": "standard",
-                    "review_lenses": ["review-code"],
-                    "qa_lenses": ["qa-desktop"],
+                    "required_lenses": ["review-code", "qa-desktop"],
                     "close_receipt_fingerprint": None,
                 }) + "\n")
             prov = _lib.provenance_from_artifacts(td)

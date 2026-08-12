@@ -9,6 +9,8 @@ from unittest import mock
 
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "plugin" / "scripts" / "codex_lifecycle_watcher.py"
+RUN_ID = "019feefa-2a00-7000-8000-000000000001"
+PRIOR_RUN_ID = "019fee8c-4d00-7000-8000-000000000001"
 
 
 def _load():
@@ -22,18 +24,15 @@ def _load():
 def _active_binding(task_dir):
     return {
         "task_dir": str(task_dir),
-        "task_run_id": "a" * 32,
-        "run_started_at": "2026-08-11T04:00:00Z",
+        "run_id": RUN_ID,
     }
 
 
-def _write_task_control(task: Path, *, run_id: str = "a" * 32) -> None:
+def _write_task_control(task: Path, *, run_id: str = RUN_ID) -> None:
     (task / "TASK.json").write_text(json.dumps({
-        "task_run_id": run_id,
-        "started_at": "2026-08-11T04:00:00Z",
+        "run_id": run_id,
         "execution_mode": "standard",
-        "review_lenses": ["review-code"],
-        "qa_lenses": ["qa-cli"],
+        "required_lenses": ["review-code", "qa-cli"],
         "close_receipt_fingerprint": None,
     }) + "\n", encoding="utf-8")
 
@@ -385,7 +384,7 @@ def test_prior_run_same_agent_path_cannot_replace_current_start(tmp_path):
         "agent_id": agent_path,
         "agent_type": "code_review",
         "lens": "review-code",
-        "task_run_id": "b" * 32,
+        "task_run_id": PRIOR_RUN_ID,
     }
     recorded = []
 
@@ -406,7 +405,7 @@ def test_prior_run_same_agent_path_cannot_replace_current_start(tmp_path):
 
     assert len(recorded) == 1
     assert recorded[0]["event"] == "started"
-    assert recorded[0]["task_run_id"] == "a" * 32
+    assert recorded[0]["task_run_id"] == RUN_ID
 
 
 def test_spawn_task_binding_is_immutable_across_task_switch(tmp_path):
@@ -450,8 +449,7 @@ def test_replayed_spawn_before_current_task_run_is_rejected(tmp_path):
     spawn["timestamp"] = "2026-08-11T01:00:00Z"
     with mock.patch.object(mod, "_active_task_binding_for_session", return_value={
         "task_dir": "/task",
-        "task_run_id": "a" * 32,
-        "run_started_at": "2026-08-11T02:00:00Z",
+        "run_id": PRIOR_RUN_ID,
     }):
         watcher.feed(spawn)
 
@@ -464,7 +462,7 @@ def test_replayed_spawn_earlier_in_same_second_is_rejected():
     mod = _load()
     assert mod._event_precedes_run(
         {"timestamp": "2026-08-11T05:00:00.100000Z"},
-        "2026-08-11T05:00:00.900000Z",
+        "019fef31-1c04-7000-8000-000000000001",
     )
 
 
@@ -587,7 +585,7 @@ def test_watcher_restart_replays_persisted_exact_start_after_child_completes(tmp
     _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo), final))
     receipts = [{
         "event": "started", "agent_id": agent_path, "lens": "review-code",
-        "agent_type": "code_review", "task_run_id": "a" * 32,
+        "agent_type": "code_review", "task_run_id": RUN_ID,
         "runtime_event_id": event_id,
         "runtime_session_id": root_id, "runtime_thread_id": child_id,
     }]
@@ -1258,7 +1256,7 @@ def test_active_task_requires_exact_session_marker_and_state(tmp_path):
     marker = tasks / _lib.ACTIVE_SESSIONS_DIRNAME / f"{root_id}.json"
     with mock.patch.object(mod, "resolve_active_task_dir", return_value=str(task)):
         assert mod._active_task_for_session(str(repo), root_id) == str(task.resolve())
-        assert mod._active_task_binding_for_session(str(repo), root_id)["task_run_id"]
+        assert mod._active_task_binding_for_session(str(repo), root_id)["run_id"]
         _lib.begin_task_run(task)
         assert mod._active_task_binding_for_session(str(repo), root_id) == {}
     marker.write_text(json.dumps({

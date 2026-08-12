@@ -115,11 +115,9 @@ class TestStopGateEmitsNextAction(unittest.TestCase):
         with open(os.path.join(self.repo, "doc", "harness", "tasks", "TASK__demo",
                                "TASK.json"), "w", encoding="utf-8") as f:
             json.dump({
-                "task_run_id": "a" * 32,
-                "started_at": "2026-05-12T00:00:00Z",
+                "run_id": "0198c349-5800-7000-8000-000000000001",
                 "execution_mode": "standard",
-                "review_lenses": ["review-code"],
-                "qa_lenses": ["qa-cli"],
+                "required_lenses": ["review-code", "qa-cli"],
                 "close_receipt_fingerprint": None,
             }, f)
         with open(os.path.join(self.repo, "doc", "harness", "tasks", ".active"),

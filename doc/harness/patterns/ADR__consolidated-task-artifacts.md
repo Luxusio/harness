@@ -19,18 +19,23 @@ so every consumer still carried multiple schemas and provenance inputs.
 
 ## Decision
 
-Task control uses one exact six-field `TASK.json`:
+Task control uses one exact four-field `TASK.json`:
 
 ```json
 {
-  "task_run_id": "<32 lowercase hex>",
-  "started_at": "<RFC3339 UTC>",
+  "run_id": "<canonical lowercase UUIDv7>",
   "execution_mode": "standard",
-  "review_lenses": ["review-code"],
-  "qa_lenses": ["qa-cli"],
+  "required_lenses": ["review-code", "qa-cli"],
   "close_receipt_fingerprint": null
 }
 ```
+
+`run_id` is an RFC 9562 UUIDv7. Its embedded Unix-millisecond timestamp is the
+run-start cutoff used by lifecycle discovery, while its random bits isolate
+receipt generations. `required_lenses` is a canonical set containing
+`review-code` and at least one `qa-*` lens; review and QA views are derived from
+the lens prefixes. Receipt records retain the wire name `task_run_id`, populated
+from `TASK.json.run_id`.
 
 The canonical directory supplies task identity. Receipt snapshots supply
 review, QA, and runtime verdicts. `BLOCKED.md` supplies blocked state. On
@@ -40,6 +45,9 @@ continue to match the exact receipt bytes when Goal completion is evaluated.
 `TASK_STATE.yaml`, `TASK_RUN.json`, `PLAN.meta.json`, and
 `TASK_CLOSE_RECEIPT.json` have no readers, writers, migration, or compatibility
 period. A fresh task run is required for an old task pack.
+
+`AUDIT_TRAIL.md` and `ENVIRONMENT_SNAPSHOT.md` are not task artifacts. Planning
+decisions live in `PLAN.md`, and environment facts are recomputed when needed.
 
 New and resumed runs use one append-only `RECEIPTS.jsonl`. It is the only
 supported receipt stream. `REVIEW_RECEIPTS.jsonl` and
@@ -69,7 +77,8 @@ to start a fresh task run or reset the unsupported stream. They are not
 normalized, migrated, or partially accepted.
 
 Each receipt-consuming MCP operation creates at most one frozen
-`ReceiptSnapshot` under the receipt lock. The snapshot contains validated
+`ReceiptSnapshot` while holding an exclusive lock on the validated task-directory
+descriptor. No `.receipts.lock` leaf exists. The snapshot contains validated
 ordered entries and the fingerprint of the exact bytes that produced them.
 Verdict, summary, context, provenance, verified installation, and close use
 that same snapshot. Unsafe ownership/type/mode/link state, path or inode
@@ -107,8 +116,8 @@ verified installation, and close fingerprint validation remain mandatory.
 ## Verification
 
 - Writers emit exactly the listed fields and only `started|completed` events.
-- New tasks emit only `TASK.json`; the four removed task-control files and
-  `INSTALL_RECEIPT.json` are never read or written.
+- New tasks emit the four-field `TASK.json`; removed control, install, audit,
+  environment-snapshot, and receipt-lock leaves are never read or written.
 - Old streams have no effect; old unified-schema entries fail with fresh-run
   guidance.
 - Each MCP operation reads one immutable snapshot, and every consumer uses its

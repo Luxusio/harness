@@ -13,8 +13,7 @@ Covered today:
    5. mcp_bash_guard.py — emits JSON permissionDecision=deny on `sed -i` into workflow-control-surface.
    6. harness_server.task_close — blocks when runtime verification is missing.
    7. prompt_memory.py — emits compact current task/verdict context.
-   8. environment_snapshot.snapshot — writes ENVIRONMENT_SNAPSHOT.md with required sections.
-   9. tool_routing.py — emits [harness-hint] on `command not found: pytest`.
+   8. tool_routing.py — emits [harness-hint] on `command not found: pytest`.
 
 Invoke:
   python3 plugin/scripts/golden_replay.py           # all tests
@@ -247,11 +246,9 @@ def test_prompt_memory_emits_context_block() -> TestResult:
             f.write("# plan\n")
         with open(_os.path.join(task_dir, "TASK.json"), "w") as f:
             json.dump({
-                "task_run_id": "a" * 32,
-                "started_at": "2026-04-19T00:00:00Z",
+                "run_id": "01890a5d-ac96-774b-bcce-b3020998df21",
                 "execution_mode": "standard",
-                "review_lenses": ["review-code"],
-                "qa_lenses": ["qa-cli"],
+                "required_lenses": ["review-code", "qa-cli"],
                 "close_receipt_fingerprint": None,
             }, f)
             f.write("\n")
@@ -288,39 +285,6 @@ def test_prompt_memory_emits_context_block() -> TestResult:
         return TestResult("prompt_memory_context_block", False,
                           f"output exceeded 400 chars: {len(out)}")
     return TestResult("prompt_memory_context_block", True)
-
-
-def test_environment_snapshot_writes_block() -> TestResult:
-    """environment_snapshot.snapshot writes an ENVIRONMENT_SNAPSHOT.md with required sections."""
-    import importlib.util as _iu
-    import os as _os
-    spec = _iu.spec_from_file_location(
-        "environment_snapshot",
-        _os.path.join(SCRIPTS, "environment_snapshot.py"),
-    )
-    mod = _iu.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    with tempfile.TemporaryDirectory() as tmp:
-        _os.makedirs(_os.path.join(tmp, ".git"))
-        _os.makedirs(_os.path.join(tmp, "doc", "harness"))
-        with open(_os.path.join(tmp, "doc", "harness", "manifest.yaml"), "w") as f:
-            f.write(
-                'test_command: "python3 -m pytest"\n'
-                'project_meta:\n  shape: library\n'
-                'tooling:\n  ast_grep_ready: true\n  lsp_ready: false\n'
-            )
-        task_dir = _os.path.join(tmp, "task")
-        _os.makedirs(task_dir)
-        path = mod.snapshot(task_dir, tmp)
-        if not path:
-            return TestResult("environment_snapshot_writes_block", False, "snapshot returned empty path")
-        body = open(path).read()
-        for needle in ("## Repo", "## Manifest", "## Tooling", "## Root entries",
-                       "python3 -m pytest", "ast_grep_ready: true"):
-            if needle not in body:
-                return TestResult("environment_snapshot_writes_block", False,
-                                  f"missing {needle!r}: body={body[:200]!r}")
-    return TestResult("environment_snapshot_writes_block", True)
 
 
 def test_tool_routing_suggests_test_command() -> TestResult:
@@ -364,7 +328,6 @@ TESTS = [
     test_prewrite_json_deny_on_protected_artifact,
     test_bash_guard_deny_on_sed_into_workflow_control,
     test_prompt_memory_emits_context_block,
-    test_environment_snapshot_writes_block,
     test_tool_routing_suggests_test_command,
 ]
 

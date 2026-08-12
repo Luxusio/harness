@@ -6,8 +6,8 @@ Sub-file for plan/SKILL.md Phase 6. Always runs.
 
 ## 6.1 Artifact writer
 
-PLAN.md and AUDIT_TRAIL.md are written through the harness MCP `write_plan`
-tool. The same call stores required review and QA lenses in `TASK.json`.
+PLAN.md is written through the harness MCP `write_plan` tool. The same call
+stores the canonical required lens set in `TASK.json`.
 
 ## 6.2 Assemble PLAN.md content
 
@@ -82,8 +82,8 @@ durable contract.
 
 ### Review Status table (end of PLAN.md)
 
-Assemble from phase-transition summaries and AUDIT_TRAIL rows already produced
-by the plan review phases. Do not create another chronological file.
+Assemble from the phase-transition summaries and decisions kept in working
+context. Do not create another chronological file.
 
 ```
 ## Review Status
@@ -114,7 +114,8 @@ by the plan review phases. Do not create another chronological file.
 **VERDICT:** REVIEWED — plan has passed the full dual-voice pipeline.
 ```
 
-If AUDIT_TRAIL.md absent/unreadable: placeholder table with all "—" and verdict `NO AUDIT TRAIL — run /plan for full review pipeline.`
+If review state is unavailable, use a placeholder table with all "—" and a
+verdict directing the operator to rerun planning.
 
 No harness policy boilerplate. Keep concise and executable.
 
@@ -124,10 +125,7 @@ No harness policy boilerplate. Keep concise and executable.
 write_plan {
   task_id: "TASK__<id>",
   plan: "<PLAN.md content>",
-  meta: {
-    review_lenses: ["review-code", "review-security"],
-    qa_lenses: ["qa-cli"]
-  }
+  required_lenses: ["review-code", "review-security", "qa-cli"]
 }
 ```
 
@@ -141,11 +139,8 @@ Keep the stable acceptance criteria directly in PLAN.md. Do not assemble or
 write a second status ledger; review and QA completion is recorded in the
 unified `RECEIPTS.jsonl` lifecycle stream.
 
-Audit rows from earlier phases are also written through MCP:
-
-```text
-write_plan { task_id: "TASK__<id>", plan: "<PLAN.md content>", audit: "<AUDIT_TRAIL.md table row>", review_lenses: [...], qa_lenses: [...] }
-```
+Planning decisions from earlier phases are included directly in PLAN.md's
+Decision Audit Trail before the single MCP publication.
 
 ## 6.8 Learnings write-back (capture-when-fresh, non-blocking)
 

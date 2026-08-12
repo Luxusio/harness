@@ -30,7 +30,7 @@ def events(tmp_path):
 def write_task_state(tmp_path, task_id, status="closed", verdict="PASS"):
     task_dir = tmp_path / "doc" / "harness" / "tasks" / task_id
     task_dir.mkdir(parents=True)
-    run_id = "a" * 32
+    run_id = "0198c349-5800-7000-8000-000000000001"
     rows = []
     for lens, agent in (("review-code", "review"), ("qa-cli", "qa")):
         for event in ("started", "completed"):
@@ -62,11 +62,9 @@ def write_task_state(tmp_path, task_id, status="closed", verdict="PASS"):
     digest.update(b"\0")
     fingerprint = "sha256:" + digest.hexdigest()
     (task_dir / "TASK.json").write_text(json.dumps({
-        "task_run_id": run_id,
-        "started_at": "2026-08-12T00:00:00Z",
+        "run_id": run_id,
         "execution_mode": "standard",
-        "review_lenses": ["review-code"],
-        "qa_lenses": ["qa-cli"],
+        "required_lenses": ["review-code", "qa-cli"],
         "close_receipt_fingerprint": fingerprint if status == "closed" else None,
     }) + "\n", encoding="utf-8")
 

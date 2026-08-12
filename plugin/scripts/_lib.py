@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Harness minimal library — stdlib only, exact six-field TASK.json."""
+"""Harness minimal library — stdlib only, exact four-field TASK.json."""
 
 import os
 import re
@@ -9,6 +9,8 @@ import tempfile
 import json
 import hashlib
 import secrets
+import time
+import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -24,11 +26,15 @@ CONVERSATION_TEXT_CAP = 2000
 CONVERSATION_READ_CAP = 256 * 1024
 
 TASK_CONTROL_FIELDS = frozenset({
-    "task_run_id", "started_at", "execution_mode", "review_lenses",
-    "qa_lenses", "close_receipt_fingerprint",
+    "run_id", "execution_mode", "required_lenses", "close_receipt_fingerprint",
 })
-REVIEW_LENSES = frozenset({"review-code", "review-security"})
-QA_LENSES = frozenset({"qa-api", "qa-browser", "qa-cli", "qa-desktop"})
+LENS_ORDER = (
+    "review-code", "review-security",
+    "qa-api", "qa-browser", "qa-cli", "qa-desktop",
+)
+REVIEW_LENSES = frozenset(lens for lens in LENS_ORDER if lens.startswith("review-"))
+QA_LENSES = frozenset(lens for lens in LENS_ORDER if lens.startswith("qa-"))
+SUPPORTED_LENSES = frozenset(LENS_ORDER)
 
 # ── Plugin-root env var (AC-006 of TASK__dual-runtime-plugin-claude-codex) ─
 #
@@ -1096,44 +1102,75 @@ def task_control_file(task_dir):
     return os.path.join(task_dir, TASK_CONTROL_NAME)
 
 
-def _task_control_lenses(value, allowed, *, required=()):
+def _task_control_lenses(value):
     if (
         not isinstance(value, list)
         or not value
-        or any(not isinstance(item, str) or item not in allowed for item in value)
+        or any(not isinstance(item, str) or item not in SUPPORTED_LENSES for item in value)
         or len(value) != len(set(value))
-        or any(item not in value for item in required)
+        or value != [lens for lens in LENS_ORDER if lens in value]
+        or "review-code" not in value
+        or not any(lens.startswith("qa-") for lens in value)
     ):
         return None
     return list(value)
 
 
+def new_uuid7(timestamp_ms=None):
+    """Generate a canonical RFC 9562 UUIDv7 using Python 3.12 stdlib."""
+    if timestamp_ms is None:
+        timestamp_ms = time.time_ns() // 1_000_000
+    if not isinstance(timestamp_ms, int) or not 0 <= timestamp_ms < (1 << 48):
+        raise ValueError("UUIDv7 timestamp must fit in 48 unsigned bits")
+    random_bits = secrets.randbits(74)
+    value = (
+        (timestamp_ms << 80)
+        | (0x7 << 76)
+        | (((random_bits >> 62) & 0xFFF) << 64)
+        | (0b10 << 62)
+        | (random_bits & ((1 << 62) - 1))
+    )
+    return str(uuid.UUID(int=value))
+
+
+def uuid7_timestamp_ms(value):
+    """Validate canonical UUIDv7 text and return its Unix millisecond time."""
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+        value,
+    ):
+        raise ValueError("run_id must be a canonical lowercase RFC 9562 UUIDv7")
+    try:
+        parsed = uuid.UUID(value)
+    except (AttributeError, ValueError) as exc:
+        raise ValueError("run_id must be a canonical lowercase RFC 9562 UUIDv7") from exc
+    if str(parsed) != value or parsed.version != 7 or parsed.variant != uuid.RFC_4122:
+        raise ValueError("run_id must be a canonical lowercase RFC 9562 UUIDv7")
+    return parsed.int >> 80
+
+
+def task_run_started_at(control):
+    """Return the TASK run cutoff as canonical UTC milliseconds."""
+    milliseconds = uuid7_timestamp_ms((control or {}).get("run_id"))
+    return datetime.fromtimestamp(milliseconds / 1000, timezone.utc).isoformat(
+        timespec="milliseconds"
+    ).replace("+00:00", "Z")
+
+
 def _validate_task_control(data):
     if not isinstance(data, dict) or set(data) != TASK_CONTROL_FIELDS:
         return {}
-    run_id = data.get("task_run_id")
-    started_at = data.get("started_at")
+    run_id = data.get("run_id")
     mode = data.get("execution_mode")
     close = data.get("close_receipt_fingerprint")
-    if not isinstance(started_at, str) or not re.fullmatch(
-        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z", started_at,
-    ):
-        return {}
     try:
-        parsed_start = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
+        uuid7_timestamp_ms(run_id)
+    except ValueError:
         return {}
-    review = _task_control_lenses(
-        data.get("review_lenses"), REVIEW_LENSES, required=("review-code",),
-    )
-    qa = _task_control_lenses(data.get("qa_lenses"), QA_LENSES)
+    lenses = _task_control_lenses(data.get("required_lenses"))
     if (
-        not isinstance(run_id, str)
-        or not re.fullmatch(r"[0-9a-f]{32}", run_id)
-        or parsed_start.utcoffset() != timezone.utc.utcoffset(parsed_start)
-        or mode not in {"standard", "micro"}
-        or review is None
-        or qa is None
+        mode not in {"standard", "micro"}
+        or lenses is None
         or (close is not None and (
             not isinstance(close, str)
             or not re.fullmatch(r"sha256:[0-9a-f]{64}", close)
@@ -1141,11 +1178,9 @@ def _validate_task_control(data):
     ):
         return {}
     return {
-        "task_run_id": run_id,
-        "started_at": started_at,
+        "run_id": run_id,
         "execution_mode": mode,
-        "review_lenses": review,
-        "qa_lenses": qa,
+        "required_lenses": lenses,
         "close_receipt_fingerprint": close,
     }
 
@@ -1216,21 +1251,19 @@ def write_task_control(task_dir, control):
         raise ValueError("invalid exact TASK.json control value")
     path = task_control_file(task_dir)
     os.makedirs(task_dir, exist_ok=True)
+    _revalidate_receipt_transaction(task_dir)
     if os.path.lexists(path) and not read_task_control(task_dir):
         raise RuntimeError("existing TASK.json is unsafe or invalid")
     _atomic_text_write(path, json.dumps(validated, indent=2, sort_keys=True) + "\n")
+    _revalidate_receipt_transaction(task_dir)
     return True
 
 
 def _new_task_control(*, execution_mode="standard"):
     return {
-        "task_run_id": secrets.token_hex(16),
-        "started_at": datetime.now(timezone.utc).isoformat(
-            timespec="microseconds"
-        ).replace("+00:00", "Z"),
+        "run_id": new_uuid7(),
         "execution_mode": execution_mode,
-        "review_lenses": ["review-code"],
-        "qa_lenses": ["qa-cli"],
+        "required_lenses": ["review-code", "qa-cli"],
         "close_receipt_fingerprint": None,
     }
 
@@ -1244,10 +1277,7 @@ def begin_task_run(task_dir):
         raise RuntimeError("valid TASK.json required to rotate task run")
     payload = dict(current)
     payload.update({
-        "task_run_id": secrets.token_hex(16),
-        "started_at": datetime.now(timezone.utc).isoformat(
-            timespec="microseconds"
-        ).replace("+00:00", "Z"),
+        "run_id": new_uuid7(),
         "close_receipt_fingerprint": None,
     })
     write_task_control(task_dir, payload)
@@ -1610,8 +1640,7 @@ def write_active_marker(repo_root, task_dir, session_id=None):
         "session_id": sid,
         "task_dir": task_dir,
         "task_id": os.path.basename(os.path.normpath(task_dir)),
-        "task_run_id": task_run.get("task_run_id", ""),
-        "run_started_at": task_run.get("started_at", ""),
+        "run_id": task_run.get("run_id", ""),
         "updated": now_iso(),
     }
     fd, tmp = tempfile.mkstemp(dir=_active_sessions_dir(repo_root), prefix=".", suffix=".tmp")
@@ -1640,8 +1669,7 @@ def active_task_binding_matches(repo_root, task_dir, control=None, session_id=No
         marker
         and os.path.realpath(str(marker.get("task_dir") or "")) == os.path.realpath(task_dir)
         and marker.get("task_id") == os.path.basename(os.path.normpath(task_dir))
-        and marker.get("task_run_id") == control.get("task_run_id")
-        and marker.get("run_started_at") == control.get("started_at")
+        and marker.get("run_id") == control.get("run_id")
     )
 
 
@@ -1905,7 +1933,7 @@ def _receipts_path(task_dir):
 
 
 _RECEIPT_STREAM_MAX_BYTES = 16 * 1024 * 1024
-_RECEIPT_LOCK_HELD = ContextVar("harness_receipt_lock_held", default="")
+_RECEIPT_LOCK_HELD = ContextVar("harness_receipt_lock_held", default=())
 
 
 def _validated_receipt_task_dir(task_dir):
@@ -1920,31 +1948,78 @@ def _validated_receipt_task_dir(task_dir):
             raise RuntimeError("receipt storage integrity unavailable")
         current = os.path.dirname(current)
     task_info = os.lstat(task_dir)
-    if task_info.st_uid != os.getuid():
+    if task_info.st_uid != os.getuid() or stat.S_IMODE(task_info.st_mode) & 0o022:
         raise RuntimeError("receipt storage integrity unavailable")
     return task_dir
+
+
+def _receipt_lock_binding(task_dir):
+    task_dir = os.path.abspath(os.fspath(task_dir))
+    for binding in reversed(_RECEIPT_LOCK_HELD.get()):
+        if binding[0] == task_dir:
+            return binding
+    return None
+
+
+def _validate_receipt_dir_binding(binding):
+    task_dir, fd, identity = binding
+    try:
+        opened = os.fstat(fd)
+        current = os.lstat(task_dir)
+    except OSError as exc:
+        raise RuntimeError("receipt storage integrity unavailable") from exc
+    if (
+        not stat.S_ISDIR(opened.st_mode)
+        or opened.st_uid != os.getuid()
+        or stat.S_IMODE(opened.st_mode) & 0o022
+        or (opened.st_dev, opened.st_ino) != identity
+        or stat.S_ISLNK(current.st_mode)
+        or not stat.S_ISDIR(current.st_mode)
+        or current.st_uid != os.getuid()
+        or stat.S_IMODE(current.st_mode) & 0o022
+        or (current.st_dev, current.st_ino) != identity
+    ):
+        raise RuntimeError("receipt storage integrity unavailable")
+
+
+def _revalidate_receipt_transaction(task_dir):
+    """Fail if a task directory changes during an enclosing receipt transaction."""
+    binding = _receipt_lock_binding(task_dir)
+    if binding is not None:
+        _validate_receipt_dir_binding(binding)
+
+
+def _receipt_dir_fd(task_dir):
+    binding = _receipt_lock_binding(task_dir)
+    if binding is None:
+        raise RuntimeError("receipt transaction required")
+    _validate_receipt_dir_binding(binding)
+    return binding[1]
 
 
 @contextmanager
 def _receipt_stream_lock(task_dir):
     task_dir = _validated_receipt_task_dir(task_dir)
-    if _RECEIPT_LOCK_HELD.get() == task_dir:
+    nested = _receipt_lock_binding(task_dir)
+    if nested is not None:
+        _validate_receipt_dir_binding(nested)
         yield
+        _validate_receipt_dir_binding(nested)
         return
-    lock_path = os.path.join(task_dir, ".receipts.lock")
-    flags = os.O_CREAT | os.O_RDWR
+    before = os.lstat(task_dir)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(lock_path, flags, 0o600)
+        fd = os.open(task_dir, flags)
     except OSError as exc:
         raise RuntimeError("receipt storage integrity unavailable") from exc
     try:
         info = os.fstat(fd)
         if (
-            not stat.S_ISREG(info.st_mode)
+            not stat.S_ISDIR(info.st_mode)
             or info.st_uid != os.getuid()
-            or info.st_nlink != 1
-            or info.st_mode & 0o022
+            or stat.S_IMODE(info.st_mode) & 0o022
+            or (info.st_dev, info.st_ino) != (before.st_dev, before.st_ino)
         ):
             raise RuntimeError("receipt storage integrity unavailable")
         try:
@@ -1952,9 +2027,12 @@ def _receipt_stream_lock(task_dir):
             fcntl.flock(fd, fcntl.LOCK_EX)
         except (ImportError, OSError) as exc:
             raise RuntimeError("receipt storage integrity unavailable") from exc
-        token = _RECEIPT_LOCK_HELD.set(task_dir)
+        binding = (task_dir, fd, (info.st_dev, info.st_ino))
+        _validate_receipt_dir_binding(binding)
+        token = _RECEIPT_LOCK_HELD.set(_RECEIPT_LOCK_HELD.get() + (binding,))
         try:
             yield
+            _validate_receipt_dir_binding(binding)
         finally:
             _RECEIPT_LOCK_HELD.reset(token)
     finally:
@@ -1962,8 +2040,10 @@ def _receipt_stream_lock(task_dir):
 
 
 def _receipt_stream_info(path):
+    task_dir = os.path.dirname(os.path.abspath(path))
+    dir_fd = _receipt_dir_fd(task_dir)
     try:
-        info = os.lstat(path)
+        info = os.stat(RECEIPTS_NAME, dir_fd=dir_fd, follow_symlinks=False)
     except FileNotFoundError:
         return None
     except OSError as exc:
@@ -1981,11 +2061,13 @@ def _receipt_stream_info(path):
 
 
 def _append_receipt_stream_unlocked(path, payload):
+    task_dir = os.path.dirname(os.path.abspath(path))
+    dir_fd = _receipt_dir_fd(task_dir)
     prior = _receipt_stream_info(path)
     flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
     flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(path, flags, 0o644)
+        fd = os.open(RECEIPTS_NAME, flags, 0o644, dir_fd=dir_fd)
     except OSError as exc:
         raise RuntimeError("receipt storage integrity unavailable") from exc
     try:
@@ -2009,6 +2091,7 @@ def _append_receipt_stream_unlocked(path, payload):
                 raise RuntimeError("receipt storage integrity unavailable")
             view = view[written:]
         os.fsync(fd)
+        _revalidate_receipt_transaction(task_dir)
     finally:
         os.close(fd)
 
@@ -2028,23 +2111,28 @@ def receipt_stream_transaction(task_dir):
 def reset_receipt_streams_for_new_run(task_dir):
     """Remove the unified receipt stream for a fresh task run."""
     task_dir = _validated_receipt_task_dir(task_dir)
-    paths = (_receipts_path(task_dir),)
+    path = _receipts_path(task_dir)
     with _receipt_stream_lock(task_dir):
-        snapshots = {}
-        for path in paths:
-            _receipt_stream_info(path)
-            snapshots[path] = _strict_regular_text_snapshot(
-                path, max_size=_RECEIPT_STREAM_MAX_BYTES,
-            )
+        raw = _read_receipt_bytes_unlocked(path)
         try:
-            for path in paths:
-                try:
-                    os.unlink(path)
-                except FileNotFoundError:
-                    pass
+            text = raw.decode("utf-8") if raw is not None else ""
+        except UnicodeError as exc:
+            raise RuntimeError("receipt storage integrity unavailable") from exc
+        snapshots = {
+            path: {
+                "exists": raw is not None,
+                "kind": "regular" if raw is not None else "absent",
+                "text": text,
+            },
+        }
+        try:
+            os.unlink(RECEIPTS_NAME, dir_fd=_receipt_dir_fd(task_dir))
+        except FileNotFoundError:
+            pass
         except BaseException:
-            _restore_text_snapshots(snapshots)
+            _restore_receipt_snapshot_unlocked(task_dir, snapshots[path])
             raise
+        _revalidate_receipt_transaction(task_dir)
     return snapshots
 
 
@@ -2054,7 +2142,7 @@ def restore_receipt_streams(snapshot):
         return
     task_dir = os.path.dirname(next(iter(snapshot)))
     with _receipt_stream_lock(task_dir):
-        _restore_text_snapshots(snapshot)
+        _restore_receipt_snapshot_unlocked(task_dir, snapshot[next(iter(snapshot))])
 
 
 RECEIPT_FIELDS = frozenset({
@@ -2089,6 +2177,8 @@ class ReceiptSnapshot:
 
 
 def _read_receipt_bytes_unlocked(path):
+    task_dir = os.path.dirname(os.path.abspath(path))
+    dir_fd = _receipt_dir_fd(task_dir)
     prior = _receipt_stream_info(path)
     if prior is None:
         return None
@@ -2099,7 +2189,7 @@ def _read_receipt_bytes_unlocked(path):
         | getattr(os, "O_NONBLOCK", 0)
     )
     try:
-        fd = os.open(path, flags)
+        fd = os.open(RECEIPTS_NAME, flags, dir_fd=dir_fd)
     except OSError as exc:
         raise RuntimeError("receipt storage integrity unavailable") from exc
     try:
@@ -2117,7 +2207,7 @@ def _read_receipt_bytes_unlocked(path):
             fd = -1
             raw = handle.read(_RECEIPT_STREAM_MAX_BYTES + 1)
             final = os.fstat(handle.fileno())
-        final_path = os.lstat(path)
+        final_path = os.stat(RECEIPTS_NAME, dir_fd=dir_fd, follow_symlinks=False)
         if (
             len(raw) > _RECEIPT_STREAM_MAX_BYTES
             or (final.st_dev, final.st_ino) != (opened.st_dev, opened.st_ino)
@@ -2140,6 +2230,50 @@ def _read_receipt_bytes_unlocked(path):
         if fd >= 0:
             os.close(fd)
     return raw
+
+
+def _restore_receipt_snapshot_unlocked(task_dir, snapshot):
+    """Restore one receipt leaf relative to the locked directory descriptor."""
+    dir_fd = _receipt_dir_fd(task_dir)
+    if not snapshot.get("exists"):
+        _receipt_stream_info(_receipts_path(task_dir))
+        try:
+            os.unlink(RECEIPTS_NAME, dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
+        _revalidate_receipt_transaction(task_dir)
+        return
+    if snapshot.get("kind") != "regular":
+        raise RuntimeError("receipt storage integrity unavailable")
+    payload = str(snapshot.get("text") or "").encode("utf-8")
+    if len(payload) > _RECEIPT_STREAM_MAX_BYTES:
+        raise RuntimeError("receipt storage integrity unavailable")
+    _receipt_stream_info(_receipts_path(task_dir))
+    temp_name = f".{RECEIPTS_NAME}.{secrets.token_hex(8)}.tmp"
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(temp_name, flags, 0o600, dir_fd=dir_fd)
+    try:
+        view = memoryview(payload)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise RuntimeError("receipt storage integrity unavailable")
+            view = view[written:]
+        os.fsync(fd)
+        os.fchmod(fd, 0o644)
+        os.replace(
+            temp_name, RECEIPTS_NAME,
+            src_dir_fd=dir_fd, dst_dir_fd=dir_fd,
+        )
+        os.fsync(dir_fd)
+    finally:
+        os.close(fd)
+        try:
+            os.unlink(temp_name, dir_fd=dir_fd)
+        except FileNotFoundError:
+            pass
+    _revalidate_receipt_transaction(task_dir)
 
 
 def _receipt_snapshot_unlocked(task_dir):
@@ -2221,30 +2355,16 @@ def extract_qa_verdict(value):
     return verdicts[0] if matches[0] and len(verdicts) == 1 else ""
 
 
-def _declared_lenses(task_dir, key, *, allowed, default, control=None):
-    value = (control or read_task_control(task_dir)).get(key)
+def _declared_lenses(task_dir, prefix, *, control=None):
+    value = (control or read_task_control(task_dir)).get("required_lenses")
     if not isinstance(value, list):
-        return list(default)
-    lenses = []
-    for item in value:
-        lens = str(item or "").strip().lower()
-        if lens in allowed and lens not in lenses:
-            lenses.append(lens)
-    return lenses or list(default)
+        return []
+    return [lens for lens in value if lens.startswith(prefix)]
 
 
 def required_review_lenses(task_dir, state=None):
     """Return task-declared review lenses without inspecting source state."""
-    lenses = _declared_lenses(
-        task_dir,
-        "review_lenses",
-        allowed={"review-code", "review-security"},
-        default=("review-code",),
-        control=state,
-    )
-    if "review-code" not in lenses:
-        lenses.insert(0, "review-code")
-    return lenses
+    return _declared_lenses(task_dir, "review-", control=state)
 
 
 def _receipt_stream_fingerprint_unlocked(task_dir):
@@ -2375,7 +2495,7 @@ def record_subagent_receipt(task_dir, receipt):
     if not current_run:
         raise RuntimeError("valid TASK.json required for receipt append")
     supplied_run_id = _receipt_short(receipt.get("task_run_id"), 64)
-    task_run_id = str(current_run["task_run_id"])
+    task_run_id = str(current_run["run_id"])
     if supplied_run_id and supplied_run_id != task_run_id:
         raise RuntimeError("receipt task_run_id does not match current task run")
     entry = {
@@ -2482,7 +2602,7 @@ def review_receipt_summary(task_dir, snapshot=None):
 def _completed_review_by_lens(task_dir, snapshot=None):
     snapshot = snapshot or receipt_snapshot(task_dir)
     receipts = snapshot.entries
-    current_run_id = str(read_task_control(task_dir).get("task_run_id") or "")
+    current_run_id = str(read_task_control(task_dir).get("run_id") or "")
     if not current_run_id:
         return {}
     latest_events = {}
@@ -2560,6 +2680,8 @@ def _qa_started_after_review(snapshot, lens, completion, review_index):
 
 def receipt_review_verdict(task_dir, state=None, snapshot=None):
     st = state or read_task_control(task_dir)
+    if not _validate_task_control(st):
+        return "PENDING"
     required = required_review_lenses(task_dir, st)
     if not required:
         return "NOT_APPLICABLE"
@@ -2580,18 +2702,12 @@ def receipt_review_verdict(task_dir, state=None, snapshot=None):
 
 def _required_qa_lenses(task_dir, state=None):
     """Return plan-declared QA lenses without inspecting changed paths."""
-    return _declared_lenses(
-        task_dir,
-        "qa_lenses",
-        allowed={"qa-api", "qa-browser", "qa-cli", "qa-desktop"},
-        default=("qa-cli",),
-        control=state,
-    )
+    return _declared_lenses(task_dir, "qa-", control=state)
 
 
 def _completed_qa_by_lens(task_dir, snapshot=None):
     snapshot = snapshot or receipt_snapshot(task_dir)
-    current_run_id = str(read_task_control(task_dir).get("task_run_id") or "")
+    current_run_id = str(read_task_control(task_dir).get("run_id") or "")
     if not current_run_id:
         return {}
     latest_events = {}
@@ -2653,7 +2769,11 @@ def emit_compact_context(task_dir, snapshot=None):
     """Build the canonical task pack with on-the-fly routing."""
     st = read_task_control(task_dir)
     if not st:
-        return {"error": "missing or invalid TASK.json", "task_dir": task_dir}
+        return {
+            "error": "missing or invalid exact four-field TASK.json",
+            "task_dir": task_dir,
+            "next_action": "Call task_start to initialize a fresh TASK.json run.",
+        }
 
     snapshot = snapshot or receipt_snapshot(task_dir)
     routing = compile_routing(task_dir)

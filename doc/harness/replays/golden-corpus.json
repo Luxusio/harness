@@ -243,22 +243,6 @@
       }
     },
     {
-      "id": "handoff_blocked_env_reads_snapshot",
-      "kind": "handoff",
-      "description": "blocked_env recovery should point operators at the environment snapshot before resuming work.",
-      "task_dir": "doc/harness/tasks/TASK__blocked-env-recovery",
-      "expect": {
-        "exists": true,
-        "trigger": "blocked_env_reentry",
-        "next_step_contains": "ENVIRONMENT_SNAPSHOT.md",
-        "files_to_read_first_contains": [
-          "ENVIRONMENT_SNAPSHOT.md",
-          "PLAN.md",
-          "TASK.json"
-        ]
-      }
-    },
-    {
       "id": "handoff_team_documentation_phase",
       "kind": "handoff",
       "description": "Team recovery should preserve the documentation phase, owners, and critic rerun when docs are the remaining blocker.",

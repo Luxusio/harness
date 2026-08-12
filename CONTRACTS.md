@@ -102,7 +102,7 @@ edits and source-scope discipline remain the developer's responsibility.
 ### C-05
 
 **Title:** Protected artifact ownership.
-**When:** Any `Write`/`Edit` to PLAN.md, AUDIT_TRAIL.md, TASK.json,
+**When:** Any `Write`/`Edit` to PLAN.md, TASK.json,
 RECEIPTS.jsonl, or CONVERSATION.md — and any `Bash` mutation (sed -i,
 redirect, cp, mv, tee, python -c open(…,'w'), …) targeting the same basenames.
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`

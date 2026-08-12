@@ -77,7 +77,6 @@ _ARTIFACT_TOOL_HINT = {
     "RECEIPTS.jsonl": "runtime review and QA lifecycle hook",
     "TASK_BASELINE.json": "task-start runtime",
     "PLAN.md": "mcp__plugin_harness_harness__write_plan",
-    "AUDIT_TRAIL.md": "mcp__plugin_harness_harness__write_plan",
     "CONVERSATION.md": "runtime conversation hook",
 }
 
@@ -297,7 +296,6 @@ def _deny(target, command):
     _NEXT = {
         "TASK.json": "Use task_start, write_plan, task_blocked, or task_close",
         "PLAN.md": "mcp__plugin_harness_harness__write_plan",
-        "AUDIT_TRAIL.md": "mcp__plugin_harness_harness__write_plan",
         "RECEIPTS.jsonl": "Spawn and await the required reviewer or QA agent; lifecycle hooks record this file",
         "CONVERSATION.md": "Let the runtime hooks record conversation history",
     }

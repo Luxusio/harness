@@ -52,7 +52,7 @@ def main() -> int:
         control = read_task_control(task_dir) or {}
     except Exception:
         return 0
-    if "qa-browser" not in (control.get("qa_lenses") or []):
+    if "qa-browser" not in (control.get("required_lenses") or []):
         return 0
 
     completed = _completed_qa_by_lens(task_dir)

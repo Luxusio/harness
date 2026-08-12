@@ -57,8 +57,8 @@ At the start of this review, check for prior session context:
 
 ```bash
 _TASK_DIR="doc/harness/tasks/$(ls doc/harness/tasks/ 2>/dev/null | grep TASK__ | head -1)"
-if [ -f "$_TASK_DIR/AUDIT_TRAIL.md" ]; then
-  grep "phase-summary" "$_TASK_DIR/AUDIT_TRAIL.md" | tail -5
+if [ -f "$_TASK_DIR/PLAN.md" ]; then
+  grep -A8 '^## Review Status' "$_TASK_DIR/PLAN.md" | tail -10
 fi
 ```
 
@@ -157,11 +157,11 @@ If a design doc exists, read it. Use it as the source of truth for the problem s
 
 ### Prior decision check
 
-If a prior plan-ceo-review or `Skill(harness:setup)` session paused partway through, resume from task-local PLAN/AUDIT_TRAIL/TASK.json data before re-asking premise questions:
+If a prior plan-ceo-review or setup session completed, resume from task-local PLAN/TASK.json data before re-asking premise questions:
 
 ```bash
 _TASK_DIR="doc/harness/tasks/$(ls doc/harness/tasks/ 2>/dev/null | grep TASK__ | head -1)"
-grep -A3 "CEO Review\|setup\|paused at\|resume from" "$_TASK_DIR"/{PLAN.md,AUDIT_TRAIL.md,TASK.json} 2>/dev/null | head -20
+grep -A3 "CEO Review\|setup\|paused at\|resume from" "$_TASK_DIR"/{PLAN.md,TASK.json} 2>/dev/null | head -20
 ```
 
 If prior decisions are found: extract the premises, scope decisions, and any user answers. Do NOT re-ask questions that were already answered in the prior session. Only ask what is genuinely new or changed since the recorded decision. Scope reads to the current `TASK__<id>` directory — never cross tasks.

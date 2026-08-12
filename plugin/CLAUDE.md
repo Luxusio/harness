@@ -27,7 +27,7 @@ No step skipped. Smallest coherent diff per step.
 - `task_blocked` — park unfinished work on a real environment blocker; writes BLOCKED.md and clears this session's active marker
 
 **Artifact writes (role-owned):**
-- `write_plan` → PLAN.md / optional AUDIT_TRAIL.md + TASK.json lens declarations (plan-skill)
+- `write_plan` → PLAN.md + TASK.json required-lens declaration (plan-skill)
 - durable docs such as `doc/<area>/REQ__*.md` are normal repo docs, not MCP evidence tools
 
 Static review and runtime QA provenance share `RECEIPTS.jsonl`.
@@ -42,11 +42,9 @@ storage/schema/gates.
 
 ```json
 {
-  "task_run_id": "<32 lowercase hex>",
-  "started_at": "<RFC3339 UTC>",
+  "run_id": "<canonical lowercase UUIDv7>",
   "execution_mode": "standard",
-  "review_lenses": ["review-code"],
-  "qa_lenses": ["qa-cli"],
+  "required_lenses": ["review-code", "qa-cli"],
   "close_receipt_fingerprint": null
 }
 ```
@@ -86,7 +84,7 @@ Turn 종결 정당 사유 (runtime_verdict 기반):
 
 | Artifact | Owner |
 |----------|-------|
-| PLAN.md / AUDIT_TRAIL.md | plan-skill via `write_plan` MCP |
+| PLAN.md | plan-skill via `write_plan` MCP |
 | TASK.json | task lifecycle MCP tools (`write_plan` may update lens declarations) |
 | source + durable docs | developer |
 | RECEIPTS.jsonl | Codex/Claude review and QA lifecycle hooks |

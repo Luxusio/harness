@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -27,15 +28,13 @@ def _task(tmp_path: Path, lenses: dict | None = None) -> Path:
     (task / "PLAN.md").write_text("# plan\n", encoding="utf-8")
     if lenses is not None:
         control = lib.read_task_control(task)
-        control["review_lenses"] = list(dict.fromkeys(
-            lens for lens in lenses.get("review_lenses", [])
-            if lens in lib.REVIEW_LENSES
-        )) or ["review-code"]
-        if "review-code" not in control["review_lenses"]:
-            control["review_lenses"].insert(0, "review-code")
-        control["qa_lenses"] = list(dict.fromkeys(
-            lens for lens in lenses.get("qa_lenses", []) if lens in lib.QA_LENSES
-        )) or ["qa-cli"]
+        requested = set(lenses.get("required_lenses", [])) & lib.SUPPORTED_LENSES
+        requested.add("review-code")
+        if not requested & lib.QA_LENSES:
+            requested.add("qa-cli")
+        control["required_lenses"] = [
+            lens for lens in lib.LENS_ORDER if lens in requested
+        ]
         lib.write_task_control(task, control)
     return task
 
@@ -79,11 +78,12 @@ def test_scaffold_uses_only_exact_task_control_and_does_not_inspect_git(tmp_path
     for legacy in (
         "TASK_STATE.yaml", "TASK_RUN.json", "PLAN.meta.json",
         "TASK_CLOSE_RECEIPT.json", "INSTALL_RECEIPT.json",
+        "AUDIT_TRAIL.md", "ENVIRONMENT_SNAPSHOT.md", ".receipts.lock",
     ):
         assert not (task / legacy).exists()
 
 
-def test_task_control_exact_six_field_schema_fails_closed(tmp_path):
+def test_task_control_exact_four_field_schema_fails_closed(tmp_path):
     task = _task(tmp_path)
     valid = lib.read_task_control(task)
     assert set(valid) == lib.TASK_CONTROL_FIELDS
@@ -91,17 +91,33 @@ def test_task_control_exact_six_field_schema_fails_closed(tmp_path):
     for mutation in (
         {**valid, "legacy_status": "open"},
         {key: value for key, value in valid.items() if key != "execution_mode"},
-        {**valid, "review_lenses": ["review-security"]},
-        {**valid, "qa_lenses": []},
-        {**valid, "started_at": "2026-W33-2T00:00:00Z"},
-        {**valid, "started_at": "2026-08-12 00:00:00Z"},
-        {**valid, "started_at": "2026-08-12T00:00Z"},
+        {**valid, "run_id": "a" * 32},
+        {**valid, "required_lenses": ["review-security", "qa-cli"]},
+        {**valid, "required_lenses": ["review-code"]},
+        {**valid, "required_lenses": ["review-code", "qa-cli", "qa-cli"]},
+        {**valid, "required_lenses": ["review-code", "qa-unknown"]},
     ):
         (task / "TASK.json").write_text(json.dumps(mutation) + "\n", encoding="utf-8")
         assert lib.read_task_control(task) == {}
 
     (task / "TASK.json").write_text(json.dumps(valid) + "\n", encoding="utf-8")
     assert lib.read_task_control(task) == valid
+
+
+def test_uuid7_identity_is_canonical_timestamped_and_rotates(tmp_path):
+    timestamp_ms = 1_786_424_400_900
+    run_id = lib.new_uuid7(timestamp_ms)
+    assert run_id == run_id.lower()
+    assert run_id[14] == "7"
+    assert run_id[19] in "89ab"
+    assert lib.uuid7_timestamp_ms(run_id) == timestamp_ms
+    assert lib.task_run_started_at({"run_id": run_id}) == "2026-08-11T05:00:00.900Z"
+
+    task = _task(tmp_path)
+    first = lib.read_task_control(task)["run_id"]
+    rotated, _ = lib.begin_task_run(task)
+    assert rotated["run_id"] != first
+    assert lib.uuid7_timestamp_ms(rotated["run_id"]) >= lib.uuid7_timestamp_ms(first)
 
 
 def test_task_control_routes_lenses_with_safe_defaults_and_explicit_security(tmp_path):
@@ -112,21 +128,21 @@ def test_task_control_routes_lenses_with_safe_defaults_and_explicit_security(tmp
     explicit_task = _task(
         tmp_path / "explicit",
         {
-            "review_lenses": ["review-security", "unknown"],
-            "qa_lenses": ["qa-browser", "qa-api", "unknown", "qa-browser"],
-            "security_review": "required",
+            "required_lenses": [
+                "review-security", "unknown", "qa-browser", "qa-api", "qa-browser",
+            ],
         },
     )
     assert lib.required_review_lenses(explicit_task) == [
         "review-code",
         "review-security",
     ]
-    assert lib._required_qa_lenses(explicit_task) == ["qa-browser", "qa-api"]
+    assert lib._required_qa_lenses(explicit_task) == ["qa-api", "qa-browser"]
 
     malformed_task = _task(tmp_path / "malformed")
     (malformed_task / "TASK.json").write_text("not json", encoding="utf-8")
-    assert lib.required_review_lenses(malformed_task) == ["review-code"]
-    assert lib._required_qa_lenses(malformed_task) == ["qa-cli"]
+    assert lib.required_review_lenses(malformed_task) == []
+    assert lib._required_qa_lenses(malformed_task) == []
 
 
 def test_receipts_require_matching_start(tmp_path):
@@ -284,7 +300,7 @@ def test_terminal_receipt_reset_rejects_unsafe_stream_leaves(tmp_path):
     assert outside.read_text(encoding="utf-8") == "preserve\n"
 
 
-def test_receipt_stream_and_lock_reject_group_world_writable_modes(tmp_path):
+def test_receipt_stream_and_task_directory_reject_group_world_writable_modes(tmp_path):
     writable_stream = _task(tmp_path / "stream")
     _pass_review(writable_stream)
     stream = writable_stream / lib.RECEIPTS_NAME
@@ -296,28 +312,68 @@ def test_receipt_stream_and_lock_reject_group_world_writable_modes(tmp_path):
     else:
         raise AssertionError("writable receipt stream must fail closed")
 
-    writable_lock = _task(tmp_path / "lock")
-    lock = writable_lock / ".receipts.lock"
-    lock.write_text("", encoding="utf-8")
-    lock.chmod(0o666)
+    writable_dir = _task(tmp_path / "directory")
+    writable_dir.chmod(0o777)
     try:
-        lib.receipt_snapshot(writable_lock)
+        lib.receipt_snapshot(writable_dir)
     except RuntimeError as exc:
         assert "integrity" in str(exc)
     else:
-        raise AssertionError("writable receipt lock must fail closed")
+        raise AssertionError("writable task directory must fail closed")
+    assert not (writable_dir / ".receipts.lock").exists()
+
+
+def test_task_directory_transaction_is_nested_serialized_and_replacement_safe(tmp_path):
+    task = _task(tmp_path / "serialized")
+    first_entered = threading.Event()
+    release_first = threading.Event()
+    second_entered = threading.Event()
+
+    def first_worker():
+        with lib.receipt_stream_transaction(task):
+            with lib.receipt_stream_transaction(task):
+                first_entered.set()
+                assert release_first.wait(5)
+
+    def second_worker():
+        assert first_entered.wait(5)
+        with lib.receipt_stream_transaction(task):
+            second_entered.set()
+
+    first = threading.Thread(target=first_worker)
+    second = threading.Thread(target=second_worker)
+    first.start()
+    second.start()
+    assert first_entered.wait(5)
+    assert not second_entered.wait(0.1)
+    release_first.set()
+    first.join(5)
+    second.join(5)
+    assert second_entered.is_set()
+    assert not (task / ".receipts.lock").exists()
+
+    original = _task(tmp_path / "replacement")
+    displaced = original.with_name("TASK__displaced")
+    try:
+        with lib.receipt_stream_transaction(original):
+            original.rename(displaced)
+            original.mkdir()
+    except RuntimeError as exc:
+        assert "integrity" in str(exc)
+    else:
+        raise AssertionError("task-directory replacement must fail closed")
 
 
 def test_rotated_task_run_rejects_prior_run_receipts_without_source_state(tmp_path):
     task = _task(tmp_path)
-    original_run = lib.read_task_control(task)["task_run_id"]
+    original_run = lib.read_task_control(task)["run_id"]
     _pass_review(task)
     _receipt(task, "qa-cli", "qa-1", "started")
     _receipt(task, "qa-cli", "qa-1", "completed", "PASS")
     assert lib.receipt_runtime_verdict(task) == "PASS"
 
     new_run, _ = lib.begin_task_run(task)
-    assert new_run["task_run_id"] != original_run
+    assert new_run["run_id"] != original_run
     assert lib.receipt_runtime_verdict(task) == "PENDING"
 
     # A late completion explicitly bound to the old run cannot revive it.
@@ -335,11 +391,11 @@ def test_rotated_task_run_rejects_prior_run_receipts_without_source_state(tmp_pa
 
 def test_missing_or_mismatched_task_run_fails_receipts_closed(tmp_path):
     task = _task(tmp_path)
-    run_id = lib.read_task_control(task)["task_run_id"]
+    run_id = lib.read_task_control(task)["run_id"]
     try:
         _receipt(
             task, "review-code", "review-wrong", "started",
-            task_run_id="f" * 32,
+            task_run_id=lib.new_uuid7(),
         )
     except RuntimeError as exc:
         assert "does not match" in str(exc)
@@ -398,13 +454,15 @@ def test_snapshot_rejects_same_size_mutation_and_path_replacement(tmp_path):
 
     with lib.receipt_stream_transaction(task):
         real_fstat = lib.os.fstat
-        calls = 0
+        stream_inode = stream.stat().st_ino
+        stream_calls = 0
 
         def changed_fstat(fd):
-            nonlocal calls
-            calls += 1
+            nonlocal stream_calls
             info = real_fstat(fd)
-            if calls == 2:
+            if info.st_ino == stream_inode:
+                stream_calls += 1
+            if info.st_ino == stream_inode and stream_calls == 2:
                 values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
                 values["st_mtime_ns"] = info.st_mtime_ns + 1
                 return SimpleNamespace(**values)
@@ -419,21 +477,17 @@ def test_snapshot_rejects_same_size_mutation_and_path_replacement(tmp_path):
                 raise AssertionError("same-size mutation must fail closed")
 
     with lib.receipt_stream_transaction(task):
-        real_lstat = lib.os.lstat
-        stream_calls = 0
+        real_stat = lib.os.stat
 
-        def replaced_lstat(path):
-            nonlocal stream_calls
-            info = real_lstat(path)
-            if Path(path) == stream:
-                stream_calls += 1
-                if stream_calls == 2:
-                    values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
-                    values["st_ino"] = info.st_ino + 1
-                    return SimpleNamespace(**values)
+        def replaced_stat(path, *args, **kwargs):
+            info = real_stat(path, *args, **kwargs)
+            if path == lib.RECEIPTS_NAME and kwargs.get("dir_fd") is not None:
+                values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+                values["st_ino"] = info.st_ino + 1
+                return SimpleNamespace(**values)
             return info
 
-        with mock.patch.object(lib.os, "lstat", side_effect=replaced_lstat):
+        with mock.patch.object(lib.os, "stat", side_effect=replaced_stat):
             try:
                 lib._receipt_snapshot_unlocked(task)
             except RuntimeError as exc:
@@ -493,7 +547,7 @@ def test_exact_schema_rejects_non_string_values(tmp_path):
     entry = {field: "" for field in lib.RECEIPT_FIELDS}
     entry.update(
         event="started",
-        task_run_id=lib.read_task_control(task)["task_run_id"],
+        task_run_id=lib.read_task_control(task)["run_id"],
         summary=[],
     )
     (task / lib.RECEIPTS_NAME).write_text(

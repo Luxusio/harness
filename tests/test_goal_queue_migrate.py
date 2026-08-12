@@ -59,11 +59,9 @@ def test_preserves_legacy_task_id_when_task_dir_exists(tmp_path):
     task_dir = harness / "tasks" / "TASK__autopilot-auth"
     task_dir.mkdir(parents=True)
     (task_dir / "TASK.json").write_text(json.dumps({
-        "task_run_id": "a" * 32,
-        "started_at": "2026-08-12T00:00:00Z",
+        "run_id": "0198c349-5800-7000-8000-000000000001",
         "execution_mode": "standard",
-        "review_lenses": ["review-code"],
-        "qa_lenses": ["qa-cli"],
+        "required_lenses": ["review-code", "qa-cli"],
         "close_receipt_fingerprint": None,
     }) + "\n", encoding="utf-8")
     (harness / "autopilot.yaml").write_text(

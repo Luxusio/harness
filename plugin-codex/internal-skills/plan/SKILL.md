@@ -41,7 +41,7 @@ Phase 5 (user-facing gate) stays inline below. Read sub-files from `plugin/skill
 - **Independent voices by capability.** Where the Claude source says "Voice A + Voice B via Agent", use separate subagent or external-model contexts when exposed. Otherwise run ONE inline critical-reviewer pass and note the degradation in PLAN.md `Review Status`; use the `single-voice` degradation row only for that fallback.
 - **Premise gate mandatory.** Phase 1.1 emits one conversational ask before Phase 5. Premises are never auto-decided (except spawned mode).
 - **Never-auto decisions.** User Challenge items get their own ask at Phase 5.3.
-- **Write via MCP only.** PLAN.md, TASK.json lens declarations, and AUDIT_TRAIL.md go through `write_plan`. Never Write/Edit directly.
+- **Write via MCP only.** PLAN.md and TASK.json required-lens declarations go through `write_plan`. Never Write/Edit them directly.
 - **Workflow-lock awareness.** Trusts coordinator; no redundant check.
 - **Read actual code.** Review phases MUST read source files, diffs, and referenced code. Reasoning from plan text alone is insufficient.
 - **Never abort.** Single-voice surfaces findings as findings; never silently redirects. Blocked is terminal only for premise gate refusal.
@@ -96,7 +96,7 @@ Each review phase reads its corresponding Codex internal prompt and executes the
 - Phase 3 → `plugin-codex/internal-skills/plan-eng-review/SKILL.md`
 - Phase 4 → `plugin-codex/internal-skills/plan-devex-review/SKILL.md` (only if dx_scope=true)
 
-These sub-skills are heavy dual-voice review pipelines on the Claude side. On Codex, route them through independent contexts when available; otherwise use the same dimensions and outputs with one reviewer and surface that fallback in the Phase N consensus row of AUDIT_TRAIL.md.
+These sub-skills are heavy dual-voice review pipelines on the Claude side. On Codex, route them through independent contexts when available; otherwise record the fallback in PLAN.md Review Status.
 
 ---
 
@@ -123,7 +123,7 @@ critical-reviewer pass. Every pass:
 - Reads the phase brief (lens dimensions from `review-phases.md`).
 - Produces findings per dimension.
 - Classifies each finding (Mechanical / Taste / User Challenge).
-- Appends a consensus row to AUDIT_TRAIL.md, marked `single-voice` only when the independent route was unavailable.
+- Retains a consensus row for PLAN.md, marked `single-voice` only when the independent route was unavailable.
 
 The fallback has less cross-blind-spot detection and no Voice A vs Voice B
 disagreement surfacing, so record it explicitly. A Codex run with independent
@@ -150,11 +150,11 @@ Full protocol, dimensions, checklists, and degradation matrix: `review-phases.md
 ### 5.0 Pre-Gate verification (max 2 retries)
 
 Verify required outputs before collecting decisions:
-- [ ] Phase 1: premise challenge user-confirmed; CEO consensus in AUDIT_TRAIL; phase-transition summary
-- [ ] Phase 2 (if ran): Design consensus in AUDIT_TRAIL; phase-transition summary
-- [ ] Phase 3: Engineering consensus in AUDIT_TRAIL; phase-transition summary
-- [ ] Phase 4 (if ran): DX consensus in AUDIT_TRAIL; phase-transition summary
-- [ ] AUDIT_TRAIL has ≥ 1 row per completed phase
+- [ ] Phase 1: premise challenge user-confirmed; CEO consensus retained; phase-transition summary
+- [ ] Phase 2 (if ran): Design consensus retained; phase-transition summary
+- [ ] Phase 3: Engineering consensus retained; phase-transition summary
+- [ ] Phase 4 (if ran): DX consensus retained; phase-transition summary
+- [ ] PLAN.md Review Status has ≥ 1 row per completed phase
 - [ ] Any single-voice fallback is logged with the concrete unavailable independent route for each affected phase.
 
 If missing after 2 retries, proceed to 5.1 with warning block:
@@ -165,7 +165,7 @@ Missing: <list>
 
 ### 5.1 Plan approval summary (user-facing)
 
-The user only needs two things at the gate: **what this plan will do** and **what is explicitly out of scope**. Internal review state (decision counts, taste classifications, cross-phase themes) is logged to `AUDIT_TRAIL.md` — never rendered here.
+The user only needs two things at the gate: **what this plan will do** and **what is explicitly out of scope**. Internal review state is retained for PLAN.md, never rendered here.
 
 Emit:
 ```
@@ -180,24 +180,24 @@ Emit:
 
 That is the entire user-facing summary.
 
-**Hard guard.** Never render at this gate: the 4-rule body (`[Re-ground]/[Simplify]/[Recommend]/[Options]`), decision counts, taste tallies, cross-phase summaries. Those belong in PLAN.md / AUDIT_TRAIL.md only.
+**Hard guard.** Never render at this gate: the 4-rule body, decision counts, taste tallies, or cross-phase summaries. Those belong in PLAN.md only.
 
 ### 5.1.1 Collect all decisions
 
 From the available consensus rows across Phases 1-4: Mechanical (silently applied), Taste, User Challenge.
 
-### 5.2 Log Taste decisions to AUDIT_TRAIL (no gate render)
+### 5.2 Retain Taste decisions for PLAN.md (no gate render)
 
-Same as Claude — taste decisions go to AUDIT_TRAIL only.
+Taste decisions go to PLAN.md's Decision Audit Trail only.
 
 ```
 Auto-decided (Taste):
 - [item]: chose [option] over [option] because [principle applied]
 ```
 
-### 5.2.5 Log Cross-Phase Themes to AUDIT_TRAIL (no gate render)
+### 5.2.5 Retain Cross-Phase Themes for PLAN.md (no gate render)
 
-Same as Claude — cross-phase theme detection writes to AUDIT_TRAIL + PLAN.md `Cross-phase themes` section.
+Cross-phase theme detection writes to PLAN.md's `Cross-phase themes` section.
 
 ### 5.3 User Challenge gate
 
@@ -296,9 +296,9 @@ Both modes: Phase 1 premise gate and Phase 5.3 User Challenges never auto-decide
   the reason. For purely mechanical, test-only, or internal refactors, write
   `No durable doc needed` and name the unchanged durable knowledge surface.
 - **Two gates.** The non-auto-decided asks are: (1) premise confirmation in Phase 1.1, and (2) User Challenges in Phase 5.3.
-- **Log every decision.** Every classification (Mechanical / Taste / User Challenge) gets a row in `AUDIT_TRAIL.md` via `write_plan { plan: "...", audit: "..." }`.
+- **Log every decision.** Every classification gets a row in PLAN.md's Decision Audit Trail.
 - **Full depth means full depth.** Complete every loaded methodology section with its required evidence and decisions.
-- **Artifacts are deliverables.** PLAN.md and valid lens declarations in TASK.json must exist before Phase 6 closes the session; AUDIT_TRAIL.md is written when audit decisions exist.
+- **Artifacts are deliverables.** PLAN.md and valid required lenses in TASK.json must exist before Phase 6 closes the session.
 - **Intent is preserved in PLAN.** Every PLAN.md includes `Original Request / Intent Summary`. If `REQUEST.md` exists, summarize it and cite it. If it is absent, gitignored, or under 15 non-empty lines, summarize the current user prompt and explicitly label the source as `conversation summary` so future reviewers can evaluate intent without relying on task-local request artifacts.
 - **Sequential order.** Phase 0 → 1 → 2 → 3 → 4 → 5 → 6.
 

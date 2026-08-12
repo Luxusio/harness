@@ -47,7 +47,7 @@ When `auto_decide` is active:
 
 **MUST:**
 - Resolve every Mechanical and Taste via 6 Principles (first applicable wins).
-- Log every auto-decision to AUDIT_TRAIL.md immediately, one row per.
+- Keep every auto-decision in working context and materialize it in PLAN.md.
 - Surface all auto-decided Taste items at Phase 5.2.
 - Default CEO to SELECTIVE EXPANSION; DX to DX POLISH.
 - Complete all mandatory phase outputs at full depth.

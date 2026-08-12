@@ -23,7 +23,7 @@ import sys
 import tempfile
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -38,6 +38,7 @@ from _lib import (  # type: ignore
     record_subagent_receipt,
     read_task_control,
     task_control_status,
+    uuid7_timestamp_ms,
     resolve_active_task_dir,
 )
 
@@ -54,7 +55,7 @@ IDLE_SECONDS = 8 * 60 * 60
 REGISTRATION_TTL_SECONDS = IDLE_SECONDS
 MAX_WATCHER_THREADS = 16
 RUNTIME_SUBDIR = os.path.join("harness", "codex-watchers")
-REGISTRATION_VERSION = 9
+REGISTRATION_VERSION = 10
 REGISTRATION_OWNER = "codex_root_hook"
 
 
@@ -734,30 +735,32 @@ def _active_task_binding_for_session(repo_root: str, root_id: str) -> dict[str, 
     marker = tasks_root / ".active_sessions" / f"{root_id}.json"
     marker_data = _read_owned_json(marker, tasks_root)
     task_run = read_task_control(task_dir)
-    marker_run_id = str(marker_data.get("task_run_id") or "")
-    marker_started_at = str(marker_data.get("run_started_at") or "")
+    marker_run_id = str(marker_data.get("run_id") or "")
     if (
         not task_run
-        or marker_run_id != task_run.get("task_run_id")
-        or marker_started_at != task_run.get("started_at")
+        or marker_run_id != task_run.get("run_id")
     ):
         return {}
     return {
         "task_dir": task_dir,
-        "task_run_id": marker_run_id,
-        "run_started_at": marker_started_at,
+        "run_id": marker_run_id,
     }
-def _event_precedes_run(event: dict[str, Any], started_at: str) -> bool:
-    if not started_at:
+
+
+def _event_precedes_run(event: dict[str, Any], run_id: str) -> bool:
+    if not run_id:
         return False
     try:
         event_time = datetime.fromisoformat(
             str(event.get("timestamp") or "").replace("Z", "+00:00")
         )
-        run_time = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
-    except (TypeError, ValueError):
+        if event_time.tzinfo is None:
+            return True
+        event_ms = int(event_time.astimezone(timezone.utc).timestamp() * 1000)
+        run_ms = uuid7_timestamp_ms(run_id)
+    except (OverflowError, TypeError, ValueError):
         return True
-    return event_time < run_time
+    return event_ms < run_ms
 
 
 def _event_payload(event: dict[str, Any], expected_type: str) -> dict[str, Any] | None:
@@ -1052,7 +1055,7 @@ class Watcher:
             not task_dir
             or active_task != task_dir
             or not item.get("task_run_id")
-            or binding.get("task_run_id") != item.get("task_run_id")
+            or binding.get("run_id") != item.get("task_run_id")
             or not lens.startswith(("review-", "qa-", "ux-"))
         ):
             item["invalid"] = True
@@ -1108,7 +1111,7 @@ class Watcher:
         if (
             current_task != item.get("task_dir")
             or not item.get("task_run_id")
-            or binding.get("task_run_id") != item.get("task_run_id")
+            or binding.get("run_id") != item.get("task_run_id")
         ):
             self._invalidate(item, "active task changed while agent was running")
             return
@@ -1167,17 +1170,16 @@ class Watcher:
             active_task = binding.get("task_dir")
             if (
                 not active_task
-                or not binding.get("task_run_id")
-                or not binding.get("run_started_at")
+                or not binding.get("run_id")
             ):
                 item["invalid"] = True
                 return
-            if _event_precedes_run(event, binding.get("run_started_at", "")):
+            if _event_precedes_run(event, binding.get("run_id", "")):
                 item["invalid"] = True
                 return
             self._set_once(item, "task_name", task_name)
             self._set_once(item, "task_dir", active_task)
-            self._set_once(item, "task_run_id", binding.get("task_run_id", ""))
+            self._set_once(item, "task_run_id", binding.get("run_id", ""))
             self._maybe_start(call_id)
             return
         payload = _event_payload(event, "response_item")

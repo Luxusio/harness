@@ -31,7 +31,7 @@ and the repository code it references.
 
 The prefix above is the single source of truth. Do not duplicate or re-author it in caller code — reference this section by path (`plan/review-phases.md` § "filesystem boundary instruction").
 
-Timeout external calls at 600s. On any external failure (timeout, empty output, non-zero exit), log one row to AUDIT_TRAIL as `cross-model-failure` and fall back to the Agent-tool transport for this phase only (`dual-voice-agent-fallback` mode). Never block the pipeline on external unavailability.
+Timeout external calls at 600s. On any external failure, retain a `cross-model-failure` decision for PLAN.md and fall back to the Agent-tool transport for this phase only. Never block on external unavailability.
 
 Every brief must include:
 - Plan content
@@ -56,21 +56,15 @@ For each disagreement:
 2. Apply per-phase conflict-resolution priority (see matrix below)
 3. Record consensus row
 
-Append rows immediately (incremental audit, not end-of-phase batch):
-```text
-write_plan {
-  task_id: "TASK__<id>",
-  artifact: "audit",
-  content: "<phase audit rows>"
-}
-```
+Keep rows in working context and materialize them once in PLAN.md's
+`Decision Audit Trail` during Phase 6. Do not create a second audit artifact.
 
 Audit row format (7 pipe-delimited columns):
 ```
 # | phase | decision | classification | principle | rationale | rejected_option
 ```
 
-Also append each auto-decided row directly into PLAN.md's `## Decision Audit Trail` section via Edit tool (inline audit trail).
+Materialize each auto-decided row in PLAN.md's `## Decision Audit Trail` section.
 
 ### 3. Consensus table display
 
@@ -93,15 +87,11 @@ Phase <N> consensus: confirmed=<N> / disagree=<N> / adversarial=<N>
 User Challenge items queued: <N>
 ```
 
-Also append a phase-summary JSON row to AUDIT_TRAIL.md:
-```
-| <#> | <N> | phase-summary | log | - | {"phase":"<N>","confirmed":<count>,"disagree":<count>,"adversarial":<count>,"taste":<count>,"challenge":<count>} | - |
-```
+Keep the phase summary for PLAN.md's Review Status table.
 
 ### 5. No separate chronological artifact
 
-Do not create another chronological file. PLAN.md and AUDIT_TRAIL
-phase-summary rows are the durable review record.
+Do not create a chronological side file. PLAN.md is the durable review record.
 
 ### Degradation matrix (apply per phase)
 
@@ -109,8 +99,8 @@ phase-summary rows are the durable review record.
 |-----------|------|--------|
 | Both voices return, Voice B external | `dual-voice-cross-model` (nominal, best) | Build consensus normally; log `cross_model_voice=<codex\|gemini\|codex-direct>` in phase-summary |
 | Both voices return, Voice B Agent-tool | `dual-voice` (nominal, same-model) | Build consensus normally |
-| External Voice B fails, Agent-tool B succeeds | `dual-voice-agent-fallback` (degraded) | Log `cross-model-failure` + retry reason to AUDIT_TRAIL; use Agent-tool B output; continue |
-| One voice fails/timeout entirely | `single-voice` (degraded) | Log reason to AUDIT_TRAIL with `mode=single-voice`; continue |
+| External Voice B fails, Agent-tool B succeeds | `dual-voice-agent-fallback` (degraded) | Record `cross-model-failure` + retry reason in PLAN; use Agent-tool B output; continue |
+| One voice fails/timeout entirely | `single-voice` (degraded) | Record reason in PLAN with `mode=single-voice`; continue |
 | Both voices fail | `blocked` | Emit AskUserQuestion with details before proceeding |
 | `HARNESS_DISABLE_CROSS_MODEL=1` set | `dual-voice` (by user choice) | Agent-tool Voice B only; not a degradation |
 
@@ -162,7 +152,7 @@ C) No, these need revisiting — (please describe)
 - [ ] Error & Rescue Registry table
 - [ ] Failure Modes Registry table
 - [ ] Completion Summary
-- [ ] CEO consensus table in AUDIT_TRAIL.md
+- [ ] CEO consensus represented in PLAN.md Review Status
 - [ ] Phase-transition summary emitted
 
 ---
@@ -200,7 +190,7 @@ Methodology: `plugin/skills/plan-eng-review/SKILL.md`. Conflict priority: **P5 +
 - [ ] Completion Summary
 - [ ] Deferred items appended to `deferred-scope.md`
 - [ ] Deferred items appended to TODOS.md (if exists at repo root)
-- [ ] Engineering consensus table in AUDIT_TRAIL.md
+- [ ] Engineering consensus represented in PLAN.md Review Status
 
 **Section 3 (Test Review) NEVER SKIP OR COMPRESS.** Read actual code, not memory. Build test diagram: list every NEW codepath and branch; for each: what test type covers it? does one exist? gaps? Auto-deciding test gaps = identify → decide add/defer (with rationale+principle) → log. Does NOT mean skip analysis.
 
@@ -229,7 +219,7 @@ Methodology: `plugin/skills/plan-devex-review/SKILL.md`. Conflict priority: **P5
 - [ ] TTHW (Time to Hello World) current → target
 - [ ] DX Implementation Checklist
 - [ ] Deferred items appended to `deferred-scope.md`
-- [ ] DX consensus table in AUDIT_TRAIL.md
+- [ ] DX consensus represented in PLAN.md Review Status
 
 ---
 

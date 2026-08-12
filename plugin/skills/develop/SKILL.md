@@ -102,7 +102,7 @@ Phases run in strict order; each phase must complete before the next. Sub-files 
 
 ### Phase 0: Pre-flight
 
-Verify `doc/harness/manifest.yaml` and the exact six-field `TASK.json` parse. Derive terminal state from `TASK.json.close_receipt_fingerprint` or `BLOCKED.md`; do not expect a stored status or verdict. No other task holds write focus. On failure, `AskUserQuestion` with setup-skill / fresh-task / continue-anyway options.
+Verify `doc/harness/manifest.yaml` and the exact four-field `TASK.json` parse. Derive terminal state from `TASK.json.close_receipt_fingerprint` or `BLOCKED.md`; do not expect a stored status or verdict. No other task holds write focus. On failure, `AskUserQuestion` with setup-skill / fresh-task / continue-anyway options.
 
 **Context Recovery:** inspect TASK.json/PROGRESS.md for the current task
 and list the 3 newest task directories. If an in-progress task matches the
@@ -340,7 +340,8 @@ migration/contract, LLM-trust, and proportional performance inputs before the
 final checkpoint. The old generic adversarial, line-count Red Team, and quality
 synthesis agents are replaced by the mandatory balanced review gate in Phase
 6.6. Canonical code/security routing comes from `task_context`
-`required_review_lenses`, which checks paths and diff content.
+`required_review_lenses`, derived from the canonical `TASK.json.required_lenses`
+set without inspecting paths or diff content.
 
 **Phase 4.85 Coverage Synthesis** — use the coverage diagram from the audit
 agent final response to update tests directly. Do not create a separate test

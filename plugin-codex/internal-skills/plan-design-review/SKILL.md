@@ -221,7 +221,7 @@ Exit early if the plan contains no UI scope. A design review on backend-only cha
 _UI_HITS=$(grep -ciE "\bui\b|frontend|component|css|html|react|vue|button|modal|dashboard|sidebar|nav|dialog|layout|visual|stylesheet|design system" doc/harness/tasks/TASK__*/PLAN.md 2>/dev/null | head -1)
 if [ "${_UI_HITS:-0}" -lt 2 ]; then
   echo "skipped, no UI scope"
-  # Log to AUDIT_TRAIL and exit cleanly — do not proceed to Step 0
+  # Report the skip in the phase summary and exit cleanly — do not proceed to Step 0
 fi
 ```
 

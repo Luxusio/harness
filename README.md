@@ -59,11 +59,9 @@ After close, the Goal child-task executor performs a self-improvement pass — s
 
 ```json
 {
-  "task_run_id": "<32 lowercase hex>",
-  "started_at": "<RFC3339 UTC>",
+  "run_id": "<canonical lowercase UUIDv7>",
   "execution_mode": "standard",
-  "review_lenses": ["review-code"],
-  "qa_lenses": ["qa-cli"],
+  "required_lenses": ["review-code", "qa-cli"],
   "close_receipt_fingerprint": null
 }
 ```
@@ -180,7 +178,6 @@ The post-close self-improvement pass in the Goal child-task executor auto-promot
 | Explicit note maintenance | `note_freshness.py --paths ...` | Mark selected durable notes suspect without automatic Git scanning |
 | Codex SessionStart/spawn PreToolUse + MCP background | `codex_hook_registration.py`, `codex_lifecycle_watcher.py` | Register the root rollout at startup or immediately before spawn, then bind runtime subagent starts and completions from MCP-hosted daemon threads without a detached process |
 | Stop | `hook_stop.py` | Codex plugin wrapper for stop gating |
-| (task_start) | `environment_snapshot.py` | One-shot probe invoked from `task_start`; writes `ENVIRONMENT_SNAPSHOT.md` into the task dir |
 
 All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook degrades gracefully; it never blocks the session. Gates signal decisions via stdout JSON (`hookSpecificOutput.permissionDecision`), so blocking survives the `|| true` wrapper while a script crash still exits 0.
 
@@ -200,7 +197,7 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 | `goal_add_task` | Attach or update a child task under the goal |
 | `goal_next_task` | Return the next queued/active child task |
 | `goal_finish` | Mark the active goal complete or blocked |
-| `write_plan` | Write PLAN.md plus optional AUDIT_TRAIL.md and update TASK.json lens declarations |
+| `write_plan` | Write PLAN.md and update TASK.json required lenses |
 
 ## Skills
 

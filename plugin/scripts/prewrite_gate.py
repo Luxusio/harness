@@ -64,7 +64,6 @@ except Exception:
 PROTECTED_ARTIFACTS = {
     "TASK.json": "task-control-mcp",
     "PLAN.md": "plan-skill",
-    "AUDIT_TRAIL.md": "plan-skill",
     "RECEIPTS.jsonl": "receipt-lifecycle-hook",
     "TASK_BASELINE.json": "task-start-runtime",
     "CONVERSATION.md": "conversation-hook",
@@ -74,7 +73,6 @@ PROTECTED_ARTIFACTS = {
 PROTECTED_ARTIFACT_HUMAN = {
     "TASK.json": "task control MCP tools",
     "PLAN.md": "plan-skill (Skill(harness:plan))",
-    "AUDIT_TRAIL.md": "plan-skill",
     "RECEIPTS.jsonl": "Codex/Claude review and QA lifecycle hooks",
     "TASK_BASELINE.json": "task-start runtime",
     "CONVERSATION.md": "Codex/Claude conversation hooks",
@@ -390,7 +388,7 @@ def _runtime_name() -> str:
 def _tool_hint(tool: str, runtime: str | None = None) -> str:
     runtime = runtime or _runtime_name()
     args = {
-        "write_plan": "task_id=..., plan=..., audit=..., review_lenses=[...], qa_lenses=[...]",
+        "write_plan": "task_id=..., plan=..., required_lenses=[...]",
     }.get(tool, "...")
     if runtime == "codex":
         return f"{tool} {{ {args} }}"

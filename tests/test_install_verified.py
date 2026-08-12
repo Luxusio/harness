@@ -221,11 +221,9 @@ def test_task_dir_must_be_canonical_and_active(tmp_path):
 def test_task_dir_requires_open_exact_session_generation(tmp_path):
     repo, task = _repo(tmp_path)
     control = {
-        "task_run_id": "a" * 32,
-        "started_at": "2026-08-12T00:00:00Z",
+        "run_id": "0198c349-5800-7000-8000-000000000001",
         "execution_mode": "standard",
-        "review_lenses": ["review-code"],
-        "qa_lenses": ["qa-cli"],
+        "required_lenses": ["review-code", "qa-cli"],
         "close_receipt_fingerprint": None,
     }
     with (

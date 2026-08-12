@@ -110,7 +110,7 @@ Phases run in strict order; each phase must complete before the next. Sub-files 
 
 ### Phase 0: Pre-flight
 
-Verify `doc/harness/manifest.yaml` and the exact six-field `TASK.json` parse. Derive terminal state from `TASK.json.close_receipt_fingerprint` or `BLOCKED.md`; do not expect a stored status or verdict. No other task holds write focus. On failure, conversationally ask about setup, a fresh task, or continuing anyway.
+Verify `doc/harness/manifest.yaml` and the exact four-field `TASK.json` parse. Derive terminal state from `TASK.json.close_receipt_fingerprint` or `BLOCKED.md`; do not expect a stored status or verdict. No other task holds write focus. On failure, conversationally ask about setup, a fresh task, or continuing anyway.
 
 **Context Recovery:** inspect TASK.json/PROGRESS.md for the current task
 and list the 3 newest task directories. If an in-progress task matches the

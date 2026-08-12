@@ -52,11 +52,9 @@ class HarnessMcpServerTests(unittest.TestCase):
         harness_lib.write_task_control(
             task_dir,
             {
-                "task_run_id": "a" * 32,
-                "started_at": "2026-01-01T00:00:00Z",
+                "run_id": harness_lib.new_uuid7(),
                 "execution_mode": "standard",
-                "review_lenses": ["review-code"],
-                "qa_lenses": ["qa-cli"],
+                "required_lenses": ["review-code", "qa-cli"],
                 "close_receipt_fingerprint": None,
             },
         )
@@ -115,7 +113,6 @@ class HarnessMcpServerTests(unittest.TestCase):
             task_dir = Path(tmp) / "doc/harness/tasks/TASK__no-git-handlers"
             with (
                 mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
-                mock.patch.object(harness_server, "_env_snapshot", return_value=""),
                 mock.patch.object(harness_lib.subprocess, "run", side_effect=forbidden),
             ):
                 started = harness_server.handle_task_start(
@@ -161,7 +158,6 @@ class HarnessMcpServerTests(unittest.TestCase):
                 task_dir = Path(tmp) / "doc/harness/tasks" / task_id
                 with (
                     mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
-                    mock.patch.object(harness_server, "_env_snapshot", return_value=""),
                 ):
                     harness_server.handle_task_start({"task_id": task_id})
                     (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
@@ -308,11 +304,9 @@ class HarnessMcpServerTests(unittest.TestCase):
                 harness_server.write_task_control(
                     str(task_dir),
                     {
-                        "task_run_id": "a" * 32,
-                        "started_at": "2026-01-01T00:00:00Z",
+                        "run_id": harness_lib.new_uuid7(),
                         "execution_mode": "standard",
-                        "review_lenses": ["review-code"],
-                        "qa_lenses": ["qa-cli"],
+                        "required_lenses": ["review-code", "qa-cli"],
                         "close_receipt_fingerprint": None,
                     },
                 )
@@ -1243,7 +1237,6 @@ class HarnessMcpServerTests(unittest.TestCase):
                     "emit_compact_context",
                     side_effect=RuntimeError("context scan exceeded request budget"),
                 ),
-                mock.patch.object(harness_server, "_env_snapshot", return_value=""),
             ):
                 result = harness_server.handle_task_start(
                     {"task_id": "TASK__context-warning"}
@@ -1282,7 +1275,6 @@ class HarnessMcpServerTests(unittest.TestCase):
                     "emit_compact_context",
                     return_value={"error": "context scan unavailable"},
                 ),
-                mock.patch.object(harness_server, "_env_snapshot", return_value=""),
             ):
                 result = harness_server.handle_task_start(
                     {"task_id": "TASK__context-error-result"}
@@ -1318,7 +1310,6 @@ class HarnessMcpServerTests(unittest.TestCase):
                     "emit_compact_context",
                     side_effect=RuntimeError("context delayed"),
                 ),
-                mock.patch.object(harness_server, "_env_snapshot", return_value=""),
             ):
                 result = harness_server.handle_task_start(
                     {"task_id": "TASK__resumed-warning"}
@@ -1390,11 +1381,9 @@ class HarnessMcpServerTests(unittest.TestCase):
             terminal_task = Path(tmp) / "doc/harness/tasks/TASK__invalid-mode-closed"
             terminal_task.mkdir(parents=True)
             original = {
-                "task_run_id": "b" * 32,
-                "started_at": "2026-08-03T00:00:00Z",
+                "run_id": harness_lib.new_uuid7(),
                 "execution_mode": "standard",
-                "review_lenses": ["review-code"],
-                "qa_lenses": ["qa-cli"],
+                "required_lenses": ["review-code", "qa-cli"],
                 "close_receipt_fingerprint": None,
             }
             harness_server.write_task_control(str(terminal_task), original)
@@ -1426,6 +1415,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             obsolete = (
                 "TASK_STATE.yaml", "TASK_RUN.json", "PLAN.meta.json",
                 "TASK_CLOSE_RECEIPT.json", "INSTALL_RECEIPT.json",
+                "AUDIT_TRAIL.md", "ENVIRONMENT_SNAPSHOT.md", ".receipts.lock",
             )
             for name in obsolete:
                 (task_dir / name).write_text("legacy\n", encoding="utf-8")
@@ -1435,7 +1425,6 @@ class HarnessMcpServerTests(unittest.TestCase):
                     harness_server, "canonical_task_dir", return_value=str(task_dir)
                 ),
                 mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
-                mock.patch.object(harness_server, "_env_snapshot", return_value=""),
             ):
                 result = harness_server.handle_task_start(
                     {"task_id": "TASK__resume-cleanup"}
@@ -1598,7 +1587,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertFalse((task_dir / "TASK_BASELINE.json").exists())
             self.assertFalse((task_dir / "TASK_STATE.yaml").exists())
 
-    def test_write_plan_updates_task_lenses_and_audit(self):
+    def test_write_plan_updates_required_lenses_without_audit_artifact(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__planmcp")
             result = self._call_in_repo(
@@ -1607,27 +1596,26 @@ class HarnessMcpServerTests(unittest.TestCase):
                 {
                     "task_dir": task_dir,
                     "plan": "# MCP Plan\n",
-                    "audit": "| 1 | p | d | c | p | r | - |\n",
-                    "review_lenses": ["review-code", "review-security"],
-                    "qa_lenses": ["qa-api"],
+                    "required_lenses": ["qa-api", "review-security", "review-code"],
                 },
             )
             self.assertNotIn("isError", result)
             self.assertEqual(
                 result["structuredContent"]["written"],
-                ["PLAN.md", "AUDIT_TRAIL.md", "TASK.json"],
+                ["PLAN.md", "TASK.json"],
             )
             bytes_written = result["structuredContent"]["bytes_written"]
             self.assertGreater(bytes_written["PLAN.md"], 0)
             self.assertGreater(bytes_written["TASK.json"], 0)
-            self.assertGreater(bytes_written["AUDIT_TRAIL.md"], 0)
             self.assertFalse((Path(task_dir) / "CHECKS.yaml").exists())
             self.assertEqual((Path(task_dir) / "PLAN.md").read_text(encoding="utf-8"), "# MCP Plan\n")
             control = json.loads((Path(task_dir) / "TASK.json").read_text(encoding="utf-8"))
-            self.assertEqual(control["review_lenses"], ["review-code", "review-security"])
-            self.assertEqual(control["qa_lenses"], ["qa-api"])
+            self.assertEqual(
+                control["required_lenses"],
+                ["review-code", "review-security", "qa-api"],
+            )
             self.assertFalse((Path(task_dir) / "PLAN.meta.json").exists())
-            self.assertIn("| 1 |", (Path(task_dir) / "AUDIT_TRAIL.md").read_text(encoding="utf-8"))
+            self.assertFalse((Path(task_dir) / "AUDIT_TRAIL.md").exists())
 
     def test_terminal_task_rejects_plan_and_blocked_mutations(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1645,7 +1633,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             plan = self._call_in_repo(tmp, "write_plan", {
                 "task_id": "TASK__terminal-mutators",
                 "plan": "# changed\n",
-                "review_lenses": ["review-code", "review-security"],
+                "required_lenses": ["review-code", "review-security", "qa-cli"],
             })
             blocked = self._call_in_repo(tmp, "task_blocked", {
                 "task_id": "TASK__terminal-mutators",
@@ -1703,220 +1691,20 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertTrue(result.get("isError"))
             self.assertIn("empty PLAN.md", result["structuredContent"]["error"])
 
-    def test_write_plan_rejects_empty_optional_audit(self):
+    def test_write_plan_rejects_removed_audit_argument_without_writes(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__emptyaudit")
-            result = self._call_in_repo(
-                tmp,
-                "write_plan",
-                {"task_dir": task_dir, "plan": "# Plan\n", "audit": "\n"},
-            )
-            self.assertTrue(result.get("isError"))
-            self.assertIn("empty AUDIT_TRAIL.md", result["structuredContent"]["error"])
-
-    def test_write_plan_rejects_invalid_audit_before_any_write(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__invalidaudit")
             before = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
             result = self._call_in_repo(
                 tmp,
                 "write_plan",
-                {"task_dir": task_dir, "plan": "# Replacement\n", "audit": "not a table row\n"},
+                {"task_dir": task_dir, "plan": "# Replacement\n", "audit": "removed"},
             )
             self.assertTrue(result.get("isError"))
-            self.assertIn("invalid AUDIT_TRAIL.md", result["structuredContent"]["error"])
-            self.assertIn("full Markdown table", result["structuredContent"]["next_action"])
-            self.assertIn("| 1 | phase | decision |", result["structuredContent"]["example"])
+            self.assertIn("unsupported", result["structuredContent"]["error"])
             after = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
             self.assertEqual(after, before)
-
-    def test_write_plan_accepts_full_markdown_audit_table_and_normalizes_header(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__friendlyaudit")
-            full_table = "\n".join(
-                [
-                    "# Audit Trail",
-                    "",
-                    "| # | phase | decision | classification | principle | rationale | rejected_option |",
-                    "|---|---|---|---|---|---|---|",
-                    "| 1 | plan | accept natural Markdown | Mechanical | P5 | friendly input | row-only input |",
-                    "",
-                ]
-            )
-
-            result = self._call_in_repo(
-                tmp,
-                "write_plan",
-                {"task_dir": task_dir, "plan": "# Plan\n", "audit": full_table},
-            )
-
-            self.assertNotIn("isError", result)
-            body = (Path(task_dir) / "AUDIT_TRAIL.md").read_text(encoding="utf-8")
-            self.assertEqual(body.count("# Audit Trail"), 0)
-            self.assertEqual(
-                body.count(
-                    "| # | phase | decision | classification | principle | rationale | rejected_option |"
-                ),
-                1,
-            )
-            self.assertEqual(body.count("|---|---|---|---|---|---|---|"), 1)
-            self.assertIn("| 1 | plan | accept natural Markdown |", body)
-
-    def test_write_plan_accepts_unspaced_canonical_audit_header(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__unspacedaudit")
-            audit = "\n".join(
-                [
-                    "# Audit Trail",
-                    "|#|phase|decision|classification|principle|rationale|rejected_option|",
-                    "|---|---|---|---|---|---|---|",
-                    "|1|plan|friendly input|Mechanical|P5|less friction|-|",
-                ]
-            )
-
-            result = self._call_in_repo(
-                tmp,
-                "write_plan",
-                {"task_dir": task_dir, "plan": "# Plan\n", "audit": audit},
-            )
-
-            self.assertNotIn("isError", result)
-            body = (Path(task_dir) / "AUDIT_TRAIL.md").read_text(encoding="utf-8")
-            self.assertEqual(body.count("# Audit Trail"), 0)
-            self.assertIn("|1|plan|friendly input|", body)
-
-    def test_write_plan_rejects_noncanonical_hash_header_without_dropping_it(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__wrongauditheader")
-            before = {
-                p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()
-            }
-            result = self._call_in_repo(
-                tmp,
-                "write_plan",
-                {
-                    "task_dir": task_dir,
-                    "plan": "# Replacement\n",
-                    "audit": "| # | garbage | x |\n| 1 | phase | decision |\n",
-                },
-            )
-
-            self.assertTrue(result.get("isError"))
-            self.assertIn("audit header columns", result["structuredContent"]["next_action"])
-            after = {
-                p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()
-            }
-            self.assertEqual(after, before)
-
-    def test_write_plan_rejects_audit_header_without_data_rows(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__headeronlyaudit")
-            before = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
-            result = self._call_in_repo(
-                tmp,
-                "write_plan",
-                {
-                    "task_dir": task_dir,
-                    "plan": "# Replacement\n",
-                    "audit": (
-                        "# Audit Trail\n\n"
-                        "| # | phase | decision | classification | principle | rationale | rejected_option |\n"
-                        "|---|---|---|---|---|---|---|\n"
-                    ),
-                },
-            )
-            self.assertTrue(result.get("isError"))
-            self.assertIn("at least one audit data row", result["structuredContent"]["next_action"])
-            after = {p.name: p.read_bytes() for p in Path(task_dir).iterdir() if p.is_file()}
-            self.assertEqual(after, before)
-
-    def test_write_plan_rejects_blank_or_separator_only_audit_rows_atomically(self):
-        invalid_values = (
-            "| | |",
-            "|---|---|",
-            "# Audit Trail\n| | |",
-        )
-        for index, audit_value in enumerate(invalid_values):
-            with self.subTest(audit=audit_value), tempfile.TemporaryDirectory() as tmp:
-                task_dir = self._make_task(tmp, f"TASK__incompleteaudit{index}")
-                before = {
-                    p.name: p.read_bytes()
-                    for p in Path(task_dir).iterdir()
-                    if p.is_file()
-                }
-                result = self._call_in_repo(
-                    tmp,
-                    "write_plan",
-                    {
-                        "task_dir": task_dir,
-                        "plan": "# Replacement\n",
-                        "audit": audit_value,
-                    },
-                )
-                self.assertTrue(result.get("isError"))
-                self.assertIn("non-empty cells", result["structuredContent"]["next_action"])
-                after = {
-                    p.name: p.read_bytes()
-                    for p in Path(task_dir).iterdir()
-                    if p.is_file()
-                }
-                self.assertEqual(after, before)
-
-    def test_write_plan_rejects_audit_leaf_symlink_without_copying_target(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__auditsymlink"))
-            sentinel = Path(tmp) / "audit-sentinel"
-            sentinel.write_text("TOP_SECRET_SENTINEL", encoding="utf-8")
-            audit = task_dir / "AUDIT_TRAIL.md"
-            audit.symlink_to(sentinel)
-            plan_before = (task_dir / "PLAN.md").read_bytes()
-            result = self._call_in_repo(
-                tmp,
-                "write_plan",
-                {
-                    "task_dir": str(task_dir),
-                    "plan": "# Replacement\n",
-                    "audit": "| 1 | phase | decision |\n",
-                },
-            )
-            self.assertTrue(result.get("isError"))
-            self.assertIn("unsafe AUDIT_TRAIL.md", result["structuredContent"]["error"])
-            self.assertEqual((task_dir / "PLAN.md").read_bytes(), plan_before)
-            self.assertEqual(sentinel.read_text(encoding="utf-8"), "TOP_SECRET_SENTINEL")
-            self.assertTrue(audit.is_symlink())
-
-    @unittest.skipUnless(hasattr(os, "mkfifo"), "FIFO artifact regression requires POSIX")
-    def test_write_plan_rejects_audit_fifo_without_blocking(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = Path(self._make_task(tmp, "TASK__auditfifo"))
-            audit = task_dir / "AUDIT_TRAIL.md"
-            os.mkfifo(audit)
-            result = self._call_in_repo(
-                tmp,
-                "write_plan",
-                {
-                    "task_dir": str(task_dir),
-                    "plan": "# Replacement\n",
-                    "audit": "| 1 | phase | decision |\n",
-                },
-            )
-            self.assertTrue(result.get("isError"))
-            self.assertIn("unsafe AUDIT_TRAIL.md", result["structuredContent"]["error"])
-
-    def test_write_plan_appends_audit_header_once(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            task_dir = self._make_task(tmp, "TASK__auditmcp")
-            for row in ("| 1 | p | d | c | p | r | - |\n", "| 2 | p | d2 | c | p | r | - |\n"):
-                result = self._call_in_repo(
-                    tmp,
-                    "write_plan",
-                    {"task_dir": task_dir, "plan": "# Plan\n", "audit": row},
-                )
-                self.assertNotIn("isError", result)
-            body = (Path(task_dir) / "AUDIT_TRAIL.md").read_text(encoding="utf-8")
-            self.assertEqual(body.count("| # | phase | decision | classification | principle | rationale | rejected_option |"), 1)
-            self.assertIn("| 1 |", body)
-            self.assertIn("| 2 |", body)
+            self.assertFalse((Path(task_dir) / "AUDIT_TRAIL.md").exists())
 
 class HarnessMcpServerPR2CloseGate(unittest.TestCase):
     """Receipt and runtime-stale gates in task_close / task_verify."""
@@ -1958,11 +1746,9 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         harness_lib.write_task_control(
             task_dir,
             {
-                "task_run_id": "a" * 32,
-                "started_at": "2026-04-19T15:00:00Z",
+                "run_id": harness_lib.new_uuid7(),
                 "execution_mode": "standard",
-                "review_lenses": ["review-code"],
-                "qa_lenses": ["qa-cli"],
+                "required_lenses": ["review-code", "qa-cli"],
                 "close_receipt_fingerprint": None,
             },
         )

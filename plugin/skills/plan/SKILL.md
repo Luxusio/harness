@@ -31,7 +31,7 @@ Phase 5 (user-facing gate) stays inline below.
 - **Dual Voice required.** Every review phase (1-4) spawns Voice A and Voice B via Agent. Single-voice is prohibited; degradation matrix applies when a voice fails.
 - **Premise gate mandatory.** Phase 1.1 emits exactly one AskUserQuestion before Phase 5. Premises are never auto-decided.
 - **Never-auto decisions.** User Challenge items get their own AskUserQuestion at Phase 5.3.
-- **Write via MCP only.** PLAN.md, TASK.json lens declarations, and AUDIT_TRAIL.md go through `write_plan`. Never Write/Edit directly.
+- **Write via MCP only.** PLAN.md and TASK.json required-lens declarations go through `write_plan`. Never Write/Edit them directly.
 - **Zero browser-flag participation.** Does not invent or inspect undeclared browser verification flags.
 - **Workflow-lock awareness.** Trusts coordinator; no redundant check.
 - **Read actual code.** Review phases MUST read source files, diffs, and referenced code. Reasoning from plan text alone is insufficient.
@@ -129,7 +129,7 @@ Required: `{"state": "...", "phase": "...", "source": "plan-skill"}`. PLAN_SESSI
 
 ## Dual Voice Protocol (summary)
 
-Phases 1-4 spawn Voice A (independent, no prior-phase context) and Voice B (same prompt + `## Prior phase findings` from earlier consensus). Exception: Phase 2 keeps both fully independent (aesthetic anchoring prevention). Consensus built phase-scoped; rows appended to AUDIT_TRAIL.md via MCP before moving to next phase.
+Phases 1-4 spawn Voice A (independent, no prior-phase context) and Voice B (same prompt + `## Prior phase findings` from earlier consensus). Exception: Phase 2 keeps both fully independent. Consensus stays in working context and is materialized in PLAN.md.
 
 Full protocol, dimensions, checklists, and degradation matrix: `review-phases.md`.
 
@@ -152,11 +152,11 @@ Full protocol, dimensions, checklists, and degradation matrix: `review-phases.md
 ### 5.0 Pre-Gate verification (max 2 retries)
 
 Verify required outputs before collecting decisions:
-- [ ] Phase 1: premise challenge user-confirmed; CEO consensus in AUDIT_TRAIL; phase-transition summary
-- [ ] Phase 2 (if ran): Design consensus in AUDIT_TRAIL; phase-transition summary
-- [ ] Phase 3: Engineering consensus in AUDIT_TRAIL; phase-transition summary
-- [ ] Phase 4 (if ran): DX consensus in AUDIT_TRAIL; phase-transition summary
-- [ ] AUDIT_TRAIL has ≥ 1 row per completed phase
+- [ ] Phase 1: premise challenge user-confirmed; CEO consensus retained; phase-transition summary
+- [ ] Phase 2 (if ran): Design consensus retained; phase-transition summary
+- [ ] Phase 3: Engineering consensus retained; phase-transition summary
+- [ ] Phase 4 (if ran): DX consensus retained; phase-transition summary
+- [ ] PLAN.md Review Status has ≥ 1 row per completed phase
 - [ ] Dual voices ran (or single-voice degradation logged with reason) for each phase
 
 If missing after 2 retries, proceed to 5.1 with warning block:
@@ -167,7 +167,7 @@ Missing: <list>
 
 ### 5.1 Plan approval summary (user-facing)
 
-The user only needs two things at the gate: **what this plan will do** and **what is explicitly out of scope**. Internal review state (decision counts, voice consensus tallies, taste classifications, cross-phase themes) is logged to `AUDIT_TRAIL.md` by §5.2 and §5.2.5 — never rendered here.
+The user only needs two things at the gate: **what this plan will do** and **what is explicitly out of scope**. Internal review state is retained for PLAN.md, never rendered here.
 
 ```
 ## Plan Approval
@@ -179,32 +179,32 @@ The user only needs two things at the gate: **what this plan will do** and **wha
 [Bulleted list pulled from PLAN.md "NOT in scope". The work direction the user needs to know.]
 ```
 
-That is the entire user-facing summary. Anything more belongs in PLAN.md or AUDIT_TRAIL.md, not here.
+That is the entire user-facing summary. Anything more belongs in PLAN.md, not here.
 
-**Hard guard.** Never render at this gate: the 4-rule body (`[Re-ground]/[Simplify]/[Recommend]/[Options]`), decision counts, taste tallies, voice consensus tallies, cross-phase summaries. Those belong in PLAN.md / AUDIT_TRAIL.md only. `decision-principles.md` § AskUserQuestion Format exempts §5.4.1 from the 4-rule body by design.
+**Hard guard.** Never render at this gate: the 4-rule body, decision counts, taste tallies, voice consensus tallies, or cross-phase summaries. Those belong in PLAN.md only.
 
 ### 5.1.1 Collect all decisions
 
 From consensus tables across Phases 1-4: Mechanical (silently applied), Taste, User Challenge.
 
-### 5.2 Log Taste decisions to AUDIT_TRAIL (no gate render)
+### 5.2 Retain Taste decisions for PLAN.md (no gate render)
 
-Taste decisions are written to AUDIT_TRAIL only. Do NOT surface them at the user-facing gate (§5.1) — that contradicts the outcome-focused gate design. Auditability is preserved through AUDIT_TRAIL.md; the user does not need to read every taste classification to approve a plan.
+Taste decisions are retained for PLAN.md's Decision Audit Trail. Do not surface them at the user-facing gate.
 
-Cognitive load rules still apply for the AUDIT_TRAIL row format:
+Cognitive load rules still apply for the PLAN decision rows:
 - **0 taste:** no rows written.
 - **1-7 taste:** one row per decision, flat.
 - **8+ taste:** one row per decision, with `phase_group` field set so the row is queryable post-task.
 
-AUDIT_TRAIL row format (this is the on-disk format, not gate output):
+PLAN.md decision-row format:
 ```
 Auto-decided (Taste):
 - [item]: chose [option] over [option] because [principle applied]
 ```
 
-### 5.2.5 Log Cross-Phase Themes to AUDIT_TRAIL (no gate render)
+### 5.2.5 Retain Cross-Phase Themes for PLAN.md (no gate render)
 
-Cross-phase theme detection still runs — scan each phase consensus table; normalise topics (lowercase, trim); group; any topic in ≥2 phases is a high-confidence signal. The output goes to AUDIT_TRAIL.md and PLAN.md `Cross-phase themes` section. AUDIT_TRAIL only — do NOT render at the user-facing gate (§5.1).
+Cross-phase theme detection still runs. Put the output in PLAN.md's `Cross-phase themes` section; do not render it at the user-facing gate.
 
 ```
 Cross-Phase Themes (recurring in 2+ phases):
@@ -212,7 +212,7 @@ Cross-Phase Themes (recurring in 2+ phases):
 (none — no topics recurred across phases)
 ```
 
-The reader of this output is the post-task auditor or the next plan-skill resume, not the user at the approval gate.
+The reader of this output is the implementer or later reviewer, not the user at the approval gate.
 
 ### 5.3 User Challenge gate
 
@@ -294,7 +294,7 @@ Capstone — restating six load-bearing rules in one place. Most also appear in 
 
 - **Never abort.** The user invoked plan-skill. Surface every taste decision; never silently redirect to a shorter path. Both-voices-fail surfaces as a finding and continues.
 - **Two gates.** The non-auto-decided AskUserQuestions are: (1) premise confirmation in Phase 1.1, and (2) User Challenges in Phase 5.3 — when both voices agree the user's stated direction should change. Everything else is auto-decided via the 6 Decision Principles.
-- **Log every decision.** Every classification (Mechanical / Taste / User Challenge) gets a row in `AUDIT_TRAIL.md` via `write_plan { plan: "...", audit: "..." }`. No silent auto-decisions.
+- **Log every decision.** Every classification gets a row in PLAN.md's Decision Audit Trail. No silent auto-decisions.
 - **Full depth means full depth.** Complete every loaded sub-skill methodology section with its required evidence and decisions. "Full depth" means: read the code the section asks you to read, produce the outputs the section requires, identify every issue, decide each one. Fewer than 3 sentences for any review section is a compression signal — expand.
-- **Artifacts are deliverables.** PLAN.md and valid lens declarations in TASK.json must exist before Phase 6 closes the session; AUDIT_TRAIL.md is written when the plan records audit decisions.
-- **Sequential order.** Phase 0 → 1 → 2 → 3 → 4 → 5 → 6. Never parallel. Each phase builds on the last; transition summaries appended to AUDIT_TRAIL.md before the next phase begins.
+- **Artifacts are deliverables.** PLAN.md and valid required lenses in TASK.json must exist before Phase 6 closes the session.
+- **Sequential order.** Phase 0 → 1 → 2 → 3 → 4 → 5 → 6. Never parallel. Each phase builds on the last in working context.

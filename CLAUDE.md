@@ -42,7 +42,7 @@ do not create tasks automatically. Do not use legacy autopilot commands.
   `doc/harness/patterns/ADR__consolidated-task-artifacts.md`.
 - Notes under `doc/**/*.md` may carry `freshness: current|suspect|stale` + optional `invalidated_by_paths`. Run `plugin/scripts/note_freshness.py --paths ...` explicitly when maintaining them; SessionStart does not inspect Git.
 - Protected artifacts (enforced by `plugin/scripts/prewrite_gate.py`):
-  PLAN.md/TASK.json/AUDIT_TRAIL.md via task MCP tools, and RECEIPTS.jsonl via
+  PLAN.md/TASK.json via task MCP tools, and RECEIPTS.jsonl via
   Codex/Claude lifecycle hooks. CONVERSATION.md is append-only runtime history
   owned by UserPromptSubmit/Subagent hooks.
 - Pre-plan source writes are blocked until PLAN.md exists on the active task (plan-first rule).

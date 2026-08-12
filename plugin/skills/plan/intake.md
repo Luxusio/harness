@@ -17,24 +17,21 @@ If spawned: set `auto_decide: true` in `PLAN_SESSION.json`, auto-resolve ALL Ask
 
 ```bash
 _BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-_PHASE_ROWS=$(grep "phase-summary" doc/harness/tasks/TASK__<id>/AUDIT_TRAIL.md 2>/dev/null | tail -10)
-_ROW_COUNT=$(echo -n "$_PHASE_ROWS" | grep -c . || echo "0")
-_OPEN_TASTE=$(grep -c '|taste|' doc/harness/tasks/TASK__<id>/AUDIT_TRAIL.md 2>/dev/null || echo "0")
-_OPEN_CHALLENGE=$(grep -c '|challenge|' doc/harness/tasks/TASK__<id>/AUDIT_TRAIL.md 2>/dev/null || echo "0")
+_PLAN_STATUS=$(grep -A8 '^## Review Status' doc/harness/tasks/TASK__<id>/PLAN.md 2>/dev/null || true)
 echo "BRANCH=$_BRANCH ROWS=$_ROW_COUNT TASTE=$_OPEN_TASTE CHALLENGE=$_OPEN_CHALLENGE"
 ```
 
-If `_ROW_COUNT` is zero → fresh task; skip recovery and go to Phase 0.1.
-
-If `_ROW_COUNT ≥ 1` → emit a **welcome-back synthesis** (2-3 sentences) before resuming. Derive it strictly from the AUDIT_TRAIL phase-summary rows above; never fabricate a phase that didn't run:
+If `_PLAN_STATUS` is empty, treat the planning review as fresh. If it is
+present, emit a short welcome-back synthesis strictly from PLAN.md and resume
+without fabricating partially persisted review phases:
 
 ```
 Welcome back to TASK__<id> on branch <_BRANCH>.
-Last completed phase: <highest N from phase-summary rows>. Consensus tallies: confirmed=<X>, disagree=<Y>, taste=<T>, challenges=<C>.
-Outstanding: <"no blockers" if _OPEN_TASTE=0 AND _OPEN_CHALLENGE=0; else "<_OPEN_CHALLENGE> user challenges queued" or "<_OPEN_TASTE> taste items awaiting Phase 5 gate">.
+The existing PLAN.md contains a completed Review Status section. Re-run the
+review only when the user requested plan changes; otherwise continue to develop.
 ```
 
-Then load prior consensus summaries as `## Prior phase findings` for remaining phases and skip all phases ≤ N. Never blocks; on unreadable AUDIT_TRAIL fall back to the short `Resuming TASK__<id>: last completed phase = <N>` form and continue.
+Never infer partial review progress from another file.
 
 ## Phase 0.1: Open session
 
@@ -135,7 +132,7 @@ Emit one AskUserQuestion:
 - B) Skip → proceed to 0.5 with thin REQUEST.md (premise challenge will surface the gap)
 - C) Re-run setup first → user has unfinished project framing; `Skill(harness:setup)` owns pre-plan scope-sharpening in harness
 
-After setup (if chosen): `find doc/ -name "*design*.md" -newer doc/harness/tasks/TASK__<id>/TASK.json` — if found, read and append as `## Design Context` to task pack. Log discovery to AUDIT_TRAIL via `write_plan { plan: "...", audit: "..." }`.
+After setup (if chosen): `find doc/ -name "*design*.md" -newer doc/harness/tasks/TASK__<id>/TASK.json` — if found, read and append it as `## Design Context` to the final PLAN.md.
 
 Skip cleanly if trigger not met. Never loop.
 
@@ -154,12 +151,11 @@ cat >> doc/harness/tasks/TASK__<id>/restore-points/pre-plan-${_TS}.md << 'EOF'
 ## Re-run Instructions
 
 1. Copy the block below (`## Original Plan State`) back over `doc/harness/tasks/TASK__<id>/PLAN.md`.
-2. Clear AUDIT_TRAIL.md when the re-run should start with a fresh decision log:
-   `rm -f doc/harness/tasks/TASK__<id>/AUDIT_TRAIL.md`
-3. Re-invoke the plan skill with the original task slug:
+2. Re-invoke the plan skill with the original task slug:
    `Skill("harness:plan", "<original-task-slug>")`
 
-The re-run will pick up the restored PLAN.md as its starting point and rebuild AUDIT_TRAIL. Phase-transition summaries from the prior run are not replayed — only the plan content is.
+The re-run will pick up the restored PLAN.md as its starting point and rebuild
+its embedded Review Status and Decision Audit Trail.
 
 ## Original Plan State
 

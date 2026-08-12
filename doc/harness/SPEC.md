@@ -79,7 +79,7 @@ committed scaffold into a failed start.
 
 | Artifact | Writer |
 |---|---|
-| `PLAN.md`, optional `AUDIT_TRAIL.md` | MCP `write_plan` |
+| `PLAN.md` | MCP `write_plan` |
 | `TASK.json` | task lifecycle MCP tools |
 | `RECEIPTS.jsonl` | Codex/Claude review and QA lifecycle hooks, including the root-hook-registered, MCP-hosted Codex watcher |
 | `CONVERSATION.md` | Codex/Claude UserPromptSubmit/Subagent hooks |
@@ -100,8 +100,8 @@ and symlink aliases are rejected before task artifacts are created or changed.
 Goal IDs use the same safe-name boundary, and Goal child entries persist the
 canonical repository-relative task path.
 
-`write_plan` validates the complete supplied bundle before its first write, so
-an invalid optional `AUDIT_TRAIL.md` cannot leave a new PLAN or lens update
+`write_plan` validates the complete supplied PLAN and required-lens bundle
+before its first write, so invalid input cannot leave a new PLAN or lens update
 behind. `task_blocked` requires an existing valid `TASK.json` before writing
 `BLOCKED.md`. Removed task-control artifacts have no compatibility readers or
 migration path; starting a fresh run is the recovery action.

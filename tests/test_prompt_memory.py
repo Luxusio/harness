@@ -21,7 +21,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "plugin" / "scripts"
 PROMPT = SCRIPTS / "prompt_memory.py"
 PROMPT_WRAPPER = SCRIPTS / "hook_user_prompt_submit.py"
-RUN_ID = "a" * 32
+RUN_ID = "0198c349-5800-7000-8000-000000000001"
 
 
 def _receipt(*, event: str, lens: str, agent_id: str, verdict: str = "") -> dict:
@@ -83,15 +83,13 @@ def _build_scratch_repo(base: Path, *,
         task_dir = tasks / active_task_id
         task_dir.mkdir(parents=True, exist_ok=True)
         control = {
-            "task_run_id": RUN_ID,
-            "started_at": "2026-08-12T00:00:00Z",
+            "run_id": RUN_ID,
             "execution_mode": "standard",
-            "review_lenses": ["review-code"],
-            "qa_lenses": ["qa-cli"],
+            "required_lenses": ["review-code", "qa-cli"],
             "close_receipt_fingerprint": None,
         }
         if "security" in active_task_id:
-            control["review_lenses"].append("review-security")
+            control["required_lenses"].insert(1, "review-security")
         if plan:
             (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
         if task_state is not None:
@@ -100,7 +98,8 @@ def _build_scratch_repo(base: Path, *,
             if "not valid" in task_state:
                 (task_dir / "TASK.json").write_text(task_state, encoding="utf-8")
             elif "security_review: required" in task_state:
-                control["review_lenses"].append("review-security")
+                if "review-security" not in control["required_lenses"]:
+                    control["required_lenses"].insert(1, "review-security")
                 (task_dir / "TASK.json").write_text(json.dumps(control) + "\n", encoding="utf-8")
             else:
                 (task_dir / "TASK.json").write_text(json.dumps(control) + "\n", encoding="utf-8")

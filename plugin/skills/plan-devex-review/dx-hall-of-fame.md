@@ -118,9 +118,9 @@ Five fields, zero ambiguity.
 Use when reviewing plans for Claude Code skills, MCP servers, or AI agent tools.
 
 - [ ] **AskUserQuestion design**: One issue per call. Re-ground context (project, branch, task). 4-rule body (Re-ground / Simplify / Recommend / Options). Hard cap at 4 options.
-- [ ] **State storage**: Under `doc/harness/` for persistent; `/tmp/` for transient. Append-only JSONL for audit trails (learnings.jsonl, AUDIT_TRAIL.md).
+- [ ] **State storage**: PLAN.md owns final planning decisions; `/tmp/` or working context is transient; learnings.jsonl remains the staging stream.
 - [ ] **Protected artifacts**: Owner role enforced by prewrite gate. PLAN.md and TASK.json lens declarations = plan skill through `write_plan`; RECEIPTS.jsonl = runtime lifecycle hook.
-- [ ] **Auto-resume**: Session recovery via AUDIT_TRAIL phase-summary rows. Welcome-back prose synthesis. Checkpoint at auto-decide boundaries.
+- [ ] **Auto-resume**: A completed PLAN.md Review Status resumes into develop; incomplete planning is reviewed again instead of replaying a side ledger.
 - [ ] **Graceful degradation**: Missing tools skip cleanly, log reason to learnings.jsonl type `operational`. Never install missing tools automatically.
 - [ ] **Kill switches**: HARNESS_DISABLE_* env vars for every auto-behavior. Honored before CLI detection.
 - [ ] **Cross-model Voice B**: Detect codex/gemini CLI availability; fall back to Agent tool with same prompt on failure. Filesystem boundary prompt mandatory for external voices.
