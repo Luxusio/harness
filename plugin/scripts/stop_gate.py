@@ -174,12 +174,23 @@ def main():
         # Stop hook already forced the continuation, and re-blocking here loops
         # until Claude Code's consecutive hook cap fires.
         if bool(hook_input.get("stop_hook_active")):
-            active_background = subagent_lifecycle.active_records(
-                repo_root,
-                task_id=task_id,
-                session_id=current_session_id(),
-                stale_secs=_background_stale_secs(),
-            )
+            try:
+                active_background = subagent_lifecycle.active_records(
+                    repo_root,
+                    task_id=task_id,
+                    session_id=current_session_id(),
+                    stale_secs=_background_stale_secs(),
+                )
+            except Exception:
+                json.dump(gate_block(
+                    reason=(
+                        f"Harness lifecycle evidence for {task_id} is malformed or unsafe; "
+                        "Stop is blocked. Start a fresh task run to reset RECEIPTS.jsonl."
+                    ),
+                    owner_skill="harness:run",
+                    docs="doc/harness/patterns/ADR__consolidated-task-artifacts.md",
+                ), sys.stdout)
+                return 0
             if active_background:
                 return 0
         else:

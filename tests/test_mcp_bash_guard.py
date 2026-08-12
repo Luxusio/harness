@@ -247,18 +247,24 @@ class TestAllowsNonGated(unittest.TestCase):
         self._assert_allow(f"command 2> /tmp/err.log")
 
 
-class TestNestedShellKnownGaps(unittest.TestCase):
-    """Nested bash/eval/$() mutations are documented-deferred.
+class TestNestedShellHandling(unittest.TestCase):
 
-    These tests codify the current behaviour so a future fix can flip the
-    assertion without searching for the test.
-    """
-
-    def test_bash_c_nested_is_known_gap(self):
+    def test_bash_c_nested_mutation_denies(self):
         r = _run_bash(f"bash -c 'sed -i s/a/b/ {SRC_PATH}'")
-        decision, _ = parse_decision(r.stdout)
-        self.assertIsNone(decision, "bash -c nested redirect now detected — "
-                                    "flip this test to assert deny")
+        decision, reason = parse_decision(r.stdout)
+        self.assertEqual(decision, "deny")
+        self.assertIn("rule=source", reason)
+
+    def test_bash_c_nested_python_lifecycle_import_denies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            helper = Path(tmp) / "innocent.py"
+            helper.write_text(
+                "import _lib\nprint(_lib.__dict__)\n", encoding="utf-8",
+            )
+            r = _run_bash(f"bash -c 'python3 {helper}'")
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("lifecycle receipt entrypoint", reason)
 
     def test_eval_is_known_gap(self):
         r = _run_bash(f"eval 'sed -i s/a/b/ {SRC_PATH}'")

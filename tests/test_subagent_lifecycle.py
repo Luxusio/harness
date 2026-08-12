@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+from types import FunctionType
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -124,6 +125,28 @@ def test_start_and_real_stop_use_only_receipts(tmp_path, monkeypatch):
     assert {item["runtime_id"] for item in receipts} == {"claude:sess-1:agent-1"}
     assert not (Path(repo) / "doc/harness/runtime/background.json").exists()
     assert not (Path(repo) / "doc/harness/runtime/background.json.lock").exists()
+
+
+def test_cloned_bound_adapter_with_foreign_globals_cannot_append(tmp_path):
+    repo, task_dir = _repo(tmp_path)
+    _bind(repo, task_dir, "sess-clone")
+    original = subagent_lifecycle.register_subagent_start
+    clone = FunctionType(
+        original.__code__, dict(original.__globals__), original.__name__,
+        original.__defaults__, original.__closure__,
+    )
+    clone.__kwdefaults__ = original.__kwdefaults__
+
+    try:
+        clone(repo, {
+            "session_id": "sess-clone", "agent_id": "agent-clone",
+            "agent_type": "harness:qa-cli",
+        })
+    except PermissionError as exc:
+        assert "runtime-owned" in str(exc)
+    else:
+        raise AssertionError("cloned adapter code authorized a receipt append")
+    assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
 
 
 def test_invalid_events_create_no_diagnostic_authority(tmp_path):

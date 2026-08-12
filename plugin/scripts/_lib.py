@@ -9,6 +9,7 @@ import tempfile
 import json
 import hashlib
 import inspect
+import sys
 import secrets
 import time
 import uuid
@@ -2643,6 +2644,36 @@ def _make_runtime_receipt_writer():
         identity = (function.__module__, function.__qualname__)
         if identity not in allowed_names.get(source, ()):
             raise PermissionError("unsupported receipt lifecycle adapter")
+        caller = inspect.currentframe().f_back
+        try:
+            module = sys.modules.get(function.__module__)
+            expected_path = os.path.realpath(os.path.join(
+                os.path.dirname(__file__), function.__module__ + ".py",
+            ))
+            module_path = os.path.realpath(str(getattr(module, "__file__", "") or ""))
+            owner = module
+            for part in function.__qualname__.split("."):
+                owner = getattr(owner, part, None)
+                if owner is None:
+                    break
+            info = os.lstat(expected_path)
+            if (
+                caller is None
+                or caller.f_code.co_name != "<module>"
+                or module is None
+                or caller.f_globals is not vars(module)
+                or function.__globals__ is not vars(module)
+                or module_path != expected_path
+                or os.path.realpath(function.__code__.co_filename) != expected_path
+                or owner is not function
+                or not stat.S_ISREG(info.st_mode)
+                or info.st_uid != os.getuid()
+                or info.st_nlink != 1
+                or info.st_mode & 0o022
+            ):
+                raise PermissionError("receipt adapter binding requires its canonical module import")
+        finally:
+            del caller
         existing = bound_callers.get((source, identity))
         dependencies = tuple(
             (name, function.__globals__[name])

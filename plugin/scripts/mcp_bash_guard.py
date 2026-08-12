@@ -11,8 +11,6 @@ with exit 0; silent on allow; fail-open on unexpected exceptions.
 Escape hatch: ``HARNESS_SKIP_MCP_GUARD=1`` → one-shot allow + log ``gate-bypass``.
 
 Known gaps (documented in doc/harness/patterns/mcp-bash-guard.md):
-  - Nested shells: ``bash -c "sed -i x file"`` — the mutation is hidden inside
-    ``-c``'s argument as a single shlex token; not recursed.
   - ``eval "sed -i ..."`` and command substitution ``$(...)`` / backticks.
   - Symlink resolution (``os.path.realpath``) — not applied before classification.
 """
@@ -63,7 +61,7 @@ LIFECYCLE_RECEIPT_ENTRYPOINTS = {
 }
 LIFECYCLE_RECEIPT_MODULES = {
     os.path.splitext(name)[0] for name in LIFECYCLE_RECEIPT_ENTRYPOINTS
-}
+} | {"_lib"}
 RECEIPT_MUTATION_SYMBOLS = {
     "record_subagent_receipt", "reset_receipt_streams_for_new_run",
     "restore_receipt_streams", "release_receipt_stream_reset",
@@ -399,6 +397,18 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
     if not non_env:
         return
     cmd = os.path.basename(non_env[0])
+
+    if cmd in {"bash", "sh"} and "-c" in non_env[1:]:
+        try:
+            nested = non_env[non_env.index("-c") + 1]
+        except IndexError:
+            nested = ""
+        if nested:
+            targets.extend(_extract_mutation_targets(
+                nested, repo_root, execution_cwd,
+            ))
+            if targets:
+                return
 
     visible = " ".join(raw_argv)
     compact = re.sub(r"[^A-Za-z0-9]", "", visible).lower()

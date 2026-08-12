@@ -78,10 +78,9 @@ noise.
 
 ## Known gaps (deferred, not in PR1)
 
-The current guard does **not** descend into nested shells or substitutions:
+The current guard descends through direct `bash -c` / `sh -c` command strings,
+but does **not** evaluate dynamic shell constructs:
 
-- `bash -c "sed -i x file"` — the mutation is hidden inside the `-c` argument
-  as a single shlex token; not recursed.
 - `eval "sed -i x file"` — same mechanism; not evaluated.
 - `$(sed -i x file)` command substitution and `` `...` `` backticks — not
   extracted.

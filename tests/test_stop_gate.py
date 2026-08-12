@@ -244,6 +244,25 @@ def test_malformed_receipt_stream_blocks_normal_stop(tmp_path):
     assert "fresh task run" in payload["reason"]
 
 
+def test_malformed_receipt_stream_blocks_recursive_stop(tmp_path):
+    repo = _fake_repo(tmp_path, active_contents="TASK__bad-recursive\n")
+    task_dir = os.path.join(repo, "doc", "harness", "tasks", "TASK__bad-recursive")
+    os.makedirs(task_dir, exist_ok=True)
+    _lib.ensure_task_scaffold(task_dir, "TASK__bad-recursive")
+    _lib.write_active_marker(repo, task_dir, session_id="sess-bad-recursive")
+    with open(os.path.join(task_dir, "RECEIPTS.jsonl"), "w", encoding="utf-8") as handle:
+        handle.write('{"legacy":true}\n')
+
+    result = _run(repo, stdin=json.dumps({
+        "session_id": "sess-bad-recursive", "hook_event_name": "Stop",
+        "stop_hook_active": True,
+    }))
+
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "block"
+    assert "malformed or unsafe" in payload["reason"]
+
+
 def test_stop_hook_active_with_active_background_silently_allows(tmp_path):
     """Recursive Stop hook continuation should not re-block while background work runs."""
     repo = _fake_repo(tmp_path, active_contents="TASK__recursive-bg\n")

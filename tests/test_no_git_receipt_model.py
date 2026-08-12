@@ -6,7 +6,7 @@ import json
 import sys
 import threading
 from pathlib import Path
-from types import FunctionType, ModuleType, SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 
@@ -297,28 +297,22 @@ def test_receipt_writer_rejects_forged_adapter_code_metadata(tmp_path, monkeypat
         raise AssertionError("forged code metadata authorized a receipt append")
 
 
-def test_receipt_writer_ignores_replaced_allowlisted_module_attribute(tmp_path):
-    task = _task(tmp_path)
+def test_receipt_writer_rejects_first_binder_outside_canonical_module(tmp_path):
+    _task(tmp_path)
     original_module = ModuleType("subagent_lifecycle")
-    original_module.__dict__.update(record=lib.record_subagent_receipt, task=task)
     exec(
-        "def register_subagent_start():\n"
-        "  return record(task, {'source':'claude_hook','runtime_id':'claude:sess:agent',"
-        "'agent_id':'agent','agent_type':'qa-cli','lens':'qa-cli','event':'started'})\n",
+        "def register_subagent_start():\n  return None\n",
         original_module.__dict__,
     )
-    original = original_module.register_subagent_start
-    lib._bind_runtime_receipt_adapter("claude_hook", original)
-    attacker_globals = dict(original_module.__dict__)
-    attacker_globals["__name__"] = "subagent_lifecycle"
-    cloned = FunctionType(original.__code__, attacker_globals)
     with mock.patch.dict(sys.modules, {"subagent_lifecycle": original_module}):
         try:
-            cloned()
+            lib._bind_runtime_receipt_adapter(
+                "claude_hook", original_module.register_subagent_start,
+            )
         except PermissionError as exc:
-            assert "runtime-owned" in str(exc)
+            assert "canonical module import" in str(exc)
         else:
-            raise AssertionError("cloned adapter code authorized a receipt append")
+            raise AssertionError("non-canonical first binder was accepted")
 
 
 def test_raw_receipt_append_primitive_is_not_exposed():
