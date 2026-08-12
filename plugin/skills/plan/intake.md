@@ -8,9 +8,6 @@ Sub-file for plan/SKILL.md Phase 0. Loaded at skill start.
 
 ```bash
 _SPAWNED="false"
-if grep -q "^spawned_session: true" doc/harness/tasks/TASK__<id>/TASK_STATE.yaml 2>/dev/null; then
-  _SPAWNED="true"
-fi
 [ "${HARNESS_SPAWNED:-}" = "1" ] && _SPAWNED="true"
 ```
 
@@ -45,7 +42,6 @@ Write `PLAN_SESSION.json`:
 ```json
 {"state": "context_open", "phase": "context", "source": "plan-skill"}
 ```
-Set `plan_session_state: context_open` in TASK_STATE.yaml.
 
 ## Phase 0.1.5: Load project learnings
 
@@ -105,7 +101,7 @@ PY
 
 ## Phase 0.4: Read task pack
 
-Read in order: `TASK_STATE.yaml`, `REQUEST.md` (if exists), existing `PLAN.md` (if exists), files in `must_read`.
+Read in order: `TASK.json`, `REQUEST.md` (if exists), existing `PLAN.md` (if exists), files in `must_read`.
 
 ## Phase 0.4.1: Git context intake
 
@@ -139,7 +135,7 @@ Emit one AskUserQuestion:
 - B) Skip → proceed to 0.5 with thin REQUEST.md (premise challenge will surface the gap)
 - C) Re-run setup first → user has unfinished project framing; `Skill(harness:setup)` owns pre-plan scope-sharpening in harness
 
-After setup (if chosen): `find doc/ -name "*design*.md" -newer TASK_STATE.yaml` — if found, read and append as `## Design Context` to task pack. Log discovery to AUDIT_TRAIL via `write_plan { plan: "...", audit: "..." }`.
+After setup (if chosen): `find doc/ -name "*design*.md" -newer doc/harness/tasks/TASK__<id>/TASK.json` — if found, read and append as `## Design Context` to task pack. Log discovery to AUDIT_TRAIL via `write_plan { plan: "...", audit: "..." }`.
 
 Skip cleanly if trigger not met. Never loop.
 

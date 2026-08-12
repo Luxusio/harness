@@ -12,6 +12,7 @@ Failure modes tested:
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -85,14 +86,25 @@ def _scaffold(tmpdir: str, *, strict: bool = False) -> str:
 
 
 def _write_task_state(tasks_dir: str, task_name: str, status: str) -> str:
-    """Create TASK__<task_name>/TASK_STATE.yaml with given status. Returns task dir."""
+    """Create TASK__<task_name>/TASK.json with a derived status. Returns task dir."""
     task_dir = os.path.join(tasks_dir, f"TASK__{task_name}")
     os.makedirs(task_dir, exist_ok=True)
-    state_path = os.path.join(task_dir, "TASK_STATE.yaml")
+    state_path = os.path.join(task_dir, "TASK.json")
+    control = {
+        "task_run_id": "a" * 32,
+        "started_at": "2026-01-01T00:00:00Z",
+        "execution_mode": "standard",
+        "review_lenses": ["review-code"],
+        "qa_lenses": ["qa-cli"],
+        "close_receipt_fingerprint": None,
+    }
+    if status == "closed":
+        control["close_receipt_fingerprint"] = "sha256:" + hashlib.sha256(
+            b"RECEIPTS.jsonl\0<missing>\0"
+        ).hexdigest()
     with open(state_path, "w") as f:
-        f.write(f"task_id: TASK__{task_name}\n")
-        f.write(f"status: {status}\n")
-        f.write("runtime_verdict: pending\n")
+        json.dump(control, f)
+        f.write("\n")
     return task_dir
 
 
@@ -122,8 +134,8 @@ class TestDormantRepoFailsOpen(unittest.TestCase):
             self.assertNotEqual(decision, "deny",
                                 f"closed task should fail-open. stdout={r.stdout!r}")
 
-    def test_dormant_repo_with_stale_tasks_fails_open(self):
-        """tasks dir contains only a stale task → fail-open."""
+    def test_removed_stale_label_is_open_without_active_marker(self):
+        """TASK.json has no stale state; an open task without .active denies."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tasks_dir = _scaffold(tmpdir)
             _write_task_state(tasks_dir, "old", "stale")
@@ -131,18 +143,15 @@ class TestDormantRepoFailsOpen(unittest.TestCase):
             r = _invoke(tmpdir, target)
             self.assertEqual(r.returncode, 0)
             decision, _ = _parse_decision(r.stdout)
-            self.assertNotEqual(decision, "deny",
-                                f"stale task should fail-open. stdout={r.stdout!r}")
+            self.assertEqual(decision, "deny", r.stdout)
 
-    def test_strict_repo_requires_task_before_first_source_write(self):
+    def test_dormant_repo_fails_open_even_with_legacy_strict_capability(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             _scaffold(tmpdir, strict=True)
             target = os.path.join(tmpdir, "foo.py")
             r = _invoke(tmpdir, target)
             decision, reason = _parse_decision(r.stdout)
-            self.assertEqual(decision, "deny")
-            self.assertIn("no-active-task", reason or "")
-            self.assertIn("$harness:run", reason or "")
+            self.assertNotEqual(decision, "deny", reason or "")
 
 
 class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):

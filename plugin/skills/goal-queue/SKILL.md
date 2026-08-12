@@ -293,8 +293,8 @@ to build a scaffold.
 
 After all planned MVP slices pass:
 
-1. Re-read the product brief, stack decision, PLAN.md, PLAN.meta.json,
-   TASK_STATE.yaml, changed files, durable docs, and QA/UX subagent final
+1. Re-read the product brief, stack decision, PLAN.md, TASK.json,
+   changed files, durable docs, and QA/UX subagent final
    responses.
 2. Look for missing workflows, broken end-to-end continuity, untested critical
    paths, rough UX states, placeholder content, security holes, and deployment

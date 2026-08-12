@@ -207,8 +207,8 @@ def main():
             try:
                 ctx = emit_compact_context(td)
                 verdict = (ctx or {}).get("runtime_verdict", "")
-                if verdict == "BLOCKED_ENV" and not ctx.get("stale", False):
-                    return 0  # silent allow — fresh BLOCKED_ENV from stop-judge
+                if verdict == "BLOCKED_ENV":
+                    return 0  # silent allow after task_blocked
             except Exception:
                 ctx = None
 
@@ -230,26 +230,16 @@ def main():
         # Cancel-push escape removed. The stop-judge agent is the only
         # legitimate non-PASS escape path — it transitions runtime_verdict to
         # BLOCKED_ENV via task_blocked.
-        stale = bool(ctx and ctx.get("stale"))
-        stale_path = (ctx or {}).get("stale_path", "")
-        stale_note = ""
-        if stale and (ctx or {}).get("runtime_verdict") == "BLOCKED_ENV":
-            stale_note = (
-                " Note: the existing BLOCKED_ENV verdict is STALE — activity"
-                f" on {stale_path or '<touched path>'} post-dates the verification signal."
-                " Spawn stop-judge again to re-assess current state, or run"
-                " task_verify after QA to transition toward PASS."
-            )
         reason = (
             f"Active harness task {task_id} is open. Do not stop — finish the "
             "plan -> develop -> review -> QA -> verify -> close loop. Legitimate exits: "
             "(1) run task_verify until runtime_verdict=PASS, then call task_close; "
             "or (2) spawn Agent(subagent_type='harness:stop-judge') to assess "
             "whether the current state is a genuine pause-with-blocker. Stop-judge "
-            "reads CHECKS+transcript+work and emits VERDICT_OK_DONE / "
+            "reads PLAN+transcript+work and emits VERDICT_OK_DONE / "
             "VERDICT_OK_BLOCKED / VERDICT_NO_CONTINUE. On VERDICT_OK_BLOCKED it "
             "calls task_blocked to record runtime_verdict=BLOCKED_ENV, write "
-            "BLOCKED.md, and clear this session's active marker." + stale_note
+            "BLOCKED.md, and clear this session's active marker."
         )
         payload = gate_block(
             reason=reason,

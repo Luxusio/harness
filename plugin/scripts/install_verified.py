@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install verified harness source once per receipt run and payload fingerprint."""
+"""Install a stable, freshly reviewed Harness payload without persistent state."""
 from __future__ import annotations
 
 import argparse
@@ -22,18 +22,16 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 
 from _lib import (  # type: ignore  # noqa: E402
     _git_changed_paths,
+    active_task_binding_matches,
     find_repo_root,
-    now_iso,
-    read_state,
+    read_task_control,
     receipt_snapshot,
     receipt_review_verdict,
     receipt_runtime_verdict,
-    resolve_active_task_dir,
     receipt_stream_fingerprint,
 )
 
 CANONICAL_REMOTE = "https://github.com/Luxusio/harness"
-RECEIPT_NAME = "INSTALL_RECEIPT.json"
 PAYLOAD_ROOTS = (".claude-plugin", "plugin", "plugin-codex")
 PAYLOAD_FILES = ("install.py", ".codex-version")
 def _normalized_remote(value: str) -> str:
@@ -63,7 +61,7 @@ def _trusted_harness_repo(repo_root: Path) -> tuple[bool, str]:
 
 
 def _verification_state(task_dir: Path) -> tuple[bool, str, str]:
-    state = read_state(str(task_dir))
+    state = read_task_control(str(task_dir))
     snapshot = receipt_snapshot(str(task_dir))
     fingerprint = receipt_stream_fingerprint(str(task_dir), snapshot)
     if receipt_review_verdict(str(task_dir), state, snapshot) != "PASS":
@@ -278,12 +276,11 @@ def _validate_task_dir(repo_root: Path, task_dir: Path) -> tuple[bool, str]:
     expected_parent = (repo_root / "doc/harness/tasks").resolve()
     if task_dir.parent != expected_parent or not task_dir.name.startswith("TASK__"):
         return False, "task directory is not canonical"
-    state = read_state(str(task_dir))
-    if state.get("task_id") != task_dir.name:
-        return False, "TASK_STATE task_id does not match directory"
-    active = resolve_active_task_dir(str(repo_root))
-    if not active or Path(active).resolve() != task_dir:
-        return False, "task is not the active harness task"
+    if not read_task_control(str(task_dir)):
+        return False, "missing or invalid TASK.json"
+    control = read_task_control(str(task_dir))
+    if not active_task_binding_matches(str(repo_root), str(task_dir), control):
+        return False, "task is not the open active TASK.json generation"
     return True, ""
 
 
@@ -303,33 +300,9 @@ def _global_lock_path() -> Path:
     return Path.home() / ".cache/harness/install.lock"
 
 
-def _read_receipt(path: Path) -> dict:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def _write_receipt(path: Path, payload: dict) -> None:
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".install-receipt.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
-            stream.write("\n")
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
 def install_verified(task_dir: Path) -> int:
     task_dir = task_dir.resolve()
     repo_root = Path(find_repo_root(str(task_dir))).resolve()
-    receipt_path = task_dir / RECEIPT_NAME
     lock_path = _global_lock_path()
     task_dir.mkdir(parents=True, exist_ok=True)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -360,16 +333,6 @@ def install_verified(task_dir: Path) -> int:
         if not payload_fingerprint:
             print("ERROR: unsafe or unreadable install payload", file=sys.stderr)
             return 5
-        prior = _read_receipt(receipt_path)
-        if (
-            prior.get("status") == "PASS"
-            and prior.get("verification_id") == fingerprint
-            and prior.get("payload_fingerprint") == payload_fingerprint
-            and prior.get("task_id") == task_dir.name
-            and prior.get("exit_code") == 0
-        ):
-            print(f"automatic install already PASS for {fingerprint}; skipping")
-            return 0
         with tempfile.TemporaryDirectory(prefix="harness-install-snapshot-") as tmp:
             snapshot_root = Path(tmp)
             try:
@@ -412,20 +375,11 @@ def install_verified(task_dir: Path) -> int:
             or not _payload_modes_match_index(repo_root, snapshot_paths_after)
         ):
             print(
-                "ERROR: source or verification changed during install; success marker withheld"
+                "ERROR: source or verification changed during install; install aborted"
                 + (f": {reason_after or task_reason_after}" if reason_after or task_reason_after else ""),
                 file=sys.stderr,
             )
             return 5
-        _write_receipt(receipt_path, {
-            "status": "PASS",
-            "installed_at": now_iso(),
-            "task_id": task_dir.name,
-            "verification_id": fingerprint,
-            "payload_fingerprint": payload_fingerprint,
-            "command": "python3 install.py --force",
-            "exit_code": 0,
-        })
     print(f"automatic install PASS for {fingerprint}")
     return 0
 

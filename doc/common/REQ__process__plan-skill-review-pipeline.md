@@ -23,7 +23,7 @@ must not be restored.
 | 4.5 | Outside Voice — Final Plan Challenge | always (skipped in light) |
 | 5 | Final Approval Gate | always |
 | 5.5 | Spec Review Loop | always (skipped in light) |
-| 6 | Write PLAN.md + PLAN.meta.json | always |
+| 6 | Write PLAN.md + declared lenses in TASK.json | always |
 
 ## Invariants
 
@@ -38,12 +38,10 @@ must not be restored.
 
 - No gstack binaries or telemetry (no `~/.gstack/` writes).
 - `codex exec` is optional; fall back to second Agent if unavailable.
-- `PLAN_SESSION.json` open/write/close lifecycle is required (not optional).
-- `plan_session_state` transitions in `TASK_STATE.yaml`: `context_open` → `write_open` → `closed`.
-- `PLAN.meta.json` with `author_role: plan-skill` is a required output.
-- `PLAN.md` and `PLAN.meta.json` are mandatory final outputs. Acceptance intent
-  stays in PLAN.md; verification evidence comes from lifecycle-owned
-  `RECEIPTS.jsonl`.
+- `PLAN.md` is the mandatory acceptance-intent output.
+- `write_plan` publishes only the explicit review/QA lens arrays into the exact
+  six-field `TASK.json`; it creates no planning metadata sidecar.
+- Verification evidence comes from lifecycle-owned `RECEIPTS.jsonl`.
 
 ## Why the old workflow was replaced
 

@@ -43,7 +43,7 @@ Bad: "I have successfully completed the implementation of AC-003 and the changes
 
 ## Anti-shortcut clause
 
-PROGRESS.md is the scope-lock contract for this task. PLAN.md owns acceptance intent, while ordered review and QA entries in the current `TASK_RUN` provide close evidence. Harness does not inspect source state after a receipt. If code changes after review or QA, the developer owns the decision to rerun the affected evidence.
+PROGRESS.md is the scope-lock contract for this task. PLAN.md owns acceptance intent, while ordered review and QA entries in the current TASK.json generation provide close evidence. Harness does not inspect source state after a receipt. If code changes after review or QA, the developer owns the decision to rerun the affected evidence.
 
 **Highest-tier verification mandate.** If a task creates, unblocks, or documents a verification path, using that path is part of the same task. Do not ask "should I verify it?" when the required services, rebuild, seed, token, browser, API, or CLI route are locally available. Execute the highest available tier yourself, then report the tier reached and any concrete blocker. Ask only when verification would require destructive state changes, paid/external credentials, production resources, or a genuine product choice between valid approaches.
 
@@ -89,7 +89,7 @@ Route work to the cheapest sufficient model. Inline below; full rationale in sub
 
 ## Flow
 
-Phases run in strict order; each phase must complete before the next. Sub-files are lazy-loaded — do NOT pre-read them, load each only in the phase that needs it. Every phase is idempotent on re-run; check PROGRESS.md and TASK_STATE.yaml to resume instead of restarting from Phase 0.
+Phases run in strict order; each phase must complete before the next. Sub-files are lazy-loaded — do NOT pre-read them, load each only in the phase that needs it. Every phase is idempotent on re-run; check PROGRESS.md and TASK.json to resume instead of restarting from Phase 0.
 
 **Graceful degradation:** missing tool or phase prerequisite → skip cleanly, log reason, do NOT install missing tools. Skipped-phase table:
 
@@ -102,9 +102,9 @@ Phases run in strict order; each phase must complete before the next. Sub-files 
 
 ### Phase 0: Pre-flight
 
-Verify `doc/harness/manifest.yaml` and `TASK_STATE.yaml` parse and `status` is one of: created, planning, implementing, verifying, closed. No other task holds write focus. On failure, `AskUserQuestion` with setup-skill / task-id / continue-anyway options.
+Verify `doc/harness/manifest.yaml` and the exact six-field `TASK.json` parse. Derive terminal state from `TASK.json.close_receipt_fingerprint` or `BLOCKED.md`; do not expect a stored status or verdict. No other task holds write focus. On failure, `AskUserQuestion` with setup-skill / fresh-task / continue-anyway options.
 
-**Context Recovery:** inspect TASK_STATE.yaml/PROGRESS.md for the current task
+**Context Recovery:** inspect TASK.json/PROGRESS.md for the current task
 and list the 3 newest task directories. If an in-progress task matches the
 current `task_id`, state "resuming from prior session" in the conversation.
 
@@ -117,7 +117,7 @@ Reads `health_components` from manifest (falls back to `test_command`). Output i
 ### Phase 1: Load plan
 
 Read `doc/harness/tasks/<task_id>/`:
-1. `PLAN.md`, `REQUEST.md` (if present), `TASK_STATE.yaml`.
+1. `PLAN.md`, `REQUEST.md` (if present), `TASK.json`.
 2. Extract: objective, scope (in/out), target files, acceptance criteria (AC-001+), verification commands.
 3. **Resume check:** `PROGRESS.md` → skip ACs listed in `completed_acs`. For each completed AC, compare target-file mtimes against `PROGRESS.md` mtime; files modified post-PROGRESS → mark "needs re-verification", do not blindly skip.
 4. **Learnings bootstrap:** `head -20 doc/harness/learnings.jsonl` and `ls doc/harness/patterns/*.md`. If PLAN.md absent, `AskUserQuestion` (run plan skill / check task_id / abort).
@@ -424,7 +424,7 @@ After Phase 7 completes (pass or fail), snapshot for mid-task resume:
 ```bash
 python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_checkpoint.py \
   --task-dir doc/harness/tasks/<task_id>/ \
-  --note "Phase 7 done — runtime_verdict=$(grep runtime_verdict <task_dir>/TASK_STATE.yaml | awk '{print $2}')"
+  --note "Phase 7 done — task_verify completed; see RECEIPTS.jsonl"
 ```
 
 ### Phase 7.6: Health score capture
@@ -460,12 +460,12 @@ The dogfooder does NOT gate task completion. Its output is:
 Skip conditions:
 - `runtime_verdict` is not PASS (QA must pass first).
 - Task is maintenance-only (no user-facing change).
-- `PLAN.meta.json.plan_meta.surfaces` declares no user-facing surface and
+- `PLAN.md` declares no user-facing surface and
   `dogfood_required` is not explicitly true.
 
 Dogfood routing is plan-owned. Use declared surfaces such as `frontend`, `api`,
-`cli`, or `desktop`; do not infer them from Git diff output or `touched_paths`.
-When the metadata is ambiguous, run the dogfooder or record an explicit plan
+`cli`, or `desktop`; do not infer them from Git diff output.
+When the PLAN declaration is ambiguous, run the dogfooder or record an explicit plan
 decision. Lifecycle commands never scan the repository to make this choice.
 
 ### Phase 7.8: Harness source auto-install (post-QA, pre-close)
@@ -487,9 +487,9 @@ current-run review+QA receipts, and a byte-stable install-payload snapshot
 before it invokes `python3 install.py --force`. A failed install blocks completion; never claim the
 source is deployed. Do not rerun installation for docs-only edits after this
 step. The current process may retain already-loaded MCP/hooks, so report when a
-new session is required without forging receipts. The same successful
-receipt-run and payload fingerprint is skipped under a task-local lock. Skip only when the user
-explicitly opts out of installation.
+new session is required without forging receipts. The helper writes no install
+receipt or deduplication state; retrying after interruption reinstalls from a
+fresh verified snapshot. Skip only when the user explicitly opts out of installation.
 
 ### Phase 8: Close and final response
 
@@ -498,7 +498,7 @@ explicitly opts out of installation.
 Before `task_close`, verify these are true:
 
 1. PLAN.md acceptance criteria are addressed or explicitly deferred.
-2. `task_verify` reports PASS from ordered receipts in the current `TASK_RUN`.
+2. `task_verify` reports PASS from ordered receipts in the current TASK.json generation.
 3. Required QA/UX subagents were spawned when available; hook-owned `RECEIPTS.jsonl` proves their lifecycle.
 4. `CONVERSATION.md` has no open `<!-- item: ... status=open -->` markers.
 5. Durable docs are updated when the task changed user-visible behavior, external contracts, or reusable guidance.
@@ -666,7 +666,7 @@ and close produced no self-healing signal.
 
 ### Phase 8.6: durable docs
 
-Mechanical. Read `TASK_STATE.yaml` touched paths + `doc/CLAUDE.md` registered roots. For each file, map to doc root. Call `task_verify`.
+Mechanical. Read the task's changed paths and `doc/CLAUDE.md` registered roots. For each file, map to doc root. Call `task_verify`.
 
 When the task changes `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or
 `POLICY__*.md` OR the current task contains explicit durable user corrections

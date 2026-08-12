@@ -55,51 +55,6 @@ python3 install.py --codex-only
 
 ## Runtime errors
 
-### `GIT_DIRTY_SNAPSHOT_SKIPPED`
-
-**What you see:** `task_start`, `task_context`, `task_verify`, or `task_close`
-returns a `git_snapshot_warnings` or `warnings` entry naming a Git root whose
-working-tree evidence was skipped.
-
-**Cause:** The root did not finish staged, unstaged, or untracked-path
-enumeration within the three-second optional budget, or the enumeration command
-failed. Harness continues because required HEAD, ancestry, and gitlink commands
-remain separate. Configured local source roots are trusted and do not receive
-linked-worktree authority preflights.
-
-**Risk:** Uncommitted changes in that root may be absent from `touched_paths`.
-That can hide scope drift, pre-task dirt, or stale review/QA evidence for the
-skipped paths.
-
-**Fix:** Make the worktree responsive. If the warning came from `task_start`,
-start a new task ID so the initial dirty baseline is recaptured. For
-`task_context`, `task_verify`, or `task_close`, retry that lifecycle call. To
-diagnose outside Harness:
-
-```bash
-git -C <reported-root> status --porcelain=v2 --untracked-files=all
-```
-
-To restore the former fail-closed policy, roll back the Harness version that
-introduced best-effort dirty scans and start a new task ID. Existing baseline
-files remain schema-compatible; do not edit `TASK_BASELINE.json` manually.
-
-### `Git snapshot deadline exhausted before git rev-parse --git-common-dir`
-
-Current Harness versions do not run linked-worktree `--git-common-dir`,
-`--absolute-git-dir`, or `--show-toplevel` authority preflights for registered
-local source roots. Manifest registration is the trust decision, and Git
-commands consume the checkout as it exists when they run.
-
-If this legacy error still appears after installation, the current MCP process
-is using an older loaded plugin. Run the verified installer and start a new
-Codex session. Do not edit task baselines to work around the old process.
-
-The tradeoff is intentional: Harness no longer detects a valid `.git` pointer
-retarget between lifecycle operations. Developers who change worktree metadata
-must treat the next Git result as authoritative and repair the checkout with
-normal Git tooling when it fails.
-
 ### "MCP server harness not reachable"
 
 **What you see:** `task_start` fails with "MCP server harness not reachable. Verify config.toml [mcp_servers.harness] command path; run: `codex mcp test harness`".

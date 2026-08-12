@@ -3,7 +3,7 @@
 This is the Codex-runtime tree for the harness plugin. **Opt-in.** It does NOT materialize automatically on existing Claude Code installs — set `harness.codex_enabled: true` in your `.claude-plugin/marketplace.json` or invoke `Skill(setup) --include-codex` to enable.
 
 Architecture lives in [`doc/harness/spike-report.md`](../doc/harness/spike-report.md) §3.6 — **MCP-only sharing**:
-- Shared across runtimes: MCP server, hook payload schemas, `plugin/scripts/` (gate scripts, helpers), and contract artifacts (`PLAN.md`, `PLAN.meta.json`, unified `RECEIPTS.jsonl`).
+- Shared across runtimes: MCP server, hook payload schemas, `plugin/scripts/` (gate scripts, helpers), and contract artifacts (`TASK.json`, `PLAN.md`, unified `RECEIPTS.jsonl`).
 - Single installer: repo-root `install.py` emits the `~/.codex/config.toml` MCP+hook block that wires the shared substrate into a Codex install.
 - Independent per runtime: SKILL.md trees, agent definitions. Hand-authored on each side, both consuming the same shared substrate.
 

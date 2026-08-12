@@ -18,17 +18,25 @@ sys.modules[SPEC.name] = lib
 SPEC.loader.exec_module(lib)
 
 
-def _task(tmp_path: Path, meta: dict | None = None) -> Path:
+def _task(tmp_path: Path, lenses: dict | None = None) -> Path:
     manifest = tmp_path / "doc/harness/manifest.yaml"
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
     task = tmp_path / "doc/harness/tasks/TASK__no-git"
     lib.ensure_task_scaffold(task, "TASK__no-git", repo_root=tmp_path)
     (task / "PLAN.md").write_text("# plan\n", encoding="utf-8")
-    if meta is not None:
-        (task / "PLAN.meta.json").write_text(
-            json.dumps({"plan_meta": meta}) + "\n", encoding="utf-8"
-        )
+    if lenses is not None:
+        control = lib.read_task_control(task)
+        control["review_lenses"] = list(dict.fromkeys(
+            lens for lens in lenses.get("review_lenses", [])
+            if lens in lib.REVIEW_LENSES
+        )) or ["review-code"]
+        if "review-code" not in control["review_lenses"]:
+            control["review_lenses"].insert(0, "review-code")
+        control["qa_lenses"] = list(dict.fromkeys(
+            lens for lens in lenses.get("qa_lenses", []) if lens in lib.QA_LENSES
+        )) or ["qa-cli"]
+        lib.write_task_control(task, control)
     return task
 
 
@@ -64,16 +72,39 @@ def _pass_review(task: Path, agent_id: str = "review-1") -> None:
     _receipt(task, "review-code", agent_id, "completed", "PASS")
 
 
-def test_scaffold_and_touched_path_helpers_do_not_inspect_git(tmp_path):
+def test_scaffold_uses_only_exact_task_control_and_does_not_inspect_git(tmp_path):
     task = _task(tmp_path)
     assert not (task / "TASK_BASELINE.json").exists()
-    assert lib._effective_touched_paths(task, ["z.py", "a.py", "z.py"]) == [
-        "a.py",
-        "z.py",
-    ]
+    assert set(lib.read_task_control(task)) == lib.TASK_CONTROL_FIELDS
+    for legacy in (
+        "TASK_STATE.yaml", "TASK_RUN.json", "PLAN.meta.json",
+        "TASK_CLOSE_RECEIPT.json", "INSTALL_RECEIPT.json",
+    ):
+        assert not (task / legacy).exists()
 
 
-def test_plan_meta_routes_lenses_with_safe_defaults_and_explicit_security(tmp_path):
+def test_task_control_exact_six_field_schema_fails_closed(tmp_path):
+    task = _task(tmp_path)
+    valid = lib.read_task_control(task)
+    assert set(valid) == lib.TASK_CONTROL_FIELDS
+
+    for mutation in (
+        {**valid, "legacy_status": "open"},
+        {key: value for key, value in valid.items() if key != "execution_mode"},
+        {**valid, "review_lenses": ["review-security"]},
+        {**valid, "qa_lenses": []},
+        {**valid, "started_at": "2026-W33-2T00:00:00Z"},
+        {**valid, "started_at": "2026-08-12 00:00:00Z"},
+        {**valid, "started_at": "2026-08-12T00:00Z"},
+    ):
+        (task / "TASK.json").write_text(json.dumps(mutation) + "\n", encoding="utf-8")
+        assert lib.read_task_control(task) == {}
+
+    (task / "TASK.json").write_text(json.dumps(valid) + "\n", encoding="utf-8")
+    assert lib.read_task_control(task) == valid
+
+
+def test_task_control_routes_lenses_with_safe_defaults_and_explicit_security(tmp_path):
     default_task = _task(tmp_path / "default")
     assert lib.required_review_lenses(default_task) == ["review-code"]
     assert lib._required_qa_lenses(default_task) == ["qa-cli"]
@@ -93,7 +124,7 @@ def test_plan_meta_routes_lenses_with_safe_defaults_and_explicit_security(tmp_pa
     assert lib._required_qa_lenses(explicit_task) == ["qa-browser", "qa-api"]
 
     malformed_task = _task(tmp_path / "malformed")
-    (malformed_task / "PLAN.meta.json").write_text("not json", encoding="utf-8")
+    (malformed_task / "TASK.json").write_text("not json", encoding="utf-8")
     assert lib.required_review_lenses(malformed_task) == ["review-code"]
     assert lib._required_qa_lenses(malformed_task) == ["qa-cli"]
 
@@ -202,33 +233,20 @@ def test_runtime_never_marks_pass_receipts_stale_after_source_edit(tmp_path):
     source.parent.mkdir()
     source.write_text("VALUE = 2\n", encoding="utf-8")
     assert lib.receipt_runtime_verdict(task) == "PASS"
-    assert lib.runtime_is_stale(task) == (False, "")
 
 
-def test_close_attestation_v3_needs_receipt_hash_but_no_head(tmp_path):
+def test_close_is_the_current_receipt_fingerprint_in_task_control(tmp_path):
     task = _task(tmp_path)
-    state = lib.read_state(task)
-    state.update(
-        status="closed",
-        runtime_verdict="PASS",
-        closed_at="2026-08-11T00:00:00Z",
-    )
     fingerprint = lib.receipt_stream_fingerprint(task)
-    payload = lib.write_task_close_attestation(
-        task, state, receipt_fingerprint=fingerprint
+    control = lib.publish_task_close(
+        task, lib.read_task_control(task), receipt_fingerprint=fingerprint,
     )
-    assert payload["version"] == 3
-    assert "head_sha" not in payload
-    assert lib.task_close_attestation_valid(task, state)
+    assert control["close_receipt_fingerprint"] == fingerprint
+    assert lib.task_control_status(task, control) == "closed"
+    assert not (task / "TASK_CLOSE_RECEIPT.json").exists()
 
-    old_schema = {
-        **payload,
-        "version": 2,
-    }
-    (task / lib.TASK_CLOSE_RECEIPT_NAME).write_text(
-        json.dumps(old_schema) + "\n", encoding="utf-8"
-    )
-    assert not lib.task_close_attestation_valid(task, state)
+    (task / lib.RECEIPTS_NAME).write_text("{}\n", encoding="utf-8")
+    assert lib.task_control_status(task, control) == "invalid"
 
 
 def test_ignored_nested_git_resolves_ancestor_harness_root(tmp_path):
@@ -292,7 +310,7 @@ def test_receipt_stream_and_lock_reject_group_world_writable_modes(tmp_path):
 
 def test_rotated_task_run_rejects_prior_run_receipts_without_source_state(tmp_path):
     task = _task(tmp_path)
-    original_run = lib.read_task_run(task)["task_run_id"]
+    original_run = lib.read_task_control(task)["task_run_id"]
     _pass_review(task)
     _receipt(task, "qa-cli", "qa-1", "started")
     _receipt(task, "qa-cli", "qa-1", "completed", "PASS")
@@ -317,7 +335,7 @@ def test_rotated_task_run_rejects_prior_run_receipts_without_source_state(tmp_pa
 
 def test_missing_or_mismatched_task_run_fails_receipts_closed(tmp_path):
     task = _task(tmp_path)
-    run_id = lib.read_task_run(task)["task_run_id"]
+    run_id = lib.read_task_control(task)["task_run_id"]
     try:
         _receipt(
             task, "review-code", "review-wrong", "started",
@@ -329,7 +347,7 @@ def test_missing_or_mismatched_task_run_fails_receipts_closed(tmp_path):
         raise AssertionError("mismatched task run must be rejected")
 
     _pass_review(task)
-    (task / lib.TASK_RUN_NAME).write_text("{}\n", encoding="utf-8")
+    (task / lib.TASK_CONTROL_NAME).write_text("{}\n", encoding="utf-8")
     assert lib.receipt_review_verdict(task) == "PENDING"
     try:
         _receipt(
@@ -337,7 +355,7 @@ def test_missing_or_mismatched_task_run_fails_receipts_closed(tmp_path):
             task_run_id=run_id,
         )
     except RuntimeError as exc:
-        assert "valid TASK_RUN" in str(exc)
+        assert "valid TASK.json" in str(exc)
     else:
         raise AssertionError("missing task run must reject receipt append")
 
@@ -475,7 +493,7 @@ def test_exact_schema_rejects_non_string_values(tmp_path):
     entry = {field: "" for field in lib.RECEIPT_FIELDS}
     entry.update(
         event="started",
-        task_run_id=lib.read_task_run(task)["task_run_id"],
+        task_run_id=lib.read_task_control(task)["task_run_id"],
         summary=[],
     )
     (task / lib.RECEIPTS_NAME).write_text(

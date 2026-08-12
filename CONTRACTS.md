@@ -102,13 +102,13 @@ edits and source-scope discipline remain the developer's responsibility.
 ### C-05
 
 **Title:** Protected artifact ownership.
-**When:** Any `Write`/`Edit` to PLAN.md, AUDIT_TRAIL.md, PLAN.meta.json,
+**When:** Any `Write`/`Edit` to PLAN.md, AUDIT_TRAIL.md, TASK.json,
 RECEIPTS.jsonl, or CONVERSATION.md — and any `Bash` mutation (sed -i,
 redirect, cp, mv, tee, python -c open(…,'w'), …) targeting the same basenames.
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`
 (Write/Edit/MultiEdit surface) + `plugin/scripts/mcp_bash_guard.py`
 (Bash surface; same helper classifiers).
-**On violation:** hard-block. Agent must route through `write_plan`,
+**On violation:** hard-block. Agent must route through the owning task MCP tool,
 the hook-owned receipt path. CONVERSATION.md is written by runtime
 conversation hooks.
 **Why:** Provenance is derived from artifact existence. Wrong writer = wrong
@@ -208,7 +208,7 @@ extra phase is a new failure point.
 **When:** `runtime_verdict` transitions to `PASS`.
 **Enforced by:** unified `RECEIPTS.jsonl`, written only by Codex/Claude
 lifecycle hooks. `task_verify` checks task, agent, lens,
-explicit completion verdict, and review-before-QA ordering. PLAN metadata is
+explicit completion verdict, and review-before-QA ordering. TASK.json is
 the authoritative declaration of applicable lenses.
 **On violation:** `task_close` refuses when a required ordered completion is
 absent or does not explicitly PASS.

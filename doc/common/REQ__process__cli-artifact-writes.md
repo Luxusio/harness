@@ -15,10 +15,10 @@ provenance.
 
 | Artifact | Owner |
 |---|---|
-| `PLAN.md` / `PLAN.meta.json` / optional `AUDIT_TRAIL.md` | MCP `write_plan` |
+| `PLAN.md` / optional `AUDIT_TRAIL.md` / `TASK.json` lens declarations | MCP `write_plan` |
 | `RECEIPTS.jsonl` | Codex/Claude review and QA lifecycle hooks |
 | `CONVERSATION.md` | Codex/Claude UserPromptSubmit/Subagent hooks |
-| `TASK_STATE.yaml` lifecycle fields | harness MCP task tools and runtime scripts |
+| exact six-field `TASK.json` lifecycle control | harness MCP task tools |
 | `doc/<area>/REQ__*.md` and other durable docs | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
 
 ## Requirements

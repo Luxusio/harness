@@ -12,7 +12,7 @@ Skip if the plan has zero new trust boundaries AND zero new writes (pure prose r
 
 S1. **Spoofing / Auth boundary** — does any new codepath cross a trust boundary (user→service, service→DB, external→internal, LLM-output→executor)? If yes, how is the identity or source verified?
 
-S2. **Tampering / Data integrity** — does any new write mutate a protected artifact (PLAN.md, PLAN.meta.json, RECEIPTS.jsonl)? Is the owning skill, MCP tool, or hook the only writer (C-05 enforced by `prewrite_gate.py` and `mcp_bash_guard.py`)? Any Bash pattern that could slip past the guard?
+S2. **Tampering / Data integrity** — does any new write mutate a protected artifact (PLAN.md, TASK.json, RECEIPTS.jsonl)? Is the owning skill, MCP tool, or hook the only writer (C-05 enforced by `prewrite_gate.py` and `mcp_bash_guard.py`)? Any Bash pattern that could slip past the guard?
 
 S3. **Information disclosure** — does any new log, error message, prompt, or artifact leak secrets, PII, absolute paths with usernames, internal infra names, or task-specific data that should stay private to the task directory?
 
@@ -28,9 +28,9 @@ H3. **Contract-bypass vector** — does the plan assume `HARNESS_SKIP_PREWRITE` 
 
 Skip if the plan makes zero mutations to repo state (review-only, advisory-only, read-only). Otherwise answer all 4. Scope is plan-level: what reverts if develop halts before verification and close.
 
-R1. **Blast radius (develop-fail)** — if implementation halts at AC-N where N < last, which file edits are already on disk? What touched paths are already recorded in PROGRESS.md or TASK_STATE.yaml? Zero is the target answer; list all non-zero mutations.
+R1. **Blast radius (develop-fail)** — if implementation halts at AC-N where N < last, which file edits are already on disk? What touched paths are already recorded in PROGRESS.md? Zero is the target answer; list all non-zero mutations.
 
-R2. **Schema safety** — does the change alter any on-disk schema (TASK_STATE.yaml 7-field, RECEIPTS.jsonl, `hooks.json`, `manifest.yaml`, restore-point format)? If yes, is the migration forward-AND-backward compatible with existing in-flight tasks, or does revert require manual repair? See C-16 archive pattern for precedent.
+R2. **Schema safety** — does the change alter any on-disk schema (TASK.json, RECEIPTS.jsonl, `hooks.json`, `manifest.yaml`, restore-point format)? If yes, state the cutover and recovery behavior explicitly; unsupported legacy task-control formats must not gain fallback readers.
 
 R3. **Feature-flag path** — can this change be disabled at runtime via a `HARNESS_DISABLE_*` env var or manifest toggle without a code revert? If no, justify why a binary `git revert` is acceptable for this change's blast radius; list the downstream tasks that would need replay.
 

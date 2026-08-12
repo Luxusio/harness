@@ -529,16 +529,6 @@ def run_command(command: str, timeout: int, state_path: Path,
     return proc.returncode, output
 
 
-def read_task_state_value(path: Path, key: str) -> str:
-    if not path.exists():
-        return ""
-    prefix = f"{key}:"
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        if line.startswith(prefix):
-            return line[len(prefix):].strip().strip("\"'")
-    return ""
-
-
 def repo_root_for_state(state_path: Path) -> Path:
     parent = state_path.parent
     if parent.name == "harness" and parent.parent.name == "doc":
@@ -550,9 +540,17 @@ def harness_task_passed(state_path: Path, item: dict[str, Any]) -> tuple[bool, s
     task_id = str(item.get("task_id") or "")
     if not task_id:
         return False, "slice has no task_id"
-    task_state = repo_root_for_state(state_path) / "doc" / "harness" / "tasks" / task_id / "TASK_STATE.yaml"
-    status = read_task_state_value(task_state, "status")
-    verdict = read_task_state_value(task_state, "runtime_verdict").upper()
+    task_dir = repo_root_for_state(state_path) / "doc" / "harness" / "tasks" / task_id
+    scripts = repo_root_for_state(state_path) / "plugin" / "scripts"
+    if str(scripts) not in sys.path:
+        sys.path.insert(0, str(scripts))
+    try:
+        from _lib import (read_task_control, receipt_runtime_verdict, task_control_status)
+        control = read_task_control(str(task_dir))
+        status = task_control_status(str(task_dir), control)
+        verdict = receipt_runtime_verdict(str(task_dir), control)
+    except Exception:
+        status, verdict = "invalid", "PENDING"
     if status == "closed" and verdict == "PASS":
         return True, f"{task_id} closed with runtime_verdict PASS"
     return False, f"{task_id} not closed/PASS (status={status or 'missing'}, runtime_verdict={verdict or 'missing'})"

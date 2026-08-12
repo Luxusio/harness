@@ -36,8 +36,8 @@ from _lib import (  # type: ignore
     find_repo_root,
     receipt_snapshot,
     record_subagent_receipt,
-    read_task_run,
-    read_state,
+    read_task_control,
+    task_control_status,
     resolve_active_task_dir,
 )
 
@@ -54,7 +54,7 @@ IDLE_SECONDS = 8 * 60 * 60
 REGISTRATION_TTL_SECONDS = IDLE_SECONDS
 MAX_WATCHER_THREADS = 16
 RUNTIME_SUBDIR = os.path.join("harness", "codex-watchers")
-REGISTRATION_VERSION = 8
+REGISTRATION_VERSION = 9
 REGISTRATION_OWNER = "codex_root_hook"
 
 
@@ -704,10 +704,8 @@ def _validated_task_dir(repo_root: str, task_id: str) -> str:
             return ""
     except (OSError, ValueError):
         return ""
-    if not _safe_regular_file(task_dir / "TASK_STATE.yaml", task_dir, max_size=256 * 1024):
-        return ""
-    state = read_state(str(task_dir))
-    if state.get("task_id") != task_id or str(state.get("status") or "").lower() in {"closed", "blocked"}:
+    control = read_task_control(str(task_dir))
+    if not control or task_control_status(str(task_dir), control) != "open":
         return ""
     return str(task_dir)
 
@@ -735,7 +733,7 @@ def _active_task_binding_for_session(repo_root: str, root_id: str) -> dict[str, 
     tasks_root = (Path(repo_root) / "doc/harness/tasks").resolve()
     marker = tasks_root / ".active_sessions" / f"{root_id}.json"
     marker_data = _read_owned_json(marker, tasks_root)
-    task_run = read_task_run(task_dir)
+    task_run = read_task_control(task_dir)
     marker_run_id = str(marker_data.get("task_run_id") or "")
     marker_started_at = str(marker_data.get("run_started_at") or "")
     if (

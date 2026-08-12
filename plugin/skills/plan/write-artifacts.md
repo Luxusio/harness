@@ -6,9 +6,8 @@ Sub-file for plan/SKILL.md Phase 6. Always runs.
 
 ## 6.1 Artifact writer
 
-PLAN.md, PLAN.meta.json, and AUDIT_TRAIL.md are written through
-the harness MCP `write_plan` tool. Do not use
-`scripts/write_plan.py`; it is a legacy compatibility shim.
+PLAN.md and AUDIT_TRAIL.md are written through the harness MCP `write_plan`
+tool. The same call stores required review and QA lenses in `TASK.json`.
 
 ## 6.2 Assemble PLAN.md content
 
@@ -124,34 +123,17 @@ No harness policy boilerplate. Keep concise and executable.
 ```text
 write_plan {
   task_id: "TASK__<id>",
-  artifact: "plan",
-  content: "<PLAN.md content>"
+  plan: "<PLAN.md content>",
+  meta: {
+    review_lenses: ["review-code", "review-security"],
+    qa_lenses: ["qa-cli"]
+  }
 }
 ```
 
-## 6.4 Assemble PLAN.meta.json
-
-Write `/tmp/plan_meta.json`:
-```json
-{
-  "author_role": "plan-skill",
-  "planning_mode": "<value from task pack>",
-  "execution_mode": "<light|standard>",
-  "dual_voice_phases": ["phase1", "phase2", "phase3", "phase4"],
-  "critic_plan": "removed"
-}
-```
-
-## 6.5 Write PLAN.meta.json via MCP
-
-```text
-write_plan {
-  task_id: "TASK__<id>",
-  artifact: "plan-meta",
-  content: "<PLAN.meta.json object as JSON>",
-  meta: { "execution_mode": "<light|standard>" }
-}
-```
+Choose only the applicable supported lenses. `review-code` is always required;
+add `review-security` when the task has a security boundary. Select QA lenses
+from `qa-cli`, `qa-api`, `qa-browser`, and `qa-desktop`.
 
 ## 6.6 Acceptance criteria
 
@@ -162,11 +144,7 @@ unified `RECEIPTS.jsonl` lifecycle stream.
 Audit rows from earlier phases are also written through MCP:
 
 ```text
-write_plan {
-  task_id: "TASK__<id>",
-  artifact: "audit",
-  content: "<AUDIT_TRAIL.md table row>"
-}
+write_plan { task_id: "TASK__<id>", plan: "<PLAN.md content>", audit: "<AUDIT_TRAIL.md table row>", review_lenses: [...], qa_lenses: [...] }
 ```
 
 ## 6.8 Learnings write-back (capture-when-fresh, non-blocking)
@@ -197,7 +175,7 @@ mkdir -p doc/harness 2>/dev/null || true
 
 ## 6.9 Close session
 
-Set `plan_session_state: closed` in TASK_STATE.yaml. Task is now ready for implementation.
+Set `PLAN_SESSION.json.state` to `closed`. Task is now ready for implementation.
 
 ## 6.10 Completion report
 

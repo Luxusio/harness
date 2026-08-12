@@ -17,7 +17,7 @@ turned a workflow coordinator into a local repository-integrity monitor.
 Automatic Git change detection is removed from `task_start`, `task_context`,
 `task_verify`, and `task_close`.
 
-The plan supplies applicable review and QA lenses in `PLAN.meta.json`. Lifecycle
+The plan supplies applicable review and QA lenses in `TASK.json`. Lifecycle
 receipts prove only:
 
 - the Harness task identity;
@@ -43,7 +43,7 @@ bytes are the same bytes seen by the reviewers. This is the same intentional
 developer-owned post-QA mutation risk, including for `install.py` itself.
 
 Receipt streams remain a transaction boundary. Each lifecycle generation gets
-a random `TASK_RUN.json` identity copied into the session marker and receipts;
+a random identity in `TASK.json`, copied into the session marker and receipts;
 events from an earlier generation cannot authorize a resumed task, including
 when a watcher replays its rollout. Terminal resume rotates receipt streams
 under the hardened no-follow receipt lock, and close holds the same lock from

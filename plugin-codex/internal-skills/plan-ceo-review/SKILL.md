@@ -159,18 +159,18 @@ Then read CLAUDE.md, TODOS.md, and any existing architecture docs.
 Check for any design documents related to this task:
 
 ```bash
-find doc/ -name "*design*.md" -newer doc/harness/tasks/TASK__*/TASK_STATE.yaml 2>/dev/null | head -3
+find doc/ -name "*design*.md" -newer doc/harness/tasks/TASK__*/TASK.json 2>/dev/null | head -3
 ```
 
 If a design doc exists, read it. Use it as the source of truth for the problem statement, constraints, and chosen approach.
 
 ### Prior decision check
 
-If a prior plan-ceo-review or `Skill(harness:setup)` session paused partway through, resume from task-local PLAN/AUDIT_TRAIL/TASK_STATE data before re-asking premise questions:
+If a prior plan-ceo-review or `Skill(harness:setup)` session paused partway through, resume from task-local PLAN/AUDIT_TRAIL/TASK.json data before re-asking premise questions:
 
 ```bash
 _TASK_DIR="doc/harness/tasks/$(ls doc/harness/tasks/ 2>/dev/null | grep TASK__ | head -1)"
-grep -A3 "CEO Review\|setup\|paused at\|resume from" "$_TASK_DIR"/{PLAN.md,AUDIT_TRAIL.md,TASK_STATE.yaml} 2>/dev/null | head -20
+grep -A3 "CEO Review\|setup\|paused at\|resume from" "$_TASK_DIR"/{PLAN.md,AUDIT_TRAIL.md,TASK.json} 2>/dev/null | head -20
 ```
 
 If prior decisions are found: extract the premises, scope decisions, and any user answers. Do NOT re-ask questions that were already answered in the prior session. Only ask what is genuinely new or changed since the recorded decision. Scope reads to the current `TASK__<id>` directory — never cross tasks.
@@ -274,7 +274,7 @@ After the loop: "Your doc survived N rounds of adversarial review. M issues caug
 ## Pause/Resume State
 
 Do not write a separate narrative pause note. If the review pauses, rely on the
-native conversation state and task-local PLAN/TASK_STATE data that already
+native conversation state and task-local PLAN/TASK.json data that already
 exists. Any durable decision or unresolved concern must be represented in the
 reviewed document itself, not in another file.
 

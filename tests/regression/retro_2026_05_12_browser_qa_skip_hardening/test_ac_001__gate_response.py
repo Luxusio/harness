@@ -111,18 +111,17 @@ class TestStopGateEmitsNextAction(unittest.TestCase):
         with open(os.path.join(self.repo, "doc", "harness", "manifest.yaml"), "w", encoding="utf-8") as f:
             f.write("version: 4\ntype: test\n")
         os.makedirs(os.path.join(self.repo, "doc", "harness", "tasks", "TASK__demo"), exist_ok=True)
-        # minimal TASK_STATE.yaml for emit_compact_context
+        # exact TASK.json for emit_compact_context
         with open(os.path.join(self.repo, "doc", "harness", "tasks", "TASK__demo",
-                               "TASK_STATE.yaml"), "w", encoding="utf-8") as f:
-            f.write(
-                "task_id: TASK__demo\n"
-                "status: implementing\n"
-                "runtime_verdict: pending\n"
-                "touched_paths: []\n"
-                "plan_session_state: closed\n"
-                "closed_at: null\n"
-                "updated: 2026-05-12T00:00:00Z\n"
-            )
+                               "TASK.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "task_run_id": "a" * 32,
+                "started_at": "2026-05-12T00:00:00Z",
+                "execution_mode": "standard",
+                "review_lenses": ["review-code"],
+                "qa_lenses": ["qa-cli"],
+                "close_receipt_fingerprint": None,
+            }, f)
         with open(os.path.join(self.repo, "doc", "harness", "tasks", ".active"),
                   "w", encoding="utf-8") as f:
             f.write(os.path.join(self.repo, "doc", "harness", "tasks", "TASK__demo"))

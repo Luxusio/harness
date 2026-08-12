@@ -95,7 +95,7 @@ or assume the whole flow must run in one conversation context.
 
 ## Flow
 
-Phases run in strict order; each phase must complete before the next. Sub-files are lazy-loaded — do NOT pre-read them, load each only in the phase that needs it. Every phase is idempotent on re-run; check PROGRESS.md and TASK_STATE.yaml to resume instead of restarting from Phase 0.
+Phases run in strict order; each phase must complete before the next. Sub-files are lazy-loaded — do NOT pre-read them, load each only in the phase that needs it. Every phase is idempotent on re-run; check PROGRESS.md and TASK.json to resume instead of restarting from Phase 0.
 
 **Runtime fallbacks:** keep routine work free of runtime routing notes. When an expected independent QA/review path was replaced by inline verification, a required browser/desktop tool was unavailable, or a high-risk policy/skill change had no independent review lens, state the reason and risk in task state or the final response. Do not write a fallback artifact just to record routing history.
 
@@ -110,9 +110,9 @@ Phases run in strict order; each phase must complete before the next. Sub-files 
 
 ### Phase 0: Pre-flight
 
-Verify `doc/harness/manifest.yaml` and `TASK_STATE.yaml` parse and `status` is one of: created, planning, implementing, verifying, closed. No other task holds write focus. On failure, conversational ask with setup-skill / task-id / continue-anyway options.
+Verify `doc/harness/manifest.yaml` and the exact six-field `TASK.json` parse. Derive terminal state from `TASK.json.close_receipt_fingerprint` or `BLOCKED.md`; do not expect a stored status or verdict. No other task holds write focus. On failure, conversationally ask about setup, a fresh task, or continuing anyway.
 
-**Context Recovery:** inspect TASK_STATE.yaml/PROGRESS.md for the current task
+**Context Recovery:** inspect TASK.json/PROGRESS.md for the current task
 and list the 3 newest task directories. If an in-progress task matches the
 current `task_id`, state "resuming from prior session" in the conversation.
 
@@ -125,7 +125,7 @@ Reads `health_components` from manifest (falls back to `test_command`). Output i
 ### Phase 1: Load plan
 
 Read `doc/harness/tasks/<task_id>/`:
-1. `PLAN.md`, `REQUEST.md` (if present), `TASK_STATE.yaml`.
+1. `PLAN.md`, `REQUEST.md` (if present), `TASK.json`.
 2. Extract: objective, scope (in/out), target files, acceptance criteria (AC-001+), verification commands.
 3. **Resume check:** `PROGRESS.md` -> skip ACs listed in `completed_acs`. For each completed AC, compare target-file mtimes against `PROGRESS.md` mtime; files modified post-PROGRESS -> mark "needs re-verification", do not blindly skip.
 4. **Learnings bootstrap:** `head -20 doc/harness/learnings.jsonl` and `ls doc/harness/patterns/*.md`. If PLAN.md absent, ask the user (run plan skill / check task_id / abort) via prose.
@@ -318,7 +318,7 @@ Read `plugin/skills/develop/quality-audit-pipeline.md`. Phase 4.5 gathers
 coverage, visual, migration/contract, LLM-trust, and proportional performance
 inputs. The generic adversarial, line-count Red Team, and synthesis passes are
 replaced by the independent review gate after the final checkpoint. Canonical
-code/security routing comes from the lenses declared in `PLAN.meta.json`.
+code/security routing comes from the lenses declared in `TASK.json`.
 
 **Phase 4.85 Coverage Synthesis** — use the coverage diagram from the audit
 agent final response to update tests directly. Do not create a separate test
@@ -361,8 +361,8 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 
 ### Phase 6.6: Independent Code Review Gate
 
-Read the required review lenses from `PLAN.meta.json`. Discover deferred
-`spawn_agent` in `ALL_TOOLS`. Spawn each review lens declared by PLAN metadata
+Read the required review lenses from `TASK.json`. Discover deferred
+`spawn_agent` in `ALL_TOOLS`. Spawn each review lens declared by TASK.json
 `security_review` when declared, in one message; each reads its matching
 `plugin-codex/agents/*-reviewer.md`, stays read-only, and returns exact VERDICT.
 Await all reviewers. Use `wait_agent` only to coordinate completion; its output
@@ -394,10 +394,10 @@ Read `plugin/skills/develop/verification-gate.md` (Claude tree fallback) for the
 Only begin this QA phase after all required Phase 6.6 review lenses PASS. QA
 started before those PASS events is out of order and must be rerun.
 
-**On Codex:** run the required QA lenses declared in `PLAN.meta.json` (qa-cli for libraries, qa-api for endpoints, qa-desktop for native GUI, qa-browser for frontend/browser work). Use `spawn_agent` for independent QA when available:
+**On Codex:** run the required QA lenses declared in `TASK.json` (qa-cli for libraries, qa-api for endpoints, qa-desktop for native GUI, qa-browser for frontend/browser work). Use `spawn_agent` for independent QA when available:
 
 For user-facing surfaces, also route the matching UX lens (`ux-cli`,
-`ux-api`, `ux-browser`, or `ux-desktop`) when PLAN metadata declares it. Pass
+`ux-api`, `ux-browser`, or `ux-desktop`) when the plan declares it. Pass
 the user flow, pages, commands, endpoints,
 windows, states, and expected intent in the subagent prompt so the UX lens can
 judge shippability without reverse-engineering the change.
@@ -405,7 +405,7 @@ judge shippability without reverse-engineering the change.
 ```text
 spawn_agent {
   task_name: "qa_<lens>_<task_slug>_<run_id>",
-  message: "task_name: qa_<lens>_<task_slug>_<run_id>\nYou are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, PLAN.meta.json, TASK_STATE.yaml, the PLAN targets, and durable docs named in PLAN. Follow plugin-codex/agents/qa-<lens>.md. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence and concrete findings.",
+  message: "task_name: qa_<lens>_<task_slug>_<run_id>\nYou are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, TASK.json, the PLAN targets, and durable docs named in PLAN. Follow plugin-codex/agents/qa-<lens>.md. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence and concrete findings.",
   fork_turns: "all"
 }
 ```
@@ -443,7 +443,7 @@ When durable docs changed under `doc/<area>/<TYPE>__*.md`, pass those paths to t
 ```bash
 python3 ${HARNESS_PLUGIN_ROOT}/scripts/write_checkpoint.py \
   --task-dir doc/harness/tasks/<task_id>/ \
-  --note "Phase 7 done — runtime_verdict=$(grep runtime_verdict <task_dir>/TASK_STATE.yaml | awk '{print $2}')"
+  --note "Phase 7 done — task_verify completed; see RECEIPTS.jsonl"
 ```
 
 ### Phase 7.6: Health score capture
@@ -459,7 +459,7 @@ On Claude this is a `harness:dogfooder` agent spawn. On Codex, use `spawn_agent`
 **Skip conditions (Codex):**
 - `runtime_verdict` is not PASS (QA must pass first).
 - Task is maintenance-only (no user-facing change).
-- `PLAN.meta.json` does not declare a dogfood/UX lens or user-facing surface.
+- `PLAN.md` declares no dogfood/UX lens or user-facing surface.
 
 When declared, use `spawn_agent` for the
 dogfooder when available, or run the same methodology inline as fallback: use
@@ -490,9 +490,9 @@ checks are not lifecycle gates. It verifies canonical harness identity and
 ordered review+QA receipts before it invokes `python3 install.py --force`. A failed install blocks completion; never claim the
 source is deployed. Do not rerun installation for docs-only edits after this
 step. The current process may retain already-loaded MCP/hooks, so report when a
-new thread is required without forging receipts. The same successful
-payload identity may be skipped under a task-local lock. Skip only when the user
-explicitly opts out of installation.
+new thread is required without forging receipts. The helper writes no install
+receipt or deduplication state; retrying after interruption reinstalls from a
+fresh verified snapshot. Skip only when the user explicitly opts out of installation.
 
 ### Phase 8: Completion preparation
 

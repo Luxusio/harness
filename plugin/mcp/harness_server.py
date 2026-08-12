@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""harness MCP server — self-contained, 7-field TASK_STATE.
+"""Harness MCP server — self-contained, exact six-field TASK.json.
 
 No plugin-legacy dependency. All operations are direct file I/O.
 MCP tools: goal_start, goal_context, goal_add_task, goal_next_task, goal_finish,
@@ -22,6 +22,13 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 SUPPORTED_PROTOCOLS = ("2025-11-25", "2025-06-18")
 SERVER_INFO = {"name": "harness", "title": "harness Control Plane", "version": "2.0.0"}
+OBSOLETE_TASK_ARTIFACTS = (
+    "TASK_STATE.yaml",
+    "TASK_RUN.json",
+    "PLAN.meta.json",
+    "TASK_CLOSE_RECEIPT.json",
+    "INSTALL_RECEIPT.json",
+)
 
 
 def _runtime_from_initialize(params: dict) -> str:
@@ -39,7 +46,7 @@ def _runtime_from_initialize(params: dict) -> str:
 
 def _initialize_instructions(runtime: str) -> str:
     base = (
-        "harness MCP — Goal-first control plane plus 7-field TASK_STATE. "
+        "harness MCP — Goal-first control plane plus exact TASK.json. "
         "Use goal_start/goal_context/goal_add_task/goal_next_task/goal_finish "
         "for native /goal orchestration. A Goal owns a child task queue; create "
         "or attach child tasks as scope expands. "
@@ -76,7 +83,8 @@ def _initialize_instructions(runtime: str) -> str:
 sys.path.insert(0, str(SCRIPTS_DIR))
 from _lib import (  # type: ignore
     GitBindingError,
-    now_iso, read_state, write_state, set_state_field,
+    now_iso, read_task_control, write_task_control, task_control_file,
+    task_control_status, publish_task_close, _validate_task_control,
     ensure_task_scaffold, emit_compact_context,
     artifact_exists, canonical_task_dir, canonical_task_id,
     find_harness_root, harness_root_resolution, find_repo_root,
@@ -87,8 +95,8 @@ from _lib import (  # type: ignore
     receipt_snapshot, receipt_stream_fingerprint,
     reset_receipt_streams_for_new_run, restore_receipt_streams,
     receipt_stream_transaction,
-    read_task_run, begin_task_run, restore_task_run,
-    write_task_close_attestation, clear_task_close_attestation,
+    begin_task_run, restore_task_control,
+    _strict_regular_text_snapshot, _restore_text_snapshots,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
 )
@@ -235,30 +243,28 @@ def _resolve_td(args: dict) -> str:
     raise ValueError("task_id or task_dir required")
 
 
-def _validated_task_state(td: str) -> dict:
-    state = read_state(td)
-    return state if state.get("task_id") == os.path.basename(td) else {}
+def _validated_task_control(td: str) -> dict:
+    return read_task_control(td)
 
 
-def _invalid_task_state_error(operation: str, td: str) -> dict:
+def _invalid_task_control_error(operation: str, td: str) -> dict:
     return _err(
-        f"{operation} failed: missing or invalid TASK_STATE.yaml",
+        f"{operation} failed: missing or invalid TASK.json",
         data={
             "task_dir": td,
-            "next_action": "Restore a regular TASK_STATE.yaml whose task_id matches the canonical task directory, or call task_start to initialize it.",
+            "next_action": "Call task_start to initialize a fresh exact TASK.json run.",
         },
     )
 
 
 def _minimal_task_start_context(task_dir: str, task_id: str) -> dict:
     """Return conservative, non-routing context after scaffold commit."""
-    state = read_state(task_dir)
+    state = read_task_control(task_dir)
     return {
         "task_id": task_id,
         "task_dir": task_dir,
-        "status": str(state.get("status") or "created"),
-        "runtime_verdict": str(state.get("runtime_verdict") or "pending").upper(),
-        "touched_paths": list(state.get("touched_paths") or []),
+        "status": task_control_status(task_dir, state),
+        "runtime_verdict": "PENDING",
         "context_complete": False,
         "source_write_allowed": False,
         "next_action": (
@@ -288,15 +294,13 @@ def handle_task_start(args: dict) -> dict:
     repo_root = _control_root()
     task_dir = canonical_task_dir(task_id=ti, slug=sl, task_dir=td, repo_root=repo_root)
     tid = canonical_task_id(task_dir=task_dir, repo_root=repo_root)
-    existing_state_path = os.path.join(task_dir, "TASK_STATE.yaml")
-    resumed_existing = os.path.lexists(existing_state_path)
+    existing_control_path = task_control_file(task_dir)
+    resumed_existing = os.path.lexists(existing_control_path)
+    preexisting_pack = os.path.isdir(task_dir)
     prior_marker_snapshot = active_marker_snapshot(repo_root)
     if resumed_existing:
-        existing_state = read_state(task_dir)
-        if existing_state.get("task_id") != tid:
-            raise ValueError(
-                "task_start refused existing TASK_STATE.yaml whose task_id does not match the canonical task directory"
-            )
+        if not read_task_control(task_dir):
+            raise ValueError("task_start refused unsafe or invalid TASK.json")
     request_text = ""
     if rf:
         rp = rf if os.path.isabs(rf) else os.path.join(repo_root, rf)
@@ -309,18 +313,22 @@ def handle_task_start(args: dict) -> dict:
 
     warnings = []
     scaffold = ensure_task_scaffold(
-        task_dir, tid, request_text=request_text, repo_root=repo_root
+        task_dir, tid, request_text=request_text, repo_root=repo_root,
+        execution_mode=execution_mode or "standard",
     )
-    original_resumed_state = read_state(task_dir) if resumed_existing else {}
+    original_resumed_control = read_task_control(task_dir) if resumed_existing else {}
     terminal_receipt_snapshot = {}
-    task_run_snapshot = {}
+    task_control_snapshot = {}
+    obsolete_artifact_snapshot = {}
+    blocked_artifact_snapshot = {}
 
     def rollback_new_start():
         if resumed_existing:
-            if original_resumed_state:
-                write_state(task_dir, original_resumed_state)
+            if original_resumed_control:
+                write_task_control(task_dir, original_resumed_control)
             restore_receipt_streams(terminal_receipt_snapshot)
-            restore_task_run(task_run_snapshot)
+            restore_task_control(task_control_snapshot)
+            _restore_text_snapshots(blocked_artifact_snapshot)
             restore_active_marker_snapshot(prior_marker_snapshot)
             return
         cleanup = list(scaffold.get("created") or [])
@@ -329,28 +337,51 @@ def handle_task_start(args: dict) -> dict:
                 os.unlink(artifact)
             except FileNotFoundError:
                 pass
+        restore_receipt_streams(terminal_receipt_snapshot)
+        _restore_text_snapshots(obsolete_artifact_snapshot)
         restore_active_marker_snapshot(prior_marker_snapshot)
 
     try:
-        resumed = read_state(task_dir)
-        terminal_resume_status = str(resumed.get("status") or "").lower()
-        terminal_resume = terminal_resume_status in {
-            "blocked", "closed",
-        }
-        if resumed_existing and (terminal_resume or not read_task_run(task_dir)):
-            _, task_run_snapshot = begin_task_run(task_dir)
-        if terminal_resume:
+        resumed = read_task_control(task_dir)
+        terminal_resume_status = task_control_status(task_dir, resumed)
+        if terminal_resume_status == "invalid":
+            if resumed.get("close_receipt_fingerprint") and not os.path.lexists(
+                os.path.join(task_dir, "BLOCKED.md")
+            ):
+                terminal_resume_status = "closed"
+            else:
+                raise RuntimeError("task_start refused invalid terminal task artifacts")
+        terminal_resume = terminal_resume_status in {"blocked", "closed"}
+        fresh_old_pack = not resumed_existing and preexisting_pack
+        if resumed_existing and terminal_resume:
+            _, task_control_snapshot = begin_task_run(task_dir)
+            resumed = read_task_control(task_dir)
+        if terminal_resume or fresh_old_pack:
             # A new lifecycle run must not inherit PASS receipts from the
             # prior closed/blocked run now that source fingerprints are no
             # longer part of receipt authority.
             terminal_receipt_snapshot = reset_receipt_streams_for_new_run(task_dir)
-            resumed["status"] = "created"
-            resumed["runtime_verdict"] = "pending"
-            resumed["closed_at"] = None
-            resumed["updated"] = now_iso()
-            write_state(task_dir, resumed)
-        if execution_mode == "micro":
-            set_state_field(task_dir, "plan_session_state", "micro_loop")
+        if fresh_old_pack:
+            for name in OBSOLETE_TASK_ARTIFACTS:
+                path = os.path.join(task_dir, name)
+                obsolete_artifact_snapshot[path] = _strict_regular_text_snapshot(
+                    path, max_size=1024 * 1024,
+                )
+            for path, prior in obsolete_artifact_snapshot.items():
+                if prior["exists"]:
+                    os.unlink(path)
+        if execution_mode and resumed.get("execution_mode") != execution_mode:
+            resumed["execution_mode"] = execution_mode
+            write_task_control(task_dir, resumed)
+        if terminal_resume_status == "blocked":
+            blocked_path = os.path.join(task_dir, "BLOCKED.md")
+            blocked_artifact_snapshot[blocked_path] = _strict_regular_text_snapshot(
+                blocked_path, max_size=256 * 1024,
+            )
+            try:
+                os.unlink(blocked_path)
+            except FileNotFoundError:
+                pass
     except Exception:
         rollback_new_start()
         raise
@@ -373,15 +404,6 @@ def handle_task_start(args: dict) -> dict:
             })
     try:
         write_active_marker(repo_root, task_dir)
-        if terminal_resume_status == "closed":
-            clear_task_close_attestation(task_dir)
-            if os.path.lexists(os.path.join(task_dir, "TASK_CLOSE_RECEIPT.json")):
-                raise RuntimeError("task close attestation cleanup unavailable")
-        elif terminal_resume_status == "blocked":
-            try:
-                os.unlink(os.path.join(task_dir, "BLOCKED.md"))
-            except FileNotFoundError:
-                pass
     except Exception:
         rollback_new_start()
         raise
@@ -463,8 +485,8 @@ def handle_goal_finish(args: dict) -> dict:
 def handle_task_context(args: dict) -> dict:
     ti = _req(args, "task_id")
     td = canonical_task_dir(task_id=ti, repo_root=_control_root())
-    if not _validated_task_state(td):
-        return _invalid_task_state_error("task_context", td)
+    if not _validated_task_control(td):
+        return _invalid_task_control_error("task_context", td)
     snapshot = receipt_snapshot(td)
     ctx = emit_compact_context(td, snapshot)
     if "error" in ctx:
@@ -480,8 +502,8 @@ def handle_task_context(args: dict) -> dict:
 def handle_task_verify(args: dict) -> dict:
     ti = _req(args, "task_id")
     td = canonical_task_dir(task_id=ti, repo_root=_control_root())
-    if not _validated_task_state(td):
-        return _invalid_task_state_error("task_verify", td)
+    if not _validated_task_control(td):
+        return _invalid_task_control_error("task_verify", td)
     verify_run = None
     if _truthy(args.get("run_commands")):
         max_workers_raw = args.get("max_workers")
@@ -492,26 +514,18 @@ def handle_task_verify(args: dict) -> dict:
             max_workers=max_workers,
         )
     snapshot = receipt_snapshot(td)
-    st = read_state(td)
-    effective_verdict = receipt_runtime_verdict(td, st, snapshot)
-    if (st.get("runtime_verdict") or "pending").upper() != effective_verdict:
-        set_state_field(td, "runtime_verdict", effective_verdict if effective_verdict != "PENDING" else "pending")
-
-    st = read_state(td)
+    st = read_task_control(td)
     rv = receipt_runtime_verdict(td, st, snapshot)
     review_verdict = receipt_review_verdict(td, st, snapshot)
     ctx = emit_compact_context(td, snapshot)
     payload = {
         "task_dir": td, "runtime_verdict": rv,
-        "touched_paths": st.get("touched_paths") or [],
         "next_action": ctx.get("next_action", ""),
         "missing_for_close": ctx.get("missing_for_close", []),
         "report_path": _task_artifact_rel(td, "RECEIPTS.jsonl"),
         "review_verdict": review_verdict,
         "required_review_lenses": required_review_lenses(td, st),
         "review_report_path": _task_artifact_rel(td, "RECEIPTS.jsonl"),
-        "stale": False,
-        "stale_path": "",
         "subagent_receipts": subagent_receipt_summary(td, snapshot),
         "review_receipts": review_receipt_summary(td, snapshot),
     }
@@ -523,8 +537,16 @@ def handle_task_verify(args: dict) -> dict:
 def handle_task_close(args: dict) -> dict:
     ti = _req(args, "task_id")
     td = canonical_task_dir(task_id=ti, repo_root=_control_root())
-    if not _validated_task_state(td):
-        return _invalid_task_state_error("task_close", td)
+    initial_control = _validated_task_control(td)
+    if not initial_control:
+        return _invalid_task_control_error("task_close", td)
+    initial_status = task_control_status(td, initial_control)
+    if initial_status != "open":
+        return _err(
+            "task_close blocked: task is not open",
+            data={"task_dir": td, "status": initial_status,
+                  "next_action": "Call task_start to begin a fresh task run."},
+        )
     with receipt_stream_transaction(td):
         snapshot = receipt_snapshot(td)
         def close_error(message, data):
@@ -533,19 +555,11 @@ def handle_task_close(args: dict) -> dict:
         control_root = find_harness_root(td) or find_repo_root(td)
         ctx = emit_compact_context(td, snapshot)
         missing = ctx.get("missing_for_close") or []
-        stale = bool(ctx.get("stale"))
-        stale_path = str(ctx.get("stale_path") or "")
         if missing:
             data = {
                 "task_dir": td, "missing_for_close": missing, "task_context": ctx,
-                "stale": stale, "stale_path": stale_path,
             }
             return close_error("task_close blocked", data)
-
-        if stale:
-            return close_error("task_close blocked: runtime verification stale — re-run task_verify", {
-                "task_dir": td, "stale_path": stale_path,
-            })
 
         try:
             receipt_fingerprint = receipt_stream_fingerprint(td, snapshot)
@@ -554,23 +568,19 @@ def handle_task_close(args: dict) -> dict:
                 "task_dir": td, "receipt_snapshot_unavailable": True,
             })
 
-        st = _validated_task_state(td)
+        st = _validated_task_control(td)
         if not st:
-            return _invalid_task_state_error("task_close", td)
-        preclose_state = dict(st)
+            return _invalid_task_control_error("task_close", td)
+        locked_status = task_control_status(td, st)
+        if locked_status != "open":
+            return close_error("task_close blocked: task changed terminal state", {
+                "task_dir": td, "status": locked_status,
+            })
+        preclose_control = dict(st)
         preclose_marker_snapshot = active_marker_snapshot(control_root)
-        st["status"] = "closed"
-        st["runtime_verdict"] = "PASS"
-        st["closed_at"] = now_iso()
-        st["updated"] = now_iso()
         try:
-            write_state(td, st)
-            write_task_close_attestation(
-                td,
-                st,
-                receipt_fingerprint=receipt_fingerprint,
-            )
-            clear_active_marker(control_root, td)
+            publish_task_close(td, st, receipt_fingerprint=receipt_fingerprint)
+            clear_active_marker(control_root, td, strict=True)
             if os.path.realpath(resolve_active_task_dir(control_root) or "") == os.path.realpath(td):
                 raise RuntimeError("active task marker cleanup unavailable")
 
@@ -583,8 +593,7 @@ def handle_task_close(args: dict) -> dict:
                     control_root, os.path.basename(td), status="closed", task_dir=td,
                 )
         except Exception as exc:
-            write_state(td, preclose_state)
-            clear_task_close_attestation(td)
+            write_task_control(td, preclose_control)
             restore_active_marker_snapshot(preclose_marker_snapshot)
             data = {"task_dir": td, "detail": str(exc)[:500]}
             if isinstance(exc, GitBindingError):
@@ -596,63 +605,65 @@ def handle_task_close(args: dict) -> dict:
                 })
             return close_error("task_close blocked: close publication failed", data)
 
-        st = read_state(td)
         return _ok({
-            "task_dir": td, "closed": True, "status": st.get("status"),
+            "task_dir": td, "closed": True, "status": "closed",
             "gate_artifact": _task_artifact_rel(td, "PLAN.md"),
         })
 
 
 def handle_task_blocked(args: dict) -> dict:
-    ti = _req(args, "task_id")
+    td = canonical_task_dir(task_id=_req(args, "task_id"), repo_root=_control_root())
+    st = _validated_task_control(td)
+    if not st:
+        return _invalid_task_control_error("task_blocked", td)
+    status = task_control_status(td, st)
+    if status != "open":
+        return _err(
+            "task_blocked refused: task is not open",
+            data={"task_dir": td, "status": status,
+                  "next_action": "Call task_start to begin a fresh task run."},
+        )
+    with receipt_stream_transaction(td):
+        return _handle_task_blocked_locked(args, td)
+
+
+def _handle_task_blocked_locked(args: dict, td: str) -> dict:
     reason = _req(args, "blocked_reason")
     unblock = _req(args, "unblock_condition")
-    td = canonical_task_dir(task_id=ti, repo_root=_control_root())
-    st = _validated_task_state(td)
+    st = _validated_task_control(td)
     if not st:
-        return _invalid_task_state_error("task_blocked", td)
+        return _invalid_task_control_error("task_blocked", td)
+    status = task_control_status(td, st)
+    if status != "open":
+        return _err(
+            "task_blocked refused: task is not open",
+            data={"task_dir": td, "status": status,
+                  "next_action": "Call task_start to begin a fresh task run."},
+        )
     blocked_md = (
         "# BLOCKED\n\n"
         f"## Blocked Reason\n{reason}\n\n"
         f"## Unblock Condition\n{unblock}\n\n"
         f"## Blocked At\n{now_iso()}\n"
     )
-    _atomic_write_text(os.path.join(td, "BLOCKED.md"), blocked_md)
-    st["status"] = "blocked"
-    st["runtime_verdict"] = "BLOCKED_ENV"
-    st["updated"] = now_iso()
-    write_state(td, st)
-    clear_active_marker(_control_root(), td)
+    blocked_path = os.path.join(td, "BLOCKED.md")
+    marker_snapshot = active_marker_snapshot(_control_root())
+    blocked_snapshot = {
+        blocked_path: _strict_regular_text_snapshot(blocked_path, max_size=256 * 1024)
+    }
+    try:
+        _atomic_write_text(blocked_path, blocked_md)
+        clear_active_marker(_control_root(), td, strict=True)
+    except Exception:
+        _restore_text_snapshots(blocked_snapshot)
+        restore_active_marker_snapshot(marker_snapshot)
+        raise
     return _ok({
         "task_dir": td,
         "status": "blocked",
         "runtime_verdict": "BLOCKED_ENV",
         "blocked_artifact": _task_artifact_rel(td, "BLOCKED.md"),
     })
-
-
-def _plan_meta_dict(td: str, artifact: str, meta: dict | None = None) -> dict:
-    out: dict[str, Any] = {
-        "artifact": artifact,
-        "task_id": os.path.basename(os.path.abspath(td)),
-        "author_role": "plan-skill",
-        "written_at": now_iso(),
-    }
-    if meta:
-        out["plan_meta"] = meta
-    return out
-
-
-def _coerce_meta(raw: Any) -> dict:
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str) and raw.strip():
-        try:
-            parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else {}
-        except json.JSONDecodeError:
-            return {}
-    return {}
 
 
 def _nonempty_artifact_content(value: str, *, artifact: str, filename: str) -> str | dict:
@@ -740,22 +751,72 @@ def _record_write(path: str, text: str, written: list[str], bytes_written: dict[
 
 
 def handle_write_plan(args: dict) -> dict:
-    """Write the minimal task-local planning artifacts in one MCP call."""
+    allowed_args = {
+        "task_id", "task_dir", "plan", "audit", "review_lenses", "qa_lenses",
+    }
+    unknown_args = sorted(set(args) - allowed_args)
+    if unknown_args:
+        return _err(
+            "write_plan received unsupported fields",
+            data={"unsupported": unknown_args, "allowed": sorted(allowed_args), "written": []},
+        )
     td = _resolve_td(args)
-    if not _validated_task_state(td):
-        return _invalid_task_state_error("write_plan", td)
+    control = _validated_task_control(td)
+    if not control:
+        return _invalid_task_control_error("write_plan", td)
+    status = task_control_status(td, control)
+    if status != "open":
+        return _err(
+            "write_plan refused: task is not open",
+            data={"task_dir": td, "status": status, "written": [],
+                  "next_action": "Call task_start to begin a fresh task run."},
+        )
+    preflight = _prepare_write_plan(args, td, control)
+    if isinstance(preflight, dict) and preflight.get("isError"):
+        return preflight
+    with receipt_stream_transaction(td):
+        return _handle_write_plan_locked(args, td, preflight=preflight)
+
+
+def _handle_write_plan_locked(args: dict, td: str, *, preflight=None) -> dict:
+    """Write the minimal task-local planning artifacts in one MCP call."""
+    control = _validated_task_control(td)
+    if not control:
+        return _invalid_task_control_error("write_plan", td)
+    status = task_control_status(td, control)
+    if status != "open":
+        return _err(
+            "write_plan refused: task is not open",
+            data={"task_dir": td, "status": status, "written": [],
+                  "next_action": "Call task_start to begin a fresh task run."},
+        )
+    return _publish_write_plan(args, td, control, preflight)
+
+
+def _prepare_write_plan(args: dict, td: str, control: dict):
     raw_plan = args.get("plan")
     plan = raw_plan if isinstance(raw_plan, str) else ""
     raw_audit = args.get("audit")
     audit = raw_audit if isinstance(raw_audit, str) else None
-    meta = _coerce_meta(args.get("meta"))
+    candidate_control = dict(control)
+    for key in ("review_lenses", "qa_lenses"):
+        if key in args:
+            candidate_control[key] = args[key]
+    try:
+        # Validate the exact lens declarations before changing any artifact.
+        if not _validate_task_control(candidate_control):
+            raise ValueError("invalid or empty lens declaration")
+    except (TypeError, ValueError) as exc:
+        return _err(
+            f"write_plan refused invalid lens declarations: {exc}",
+            data={"written": [], "allowed_review_lenses": ["review-code", "review-security"],
+                  "allowed_qa_lenses": ["qa-api", "qa-browser", "qa-cli", "qa-desktop"]},
+        )
     checked_plan = _nonempty_artifact_content(plan, artifact="plan", filename="PLAN.md")
     if isinstance(checked_plan, dict):
         return checked_plan
-    plan_meta = json.dumps(_plan_meta_dict(td, "PLAN.md", meta), indent=2, ensure_ascii=False) + "\n"
     checked_audit = None
     audit_path = os.path.join(td, "AUDIT_TRAIL.md")
-    audit_content = None
     if audit is not None:
         checked_audit = _nonempty_artifact_content(audit, artifact="audit", filename="AUDIT_TRAIL.md")
         if isinstance(checked_audit, dict):
@@ -781,22 +842,65 @@ def handle_write_plan(args: dict) -> dict:
                 data={"artifact": "audit", "filename": "AUDIT_TRAIL.md", "written": [],
                       "next_action": "Replace the audit leaf with a regular repository file, then retry."},
             )
+    return control, candidate_control, checked_plan, audit_path, checked_audit
+
+
+def _publish_write_plan(args, td, control, preflight):
+    expected_control, candidate_control, checked_plan, audit_path, checked_audit = preflight
+    # Recheck the exact authority while holding the receipt transaction.
+    current = _validated_task_control(td)
+    if current != expected_control or current != control or task_control_status(td, current) != "open":
+        return _err(
+            "write_plan refused: task changed before publication",
+            data={"task_dir": td, "written": [],
+                  "next_action": "Call task_context and retry only if the task is open."},
+        )
+    audit_content = None
+    if checked_audit is not None:
+        try:
+            if os.path.isfile(audit_path):
+                existing = _read_regular_text_no_follow(audit_path)
+            elif os.path.lexists(audit_path):
+                raise ValueError("existing audit artifact is not a regular file")
+            else:
+                existing = ""
+        except (OSError, ValueError) as exc:
+            return _err(
+                f"write_plan refused unsafe AUDIT_TRAIL.md: {exc}",
+                data={"artifact": "audit", "filename": "AUDIT_TRAIL.md", "written": []},
+            )
         first_line = existing.lstrip("\n").split("\n")[0] if existing.strip() else ""
         has_header = first_line.startswith("| # |")
         if not existing.strip():
-            new_content = AUDIT_HEADER + checked_audit.rstrip("\n") + "\n"
+            audit_content = AUDIT_HEADER + checked_audit.rstrip("\n") + "\n"
         elif has_header:
-            new_content = existing.rstrip("\n") + "\n" + checked_audit.rstrip("\n") + "\n"
+            audit_content = existing.rstrip("\n") + "\n" + checked_audit.rstrip("\n") + "\n"
         else:
-            new_content = existing.rstrip("\n") + "\n\n" + AUDIT_HEADER + checked_audit.rstrip("\n") + "\n"
-        audit_content = new_content
-
+            audit_content = existing.rstrip("\n") + "\n\n" + AUDIT_HEADER + checked_audit.rstrip("\n") + "\n"
     written: list[str] = []
     bytes_written: dict[str, int] = {}
-    _record_write(os.path.join(td, "PLAN.md"), checked_plan, written, bytes_written)
-    _record_write(os.path.join(td, "PLAN.meta.json"), plan_meta, written, bytes_written)
-    if audit_content is not None:
-        _record_write(audit_path, audit_content, written, bytes_written)
+    plan_path = os.path.join(td, "PLAN.md")
+    control_path = task_control_file(td)
+    try:
+        snapshots = {
+            path: _strict_regular_text_snapshot(path, max_size=1024 * 1024)
+            for path in (plan_path, audit_path, control_path)
+        }
+        _record_write(plan_path, checked_plan, written, bytes_written)
+        if audit_content is not None:
+            _record_write(audit_path, audit_content, written, bytes_written)
+        write_task_control(td, candidate_control)
+        written.append("TASK.json")
+        bytes_written["TASK.json"] = len(
+            json.dumps(candidate_control, indent=2, sort_keys=True).encode("utf-8")
+        ) + 1
+    except Exception as exc:
+        if "snapshots" in locals():
+            _restore_text_snapshots(snapshots)
+        return _err(
+            f"write_plan failed without publishing a partial artifact bundle: {exc}",
+            data={"written": []},
+        )
 
     return _ok({
         "artifact": "plan",
@@ -841,7 +945,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "additionalProperties": False},
      "handler": handle_goal_finish},
     {"name": "task_start", "title": "Create or resume a task",
-     "description": "Create task scaffolding (7-field TASK_STATE) and return fresh context. Use directly for plain repo-mutating requests when no native goal context is active. Pass execution_mode='micro' for explicit no-plan develop->verify->close mode; verification remains mandatory.",
+     "description": "Create exact TASK.json scaffolding and return fresh context. Use directly for plain repo-mutating requests when no native goal context is active. Pass execution_mode='micro' for explicit no-plan develop->verify->close mode; verification remains mandatory.",
      "inputSchema": {"type": "object", "properties": {
          "task_dir": {"type": "string"}, "task_id": {"type": "string"},
          "slug": {"type": "string"}, "request_file": {"type": "string"},
@@ -859,7 +963,6 @@ TOOL_DEFS: list[dict[str, Any]] = [
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"},
          "run_commands": {"type": "boolean"},
-         "reconcile_acs": {"type": "boolean", "description": "Deprecated compatibility field; ignored."},
          "parallel": {"type": "boolean"},
          "max_workers": {"type": "integer"}},
          "required": ["task_id"], "additionalProperties": False},
@@ -871,7 +974,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "required": ["task_id"], "additionalProperties": False},
      "handler": handle_task_close},
     {"name": "task_blocked", "title": "Park a task on a real environment blocker",
-     "description": "Record BLOCKED_ENV, write BLOCKED.md, set status=blocked, and clear this session's active marker. This is not completion.",
+     "description": "Record BLOCKED_ENV in BLOCKED.md and clear this session's active marker. This is not completion.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"},
          "blocked_reason": {"type": "string"},
@@ -880,13 +983,13 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "additionalProperties": False},
      "handler": handle_task_blocked},
     {"name": "write_plan", "title": "Write task plan artifacts",
-     "description": "Write PLAN.md and PLAN.meta.json, with optional AUDIT_TRAIL.md. Legacy checks input is accepted but ignored.",
+     "description": "Write PLAN.md, optional AUDIT_TRAIL.md, and exact review/QA lens declarations in TASK.json.",
      "inputSchema": {"type": "object", "properties": {
          "task_id": {"type": "string"}, "task_dir": {"type": "string"},
          "plan": {"type": "string"},
-         "checks": {"type": "string"},
          "audit": {"type": "string"},
-         "meta": {"type": ["object", "string"]}},
+         "review_lenses": {"type": "array", "items": {"type": "string"}},
+         "qa_lenses": {"type": "array", "items": {"type": "string"}}},
          "required": ["plan"],
          "additionalProperties": False},
      "handler": handle_write_plan},

@@ -82,23 +82,30 @@ def _build_scratch_repo(base: Path, *,
     if active_task_id:
         task_dir = tasks / active_task_id
         task_dir.mkdir(parents=True, exist_ok=True)
-        (task_dir / "TASK_RUN.json").write_text(
-            json.dumps({"task_run_id": RUN_ID, "started_at": "2026-08-12T00:00:00Z"}) + "\n",
-            encoding="utf-8",
-        )
+        control = {
+            "task_run_id": RUN_ID,
+            "started_at": "2026-08-12T00:00:00Z",
+            "execution_mode": "standard",
+            "review_lenses": ["review-code"],
+            "qa_lenses": ["qa-cli"],
+            "close_receipt_fingerprint": None,
+        }
+        if "security" in active_task_id:
+            control["review_lenses"].append("review-security")
         if plan:
             (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
         if task_state is not None:
-            (task_dir / "TASK_STATE.yaml").write_text(task_state, encoding="utf-8")
+            # Callers use this switch to request malformed control or security
+            # review routing; legacy status/touched-path values are ignored.
+            if "not valid" in task_state:
+                (task_dir / "TASK.json").write_text(task_state, encoding="utf-8")
+            elif "security_review: required" in task_state:
+                control["review_lenses"].append("review-security")
+                (task_dir / "TASK.json").write_text(json.dumps(control) + "\n", encoding="utf-8")
+            else:
+                (task_dir / "TASK.json").write_text(json.dumps(control) + "\n", encoding="utf-8")
         else:
-            tp_block = "[]" if not touched_paths else "\n" + "\n".join(f"  - {p}" for p in touched_paths)
-            (task_dir / "TASK_STATE.yaml").write_text(
-                f"task_id: {active_task_id}\nstatus: implementing\n"
-                f"runtime_verdict: PASS\ntouched_paths: {tp_block}\n"
-                f"plan_session_state: closed\nclosed_at: null\n"
-                f"updated: 2026-04-19T00:00:00Z\n",
-                encoding="utf-8",
-            )
+            (task_dir / "TASK.json").write_text(json.dumps(control) + "\n", encoding="utf-8")
         if write_receipt:
             (task_dir / "RECEIPTS.jsonl").write_text(
                 json.dumps(_receipt(event="started", lens="qa-cli", agent_id="agent-1")) + "\n",
@@ -215,8 +222,7 @@ class TestPromptMemory(unittest.TestCase):
                 task_state="not valid yaml\n:::\n",
             )
             r = _invoke(str(base))
-        # read_state tolerates malformed input; may emit minimal block or empty.
-        # Both are acceptable; do not regress on a hard crash.
+        # Invalid exact TASK.json fails closed without crashing the hook.
         self.assertEqual(r.returncode, 0)
 
     # ---- AC-001: happy path shape ----
@@ -230,13 +236,13 @@ class TestPromptMemory(unittest.TestCase):
         self.assertTrue(r.stdout.startswith("[harness-doc-gate] "), r.stdout)
         self.assertIn("[harness-context] ", r.stdout)
         self.assertIn("task=TASK__happy", r.stdout)
-        self.assertIn("status=implementing", r.stdout)
-        self.assertIn("verdict=PASS", r.stdout)
+        self.assertIn("status=open", r.stdout)
+        self.assertIn("recorded_verdict=PENDING", r.stdout)
         # No CHECKS / notes → omit those sections
         self.assertNotIn("open=", r.stdout)
         self.assertNotIn("suspect=", r.stdout)
 
-    def test_pending_verification_injects_automatic_qa_sequence(self):
+    def test_pending_review_injects_review_sequence_before_qa(self):
         state = (
             "task_id: TASK__qa-prompt\nstatus: implementing\n"
             "runtime_verdict: pending\ntouched_paths: []\n"
@@ -250,13 +256,9 @@ class TestPromptMemory(unittest.TestCase):
             r = _invoke(str(base))
 
         self.assertEqual(r.returncode, 0)
-        self.assertIn("[harness-qa]", r.stdout)
-        self.assertIn("ALL_TOOLS", r.stdout)
-        self.assertIn("spawn_agent", r.stdout)
-        self.assertIn("await status-map", r.stdout)
-        self.assertIn("list_agents only if wait omitted identities", r.stdout)
-        self.assertIn("explicit VERDICT", r.stdout)
-        self.assertIn("task_verify", r.stdout)
+        self.assertIn("[harness-review]", r.stdout)
+        self.assertIn("spawn+await", r.stdout)
+        self.assertNotIn("[harness-qa]", r.stdout)
         self.assertIn("start≠PASS", r.stdout)
 
     def test_prompt_hook_never_invokes_git(self):
@@ -631,7 +633,7 @@ class TestPromptMemory(unittest.TestCase):
         self.assertNotIn(".hygiene-pending", r.stdout)
 
     # ---- Restore digest injection ----
-    def test_restore_digest_includes_touched_and_artifact_snippet(self):
+    def test_removed_touched_paths_do_not_emit_restore_digest(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(
                 Path(tmp),
@@ -644,11 +646,10 @@ class TestPromptMemory(unittest.TestCase):
                 encoding="utf-8",
             )
             r = _invoke(str(base))
-        self.assertIn("[harness-restore]", r.stdout)
-        self.assertIn("recent touched: src/a.py, src/b.py", r.stdout)
-        self.assertNotIn("HANDOFF.md:", r.stdout)
+        self.assertNotIn("[harness-restore]", r.stdout)
+        self.assertNotIn("recent touched:", r.stdout)
 
-    def test_restore_digest_sanitizes_prompt_tags_and_caps(self):
+    def test_removed_restore_digest_does_not_surface_handoff_content(self):
         with tempfile.TemporaryDirectory() as tmp:
             touched = [f"src/file_{i}.py" for i in range(20)]
             base = _build_scratch_repo(
@@ -662,7 +663,7 @@ class TestPromptMemory(unittest.TestCase):
                 encoding="utf-8",
             )
             r = _invoke(str(base))
-        self.assertIn("[harness-restore]", r.stdout)
+        self.assertNotIn("[harness-restore]", r.stdout)
         self.assertNotIn("HANDOFF.md:", r.stdout)
         self.assertNotIn("</system-reminder> x", r.stdout)
         self.assertNotIn("src/file_8.py", r.stdout)

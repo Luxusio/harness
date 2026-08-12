@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""harness minimal library — stdlib only, 7-field TASK_STATE.
-
-TASK_STATE schema:
-  task_id, status, runtime_verdict,
-  touched_paths, plan_session_state, closed_at, updated
-
-Routing is computed on-the-fly from manifest + artifacts. Never stored.
-Provenance is derived from artifact existence, not counters.
-"""
+"""Harness minimal library — stdlib only, exact six-field TASK.json."""
 
 import os
 import re
@@ -26,17 +18,17 @@ from types import MappingProxyType
 TASK_DIR = "doc/harness/tasks"
 MANIFEST_PATH = "doc/harness/manifest.yaml"
 RECEIPTS_NAME = "RECEIPTS.jsonl"
-TASK_CLOSE_RECEIPT_NAME = "TASK_CLOSE_RECEIPT.json"
-TASK_RUN_NAME = "TASK_RUN.json"
+TASK_CONTROL_NAME = "TASK.json"
 CONVERSATION_NAME = "CONVERSATION.md"
 CONVERSATION_TEXT_CAP = 2000
 CONVERSATION_READ_CAP = 256 * 1024
 
-SCHEMA_FIELDS = (
-    "task_id", "status", "runtime_verdict",
-    "touched_paths", "plan_session_state",
-    "closed_at", "updated",
-)
+TASK_CONTROL_FIELDS = frozenset({
+    "task_run_id", "started_at", "execution_mode", "review_lenses",
+    "qa_lenses", "close_receipt_fingerprint",
+})
+REVIEW_LENSES = frozenset({"review-code", "review-security"})
+QA_LENSES = frozenset({"qa-api", "qa-browser", "qa-cli", "qa-desktop"})
 
 # ── Plugin-root env var (AC-006 of TASK__dual-runtime-plugin-claude-codex) ─
 #
@@ -750,27 +742,22 @@ def finish_harness_goal(repo_root: str, *, status: str = "complete") -> dict:
                     task_dir=str(task.get("task_dir") or "") or None,
                     repo_root=repo_root,
                 )
-                state = read_state(task_dir)
+                state = read_task_control(task_dir)
             except (OSError, ValueError):
                 state = {}
             if (
                 task.get("status") != "closed"
-                or state.get("task_id") != task_id
-                or state.get("status") != "closed"
-                or str(state.get("runtime_verdict") or "").upper() != "PASS"
-                or not task_close_attestation_valid(task_dir, state)
+                or task_control_status(task_dir, state) != "closed"
             ):
                 blockers.append(task_id or "<missing task_id>")
             else:
                 validated.append((task_id, task_dir))
         if not blockers:
             for task_id, task_dir in validated:
-                final_state = read_state(task_dir)
+                final_state = read_task_control(task_dir)
                 if (
-                    final_state.get("task_id") != task_id
-                    or final_state.get("status") != "closed"
-                    or str(final_state.get("runtime_verdict") or "").upper() != "PASS"
-                    or not task_close_attestation_valid(task_dir, final_state)
+                    not final_state
+                    or task_control_status(task_dir, final_state) != "closed"
                 ):
                     blockers.append(task_id)
         if blockers:
@@ -1102,114 +1089,172 @@ def set_scalar_field(frontmatter: str, field: str, value: str) -> str:
     return new_fm + f"{field}: {value}\n"
 
 
-# ── Task state read/write ────────────────────────────────────────────────
+# ── Task control read/write ──────────────────────────────────────────────
 
 
-def state_file(task_dir):
-    return os.path.join(task_dir, "TASK_STATE.yaml")
+def task_control_file(task_dir):
+    return os.path.join(task_dir, TASK_CONTROL_NAME)
 
 
-def read_state(task_dir):
-    """Read all fields from TASK_STATE.yaml."""
-    path = state_file(task_dir)
-    result = {}
-    text = _read_regular_text_file(path, max_size=256 * 1024)
-    if not text:
-        return result
-    lines = text.splitlines()
-    for field in SCHEMA_FIELDS:
-        if field == "touched_paths":
-            prefix = field + ":"
-            result[field] = []
-            for i, line in enumerate(lines):
-                if not line.startswith(prefix):
-                    continue
-                rest = line[len(prefix):].strip()
-                if rest == "[]":
-                    break
-                for item_line in lines[i + 1:]:
-                    match = re.match(r"^\s+-\s+(.*)", item_line)
-                    if not match:
-                        break
-                    result[field].append(match.group(1).strip().strip('"').strip("'"))
-                break
-        else:
-            prefix = field + ":"
-            result[field] = None
-            for line in lines:
-                if line.startswith(prefix):
-                    value = line[len(prefix):].strip()
-                    if value not in ("null", "~", "", "[]"):
-                        result[field] = value.strip('"').strip("'")
-                    break
-    return result
+def _task_control_lenses(value, allowed, *, required=()):
+    if (
+        not isinstance(value, list)
+        or not value
+        or any(not isinstance(item, str) or item not in allowed for item in value)
+        or len(value) != len(set(value))
+        or any(item not in value for item in required)
+    ):
+        return None
+    return list(value)
 
 
-def write_state(task_dir, fields):
-    """Write TASK_STATE.yaml preserving field order. Atomic via tempfile."""
-    path = state_file(task_dir)
-    os.makedirs(task_dir, exist_ok=True)
-    content = []
-    for field in SCHEMA_FIELDS:
-        content.append(f"{field}: {_yaml_fmt(fields.get(field))}")
-    text = "\n".join(content) + "\n"
-    fd, tmp = tempfile.mkstemp(dir=task_dir, prefix=".state.", suffix=".tmp")
+def _validate_task_control(data):
+    if not isinstance(data, dict) or set(data) != TASK_CONTROL_FIELDS:
+        return {}
+    run_id = data.get("task_run_id")
+    started_at = data.get("started_at")
+    mode = data.get("execution_mode")
+    close = data.get("close_receipt_fingerprint")
+    if not isinstance(started_at, str) or not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z", started_at,
+    ):
+        return {}
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+        parsed_start = datetime.fromisoformat(str(started_at).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return {}
+    review = _task_control_lenses(
+        data.get("review_lenses"), REVIEW_LENSES, required=("review-code",),
+    )
+    qa = _task_control_lenses(data.get("qa_lenses"), QA_LENSES)
+    if (
+        not isinstance(run_id, str)
+        or not re.fullmatch(r"[0-9a-f]{32}", run_id)
+        or parsed_start.utcoffset() != timezone.utc.utcoffset(parsed_start)
+        or mode not in {"standard", "micro"}
+        or review is None
+        or qa is None
+        or (close is not None and (
+            not isinstance(close, str)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", close)
+        ))
+    ):
+        return {}
+    return {
+        "task_run_id": run_id,
+        "started_at": started_at,
+        "execution_mode": mode,
+        "review_lenses": review,
+        "qa_lenses": qa,
+        "close_receipt_fingerprint": close,
+    }
+
+
+def _read_task_control_text(path):
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        before = os.lstat(path)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.getuid()
+            or before.st_nlink != 1
+            or stat.S_IMODE(before.st_mode) & 0o022
+            or before.st_size > 16 * 1024
+        ):
+            return ""
+        fd = os.open(path, flags)
+    except OSError:
+        return ""
+    try:
+        opened = os.fstat(fd)
+        identity = (
+            opened.st_dev, opened.st_ino, opened.st_size, opened.st_mode,
+            opened.st_uid, opened.st_nlink, opened.st_mtime_ns, opened.st_ctime_ns,
+        )
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            return ""
+        chunks = []
+        while True:
+            chunk = os.read(fd, 4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(fd)
+        if identity != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mode,
+            after.st_uid, after.st_nlink, after.st_mtime_ns, after.st_ctime_ns,
+        ):
+            return ""
+        return b"".join(chunks).decode("utf-8")
+    except (OSError, UnicodeError):
+        return ""
+    finally:
+        os.close(fd)
+
+
+def read_task_control(task_dir):
+    """Read the one exact, owner-controlled task authority or fail closed."""
+    text = _read_task_control_text(task_control_file(task_dir))
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate TASK.json key: {key}")
+            result[key] = value
+        return result
+    try:
+        data = json.loads(text, object_pairs_hook=unique_object) if text else {}
+    except (TypeError, ValueError):
+        return {}
+    return _validate_task_control(data)
+
+
+def write_task_control(task_dir, control):
+    """Atomically publish one exact TASK.json value."""
+    validated = _validate_task_control(control)
+    if not validated:
+        raise ValueError("invalid exact TASK.json control value")
+    path = task_control_file(task_dir)
+    os.makedirs(task_dir, exist_ok=True)
+    if os.path.lexists(path) and not read_task_control(task_dir):
+        raise RuntimeError("existing TASK.json is unsafe or invalid")
+    _atomic_text_write(path, json.dumps(validated, indent=2, sort_keys=True) + "\n")
     return True
 
 
-def set_state_field(task_dir, field, value):
-    """Set a single field, rewriting the file."""
-    fields = read_state(task_dir)
-    if not fields:
-        return False
-    fields[field] = value
-    fields["updated"] = now_iso()
-    return write_state(task_dir, fields)
-
-
-def task_run_file(task_dir):
-    return os.path.join(task_dir, TASK_RUN_NAME)
-
-
-def read_task_run(task_dir):
-    """Read the non-Git lifecycle generation bound to current receipts."""
-    text = _read_regular_text_file(task_run_file(task_dir), max_size=16 * 1024)
-    try:
-        data = json.loads(text) if text else {}
-    except (TypeError, ValueError):
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    run_id = str(data.get("task_run_id") or "")
-    started_at = str(data.get("started_at") or "")
-    if not re.fullmatch(r"[0-9a-f]{32}", run_id) or not started_at:
-        return {}
-    return {"task_run_id": run_id, "started_at": started_at}
+def _new_task_control(*, execution_mode="standard"):
+    return {
+        "task_run_id": secrets.token_hex(16),
+        "started_at": datetime.now(timezone.utc).isoformat(
+            timespec="microseconds"
+        ).replace("+00:00", "Z"),
+        "execution_mode": execution_mode,
+        "review_lenses": ["review-code"],
+        "qa_lenses": ["qa-cli"],
+        "close_receipt_fingerprint": None,
+    }
 
 
 def begin_task_run(task_dir):
-    """Rotate the lifecycle generation and return an exact rollback snapshot."""
-    path = task_run_file(task_dir)
+    """Rotate TASK.json run identity and clear terminal authority."""
+    path = task_control_file(task_dir)
     snapshot = {path: _strict_regular_text_snapshot(path, max_size=16 * 1024)}
-    started_at = datetime.now(timezone.utc).isoformat(timespec="microseconds").replace(
-        "+00:00", "Z"
-    )
-    payload = {"task_run_id": secrets.token_hex(16), "started_at": started_at}
-    _atomic_text_write(path, json.dumps(payload, sort_keys=True) + "\n")
+    current = read_task_control(task_dir)
+    if not current:
+        raise RuntimeError("valid TASK.json required to rotate task run")
+    payload = dict(current)
+    payload.update({
+        "task_run_id": secrets.token_hex(16),
+        "started_at": datetime.now(timezone.utc).isoformat(
+            timespec="microseconds"
+        ).replace("+00:00", "Z"),
+        "close_receipt_fingerprint": None,
+    })
+    write_task_control(task_dir, payload)
     return payload, snapshot
 
 
-def restore_task_run(snapshot):
+def restore_task_control(snapshot):
     _restore_text_snapshots(snapshot)
 
 
@@ -1560,7 +1605,7 @@ def write_active_marker(repo_root, task_dir, session_id=None):
     os.makedirs(tasks_dir, exist_ok=True)
     os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
     sid = current_session_id() if session_id is None else sanitize_session_id(session_id)
-    task_run = read_task_run(task_dir)
+    task_run = read_task_control(task_dir)
     payload = {
         "session_id": sid,
         "task_dir": task_dir,
@@ -1582,6 +1627,22 @@ def write_active_marker(repo_root, task_dir, session_id=None):
             pass
         raise
     _atomic_text_write(_legacy_active_path(repo_root), task_dir)
+
+
+def active_task_binding_matches(repo_root, task_dir, control=None, session_id=None):
+    """Require the current session marker to match the exact TASK.json generation."""
+    control = control or read_task_control(task_dir)
+    if not control or task_control_status(task_dir, control) != "open":
+        return False
+    sid = current_session_id() if session_id is None else sanitize_session_id(session_id)
+    marker = _read_session_marker(_session_active_path(repo_root, sid), sid)
+    return bool(
+        marker
+        and os.path.realpath(str(marker.get("task_dir") or "")) == os.path.realpath(task_dir)
+        and marker.get("task_id") == os.path.basename(os.path.normpath(task_dir))
+        and marker.get("task_run_id") == control.get("task_run_id")
+        and marker.get("run_started_at") == control.get("started_at")
+    )
 
 
 def active_marker_snapshot(repo_root, session_id=None):
@@ -1635,16 +1696,11 @@ def _live_active_task_dir(repo_root, value, *, require_live_state=True):
     except ValueError:
         return ""
     if not require_live_state:
-        # The legacy .active marker predates TASK_STATE and is intentionally
-        # conservative: an explicit canonical marker keeps Stop/prewrite gates
-        # engaged even for old or partially-created task packs.
+        # The repository-wide marker is conservative for partially-created
+        # packs; exact TASK.json validation still gates lifecycle authority.
         return td
-    state = read_state(td)
-    if str(state.get("status") or "").lower() not in {
-        "created", "planning", "implementing", "verifying"
-    }:
-        return ""
-    if state.get("task_id") != os.path.basename(td):
+    control = read_task_control(td)
+    if not control or task_control_status(td, control) != "open":
         return ""
     return td
 
@@ -1695,12 +1751,15 @@ def iter_active_task_dirs(repo_root=None):
         yield legacy
 
 
-def clear_active_marker(repo_root, task_dir=None, session_id=None):
+def clear_active_marker(repo_root, task_dir=None, session_id=None, *, strict=False):
     """Clear this session's active marker and matching legacy marker."""
     try:
         os.unlink(_session_active_path(repo_root, session_id))
-    except (OSError, ValueError):
+    except FileNotFoundError:
         pass
+    except (OSError, ValueError):
+        if strict:
+            raise
     legacy = _legacy_active_path(repo_root)
     try:
         if os.path.isfile(legacy):
@@ -1708,41 +1767,47 @@ def clear_active_marker(repo_root, task_dir=None, session_id=None):
             if task_dir is None or os.path.normpath(current) == os.path.normpath(task_dir):
                 os.unlink(legacy)
     except OSError:
-        pass
+        if strict:
+            raise
+    if strict:
+        try:
+            sid = current_session_id() if session_id is None else sanitize_session_id(session_id)
+            session_data = _read_session_marker(_session_active_path(repo_root, sid), sid)
+        except ValueError:
+            session_data = {}
+        if session_data and (
+            task_dir is None
+            or os.path.normpath(str(session_data.get("task_dir") or ""))
+            == os.path.normpath(task_dir)
+        ):
+            raise RuntimeError("active session marker cleanup unavailable")
+        legacy_target = _read_legacy_active(repo_root)
+        if legacy_target and (
+            task_dir is None
+            or os.path.normpath(legacy_target) == os.path.normpath(task_dir)
+        ):
+            raise RuntimeError("legacy active marker cleanup unavailable")
 
 
 # ── Scaffold ─────────────────────────────────────────────────────────────
 
 
-def ensure_task_scaffold(task_dir, task_id, request_text="", repo_root=None):
-    """Create task dir with minimal 7-field TASK_STATE.yaml. Preserves existing state on resume."""
+def ensure_task_scaffold(
+    task_dir, task_id, request_text="", repo_root=None, execution_mode="standard",
+):
+    """Create a new exact TASK.json; existing valid controls are resumed."""
     os.makedirs(task_dir, exist_ok=True)
     expected_tid = _normalize_task_id(task_id, task_dir=task_dir) or task_id
-    if os.path.lexists(state_file(task_dir)):
-        existing = read_state(task_dir)
-        if existing.get("task_id") != expected_tid:
-            raise ValueError(
-                "existing TASK_STATE.yaml must be a regular file whose task_id matches its canonical directory"
-            )
-        created = [state_file(task_dir)]
+    path = task_control_file(task_dir)
+    if os.path.lexists(path):
+        if not read_task_control(task_dir):
+            raise ValueError("existing TASK.json must be an exact safe task control")
+        created = [path]
         return {"created": created, "task_dir": task_dir, "task_id": expected_tid}
-    tid = expected_tid
-    fields = {
-        "task_id": tid,
-        "status": "created",
-        "runtime_verdict": "pending",
-        "touched_paths": [],
-        "plan_session_state": "closed",
-        "closed_at": None,
-        "updated": now_iso(),
-    }
     created = []
     try:
-        write_state(task_dir, fields)
-        created.append(state_file(task_dir))
-        _, run_snapshot = begin_task_run(task_dir)
-        if not run_snapshot[task_run_file(task_dir)]["exists"]:
-            created.append(task_run_file(task_dir))
+        write_task_control(task_dir, _new_task_control(execution_mode=execution_mode))
+        created.append(path)
         if request_text:
             req_path = os.path.join(task_dir, "REQUEST.md")
             if not os.path.isfile(req_path) or os.path.islink(req_path):
@@ -1755,7 +1820,7 @@ def ensure_task_scaffold(task_dir, task_id, request_text="", repo_root=None):
             except FileNotFoundError:
                 pass
         raise
-    return {"created": created, "task_dir": task_dir, "task_id": tid}
+    return {"created": created, "task_dir": task_dir, "task_id": expected_tid}
 
 
 # ── Manifest ─────────────────────────────────────────────────────────────
@@ -1764,227 +1829,6 @@ def ensure_task_scaffold(task_dir, task_id, request_text="", repo_root=None):
 def read_manifest_field(field, repo_root=None):
     repo_root = repo_root or find_harness_root() or find_repo_root()
     return yaml_field(field, os.path.join(repo_root, MANIFEST_PATH))
-
-
-# AC-002: browser-QA close gate helpers (2026-05-12 retro)
-_FRONTEND_EXT = (".tsx", ".jsx", ".vue", ".svelte", ".html", ".css", ".scss")
-_FRONTEND_PATH_FRAGMENTS = ("/components/", "/pages/", "/views/", "/routes/")
-_API_EXT = (".py", ".rb", ".go", ".java", ".kt", ".ts", ".js", ".php", ".cs")
-_API_PATH_FRAGMENTS = (
-    "/api/", "/apis/", "/controllers/", "/controller/", "/routes/",
-    "/handlers/", "/handler/", "/endpoints/", "/endpoint/",
-)
-_CLI_PATH_FRAGMENTS = (
-    "/cli/", "/cmd/", "/commands/", "/bin/", "/scripts/",
-)
-_CLI_BASENAME_HINTS = ("cli", "command", "commands", "main")
-_DESKTOP_PATH_FRAGMENTS = (
-    "/desktop/", "/gui/", "/native/", "/electron/", "/tauri/", "/qt/", "/gtk/",
-    "/windows/", "/window/", "/menus/", "/dialogs/",
-)
-_REQ_REF_RE = re.compile(r"doc/[^)\]\s`'\"]+/REQ__[A-Za-z0-9_.-]+\.md")
-_DURABLE_DOC_RE = re.compile(r"^doc/[^/]+/(?:REQ|GUIDE|ADR|POLICY)__[^/]+\.md$")
-_UX_VERDICT_RE = re.compile(
-    r"^## ux-(cli|api|browser|desktop) verdict: (PASS|FAIL|BLOCKED_ENV|PENDING)\s*$",
-    re.MULTILINE,
-)
-
-
-def _read_nested_manifest_field(repo_root, *keys):
-    """Two-level YAML lookup for nested manifest blocks like ``qa.browser_qa_supported``.
-
-    Stdlib only — scans the manifest line-by-line, tracking the current top-level
-    block. Returns the raw value string for the second-level key under the
-    given top-level key, or None if not found.
-    """
-    if not keys or len(keys) != 2:
-        return None
-    top, sub = keys
-    path = os.path.join(repo_root, MANIFEST_PATH)
-    if not os.path.isfile(path):
-        return None
-    in_block = False
-    top_prefix = top + ":"
-    sub_prefix = "  " + sub + ":"  # 2-space indent under block
-    try:
-        text = _read_regular_text_file(path, max_size=256 * 1024)
-        for line in text.splitlines(keepends=True):
-            stripped = line.rstrip("\n")
-            if stripped.startswith(top_prefix):
-                in_block = True
-                continue
-            if in_block:
-                if stripped and not stripped.startswith(" ") and not stripped.startswith("#"):
-                    in_block = False
-                    continue
-                if stripped.startswith(sub_prefix):
-                    val = stripped[len(sub_prefix):].strip()
-                    if val in ("null", "~", "", "[]"):
-                        return None
-                    return val.strip('"').strip("'")
-    except Exception:
-        return None
-    return None
-
-
-def _read_top_manifest_field(repo_root, key):
-    path = os.path.join(repo_root, MANIFEST_PATH)
-    if not os.path.isfile(path):
-        return None
-    prefix = key + ":"
-    try:
-        text = _read_regular_text_file(path, max_size=256 * 1024)
-        for line in text.splitlines(keepends=True):
-            # Only column-zero keys are top-level. Stripping leading
-            # whitespace let nested metadata.type override QA routing.
-            stripped = line.rstrip("\n")
-            if stripped.startswith(prefix):
-                val = stripped[len(prefix):].strip()
-                if val in ("null", "~", "", "[]"):
-                    return None
-                return val.strip('"').strip("'")
-    except Exception:
-        return None
-    return None
-
-
-def _manifest_bool(repo_root, top, sub=None):
-    try:
-        if sub is None:
-            val = _read_top_manifest_field(repo_root, top)
-        else:
-            val = _read_nested_manifest_field(repo_root, top, sub)
-            if val is None:
-                val = _read_top_manifest_field(repo_root, sub)
-    except Exception:
-        val = None
-    return (val or "").strip().lower() == "true"
-
-
-def _frontend_touched(touched_paths):
-    """Return True if any touched path looks like a user-facing frontend file."""
-    for p in touched_paths or []:
-        if not isinstance(p, str):
-            continue
-        lp = p.lower()
-        if any(lp.endswith(ext) for ext in _FRONTEND_EXT):
-            return True
-        if any(frag in lp for frag in _FRONTEND_PATH_FRAGMENTS):
-            return True
-    return False
-
-
-def _cli_touched(touched_paths):
-    """Return True if touched paths look like user-facing CLI surface."""
-    for p in touched_paths or []:
-        if not isinstance(p, str):
-            continue
-        lp = "/" + p.lower().lstrip("./")
-        base = os.path.splitext(os.path.basename(lp))[0]
-        if any(frag in lp for frag in _CLI_PATH_FRAGMENTS):
-            return True
-        if base in _CLI_BASENAME_HINTS or any(hint in base for hint in ("_cli", "-cli")):
-            return True
-    return False
-
-
-def _desktop_touched(touched_paths):
-    """Return True if touched paths look like native desktop GUI surface."""
-    for p in touched_paths or []:
-        if not isinstance(p, str):
-            continue
-        lp = "/" + p.lower().lstrip("./")
-        if any(frag in lp for frag in _DESKTOP_PATH_FRAGMENTS):
-            return True
-    return False
-
-
-def _api_touched(touched_paths):
-    """Return True if any touched path looks like an externally consumed API file."""
-    for p in touched_paths or []:
-        if not isinstance(p, str):
-            continue
-        lp = p.lower()
-        if any(frag in lp for frag in _API_PATH_FRAGMENTS) and any(
-            lp.endswith(ext) for ext in _API_EXT
-        ):
-            return True
-    return False
-
-
-def _required_ux_lenses(repo_root, touched_paths):
-    """Return UX lenses required by manifest opt-in and touched surface."""
-    ux_supported = _manifest_bool(repo_root, "qa", "ux_review_supported")
-    browser_supported = _manifest_bool(repo_root, "qa", "browser_qa_supported")
-    desktop_supported = _manifest_bool(repo_root, "qa", "desktop_qa_supported")
-
-    lenses = []
-    if (ux_supported or browser_supported) and _frontend_touched(touched_paths):
-        lenses.append("browser")
-    if ux_supported and _api_touched(touched_paths):
-        lenses.append("api")
-    if ux_supported and _cli_touched(touched_paths):
-        lenses.append("cli")
-    if (ux_supported or desktop_supported) and _desktop_touched(touched_paths):
-        lenses.append("desktop")
-    return lenses
-
-
-def _has_req_doc_reference(task_dir, touched_paths):
-    """Return True when task artifacts or touched docs reference a durable REQ."""
-    repo_root = find_harness_root(task_dir) or find_repo_root(task_dir)
-    artifact_names = ("PLAN.md",)
-    for name in artifact_names:
-        path = os.path.join(task_dir, name)
-        if not os.path.isfile(path):
-            continue
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                if _REQ_REF_RE.search(f.read()):
-                    return True
-        except OSError:
-            continue
-
-    for rel in touched_paths or []:
-        if not isinstance(rel, str):
-            continue
-        if _REQ_REF_RE.search(rel):
-            abs_path = rel if os.path.isabs(rel) else os.path.join(repo_root, rel)
-            if os.path.isfile(abs_path):
-                return True
-    return False
-
-
-def _durable_docs_touched(touched_paths):
-    """Return durable doc paths changed by this task."""
-    paths = []
-    for p in touched_paths or []:
-        if not isinstance(p, str):
-            continue
-        rel = p.strip().lstrip("./")
-        if _DURABLE_DOC_RE.match(rel):
-            paths.append(rel)
-    return paths
-
-
-def _effective_touched_paths(task_dir, touched_paths):
-    """Return only explicitly recorded compatibility paths.
-
-    Lifecycle routing never expands this list from Git or the filesystem.
-    """
-    return sorted(set(path for path in (touched_paths or []) if isinstance(path, str)))
-
-
-def _task_req_detector_texts(task_dir):
-    return []
-
-
-def _req_detector_result(task_dir, touched_paths):
-    try:
-        from req_detector import detect_req_need  # type: ignore
-        return detect_req_need(texts=_task_req_detector_texts(task_dir), paths=touched_paths)
-    except Exception:
-        return {"requires_req": False, "confidence": "low", "surfaces": [], "reasons": []}
 
 
 def is_maintenance_task(task_dir, repo_root=None):
@@ -1999,8 +1843,8 @@ def is_maintenance_task(task_dir, repo_root=None):
 def compile_routing(task_dir, repo_root=None):
     repo_root = repo_root or find_repo_root()
     maintenance = is_maintenance_task(task_dir, repo_root)
-    st = read_state(task_dir)
-    micro_loop = _is_micro_loop_state(st)
+    control = read_task_control(task_dir)
+    micro_loop = _is_micro_loop_state(control)
     return {
         "maintenance_task": maintenance,
         "workflow_locked": not maintenance,
@@ -2011,15 +1855,8 @@ def compile_routing(task_dir, repo_root=None):
     }
 
 
-def _is_micro_loop_state(st):
-    """Return True when TASK_STATE explicitly selects no-plan micro-loop mode.
-
-    The harness keeps TASK_STATE to its historical 7 fields. To avoid a schema
-    migration, the opt-in is encoded in the existing ``plan_session_state``
-    field. Standard tasks keep ``closed`` and retain the plan-first gate.
-    """
-    mode = str((st or {}).get("plan_session_state") or "").strip().lower()
-    return mode in {"micro", "micro_loop", "no_plan_micro", "develop_verify_close"}
+def _is_micro_loop_state(control):
+    return (control or {}).get("execution_mode") == "micro"
 
 
 def _attempts_dir(task_dir):
@@ -2384,17 +2221,8 @@ def extract_qa_verdict(value):
     return verdicts[0] if matches[0] and len(verdicts) == 1 else ""
 
 
-def _plan_meta(task_dir):
-    """Read bounded task-declared workflow metadata, defaulting safely."""
-    payload = _read_json_file(
-        os.path.join(task_dir, "PLAN.meta.json"), max_size=256 * 1024,
-    )
-    meta = payload.get("plan_meta") if isinstance(payload, dict) else None
-    return meta if isinstance(meta, dict) else {}
-
-
-def _declared_lenses(task_dir, key, *, allowed, default):
-    value = _plan_meta(task_dir).get(key)
+def _declared_lenses(task_dir, key, *, allowed, default, control=None):
+    value = (control or read_task_control(task_dir)).get(key)
     if not isinstance(value, list):
         return list(default)
     lenses = []
@@ -2406,19 +2234,16 @@ def _declared_lenses(task_dir, key, *, allowed, default):
 
 
 def required_review_lenses(task_dir, state=None):
-    """Return plan-declared review lenses without inspecting source state."""
-    meta = _plan_meta(task_dir)
+    """Return task-declared review lenses without inspecting source state."""
     lenses = _declared_lenses(
         task_dir,
         "review_lenses",
         allowed={"review-code", "review-security"},
         default=("review-code",),
+        control=state,
     )
     if "review-code" not in lenses:
         lenses.insert(0, "review-code")
-    security = str(meta.get("security_review") or "").strip().lower()
-    if security == "required" and "review-security" not in lenses:
-        lenses.append("review-security")
     return lenses
 
 
@@ -2430,57 +2255,47 @@ def receipt_stream_fingerprint(task_dir, snapshot=None):
     return (snapshot or receipt_snapshot(task_dir)).fingerprint
 
 
-def write_task_close_attestation(
-    task_dir, state, *, receipt_fingerprint,
-):
-    """Persist close evidence without binding lifecycle state to Git HEAD."""
-    payload = {
-        "version": 3,
-        "task_id": str(state.get("task_id") or ""),
-        "closed_at": str(state.get("closed_at") or ""),
-        "runtime_verdict": str(state.get("runtime_verdict") or "").upper(),
-        "receipt_stream_fingerprint": str(receipt_fingerprint or ""),
-    }
-    if (
-        not re.fullmatch(r"TASK__[A-Za-z0-9._-]+", payload["task_id"])
-        or not payload["closed_at"]
-        or payload["runtime_verdict"] != "PASS"
-        or not re.fullmatch(r"sha256:[0-9a-f]{64}", payload["receipt_stream_fingerprint"])
-    ):
-        raise ValueError("invalid task close attestation inputs")
-    _atomic_json_write(os.path.join(task_dir, TASK_CLOSE_RECEIPT_NAME), payload)
-    return payload
-
-
-def clear_task_close_attestation(task_dir):
+def _blocked_artifact_valid(task_dir):
+    path = os.path.join(task_dir, "BLOCKED.md")
     try:
-        os.unlink(os.path.join(task_dir, TASK_CLOSE_RECEIPT_NAME))
-    except FileNotFoundError:
-        pass
-
-
-def task_close_attestation_valid(task_dir, state):
-    if not task_dir:
+        info = os.lstat(path)
+    except OSError:
         return False
-    payload = _read_json_file(
-        os.path.join(task_dir, TASK_CLOSE_RECEIPT_NAME),
-        max_size=16 * 1024,
+    return bool(
+        stat.S_ISREG(info.st_mode)
+        and info.st_uid == os.getuid()
+        and info.st_nlink == 1
+        and not stat.S_IMODE(info.st_mode) & 0o022
     )
-    if (
-        payload.get("version") != 3
-        or payload.get("task_id") != state.get("task_id")
-        or payload.get("closed_at") != state.get("closed_at")
-        or payload.get("runtime_verdict") != "PASS"
-        or not re.fullmatch(
-            r"sha256:[0-9a-f]{64}",
-            str(payload.get("receipt_stream_fingerprint") or ""),
-        )
-    ):
-        return False
-    try:
-        return receipt_stream_fingerprint(task_dir) == payload["receipt_stream_fingerprint"]
-    except RuntimeError:
-        return False
+
+
+def task_control_status(task_dir, control=None, snapshot=None):
+    """Derive open/blocked/closed; malformed terminal evidence is invalid."""
+    control = control or read_task_control(task_dir)
+    if not control:
+        return "invalid"
+    blocked_path = os.path.join(task_dir, "BLOCKED.md")
+    if os.path.lexists(blocked_path):
+        if not _blocked_artifact_valid(task_dir):
+            return "invalid"
+        return "invalid" if control.get("close_receipt_fingerprint") else "blocked"
+    expected = control.get("close_receipt_fingerprint")
+    if expected:
+        try:
+            return "closed" if receipt_stream_fingerprint(task_dir, snapshot) == expected else "invalid"
+        except RuntimeError:
+            return "invalid"
+    return "open"
+
+
+def publish_task_close(task_dir, control, *, receipt_fingerprint):
+    """Atomically publish current receipt bytes as the sole close authority."""
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(receipt_fingerprint or "")):
+        raise ValueError("invalid task close receipt fingerprint")
+    updated = dict(control)
+    updated["close_receipt_fingerprint"] = receipt_fingerprint
+    write_task_control(task_dir, updated)
+    return updated
 
 
 def _infer_receipt_lens(agent_type, explicit_lens=""):
@@ -2556,9 +2371,9 @@ def record_subagent_receipt(task_dir, receipt):
             verdict = "PENDING"
         if verdict == "BLOCKED_ENV" and not finding_counts["investigate"]:
             verdict = "PENDING"
-    current_run = read_task_run(task_dir)
+    current_run = read_task_control(task_dir)
     if not current_run:
-        raise RuntimeError("valid TASK_RUN.json required for receipt append")
+        raise RuntimeError("valid TASK.json required for receipt append")
     supplied_run_id = _receipt_short(receipt.get("task_run_id"), 64)
     task_run_id = str(current_run["task_run_id"])
     if supplied_run_id and supplied_run_id != task_run_id:
@@ -2586,8 +2401,8 @@ def record_subagent_receipt(task_dir, receipt):
     _validated_receipt_task_dir(task_dir)
     payload = (json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
     with receipt_stream_transaction(task_dir):
-        state = read_state(task_dir)
-        if str(state.get("status") or "").lower() in {"closed", "blocked"}:
+        control = read_task_control(task_dir)
+        if task_control_status(task_dir, control) in {"closed", "blocked", "invalid"}:
             raise RuntimeError("receipt stream is terminal")
         _append_receipt_stream_unlocked(path, payload)
     return entry
@@ -2667,7 +2482,7 @@ def review_receipt_summary(task_dir, snapshot=None):
 def _completed_review_by_lens(task_dir, snapshot=None):
     snapshot = snapshot or receipt_snapshot(task_dir)
     receipts = snapshot.entries
-    current_run_id = str(read_task_run(task_dir).get("task_run_id") or "")
+    current_run_id = str(read_task_control(task_dir).get("task_run_id") or "")
     if not current_run_id:
         return {}
     latest_events = {}
@@ -2715,7 +2530,7 @@ def _receipt_runtime_identity_matches(start, completion):
 
 
 def _latest_review_pass_index(task_dir, state=None, snapshot=None):
-    st = state or read_state(task_dir)
+    st = state or read_task_control(task_dir)
     snapshot = snapshot or receipt_snapshot(task_dir)
     if receipt_review_verdict(task_dir, st, snapshot) != "PASS":
         return -1
@@ -2744,7 +2559,7 @@ def _qa_started_after_review(snapshot, lens, completion, review_index):
 
 
 def receipt_review_verdict(task_dir, state=None, snapshot=None):
-    st = state or read_state(task_dir)
+    st = state or read_task_control(task_dir)
     required = required_review_lenses(task_dir, st)
     if not required:
         return "NOT_APPLICABLE"
@@ -2770,12 +2585,13 @@ def _required_qa_lenses(task_dir, state=None):
         "qa_lenses",
         allowed={"qa-api", "qa-browser", "qa-cli", "qa-desktop"},
         default=("qa-cli",),
+        control=state,
     )
 
 
 def _completed_qa_by_lens(task_dir, snapshot=None):
     snapshot = snapshot or receipt_snapshot(task_dir)
-    current_run_id = str(read_task_run(task_dir).get("task_run_id") or "")
+    current_run_id = str(read_task_control(task_dir).get("task_run_id") or "")
     if not current_run_id:
         return {}
     latest_events = {}
@@ -2803,9 +2619,8 @@ def _completed_qa_by_lens(task_dir, snapshot=None):
 
 def receipt_runtime_verdict(task_dir, state=None, snapshot=None):
     """Compute runtime verdict from completed, explicit QA receipts only."""
-    st = state or read_state(task_dir)
-    current = (st.get("runtime_verdict") or "pending").upper() if isinstance(st, dict) else "PENDING"
-    if current == "BLOCKED_ENV":
+    st = state or read_task_control(task_dir)
+    if _blocked_artifact_valid(task_dir):
         return "BLOCKED_ENV"
     snapshot = snapshot or receipt_snapshot(task_dir)
     review_verdict = receipt_review_verdict(task_dir, st, snapshot)
@@ -2834,26 +2649,15 @@ def receipt_runtime_verdict(task_dir, state=None, snapshot=None):
 # ── Task context ─────────────────────────────────────────────────────────
 
 
-def runtime_is_stale(task_dir: str) -> tuple[bool, str]:
-    """Source mutations no longer invalidate lifecycle receipts."""
-    return False, ""
-
-
 def emit_compact_context(task_dir, snapshot=None):
-    """Build the canonical task pack with on-the-fly routing.
-
-    Always populates ``stale`` and ``stale_path`` keys via :func:`runtime_is_stale`
-    so callers (stop_gate, task_close gate, MCP task_verify) can refuse to
-    permit transitions on stale frozen verdicts without re-computing.
-    """
-    st = read_state(task_dir)
+    """Build the canonical task pack with on-the-fly routing."""
+    st = read_task_control(task_dir)
     if not st:
-        return {"error": "no TASK_STATE.yaml", "task_dir": task_dir}
+        return {"error": "missing or invalid TASK.json", "task_dir": task_dir}
 
     snapshot = snapshot or receipt_snapshot(task_dir)
     routing = compile_routing(task_dir)
     runtime_verdict = receipt_runtime_verdict(task_dir, st, snapshot)
-    touched = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
 
     micro_loop = _is_micro_loop_state(st)
     has_plan = artifact_exists(task_dir, "PLAN.md")
@@ -2883,37 +2687,9 @@ def emit_compact_context(task_dir, snapshot=None):
         else:
             missing_for_close.append("completed QA verdict PASS")
 
-    # Browser QA uses the same lifecycle receipt stream as other QA lenses.
-    # There is no separate browser critic artifact gate.
-    repo_root = find_repo_root()
-    try:
-        browser_supported = _manifest_bool(repo_root, "qa", "browser_qa_supported")
-    except Exception:
-        browser_supported = False
-    frontend_touched = _frontend_touched(touched)
-    api_touched = _api_touched(touched)
-    durable_doc_paths = _durable_docs_touched(touched)
-    req_detection = _req_detector_result(task_dir, touched)
     open_conversation_items = conversation_open_items(task_dir)
     if open_conversation_items:
         missing_for_close.append("CONVERSATION.md open items")
-    # Durable-doc close gate. PLAN's Durable Docs Decision is still required,
-    # but implementation can grow new visible/API surfaces after planning. The
-    # close gate rechecks the actual diff so `REQ: n/a` cannot silently pass for
-    # a new page, route, controller, endpoint, or comparable observable surface.
-    req_needed_by_detector = (
-        bool(req_detection.get("requires_req"))
-        and str(req_detection.get("confidence") or "").lower() in {"high", "medium"}
-    )
-    if (frontend_touched or api_touched or req_needed_by_detector) and not _has_req_doc_reference(task_dir, touched):
-        if frontend_touched and api_touched:
-            missing_for_close.append("REQ durable doc for UI/API observable behavior")
-        elif frontend_touched:
-            missing_for_close.append("REQ durable doc for UI observable behavior")
-        elif api_touched:
-            missing_for_close.append("REQ durable doc for API observable behavior")
-        else:
-            missing_for_close.append("REQ durable doc for observable behavior or user feedback")
 
     if not has_plan and not micro_loop:
         next_action = "Create PLAN.md via plan skill before source writes."
@@ -2932,27 +2708,18 @@ def emit_compact_context(task_dir, snapshot=None):
             "Resolve CONVERSATION.md open item markers as captured, rejected, "
             "or deferred before task_close."
         )
-    elif any(m.startswith("REQ durable doc") for m in missing_for_close):
-        next_action = (
-            "Create or update a doc/<area>/REQ__*.md for the observable "
-            "behavior before source work, then link it from PLAN.md."
-        )
     else:
         next_action = "Completed QA verdicts present — run task_close."
 
-    stale, stale_path = runtime_is_stale(task_dir)
-
     attempts = list_attempts(task_dir)
     return {
-        "task_id": st.get("task_id") or os.path.basename(task_dir),
-        "status": st.get("status") or "unknown",
+        "task_id": os.path.basename(task_dir),
+        "status": task_control_status(task_dir, st, snapshot),
         "task_dir": task_dir,
         "routing": routing,
         "runtime_verdict": runtime_verdict,
         "source_write_allowed": source_write_allowed,
         "why_source_write_blocked": why_blocked,
-        "touched_paths": touched,
-        "path_count": len(touched),
         "attempt_count": len(attempts),
         "latest_attempt": attempts[-1] if attempts else {},
         "subagent_receipts": receipt_summary,
@@ -2964,8 +2731,6 @@ def emit_compact_context(task_dir, snapshot=None):
         "next_action": next_action,
         "conversation_open_items": open_conversation_items[:10],
         "effective_close_gate": "micro" if micro_loop else "standard",
-        "stale": stale,
-        "stale_path": stale_path,
     }
 
 

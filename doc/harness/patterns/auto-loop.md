@@ -30,11 +30,11 @@ updated: 2026-06-12
 1. 사용자가 native `/goal <objective>` 입력 → hook이 harness Goal state를 생성/동기화한다. 이후 agent가 Goal context를 보고 필요한 경우 `task_start` + `goal_add_task`로 `doc/harness/tasks/.active` 마커를 만든다. Plain repo-mutating request에서도 hook이 task를 자동 생성하지 않으며, agent가 필요성을 판단해 `task_start`로 direct task를 연다.
 2. `plugin/hooks/hooks.json` Stop 엔트리에 등록된 `python3 plugin/scripts/stop_gate.py`가 매 turn 종료 시 실행.
 3. `stop_gate.py:77-151`이 active task 마커 확인 → `emit_compact_context`로 `missing_for_close` 계산:
-   - PLAN.md 없음, HANDOFF.md 없음, qa-browser evidence 없음, `runtime_verdict ≠ PASS` 등.
+   - PLAN.md 없음, 필수 review/QA receipt 없음, `runtime_verdict ≠ PASS` 등.
 4. 미완료이면 `_gate_response.block(...)`이 `{"decision": "block", "reason": "...", "hookSpecificOutput": {...}}` JSON을 stdout으로 emit.
 5. Claude Code Stop hook contract에 따라 `reason`이 **Claude 다음 turn 입력으로 주입** → 자동 재개. `next_action_command`까지 함께 줘서 정확한 다음 호출을 명시.
 6. `runtime_verdict=PASS` + `task_close` 성공 시 `.active` 마커 제거 → 다음 Stop hook은 silent allow.
-7. `runtime_verdict=BLOCKED_ENV` (fresh, `stale=false`)일 때만 silent allow (`stop_gate.py:103`). Stale BLOCKED_ENV는 그대로 block 유지 (C-17 staleness clause).
+7. `task_blocked`가 안전한 `BLOCKED.md`를 게시해 `runtime_verdict=BLOCKED_ENV`가 파생되면 silent allow한다.
 
 ### 핵심 동일성
 양쪽 모두 **Stop hook 응답 contract**의 동일한 surface를 사용한다:
@@ -48,13 +48,13 @@ updated: 2026-06-12
 
 | 항목 | `/goal` | `stop_gate.py` |
 |---|---|---|
-| Evaluator | Haiku (자연어 transcript 판단) | Python 규칙 (`missing_for_close`, mtime staleness) |
+| Evaluator | Haiku (자연어 transcript 판단) | Python 규칙 (`missing_for_close`, declared lenses, ordered receipts) |
 | 조건 입력 | 자연어 4000자 (`/goal …`) | 하드코딩 close-gate (PLAN.md / RECEIPTS.jsonl / runtime_verdict) |
 | 초기 kickoff | 조건 텍스트가 first directive로 즉시 발사 | native Goal sync 후 Goal child task가 plan→develop 체이닝 |
 | 저장 위치 | 세션 메모리 (휘발) | `plugin/hooks/hooks.json` (영속) |
 | Turn cap | "or stop after N turns" 명시 가능 | 없음 (close-gate 충족까지 지속) |
 | Cancel UX | `/goal clear` | task_close 또는 stop-judge → task_blocked |
-| 신뢰성 | LLM 판단 의존 (transcript 잘못 읽으면 오판) | 파일 mtime + YAML 필드 기반 (deterministic) |
+| 신뢰성 | LLM 판단 의존 (transcript 잘못 읽으면 오판) | exact `TASK.json` + `RECEIPTS.jsonl` 기반 (deterministic) |
 
 규칙 기반 평가는 결정성이 강점이지만, `/goal`의 자연어 조건은 더 유연하다. 둘 다 같은 turn-주입 primitive 위에 올라간 다른 정책일 뿐이다.
 
@@ -76,10 +76,10 @@ Anthropic 실제 `/goal`을 함께 켜고 싶다면 develop 진입 시점에 수
 
 ## 코드 인용
 
-- `plugin/scripts/stop_gate.py:103` — fresh BLOCKED_ENV silent allow:
+- `plugin/scripts/stop_gate.py` — BLOCKED_ENV silent allow:
   ```python
-  if verdict == "BLOCKED_ENV" and not ctx.get("stale", False):
-      return 0  # silent allow — fresh BLOCKED_ENV from stop-judge
+  if verdict == "BLOCKED_ENV":
+      return 0  # silent allow after task_blocked
   ```
 - `plugin/scripts/stop_gate.py:133-150` — reason 본문과 `gate_block` emit:
   ```python

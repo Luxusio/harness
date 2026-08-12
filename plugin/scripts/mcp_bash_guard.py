@@ -73,12 +73,10 @@ _PY_PATTERNS = [
 
 # Protected-artifact → owning MCP/CLI tool (for human-text fix hint).
 _ARTIFACT_TOOL_HINT = {
+    "TASK.json": "harness task control MCP",
     "RECEIPTS.jsonl": "runtime review and QA lifecycle hook",
-    "INSTALL_RECEIPT.json": "scripts/install_verified.py",
     "TASK_BASELINE.json": "task-start runtime",
-    "TASK_RUN.json": "task-start runtime",
     "PLAN.md": "mcp__plugin_harness_harness__write_plan",
-    "PLAN.meta.json": "mcp__plugin_harness_harness__write_plan",
     "AUDIT_TRAIL.md": "mcp__plugin_harness_harness__write_plan",
     "CONVERSATION.md": "runtime conversation hook",
 }
@@ -297,8 +295,8 @@ def _deny(target, command):
     # orchestrator gets an actionable resolution path inline.
     base = os.path.basename(rel)
     _NEXT = {
+        "TASK.json": "Use task_start, write_plan, task_blocked, or task_close",
         "PLAN.md": "mcp__plugin_harness_harness__write_plan",
-        "PLAN.meta.json": "mcp__plugin_harness_harness__write_plan",
         "AUDIT_TRAIL.md": "mcp__plugin_harness_harness__write_plan",
         "RECEIPTS.jsonl": "Spawn and await the required reviewer or QA agent; lifecycle hooks record this file",
         "CONVERSATION.md": "Let the runtime hooks record conversation history",

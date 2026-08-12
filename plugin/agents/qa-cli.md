@@ -15,7 +15,7 @@ without it verification remains pending.
 
 ## Core Contract
 
-Read first: `PLAN.md`, `PLAN.meta.json`, `TASK_STATE.yaml`, `REQUEST.md` if present,
+Read first: `PLAN.md`, `TASK.json`, `REQUEST.md` if present,
 `doc/harness/manifest.yaml`, relevant durable docs, and
 `doc/harness/qa/QA_KNOWLEDGE.yaml` if present.
 
@@ -66,7 +66,7 @@ why direct command execution was blocked or not applicable.
 ## Understand before you judge
 
 Before writing any verdict, build a mental model of what the change is
-supposed to do. Read PLAN.md, the relevant REQ/AC entries, TASK_STATE.yaml,
+supposed to do. Read PLAN.md, the relevant REQ/AC entries, TASK.json,
 and any linked durable docs. Know the intended inputs, flags, stdout/stderr
 shape, exit codes, and error states before touching a terminal.
 

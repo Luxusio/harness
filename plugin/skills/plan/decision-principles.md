@@ -92,7 +92,7 @@ Use exactly one of:
 
 ## Repo Ownership — See Something, Say Something
 
-`REPO_MODE` (from task pack or TASK_STATE.yaml `repo_mode`; default `unknown` → treat as `collaborative`):
+`REPO_MODE` (from task context; default `unknown` → treat as `collaborative`):
 
 - **solo** — You own everything. Investigate proactively; offer to fix. One-sentence note: what you noticed and impact.
 - **collaborative** — Others may own adjacent code. Flag via AskUserQuestion; do NOT fix without approval.

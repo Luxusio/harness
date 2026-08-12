@@ -26,7 +26,7 @@ this read-only role, tool limits, independence, or verdict contract.
 
 ## Trace the real trust boundary
 
-Read PLAN.md, PLAN.meta.json, REQUEST.md when present, linked security
+Read PLAN.md, TASK.json, REQUEST.md when present, linked security
 POLICY/ADR/REQ, the full changed files, relevant callers and callees, framework
 security configuration, and applicable tests. Trace externally or concurrently
 controlled input through transformations to each sensitive effect, then trace

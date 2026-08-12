@@ -11,7 +11,6 @@ import os
 import subprocess
 import sys
 import tempfile
-import textwrap
 
 
 SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -26,18 +25,18 @@ def _setup_task_dir(repo_root: str, verdict: str) -> str:
     os.makedirs(task_dir, exist_ok=True)
     with open(os.path.join(repo_root, "doc", "harness", "manifest.yaml"), "w") as f:
         f.write("type: test\n")
-    # Minimal TASK_STATE.yaml — 7 required fields per _lib.SCHEMA_FIELDS.
-    state = textwrap.dedent(f"""\
-        task_id: TASK__test_blocked_env
-        status: implementing
-        runtime_verdict: {verdict}
-        touched_paths: []
-        plan_session_state: closed
-        closed_at: null
-        updated: 2026-05-13T00:00:00Z
-        """)
-    with open(os.path.join(task_dir, "TASK_STATE.yaml"), "w") as f:
-        f.write(state)
+    with open(os.path.join(task_dir, "TASK.json"), "w") as f:
+        json.dump({
+            "task_run_id": "a" * 32,
+            "started_at": "2026-05-13T00:00:00Z",
+            "execution_mode": "standard",
+            "review_lenses": ["review-code"],
+            "qa_lenses": ["qa-cli"],
+            "close_receipt_fingerprint": None,
+        }, f)
+    if verdict == "BLOCKED_ENV":
+        with open(os.path.join(task_dir, "BLOCKED.md"), "w") as f:
+            f.write("# BLOCKED\n\nEnvironment unavailable.\n")
     # Plan.md presence prevents "PLAN.md missing" entry in missing_for_close.
     with open(os.path.join(task_dir, "PLAN.md"), "w") as f:
         f.write("# Test plan\n")

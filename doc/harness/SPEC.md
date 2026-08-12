@@ -62,15 +62,15 @@ submodules, gitlinks, worktree bindings, or a source baseline. `task_context`,
 source fingerprinting. This keeps nested repositories, ignored checkouts,
 submodules, and linked worktrees outside the control plane.
 
-The plan declares the intended source scope and applicable review/QA lenses in
-`PLAN.meta.json`. These declarations route work and verification; Harness does
+The plan declares the intended source scope in `PLAN.md`; `TASK.json` stores
+the applicable review/QA lenses. These declarations route work and verification; Harness does
 not prove that every edited file belongs to that scope. Post-review or post-QA
 edits, concurrent mutations, and scope drift are developer-owned risks.
 Explicit setup, installer, release, or diagnostic commands may still inspect
 Git or hash a concrete payload when that operation intrinsically requires it.
 Those opt-in checks are not task lifecycle prerequisites.
 
-The initialization commit point is a valid `TASK_STATE.yaml` plus the session
+The initialization commit point is a valid `TASK.json` plus the session
 active marker. Optional environment probing remains bounded, performs no Git
 probe, and cannot turn a
 committed scaffold into a failed start.
@@ -79,7 +79,8 @@ committed scaffold into a failed start.
 
 | Artifact | Writer |
 |---|---|
-| `PLAN.md`, `PLAN.meta.json`, optional `AUDIT_TRAIL.md` | MCP `write_plan` |
+| `PLAN.md`, optional `AUDIT_TRAIL.md` | MCP `write_plan` |
+| `TASK.json` | task lifecycle MCP tools |
 | `RECEIPTS.jsonl` | Codex/Claude review and QA lifecycle hooks, including the root-hook-registered, MCP-hosted Codex watcher |
 | `CONVERSATION.md` | Codex/Claude UserPromptSubmit/Subagent hooks |
 | durable docs under `doc/<area>/<TYPE>__*.md` | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
@@ -100,11 +101,10 @@ Goal IDs use the same safe-name boundary, and Goal child entries persist the
 canonical repository-relative task path.
 
 `write_plan` validates the complete supplied bundle before its first write, so
-an invalid optional `AUDIT_TRAIL.md` cannot leave a new PLAN or
-meta file behind. `task_blocked` requires an existing `TASK_STATE.yaml` before
-writing `BLOCKED.md`. Legacy `CHECKS.yaml` files in old task packs are
-read-only compatibility artifacts: current verification and close do not parse,
-reconcile, rewrite, or gate on them.
+an invalid optional `AUDIT_TRAIL.md` cannot leave a new PLAN or lens update
+behind. `task_blocked` requires an existing valid `TASK.json` before writing
+`BLOCKED.md`. Removed task-control artifacts have no compatibility readers or
+migration path; starting a fresh run is the recovery action.
 
 Per-session active markers are authoritative only while their canonical task
 state is live. Marker leaves must be regular files and are read without
@@ -165,8 +165,9 @@ accepts that risk instead of imposing a repository-integrity monitor on local
 development. Missing or malformed task artifacts and receipt streams still fail
 closed.
 
-`TASK_RUN.json` is a small non-Git generation marker. `task_start` creates it,
-terminal resume rotates it, the session marker carries it to lifecycle watchers,
+`TASK.json` contains the non-Git generation identity and start timestamp.
+`task_start` creates it, terminal resume rotates those fields, and the session
+marker carries them to lifecycle watchers,
 and start/completion receipts must match the current generation. A replayed
 rollout event whose timestamp predates the generation start is ignored. This
 prevents a prior-run agent from satisfying a reopened task without restoring any

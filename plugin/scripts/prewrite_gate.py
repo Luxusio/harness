@@ -41,14 +41,15 @@ try:
         find_harness_root,
         harness_root_resolution,
         yaml_array,
+        yaml_field,
         now_iso,
         TASK_DIR,
         resolve_active_task_dir,
         iter_active_task_dirs,
-        read_state,
+        read_task_control,
+        task_control_status,
         current_session_id,
         is_harness_enabled_repo,
-        _manifest_bool,
     )
 except Exception:
     # _lib unavailable: fail-open. `|| true` would mask an ImportError exit
@@ -61,25 +62,21 @@ except Exception:
 # Owner values are space-free so the structured reason tail stays grep-stable.
 # Human text in the deny message names the concrete owning tool or lifecycle hook.
 PROTECTED_ARTIFACTS = {
+    "TASK.json": "task-control-mcp",
     "PLAN.md": "plan-skill",
-    "PLAN.meta.json": "plan-skill",
     "AUDIT_TRAIL.md": "plan-skill",
     "RECEIPTS.jsonl": "receipt-lifecycle-hook",
-    "INSTALL_RECEIPT.json": "verified-install-helper",
     "TASK_BASELINE.json": "task-start-runtime",
-    "TASK_RUN.json": "task-start-runtime",
     "CONVERSATION.md": "conversation-hook",
 }
 
 # Human-readable owner description (used in deny message text, not in the tail).
 PROTECTED_ARTIFACT_HUMAN = {
+    "TASK.json": "task control MCP tools",
     "PLAN.md": "plan-skill (Skill(harness:plan))",
-    "PLAN.meta.json": "plan-skill",
     "AUDIT_TRAIL.md": "plan-skill",
     "RECEIPTS.jsonl": "Codex/Claude review and QA lifecycle hooks",
-    "INSTALL_RECEIPT.json": "scripts/install_verified.py",
     "TASK_BASELINE.json": "task-start runtime",
-    "TASK_RUN.json": "task-start runtime",
     "CONVERSATION.md": "Codex/Claude conversation hooks",
 }
 
@@ -393,7 +390,7 @@ def _runtime_name() -> str:
 def _tool_hint(tool: str, runtime: str | None = None) -> str:
     runtime = runtime or _runtime_name()
     args = {
-        "write_plan": "task_id=..., plan=..., audit=..., meta=...",
+        "write_plan": "task_id=..., plan=..., audit=..., review_lenses=[...], qa_lenses=[...]",
     }.get(tool, "...")
     if runtime == "codex":
         return f"{tool} {{ {args} }}"
@@ -480,29 +477,19 @@ def _handle_scope_lock(file_path, active_dir, repo_root, task_id):
 
 
 def _has_open_tasks(tasks_dir: str) -> bool:
-    """Return True if tasks_dir contains any TASK__* whose status is not
-    closed/stale/archived. Missing or unreadable status is treated as open
-    (conservative: err toward deny rather than silent allow)."""
+    """Return whether a canonical task is open; malformed packs fail closed."""
     if not os.path.isdir(tasks_dir):
         return False
     for entry in os.listdir(tasks_dir):
         if not entry.startswith("TASK__"):
             continue
-        state_file = os.path.join(tasks_dir, entry, "TASK_STATE.yaml")
-        if not os.path.isfile(state_file):
-            return True  # malformed task dir — treat as open (conservative)
         try:
-            # minimal line-scan for status: avoid full YAML parse to stay stdlib-light
-            status = ""
-            with open(state_file) as f:
-                for line in f:
-                    if line.startswith("status:"):
-                        status = line.split(":", 1)[1].strip()
-                        break
-            if status not in ("closed", "stale", "archived", "blocked"):
+            task_dir = os.path.join(tasks_dir, entry)
+            control = read_task_control(task_dir)
+            if task_control_status(task_dir, control) in {"open", "invalid"}:
                 return True
         except Exception:
-            return True  # read error — conservative
+            return True
     return False
 
 
@@ -610,9 +597,12 @@ def _check_path(data: dict, file_path: str) -> None:
     if not active_dir:
         # Strict-compliance repositories cannot bypass the task/QA close gate
         # merely because this is the first write of a new request.
-        strict = _manifest_bool(
-            repo_root, "capabilities", "strict_compliance_requires_delegation"
-        )
+        strict = str(
+            yaml_field(
+                "strict_compliance_requires_delegation",
+                os.path.join(repo_root, "doc", "harness", "manifest.yaml"),
+            ) or ""
+        ).strip().lower() == "true"
         if not strict and not _has_open_tasks(tasks_dir):
             return 0
         human = (
@@ -632,13 +622,8 @@ def _check_path(data: dict, file_path: str) -> None:
         return 0
 
     if not os.path.isfile(os.path.join(active_dir, "PLAN.md")):
-        st = read_state(active_dir)
-        micro_loop = str(st.get("plan_session_state") or "").strip().lower() in {
-            "micro",
-            "micro_loop",
-            "no_plan_micro",
-            "develop_verify_close",
-        }
+        control = read_task_control(active_dir)
+        micro_loop = control.get("execution_mode") == "micro"
         if not os.path.isfile(os.path.join(active_dir, "MAINTENANCE")) and not micro_loop:
             human = (
                 "PLAN.md does not exist yet. On Codex invoke $harness:run; "
@@ -657,20 +642,6 @@ def _check_path(data: dict, file_path: str) -> None:
         )
         _deny("C-REQ-observable-doc-required", file_path, "developer", human, repo_root)
         return 0
-
-    for other_dir in iter_active_task_dirs(repo_root):
-        if os.path.normpath(other_dir) == os.path.normpath(active_dir):
-            continue
-        st = read_state(other_dir)
-        if rel in (st.get("touched_paths") or []):
-            other_id = os.path.basename(other_dir.rstrip("/"))
-            human = (
-                f"{rel} is already touched by active task {other_id}. "
-                "Source-file conflicts between active tasks are blocked; finish "
-                "or block one task before editing the same file."
-            )
-            _deny("C-09-scope-lock", file_path, "developer", human, repo_root)
-            return 0
 
     # Scope-lock enforcement as the last check: active task + PLAN.md confirmed.
     try:

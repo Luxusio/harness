@@ -1,7 +1,7 @@
 # harness runtime rules
 
 Lightweight execution harness for Claude Code.
-7-field TASK_STATE + on-the-fly routing + artifact-provenance.
+Six-field TASK.json + on-the-fly routing + artifact provenance.
 Self-contained — no plugin-legacy dependency.
 
 Harness rules apply to any caller — the main Claude session, a sub-skill,
@@ -27,32 +27,34 @@ No step skipped. Smallest coherent diff per step.
 - `task_blocked` — park unfinished work on a real environment blocker; writes BLOCKED.md and clears this session's active marker
 
 **Artifact writes (role-owned):**
-- `write_plan` → PLAN.md / PLAN.meta.json / optional AUDIT_TRAIL.md (plan-skill)
+- `write_plan` → PLAN.md / optional AUDIT_TRAIL.md + TASK.json lens declarations (plan-skill)
 - durable docs such as `doc/<area>/REQ__*.md` are normal repo docs, not MCP evidence tools
 
 Static review and runtime QA provenance share `RECEIPTS.jsonl`.
 Codex/Claude lifecycle hooks own it. Applicable lenses come from
-`PLAN.meta.json`; receipts do not bind Git state. The normative contracts are
+`TASK.json`; receipts do not bind Git state. The normative contracts are
 `doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md` for Codex
 acquisition/identity/completion and
 `doc/harness/patterns/ADR__consolidated-task-artifacts.md` for
 storage/schema/gates.
 
-## 3. TASK_STATE (7 fields only)
+## 3. TASK.json (6 fields only)
 
-```yaml
-task_id: TASK__xxx
-status: created|planning|implementing|verifying|blocked|closed
-runtime_verdict: pending|PASS|FAIL|BLOCKED_ENV
-touched_paths: []
-plan_session_state: closed|context_open|write_open
-closed_at: null
-updated: 2026-04-14T00:00:00Z
+```json
+{
+  "task_run_id": "<32 lowercase hex>",
+  "started_at": "<RFC3339 UTC>",
+  "execution_mode": "standard",
+  "review_lenses": ["review-code"],
+  "qa_lenses": ["qa-cli"],
+  "close_receipt_fingerprint": null
+}
 ```
 
-Routing is computed on-the-fly from manifest + artifacts. Never stored in TASK_STATE.
-`touched_paths` is schema-compatible legacy state and is not populated by
-automatic Git inspection.
+Task identity comes from the canonical directory. Routing and verdicts are
+derived on demand; `BLOCKED.md` represents a parked task. A successful close
+sets `close_receipt_fingerprint`. Removed task-control artifacts are not
+read or migrated.
 
 ## 4. Plan-first rule
 
@@ -84,7 +86,8 @@ Turn 종결 정당 사유 (runtime_verdict 기반):
 
 | Artifact | Owner |
 |----------|-------|
-| PLAN.md / PLAN.meta.json / AUDIT_TRAIL.md | plan-skill via `write_plan` MCP |
+| PLAN.md / AUDIT_TRAIL.md | plan-skill via `write_plan` MCP |
+| TASK.json | task lifecycle MCP tools (`write_plan` may update lens declarations) |
 | source + durable docs | developer |
 | RECEIPTS.jsonl | Codex/Claude review and QA lifecycle hooks |
 | CONVERSATION.md | Codex/Claude UserPromptSubmit/Subagent hooks |

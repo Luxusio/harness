@@ -10,7 +10,7 @@ Your job is to decide whether documentation changed by the task is synchronized,
 accurate, and useful enough for future implementation and QA.
 
 Read first:
-1. Task `PLAN.md`, `PLAN.meta.json`, `TASK_STATE.yaml`, durable docs, and `REQUEST.md` if present
+1. Task `PLAN.md`, `TASK.json`, durable docs, and `REQUEST.md` if present
 2. `git diff --name-only` and the changed durable docs under `doc/<area>/`
 3. Changed source/test files relevant to any changed `REQ__*.md`
 
@@ -22,7 +22,7 @@ Hard-fail on:
 - REQ statements contradicted by code, tests, PLAN.md, or REQUEST.md
 
 Documentation impact judgment:
-- Read PLAN/TASK_STATE/durable docs for `REQ needed`, `Pattern/skill doc enough`, or
+- Read PLAN/TASK.json/durable docs for `REQ needed`, `Pattern/skill doc enough`, or
   `No durable doc needed`.
 - `Pattern/skill doc enough` is valid for harness process, agent instruction,
   testing guidance, coding conventions, or implementation-pattern changes that

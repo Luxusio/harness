@@ -27,6 +27,17 @@ def _active_binding(task_dir):
     }
 
 
+def _write_task_control(task: Path, *, run_id: str = "a" * 32) -> None:
+    (task / "TASK.json").write_text(json.dumps({
+        "task_run_id": run_id,
+        "started_at": "2026-08-11T04:00:00Z",
+        "execution_mode": "standard",
+        "review_lenses": ["review-code"],
+        "qa_lenses": ["qa-cli"],
+        "close_receipt_fingerprint": None,
+    }) + "\n", encoding="utf-8")
+
+
 def _write_jsonl(path: Path, events: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
@@ -797,7 +808,7 @@ def test_record_receipt_preserves_runtime_provenance(tmp_path):
 
     task = tmp_path / "TASK__provenance"
     task.mkdir()
-    _lib.begin_task_run(task)
+    _write_task_control(task)
     entry = _lib.record_subagent_receipt(task, {
         "agent_id": "/root/qa_cli", "agent_type": "qa_cli", "event": "started",
         "runtime_event_id": "session:call:thread", "runtime_session_id": "session",
@@ -1241,12 +1252,8 @@ def test_active_task_requires_exact_session_marker_and_state(tmp_path):
     tasks = repo / "doc/harness/tasks"
     task = tasks / "TASK__active"
     task.mkdir(parents=True)
-    (task / "TASK_STATE.yaml").write_text(
-        "task_id: TASK__active\nstatus: in_progress\nruntime_verdict: pending\n"
-        "touched_paths: []\nplan_session_state: closed\nclosed_at: null\nupdated: now\n"
-    )
+    _write_task_control(task)
     import _lib
-    _lib.begin_task_run(task)
     _lib.write_active_marker(str(repo), str(task), session_id=root_id)
     marker = tasks / _lib.ACTIVE_SESSIONS_DIRNAME / f"{root_id}.json"
     with mock.patch.object(mod, "resolve_active_task_dir", return_value=str(task)):
@@ -1268,10 +1275,7 @@ def test_validated_task_dir_rejects_symlinked_tasks_root(tmp_path):
     (attacker / ".git").mkdir(parents=True)
     victim_task = victim / "doc/harness/tasks/TASK__victim"
     victim_task.mkdir(parents=True)
-    (victim_task / "TASK_STATE.yaml").write_text(
-        "task_id: TASK__victim\nstatus: created\nruntime_verdict: pending\n"
-        "touched_paths: []\nplan_session_state: closed\nclosed_at: null\nupdated: now\n"
-    )
+    _write_task_control(victim_task)
     attacker_harness = attacker / "doc/harness"
     attacker_harness.mkdir(parents=True)
     (attacker_harness / "tasks").symlink_to(victim / "doc/harness/tasks", target_is_directory=True)
@@ -1285,10 +1289,7 @@ def test_validated_task_dir_accepts_root_owned_workspace_ancestors(tmp_path):
     task = repo / "doc/harness/tasks/TASK__root-workspace"
     task.mkdir(parents=True)
     (repo / ".git").mkdir()
-    (task / "TASK_STATE.yaml").write_text(
-        "task_id: TASK__root-workspace\nstatus: created\nruntime_verdict: pending\n"
-        "touched_paths: []\nplan_session_state: closed\nclosed_at: null\nupdated: now\n"
-    )
+    _write_task_control(task)
     root_owned = {
         repo / "doc",
         repo / "doc/harness",
@@ -1322,11 +1323,7 @@ def test_validated_task_dir_rejects_writable_root_owned_ancestor(tmp_path):
     task = repo / "doc/harness/tasks/TASK__unsafe-root-workspace"
     task.mkdir(parents=True)
     (repo / ".git").mkdir()
-    (task / "TASK_STATE.yaml").write_text(
-        "task_id: TASK__unsafe-root-workspace\nstatus: created\n"
-        "runtime_verdict: pending\ntouched_paths: []\nplan_session_state: closed\n"
-        "closed_at: null\nupdated: now\n"
-    )
+    _write_task_control(task)
     unsafe = repo / "doc/harness"
     original_lstat = mod.os.lstat
 

@@ -20,7 +20,7 @@ def _repo(tmp_path):
     tasks = tmp_path / "doc" / "harness" / "tasks"
     task_dir = tasks / "TASK__bg"
     task_dir.mkdir(parents=True)
-    _lib.begin_task_run(str(task_dir))
+    _lib.ensure_task_scaffold(str(task_dir), "TASK__bg")
     (tasks / ".active").write_text(str(task_dir), encoding="utf-8")
     return str(tmp_path), str(task_dir)
 

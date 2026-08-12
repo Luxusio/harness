@@ -770,7 +770,7 @@ def test_runtime_top_level_reader_does_not_accept_nested_type(tmp_path):
         manifest = repo / "doc/harness/manifest.yaml"
         manifest.parent.mkdir(parents=True)
         manifest.write_text("metadata:\n  type: cli\ntype: api\n")
-        assert _lib._read_top_manifest_field(str(repo), "type") == "api"
+        assert _lib.read_manifest_field("type", str(repo)) == "api"
     finally:
         sys.path.pop(0)
 

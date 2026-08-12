@@ -166,7 +166,7 @@ def _is_pinned(rel_path: str, pin_paths: list) -> bool:
 def _gather_search_corpus(repo_root: str) -> list:
     """Build list of (abs_path, rel_path) for reference-count scanning.
 
-    Sources: CLAUDE.md, doc/**/*.md, active TASK_STATE PLAN.md files.
+    Sources: CLAUDE.md, doc/**/*.md, and open task PLAN.md files.
     Token-grep mandate: scans including inside fenced code blocks (plain regex).
     """
     corpus = []

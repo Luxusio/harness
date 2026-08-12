@@ -28,7 +28,7 @@ do not create tasks automatically. Do not use legacy autopilot commands.
 # Operating mode
 - `doc/harness/manifest.yaml` is the initialization marker.
 - Canonical loop for every repo-mutating child task: **plan when needed → develop → verify → close**. Smallest coherent diff per step. No verification skipped. See `plugin/CLAUDE.md` for the authoritative runtime rules.
-- In this harness plugin source repo, a successful repo-mutating development task runs `python3 plugin/scripts/install_verified.py --task-dir doc/harness/tasks/<task_id>` automatically after current-run review+QA PASS and before `task_close`, unless the user explicitly opts out. The helper securely invokes `python3 install.py --force` once per receipt run and stable payload fingerprint. Post-close self-improvement may then commit the completed diff; it must not introduce a second install phase. Report the commit hash when applicable and the pre-close install result.
+- In this harness plugin source repo, a successful repo-mutating development task runs `python3 plugin/scripts/install_verified.py --task-dir doc/harness/tasks/<task_id>` automatically after current-run review+QA PASS and before `task_close`, unless the user explicitly opts out. The helper securely invokes `python3 install.py --force` from a stable payload snapshot. It writes no install receipt or deduplication state; retrying after interruption reinstalls. Post-close self-improvement may then commit the completed diff; it must not introduce a second install phase. Report the commit hash when applicable and the pre-close install result.
 - The hard gate at task completion is receipt-backed `runtime_verdict: PASS` for the current task run. Source edits and scope drift after review/QA are developer-owned.
 - Durable user requirements and reusable discoveries must be promoted to the
   right committed surface: REQ/GUIDE/ADR/POLICY, skill/pattern docs, or tests.
@@ -42,7 +42,7 @@ do not create tasks automatically. Do not use legacy autopilot commands.
   `doc/harness/patterns/ADR__consolidated-task-artifacts.md`.
 - Notes under `doc/**/*.md` may carry `freshness: current|suspect|stale` + optional `invalidated_by_paths`. Run `plugin/scripts/note_freshness.py --paths ...` explicitly when maintaining them; SessionStart does not inspect Git.
 - Protected artifacts (enforced by `plugin/scripts/prewrite_gate.py`):
-  PLAN.md/PLAN.meta.json/AUDIT_TRAIL.md via `write_plan`, and RECEIPTS.jsonl via
+  PLAN.md/TASK.json/AUDIT_TRAIL.md via task MCP tools, and RECEIPTS.jsonl via
   Codex/Claude lifecycle hooks. CONVERSATION.md is append-only runtime history
   owned by UserPromptSubmit/Subagent hooks.
 - Pre-plan source writes are blocked until PLAN.md exists on the active task (plan-first rule).

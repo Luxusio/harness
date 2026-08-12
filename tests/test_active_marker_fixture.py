@@ -17,6 +17,7 @@ from __future__ import annotations
 import inspect
 import importlib.util
 import json
+import hashlib
 import os
 import shutil
 import tempfile
@@ -66,8 +67,18 @@ class ActiveMarkerResolutionTests(unittest.TestCase):
     def _task(self, repo: str, task_id: str, status: str) -> str:
         task = os.path.join(repo, "doc", "harness", "tasks", task_id)
         os.makedirs(task, exist_ok=True)
-        with open(os.path.join(task, "TASK_STATE.yaml"), "w", encoding="utf-8") as f:
-            f.write(f"task_id: {task_id}\nstatus: {status}\n")
+        close = None
+        if status == "closed":
+            close = "sha256:" + hashlib.sha256(b"RECEIPTS.jsonl\0<missing>\0").hexdigest()
+        with open(os.path.join(task, "TASK.json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "task_run_id": "a" * 32,
+                "started_at": "2026-08-12T00:00:00Z",
+                "execution_mode": "standard",
+                "review_lenses": ["review-code"],
+                "qa_lenses": ["qa-cli"],
+                "close_receipt_fingerprint": close,
+            }, f)
         return task
 
     def test_closed_session_marker_falls_back_to_live_legacy_marker(self):
@@ -105,8 +116,8 @@ class ActiveMarkerResolutionTests(unittest.TestCase):
     def test_session_state_task_id_mismatch_falls_back_and_is_not_iterated(self):
         with tempfile.TemporaryDirectory() as repo:
             mismatched = self._task(repo, "TASK__marker-name", "implementing")
-            with open(os.path.join(mismatched, "TASK_STATE.yaml"), "w", encoding="utf-8") as f:
-                f.write("task_id: TASK__different\nstatus: implementing\n")
+            with open(os.path.join(mismatched, "TASK.json"), "w", encoding="utf-8") as f:
+                f.write("{}\n")
             legacy = self._task(repo, "TASK__legacy", "planning")
             active_marker_lib.write_active_marker(repo, mismatched, session_id="session-a")
             with open(os.path.join(repo, "doc", "harness", "tasks", ".active"), "w", encoding="utf-8") as f:
@@ -120,8 +131,8 @@ class ActiveMarkerResolutionTests(unittest.TestCase):
     def test_session_state_missing_task_id_falls_back_and_is_not_iterated(self):
         with tempfile.TemporaryDirectory() as repo:
             missing = self._task(repo, "TASK__marker-name", "implementing")
-            with open(os.path.join(missing, "TASK_STATE.yaml"), "w", encoding="utf-8") as f:
-                f.write("status: implementing\n")
+            with open(os.path.join(missing, "TASK.json"), "w", encoding="utf-8") as f:
+                f.write("{}\n")
             legacy = self._task(repo, "TASK__legacy", "planning")
             active_marker_lib.write_active_marker(repo, missing, session_id="session-a")
             with open(os.path.join(repo, "doc", "harness", "tasks", ".active"), "w", encoding="utf-8") as f:
@@ -218,8 +229,8 @@ class ActiveMarkerResolutionTests(unittest.TestCase):
             tasks = os.path.join(repo, "doc", "harness", "tasks")
             with open(os.path.join(tasks, ".active"), "w", encoding="utf-8") as f:
                 f.write(fallback)
-            state = os.path.join(task, "TASK_STATE.yaml")
-            external = os.path.join(repo, "external-state.yaml")
+            state = os.path.join(task, "TASK.json")
+            external = os.path.join(repo, "external-state.json")
             with open(external, "w", encoding="utf-8") as f:
                 f.write("task_id: TASK__unsafe-state\nstatus: implementing\n")
 

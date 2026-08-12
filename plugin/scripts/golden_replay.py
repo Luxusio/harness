@@ -245,14 +245,16 @@ def test_prompt_memory_emits_context_block() -> TestResult:
         _os.makedirs(task_dir)
         with open(_os.path.join(task_dir, "PLAN.md"), "w") as f:
             f.write("# plan\n")
-        with open(_os.path.join(task_dir, "TASK_STATE.yaml"), "w") as f:
-            f.write(
-                "task_id: TASK__gr-pr3\nstatus: implementing\n"
-                "runtime_verdict: PASS\n"
-                "touched_paths:\n  - src/foo.py\n"
-                "plan_session_state: closed\nclosed_at: null\n"
-                "updated: 2026-04-19T00:00:00Z\n"
-            )
+        with open(_os.path.join(task_dir, "TASK.json"), "w") as f:
+            json.dump({
+                "task_run_id": "a" * 32,
+                "started_at": "2026-04-19T00:00:00Z",
+                "execution_mode": "standard",
+                "review_lenses": ["review-code"],
+                "qa_lenses": ["qa-cli"],
+                "close_receipt_fingerprint": None,
+            }, f)
+            f.write("\n")
         _os.makedirs(_os.path.join(base, "src"))
         src = _os.path.join(base, "src", "foo.py")
         with open(src, "w") as f:
@@ -275,7 +277,7 @@ def test_prompt_memory_emits_context_block() -> TestResult:
         return TestResult("prompt_memory_context_block", False,
                           f"exit {r.returncode}: {r.stderr[:200]}")
     out = r.stdout
-    for needle in ("[harness-context]", "task=TASK__gr-pr3", "verdict=PASS"):
+    for needle in ("[harness-context]", "task=TASK__gr-pr3", "verdict=PENDING"):
         if needle not in out:
             return TestResult("prompt_memory_context_block", False,
                               f"missing {needle!r} in stdout: {out!r}")

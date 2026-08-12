@@ -64,7 +64,7 @@ def test_verification_state_uses_one_receipt_snapshot(tmp_path):
     _, task = _repo(tmp_path)
     snapshot = object()
     with (
-        mock.patch.object(mod, "read_state", return_value={}),
+        mock.patch.object(mod, "read_task_control", return_value={}),
         mock.patch.object(mod, "receipt_snapshot", return_value=snapshot) as read_snapshot,
         mock.patch.object(mod, "receipt_stream_fingerprint", return_value="sha256:" + "a" * 64) as fingerprint,
         mock.patch.object(mod, "receipt_review_verdict", return_value="PASS") as review,
@@ -78,7 +78,7 @@ def test_verification_state_uses_one_receipt_snapshot(tmp_path):
     assert runtime.call_args.args[-1] is snapshot
 
 
-def test_success_marker_skips_same_fingerprint_and_reinstalls_changed_diff(tmp_path):
+def test_stateless_installer_reinstalls_every_verified_dirty_call(tmp_path):
     repo, task = _repo(tmp_path)
     installer = subprocess.CompletedProcess([], 0)
     common = (
@@ -98,10 +98,8 @@ def test_success_marker_skips_same_fingerprint_and_reinstalls_changed_diff(tmp_p
     ), mock.patch.object(mod.subprocess, "run", return_value=installer) as run:
         assert mod.install_verified(task) == 0
         assert mod.install_verified(task) == 0
-        assert run.call_count == 1
-
-    receipt = json.loads((task / mod.RECEIPT_NAME).read_text())
-    assert receipt["verification_id"] == "fp-1"
+        assert run.call_count == 2
+    assert not (task / "INSTALL_RECEIPT.json").exists()
     with (
         mock.patch.object(mod, "find_repo_root", return_value=str(repo)),
         mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
@@ -208,7 +206,7 @@ def test_payload_change_during_install_withholds_success_marker(tmp_path):
         mock.patch.object(mod.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)),
     ):
         assert mod.install_verified(task) == 5
-    assert not (task / mod.RECEIPT_NAME).exists()
+    assert not (task / "INSTALL_RECEIPT.json").exists()
 
 
 def test_task_dir_must_be_canonical_and_active(tmp_path):
@@ -218,6 +216,26 @@ def test_task_dir_must_be_canonical_and_active(tmp_path):
     valid, reason = mod._validate_task_dir(repo, rogue.resolve())
     assert not valid
     assert "not canonical" in reason
+
+
+def test_task_dir_requires_open_exact_session_generation(tmp_path):
+    repo, task = _repo(tmp_path)
+    control = {
+        "task_run_id": "a" * 32,
+        "started_at": "2026-08-12T00:00:00Z",
+        "execution_mode": "standard",
+        "review_lenses": ["review-code"],
+        "qa_lenses": ["qa-cli"],
+        "close_receipt_fingerprint": None,
+    }
+    with (
+        mock.patch.object(mod, "read_task_control", return_value=control),
+        mock.patch.object(mod, "active_task_binding_matches", return_value=False) as binding,
+    ):
+        valid, reason = mod._validate_task_dir(repo, task.resolve())
+    assert not valid
+    assert "open active TASK.json generation" in reason
+    binding.assert_called_once_with(str(repo), str(task.resolve()), control)
 
 
 def test_snapshot_paths_use_tracked_and_dirty_payload_files(tmp_path):
@@ -270,4 +288,4 @@ def test_active_task_switch_during_install_withholds_marker(tmp_path):
         mock.patch.object(mod.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)),
     ):
         assert mod.install_verified(task) == 5
-    assert not (task / mod.RECEIPT_NAME).exists()
+    assert not (task / "INSTALL_RECEIPT.json").exists()

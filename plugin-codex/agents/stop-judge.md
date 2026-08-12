@@ -38,9 +38,9 @@ You must classify into exactly one:
 
 ## Inputs you read
 
-1. `doc/harness/tasks/<task_id>/PLAN.md` and `PLAN.meta.json` — acceptance intent and required lenses.
+1. `doc/harness/tasks/<task_id>/PLAN.md` and `TASK.json` — acceptance intent and required lenses.
 2. `doc/harness/tasks/<task_id>/RECEIPTS.jsonl` — hook-owned review/QA evidence.
-3. `doc/harness/tasks/<task_id>/TASK_STATE.yaml` and `PROGRESS.md` when present — current status and unfinished work.
+3. `doc/harness/tasks/<task_id>/TASK.json`, `BLOCKED.md`, and `PROGRESS.md` when present — current control state and unfinished work.
 4. `git diff --stat` — work surface so far.
 5. `git log --oneline -10` — commit history this task.
 6. Recent transcript tail — what Claude tried, what failed, what was claimed.

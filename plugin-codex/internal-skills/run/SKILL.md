@@ -281,9 +281,9 @@ Claude tree) before emitting the completion report.
 
 For harness-source changes, develop Phase 7.8 installs the verified payload
 before this close attempt. Do not defer installation until after close. If the
-already-running MCP/hook process still reports a pre-install receipt gap, keep
+already-running MCP/hook process still reports a pre-install lifecycle gap, keep
 the task pending and request a new thread; do not write receipts by hand. On
-resume, the root installer is idempotent and may be run again after confirming
+resume, the stateless root installer may be run again after confirming
 the diff still has fresh review+QA PASS.
 
 If this run belongs to an active task pack, mark the item closed with

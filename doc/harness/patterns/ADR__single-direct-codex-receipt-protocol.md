@@ -36,10 +36,10 @@ Zero, multiple, malformed, mismatched, out-of-bound, or already-completed child
 candidates fail closed. Activity events are ignored and cannot start or repair
 a lifecycle.
 
-The watcher binds the active `TASK_RUN`, canonical repository, root session,
+The watcher binds the active `TASK.json` generation, canonical repository, root session,
 root rollout, child thread, child agent path, structured task name, and derived
 review or QA lens. The root session's active-task marker and current
-`TASK_RUN.json` are the only task authorities. MCP output, prompt text, and
+`TASK.json` are the only task authorities. MCP output, prompt text, and
 watcher-local fallback state are not task authorities.
 
 Completion requires one child `task_complete` final and one direct child

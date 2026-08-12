@@ -14,8 +14,8 @@ usability, platform fit, and workflow friction.
 
 ## Inputs
 
-Read `doc/harness/manifest.yaml`, PLAN.md, PLAN.meta.json, REQUEST.md when present,
-and relevant README/durable docs. Use PLAN/TASK_STATE for launch commands and target
+Read `doc/harness/manifest.yaml`, PLAN.md, TASK.json, REQUEST.md when present,
+and relevant README/durable docs. Use PLAN/TASK.json for launch commands and target
 windows.
 
 ## Review Method

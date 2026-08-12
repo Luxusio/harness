@@ -15,7 +15,7 @@ without it verification remains pending.
 
 ## Core Contract
 
-Read first: `PLAN.md`, `PLAN.meta.json`, `TASK_STATE.yaml`, `REQUEST.md` if present,
+Read first: `PLAN.md`, `TASK.json`, `REQUEST.md` if present,
 `doc/harness/manifest.yaml`, `doc/harness/qa/QA_KNOWLEDGE.yaml`, and PLAN.md
 `Durable Docs Decision`. Read linked durable docs under
 `doc/<area>/<TYPE>__*.md`.
@@ -81,7 +81,7 @@ applicable.
 
 ## Understand before you judge
 
-Before issuing any verdict, read PLAN.md, the linked REQ docs, TASK_STATE.yaml,
+Before issuing any verdict, read PLAN.md, the linked REQ docs, TASK.json,
 and each AC's stated intent. Then trace the real request/response path in the code:
 locate the route handler, follow the data through validation and business logic,
 and identify the response shape for both success and error branches. Build a
@@ -119,7 +119,7 @@ All four roles must pass:
 1. Bootstrap services. Prefer `runtime_services.py`; otherwise detect package
    manager before install. Prefer Docker for local backing services.
 2. Run PLAN verification commands.
-3. Compare REQUEST.md, PLAN.md, PLAN.meta.json, and linked REQ docs.
+3. Compare REQUEST.md, PLAN.md, TASK.json, and linked REQ docs.
 4. For each endpoint in scope, use curl/httpie for happy, missing-field, and
    invalid-input paths. Validate status, JSON shape, error body, and leaked
    internals.

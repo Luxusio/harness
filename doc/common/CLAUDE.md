@@ -11,8 +11,6 @@ updated: 2026-03-30
 - [OBS repo workspace-layout](OBS__repo__workspace-layout.md)
 - [INF arch initial-stack-assumptions](INF__arch__initial-stack-assumptions.md)
 - [REQ process cli-artifact-writes](REQ__process__cli-artifact-writes.md) — agents must use CLI tool for protected artifact writes; direct inline writes waste 500-2000 tokens
-- [REQ process task-set-fields-via-mcp](REQ__process__task-set-fields-via-mcp.md) — coordinator must use task_set_fields MCP tool to update coordinator-settable TASK_STATE fields; direct YAML writes prohibited
-- [REQ process browser-required-enforcement](REQ__process__browser-required-enforcement.md) — browser_required: true in TASK_STATE.yaml enforces browser verification across critic-runtime, plan skill, and setup template
 - [INF harness spec-exists](INF__harness__spec-exists.md) — harness architecture spec at doc/harness/ (SPEC.md, IMPORT_LIST.md, AUTO_ROUTING.md)
 - [REQ process plan-skill-review-pipeline](REQ__process__plan-skill-review-pipeline.md) — plan skill must run 7-phase dual-voice pipeline; old linear procedure retired (2026-04-10)
 - [GUIDE document taxonomy](GUIDE__document-taxonomy.md) — durable project knowledge uses typed documents under `doc/<area>/`

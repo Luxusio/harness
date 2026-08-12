@@ -26,13 +26,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from _lib import (  # type: ignore
         read_hook_input,
-        read_state,
+        read_task_control,
+        task_control_status,
+        receipt_review_verdict,
+        receipt_runtime_verdict,
         find_repo_root,
         is_harness_enabled_repo,
         TASK_DIR,
         _log_gate_error,
         resolve_active_task_dir,
-        list_review_receipts,
         goal_command_objective,
         read_current_goal,
         next_goal_task,
@@ -80,15 +82,7 @@ TASK_PACK_GATE = (
     "task-pack item unless the pack is done, blocked, stopped, or budget-capped."
 )
 RESTORE_INJECT_CAP = 1400
-RESTORE_TOUCHED_CAP = 5
 RESTORE_ARTIFACTS = ("RECEIPTS.jsonl", "BLOCKED.md")
-_REVIEWABLE_SUFFIXES = {
-    ".c", ".cc", ".conf", ".config", ".cpp", ".cs", ".css", ".go", ".h",
-    ".hpp", ".html", ".ini", ".java", ".js", ".json", ".jsx", ".kt",
-    ".lock", ".php", ".pl", ".properties", ".py", ".rb", ".rs", ".sh",
-    ".sql", ".swift", ".toml", ".ts", ".tsx", ".vue", ".xml", ".yaml",
-    ".yml",
-}
 
 
 def _build_goal_block(repo_root: str, synced_goal: dict | None = None) -> str:
@@ -145,12 +139,12 @@ def _truncate_output(output: str) -> str:
 
 
 def _build_block(task_dir: str) -> str:
-    st = read_state(task_dir)
-    if not st:
+    control = read_task_control(task_dir)
+    if not control:
         return ""
-    task_id = st.get("task_id") or os.path.basename(task_dir)
-    status = st.get("status") or "unknown"
-    verdict = (st.get("runtime_verdict") or "pending").upper()
+    task_id = os.path.basename(task_dir)
+    status = task_control_status(task_dir, control)
+    verdict = receipt_runtime_verdict(task_dir, control)
 
     pieces: list = [PREFIX, f"task={task_id}", f"status={status}"]
     pieces.append(f"recorded_verdict={verdict}")
@@ -160,70 +154,21 @@ def _build_block(task_dir: str) -> str:
 
 
 def _build_qa_gate(task_dir: str) -> str:
-    """Use the last persisted task verdict; task_verify remains authoritative."""
+    """Derive the current verdict; task_verify remains authoritative."""
     try:
-        st = read_state(task_dir)
-        return "" if str(st.get("runtime_verdict") or "").upper() == "PASS" else QA_GATE
+        control = read_task_control(task_dir)
+        return "" if receipt_runtime_verdict(task_dir, control) == "PASS" else QA_GATE
     except Exception:
         return QA_GATE
 
 
-def _has_reviewable_touched_path(state: dict) -> bool:
-    for raw in state.get("touched_paths") or []:
-        rel = str(raw or "").replace("\\", "/").lower()
-        if not rel or "__pycache__/" in rel or rel.endswith((".pyc", ".pyo", ".pyd")):
-            continue
-        suffix = os.path.splitext(rel)[1]
-        if suffix == ".md" and rel.startswith(("plugin/", "plugin-codex/")):
-            return True
-        if suffix in _REVIEWABLE_SUFFIXES:
-            if rel.startswith("doc/"):
-                continue
-            return True
-    return False
-
-
 def _build_review_gate(task_dir: str) -> str:
-    """Keep source review advisory until the persisted runtime verdict passes.
-
-    Without Git, prompt-time code cannot prove receipt freshness or discover a
-    newly-required security lens. It therefore never treats review receipts as
-    authoritative; task_verify/task_close make that decision.
-    """
+    """Report the receipt-derived review state without source-path heuristics."""
     try:
-        st = read_state(task_dir)
-        if not _has_reviewable_touched_path(st):
+        control = read_task_control(task_dir)
+        if receipt_runtime_verdict(task_dir, control) == "PASS":
             return ""
-        if str(st.get("runtime_verdict") or "").upper() == "PASS":
-            return ""
-        receipts = list_review_receipts(task_dir)
-        latest = {}
-        for index, item in enumerate(receipts):
-            lens = str(item.get("lens") or "").lower()
-            if lens.startswith("review-"):
-                latest[lens] = (index, item)
-
-        def has_valid_pass(pair: tuple[int, dict]) -> bool:
-            completion_index, completion = pair
-            return (
-                completion.get("event") == "completed"
-                and str(completion.get("verdict") or "").upper() == "PASS"
-                and any(
-                    start.get("event") == "started"
-                    and start.get("lens") == completion.get("lens")
-                    and start.get("agent_id") == completion.get("agent_id")
-                    and all(
-                        str(start.get(key) or "") == str(completion.get(key) or "")
-                        for key in (
-                            "task_run_id", "runtime_event_id",
-                            "runtime_session_id", "runtime_thread_id",
-                        )
-                    )
-                    for start in receipts[:completion_index]
-                )
-            )
-
-        if "review-code" in latest and all(has_valid_pass(pair) for pair in latest.values()):
+        if receipt_review_verdict(task_dir, control) == "PASS":
             return REVIEW_RECORDED_GATE
         return REVIEW_GATE
     except Exception:
@@ -267,16 +212,9 @@ def _first_meaningful_line(path: str, cap: int = 180) -> str:
 
 def _build_restore_block(task_dir: str) -> str:
     """Build a capped resume digest for the active task."""
-    st = read_state(task_dir)
-    if not st:
+    if not read_task_control(task_dir):
         return ""
     lines = ["<system-reminder>[harness-restore]"]
-    touched = [
-        _sanitize_path(str(p)) for p in (st.get("touched_paths") or [])[:RESTORE_TOUCHED_CAP]
-        if str(p).strip()
-    ]
-    if touched:
-        lines.append("recent touched: " + ", ".join(touched))
 
     artifact_lines: list[str] = []
     for name in RESTORE_ARTIFACTS:

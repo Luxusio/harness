@@ -1,4 +1,5 @@
 import json
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -29,10 +30,45 @@ def events(tmp_path):
 def write_task_state(tmp_path, task_id, status="closed", verdict="PASS"):
     task_dir = tmp_path / "doc" / "harness" / "tasks" / task_id
     task_dir.mkdir(parents=True)
-    (task_dir / "TASK_STATE.yaml").write_text(
-        f"task_id: {task_id}\nstatus: {status}\nruntime_verdict: {verdict}\n",
-        encoding="utf-8",
-    )
+    run_id = "a" * 32
+    rows = []
+    for lens, agent in (("review-code", "review"), ("qa-cli", "qa")):
+        for event in ("started", "completed"):
+            summary = "started" if event == "started" else f"VERDICT: {verdict}"
+            if lens == "review-code" and event == "completed":
+                summary += "\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+            rows.append({
+                "receipt_id": f"receipt-{agent}-{event}",
+                "ts": "2026-08-12T00:00:00Z",
+                "event": event,
+                "source": "codex-lifecycle-watcher",
+                "task_run_id": run_id,
+                "agent_id": agent,
+                "agent_type": lens,
+                "lens": lens,
+                "verdict": "" if event == "started" else verdict,
+                "summary": summary,
+                "transcript_path": "",
+                "transcript_sha256": "",
+                "runtime_event_id": f"event-{agent}",
+                "runtime_session_id": "session",
+                "runtime_thread_id": agent,
+            })
+    receipt_bytes = "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows)
+    (task_dir / "RECEIPTS.jsonl").write_text(receipt_bytes, encoding="utf-8")
+    digest = hashlib.sha256()
+    digest.update(b"RECEIPTS.jsonl\0")
+    digest.update(receipt_bytes.encode())
+    digest.update(b"\0")
+    fingerprint = "sha256:" + digest.hexdigest()
+    (task_dir / "TASK.json").write_text(json.dumps({
+        "task_run_id": run_id,
+        "started_at": "2026-08-12T00:00:00Z",
+        "execution_mode": "standard",
+        "review_lenses": ["review-code"],
+        "qa_lenses": ["qa-cli"],
+        "close_receipt_fingerprint": fingerprint if status == "closed" else None,
+    }) + "\n", encoding="utf-8")
 
 
 def test_init_status_and_next_prompt(tmp_path):

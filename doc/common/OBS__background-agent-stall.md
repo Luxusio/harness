@@ -50,7 +50,7 @@ All timestamps are 2026-04-11, UTC. Elapsed = wall time from first to last seria
 
 ## Stop-gate interaction
 
-`stop_gate.py` runs on the **main session** stop hook. It reads `doc/harness/tasks/TASK__*/TASK_STATE.yaml`
+`stop_gate.py` runs on the **main session** stop hook. It reads each task's exact `TASK.json`
 and blocks the main-session stop when open tasks exist. It has no mechanism to inject into or
 affect subagent sessions — subagents run with their own stop hooks via `subagent_stop_gate.py`
 (a separate script), and background agents are not subject to the coordinator's stop hook at

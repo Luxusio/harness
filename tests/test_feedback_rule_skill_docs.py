@@ -152,7 +152,7 @@ def test_harness_source_completion_requires_commit_and_force_install():
         assert "python3 install.py --force" in body
         assert "final response" in body
         assert "force-install result" in body
-        assert "installer is idempotent" in body
+        assert "stateless root installer" in body
 
 
 def test_develop_installs_harness_after_fresh_qa_before_close():

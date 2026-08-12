@@ -48,29 +48,31 @@ plan → develop → verify → close
 
 | Step | What happens |
 |------|-------------|
-| **plan** | 7-phase dual-voice review pipeline writes PLAN.md + PLAN.meta.json |
+| **plan** | 7-phase dual-voice review pipeline writes PLAN.md and declares required lenses in TASK.json |
 | **develop** | Implement per-AC, checkpoint progress, run quality audit, dogfood |
-| **verify** | Ordered review/QA completions are hook-recorded and checked against PLAN metadata |
+| **verify** | Ordered review/QA completions are hook-recorded and checked against TASK.json lens declarations |
 | **close** | Gate: PLAN.md exists + ordered review/QA receipts yield runtime_verdict = PASS + no open CONVERSATION.md items |
 
 After close, the Goal child-task executor performs a self-improvement pass — surfaces friction signals into `learnings.jsonl`, promotes recurring keys into Tier 2 patterns, and prunes stale entries.
 
-## TASK_STATE (7 fields)
+## TASK.json (6 fields)
 
-```yaml
-task_id: TASK__<slug>
-status: created|planning|implementing|verifying|closed
-runtime_verdict: pending|PASS|FAIL|BLOCKED_ENV
-touched_paths: []
-plan_session_state: closed|context_open|write_open
-closed_at: null
-updated: <ISO8601>
+```json
+{
+  "task_run_id": "<32 lowercase hex>",
+  "started_at": "<RFC3339 UTC>",
+  "execution_mode": "standard",
+  "review_lenses": ["review-code"],
+  "qa_lenses": ["qa-cli"],
+  "close_receipt_fingerprint": null
+}
 ```
 
-`touched_paths` is retained for schema compatibility but is not populated by
-automatic Git inspection. `BLOCKED_ENV` keeps the task open — QA has surfaced
-an environmental blocker that cannot be resolved without user action.
-`task_close` refuses to close anything except receipt-backed `PASS`.
+`task_id` is derived from the canonical directory, verdicts are derived from
+`RECEIPTS.jsonl`, and `BLOCKED.md` represents a parked environmental blocker.
+On successful close, `close_receipt_fingerprint` contains the exact receipt
+stream fingerprint. Legacy task control artifacts are unsupported rather than
+migrated or read.
 
 ## Acceptance criteria
 
@@ -135,7 +137,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `verify_runner.py` | Deterministic manifest `verify_commands` runner with optional parallel execution | stdout |
 | `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | stdout |
 | `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |
-| `install_verified.py` | Trusted post-QA harness installer with ordered review/QA receipts, explicit payload snapshot, global lock, and payload deduplication | task-local `INSTALL_RECEIPT.json` |
+| `install_verified.py` | Stateless trusted post-QA harness installer with ordered review/QA receipts, an explicit payload snapshot, and a global concurrency lock | stdout / exit status |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
 | `hygiene_scan.py` | Close-time hygiene scan: Tier A/B auto-apply + doc archive pass | `doc/harness/.hygiene-pending.json` |
 | `doc_hygiene.py` | Content-signal KEEP/REMOVE/REVIEW classifier; archives stale docs via `git mv` | `doc/harness/.hygiene-pending.json` |
@@ -198,7 +200,7 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 | `goal_add_task` | Attach or update a child task under the goal |
 | `goal_next_task` | Return the next queued/active child task |
 | `goal_finish` | Mark the active goal complete or blocked |
-| `write_plan` | Write PLAN.md / PLAN.meta.json plus optional AUDIT_TRAIL.md |
+| `write_plan` | Write PLAN.md plus optional AUDIT_TRAIL.md and update TASK.json lens declarations |
 
 ## Skills
 

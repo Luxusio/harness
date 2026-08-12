@@ -130,7 +130,7 @@ Harness phases map to specific agent types and model tiers. Models stay AS-DECLA
 | 4.8 (edge-case scan) | `oh-my-claudecode:executor` | haiku | Pattern scan for null guards, async error paths |
 | 7 (verification gate) | `harness:qa-cli` / `qa-api` / `qa-browser` / `qa-desktop` | per agent frontmatter | Spawn every applicable lens in one message with `lens="<lens>"` for lens-aware merge |
 | 7 fix loop (type / build errors) | `oh-my-claudecode:debugger` | sonnet | Compilation + regression isolation |
-| 7.7 (dogfooder, post-PASS) | `harness:dogfooder` | per frontmatter | Routed from `PLAN.meta.json.plan_meta.surfaces` or explicit `dogfood_required`; never inferred from Git or `touched_paths`. Batches with Phase 7 QA spawn. |
+| 7.7 (dogfooder, post-PASS) | `harness:dogfooder` | per frontmatter | Routed from PLAN.md-declared user-facing surfaces or explicit `dogfood_required`; never inferred from Git. Batches with Phase 7 QA spawn. |
 
 The OMC source for this pattern lives at `/tmp/omc-research/skills/team/SKILL.md:99-117`; harness adapts the stage→agent mapping but keeps the model-tier discipline AS-DECLARED.
 

@@ -198,7 +198,7 @@ extra phase is a new failure point.
 **When:** `runtime_verdict` transitions to `PASS`.
 **Enforced by:** unified `RECEIPTS.jsonl` lifecycle entries, written by runtime
 hooks. `task_verify` checks task, agent,
-lens, explicit completion verdict, and review-before-QA ordering; PLAN metadata
+lens, explicit completion verdict, and review-before-QA ordering; TASK.json
 declares the applicable lenses.
 **On violation:** `task_close` blocks until every required reviewer and QA lens
 has an ordered explicit PASS completion. A start-only receipt never passes.

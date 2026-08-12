@@ -235,7 +235,7 @@
         "files_to_read_first_contains": [
           "CHECKS.yaml",
           "PLAN.md",
-          "TASK_STATE.yaml"
+          "TASK.json"
         ],
         "open_check_ids_contains": [
           "AC-001"
@@ -254,7 +254,7 @@
         "files_to_read_first_contains": [
           "ENVIRONMENT_SNAPSHOT.md",
           "PLAN.md",
-          "TASK_STATE.yaml"
+          "TASK.json"
         ]
       }
     },
@@ -557,7 +557,7 @@
           "expect": {
             "blocked": true,
             "required_substrings": [
-              "document_verdict is 'pending' in TASK_STATE.yaml (needs PASS + freshness=current)",
+              "required review or QA receipt is pending in TASK.json generation",
               "doc changes detected — needs document critic verdict (CRITIC__document.md)"
             ]
           }

@@ -16,8 +16,9 @@ sys.path.insert(0, SCRIPTS_DIR)
 from codex_lifecycle_watcher import ensure
 from _lib import (
     find_harness_root,
-    read_state,
+    read_task_control,
     resolve_active_task_dir,
+    task_control_status,
     write_active_marker,
 )
 
@@ -145,12 +146,8 @@ def _bind_active_task_to_root_session(control_root: str, thread_id: str) -> bool
     task_dir = resolve_active_task_dir(control_root, session_id="default")
     if not task_dir:
         return False
-    state = read_state(task_dir)
-    if (
-        str(state.get("status") or "").lower()
-        not in {"created", "planning", "implementing", "verifying"}
-        or state.get("task_id") != os.path.basename(task_dir)
-    ):
+    control = read_task_control(task_dir)
+    if task_control_status(task_dir, control) != "open":
         return False
     write_active_marker(control_root, task_dir, session_id=thread_id)
     return True

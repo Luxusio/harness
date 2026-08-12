@@ -3,8 +3,7 @@
 
 Detects the case where:
   - an active harness task exists
-  - manifest declares qa.browser_qa_supported: true
-  - the task's touched_paths include frontend files
+  - TASK.json declares qa-browser
   - no hook-owned completed qa-browser PASS receipt exists yet
 
 On match, prints a one-line `[verification-gap]` message so the orchestrator
@@ -30,9 +29,8 @@ def main() -> int:
         return 0
     try:
         from _lib import (  # type: ignore
-            find_repo_root, _completed_qa_by_lens,
-            _read_nested_manifest_field, _frontend_touched,
-            read_state, resolve_active_task_dir, is_harness_enabled_repo,
+            find_repo_root, _completed_qa_by_lens, read_task_control,
+            resolve_active_task_dir, is_harness_enabled_repo,
         )
     except Exception:
         return 0
@@ -51,19 +49,10 @@ def main() -> int:
         return 0
 
     try:
-        browser_supported = (_read_nested_manifest_field(
-            repo_root, "qa", "browser_qa_supported") or "").lower() == "true"
+        control = read_task_control(task_dir) or {}
     except Exception:
         return 0
-    if not browser_supported:
-        return 0
-
-    try:
-        st = read_state(task_dir) or {}
-    except Exception:
-        return 0
-    touched = st.get("touched_paths") or []
-    if not _frontend_touched(touched):
+    if "qa-browser" not in (control.get("qa_lenses") or []):
         return 0
 
     completed = _completed_qa_by_lens(task_dir)
@@ -73,7 +62,7 @@ def main() -> int:
     task_id = os.path.basename(task_dir.rstrip("/"))
     print(
         f"[verification-gap] active task {task_id}: browser QA required "
-        f"(manifest.qa.browser_qa_supported=true + frontend diff) but no "
+        f"by TASK.json but no "
         f"completed qa-browser PASS receipt exists. Spawn and await qa-browser before close."
     )
     return 0

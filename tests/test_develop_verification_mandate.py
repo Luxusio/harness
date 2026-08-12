@@ -39,12 +39,14 @@ def test_contract_records_highest_available_verification_rule():
     assert "external/destructive blocker" in body
 
 
-def test_develop_workflow_uses_task_run_and_plan_routing_not_git_freshness():
+def test_develop_workflow_uses_unified_task_control_not_git_freshness():
     body = "\n".join(_text(path) for path in (DEVELOP, QUALITY, PARALLEL))
 
-    assert "current `TASK_RUN`" in body
-    assert "PLAN.meta.json.plan_meta.surfaces" in body
+    assert "current TASK.json generation" in body
+    assert "TASK.json.close_receipt_fingerprint" in body
     for obsolete in (
+        "current `TASK_RUN`",
+        "PLAN.meta.json.plan_meta.surfaces",
         "PASS verdict must be fresh after the last edit",
         "Source of truth: `TASK_STATE.yaml touched_paths`",
         "stale HEAD, or changed worktree fingerprint",

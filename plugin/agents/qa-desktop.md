@@ -20,7 +20,7 @@ with a `.mcp.json` fix block instead of continuing.
 
 Read `doc/harness/manifest.yaml` for `desktop_qa_supported`,
 `app_launch_command`, and optional `display_command`; read
-`doc/harness/qa/QA_KNOWLEDGE.yaml` when present; then read PLAN.md, PLAN.meta.json,
+`doc/harness/qa/QA_KNOWLEDGE.yaml` when present; then read PLAN.md, TASK.json,
 and REQUEST.md when present. Use PLAN.md as the AC source and REQUEST.md for
 intent gaps.
 
@@ -42,7 +42,7 @@ ACs `BLOCKED_ENV` with the exact missing display/tool/command/data/token/platfor
 
 ## Understand before you judge
 
-Read PLAN.md, the linked REQ/AC docs, TASK_STATE.yaml, and REQUEST.md before forming
+Read PLAN.md, the linked REQ/AC docs, TASK.json, and REQUEST.md before forming
 any verdict. Know what the change is supposed to do at the GUI level: which
 windows are expected, what widget states should appear, what the user interaction
 path is, and what the error states look like. Then drive the real GUI and trace

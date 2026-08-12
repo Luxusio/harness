@@ -28,7 +28,7 @@ role, tool limits, independence, or verdict contract.
 
 ## Spec and scope before quality
 
-Read PLAN.md, PLAN.meta.json, REQUEST.md when present, linked REQ/GUIDE/ADR/POLICY,
+Read PLAN.md, TASK.json, REQUEST.md when present, linked REQ/GUIDE/ADR/POLICY,
 the full changed files, relevant callers and callees, and at least one nearby
 project example. Never infer a finding from a hunk without reading its context.
 

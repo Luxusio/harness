@@ -217,7 +217,7 @@ tests, and observable behavior. PASS when changed durable knowledge is accurate,
 discoverable, and non-contradictory.
 
 Documentation review is performed by the documentation-review subagent and
-`task_verify`. It reads typed durable docs, PLAN/CHECKS/TASK_STATE, and touched
+`task_verify`. It reads typed durable docs, PLAN/TASK.json, and declared lenses
 paths. It does not require legacy document-sync artifacts.
 
 ## 3.6 doc/harness/ directory

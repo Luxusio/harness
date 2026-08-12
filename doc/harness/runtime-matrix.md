@@ -47,13 +47,13 @@ Legend:
 | **dogfooder agent** | ✅ | ✅ (v2 port) | Text-only, AC-003 spike candidate for v2. |
 | **stop-judge agent** | ✅ | ✅ (v2 port) | Text-only, portable. |
 | **developer agent** | ✅ | ✅ (v2 port) | Text-only, portable. |
-| **Subprocess fan-out (`codex exec` spawned for parallel qa-* / dogfooder)** | N/A (Agent-based) | 🚧 v2 | v1 ships sequential Codex executor only. v2 blockers: hook-lifecycle collision with codex exec duration vs `hooks.json:50` timeout=10s, TASK_STATE.yaml race needs `fcntl.flock` first. Orphan-PID concern downgraded — `codex exec --json` streaming + process-group ownership manages this (CODEX_REVIEW finding 3). |
+| **Subprocess fan-out (`codex exec` spawned for parallel qa-* / dogfooder)** | N/A (Agent-based) | 🚧 v2 | v1 ships sequential Codex executor only. v2 blocker: hook-lifecycle collision with codex exec duration vs `hooks.json:50` timeout=10s. Orphan-PID concern downgraded — `codex exec --json` streaming + process-group ownership manages this (CODEX_REVIEW finding 3). |
 | **`HARNESS_PLUGIN_ROOT` env var** | ✅ (AC-006) | ✅ (AC-006) | Renamed from `CLAUDE_PLUGIN_ROOT` with one-version overlap. Both names readable in `_lib.plugin_root_env()` during deprecation window. Sunset version pinned in `CHANGELOG.md`. |
 | **Structured gate-crash logging** | ✅ (AC-007) | ✅ (AC-007) | Same JSON shape on both: `{type:"gate-crash", script, tool_name, error, payload_keys}` in `learnings.jsonl`. Codex hook output `permissionDecision` writes match Claude. |
 | **Codex CLI version pin** | N/A | ✅ (AC-008) | `plugin-codex/.codex-version` minimum version; setup refuses registration if installed Codex < pin. Bounds the test matrix. |
 | **Opt-in / opt-out** | always-on | ✅ (AC-010) opt-in | Manifest flag `harness.codex_enabled: false` default. `plugin-codex/` materializes only when true. Prevents surprise for existing Claude users on `claude plugin update`. |
 | **`AGENTS.md` import / `project_doc_fallback_filenames`** | N/A | 🟡 user-config | Codex supports `project_doc_fallback_filenames = ["CLAUDE.md"]` in `~/.codex/config.toml`. User-opt-in bridge during migration. Documented in `README.codex.md`. |
-| **Cross-runtime task handoff (Claude start, Codex resume)** | N/A | 🚧 v3 | TASK_STATE.yaml race window exists for parallel runtime use; v1 documents single-runtime-per-repo as a constraint. v2 adds `fcntl.flock`. v3 supports concurrent. |
+| **Cross-runtime task handoff (Claude start, Codex resume)** | N/A | 🚧 v3 | Current runtimes share atomic `TASK.json` publication and receipt locking, but concurrent orchestration policy remains single-active-session. v3 may support concurrent ownership. |
 
 ---
 

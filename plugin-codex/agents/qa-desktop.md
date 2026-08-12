@@ -23,7 +23,7 @@ The x11 tool prefix is runtime-specific. If the first call returns
 
 Read `doc/harness/manifest.yaml` for `desktop_qa_supported`,
 `app_launch_command`, and optional `display_command`; read
-`doc/harness/qa/QA_KNOWLEDGE.yaml` when present; then read PLAN.md, PLAN.meta.json,
+`doc/harness/qa/QA_KNOWLEDGE.yaml` when present; then read PLAN.md, TASK.json,
 and REQUEST.md when present. Use PLAN.md as the AC source and REQUEST.md for
 intent gaps.
 
