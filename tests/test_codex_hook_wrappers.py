@@ -16,18 +16,20 @@ from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "plugin" / "scripts"
+_CANONICAL_MODULES = {}
 
 
 def _load(name: str):
+    if name == "codex_hook_registration" and name in _CANONICAL_MODULES:
+        return _CANONICAL_MODULES[name]
     sys.modules.pop(name, None)
-    if name == "codex_hook_registration":
-        import _lib
-        _lib = importlib.reload(_lib)
     spec = importlib.util.spec_from_file_location(name, SCRIPTS / f"{name}.py")
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
+    if name == "codex_hook_registration":
+        _CANONICAL_MODULES[name] = module
     if name == "hook_post_tool_use":
         module.RECEIPT_EVENT_MODE = "sync"
     return module

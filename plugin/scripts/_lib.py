@@ -2399,7 +2399,7 @@ def parse_receipt_runtime_id(value):
 
 def _validate_receipt_runtime_id(source, runtime_id):
     parsed = parse_receipt_runtime_id(runtime_id)
-    normalized_source = str(source or "").lower()
+    normalized_source = str(source or "")
     if not parsed:
         raise ValueError("receipt requires a namespaced runtime_id")
     if normalized_source not in {
@@ -2854,8 +2854,9 @@ def _make_runtime_receipt_writer():
                 pending.append(value.__code__)
             elif inspect.isclass(value) and value.__module__ == module.__name__:
                 for name, item in vars(value).items():
-                    if inspect.isfunction(item) and item.__globals__ is vars(module):
-                        pending.append(item.__code__)
+                    member = item.__func__ if isinstance(item, (staticmethod, classmethod)) else item
+                    if inspect.isfunction(member) and member.__globals__ is vars(module):
+                        pending.append(member.__code__)
                         class_members.append((value, name, item))
         while pending:
             code = pending.pop()

@@ -845,6 +845,32 @@ def _spawn_output(event: dict[str, Any]) -> tuple[str, str] | None:
     return (call_id, identity) if _valid_agent_identity(identity) else None
 
 
+def _spawn_activity(event: dict[str, Any]) -> tuple[str, str, str] | None:
+    """Decode the runtime's structured child-start correlation event."""
+    payload = _event_payload(event, "event_msg")
+    if not payload:
+        return None
+    item = payload.get("item") if payload.get("type") == "item_completed" else payload
+    if not isinstance(item, dict):
+        return None
+    if item.get("type") == "SubAgentActivity":
+        call_id = str(item.get("id") or "")
+    elif item.get("type") == "sub_agent_activity":
+        call_id = str(item.get("event_id") or "")
+    else:
+        return None
+    child_id = str(item.get("agent_thread_id") or "")
+    agent_path = str(item.get("agent_path") or "")
+    if (
+        item.get("kind") != "started"
+        or not CALL_RE.fullmatch(call_id)
+        or not THREAD_RE.fullmatch(child_id)
+        or not AGENT_PATH_RE.fullmatch(agent_path)
+    ):
+        return None
+    return call_id, child_id, agent_path
+
+
 def _root_delivery(event: dict[str, Any]) -> tuple[str, str] | None:
     payload = _event_payload(event, "response_item")
     if not payload or payload.get("type") != "agent_message":
@@ -1042,6 +1068,9 @@ class Watcher:
         item = self.calls.get(call_id) or {}
         if not all(item.get(key) for key in ("task_name", "output_path")):
             return
+        if item.get("agent_path") and item["agent_path"] != item["output_path"]:
+            self._invalidate(item, "structured activity and spawn output identities differed")
+            return
         if not item.get("child_id"):
             child_id = _find_child_by_agent_path(
                 self.root_id, str(item["output_path"]), self.session_cwd,
@@ -1180,6 +1209,16 @@ class Watcher:
             self._set_once(item, "task_name", task_name)
             self._set_once(item, "task_dir", active_task)
             self._set_once(item, "task_run_id", binding.get("run_id", ""))
+            self._maybe_start(call_id)
+            return
+        activity = _spawn_activity(event)
+        if activity:
+            call_id, child_id, agent_path = activity
+            item = self.calls.get(call_id)
+            if not item or not item.get("task_name"):
+                return
+            self._set_once(item, "child_id", child_id)
+            self._set_once(item, "agent_path", agent_path)
             self._maybe_start(call_id)
             return
         payload = _event_payload(event, "response_item")

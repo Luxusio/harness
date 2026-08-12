@@ -154,6 +154,39 @@ except PermissionError as exc:
     assert not (task / "RECEIPTS.jsonl").exists()
 
 
+def test_replaced_static_watcher_identity_helper_invalidates_binding(tmp_path):
+    task = tmp_path / "doc/harness/tasks/TASK__replaced-static-helper"
+    task.mkdir(parents=True)
+    _write_task_control(task)
+    probe = f'''\
+import sys
+sys.path.insert(0, {str(SCRIPT.parent)!r})
+import codex_lifecycle_watcher as mod
+
+mod.Watcher._receipt_source = staticmethod(lambda _item: "codex_session_watcher:collaboration")
+try:
+    mod.record_subagent_receipt({str(task)!r}, {{
+        "event": "started",
+        "source": "codex_session_watcher:collaboration",
+        "runtime_id": "codex:019f825b-f25f-70c3-8ee8-071f79fa1c42:call_staticHelper123:019f825b-f25f-70c3-8ee8-071f79fa1c43",
+        "agent_id": "/root/qa_cli_static",
+        "agent_type": "qa-cli",
+        "lens": "qa-cli",
+        "verdict": "",
+        "summary": "",
+    }})
+except PermissionError as exc:
+    assert "runtime-owned" in str(exc)
+else:
+    raise AssertionError("replaced static helper did not invalidate binding")
+'''
+    completed = subprocess.run(
+        [sys.executable, "-c", probe], cwd=REPO, text=True, capture_output=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert not (task / "RECEIPTS.jsonl").exists()
+
+
 def _write_task_control(task: Path, *, run_id: str = RUN_ID) -> None:
     (task / "TASK.json").write_text(json.dumps({
         "run_id": run_id,
@@ -234,8 +267,10 @@ def _spawn_events(root_id: str, child_id: str, task_name: str, agent_path: str):
             "call_id": call_id, "arguments": json.dumps({"task_name": task_name, "message": "encrypted"}),
         }},
         {"type": "event_msg", "payload": {
-            "type": "sub_agent_activity", "kind": "started", "event_id": call_id,
-            "agent_thread_id": child_id, "agent_path": agent_path,
+            "type": "item_completed", "item": {
+                "type": "SubAgentActivity", "kind": "started", "id": call_id,
+                "agent_thread_id": child_id, "agent_path": agent_path,
+            },
         }},
         {"type": "response_item", "payload": {
             "type": "function_call_output", "call_id": call_id,
@@ -695,6 +730,25 @@ def test_watcher_rejects_child_that_completed_before_start_capture(tmp_path, mon
         for event in _spawn_events(root_id, child_id, "qa_cli", agent_path):
             watcher.feed(event)
     assert receipts == []
+
+
+def test_activity_and_structured_output_identity_must_match(tmp_path, monkeypatch):
+    mod = _load()
+    task_dir = tmp_path / "doc/harness/tasks/TASK__watcher"
+    task_dir.mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    events = _spawn_events(root_id, child_id, "qa_cli", "/root/qa_cli")
+    events[-1]["payload"]["output"] = json.dumps({"task_name": "/root/qa_cli_other"})
+    watcher = mod.Watcher(str(tmp_path), root_id)
+    receipts = []
+    with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
+         mock.patch.object(mod, "record_subagent_receipt", side_effect=lambda _td, row: receipts.append(row)), \
+         mock.patch.object(mod, "receipt_snapshot", return_value=_snapshot([])):
+        for event in events:
+            watcher.feed(event)
+    assert receipts == []
+    assert watcher.calls["call_runtime_123456"]["invalid"] is True
 
 
 def test_watcher_restart_replays_persisted_exact_start_after_child_completes(tmp_path, monkeypatch):

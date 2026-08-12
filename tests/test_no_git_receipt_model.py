@@ -907,6 +907,8 @@ def test_receipt_runtime_id_requires_parseable_namespace(tmp_path):
     for source, runtime_id in (
         ("test_fixture", ""),
         ("test_fixture", "test:session:agent"),
+        ("CLAUDE_HOOK", "claude:session:agent"),
+        ("Codex_Session_Watcher:Collaboration", "codex:root:event:child"),
         ("codex_session_watcher:collaboration", "codex:root:event"),
         ("codex_session_watcher:collaboration", "claude:session:agent"),
         ("claude_hook", "claude:session:agent:extra"),
