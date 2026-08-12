@@ -98,39 +98,26 @@ def test_plan_meta_routes_lenses_with_safe_defaults_and_explicit_security(tmp_pa
     assert lib._required_qa_lenses(malformed_task) == ["qa-cli"]
 
 
-def test_receipts_require_matching_start_but_ignore_head_and_diff(tmp_path):
+def test_receipts_require_matching_start(tmp_path):
     task = _task(tmp_path)
-    _receipt(
-        task,
-        "review-code",
-        "review-1",
-        "started",
-        head_sha="a" * 40,
-        diff_fingerprint="sha256:" + "1" * 64,
-    )
+    _receipt(task, "review-code", "review-1", "started")
     completed = _receipt(
         task,
         "review-code",
         "review-1",
         "completed",
         "PASS",
-        head_sha="b" * 40,
-        diff_fingerprint="sha256:" + "2" * 64,
     )
-    assert "head_sha" not in completed
-    assert "diff_fingerprint" not in completed
-    assert "base_sha" not in completed
+    assert set(completed) == lib.RECEIPT_FIELDS
     assert lib.receipt_review_verdict(task) == "PASS"
 
-    _receipt(task, "qa-cli", "qa-1", "started", head_sha="c" * 40)
+    _receipt(task, "qa-cli", "qa-1", "started")
     _receipt(
         task,
         "qa-cli",
         "qa-1",
         "completed",
         "PASS",
-        head_sha="d" * 40,
-        diff_fingerprint="sha256:" + "3" * 64,
     )
     assert lib.receipt_runtime_verdict(task) == "PASS"
 
@@ -277,6 +264,30 @@ def test_terminal_receipt_reset_rejects_unsafe_stream_leaves(tmp_path):
     else:
         raise AssertionError("symlinked receipt stream must be rejected")
     assert outside.read_text(encoding="utf-8") == "preserve\n"
+
+
+def test_receipt_stream_and_lock_reject_group_world_writable_modes(tmp_path):
+    writable_stream = _task(tmp_path / "stream")
+    _pass_review(writable_stream)
+    stream = writable_stream / lib.RECEIPTS_NAME
+    stream.chmod(0o666)
+    try:
+        lib.receipt_snapshot(writable_stream)
+    except RuntimeError as exc:
+        assert "integrity" in str(exc)
+    else:
+        raise AssertionError("writable receipt stream must fail closed")
+
+    writable_lock = _task(tmp_path / "lock")
+    lock = writable_lock / ".receipts.lock"
+    lock.write_text("", encoding="utf-8")
+    lock.chmod(0o666)
+    try:
+        lib.receipt_snapshot(writable_lock)
+    except RuntimeError as exc:
+        assert "integrity" in str(exc)
+    else:
+        raise AssertionError("writable receipt lock must fail closed")
 
 
 def test_rotated_task_run_rejects_prior_run_receipts_without_source_state(tmp_path):

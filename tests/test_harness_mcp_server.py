@@ -326,7 +326,6 @@ class HarnessMcpServerTests(unittest.TestCase):
                 harness_server.write_task_close_attestation(
                     str(task_dir),
                     harness_server.read_state(str(task_dir)),
-                    head_sha="a" * 40,
                     receipt_fingerprint=harness_server.receipt_stream_fingerprint(str(task_dir)),
                 )
 
@@ -379,7 +378,6 @@ class HarnessMcpServerTests(unittest.TestCase):
             harness_server.write_task_close_attestation(
                 str(task_dir),
                 harness_server.read_state(str(task_dir)),
-                head_sha="a" * 40,
                 receipt_fingerprint=harness_server.receipt_stream_fingerprint(str(task_dir)),
             )
             self._call_in_repo(tmp, "goal_add_task", {

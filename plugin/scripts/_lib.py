@@ -2107,6 +2107,7 @@ def _receipt_stream_lock(task_dir):
             not stat.S_ISREG(info.st_mode)
             or info.st_uid != os.getuid()
             or info.st_nlink != 1
+            or info.st_mode & 0o022
         ):
             raise RuntimeError("receipt storage integrity unavailable")
         try:
@@ -2135,6 +2136,7 @@ def _receipt_stream_info(path):
         or not stat.S_ISREG(info.st_mode)
         or info.st_uid != os.getuid()
         or info.st_nlink != 1
+        or info.st_mode & 0o022
         or info.st_size > _RECEIPT_STREAM_MAX_BYTES
     ):
         raise RuntimeError("receipt storage integrity unavailable")
@@ -2155,6 +2157,7 @@ def _append_receipt_stream_unlocked(path, payload):
             not stat.S_ISREG(opened.st_mode)
             or opened.st_uid != os.getuid()
             or opened.st_nlink != 1
+            or opened.st_mode & 0o022
             or opened.st_size + len(payload) > _RECEIPT_STREAM_MAX_BYTES
             or (
                 prior is not None
@@ -2268,6 +2271,7 @@ def _read_receipt_bytes_unlocked(path):
             not stat.S_ISREG(opened.st_mode)
             or opened.st_uid != os.getuid()
             or opened.st_nlink != 1
+            or opened.st_mode & 0o022
             or opened.st_size > _RECEIPT_STREAM_MAX_BYTES
             or (opened.st_dev, opened.st_ino) != (prior.st_dev, prior.st_ino)
         ):
@@ -2283,7 +2287,13 @@ def _read_receipt_bytes_unlocked(path):
             or final.st_size != opened.st_size
             or final.st_mtime_ns != opened.st_mtime_ns
             or final.st_ctime_ns != opened.st_ctime_ns
+            or final.st_uid != os.getuid()
+            or final.st_nlink != 1
+            or final.st_mode & 0o022
             or not stat.S_ISREG(final_path.st_mode)
+            or final_path.st_uid != os.getuid()
+            or final_path.st_nlink != 1
+            or final_path.st_mode & 0o022
             or (final_path.st_dev, final_path.st_ino) != (opened.st_dev, opened.st_ino)
         ):
             raise RuntimeError("receipt storage integrity unavailable")
@@ -2417,7 +2427,7 @@ def receipt_stream_fingerprint(task_dir, snapshot=None):
 
 
 def write_task_close_attestation(
-    task_dir, state, *, receipt_fingerprint, head_sha=None,
+    task_dir, state, *, receipt_fingerprint,
 ):
     """Persist close evidence without binding lifecycle state to Git HEAD."""
     payload = {

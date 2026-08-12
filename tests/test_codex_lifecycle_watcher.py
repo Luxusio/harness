@@ -194,9 +194,7 @@ def test_watcher_records_start_then_correlated_review_completion(tmp_path, monke
 
     receipts = []
     def record(_task_dir, receipt):
-        entry = {**receipt, "head_sha": receipt.get("head_sha") or "a" * 40,
-                 "base_sha": receipt.get("base_sha") or "a" * 40,
-                 "diff_fingerprint": receipt.get("diff_fingerprint") or "sha256:before"}
+        entry = dict(receipt)
         receipts.append(entry)
         return entry
 
