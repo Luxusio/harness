@@ -1313,12 +1313,31 @@ def _make_control_writer_authority():
         )),
     }
     bindings = {}
+
+    def module_codes(module):
+        found = set()
+        pending = []
+        for value in vars(module).values():
+            if inspect.isfunction(value) and value.__globals__ is vars(module):
+                pending.append(value.__code__)
+            elif inspect.isclass(value) and value.__module__ == module.__name__:
+                pending.extend(
+                    item.__code__ for item in vars(value).values()
+                    if inspect.isfunction(item) and item.__globals__ is vars(module)
+                )
+        while pending:
+            code = pending.pop()
+            if code in found:
+                continue
+            found.add(code)
+            pending.extend(item for item in code.co_consts if isinstance(item, CodeType))
+        return found
+
     protected_dependencies = {
         "write_task_control", "begin_task_run", "restore_task_control",
         "write_active_marker", "clear_active_marker",
         "restore_active_marker_snapshot", "publish_task_close",
     }
-
     def bind(function):
         module_name = function.__module__
         function_path = os.path.realpath(function.__code__.co_filename)
@@ -1402,15 +1421,18 @@ def _make_control_writer_authority():
             (name, function.__globals__[name]) for name in function.__code__.co_names
             if name in protected_dependencies and name in function.__globals__
         )
+        library = sys.modules[__name__]
+        allowed_frames = {
+            **{code: vars(module) for code in module_codes(module)},
+            **{code: vars(library) for code in module_codes(library)},
+        }
         identity = (role, function.__qualname__)
         binding = (
-            function.__code__, function.__globals__, dependencies, role, module_name,
+            function.__code__, function.__globals__, dependencies, role, allowed_frames,
         )
         existing = bindings.get(identity)
         if existing is not None and existing != binding:
-            existing_module = sys.modules.get(existing[4])
-            if existing_module is not None and vars(existing_module) is existing[1]:
-                raise PermissionError("task-control writer is already bound")
+            raise PermissionError("task-control writer is already bound")
         bindings[identity] = binding
 
     def authorized(marker=False):
@@ -1429,6 +1451,12 @@ def _make_control_writer_authority():
                         and caller.f_globals is binding[1]
                         and all(caller.f_globals.get(name) is value for name, value in binding[2])
                     )
+                if not any(
+                    value[4].get(caller.f_code) is caller.f_globals
+                    for (role, _), value in bindings.items()
+                    if marker or role == "harness_server"
+                ):
+                    return False
                 caller = caller.f_back
             return False
         finally:

@@ -19,6 +19,10 @@ SCRIPTS = REPO_ROOT / "plugin" / "scripts"
 
 
 def _load(name: str):
+    sys.modules.pop(name, None)
+    if name == "codex_hook_registration":
+        import _lib
+        _lib = importlib.reload(_lib)
     spec = importlib.util.spec_from_file_location(name, SCRIPTS / f"{name}.py")
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)

@@ -209,6 +209,40 @@ class HarnessMcpServerTests(unittest.TestCase):
                 (root / "doc/harness/tasks/TASK__foreign-control-clone/TASK.json").exists()
             )
 
+    def test_control_writer_rejects_replaced_helper_confused_deputy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".git").mkdir()
+            manifest = root / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
+            foreign = root / "doc/harness/tasks/TASK__foreign-helper"
+            foreign.mkdir(parents=True)
+            control = {
+                "run_id": harness_lib.new_uuid7(),
+                "execution_mode": "standard",
+                "required_lenses": ["review-code", "qa-cli"],
+                "close_receipt_fingerprint": None,
+            }
+
+            def confused_helper(*_args, **_kwargs):
+                harness_server.write_task_control(str(foreign), control)
+                raise AssertionError("replaced helper reached task-control authority")
+
+            prior_cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                with mock.patch.object(
+                    harness_server, "ensure_task_scaffold", confused_helper,
+                ):
+                    with self.assertRaisesRegex(PermissionError, "task-control"):
+                        harness_server.handle_task_start(
+                            {"task_id": "TASK__confused-deputy-trigger"}
+                        )
+            finally:
+                os.chdir(prior_cwd)
+            self.assertFalse((foreign / "TASK.json").exists())
+
     def test_lifecycle_handlers_never_enter_git_snapshot_helpers(self):
         def forbidden(*_args, **_kwargs):
             raise AssertionError("lifecycle Git snapshot helper was called")
