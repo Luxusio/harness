@@ -60,7 +60,7 @@ def _write_marker_fixture(repo_root: str, task_dir: str, session_id: str = "") -
 
 
 def _record_receipt_fixture(task_dir, receipt):
-    source = harness_lib._receipt_short(receipt.get("source") or "test_fixture", 100)
+    source = harness_lib._receipt_short(receipt.get("source") or "claude_hook", 100)
     agent_id = harness_lib._receipt_short(receipt.get("agent_id") or receipt.get("id"), 300)
     agent_type = harness_lib._receipt_short(receipt.get("agent_type"), 300)
     lens = harness_lib._infer_receipt_lens(agent_type, receipt.get("lens"))
@@ -145,7 +145,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         *,
         agent_id: str = "agent-1",
         agent_type: str = "harness:qa-cli",
-        source: str = "test_harness",
+        source: str = "claude_hook",
     ) -> None:
         if not harness_lib.read_task_control(task_dir):
             raise AssertionError("test task requires valid TASK.json")
@@ -153,7 +153,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             {
                 "agent_id": "review-1", "agent_type": "harness:review-code",
                 "lens": "review-code", "event": "started", "source": source,
-                "runtime_id": "test:review-1",
+                "runtime_id": "claude:test-session:review-1",
             },
             {
                 "agent_id": "review-1", "agent_type": "harness:review-code",
@@ -161,18 +161,18 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "event": "completed", "verdict": "PASS",
                 "summary": "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0",
                 "source": source,
-                "runtime_id": "test:review-1",
+                "runtime_id": "claude:test-session:review-1",
             },
             {
                 "agent_id": agent_id, "agent_type": agent_type,
                 "lens": "qa-cli", "event": "started", "source": source,
-                "runtime_id": f"test:{agent_id}",
+                "runtime_id": f"claude:test-session:{agent_id}",
             },
             {
                 "agent_id": agent_id, "agent_type": agent_type, "event": "completed",
                 "lens": "qa-cli", "verdict": "PASS", "summary": "VERDICT: PASS",
                 "source": source,
-                "runtime_id": f"test:{agent_id}",
+                "runtime_id": f"claude:test-session:{agent_id}",
             },
         ):
             harness_server.record_subagent_receipt(task_dir, payload)
@@ -306,7 +306,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                     {
                         "agent_id": "late-agent", "agent_type": "harness:qa-cli",
                         "lens": "qa-cli", "event": "started",
-                        "source": "test_harness", "runtime_id": "test:late-agent",
+                        "source": "claude_hook", "runtime_id": "claude:test-session:late-agent",
                     },
                 )
 
@@ -358,7 +358,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             harness_server.record_subagent_receipt(task_dir, {
                 "agent_id": "qa-1", "agent_type": "harness:qa-cli",
                 "lens": "qa-cli", "event": "started",
-                "source": "test_harness", "runtime_id": "test:qa-1",
+                "source": "claude_hook", "runtime_id": "claude:test-session:qa-1",
             })
             self.assertEqual(harness_server.receipt_runtime_verdict(task_dir), "PENDING")
 
@@ -369,19 +369,19 @@ class HarnessMcpServerTests(unittest.TestCase):
                 {
                     "agent_id": "review-1", "agent_type": "harness:review-code",
                     "lens": "review-code", "event": "started",
-                    "source": "test_harness", "runtime_id": "test:review-1",
+                    "source": "claude_hook", "runtime_id": "claude:test-session:review-1",
                 },
                 {
                     "agent_id": "review-1", "agent_type": "harness:review-code",
                     "lens": "review-code",
                     "event": "completed", "verdict": "PASS",
                     "summary": "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0",
-                    "source": "test_harness", "runtime_id": "test:review-1",
+                    "source": "claude_hook", "runtime_id": "claude:test-session:review-1",
                 },
                 {
                     "agent_id": "qa-1", "agent_type": "harness:qa-cli",
                     "lens": "qa-cli", "event": "started",
-                    "source": "test_harness", "runtime_id": "test:qa-1",
+                    "source": "claude_hook", "runtime_id": "claude:test-session:qa-1",
                 },
             ):
                 harness_server.record_subagent_receipt(task_dir, payload)
@@ -394,8 +394,8 @@ class HarnessMcpServerTests(unittest.TestCase):
                     "event": "completed",
                     "verdict": "FAIL",
                     "summary": "VERDICT: FAIL",
-                    "source": "test_harness",
-                    "runtime_id": "test:qa-1",
+                    "source": "claude_hook",
+                    "runtime_id": "claude:test-session:qa-1",
                 },
             )
             self.assertEqual(harness_server.receipt_runtime_verdict(task_dir), "FAIL")
@@ -411,7 +411,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                     "agent_type": "harness:qa-cli",
                     "event": "started",
                     "summary": "rerun started",
-                    "source": "test_harness", "runtime_id": "test:qa-new",
+                    "source": "claude_hook", "runtime_id": "claude:test-session:qa-new",
                 },
             )
             self.assertEqual(harness_server.receipt_runtime_verdict(task_dir), "PENDING")
@@ -2123,8 +2123,8 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             for lens in harness_server.required_review_lenses(task_dir):
                 for status, verdict in (("started", ""), ("completed", "PASS")):
                     harness_server.record_subagent_receipt(task_dir, {
-                        "source": "test_fixture",
-                        "runtime_id": f"test:{lens}-{task_id}",
+                        "source": "claude_hook",
+                        "runtime_id": f"claude:test-session:{lens}-{task_id}",
                         "event": status,
                         "agent_id": f"{lens}-{task_id}",
                         "agent_type": review_types[lens],
@@ -2137,8 +2137,8 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                     })
             for status, verdict in (("started", ""), ("completed", "PASS")):
                 harness_server.record_subagent_receipt(task_dir, {
-                    "source": "test_fixture",
-                    "runtime_id": f"test:agent-{task_id}",
+                    "source": "claude_hook",
+                    "runtime_id": f"claude:test-session:agent-{task_id}",
                     "event": status,
                     "agent_id": f"agent-{task_id}",
                     "agent_type": "harness:qa-cli",

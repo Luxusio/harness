@@ -110,6 +110,50 @@ else:
     assert not (task / "RECEIPTS.jsonl").exists()
 
 
+def test_replaced_transitive_validation_helpers_invalidate_watch_binding(tmp_path):
+    task = tmp_path / "doc/harness/tasks/TASK__replaced-transitive-helper"
+    task.mkdir(parents=True)
+    _write_task_control(task)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    probe = f'''\
+import json, sys
+from pathlib import Path
+sys.path.insert(0, {str(SCRIPT.parent)!r})
+import codex_lifecycle_watcher as mod
+
+repo = Path({str(tmp_path)!r})
+rollout = repo / "rollout.jsonl"
+rollout.write_text(json.dumps({{"type":"session_meta","payload":{{
+    "id":{root_id!r},"session_id":{root_id!r},"cwd":str(repo),"thread_source":"user"
+}}}}) + "\\n" + json.dumps({{"type":"response_item","payload":{{
+    "type":"function_call","namespace":"collaboration","name":"spawn_agent",
+    "call_id":"call_transitive123","arguments":json.dumps({{"task_name":"qa_cli_transitive"}})
+}}}}) + "\\n" + json.dumps({{"type":"response_item","payload":{{
+    "type":"function_call_output","call_id":"call_transitive123",
+    "output":json.dumps({{"task_name":"/root/qa_cli_transitive"}})
+}}}}) + "\\n")
+original_open = mod._open_trusted_file
+mod._sessions_root = lambda: repo
+mod._find_rollout = lambda *_args, **_kwargs: rollout
+mod._open_trusted_file = original_open
+mod._active_task_binding_for_session = lambda *_: {{
+    "task_dir": {str(task)!r}, "run_id": {RUN_ID!r},
+}}
+mod._find_child_by_agent_path = lambda *_args, **_kwargs: {child_id!r}
+mod._child_status = lambda *_args, **_kwargs: ("running", None, "")
+try:
+    mod.watch(str(repo), {root_id!r}, str(rollout), 0, idle_seconds=1)
+except PermissionError as exc:
+    assert "runtime-owned" in str(exc) or "binding" in str(exc)
+'''
+    completed = subprocess.run(
+        [sys.executable, "-c", probe], cwd=REPO, text=True, capture_output=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert not (task / "RECEIPTS.jsonl").exists()
+
+
 def _write_task_control(task: Path, *, run_id: str = RUN_ID) -> None:
     (task / "TASK.json").write_text(json.dumps({
         "run_id": run_id,

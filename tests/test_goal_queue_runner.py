@@ -42,9 +42,9 @@ def write_task_state(tmp_path, task_id, status="closed", verdict="PASS"):
             rows.append({
                 "ts": "2026-08-12T00:00:00Z",
                 "event": event,
-                "source": "test_fixture",
+                "source": "claude_hook",
                 "task_run_id": run_id,
-                "runtime_id": f"test:{agent}",
+                "runtime_id": f"claude:test-session:{agent}",
                 "agent_id": agent,
                 "agent_type": lens,
                 "lens": lens,

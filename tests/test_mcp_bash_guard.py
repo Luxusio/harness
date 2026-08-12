@@ -161,6 +161,7 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "printf '%s' 'pass' | python3 -",
             "python3 -c \"exec(__import__('base64').b64decode('cGFzcw=='))\"",
             "python3 -c \"name='subagent_'+'lifecycle'; __import__(name)\"",
+            "python3 -c \"$(printf '%s' 'import subagent_lifecycle')\"",
         ):
             with self.subTest(command=command):
                 r = _run_bash(command)

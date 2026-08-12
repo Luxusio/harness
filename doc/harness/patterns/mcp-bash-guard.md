@@ -78,12 +78,12 @@ noise.
 
 ## Known gaps (deferred, not in PR1)
 
-The current guard descends through direct `bash -c` / `sh -c` command strings,
-but does **not** evaluate dynamic shell constructs:
+The current guard descends through direct `bash -c` / `sh -c` command strings.
+For Python `-c`, command substitution or backticks fail closed because the
+resolved code cannot be inspected statically. Other dynamic constructs remain:
 
 - `eval "sed -i x file"` — same mechanism; not evaluated.
-- `$(sed -i x file)` command substitution and `` `...` `` backticks — not
-  extracted.
+- command substitution or backticks around non-Python mutators — not extracted.
 - `python -c` with base64 / `exec(...)` obfuscation — regex patterns miss
   dynamically-constructed writes.
 - Symlink target resolution — `os.path.realpath` is not applied before

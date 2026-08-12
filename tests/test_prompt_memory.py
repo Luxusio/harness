@@ -38,9 +38,9 @@ def _receipt(*, event: str, lens: str, agent_id: str, verdict: str = "") -> dict
     return {
         "ts": "2026-08-12T00:00:00Z",
         "event": event,
-        "source": "test_fixture",
+        "source": "claude_hook",
         "task_run_id": RUN_ID,
-        "runtime_id": f"test:{agent_id}",
+        "runtime_id": f"claude:test-session:{agent_id}",
         "agent_id": agent_id,
         "agent_type": agent_id,
         "lens": lens,

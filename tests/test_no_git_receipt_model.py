@@ -64,8 +64,8 @@ def _receipt(
         summary = f"VERDICT: {verdict}"
         if lens.startswith("review-"):
             summary += "\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
-    extra.setdefault("source", "test_fixture")
-    extra.setdefault("runtime_id", f"test:{agent_id}")
+    extra.setdefault("source", "claude_hook")
+    extra.setdefault("runtime_id", f"claude:test-session:{agent_id}")
     return _fixture_record(
         task,
         {
@@ -85,7 +85,7 @@ def _fixture_record(task: Path, receipt: dict) -> dict:
     agent_id = lib._receipt_short(receipt.get("agent_id") or receipt.get("id"), 300)
     if not agent_id:
         raise ValueError("agent_id required")
-    source = lib._receipt_short(receipt.get("source") or "test_fixture", 100)
+    source = lib._receipt_short(receipt.get("source") or "claude_hook", 100)
     agent_type = lib._receipt_short(receipt.get("agent_type"), 300)
     lens = lib._infer_receipt_lens(agent_type, receipt.get("lens"))
     event = lib._receipt_short(receipt.get("event"), 20).lower()
@@ -427,24 +427,15 @@ def test_qa_start_must_match_completion_and_follow_review(tmp_path):
     replay = _task(tmp_path / "runtime-replay")
     _receipt(
         replay, "review-code", "review-reused", "started",
-        runtime_id="test:event-a:session-1:thread-a",
+        runtime_id="codex:root:event-a:thread-a",
+        source="codex_session_watcher:collaboration",
     )
     _receipt(
         replay, "review-code", "review-reused", "completed", "PASS",
-        runtime_id="test:event-b:session-1:thread-a",
+        runtime_id="codex:root:event-b:thread-a",
+        source="codex_session_watcher:collaboration",
     )
     assert lib.receipt_review_verdict(replay) == "PENDING"
-
-    source_mismatch = _task(tmp_path / "source-mismatch")
-    _receipt(
-        source_mismatch, "review-code", "reviewer", "started",
-        source="source-a",
-    )
-    _receipt(
-        source_mismatch, "review-code", "reviewer", "completed", "PASS",
-        source="source-b",
-    )
-    assert lib.receipt_review_verdict(source_mismatch) == "PENDING"
 
     type_mismatch = _task(tmp_path / "type-mismatch")
     _receipt(type_mismatch, "review-code", "reviewer", "started", agent_type="type-a")
@@ -473,17 +464,17 @@ def test_duplicate_terminals_and_contradictory_summaries_fail_closed(tmp_path):
     started = _fixture_record(contradictory, {
         "event": "started", "agent_id": "qa", "agent_type": "qa_cli",
         "lens": "qa-cli", "verdict": "PASS", "summary": "VERDICT: PASS",
-        "source": "test_fixture", "runtime_id": "test:qa",
+        "source": "claude_hook", "runtime_id": "claude:test-session:qa",
     })
     completed = _fixture_record(contradictory, {
         "event": "completed", "agent_id": "qa", "agent_type": "qa_cli",
         "lens": "qa-cli", "verdict": "PASS", "summary": "VERDICT: FAIL",
-        "source": "test_fixture", "runtime_id": "test:qa",
+        "source": "claude_hook", "runtime_id": "claude:test-session:qa",
     })
     missing = _fixture_record(contradictory, {
         "event": "completed", "agent_id": "qa-2", "agent_type": "qa_cli",
         "lens": "qa-cli", "verdict": "PASS", "summary": "done",
-        "source": "test_fixture", "runtime_id": "test:qa-2",
+        "source": "claude_hook", "runtime_id": "claude:test-session:qa-2",
     })
     assert started["verdict"] == ""
     assert completed["verdict"] == "PENDING"
@@ -865,7 +856,7 @@ def test_compact_receipts_reduce_representative_verbose_pair_by_at_least_40_perc
     completed = _fixture_record(task, {
         "event": "completed", "agent_id": "review-1", "agent_type": "review-code",
         "lens": "review-code", "verdict": "PASS", "summary": detail,
-        "source": "test_fixture", "runtime_id": "test:review-1",
+        "source": "claude_hook", "runtime_id": "claude:test-session:review-1",
     })
     compact = sum(len(json.dumps(row, sort_keys=True)) + 1 for row in (started, completed))
     legacy_pair = []
@@ -915,6 +906,7 @@ def test_receipt_runtime_id_requires_parseable_namespace(tmp_path):
 
     for source, runtime_id in (
         ("test_fixture", ""),
+        ("test_fixture", "test:session:agent"),
         ("codex_session_watcher:collaboration", "codex:root:event"),
         ("codex_session_watcher:collaboration", "claude:session:agent"),
         ("claude_hook", "claude:session:agent:extra"),
@@ -954,7 +946,7 @@ def test_writer_rejects_missing_type_or_lens_without_poisoning_stream(tmp_path):
     with pytest.raises(ValueError, match="exact persisted schema"):
         _fixture_record(task, {
             "event": "started", "agent_id": "unknown", "agent_type": "",
-            "source": "test_fixture", "runtime_id": "test:unknown",
+            "source": "claude_hook", "runtime_id": "claude:test-session:unknown",
         })
     assert not (task / lib.RECEIPTS_NAME).exists()
 

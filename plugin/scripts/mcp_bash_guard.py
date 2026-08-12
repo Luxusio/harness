@@ -10,8 +10,7 @@ with exit 0; silent on allow; fail-open on unexpected exceptions.
 
 Escape hatch: ``HARNESS_SKIP_MCP_GUARD=1`` → one-shot allow + log ``gate-bypass``.
 
-Known gaps (documented in doc/harness/patterns/mcp-bash-guard.md):
-  - ``eval "sed -i ..."`` and command substitution ``$(...)`` / backticks.
+Known gap (documented in doc/harness/patterns/mcp-bash-guard.md):
   - Symlink resolution (``os.path.realpath``) — not applied before classification.
 """
 from __future__ import annotations
@@ -332,7 +331,10 @@ def _protected_lifecycle_execution(argv, execution_cwd=""):
                 code = args[args.index("-c") + 1]
             except IndexError:
                 return False
-            return _python_code_exposes_lifecycle(code)
+            # The shell resolves these after parsing, so static Python
+            # inspection sees only a placeholder. Fail closed here, while
+            # still allowing ordinary script source to contain prose ticks.
+            return "$(" in code or "`" in code or _python_code_exposes_lifecycle(code)
         value_options = {"-X", "-W", "-Q", "--check-hash-based-pycs"}
         index = 0
         while index < len(args) and args[index].startswith("-"):

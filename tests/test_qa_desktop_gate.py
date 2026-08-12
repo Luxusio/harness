@@ -83,15 +83,15 @@ class TestProvenance(unittest.TestCase):
             rows = [
                 {
                     "ts": _lib._receipt_now_iso(), "event": "started",
-                    "source": "test_fixture", "task_run_id": run_id,
-                    "runtime_id": "test:qa-cli-1", "agent_id": "qa-cli-1",
+                    "source": "claude_hook", "task_run_id": run_id,
+                    "runtime_id": "claude:test-session:qa-cli-1", "agent_id": "qa-cli-1",
                     "agent_type": "qa_cli", "lens": "qa-cli",
                     "verdict": "", "summary": "",
                 },
                 {
                     "ts": _lib._receipt_now_iso(), "event": "completed",
-                    "source": "test_fixture", "task_run_id": run_id,
-                    "runtime_id": "test:qa-cli-1", "agent_id": "qa-cli-1",
+                    "source": "claude_hook", "task_run_id": run_id,
+                    "runtime_id": "claude:test-session:qa-cli-1", "agent_id": "qa-cli-1",
                     "agent_type": "qa_cli", "lens": "qa-cli",
                     "verdict": "PASS", "summary": completed_summary,
                 },
