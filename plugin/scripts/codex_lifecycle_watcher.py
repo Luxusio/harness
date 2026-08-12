@@ -196,6 +196,19 @@ def _find_rollout(thread_id: str, *, deadline: float | None = None) -> Path | No
     root = _sessions_root()
     candidates: list[Path] = []
     try:
+        # UUIDv7 gives the runtime creation date. Probe that bounded day first;
+        # older registrations retain the bounded fallback scan below.
+        try:
+            created = datetime.fromtimestamp(uuid7_timestamp_ms(thread_id) / 1000).astimezone()
+            direct_root = root / f"{created:%Y}" / f"{created:%m}" / f"{created:%d}"
+            direct = list(direct_root.glob(f"rollout-*{thread_id}.jsonl"))
+        except (OSError, OverflowError, TypeError, ValueError):
+            direct = []
+        valid_direct = [path for path in direct if _safe_regular_file(path, root)]
+        if len(valid_direct) == 1:
+            return valid_direct[0]
+        if len(valid_direct) > 1:
+            return None
         for directory, _subdirs, filenames in os.walk(root):
             if _deadline_expired(deadline):
                 return None
