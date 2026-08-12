@@ -92,8 +92,8 @@ echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"'","ty
 
 This closes the loop: Phase 7 discovers flaky tests, learnings stores them, Phase 1 loads them.
 
-2. Read `plugin/skills/develop/test-failure-triage.md` and classify each GATE+OWN failure (T1-T4).
-3. For T1/T2 GATE failures, read `plugin/skills/develop/hypothesis-driven-debugging.md` and follow it. Form hypotheses, test them, then apply targeted fixes. Do NOT guess.
+2. Read `${CLAUDE_PLUGIN_ROOT}/skills/develop/test-failure-triage.md` and classify each GATE+OWN failure (T1-T4).
+3. For T1/T2 GATE failures, read `${CLAUDE_PLUGIN_ROOT}/skills/develop/hypothesis-driven-debugging.md` and follow it. Form hypotheses, test them, then apply targeted fixes. Do NOT guess.
 
    **Bug pattern reference table** — use this to inform hypothesis formation:
 

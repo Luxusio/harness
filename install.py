@@ -351,6 +351,7 @@ def _build_codex_payload(target: Path, final_root: Path) -> None:
         "internal-skills/develop": (
             "fix-first-pattern.md", "runtime-smoke.md",
             "quality-audit-pipeline.md", "verification-gate.md",
+            "test-failure-triage.md", "hypothesis-driven-debugging.md",
         ),
         "internal-skills/plan": (
             "decision-principles.md", "intake.md", "review-phases.md", "write-artifacts.md",
@@ -363,7 +364,12 @@ def _build_codex_payload(target: Path, final_root: Path) -> None:
         source_dir = PLUGIN_ROOT / "skills" / relative_dir.removeprefix("internal-skills/")
         destination_dir = target / relative_dir
         for name in names:
-            shutil.copy2(source_dir / name, destination_dir / name)
+            source_path = source_dir / name
+            destination_path = destination_dir / name
+            text = source_path.read_text(encoding="utf-8").replace(
+                "${CLAUDE_PLUGIN_ROOT}", "${HARNESS_PLUGIN_ROOT}",
+            )
+            destination_path.write_text(text, encoding="utf-8")
     codex_setup = target / "skills" / "setup"
     claude_setup = PLUGIN_ROOT / "skills" / "setup"
     for name in ("repo-census.md", "project-interview.md", "bootstrap.md", "verify-report.md"):

@@ -108,7 +108,7 @@ Do not create a chronological side file. PLAN.md is the durable review record.
 
 ## Phase 1 — CEO Review (always runs)
 
-Methodology: `plugin/skills/plan-ceo-review/SKILL.md`. Conflict priority: **P1 + P2**.
+Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-ceo-review/SKILL.md`. Conflict priority: **P1 + P2**.
 
 ### 1.1 Premise extraction and gate (MANDATORY USER GATE)
 
@@ -159,7 +159,7 @@ C) No, these need revisiting — (please describe)
 
 ## Phase 2 — Design Review (if ui_scope=true)
 
-Methodology: `plugin/skills/plan-design-review/SKILL.md`. Conflict priority: **P5 + P1**.
+Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-design-review/SKILL.md`. Conflict priority: **P5 + P1**.
 
 Both voices fully independent (no `## Prior phase findings` in either brief — aesthetic anchoring prevention).
 
@@ -169,7 +169,7 @@ Brief format: `| dimension | score | finding | fix |` — score each dimension 0
 
 ## Phase 3 — Engineering Review (always runs)
 
-Methodology: `plugin/skills/plan-eng-review/SKILL.md`. Conflict priority: **P5 + P3**.
+Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-eng-review/SKILL.md`. Conflict priority: **P5 + P3**.
 
 ### Dimensions (6)
 
@@ -198,7 +198,7 @@ Methodology: `plugin/skills/plan-eng-review/SKILL.md`. Conflict priority: **P5 +
 
 ## Phase 4 — DX Review (if dx_scope=true)
 
-Methodology: `plugin/skills/plan-devex-review/SKILL.md`. Conflict priority: **P5 + P3**.
+Methodology: `${CLAUDE_PLUGIN_ROOT}/skills/plan-devex-review/SKILL.md`. Conflict priority: **P5 + P3**.
 
 ### Dimensions (6)
 

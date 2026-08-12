@@ -371,6 +371,8 @@ def test_install_codex_plugin_cache_uses_manifest_version(tmp_path):
         "internal-skills/develop/runtime-smoke.md",
         "internal-skills/develop/quality-audit-pipeline.md",
         "internal-skills/develop/verification-gate.md",
+        "internal-skills/develop/test-failure-triage.md",
+        "internal-skills/develop/hypothesis-driven-debugging.md",
         "internal-skills/plan/decision-principles.md",
         "internal-skills/plan/intake.md",
         "internal-skills/plan/review-phases.md",
@@ -380,6 +382,16 @@ def test_install_codex_plugin_cache_uses_manifest_version(tmp_path):
         "internal-skills/run/self-improvement.md",
     ):
         assert (cached / rel).is_file(), rel
+    for shared in (
+        cached / "internal-skills/develop/runtime-smoke.md",
+        cached / "internal-skills/develop/verification-gate.md",
+        cached / "internal-skills/plan/review-phases.md",
+        cached / "internal-skills/run/self-improvement.md",
+    ):
+        text = shared.read_text(encoding="utf-8")
+        assert "${CLAUDE_PLUGIN_ROOT}" not in text, shared
+        assert "`plugin/skills/develop/" not in text, shared
+        assert "`plugin/skills/plan-" not in text, shared
     assert (cached / "skills" / "setup" / "bootstrap.md").is_file()
     assert (cached / "skills" / "setup" / "verify-report.md").is_file()
     assert (cached / "skills" / "setup" / "templates" / "CONTRACTS.md").is_file()
