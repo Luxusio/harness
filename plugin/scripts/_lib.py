@@ -2331,7 +2331,11 @@ def _receipt_snapshot_unlocked(task_dir):
             raise RuntimeError("receipt storage integrity unavailable") from exc
         if not isinstance(item, dict):
             raise RuntimeError("receipt storage integrity unavailable")
-        if set(item) != RECEIPT_FIELDS or item.get("event") not in RECEIPT_EVENTS:
+        if (
+            set(item) != RECEIPT_FIELDS
+            or any(not isinstance(value, str) for value in item.values())
+            or item.get("event") not in RECEIPT_EVENTS
+        ):
             raise RuntimeError(
                 "unsupported RECEIPTS.jsonl schema; start a fresh task run to reset receipts"
             )

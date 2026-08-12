@@ -468,3 +468,23 @@ def test_old_unified_schema_requires_a_fresh_task_run(tmp_path):
         assert "start a fresh task run" in str(exc)
     else:
         raise AssertionError("old receipt schema must fail closed")
+
+
+def test_exact_schema_rejects_non_string_values(tmp_path):
+    task = _task(tmp_path)
+    entry = {field: "" for field in lib.RECEIPT_FIELDS}
+    entry.update(
+        event="started",
+        task_run_id=lib.read_task_run(task)["task_run_id"],
+        summary=[],
+    )
+    (task / lib.RECEIPTS_NAME).write_text(
+        json.dumps(entry) + "\n", encoding="utf-8"
+    )
+
+    try:
+        lib.receipt_snapshot(task)
+    except RuntimeError as exc:
+        assert "start a fresh task run" in str(exc)
+    else:
+        raise AssertionError("mutable receipt values must fail closed")
