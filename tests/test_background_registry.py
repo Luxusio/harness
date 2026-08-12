@@ -521,6 +521,29 @@ def test_stop_only_rejects_transcript_without_runtime_start_proof(tmp_path, monk
     assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
 
 
+def test_stop_only_rejects_symlinked_transcript_path(tmp_path, monkeypatch):
+    repo, task_dir = _repo(tmp_path)
+    session_id = "sess-symlink-proof"
+    agent_id = "qa-cli-symlink-proof"
+    final_message = "VERDICT: PASS"
+    _bind_session(repo, task_dir, session_id)
+    transcript = Path(_write_agent_transcript(
+        tmp_path, monkeypatch, session_id, agent_id, final_message,
+    ))
+    real_transcript = transcript.with_name("runtime-copy.jsonl")
+    transcript.rename(real_transcript)
+    transcript.symlink_to(real_transcript)
+
+    record = background_registry.mark_subagent_stop(repo, {
+        "hook_event_name": "SubagentStop", "session_id": session_id,
+        "agent_id": agent_id, "agent_type": agent_id,
+        "agent_transcript_path": str(transcript), "last_assistant_message": final_message,
+    })
+
+    assert record["status"] == "unmatched_stop"
+    assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
+
+
 def test_stop_only_fallback_rejects_transcript_from_prior_run(tmp_path, monkeypatch):
     repo, task_dir = _repo(tmp_path)
     session_id = "sess-rotated"

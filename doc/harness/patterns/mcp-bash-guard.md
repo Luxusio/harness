@@ -57,6 +57,10 @@ before the command basename is examined (fixes a legacy bypass).
 and direct imports of `record_subagent_receipt` are runtime-owned receipt
 capabilities. A model-issued Bash command may not invoke them directly; only
 the configured runtime lifecycle hooks/watchers may author those events.
+Claude `projects/*/<session>/subagents/agent-*.jsonl` transcripts are likewise
+classified as protected receipt provenance even though they live outside the
+repository; redirection, mutator verbs, and recognized inline Python writes to
+those leaves are denied.
 
 ## Known-safe verbs (no classification attempt)
 

@@ -39,6 +39,7 @@ try:
     )
     from prewrite_gate import (
         _is_protected_artifact,
+        _is_claude_subagent_transcript,
         _is_source_file,
         _is_workflow_control_surface,
         PROTECTED_ARTIFACTS,
@@ -57,6 +58,9 @@ LAST_ARG_MUTATORS = {"cp", "mv", "install", "touch", "truncate"}
 TEE_COMMAND = "tee"
 LIFECYCLE_RECEIPT_ENTRYPOINTS = {
     "background_hook.py", "background_registry.py", "codex_lifecycle_watcher.py",
+}
+LIFECYCLE_RECEIPT_MODULES = {
+    os.path.splitext(name)[0] for name in LIFECYCLE_RECEIPT_ENTRYPOINTS
 }
 
 # Shell operators that separate command units. We shlex-tokenize first
@@ -116,7 +120,7 @@ def _tokenize(command: str):
 def _normalize_candidate_path(
     token: str, repo_root: str = "", execution_cwd: str = ""
 ) -> str:
-    value = str(token or "").strip().strip("'").strip('"')
+    value = os.path.expanduser(str(token or "").strip().strip("'").strip('"'))
     if not value:
         return ""
     value = value.rstrip(",)")
@@ -125,6 +129,8 @@ def _normalize_candidate_path(
     candidate = os.path.realpath(
         value if os.path.isabs(value) else os.path.join(cwd, value)
     )
+    if _is_claude_subagent_transcript(candidate):
+        return candidate
     try:
         if os.path.commonpath((root, candidate)) != root:
             return ""
@@ -136,6 +142,8 @@ def _normalize_candidate_path(
 def _classify_gated_path(path_value: str, repo_root: str) -> str:
     if not path_value:
         return ""
+    if _is_claude_subagent_transcript(path_value):
+        return "protected-artifact"
     if _is_workflow_control_surface(path_value, repo_root=repo_root):
         return "workflow-control-surface"
     if _is_protected_artifact(path_value):
@@ -212,6 +220,13 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
     cmd = os.path.basename(non_env[0])
 
     visible = " ".join(non_env)
+    protected_import = any(
+        re.search(
+            rf"(?:^|[;\s])(?:from\s+{re.escape(name)}\s+import|import\s+{re.escape(name)}(?:\s|$|[;,]))",
+            visible,
+        )
+        for name in LIFECYCLE_RECEIPT_MODULES
+    )
     if (
         cmd in LIFECYCLE_RECEIPT_ENTRYPOINTS
         or cmd.startswith(("python", "python3", "pypy"))
@@ -219,6 +234,7 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
     ):
         if (
             any(name in visible for name in LIFECYCLE_RECEIPT_ENTRYPOINTS)
+            or protected_import
             or "record_subagent_receipt" in visible
         ):
             targets.append({

@@ -144,6 +144,27 @@ def _is_protected_artifact(path):
     return os.path.basename(path) in PROTECTED_ARTIFACTS
 
 
+def _is_claude_subagent_transcript(path):
+    """Return True for the runtime-owned Claude subagent transcript surface."""
+    if not path:
+        return False
+    candidate = os.path.abspath(os.path.expanduser(str(path)))
+    config_root = os.path.abspath(os.path.expanduser(
+        os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude"
+    ))
+    projects_root = os.path.join(config_root, "projects")
+    try:
+        rel = os.path.relpath(candidate, projects_root).split(os.sep)
+    except ValueError:
+        return False
+    return (
+        len(rel) >= 4
+        and rel[-2] == "subagents"
+        and re.fullmatch(r"agent-[A-Za-z0-9_.:-]+\.jsonl", rel[-1]) is not None
+        and rel[0] != ".."
+    )
+
+
 def _is_workflow_control_surface(path, repo_root=None):
     """Return True if ``path`` is a harness workflow-control-surface file."""
     if not path:
@@ -517,6 +538,15 @@ def _check_path(data: dict, file_path: str) -> None:
         )
         return 0
     if not is_harness_enabled_repo(repo_root):
+        return 0
+    if _is_claude_subagent_transcript(requested_path):
+        _deny(
+            "C-05-protected-artifact",
+            requested_path,
+            "claude-runtime",
+            "Claude subagent transcripts are runtime-owned receipt provenance and cannot be edited.",
+            repo_root,
+        )
         return 0
     file_path = os.path.realpath(requested_path)
     try:

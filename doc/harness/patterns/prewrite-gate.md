@@ -47,7 +47,9 @@ the sentence to understand what to do next.
 
 The `PROTECTED_ARTIFACTS` dict maps basename → owner-role. Owners are space-free
 so the structured tail remains grep-stable; the deny sentence names the human
-tool to route through (e.g. `update_checks.py` for `CHECKS.yaml`).
+tool to route through (for example `write_plan` for `PLAN.md`). Claude
+`projects/*/<session>/subagents/agent-*.jsonl` leaves are also protected outside
+the repository because stop-only receipt provenance depends on them.
 
 ## Workflow-control-surface
 

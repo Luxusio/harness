@@ -97,6 +97,20 @@ class TestMutationsAgainstWorkflowControl(unittest.TestCase):
 
 
 class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
+    def test_claude_subagent_transcript_mutation_is_denied(self):
+        transcript = os.path.expanduser(
+            "~/.claude/projects/project/session/subagents/agent-review-code.jsonl"
+        )
+        for command in (
+            f"echo forged >> {transcript}",
+            f"python3 -c 'open(\"{transcript}\", \"a\").write(\"forged\")'",
+        ):
+            with self.subTest(command=command):
+                r = _run_bash(command)
+                decision, reason = parse_decision(r.stdout)
+                self.assertEqual(decision, "deny")
+                self.assertIn("rule=protected-artifact", reason)
+
     def test_direct_lifecycle_hook_invocation_is_denied(self):
         for command in (
             "python3 plugin/scripts/background_hook.py --event stop",
@@ -104,6 +118,9 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "bash plugin/scripts/background_hook.py --event stop",
             "HARNESS_SKIP_MCP_GUARD=1 python3 plugin/scripts/background_hook.py --event stop",
             "python3 plugin/scripts/background_registry.py",
+            "python3 -c 'import background_registry'",
+            "python3 -c 'from background_registry import mark_subagent_stop'",
+            "python3 -c 'import codex_lifecycle_watcher as watcher'",
             "python3 -c 'from _lib import record_subagent_receipt'",
         ):
             with self.subTest(command=command):

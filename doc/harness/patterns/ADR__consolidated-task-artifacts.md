@@ -85,6 +85,9 @@ immediately followed by the explicit `completed` entry in one task transaction.
 The verdict still comes only from the unique canonical first line; missing,
 foreign, stale, replayed, aliased, untrusted, or unbound stops cannot yield
 PASS. Direct model invocation of lifecycle receipt-authoring scripts is denied.
+The transcript namespace and every path component/leaf are descriptor-bound,
+non-symlink, owner-only provenance; Write/Edit/apply_patch and Bash mutation
+gates deny model-authored changes to Claude subagent transcript leaves.
 
 Old-schema entries in `RECEIPTS.jsonl` are rejected with an actionable message
 to start a fresh task run or reset the unsupported stream. They are not

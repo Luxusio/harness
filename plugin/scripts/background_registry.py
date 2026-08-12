@@ -11,6 +11,7 @@ import json
 import os
 import hashlib
 import re
+import stat
 import tempfile
 import threading
 import time
@@ -207,33 +208,75 @@ def _trusted_stop_provenance(
     final_message = payload.get("last_assistant_message")
     if not isinstance(raw_path, str) or not isinstance(final_message, str) or not final_message:
         return "", ""
-    path = os.path.realpath(raw_path)
-    claude_root = os.path.realpath(
+    path = os.path.abspath(raw_path)
+    claude_root = os.path.abspath(
         os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
     )
     projects_root = os.path.join(claude_root, "projects")
+    opened: list[tuple[int, str, os.stat_result]] = []
     try:
         if os.path.commonpath((projects_root, path)) != projects_root:
             return "", ""
         rel = os.path.relpath(path, projects_root).split(os.sep)
-        if len(rel) < 4 or rel[-3:] != [sid, "subagents", f"agent-{aid}.jsonl"]:
-            return "", ""
-        before = os.lstat(path)
         if (
-            os.path.islink(path) or not os.path.isfile(path)
+            len(rel) < 4 or any(part in {"", ".", ".."} for part in rel)
+            or rel[-3:] != [sid, "subagents", f"agent-{aid}.jsonl"]
+        ):
+            return "", ""
+        dir_flags = (
+            os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        current_fd = os.open(projects_root, dir_flags)
+        root_stat = os.fstat(current_fd)
+        opened.append((current_fd, projects_root, root_stat))
+        if root_stat.st_uid != os.getuid() or root_stat.st_mode & 0o022:
+            return "", ""
+        for part in rel[:-1]:
+            child_fd = os.open(part, dir_flags, dir_fd=current_fd)
+            child_stat = os.fstat(child_fd)
+            opened.append((child_fd, part, child_stat))
+            if (
+                not stat.S_ISDIR(child_stat.st_mode)
+                or child_stat.st_uid != os.getuid() or child_stat.st_mode & 0o022
+            ):
+                return "", ""
+            current_fd = child_fd
+        leaf_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        leaf_fd = os.open(rel[-1], leaf_flags, dir_fd=current_fd)
+        before = os.fstat(leaf_fd)
+        opened.append((leaf_fd, rel[-1], before))
+        if (
+            not stat.S_ISREG(before.st_mode)
             or before.st_uid != os.getuid() or before.st_nlink != 1
             or before.st_mode & 0o022 or before.st_size > 64 * 1024 * 1024
         ):
             return "", ""
-        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-        fd = os.open(path, flags)
-        with os.fdopen(fd, encoding="utf-8") as handle:
-            lines = handle.readlines()
-        after = os.lstat(path)
-        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns,
+        raw = bytearray()
+        while True:
+            chunk = os.read(leaf_fd, 64 * 1024)
+            if not chunk:
+                break
+            raw.extend(chunk)
+        lines = raw.decode("utf-8").splitlines()
+        after = os.fstat(leaf_fd)
+        if (
+            before.st_dev, before.st_ino, before.st_size,
+            before.st_mtime_ns, before.st_ctime_ns,
+        ) != (
+            after.st_dev, after.st_ino, after.st_size,
+            after.st_mtime_ns, after.st_ctime_ns,
         ):
             return "", ""
+        for index, (fd, name, expected) in enumerate(opened):
+            actual = (
+                os.stat(name, dir_fd=opened[index - 1][0], follow_symlinks=False)
+                if index else os.stat(projects_root, follow_symlinks=False)
+            )
+            if (actual.st_dev, actual.st_ino, actual.st_mode) != (
+                expected.st_dev, expected.st_ino, expected.st_mode,
+            ):
+                return "", ""
         run_time = datetime.fromisoformat(task_run_started_at({"run_id": run_id}).replace("Z", "+00:00"))
         items = [json.loads(line) for line in lines if line.strip()]
         transcript_agent_type = ""
@@ -277,6 +320,12 @@ def _trusted_stop_provenance(
             return "", ""
     except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
         return "", ""
+    finally:
+        for fd, _name, _expected in reversed(opened):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
     return "", ""
 
 

@@ -46,6 +46,15 @@ class TestAllowSilent(unittest.TestCase):
 
 
 class TestDenyProtectedArtifact(unittest.TestCase):
+    def test_write_claude_subagent_transcript_denies(self):
+        transcript = os.path.expanduser(
+            "~/.claude/projects/project/session/subagents/agent-review-code.jsonl"
+        )
+        r = invoke_hook(GATE, "Write", {"file_path": transcript})
+        decision, reason = parse_decision(r.stdout)
+        self.assertEqual(decision, "deny")
+        self.assertIn("runtime-owned receipt provenance", reason)
+
     def test_write_plan_md_inside_task_denies(self):
         with scratch_task_in_real_repo("pr1-protected") as task_dir:
             plan = os.path.join(task_dir, "PLAN.md")
