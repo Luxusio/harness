@@ -5,6 +5,8 @@ import hashlib
 import json
 import sys
 import threading
+import importlib.machinery
+import subprocess
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest import mock
@@ -326,6 +328,43 @@ def test_receipt_writer_rejects_first_binder_outside_canonical_module(tmp_path):
             assert "canonical module import" in str(exc)
         else:
             raise AssertionError("non-canonical first binder was accepted")
+
+
+def test_control_writer_rejects_forged_first_module_and_rebinding():
+    import pytest
+
+    expected = ROOT / "plugin/mcp/harness_server.py"
+    module = ModuleType("harness_server")
+    module.__file__ = str(expected)
+    module.__spec__ = importlib.util.spec_from_loader(
+        "harness_server",
+        importlib.machinery.SourceFileLoader("harness_server", str(expected)),
+    )
+    module.__dict__["bind"] = lib._bind_control_writer
+    forged = compile(
+        "def handle_task_start(args):\n  return None\nbind(handle_task_start)\n",
+        str(expected),
+        "exec",
+    )
+    with mock.patch.dict(sys.modules, {"harness_server": module}):
+        with pytest.raises(PermissionError, match="canonical module import"):
+            exec(forged, module.__dict__)
+
+    server = sys.modules.get("harness_server")
+    if server is not None:
+        with pytest.raises(PermissionError, match="canonical module import"):
+            lib._bind_control_writer(server.handle_task_start)
+
+
+def test_control_writer_accepts_canonical_script_entrypoints():
+    for script in (
+        ROOT / "plugin/mcp/harness_server.py",
+        ROOT / "plugin/scripts/codex_hook_registration.py",
+    ):
+        completed = subprocess.run(
+            [sys.executable, str(script)], input=b"", capture_output=True, timeout=10,
+        )
+        assert completed.returncode == 0, completed.stderr.decode("utf-8", "replace")
 
 
 def test_raw_receipt_append_primitive_is_not_exposed():

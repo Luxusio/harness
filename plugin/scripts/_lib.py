@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import json
 import hashlib
+import importlib.machinery
 import inspect
 import sys
 import secrets
@@ -1303,6 +1304,14 @@ def _make_control_writer_authority():
         },
         "codex_hook_registration": {"_bind_active_task_to_root_session"},
     }
+    canonical_paths = {
+        "harness_server": os.path.realpath(os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "mcp", "harness_server.py",
+        )),
+        "codex_hook_registration": os.path.realpath(os.path.join(
+            os.path.dirname(__file__), "codex_hook_registration.py",
+        )),
+    }
     bindings = {}
     protected_dependencies = {
         "write_task_control", "begin_task_run", "restore_task_control",
@@ -1312,36 +1321,109 @@ def _make_control_writer_authority():
 
     def bind(function):
         module_name = function.__module__
-        role = os.path.splitext(os.path.basename(function.__code__.co_filename))[0]
+        function_path = os.path.realpath(function.__code__.co_filename)
+        roles = [role for role, path in canonical_paths.items() if path == function_path]
+        role = roles[0] if len(roles) == 1 else ""
         if function.__qualname__ not in allowed.get(role, set()):
             raise PermissionError("unsupported task-control writer")
         module = sys.modules.get(module_name)
-        if module is None or function.__globals__ is not vars(module):
-            raise PermissionError("task-control writer requires its canonical module")
+        expected_path = canonical_paths[role]
+        caller = inspect.currentframe().f_back
+        module_path = os.path.realpath(str(getattr(module, "__file__", "") or ""))
+        if module_name == "__main__":
+            canonical_loader = (
+                os.path.realpath(sys.argv[0]) == expected_path
+                and getattr(module, "__spec__", None) is None
+            )
+        else:
+            spec = getattr(module, "__spec__", None)
+            loader = getattr(spec, "loader", None)
+            canonical_loader = (
+                module_name == role
+                and isinstance(loader, importlib.machinery.SourceFileLoader)
+                and os.path.realpath(str(getattr(spec, "origin", "") or "")) == expected_path
+                and os.path.realpath(loader.get_filename(module_name)) == expected_path
+            )
         owner = module
         for part in function.__qualname__.split("."):
             owner = getattr(owner, part, None)
-        if owner is not function:
-            raise PermissionError("task-control writer function is not canonical")
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            before = os.lstat(expected_path)
+            fd = os.open(expected_path, flags)
+            try:
+                opened = os.fstat(fd)
+                chunks = []
+                while True:
+                    chunk = os.read(fd, 64 * 1024)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                after = os.fstat(fd)
+            finally:
+                os.close(fd)
+            final_path = os.lstat(expected_path)
+        except OSError as exc:
+            raise PermissionError("task-control writer source is unsafe") from exc
+        source_identity = lambda value: (
+            value.st_dev, value.st_ino, value.st_size, value.st_mode,
+            value.st_uid, value.st_nlink, value.st_mtime_ns, value.st_ctime_ns,
+        )
+        canonical_root = compile(b"".join(chunks), expected_path, "exec")
+        candidates = []
+        pending = [canonical_root]
+        while pending:
+            candidate = pending.pop()
+            if candidate.co_qualname == function.__qualname__:
+                candidates.append(candidate)
+            pending.extend(value for value in candidate.co_consts if isinstance(value, CodeType))
+        if (
+            caller is None
+            or caller.f_code.co_name != "<module>"
+            or caller.f_code != canonical_root
+            or module is None
+            or caller.f_globals is not vars(module)
+            or function.__globals__ is not vars(module)
+            or module_path != expected_path
+            or not canonical_loader
+            or owner is not function
+            or len(candidates) != 1
+            or candidates[0] != function.__code__
+            or not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.getuid()
+            or before.st_nlink != 1
+            or before.st_mode & 0o022
+            or (before.st_dev, before.st_ino) != (opened.st_dev, opened.st_ino)
+            or source_identity(opened) != source_identity(after)
+            or (final_path.st_dev, final_path.st_ino) != (before.st_dev, before.st_ino)
+        ):
+            raise PermissionError("task-control writer requires its canonical module import")
         dependencies = tuple(
             (name, function.__globals__[name]) for name in function.__code__.co_names
             if name in protected_dependencies and name in function.__globals__
         )
-        bindings[(module_name, function.__qualname__)] = (
-            function.__code__, function.__globals__, dependencies, role,
+        identity = (role, function.__qualname__)
+        binding = (
+            function.__code__, function.__globals__, dependencies, role, module_name,
         )
+        existing = bindings.get(identity)
+        if existing is not None and existing != binding:
+            existing_module = sys.modules.get(existing[4])
+            if existing_module is not None and vars(existing_module) is existing[1]:
+                raise PermissionError("task-control writer is already bound")
+        bindings[identity] = binding
 
     def authorized(marker=False):
         frame = inspect.currentframe()
         try:
             caller = frame.f_back.f_back if frame and frame.f_back else None
             while caller is not None:
-                module_name = str(caller.f_globals.get("__name__") or "")
-                identity = (module_name, caller.f_code.co_qualname)
-                binding = bindings.get(identity)
-                if binding is not None and (
-                    marker or binding[3] == "harness_server"
-                ):
+                binding = next((
+                    value for (role, qualname), value in bindings.items()
+                    if qualname == caller.f_code.co_qualname
+                    and (marker or role == "harness_server")
+                ), None)
+                if binding is not None:
                     return bool(
                         caller.f_code is binding[0]
                         and caller.f_globals is binding[1]

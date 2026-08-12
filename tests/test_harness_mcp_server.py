@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import FunctionType
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -179,6 +180,34 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_server_info_is_harness(self):
         self.assertEqual(harness_server.SERVER_INFO["name"], "harness")
         self.assertEqual(harness_server.SERVER_INFO["title"], "harness Control Plane")
+
+    def test_control_writer_rejects_foreign_globals_clone(self):
+        foreign_globals = dict(harness_server.handle_task_start.__globals__)
+        foreign_globals["__name__"] = "harness_server"
+        clone = FunctionType(
+            harness_server.handle_task_start.__code__,
+            foreign_globals,
+            harness_server.handle_task_start.__name__,
+            harness_server.handle_task_start.__defaults__,
+            harness_server.handle_task_start.__closure__,
+        )
+        clone.__kwdefaults__ = harness_server.handle_task_start.__kwdefaults__
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".git").mkdir()
+            manifest = root / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
+            prior_cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                with self.assertRaisesRegex(PermissionError, "task-control"):
+                    clone({"task_id": "TASK__foreign-control-clone"})
+            finally:
+                os.chdir(prior_cwd)
+            self.assertFalse(
+                (root / "doc/harness/tasks/TASK__foreign-control-clone/TASK.json").exists()
+            )
 
     def test_lifecycle_handlers_never_enter_git_snapshot_helpers(self):
         def forbidden(*_args, **_kwargs):
