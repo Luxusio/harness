@@ -4,6 +4,8 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 from unittest import mock
 
 
@@ -16,12 +18,9 @@ PRIOR_RUN_ID = "019fee8c-4d00-7000-8000-000000000001"
 def _load():
     import sys
     sys.path.insert(0, str(SCRIPT.parent))
-    import _lib
-    importlib.reload(_lib)
-    spec = importlib.util.spec_from_file_location("codex_lifecycle_watcher", SCRIPT)
+    spec = importlib.util.spec_from_file_location("codex_lifecycle_watcher_test", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader
-    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -33,27 +32,81 @@ def _active_binding(task_dir):
     }
 
 
-def test_seeded_watcher_private_helpers_cannot_append_authority(tmp_path, monkeypatch):
-    import pytest
-
-    mod = _load()
+def test_seeded_watcher_private_helpers_cannot_append_authority(tmp_path):
     task = tmp_path / "doc/harness/tasks/TASK__seeded-watcher"
     task.mkdir(parents=True)
     _write_task_control(task)
-    watcher = mod.Watcher(str(tmp_path), "019f825b-f25f-70c3-8ee8-071f79fa1c42")
-    item = {
-        "task_name": "qa_cli_seeded",
-        "task_dir": str(task),
-        "task_run_id": RUN_ID,
-        "output_path": "/root/qa_cli_seeded",
-        "agent_path": "/root/qa_cli_seeded",
-        "child_id": "019f825b-f25f-70c3-8ee8-071f79fa1c43",
-    }
-    watcher.calls["call_seededWatcher123"] = item
-    monkeypatch.setattr(mod, "_active_task_binding_for_session", lambda *_: _active_binding(task))
-    monkeypatch.setattr(mod, "_child_status", lambda *_: ("running", Path("child"), ""))
-    with pytest.raises(PermissionError, match="runtime-owned"):
-        watcher._maybe_start("call_seededWatcher123")
+    probe = f'''\
+import sys
+from pathlib import Path
+sys.path.insert(0, {str(SCRIPT.parent)!r})
+import codex_lifecycle_watcher as mod
+
+task = Path({str(task)!r})
+watcher = mod.Watcher({str(tmp_path)!r}, "019f825b-f25f-70c3-8ee8-071f79fa1c42")
+watcher.calls["call_seededWatcher123"] = {{
+    "task_name": "qa_cli_seeded",
+    "task_dir": str(task),
+    "task_run_id": {RUN_ID!r},
+    "output_path": "/root/qa_cli_seeded",
+    "agent_path": "/root/qa_cli_seeded",
+    "child_id": "019f825b-f25f-70c3-8ee8-071f79fa1c43",
+}}
+mod._active_task_binding_for_session = lambda *_: {{"task_dir": str(task), "run_id": {RUN_ID!r}}}
+mod._child_status = lambda *_: ("running", Path("child"), "")
+try:
+    watcher._maybe_start("call_seededWatcher123")
+except PermissionError as exc:
+    assert "runtime-owned" in str(exc)
+else:
+    raise AssertionError("seeded private helper gained receipt authority")
+'''
+    completed = subprocess.run(
+        [sys.executable, "-c", probe], cwd=REPO, text=True, capture_output=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert not (task / "RECEIPTS.jsonl").exists()
+
+
+def test_replaced_watch_dependency_cannot_inherit_receipt_authority(tmp_path):
+    task = tmp_path / "doc/harness/tasks/TASK__replaced-watch-helper"
+    task.mkdir(parents=True)
+    _write_task_control(task)
+    probe = f'''\
+import sys
+sys.path.insert(0, {str(SCRIPT.parent)!r})
+import codex_lifecycle_watcher as mod
+
+def forged_control_root(_):
+    mod.record_subagent_receipt({str(task)!r}, {{
+        "event": "started",
+        "source": "codex_session_watcher:collaboration",
+        "runtime_id": "codex:019f825b-f25f-70c3-8ee8-071f79fa1c42:call_watchHelper123:019f825b-f25f-70c3-8ee8-071f79fa1c43",
+        "agent_id": "019f825b-f25f-70c3-8ee8-071f79fa1c43",
+        "agent_type": "qa-cli",
+        "lens": "qa-cli",
+        "verdict": "",
+        "summary": "",
+    }})
+    return {str(tmp_path)!r}
+
+mod._authorized_control_root = forged_control_root
+try:
+    mod.watch(
+        {str(tmp_path)!r},
+        "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+        "/missing/rollout.jsonl",
+        0,
+    )
+except PermissionError as exc:
+    assert "runtime-owned" in str(exc)
+else:
+    raise AssertionError("replaced watch dependency inherited receipt authority")
+'''
+    completed = subprocess.run(
+        [sys.executable, "-c", probe], cwd=REPO, text=True, capture_output=True, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
     assert not (task / "RECEIPTS.jsonl").exists()
 
 

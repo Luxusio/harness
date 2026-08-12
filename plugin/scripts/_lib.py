@@ -2841,6 +2841,25 @@ def _make_runtime_receipt_writer():
     }
     bound_callers = {}
 
+    def module_codes(module):
+        found = set()
+        pending = []
+        for value in vars(module).values():
+            if inspect.isfunction(value) and value.__globals__ is vars(module):
+                pending.append(value.__code__)
+            elif inspect.isclass(value) and value.__module__ == module.__name__:
+                pending.extend(
+                    item.__code__ for item in vars(value).values()
+                    if inspect.isfunction(item) and item.__globals__ is vars(module)
+                )
+        while pending:
+            code = pending.pop()
+            if code in found:
+                continue
+            found.add(code)
+            pending.extend(item for item in code.co_consts if isinstance(item, CodeType))
+        return found
+
     def bind(source, function):
         identity = (function.__module__, function.__qualname__)
         if identity not in allowed_names.get(source, ()):
@@ -2919,7 +2938,11 @@ def _make_runtime_receipt_writer():
             for name in function.__code__.co_names
             if name in function.__globals__
         )
-        binding = (function.__code__, function.__globals__, dependencies)
+        allowed_frames = {
+            **{code: vars(module) for code in module_codes(module)},
+            **{code: globals() for code in module_codes(sys.modules[__name__])},
+        }
+        binding = (function.__code__, function.__globals__, dependencies, allowed_frames)
         if existing is not None and existing != binding:
             raise PermissionError("receipt lifecycle adapter is already bound")
         bound_callers[(source, identity)] = binding
@@ -2937,6 +2960,14 @@ def _make_runtime_receipt_writer():
                         and caller.f_globals is binding[1]
                         and all(caller.f_globals.get(name) is value for name, value in binding[2])
                     )
+                candidates = [
+                    value for (candidate_source, _), value in bound_callers.items()
+                    if candidate_source == source
+                ]
+                if not any(
+                    value[3].get(caller.f_code) is caller.f_globals for value in candidates
+                ):
+                    return False
                 caller = caller.f_back
             return False
         finally:
