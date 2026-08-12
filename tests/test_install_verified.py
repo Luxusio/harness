@@ -60,6 +60,24 @@ def test_install_requires_fresh_review_and_qa(tmp_path):
     run.assert_not_called()
 
 
+def test_verification_state_uses_one_receipt_snapshot(tmp_path):
+    _, task = _repo(tmp_path)
+    snapshot = object()
+    with (
+        mock.patch.object(mod, "read_state", return_value={}),
+        mock.patch.object(mod, "receipt_snapshot", return_value=snapshot) as read_snapshot,
+        mock.patch.object(mod, "receipt_stream_fingerprint", return_value="sha256:" + "a" * 64) as fingerprint,
+        mock.patch.object(mod, "receipt_review_verdict", return_value="PASS") as review,
+        mock.patch.object(mod, "receipt_runtime_verdict", return_value="PASS") as runtime,
+    ):
+        assert mod._verification_state(task) == (True, "", "sha256:" + "a" * 64)
+
+    read_snapshot.assert_called_once_with(str(task))
+    assert fingerprint.call_args.args[-1] is snapshot
+    assert review.call_args.args[-1] is snapshot
+    assert runtime.call_args.args[-1] is snapshot
+
+
 def test_success_marker_skips_same_fingerprint_and_reinstalls_changed_diff(tmp_path):
     repo, task = _repo(tmp_path)
     installer = subprocess.CompletedProcess([], 0)

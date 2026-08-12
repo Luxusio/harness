@@ -3,7 +3,7 @@
 tags: [harness, spec, architecture]
 status: draft
 created: 2026-04-09
-updated: 2026-08-11
+updated: 2026-08-12
 task_ref: TASK__harness-architecture
 
 ---
@@ -131,28 +131,17 @@ Verification has two responsibilities:
 - intent adequacy check: the result satisfies the user's request and durable
   requirements
 
-A source-changing task requires the read-only reviewers declared by its plan.
-The plan normally includes the code reviewer and adds security review when the
-planned work crosses a sensitive boundary. Their hook-owned
-Review completions in `RECEIPTS.jsonl` must explicitly PASS for the current task.
+A source-changing task requires the plan-declared read-only reviewers, followed
+by every declared QA lens. Only ordered, lifecycle-owned, explicit PASS evidence
+for the current task run can close the task; a start or self-authored result
+cannot. Acceptance intent remains in `PLAN.md`, and later source drift is
+developer-owned.
 
-Only QA started after the latest required review PASS is eligible for runtime
-PASS. Every QA lens declared in `PLAN.meta.json` then needs a hook-owned
-`RECEIPTS.jsonl` completion with explicit `VERDICT: PASS`. A start
-receipt proves delegation only. FAIL, BLOCKED_ENV, missing verdicts, missing
-lenses, unmatched lifecycle events, and incorrect review-before-QA ordering
-prevent close. Receipts bind task, agent, lens, lifecycle identity, and event
-ordering; they do not bind HEAD, a diff, touched paths, or a source fingerprint.
-Self-authored PASS notes, summaries, or narrative evidence do not close the
-task. Commands and inline checks may still help debugging, but close authority
-comes from `task_verify` reading task state and the lifecycle streams.
-
-New task packs use one append-only `RECEIPTS.jsonl` for both review and QA
-events. The `kind` and `lens` fields preserve separation inside the stream.
-Legacy `REVIEW_RECEIPTS.jsonl` and `SUBAGENT_RECEIPTS.jsonl` remain readable but
-are not generated. `CHECKS.yaml` and `USER_FEEDBACK.jsonl` are not part of the
-current runtime model: acceptance criteria live in `PLAN.md`, and user feedback
-is handled conversationally or promoted directly into durable docs.
+Receipt storage, minimal schema, immutable snapshot, and gate semantics are
+normatively defined by
+[ADR__consolidated-task-artifacts.md](patterns/ADR__consolidated-task-artifacts.md).
+Codex acquisition, identity, and completion are normatively defined by
+[ADR__single-direct-codex-receipt-protocol.md](patterns/ADR__single-direct-codex-receipt-protocol.md).
 
 Verification delegation is a workflow optimization, not a generic pre-tool
 policy. Browser and heavy full-suite work should use an applicable `qa-*` lens
@@ -160,18 +149,6 @@ when isolation materially reduces context or process load. Inline browser use
 remains valid when it is the lighter available path; its potentially large DOM,
 screenshot, or evaluation payload is an accepted caller-owned context cost and
 does not relax the receipt-backed close requirements above.
-
-Codex lifecycle receipts use one explicit protocol. The registered root-rollout
-watcher accepts direct `collaboration.spawn_agent` with a structured
-`task_name`, structured spawn output, and either correlated child activity or
-one unambiguous trusted depth-1 child rollout discovered from session metadata,
-plus a direct `FINAL_ANSWER` delivery. It requires the active task run, root session, child
-thread, agent path, lens, child `task_complete` final text, and root final to
-agree before recording PASS. `exec`, `multi_agent_v1`, `wait_agent`,
-`close_agent`, list/status, XML notification, and prompt-marker fallbacks are
-not receipt authorities. A runtime protocol change therefore leaves the
-required receipt missing and task close fail-closed until Harness and Codex are
-updated together.
 
 `write_plan` owns the canonical audit header but accepts both convenient caller
 forms: audit data rows only, or a complete Markdown audit table with an optional
@@ -195,54 +172,16 @@ rollout event whose timestamp predates the generation start is ignored. This
 prevents a prior-run agent from satisfying a reopened task without restoring any
 source snapshot or change detector.
 
-Codex runtimes do not always forward collaboration tools to plugin
-`PostToolUse`. SessionStart and spawn-selective PreToolUse therefore validate
-the current official `session_id` (with a matching environment fallback),
-canonical repository, root rollout, and initial offset, then writes a versioned
-registration under the current user's state directory. This restoration path is
-strictly opt-in and binds to an ancestor containing
-`doc/harness/manifest.yaml` without invoking a Git command. Nested `.git`
-boundaries still require the session-specific active-task marker described
-below.
-Registration stores the control root separately from the session cwd and
-validates the rollout against the latter. Registration retries briefly on
-SessionStart when rollout creation races hook delivery. PreToolUse restores
-missing or invalid registration immediately before a supported spawn without
-overwriting a valid current-version initial offset; late recovery begins at the
-current offset and covers only future subagent starts. UserPromptSubmit,
-PostToolUse, and Stop do no registration work. Root-owned workspace ancestors common in container
-mounts are accepted for task binding only when group/other write bits are
-absent, while symlink checks and current-user ownership of the task directory
-remain enforced. An existing current-version
-registration is validated from its
-exact state and rollout paths before discovery, so ordinary hook events do not
-recursively scan the session tree, acquire the registration lock, or rewrite
-state. Discovery for a missing registration is deadline-aware and registration
-locking is non-blocking. UserPromptSubmit and PostToolUse wrappers enforce one
-total child-work deadline below their configured outer Codex hook timeout.
-PreToolUse selects at most one gate child and gives it a fixed bounded timeout.
+Codex SessionStart and spawn-selective PreToolUse establish the bounded root
+registration used by the MCP-hosted watcher. Registration and lifecycle
+authority follow the single-direct protocol ADR; late registration never
+recovers already-completed work.
+
 PreToolUse dispatch is selective: plan-first/artifact ownership runs only for
 direct write tools (`Write|Edit|MultiEdit|apply_patch`), while the shell
 mutation guard runs only for `Bash|shell`.
 Read-only, browser, and unrelated tools do not launch either gate. Browser
 delegation has no generic PreToolUse enforcement.
-Lifecycle root resolution is included in that hard budget. The single lifecycle
-watcher observes ordered runtime spawn/completion events; it does not run Git or
-fingerprint source.
-The lifecycle watcher itself does not fork. The existing Harness MCP server discovers these registrations
-and hosts one passive daemon watcher thread per root tuple. MCP restart replays
-from the immutable initial offset; receipt deduplication makes replay safe.
-Root-delivered child messages become completion candidates only when their
-runtime envelope is `Message Type: FINAL_ANSWER`; intermediate progress
-`MESSAGE` deliveries are ignored so they cannot poison the later attested
-completion.
-The watcher binds a root to a task only through the root session's canonical
-active-task marker and its current `TASK_RUN.json`. Harness MCP completion
-events and watcher-local task fallbacks are not task authorities. A missing,
-stale, or malformed marker/run pair leaves the receipt missing.
-Session marker selection uses the hook payload, explicit Harness/Codex session
-ids, and then `CODEX_THREAD_ID`; the thread fallback is valid even when
-`HARNESS_RUNTIME` is unset.
 
 Nested repositories and submodules need no source registration for lifecycle
 verification. Crossing a nested Git boundary requires the ancestor Harness
@@ -265,23 +204,8 @@ adds a missing `@CONTRACTS.md` runtime import with an idempotent targeted edit
 and enables Health scoring from every census-detected API/frontend test and
 quality command without asking.
 
-Each rollout is opened with no-follow semantics and validated by descriptor
-identity, owner, link count, non-group/world-writable mode, size, and an owner-controlled non-writable session
-directory chain. Path replacement or inode changes fail closed. A
-per-registration interprocess lease ensures that concurrent MCP servers cannot
-tail and append evidence for the same root tuple at the same time.
-
-The watcher accepts completion only when the root-delivered message matches the
-correlated child rollout's `task_complete.last_agent_message`. When the runtime
-also emits a separate child final-answer event, it must match the same text.
-Historical finals, unrecognized lenses, cross-repository lineage, partial
-records, symlinks, unsafe registrations, and schema ambiguity cannot create
-PASS. The unresolved repository `doc/harness/tasks` directory chain is also
-owner/type checked with `lstat`; symlinked task roots cannot redirect receipts
-across repositories. No model-callable MCP tool can author review or QA evidence. The
-MCP-hosted watcher is the sole Codex receipt owner and uses the same protected
-receipt writer and ordering gates as other runtimes. No recovery hook converts a child that completed
-before start capture into evidence.
+No model-callable MCP tool can author review or QA evidence. Runtime and stream
+integrity rules fail closed as specified by the two receipt ADRs above.
 
 ## Durable Knowledge
 

@@ -74,8 +74,6 @@ _PY_PATTERNS = [
 # Protected-artifact → owning MCP/CLI tool (for human-text fix hint).
 _ARTIFACT_TOOL_HINT = {
     "RECEIPTS.jsonl": "runtime review and QA lifecycle hook",
-    "SUBAGENT_RECEIPTS.jsonl": "legacy lifecycle hook",
-    "REVIEW_RECEIPTS.jsonl": "legacy lifecycle hook",
     "INSTALL_RECEIPT.json": "scripts/install_verified.py",
     "TASK_BASELINE.json": "task-start runtime",
     "TASK_RUN.json": "task-start runtime",

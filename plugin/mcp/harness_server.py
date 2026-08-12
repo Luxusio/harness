@@ -84,7 +84,7 @@ from _lib import (  # type: ignore
     resolve_active_task_dir, active_marker_snapshot, restore_active_marker_snapshot,
     receipt_runtime_verdict, subagent_receipt_summary, record_subagent_receipt,
     receipt_review_verdict, review_receipt_summary, required_review_lenses,
-    receipt_stream_fingerprint,
+    receipt_snapshot, receipt_stream_fingerprint,
     reset_receipt_streams_for_new_run, restore_receipt_streams,
     receipt_stream_transaction,
     read_task_run, begin_task_run, restore_task_run,
@@ -465,14 +465,15 @@ def handle_task_context(args: dict) -> dict:
     td = canonical_task_dir(task_id=ti, repo_root=_control_root())
     if not _validated_task_state(td):
         return _invalid_task_state_error("task_context", td)
-    ctx = emit_compact_context(td)
+    snapshot = receipt_snapshot(td)
+    ctx = emit_compact_context(td, snapshot)
     if "error" in ctx:
         return _err("task_context failed", data=ctx)
     return _ok({
         "task_dir": td,
         "task_context": ctx,
-        "subagent_receipts": subagent_receipt_summary(td),
-        "review_receipts": review_receipt_summary(td),
+        "subagent_receipts": subagent_receipt_summary(td, snapshot),
+        "review_receipts": review_receipt_summary(td, snapshot),
     })
 
 
@@ -490,15 +491,16 @@ def handle_task_verify(args: dict) -> dict:
             parallel=_truthy(args.get("parallel")) or args.get("parallel") is None,
             max_workers=max_workers,
         )
+    snapshot = receipt_snapshot(td)
     st = read_state(td)
-    effective_verdict = receipt_runtime_verdict(td, st)
+    effective_verdict = receipt_runtime_verdict(td, st, snapshot)
     if (st.get("runtime_verdict") or "pending").upper() != effective_verdict:
         set_state_field(td, "runtime_verdict", effective_verdict if effective_verdict != "PENDING" else "pending")
 
     st = read_state(td)
-    rv = receipt_runtime_verdict(td, st)
-    review_verdict = receipt_review_verdict(td, st)
-    ctx = emit_compact_context(td)
+    rv = receipt_runtime_verdict(td, st, snapshot)
+    review_verdict = receipt_review_verdict(td, st, snapshot)
+    ctx = emit_compact_context(td, snapshot)
     payload = {
         "task_dir": td, "runtime_verdict": rv,
         "touched_paths": st.get("touched_paths") or [],
@@ -510,8 +512,8 @@ def handle_task_verify(args: dict) -> dict:
         "review_report_path": _task_artifact_rel(td, "RECEIPTS.jsonl"),
         "stale": False,
         "stale_path": "",
-        "subagent_receipts": subagent_receipt_summary(td),
-        "review_receipts": review_receipt_summary(td),
+        "subagent_receipts": subagent_receipt_summary(td, snapshot),
+        "review_receipts": review_receipt_summary(td, snapshot),
     }
     if verify_run is not None:
         payload["verify_run"] = verify_run
@@ -524,11 +526,12 @@ def handle_task_close(args: dict) -> dict:
     if not _validated_task_state(td):
         return _invalid_task_state_error("task_close", td)
     with receipt_stream_transaction(td):
+        snapshot = receipt_snapshot(td)
         def close_error(message, data):
             return _err(message, data=dict(data))
 
         control_root = find_harness_root(td) or find_repo_root(td)
-        ctx = emit_compact_context(td)
+        ctx = emit_compact_context(td, snapshot)
         missing = ctx.get("missing_for_close") or []
         stale = bool(ctx.get("stale"))
         stale_path = str(ctx.get("stale_path") or "")
@@ -545,7 +548,7 @@ def handle_task_close(args: dict) -> dict:
             })
 
         try:
-            receipt_fingerprint = receipt_stream_fingerprint(td)
+            receipt_fingerprint = receipt_stream_fingerprint(td, snapshot)
         except RuntimeError:
             return close_error("task_close blocked: receipt stream snapshot unavailable", {
                 "task_dir": td, "receipt_snapshot_unavailable": True,

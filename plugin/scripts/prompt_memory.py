@@ -206,16 +206,19 @@ def _build_review_gate(task_dir: str) -> str:
         def has_valid_pass(pair: tuple[int, dict]) -> bool:
             completion_index, completion = pair
             return (
-                str(completion.get("status") or "").lower() in {"completed", "done"}
+                completion.get("event") == "completed"
                 and str(completion.get("verdict") or "").upper() == "PASS"
                 and any(
-                    str(start.get("status") or "").lower() == "started"
+                    start.get("event") == "started"
                     and start.get("lens") == completion.get("lens")
                     and start.get("agent_id") == completion.get("agent_id")
-                    and start.get("head_sha") == completion.get("head_sha")
-                    and start.get("diff_fingerprint") == completion.get("diff_fingerprint")
-                    and start.get("head_sha")
-                    and start.get("diff_fingerprint")
+                    and all(
+                        str(start.get(key) or "") == str(completion.get(key) or "")
+                        for key in (
+                            "task_run_id", "runtime_event_id",
+                            "runtime_session_id", "runtime_thread_id",
+                        )
+                    )
                     for start in receipts[:completion_index]
                 )
             )

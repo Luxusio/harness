@@ -215,6 +215,10 @@ absent or does not explicitly PASS.
 **Why:** A self-authored PASS is indistinguishable from hallucination. Source
 fingerprints are intentionally not part of receipt validity; edits after QA
 and scope drift are developer-owned risks.
+**Normative detail:** Codex acquisition/identity/completion is owned by
+`doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md`; receipt
+storage/schema/gates are owned by
+`doc/harness/patterns/ADR__consolidated-task-artifacts.md`.
 
 ### C-14a
 

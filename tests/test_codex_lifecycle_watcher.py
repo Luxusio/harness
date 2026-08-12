@@ -32,6 +32,10 @@ def _write_jsonl(path: Path, events: list[dict]) -> None:
     path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
 
 
+def _snapshot(entries):
+    return type("Snapshot", (), {"entries": tuple(entries)})()
+
+
 def _child_events(
     root_id: str,
     child_id: str,
@@ -199,17 +203,15 @@ def test_watcher_records_start_then_correlated_review_completion(tmp_path, monke
     watcher = mod.Watcher(str(repo), root_id)
     patches = (
         mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)),
-        mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"),
         mock.patch.object(mod, "record_subagent_receipt", side_effect=record),
-        mock.patch.object(mod, "list_review_receipts", side_effect=lambda _td: receipts),
-        mock.patch.object(mod, "list_subagent_receipts", return_value=[]),
+        mock.patch.object(mod, "receipt_snapshot", side_effect=lambda _td: _snapshot(receipts)),
     )
     for patcher in patches:
         patcher.start()
     try:
         for event in _spawn_events(root_id, child_id, "code_review", agent_path):
             watcher.feed(event)
-        assert [(item["status"], item["lens"]) for item in receipts] == [("started", "review-code")]
+        assert [(item["event"], item["lens"]) for item in receipts] == [("started", "review-code")]
 
         final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nClean."
         _write_jsonl(
@@ -228,7 +230,7 @@ def test_watcher_records_start_then_correlated_review_completion(tmp_path, monke
         for patcher in reversed(patches):
             patcher.stop()
 
-    assert [(item["status"], item.get("verdict", "")) for item in receipts] == [
+    assert [(item["event"], item.get("verdict", "")) for item in receipts] == [
         ("started", ""), ("completed", "PASS"),
     ]
     assert receipts[0]["runtime_thread_id"] == child_id
@@ -255,11 +257,11 @@ def test_watcher_discovers_child_when_runtime_omits_activity_event(tmp_path, mon
     ), mock.patch.object(
         mod, "record_subagent_receipt", side_effect=lambda _td, item: receipts.append(item) or item,
     ), mock.patch.object(
-        mod, "list_review_receipts", side_effect=lambda _td: receipts,
-    ), mock.patch.object(mod, "list_subagent_receipts", return_value=[]):
+        mod, "receipt_snapshot", side_effect=lambda _td: _snapshot(receipts),
+    ):
         for event in _spawn_events_without_activity("code_review_output_only", agent_path):
             watcher.feed(event)
-        assert [(item["status"], item["lens"]) for item in receipts] == [
+        assert [(item["event"], item["lens"]) for item in receipts] == [
             ("started", "review-code"),
         ]
         final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nClean."
@@ -276,11 +278,86 @@ def test_watcher_discovers_child_when_runtime_omits_activity_event(tmp_path, mon
         )
         watcher.feed(_delivery(agent_path, final))
 
-    assert [(item["status"], item.get("verdict", "")) for item in receipts] == [
+    assert [(item["event"], item.get("verdict", "")) for item in receipts] == [
         ("started", ""), ("completed", "PASS"),
     ]
     assert receipts[0]["runtime_thread_id"] == child_id
-    assert receipts[0]["runtime_agent_path"] == agent_path
+    assert receipts[0]["agent_id"] == agent_path
+
+
+def test_child_discovery_fails_closed_for_zero_multiple_and_bounds(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    agent_path = "/root/code_review_discovery"
+
+    assert mod._find_child_by_agent_path(root_id, agent_path, str(repo)) == ""
+
+    for child_id in (
+        "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f",
+        "019f82a6-ce64-75a3-b01d-92f7b0b4fe70",
+    ):
+        _write_jsonl(
+            codex_home / "sessions/day" / f"rollout-{child_id}.jsonl",
+            _child_events(root_id, child_id, agent_path, str(repo)),
+        )
+    assert mod._find_child_by_agent_path(root_id, agent_path, str(repo)) == ""
+
+    monkeypatch.setattr(mod, "MAX_DISCOVERY_FILES", 0)
+    assert mod._find_child_by_agent_path(root_id, agent_path, str(repo)) == ""
+    monkeypatch.setattr(mod, "MAX_DISCOVERY_FILES", 4096)
+    with mock.patch.object(mod.time, "monotonic", side_effect=[0.0, 3.0]):
+        assert mod._find_child_by_agent_path(root_id, agent_path, str(repo)) == ""
+
+
+def test_child_discovery_can_be_scoped_to_registered_root_rollout_dir(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    agent_path = "/root/code_review_scoped"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    current = codex_home / "sessions/2026/08/12"
+    old = codex_home / "sessions/2026/08/11"
+    _write_jsonl(
+        current / f"rollout-{child_id}.jsonl",
+        _child_events(root_id, child_id, agent_path, str(repo)),
+    )
+    _write_jsonl(
+        old / "rollout-019f82a6-ce64-75a3-b01d-92f7b0b4fe70.jsonl",
+        _child_events(
+            root_id,
+            "019f82a6-ce64-75a3-b01d-92f7b0b4fe70",
+            agent_path,
+            str(repo),
+        ),
+    )
+
+    assert mod._find_child_by_agent_path(
+        root_id, agent_path, str(repo), current,
+    ) == child_id
+    assert mod._find_child_by_agent_path(
+        root_id, agent_path, str(repo), tmp_path,
+    ) == ""
+
+
+def test_activity_event_without_structured_spawn_output_is_ignored(tmp_path):
+    mod = _load()
+    watcher = mod.Watcher(str(tmp_path), "019f825b-f25f-70c3-8ee8-071f79fa1c42")
+    activity = _spawn_events(
+        watcher.root_id,
+        "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f",
+        "code_review_activity_only",
+        "/root/code_review_activity_only",
+    )[1]
+    watcher.feed(activity)
+    assert watcher.calls == {}
+    assert watcher.by_agent == {}
 
 
 def test_prior_run_same_agent_path_cannot_replace_current_start(tmp_path):
@@ -292,11 +369,10 @@ def test_prior_run_same_agent_path_cannot_replace_current_start(tmp_path):
     agent_path = "/root/code_review"
     event_id = f"{root_id}:call_runtime_123456:{child_id}"
     prior = {
-        "status": "started",
+        "event": "started",
         "runtime_event_id": event_id,
         "runtime_session_id": root_id,
         "runtime_thread_id": child_id,
-        "runtime_agent_path": agent_path,
         "agent_id": agent_path,
         "agent_type": "code_review",
         "lens": "review-code",
@@ -310,9 +386,9 @@ def test_prior_run_same_agent_path_cannot_replace_current_start(tmp_path):
     ), mock.patch.object(
         mod, "_child_status", return_value=("running", None, ""),
     ), mock.patch.object(
-        mod, "list_review_receipts", return_value=[prior],
+        mod, "_find_child_by_agent_path", return_value=child_id,
     ), mock.patch.object(
-        mod, "list_subagent_receipts", return_value=[],
+        mod, "receipt_snapshot", return_value=_snapshot([prior]),
     ), mock.patch.object(
         mod, "record_subagent_receipt", side_effect=lambda _td, item: recorded.append(item) or item,
     ):
@@ -320,7 +396,7 @@ def test_prior_run_same_agent_path_cannot_replace_current_start(tmp_path):
             watcher.feed(event)
 
     assert len(recorded) == 1
-    assert recorded[0]["status"] == "started"
+    assert recorded[0]["event"] == "started"
     assert recorded[0]["task_run_id"] == "a" * 32
 
 
@@ -340,7 +416,8 @@ def test_spawn_task_binding_is_immutable_across_task_switch(tmp_path):
         mod, "_active_task_binding_for_session",
         side_effect=lambda *_args: _active_binding(active[0]),
     ), mock.patch.object(mod, "record_subagent_receipt") as record, \
-         mock.patch.object(mod, "_child_status", return_value=("running", None, "")):
+         mock.patch.object(mod, "_child_status", return_value=("running", None, "")), \
+         mock.patch.object(mod, "_find_child_by_agent_path", return_value=child_id):
         watcher.feed(spawn)
         assert watcher.calls["call_runtime_123456"]["task_dir"] == task_a
         active[0] = task_b
@@ -397,21 +474,14 @@ def test_watcher_records_sequential_unique_qa_names_in_one_root(tmp_path, monkey
     receipts = []
 
     def record(_task_dir, receipt):
-        entry = {
-            **receipt,
-            "head_sha": receipt.get("head_sha") or "a" * 40,
-            "base_sha": receipt.get("base_sha") or "a" * 40,
-            "diff_fingerprint": receipt.get("diff_fingerprint") or "sha256:before",
-        }
+        entry = dict(receipt)
         receipts.append(entry)
         return entry
 
     watcher = mod.Watcher(str(repo), root_id)
     with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
-         mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"), \
          mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
-         mock.patch.object(mod, "list_review_receipts", return_value=[]), \
-         mock.patch.object(mod, "list_subagent_receipts", side_effect=lambda _td: receipts):
+         mock.patch.object(mod, "receipt_snapshot", side_effect=lambda _td: _snapshot(receipts)):
         for child_id, task_name, agent_path, call_id in runs:
             child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
             _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo)))
@@ -427,10 +497,10 @@ def test_watcher_records_sequential_unique_qa_names_in_one_root(tmp_path, monkey
             _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo), final))
             watcher.feed(_delivery(agent_path, final))
 
-    completed = [item for item in receipts if item["status"] == "completed"]
+    completed = [item for item in receipts if item["event"] == "completed"]
     assert [item["lens"] for item in completed] == ["qa-cli", "qa-cli"]
     assert [item["verdict"] for item in completed] == ["PASS", "PASS"]
-    assert len({item["runtime_agent_path"] for item in completed}) == 2
+    assert len({item["agent_id"] for item in completed}) == 2
 
 
 def test_watcher_ignores_intermediate_message_before_final_delivery(tmp_path, monkeypatch):
@@ -448,31 +518,24 @@ def test_watcher_ignores_intermediate_message_before_final_delivery(tmp_path, mo
     receipts = []
 
     def record(_task_dir, receipt):
-        entry = {
-            **receipt,
-            "head_sha": receipt.get("head_sha") or "a" * 40,
-            "base_sha": receipt.get("base_sha") or "a" * 40,
-            "diff_fingerprint": receipt.get("diff_fingerprint") or "sha256:before",
-        }
+        entry = dict(receipt)
         receipts.append(entry)
         return entry
 
     watcher = mod.Watcher(str(repo), root_id)
     final = "VERDICT: PASS\nQA passed"
     with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
-         mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"), \
          mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
-         mock.patch.object(mod, "list_review_receipts", return_value=[]), \
-         mock.patch.object(mod, "list_subagent_receipts", side_effect=lambda _td: receipts):
+         mock.patch.object(mod, "receipt_snapshot", side_effect=lambda _td: _snapshot(receipts)):
         for event in _spawn_events(root_id, child_id, "qa_cli_status_r1", agent_path):
             watcher.feed(event)
         watcher.feed(_intermediate_message(agent_path))
-        assert watcher.by_path[agent_path].get("root_final") is None
+        assert watcher.by_agent[agent_path].get("root_final") is None
 
         _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo), final))
         watcher.feed(_delivery(agent_path, final))
 
-    assert [(item["status"], item.get("verdict", "")) for item in receipts] == [
+    assert [(item["event"], item.get("verdict", "")) for item in receipts] == [
         ("started", ""), ("completed", "PASS"),
     ]
 
@@ -492,8 +555,7 @@ def test_watcher_rejects_child_that_completed_before_start_capture(tmp_path, mon
     watcher = mod.Watcher(str(repo), root_id)
     with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding("/task")), \
          mock.patch.object(mod, "record_subagent_receipt", side_effect=lambda td, item: receipts.append(item)), \
-         mock.patch.object(mod, "list_review_receipts", return_value=[]), \
-         mock.patch.object(mod, "list_subagent_receipts", return_value=[]):
+         mock.patch.object(mod, "receipt_snapshot", return_value=_snapshot([])):
         for event in _spawn_events(root_id, child_id, "qa_cli", agent_path):
             watcher.feed(event)
     assert receipts == []
@@ -515,12 +577,10 @@ def test_watcher_restart_replays_persisted_exact_start_after_child_completes(tmp
     child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
     _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo), final))
     receipts = [{
-        "status": "started", "agent_id": agent_path, "lens": "review-code",
+        "event": "started", "agent_id": agent_path, "lens": "review-code",
         "agent_type": "code_review", "task_run_id": "a" * 32,
-        "runtime_event_id": event_id, "head_sha": "a" * 40,
-        "base_sha": "a" * 40, "diff_fingerprint": "sha256:before",
+        "runtime_event_id": event_id,
         "runtime_session_id": root_id, "runtime_thread_id": child_id,
-        "runtime_agent_path": agent_path,
     }]
 
     def record(_task_dir, receipt):
@@ -529,15 +589,13 @@ def test_watcher_restart_replays_persisted_exact_start_after_child_completes(tmp
 
     watcher = mod.Watcher(str(repo), root_id)
     with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
-         mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"), \
          mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
-         mock.patch.object(mod, "list_review_receipts", side_effect=lambda _td: receipts), \
-         mock.patch.object(mod, "list_subagent_receipts", return_value=[]):
+         mock.patch.object(mod, "receipt_snapshot", side_effect=lambda _td: _snapshot(receipts)):
         for event in _spawn_events(root_id, child_id, "code_review", agent_path):
             watcher.feed(event)
         watcher.feed(_delivery(agent_path, final))
 
-    assert [(item["status"], item.get("verdict")) for item in receipts] == [
+    assert [(item["event"], item.get("verdict")) for item in receipts] == [
         ("started", None), ("completed", "PASS"),
     ]
 
@@ -555,23 +613,17 @@ def test_watcher_keeps_completion_pass_when_source_changes(tmp_path, monkeypatch
     child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
     _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo)))
     receipts = []
-    fingerprint = ["sha256:before"]
-
     def record(_task_dir, receipt):
-        entry = {**receipt, "head_sha": "a" * 40, "base_sha": "a" * 40,
-                 "diff_fingerprint": receipt.get("diff_fingerprint") or fingerprint[0]}
+        entry = dict(receipt)
         receipts.append(entry)
         return entry
 
     watcher = mod.Watcher(str(repo), root_id)
     with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
-         mock.patch.object(mod, "review_diff_fingerprint", side_effect=lambda _td: fingerprint[0]), \
          mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
-         mock.patch.object(mod, "list_review_receipts", side_effect=lambda _td: receipts), \
-         mock.patch.object(mod, "list_subagent_receipts", return_value=[]):
+         mock.patch.object(mod, "receipt_snapshot", side_effect=lambda _td: _snapshot(receipts)):
         for event in _spawn_events(root_id, child_id, "code_review", agent_path):
             watcher.feed(event)
-        fingerprint[0] = "sha256:after"
         final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
         _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo), final))
         watcher.feed(_delivery(agent_path, final))
@@ -599,12 +651,7 @@ def test_watcher_records_child_repo_receipt_for_parent_control_workspace(tmp_pat
     receipts = []
 
     def record(_task_dir, receipt):
-        entry = {
-            **receipt,
-            "head_sha": receipt.get("head_sha") or "a" * 40,
-            "base_sha": receipt.get("base_sha") or "a" * 40,
-            "diff_fingerprint": receipt.get("diff_fingerprint") or "sha256:stable",
-        }
+        entry = dict(receipt)
         receipts.append(entry)
         return entry
 
@@ -614,13 +661,9 @@ def test_watcher_records_child_repo_receipt_for_parent_control_workspace(tmp_pat
     with mock.patch.object(
         mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)
     ), mock.patch.object(
-        mod, "review_diff_fingerprint", return_value="sha256:stable"
-    ), mock.patch.object(
         mod, "record_subagent_receipt", side_effect=record
     ), mock.patch.object(
-        mod, "list_review_receipts", return_value=[]
-    ), mock.patch.object(
-        mod, "list_subagent_receipts", side_effect=lambda _td: receipts
+        mod, "receipt_snapshot", side_effect=lambda _td: _snapshot(receipts)
     ):
         for event in _spawn_events(root_id, child_id, "qa_cli", agent_path):
             watcher.feed(event)
@@ -630,7 +673,7 @@ def test_watcher_records_child_repo_receipt_for_parent_control_workspace(tmp_pat
         )
         watcher.feed(_delivery(agent_path, final))
 
-    assert [(item["status"], item.get("verdict")) for item in receipts] == [
+    assert [(item["event"], item.get("verdict")) for item in receipts] == [
         ("started", None),
         ("completed", "PASS"),
     ]
@@ -757,16 +800,15 @@ def test_record_receipt_preserves_runtime_provenance(tmp_path):
     task = tmp_path / "TASK__provenance"
     task.mkdir()
     _lib.begin_task_run(task)
-    with mock.patch.object(_lib, "review_diff_fingerprint", return_value="sha256:x"):
-        entry = _lib.record_subagent_receipt(task, {
-            "agent_id": "/root/qa_cli", "agent_type": "qa_cli", "status": "started",
-            "runtime_event_id": "session:call:thread", "runtime_session_id": "session",
-            "runtime_thread_id": "thread", "runtime_agent_path": "/root/qa_cli",
-        })
+    entry = _lib.record_subagent_receipt(task, {
+        "agent_id": "/root/qa_cli", "agent_type": "qa_cli", "event": "started",
+        "runtime_event_id": "session:call:thread", "runtime_session_id": "session",
+        "runtime_thread_id": "thread",
+    })
     assert entry["runtime_event_id"] == "session:call:thread"
     assert entry["runtime_session_id"] == "session"
     assert entry["runtime_thread_id"] == "thread"
-    assert entry["runtime_agent_path"] == "/root/qa_cli"
+    assert entry["agent_id"] == "/root/qa_cli"
 
 
 def test_ensure_registers_once_without_forking_for_exact_root_rollout(tmp_path, monkeypatch):
@@ -1325,18 +1367,14 @@ def test_duplicate_identical_root_delivery_is_idempotent(tmp_path, monkeypatch):
     _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo)))
     receipts = []
     def record(_task_dir, receipt):
-        entry = {**receipt, "head_sha": receipt.get("head_sha") or "a" * 40,
-                 "base_sha": receipt.get("base_sha") or "a" * 40,
-                 "diff_fingerprint": receipt.get("diff_fingerprint") or "sha256:before"}
+        entry = dict(receipt)
         receipts.append(entry)
         return entry
     watcher = mod.Watcher(str(repo), root_id)
     final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
     with mock.patch.object(mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir)), \
-         mock.patch.object(mod, "review_diff_fingerprint", return_value="sha256:before"), \
          mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
-         mock.patch.object(mod, "list_review_receipts", side_effect=lambda _td: receipts), \
-         mock.patch.object(mod, "list_subagent_receipts", return_value=[]):
+         mock.patch.object(mod, "receipt_snapshot", side_effect=lambda _td: _snapshot(receipts)):
         for event in _spawn_events(root_id, child_id, "code_review", agent_path):
             watcher.feed(event)
         _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo), final))

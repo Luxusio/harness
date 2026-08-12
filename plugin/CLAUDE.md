@@ -31,9 +31,12 @@ No step skipped. Smallest coherent diff per step.
 - durable docs such as `doc/<area>/REQ__*.md` are normal repo docs, not MCP evidence tools
 
 Static review and runtime QA provenance share `RECEIPTS.jsonl`.
-Codex/Claude lifecycle hooks own it. Starts prove
-delegation only; ordered matched completions with explicit PASS drive the gates.
-Applicable lenses come from `PLAN.meta.json`; receipts do not bind Git state.
+Codex/Claude lifecycle hooks own it. Applicable lenses come from
+`PLAN.meta.json`; receipts do not bind Git state. The normative contracts are
+`doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md` for Codex
+acquisition/identity/completion and
+`doc/harness/patterns/ADR__consolidated-task-artifacts.md` for
+storage/schema/gates.
 
 ## 3. TASK_STATE (7 fields only)
 
@@ -121,11 +124,9 @@ Do not claim success from static inspection when runtime verification is require
 
 ## 8. Finish cleanly
 
-The plan declares required review and QA lenses. Required
-Required review entries in `RECEIPTS.jsonl` must PASS before QA starts. Runtime verdict becomes
-PASS only when every applicable QA lens then starts and completes with explicit
-PASS. Receipts attest task, agent, lens, verdict, and ordering—not HEAD, diffs,
-or source fingerprints. Post-QA edits and scope drift are developer-owned.
+The plan declares required review and QA lenses. Required review evidence must
+PASS before QA starts, and every applicable QA lens must then PASS. Post-QA
+edits and scope drift are developer-owned.
 Use `task_close`. If blocked, fix the stated gate.
 Harness does not create a separate user-feedback artifact; durable requirements belong in PLAN.md or project documentation.
 Task-local `CONVERSATION.md` is human-readable history. The close gate reads
@@ -168,10 +169,9 @@ pass when delegation is available. Browser-driving calls (`take_snapshot`,
 can add thousands of structured tokens to the caller's context, so an isolated
 lane is usually cheaper for multi-step QA.
 
-Why: qa-browser runs browser verification in an isolated context. The start
-hooks write start and completion entries to `RECEIPTS.jsonl`; the
-orchestrator reads the subagent's final response for findings and uses
-`task_verify` to compute the close signal.
+Why: qa-browser runs browser verification in an isolated context. The
+orchestrator reads its final response for findings and uses `task_verify` for
+the authoritative close signal.
 
 This is workflow guidance, not a PreToolUse gate. Short diagnostics and browser
 verification may run inline when delegation is unavailable or the inline path

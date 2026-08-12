@@ -36,7 +36,10 @@ do not create tasks automatically. Do not use legacy autopilot commands.
   evidence.
 - Browser-first QA is default for web frontend projects when `browser_qa_supported: true` in manifest.
 - Acceptance criteria live in `PLAN.md`; current-run review and QA authority
-  comes only from lifecycle-owned `RECEIPTS.jsonl` entries.
+  comes only from lifecycle-owned `RECEIPTS.jsonl` entries. Receipt acquisition
+  and storage/gate contracts are owned respectively by
+  `doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md` and
+  `doc/harness/patterns/ADR__consolidated-task-artifacts.md`.
 - Notes under `doc/**/*.md` may carry `freshness: current|suspect|stale` + optional `invalidated_by_paths`. Run `plugin/scripts/note_freshness.py --paths ...` explicitly when maintaining them; SessionStart does not inspect Git.
 - Protected artifacts (enforced by `plugin/scripts/prewrite_gate.py`):
   PLAN.md/PLAN.meta.json/AUDIT_TRAIL.md via `write_plan`, and RECEIPTS.jsonl via

@@ -70,21 +70,21 @@ class TestProvenance(unittest.TestCase):
                 self.assertIn(agent, prov)
                 self.assertFalse(prov[agent])
 
-            open(os.path.join(td, "SUBAGENT_RECEIPTS.jsonl"), "w").close()
+            open(os.path.join(td, "RECEIPTS.jsonl"), "w").close()
             prov = _lib.provenance_from_artifacts(td)
-            self.assertTrue(prov["subagent-start-hook"])
+            self.assertFalse(prov["subagent-start-hook"])
             for agent in ("qa-browser", "qa-api", "qa-cli", "qa-desktop"):
                 self.assertFalse(prov[agent], f"empty receipt stream cannot prove {agent}")
 
-            receipt = {
-                "kind": "subagent",
-                "status": "completed",
-                "lens": "qa-cli",
-                "verdict": "PASS",
-                "task_run_id": run_id,
-            }
-            with open(os.path.join(td, "SUBAGENT_RECEIPTS.jsonl"), "w") as f:
-                f.write(json.dumps(receipt) + "\n")
+            _lib.record_subagent_receipt(td, {
+                "event": "started", "lens": "qa-cli", "agent_id": "qa-cli-1",
+                "agent_type": "qa_cli", "task_run_id": run_id,
+            })
+            _lib.record_subagent_receipt(td, {
+                "event": "completed", "lens": "qa-cli", "agent_id": "qa-cli-1",
+                "agent_type": "qa_cli", "task_run_id": run_id,
+                "verdict": "PASS", "summary": "VERDICT: PASS",
+            })
             prov = _lib.provenance_from_artifacts(td)
             self.assertTrue(prov["qa-cli"])
             for agent in ("qa-browser", "qa-api", "qa-desktop"):

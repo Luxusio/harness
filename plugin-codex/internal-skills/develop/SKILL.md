@@ -378,17 +378,14 @@ then wait in one interval of up to 60 seconds; never use rapid short polling or
 agent-status tools as a progress poll. After a timeout, emit one compact user
 status before waiting again.
 
-For runtimes that omit collaboration events from PostToolUse, Codex
-SessionStart creates the exact root-rollout registration, every installed root
-hook idempotently restores it, and the Harness MCP server hosts the lifecycle
-watcher as a daemon thread. It is the sole Codex receipt owner; no PostToolUse
-result parser or model-callable MCP receipt writer exists. A valid structured
-`task_name` argument containing `code_review` or `security_review` is mandatory.
-A matching first message line is readable context only, not identity evidence.
-Do not use a generic worker name for a required reviewer.
-The watcher must observe the spawn while the child is still running to bind
-the task, agent, lens, and lifecycle ordering.
-Registration after a reviewer finishes cannot recover a PASS.
+Use a valid structured `task_name` containing `code_review` or
+`security_review`; a matching first message line is readable context only. Do
+not use a generic worker name for a required reviewer. The MCP-hosted watcher
+solely owns lifecycle evidence. Follow
+`doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md` for Codex
+acquisition/identity/completion and
+`doc/harness/patterns/ADR__consolidated-task-artifacts.md` for stream/gate
+semantics. Late observation cannot recover a completed reviewer.
 
 ### Phase 7: Verification Gate
 

@@ -4,6 +4,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 
@@ -35,7 +36,7 @@ def _receipt(
     task: Path,
     lens: str,
     agent_id: str,
-    status: str,
+    event: str,
     verdict: str = "",
     **extra,
 ):
@@ -50,7 +51,7 @@ def _receipt(
             "agent_id": agent_id,
             "agent_type": lens,
             "lens": lens,
-            "status": status,
+            "event": event,
             "verdict": verdict,
             "summary": summary,
             **extra,
@@ -63,13 +64,9 @@ def _pass_review(task: Path, agent_id: str = "review-1") -> None:
     _receipt(task, "review-code", agent_id, "completed", "PASS")
 
 
-def test_scaffold_and_compatibility_helpers_do_not_inspect_git(tmp_path):
+def test_scaffold_and_touched_path_helpers_do_not_inspect_git(tmp_path):
     task = _task(tmp_path)
     assert not (task / "TASK_BASELINE.json").exists()
-    assert lib.review_diff_fingerprint(task) == (
-        "sha256:e3b0c44298fc1c149afbf4c8996fb924"
-        "27ae41e4649b934ca495991b7852b855"
-    )
     assert lib._effective_touched_paths(task, ["z.py", "a.py", "z.py"]) == [
         "a.py",
         "z.py",
@@ -159,14 +156,54 @@ def test_qa_start_must_match_completion_and_follow_review(tmp_path):
     _receipt(
         replay, "review-code", "review-reused", "started",
         runtime_event_id="event-a", runtime_session_id="session-1",
-        runtime_thread_id="thread-a", runtime_agent_path="/root/review",
+        runtime_thread_id="thread-a",
     )
     _receipt(
         replay, "review-code", "review-reused", "completed", "PASS",
         runtime_event_id="event-b", runtime_session_id="session-1",
-        runtime_thread_id="thread-a", runtime_agent_path="/root/review",
+        runtime_thread_id="thread-a",
     )
     assert lib.receipt_review_verdict(replay) == "PENDING"
+
+    type_mismatch = _task(tmp_path / "type-mismatch")
+    _receipt(type_mismatch, "review-code", "reviewer", "started", agent_type="type-a")
+    _receipt(
+        type_mismatch, "review-code", "reviewer", "completed", "PASS",
+        agent_type="type-b",
+    )
+    assert lib.receipt_review_verdict(type_mismatch) == "PENDING"
+
+
+def test_duplicate_terminals_and_contradictory_summaries_fail_closed(tmp_path):
+    duplicate_review = _task(tmp_path / "duplicate-review")
+    _receipt(duplicate_review, "review-code", "reviewer", "started")
+    _receipt(duplicate_review, "review-code", "reviewer", "completed", "FAIL")
+    _receipt(duplicate_review, "review-code", "reviewer", "completed", "PASS")
+    assert lib.receipt_review_verdict(duplicate_review) == "PENDING"
+
+    duplicate_qa = _task(tmp_path / "duplicate-qa")
+    _pass_review(duplicate_qa)
+    _receipt(duplicate_qa, "qa-cli", "qa", "started")
+    _receipt(duplicate_qa, "qa-cli", "qa", "completed", "FAIL")
+    _receipt(duplicate_qa, "qa-cli", "qa", "completed", "PASS")
+    assert lib.receipt_runtime_verdict(duplicate_qa) == "PENDING"
+
+    contradictory = _task(tmp_path / "contradictory")
+    started = lib.record_subagent_receipt(contradictory, {
+        "event": "started", "agent_id": "qa", "agent_type": "qa_cli",
+        "lens": "qa-cli", "verdict": "PASS", "summary": "VERDICT: PASS",
+    })
+    completed = lib.record_subagent_receipt(contradictory, {
+        "event": "completed", "agent_id": "qa", "agent_type": "qa_cli",
+        "lens": "qa-cli", "verdict": "PASS", "summary": "VERDICT: FAIL",
+    })
+    missing = lib.record_subagent_receipt(contradictory, {
+        "event": "completed", "agent_id": "qa-2", "agent_type": "qa_cli",
+        "lens": "qa-cli", "verdict": "PASS", "summary": "done",
+    })
+    assert started["verdict"] == ""
+    assert completed["verdict"] == "PENDING"
+    assert missing["verdict"] == "PENDING"
 
 
 def test_runtime_never_marks_pass_receipts_stale_after_source_edit(tmp_path):
@@ -181,7 +218,7 @@ def test_runtime_never_marks_pass_receipts_stale_after_source_edit(tmp_path):
     assert lib.runtime_is_stale(task) == (False, "")
 
 
-def test_close_attestation_v2_needs_receipt_hash_but_no_head(tmp_path):
+def test_close_attestation_v3_needs_receipt_hash_but_no_head(tmp_path):
     task = _task(tmp_path)
     state = lib.read_state(task)
     state.update(
@@ -193,19 +230,18 @@ def test_close_attestation_v2_needs_receipt_hash_but_no_head(tmp_path):
     payload = lib.write_task_close_attestation(
         task, state, receipt_fingerprint=fingerprint
     )
-    assert payload["version"] == 2
+    assert payload["version"] == 3
     assert "head_sha" not in payload
     assert lib.task_close_attestation_valid(task, state)
 
-    legacy = {
+    old_schema = {
         **payload,
-        "version": 1,
-        "head_sha": "a" * 40,
+        "version": 2,
     }
     (task / lib.TASK_CLOSE_RECEIPT_NAME).write_text(
-        json.dumps(legacy) + "\n", encoding="utf-8"
+        json.dumps(old_schema) + "\n", encoding="utf-8"
     )
-    assert lib.task_close_attestation_valid(task, state)
+    assert not lib.task_close_attestation_valid(task, state)
 
 
 def test_ignored_nested_git_resolves_ancestor_harness_root(tmp_path):
@@ -295,14 +331,16 @@ def test_missing_or_mismatched_task_run_fails_receipts_closed(tmp_path):
         raise AssertionError("missing task run must reject receipt append")
 
 
-def test_receipt_reset_removes_unified_stream_and_preserves_legacy_inputs(tmp_path):
+def test_receipt_reset_removes_only_unified_stream(tmp_path):
     task = _task(tmp_path)
     _pass_review(task)
     unified = task / lib.RECEIPTS_NAME
-    legacy_review = task / lib.REVIEW_RECEIPTS_NAME
-    legacy_qa = task / lib.SUBAGENT_RECEIPTS_NAME
+    unified_fingerprint = lib.receipt_stream_fingerprint(task)
+    legacy_review = task / "REVIEW_RECEIPTS.jsonl"
+    legacy_qa = task / "SUBAGENT_RECEIPTS.jsonl"
     legacy_review.write_text('{"kind":"review"}\n', encoding="utf-8")
     legacy_qa.write_text('{"kind":"subagent"}\n', encoding="utf-8")
+    assert lib.receipt_stream_fingerprint(task) == unified_fingerprint
 
     snapshot = lib.reset_receipt_streams_for_new_run(task)
 
@@ -310,6 +348,69 @@ def test_receipt_reset_removes_unified_stream_and_preserves_legacy_inputs(tmp_pa
     assert legacy_review.read_text(encoding="utf-8") == '{"kind":"review"}\n'
     assert legacy_qa.read_text(encoding="utf-8") == '{"kind":"subagent"}\n'
     assert set(snapshot) == {str(unified)}
+
+
+def test_snapshot_fingerprint_stays_bound_to_the_same_bytes(tmp_path):
+    task = _task(tmp_path)
+    _pass_review(task)
+    snapshot = lib.receipt_snapshot(task)
+    original = lib.receipt_stream_fingerprint(task, snapshot)
+
+    _receipt(task, "qa-cli", "qa-1", "started")
+
+    assert lib.receipt_stream_fingerprint(task, snapshot) == original
+    assert lib.receipt_stream_fingerprint(task) != original
+
+
+def test_snapshot_rejects_same_size_mutation_and_path_replacement(tmp_path):
+    task = _task(tmp_path)
+    _pass_review(task)
+    stream = task / lib.RECEIPTS_NAME
+
+    with lib.receipt_stream_transaction(task):
+        real_fstat = lib.os.fstat
+        calls = 0
+
+        def changed_fstat(fd):
+            nonlocal calls
+            calls += 1
+            info = real_fstat(fd)
+            if calls == 2:
+                values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+                values["st_mtime_ns"] = info.st_mtime_ns + 1
+                return SimpleNamespace(**values)
+            return info
+
+        with mock.patch.object(lib.os, "fstat", side_effect=changed_fstat):
+            try:
+                lib._receipt_snapshot_unlocked(task)
+            except RuntimeError as exc:
+                assert "integrity" in str(exc)
+            else:
+                raise AssertionError("same-size mutation must fail closed")
+
+    with lib.receipt_stream_transaction(task):
+        real_lstat = lib.os.lstat
+        stream_calls = 0
+
+        def replaced_lstat(path):
+            nonlocal stream_calls
+            info = real_lstat(path)
+            if Path(path) == stream:
+                stream_calls += 1
+                if stream_calls == 2:
+                    values = {name: getattr(info, name) for name in dir(info) if name.startswith("st_")}
+                    values["st_ino"] = info.st_ino + 1
+                    return SimpleNamespace(**values)
+            return info
+
+        with mock.patch.object(lib.os, "lstat", side_effect=replaced_lstat):
+            try:
+                lib._receipt_snapshot_unlocked(task)
+            except RuntimeError as exc:
+                assert "integrity" in str(exc)
+            else:
+                raise AssertionError("path replacement must fail closed")
 
 def test_symlinked_manifest_remains_untrusted(tmp_path):
     root = tmp_path / "workspace"
@@ -334,7 +435,25 @@ def test_review_and_qa_share_one_receipt_stream(tmp_path):
     _receipt(task, "qa-cli", "qa-1", "completed", "PASS")
 
     assert (task / lib.RECEIPTS_NAME).is_file()
-    assert not (task / lib.LEGACY_REVIEW_RECEIPTS_NAME).exists()
-    assert not (task / lib.LEGACY_SUBAGENT_RECEIPTS_NAME).exists()
     assert lib.receipt_review_verdict(task) == "PASS"
     assert lib.receipt_runtime_verdict(task) == "PASS"
+
+    entries = lib.receipt_snapshot(task).entries
+    assert entries
+    assert all(set(entry) == lib.RECEIPT_FIELDS for entry in entries)
+    assert {entry["event"] for entry in entries} == {"started", "completed"}
+
+
+def test_old_unified_schema_requires_a_fresh_task_run(tmp_path):
+    task = _task(tmp_path)
+    (task / lib.RECEIPTS_NAME).write_text(
+        json.dumps({"kind": "review", "status": "completed"}) + "\n",
+        encoding="utf-8",
+    )
+
+    try:
+        lib.receipt_snapshot(task)
+    except RuntimeError as exc:
+        assert "start a fresh task run" in str(exc)
+    else:
+        raise AssertionError("old receipt schema must fail closed")

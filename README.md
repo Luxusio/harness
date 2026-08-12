@@ -92,16 +92,13 @@ All under `plugin/agents/`. Narrow tool surface — each agent gets only what it
 | `qa-desktop` | Native GUI runtime QA via X11 tooling |
 | `ux-browser` / `ux-api` / `ux-cli` / `ux-desktop` | Surface-specific UX review; judges whether the implemented experience is shippable |
 
-QA/UX agents return findings in their final response. Claude hooks and the
-Codex root-rollout watcher record matched subagent starts and completions to
-the task's unified `RECEIPTS.jsonl` stream. Codex supports one explicit lifecycle contract: direct
-`collaboration.spawn_agent`, structured output plus either correlated child
-activity or one unambiguous trusted depth-1 child rollout, and direct
-`FINAL_ANSWER` delivery. SessionStart creates the registration and the
-spawn-selective PreToolUse hook restores it immediately before delegation; the
-Harness MCP server hosts `codex_lifecycle_watcher.py` as
-passive daemon threads. `task_verify`
-uses task/agent/lens identity plus review-before-QA ordering to set runtime verification.
+QA/UX agents return findings in their final response. Lifecycle hooks own the
+unified `RECEIPTS.jsonl`; `task_verify` enforces plan-declared lenses and
+review-before-QA ordering. See
+[the Codex lifecycle ADR](doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md)
+for acquisition/identity/completion and
+[the artifact ADR](doc/harness/patterns/ADR__consolidated-task-artifacts.md)
+for storage/schema/gate semantics.
 QA agents never hold `Edit`/`Write` on source files.
 Dogfooder remains a non-gating backlog pass after QA/UX.
 

@@ -85,20 +85,20 @@ class HarnessMcpServerTests(unittest.TestCase):
         for payload in (
             {
                 "agent_id": "review-1", "agent_type": "harness:review-code",
-                "lens": "review-code", "status": "started",
+                "lens": "review-code", "event": "started",
             },
             {
                 "agent_id": "review-1", "agent_type": "harness:review-code",
                 "lens": "review-code",
-                "status": "completed", "verdict": "PASS",
+                "event": "completed", "verdict": "PASS",
                 "summary": "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0",
             },
             {
                 "agent_id": agent_id, "agent_type": agent_type,
-                "lens": "qa-cli", "status": "started",
+                "lens": "qa-cli", "event": "started",
             },
             {
-                "agent_id": agent_id, "agent_type": agent_type, "status": "completed",
+                "agent_id": agent_id, "agent_type": agent_type, "event": "completed",
                 "lens": "qa-cli", "verdict": "PASS", "summary": "VERDICT: PASS",
                 "source": source,
             },
@@ -147,9 +147,38 @@ class HarnessMcpServerTests(unittest.TestCase):
                     str(task_dir),
                     {
                         "agent_id": "late-agent", "agent_type": "harness:qa-cli",
-                        "lens": "qa-cli", "status": "started",
+                        "lens": "qa-cli", "event": "started",
                     },
                 )
+
+    def test_context_verify_and_close_each_read_one_receipt_snapshot(self):
+        handlers = (
+            harness_server.handle_task_context,
+            harness_server.handle_task_verify,
+            harness_server.handle_task_close,
+        )
+        for index, handler in enumerate(handlers):
+            with self.subTest(handler=handler.__name__), tempfile.TemporaryDirectory() as tmp:
+                manifest = Path(tmp) / "doc/harness/manifest.yaml"
+                manifest.parent.mkdir(parents=True)
+                manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
+                task_id = f"TASK__one-snapshot-{index}"
+                task_dir = Path(tmp) / "doc/harness/tasks" / task_id
+                with (
+                    mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                    mock.patch.object(harness_server, "_env_snapshot", return_value=""),
+                ):
+                    harness_server.handle_task_start({"task_id": task_id})
+                    (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
+                    self._write_subagent_receipt(str(task_dir))
+                    with mock.patch.object(
+                        harness_server,
+                        "receipt_snapshot",
+                        wraps=harness_server.receipt_snapshot,
+                    ) as snapshot:
+                        result = handler({"task_id": task_id})
+                self.assertNotIn("isError", result)
+                self.assertEqual(snapshot.call_count, 1)
 
     def test_tool_registry_matches_expected_tool_surface(self):
         tools = {tool["name"] for tool in harness_server.list_tools()}
@@ -165,19 +194,10 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_start_only_receipt_does_not_produce_runtime_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__start-only")
-            receipt = {
-                "kind": "subagent",
-                "status": "started",
-                "task_id": "TASK__start-only",
-                "agent_id": "qa-1",
-                "agent_type": "harness:qa-cli",
-                "lens": "qa-cli",
-                "verdict": "",
-                "ts": "2099-01-01T00:00:00Z",
-            }
-            (Path(task_dir) / "SUBAGENT_RECEIPTS.jsonl").write_text(
-                json.dumps(receipt) + "\n", encoding="utf-8"
-            )
+            harness_server.record_subagent_receipt(task_dir, {
+                "agent_id": "qa-1", "agent_type": "harness:qa-cli",
+                "lens": "qa-cli", "event": "started",
+            })
             self.assertEqual(harness_server.receipt_runtime_verdict(task_dir), "PENDING")
 
     def test_completed_qa_fail_controls_runtime_verdict(self):
@@ -186,17 +206,17 @@ class HarnessMcpServerTests(unittest.TestCase):
             for payload in (
                 {
                     "agent_id": "review-1", "agent_type": "harness:review-code",
-                    "lens": "review-code", "status": "started",
+                    "lens": "review-code", "event": "started",
                 },
                 {
                     "agent_id": "review-1", "agent_type": "harness:review-code",
                     "lens": "review-code",
-                    "status": "completed", "verdict": "PASS",
+                    "event": "completed", "verdict": "PASS",
                     "summary": "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0",
                 },
                 {
                     "agent_id": "qa-1", "agent_type": "harness:qa-cli",
-                    "lens": "qa-cli", "status": "started",
+                    "lens": "qa-cli", "event": "started",
                 },
             ):
                 harness_server.record_subagent_receipt(task_dir, payload)
@@ -206,7 +226,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                     "agent_id": "qa-1",
                     "agent_type": "harness:qa-cli",
                     "lens": "qa-cli",
-                    "status": "completed",
+                    "event": "completed",
                     "verdict": "FAIL",
                     "summary": "VERDICT: FAIL",
                 },
@@ -222,7 +242,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 {
                     "agent_id": "qa-new",
                     "agent_type": "harness:qa-cli",
-                    "status": "started",
+                    "event": "started",
                     "summary": "rerun started",
                 },
             )
@@ -1360,7 +1380,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 })
                 harness_server.write_state(str(task_dir), state)
                 prior_receipt = '{"prior": true}\n'
-                receipt = task_dir / "REVIEW_RECEIPTS.jsonl"
+                receipt = task_dir / "RECEIPTS.jsonl"
                 receipt.write_text(prior_receipt, encoding="utf-8")
                 with (
                     mock.patch.object(harness_server, "canonical_task_dir", return_value=str(task_dir)),
@@ -1940,7 +1960,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 for status, verdict in (("started", ""), ("completed", "PASS")):
                     harness_server.record_subagent_receipt(task_dir, {
                         "source": "subagent_start_hook" if status == "started" else "subagent_stop_hook",
-                        "status": status,
+                        "event": status,
                         "agent_id": f"{lens}-{task_id}",
                         "agent_type": review_types[lens],
                         "verdict": verdict,
@@ -1953,7 +1973,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             for status, verdict in (("started", ""), ("completed", "PASS")):
                 harness_server.record_subagent_receipt(task_dir, {
                     "source": "subagent_start_hook" if status == "started" else "subagent_stop_hook",
-                    "status": status,
+                    "event": status,
                     "agent_id": f"agent-{task_id}",
                     "agent_type": "harness:qa-cli",
                     "verdict": verdict,

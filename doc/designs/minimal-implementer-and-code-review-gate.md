@@ -103,8 +103,8 @@ Adopt:
 
 Adapt:
 
-- record a worktree diff fingerprint as well as `HEAD`, because harness tasks
-  commonly review uncommitted changes;
+- bind evidence to the current task run and ordered lifecycle rather than Git
+  state, because harness tasks commonly review uncommitted changes;
 - make unavailable or incomplete required review fail closed instead of
   treating it as a non-blocking enhancement;
 - route by risk signals, not a 50/200-line threshold alone.
@@ -305,7 +305,7 @@ Update these prompt surfaces:
    templates where Codex cannot register named agents.
 5. Update session/resume/final prompt injection so it says which review lenses
    are required and gives the executable sequence: discover tool, spawn,
-   await, parse verdict, record receipt, fix, and re-review.
+   await, parse verdict, fix, and re-review. Lifecycle hooks own receipts.
 6. Scope any Ponytail-like prompt injection to implementer agents only. Never
    inject it globally into QA, security, or balanced review agents.
 7. Keep each Claude/Codex role prompt standalone, delimit its behavioral core
@@ -320,47 +320,17 @@ missing, incomplete, self-authored, or stale review.
 
 ## Lifecycle and evidence contract
 
-Record review and QA lifecycle events in the single append-only
-`RECEIPTS.jsonl` stream. The `kind` and `lens` fields preserve their distinct
-semantics without separate files.
+Lifecycle hooks record review and QA evidence in `RECEIPTS.jsonl`. Every routed
+review lens must explicitly PASS before required QA starts; a start,
+self-authored result, or coordination-tool output is not completion evidence.
+The reviewer still returns the exact verdict and canonical finding-count
+summary expected by its role contract. The developer owns deciding which
+evidence to rerun after source edits.
 
-Each required reviewer produces a hook-owned completion record containing:
-
-```json
-{
-  "event": "review_completed",
-  "task_id": "TASK__...",
-  "task_run_id": "...",
-  "agent_id": "...",
-  "kind": "review",
-  "lens": "review-code|review-security",
-  "verdict": "PASS|FAIL|BLOCKED_ENV",
-  "runtime_session_id": "...",
-  "runtime_thread_id": "...",
-  "runtime_event_id": "...",
-  "finished_at": "...",
-  "finding_counts": {"fix_now": 0, "investigate": 0, "optional": 0}
-}
-```
-
-The hook records starts and lifecycle completions. A start receipt is never a
-PASS. The close gate requires:
-
-- Codex completion authority comes from the registered root-rollout watcher
-  observing the direct child final delivery; `wait_agent` and `list_agents`
-  coordinate agents but do not author evidence;
-- reviewer line 1 is the exact verdict and line 2 is the single canonical
-  `FINDING_COUNTS` record; missing or contradictory counts remain pending;
-
-- all routed review lenses completed with explicit PASS;
-- the completion belongs to the current task run, spawned agent, root session,
-  child thread, event, and lens;
-- all required QA lenses subsequently completed with fresh PASS.
-
-Receipts intentionally do not bind HEAD or a worktree fingerprint. The
-developer owns source-drift detection and starts a fresh review cycle after
-edits; close authority comes from the ordered latest review/QA lifecycle for
-the current task run.
+The storage, minimal schema, snapshot, and gate contract is owned by
+[`ADR__consolidated-task-artifacts.md`](../harness/patterns/ADR__consolidated-task-artifacts.md).
+Codex acquisition, identity, and completion matching is owned by
+[`ADR__single-direct-codex-receipt-protocol.md`](../harness/patterns/ADR__single-direct-codex-receipt-protocol.md).
 
 `BLOCKED_ENV` remains a real non-PASS state. If the runtime cannot expose an
 independent reviewer, the task stays pending unless repository policy explicitly
@@ -384,7 +354,7 @@ Refactor it as follows:
   at risk;
 - remove line-count-only red-team routing; use security, architecture,
   migration, concurrency, external contract, or broad blast-radius signals;
-- persist one deduplicated review verdict and receipt before QA begins.
+- require one authoritative review verdict per routed lens before QA begins.
 
 ## Delivery plan
 
@@ -399,11 +369,11 @@ Refactor it as follows:
 ### Phase B: routing and lifecycle receipts
 
 - Compute required review lenses from changed paths and diff-content signals.
-- Add hook-owned review start/completion capture.
-- Add canonical worktree diff fingerprinting.
-- Validate agent identity, lens, verdict, task id, and freshness.
-- Add regression tests for missing wait, timeout, FAIL, BLOCKED_ENV, wrong lens,
-  wrong task, stale SHA, dirty diff after review, and forged artifacts.
+- Add hook-owned review lifecycle capture through the canonical receipt
+  protocol.
+- Validate current-run identity, lens, verdict, and ordering.
+- Add regression tests for timeout, FAIL, BLOCKED_ENV, wrong lens, wrong task
+  run, invalid ordering, ambiguous identity, and forged artifacts.
 
 ### Phase C: develop-flow and close gate
 
@@ -435,7 +405,8 @@ Refactor it as follows:
   smallest safe fix.
 - A review start, timeout, missing verdict, stale result, or QA-only PASS cannot
   close the task.
-- Any post-review edit invalidates review; any post-QA edit invalidates both.
+- The developer reruns affected review or QA after edits; Harness does not
+  infer source drift from Git state.
 - Docs-only and non-code tasks use an explicit routing exemption rather than a
   fabricated PASS.
 

@@ -265,7 +265,7 @@ def register_subagent_start(
             task_dir,
             {
                 "source": "subagent_start_hook",
-                "status": "started",
+                "event": "started",
                 "agent_id": aid,
                 "agent_type": _agent_type(payload),
                 "summary": "subagent start hook observed",
@@ -323,7 +323,7 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
                 result.get("task_dir") or "",
                 {
                     "source": "subagent_stop_hook",
-                    "status": "completed",
+                    "event": "completed",
                     "agent_id": result.get("id") or aid,
                     "agent_type": result.get("agent_type") or _agent_type(payload),
                     "verdict": verdict or "UNKNOWN",

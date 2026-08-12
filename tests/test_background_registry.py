@@ -79,7 +79,7 @@ def test_subagent_start_records_task_local_receipt(tmp_path):
     assert len(lines) == 1
     receipt = json.loads(lines[0])
     assert receipt["source"] == "subagent_start_hook"
-    assert receipt["status"] == "started"
+    assert receipt["event"] == "started"
     assert receipt["agent_id"] == "agent-qa"
     assert receipt["agent_type"] == "harness:qa-cli"
     assert receipt["lens"] == "qa-cli"
@@ -99,8 +99,8 @@ def test_subagent_start_records_task_local_receipt(tmp_path):
     with open(receipt_path, encoding="utf-8") as f:
         receipts = [json.loads(line) for line in f]
     assert len(receipts) == 2
-    assert receipts[-1]["status"] == "completed"
-    assert receipts[-1]["verdict"] == "UNKNOWN"
+    assert receipts[-1]["event"] == "completed"
+    assert receipts[-1]["verdict"] == "PENDING"
     conversation = os.path.join(task_dir, "CONVERSATION.md")
     assert os.path.isfile(conversation)
     with open(conversation, encoding="utf-8") as f:
@@ -235,7 +235,7 @@ def test_official_subagent_stop_fields_are_preserved(tmp_path):
     assert stopped["transcript_path"] == "/tmp/agent.jsonl"
     assert stopped["last_assistant_message"] == "VERDICT: PASS\ndone"
     receipts = [json.loads(line) for line in (Path(task_dir) / "RECEIPTS.jsonl").read_text().splitlines()]
-    assert receipts[-1]["status"] == "completed"
+    assert receipts[-1]["event"] == "completed"
     assert receipts[-1]["verdict"] == "PASS"
 
 

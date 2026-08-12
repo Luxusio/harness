@@ -25,6 +25,7 @@ from _lib import (  # type: ignore  # noqa: E402
     find_repo_root,
     now_iso,
     read_state,
+    receipt_snapshot,
     receipt_review_verdict,
     receipt_runtime_verdict,
     resolve_active_task_dir,
@@ -63,10 +64,11 @@ def _trusted_harness_repo(repo_root: Path) -> tuple[bool, str]:
 
 def _verification_state(task_dir: Path) -> tuple[bool, str, str]:
     state = read_state(str(task_dir))
-    fingerprint = receipt_stream_fingerprint(str(task_dir))
-    if receipt_review_verdict(str(task_dir), state) != "PASS":
+    snapshot = receipt_snapshot(str(task_dir))
+    fingerprint = receipt_stream_fingerprint(str(task_dir), snapshot)
+    if receipt_review_verdict(str(task_dir), state, snapshot) != "PASS":
         return False, "fresh review PASS required", fingerprint
-    if receipt_runtime_verdict(str(task_dir), state) != "PASS":
+    if receipt_runtime_verdict(str(task_dir), state, snapshot) != "PASS":
         return False, "fresh QA PASS after review required", fingerprint
     return True, "", fingerprint
 

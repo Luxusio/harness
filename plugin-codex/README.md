@@ -41,7 +41,7 @@ Further references:
 - `skills/` — user-visible Codex entry skills: `setup` for bootstrap/repair and `run` for repository mutation. `run` is implicitly invocable and loads the canonical internal workflow before edits.
 - `internal-skills/` — hand-authored Codex methodology prompts hidden from the user skill menu (`run`, `goal-queue`, `plan`, `develop`, `plan-*-review`).
 - `agents/` — QA/UX/review methodology references. On Codex, the orchestrator checks the current and deferred tool catalogs and uses `spawn_agent` when available; inline execution is the explicit fallback when no independent agent route exists.
-- Codex hook config is emitted by `install.py` as plugin-local `hooks.json`. It intentionally omits Stop-loop control; Codex flow is prompt-controlled by the skills. SessionStart creates the exact root-rollout registration and spawn-selective PreToolUse restores it immediately before delegation. Prompt, PostToolUse, and Stop hooks do no registration work. The Harness MCP server hosts the sole Codex receipt owner: a passive thread-scoped watcher over direct `collaboration` events. It accepts only strictly correlated child completions without launching another OS process. Late recovery covers future subagent starts only; it never promotes already-completed work.
+- Codex hook config is emitted by `install.py` as plugin-local `hooks.json`; Codex flow is prompt-controlled by the skills and the Harness MCP server hosts the sole receipt watcher. The normative acquisition/identity/completion contract is in `doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md`; storage/schema/gates are in `doc/harness/patterns/ADR__consolidated-task-artifacts.md`.
 
 ## Skills and Internal Prompts
 

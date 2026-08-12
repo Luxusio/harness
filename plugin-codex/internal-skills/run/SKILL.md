@@ -70,28 +70,19 @@ spawn_agent {
 }
 ```
 
-The MCP-hosted Codex lifecycle watcher records each direct `collaboration`
-spawn and completion in the protected receipt streams. Do not call a harness receipt tool and do not write
-critic verdict artifacts. If no subagent was spawned, use the inline fallback
-path and keep the fallback reason in task state or the final response;
-`task_close` will still require a real completed QA PASS receipt for
-verification-gated work when `spawn_agent` was available.
+The MCP-hosted Codex lifecycle watcher owns the protected receipt stream. Do
+not call a receipt tool or write critic verdict artifacts. Do not call a harness receipt tool
+or write `RECEIPTS.jsonl` yourself. If no subagent was
+spawned, use the inline fallback path and record the material fallback reason;
+strict close still requires the plan-declared independent evidence.
 
-Every review or QA spawn must provide a valid structured `task_name` argument.
-The message may repeat `task_name: <same-structured-name>` on its first line for
-readability, but the watcher does not use prompt text as identity evidence. A
-runtime without the structured field is unsupported and leaves the receipt
-missing until Harness and Codex are upgraded together.
-
-On Codex builds that do not forward collaboration tools to PostToolUse,
-SessionStart creates the exact root-rollout registration and spawn-selective
-PreToolUse restores it immediately before delegation. The existing Harness MCP server hosts the
-thread-scoped watcher as a daemon thread. The watcher, not a model-callable MCP
-tool or PostToolUse result parser, owns receipts.
-Give review/QA agents structured task names containing their exact lens; then
-await the final response normally. A
-registration created after completion cannot retroactively establish ordered
-lifecycle evidence; recovery covers only future subagent starts.
+Every review or QA spawn must provide a valid structured `task_name` containing
+its exact lens. Prompt text may mirror it only for readability. Await the final
+response normally; late recovery cannot authorize already-completed work.
+Codex acquisition/identity/completion is defined only by
+`doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md`; storage,
+schema, snapshots, and gates are defined only by
+`doc/harness/patterns/ADR__consolidated-task-artifacts.md`.
 
 Subagent lifecycle cleanup: track every `agent_id` returned by `spawn_agent`.
 After a spawned agent completes, fails, is cancelled, or is no longer needed,
@@ -107,8 +98,7 @@ agent-status polling between timeouts. After a timeout, give one compact status 
 before the next wait interval. Treat an agent's progress message and
 final response as one lifecycle; do not add an extra wait solely to collect a
 duplicate completion notification. Use `wait_agent` only to coordinate
-completion. `wait_agent` and `list_agents` output do not author receipts; the
-direct lifecycle watcher owns that evidence.
+completion. `wait_agent` and `list_agents` output do not author receipts.
 
 Use inline execution as the fallback for roles that normally benefit from independence only when `spawn_agent` is unavailable or the work is not actually independent. If independent work runs sequentially, state the concrete blocker and affected lanes in the lane table or final response; vague reasons such as lack of user request are invalid. Do not create a runtime fallback document just to record routing history.
 

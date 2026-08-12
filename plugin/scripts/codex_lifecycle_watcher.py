@@ -34,13 +34,11 @@ from _lib import (  # type: ignore
     extract_qa_verdict,
     find_harness_root,
     find_repo_root,
-    list_review_receipts,
-    list_subagent_receipts,
+    receipt_snapshot,
     record_subagent_receipt,
     read_task_run,
     read_state,
     resolve_active_task_dir,
-    review_diff_fingerprint,  # compatibility symbol; watcher does not inspect source state
 )
 
 THREAD_RE = re.compile(r"^[0-9a-fA-F-]{16,80}$")
@@ -49,12 +47,14 @@ AGENT_PATH_RE = re.compile(r"^/root/[A-Za-z0-9_.-]{1,120}$")
 TASK_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
 MAX_LINE_BYTES = 2 * 1024 * 1024
 MAX_CHILD_BYTES = 64 * 1024 * 1024
+MAX_DISCOVERY_FILES = 4096
+DISCOVERY_SECONDS = 2.0
 POLL_SECONDS = 0.20
 IDLE_SECONDS = 8 * 60 * 60
 REGISTRATION_TTL_SECONDS = IDLE_SECONDS
 MAX_WATCHER_THREADS = 16
 RUNTIME_SUBDIR = os.path.join("harness", "codex-watchers")
-REGISTRATION_VERSION = 7
+REGISTRATION_VERSION = 8
 REGISTRATION_OWNER = "codex_root_hook"
 
 
@@ -252,17 +252,32 @@ def _find_child_by_agent_path(
     root_id: str,
     agent_path: str,
     session_cwd: str,
-) -> tuple[str, str] | None:
-    """Resolve current Codex spawn output when no activity event is emitted."""
+    rollout_dir: Path | None = None,
+) -> str:
+    """Resolve one trusted depth-1 rollout for a structured spawn output."""
     if not AGENT_PATH_RE.fullmatch(agent_path):
-        return None
+        return ""
     root = _sessions_root()
-    matches: list[tuple[str, str]] = []
+    search_root = (rollout_dir or root).resolve()
     try:
-        for directory, _subdirs, filenames in os.walk(root):
+        search_root.relative_to(root)
+    except ValueError:
+        return ""
+    if search_root != root and not _trusted_parent_tree(
+        search_root / ".rollout-scan", root,
+    ):
+        return ""
+    matches: list[str] = []
+    deadline = time.monotonic() + DISCOVERY_SECONDS
+    candidates = 0
+    try:
+        for directory, _subdirs, filenames in os.walk(search_root):
             for name in filenames:
                 if not (name.startswith("rollout-") and name.endswith(".jsonl")):
                     continue
+                candidates += 1
+                if candidates > MAX_DISCOVERY_FILES or time.monotonic() >= deadline:
+                    return ""
                 path = Path(directory) / name
                 opened = _open_trusted_file(path, root, max_size=MAX_CHILD_BYTES)
                 if opened is None:
@@ -278,12 +293,12 @@ def _find_child_by_agent_path(
                 finally:
                     handle.close()
                 if child_id and identity_matches:
-                    matches.append((child_id, agent_path))
+                    matches.append(child_id)
                     if len(matches) > 1:
-                        return None
+                        return ""
     except OSError:
-        return None
-    return matches[0] if len(matches) == 1 else None
+        return ""
+    return matches[0] if len(matches) == 1 else ""
 
 
 def _load_json_line(raw: bytes) -> dict[str, Any] | None:
@@ -827,20 +842,6 @@ def _spawn_output(event: dict[str, Any]) -> tuple[str, str] | None:
     return (call_id, identity) if _valid_agent_identity(identity) else None
 
 
-def _started_activity(event: dict[str, Any]) -> tuple[str, str, str] | None:
-    payload = _event_payload(event, "event_msg")
-    if not payload or payload.get("type") != "sub_agent_activity" or payload.get("kind") != "started":
-        return None
-    call_id = str(payload.get("event_id") or "")
-    child_id = str(payload.get("agent_thread_id") or "")
-    agent_path = str(payload.get("agent_path") or "")
-    if not CALL_RE.fullmatch(call_id) or not THREAD_RE.fullmatch(child_id):
-        return None
-    if not _valid_agent_identity(agent_path):
-        return None
-    return call_id, child_id, agent_path
-
-
 def _root_delivery(event: dict[str, Any]) -> tuple[str, str] | None:
     payload = _event_payload(event, "response_item")
     if not payload or payload.get("type") != "agent_message":
@@ -950,7 +951,7 @@ def _child_status(
 def _exact_receipt(
     task_dir: str,
     event_id: str,
-    status: str,
+    event: str,
     *,
     root_id: str,
     child_id: str,
@@ -959,13 +960,13 @@ def _exact_receipt(
     task_run_id: str,
     agent_type: str,
 ) -> dict[str, Any] | None:
-    for item in list_review_receipts(task_dir) + list_subagent_receipts(task_dir):
+    for item in receipt_snapshot(task_dir).entries:
         if (
             item.get("runtime_event_id") == event_id
-            and item.get("status") == status
+            and item.get("event") == event
             and item.get("runtime_session_id") == root_id
             and item.get("runtime_thread_id") == child_id
-            and item.get("runtime_agent_path") == agent_path
+            and item.get("agent_id") == agent_path
             and item.get("lens") == lens
             and item.get("task_run_id") == task_run_id
             and item.get("agent_type") == agent_type
@@ -975,16 +976,24 @@ def _exact_receipt(
 
 
 class Watcher:
-    def __init__(self, repo_root: str, root_id: str, *, session_cwd: str | None = None):
+    def __init__(
+        self,
+        repo_root: str,
+        root_id: str,
+        *,
+        session_cwd: str | None = None,
+        rollout_dir: Path | None = None,
+    ):
         self.repo_root = repo_root
         self.root_id = root_id
         self.session_cwd = os.path.realpath(session_cwd or repo_root)
+        self.rollout_dir = rollout_dir
         self.calls: dict[str, dict[str, Any]] = {}
-        self.by_path: dict[str, dict[str, Any]] = {}
+        self.by_agent: dict[str, dict[str, Any]] = {}
 
     @staticmethod
     def _receipt_agent_id(item: dict[str, Any]) -> str:
-        return str(item.get("activity_path") or "")
+        return str(item.get("agent_path") or "")
 
     @staticmethod
     def _receipt_source(_item: dict[str, Any]) -> str:
@@ -1003,7 +1012,7 @@ class Watcher:
         summary += f"\nRuntime watcher invalidated: {reason}"
         record_subagent_receipt(item["task_dir"], {
             "source": self._receipt_source(item),
-            "status": "completed",
+            "event": "completed",
             "agent_id": self._receipt_agent_id(item),
             "agent_type": item.get("task_name", ""),
             "lens": lens,
@@ -1013,7 +1022,6 @@ class Watcher:
             "runtime_event_id": item.get("event_id", "") + ":conflict",
             "runtime_session_id": self.root_id,
             "runtime_thread_id": item.get("child_id", ""),
-            "runtime_agent_path": self._receipt_agent_id(item),
         })
 
     def _set_once(self, item: dict[str, Any], key: str, value: Any) -> bool:
@@ -1027,18 +1035,15 @@ class Watcher:
         item = self.calls.get(call_id) or {}
         if not all(item.get(key) for key in ("task_name", "output_path")):
             return
-        if not item.get("child_id") or not item.get("activity_path"):
-            discovered = _find_child_by_agent_path(
+        if not item.get("child_id"):
+            child_id = _find_child_by_agent_path(
                 self.root_id, str(item["output_path"]), self.session_cwd,
+                self.rollout_dir,
             )
-            if discovered is None:
+            if not child_id:
                 return
-            child_id, activity_path = discovered
-            item.setdefault("child_id", child_id)
-            item.setdefault("activity_path", activity_path)
-        if item["output_path"] not in {item["activity_path"], item["child_id"]}:
-            self._invalidate(item, "spawn output identity did not match child activity")
-            return
+            item["child_id"] = child_id
+            item["agent_path"] = item["output_path"]
         if item.get("invalid") or item.get("started"):
             return
         task_dir = str(item.get("task_dir") or "")
@@ -1068,7 +1073,7 @@ class Watcher:
         )
         if exact_existing is None:
             child_status, _, _ = _child_status(
-                item["child_id"], self.root_id, item["activity_path"], self.session_cwd,
+                item["child_id"], self.root_id, item["agent_path"], self.session_cwd,
             )
             if child_status == "pending":
                 return
@@ -1079,7 +1084,7 @@ class Watcher:
                 return
             record_subagent_receipt(task_dir, {
                     "source": self._receipt_source(item),
-                    "status": "started",
+                    "event": "started",
                     "agent_id": self._receipt_agent_id(item),
                     "agent_type": item["task_name"],
                     "lens": lens,
@@ -1088,15 +1093,13 @@ class Watcher:
                     "runtime_event_id": event_id,
                     "runtime_session_id": self.root_id,
                     "runtime_thread_id": item["child_id"],
-                    "runtime_agent_path": self._receipt_agent_id(item),
                 })
         item.update({
             "started": True,
             "task_dir": task_dir,
             "event_id": event_id,
         })
-        self.by_path[item["activity_path"]] = item
-        self.by_path[item["output_path"]] = item
+        self.by_agent[item["agent_path"]] = item
 
     def _maybe_complete(self, item: dict[str, Any]) -> None:
         root_final = str(item.get("root_final") or "")
@@ -1112,7 +1115,7 @@ class Watcher:
             self._invalidate(item, "active task changed while agent was running")
             return
         status, transcript, child_final = _child_status(
-            item["child_id"], self.root_id, item["activity_path"], self.session_cwd,
+            item["child_id"], self.root_id, item["agent_path"], self.session_cwd,
         )
         if status == "pending":
             return
@@ -1137,7 +1140,7 @@ class Watcher:
         ) is None:
             record_subagent_receipt(item["task_dir"], {
                 "source": self._receipt_source(item),
-                "status": "completed",
+                "event": "completed",
                 "agent_id": self._receipt_agent_id(item),
                 "agent_type": item["task_name"],
                 "lens": lens,
@@ -1148,14 +1151,13 @@ class Watcher:
                 "runtime_event_id": item["event_id"],
                 "runtime_session_id": self.root_id,
                 "runtime_thread_id": item["child_id"],
-                "runtime_agent_path": self._receipt_agent_id(item),
             })
         item["completed"] = True
 
     def retry(self) -> None:
         for call_id in list(self.calls):
             self._maybe_start(call_id)
-        for item in list(self.by_path.values()):
+        for item in list(self.by_agent.values()):
             self._maybe_complete(item)
 
     def feed(self, event: dict[str, Any]) -> None:
@@ -1178,14 +1180,6 @@ class Watcher:
             self._set_once(item, "task_name", task_name)
             self._set_once(item, "task_dir", active_task)
             self._set_once(item, "task_run_id", binding.get("task_run_id", ""))
-            self._maybe_start(call_id)
-            return
-        activity = _started_activity(event)
-        if activity:
-            call_id, child_id, agent_path = activity
-            item = self.calls.setdefault(call_id, {})
-            self._set_once(item, "child_id", child_id)
-            self._set_once(item, "activity_path", agent_path)
             self._maybe_start(call_id)
             return
         payload = _event_payload(event, "response_item")
@@ -1211,7 +1205,7 @@ class Watcher:
         self._deliver(agent_path, root_final)
 
     def _deliver(self, agent_path: str, root_final: str) -> dict[str, Any] | None:
-        item = self.by_path.get(agent_path)
+        item = self.by_agent.get(agent_path)
         if not item:
             return None
         if item.get("root_final") is not None:
@@ -1252,7 +1246,12 @@ def watch(
     ):
         handle.close()
         return 2
-    watcher = Watcher(repo_root, thread_id, session_cwd=session_cwd)
+    watcher = Watcher(
+        repo_root,
+        thread_id,
+        session_cwd=session_cwd,
+        rollout_dir=path.parent,
+    )
     stop_event = stop_event or threading.Event()
     rollout_age = max(0.0, time.time() - rollout_info.st_mtime)
     last_data = time.monotonic() - min(rollout_age, idle_seconds)

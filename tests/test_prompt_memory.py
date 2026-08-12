@@ -21,6 +21,30 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "plugin" / "scripts"
 PROMPT = SCRIPTS / "prompt_memory.py"
 PROMPT_WRAPPER = SCRIPTS / "hook_user_prompt_submit.py"
+RUN_ID = "a" * 32
+
+
+def _receipt(*, event: str, lens: str, agent_id: str, verdict: str = "") -> dict:
+    summary = "started" if event == "started" else f"VERDICT: {verdict}"
+    if lens.startswith("review-") and event == "completed":
+        summary += "\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+    return {
+        "receipt_id": f"receipt-{agent_id}-{event}",
+        "ts": "2026-08-12T00:00:00Z",
+        "event": event,
+        "source": "codex-lifecycle-watcher",
+        "task_run_id": RUN_ID,
+        "agent_id": agent_id,
+        "agent_type": agent_id,
+        "lens": lens,
+        "verdict": verdict,
+        "summary": summary,
+        "transcript_path": "",
+        "transcript_sha256": "",
+        "runtime_event_id": f"event-{agent_id}",
+        "runtime_session_id": "session",
+        "runtime_thread_id": agent_id,
+    }
 
 
 def _invoke(repo_root: str, *, env_extra=None, payload: dict | None = None) -> subprocess.CompletedProcess:
@@ -58,6 +82,10 @@ def _build_scratch_repo(base: Path, *,
     if active_task_id:
         task_dir = tasks / active_task_id
         task_dir.mkdir(parents=True, exist_ok=True)
+        (task_dir / "TASK_RUN.json").write_text(
+            json.dumps({"task_run_id": RUN_ID, "started_at": "2026-08-12T00:00:00Z"}) + "\n",
+            encoding="utf-8",
+        )
         if plan:
             (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
         if task_state is not None:
@@ -72,8 +100,8 @@ def _build_scratch_repo(base: Path, *,
                 encoding="utf-8",
             )
         if write_receipt:
-            (task_dir / "SUBAGENT_RECEIPTS.jsonl").write_text(
-                '{"source":"subagent_start_hook","status":"started","agent_id":"agent-1","agent_type":"harness:qa-cli"}\n',
+            (task_dir / "RECEIPTS.jsonl").write_text(
+                json.dumps(_receipt(event="started", lens="qa-cli", agent_id="agent-1")) + "\n",
                 encoding="utf-8",
             )
         if checks_yaml is not None:
@@ -268,13 +296,11 @@ class TestPromptMemory(unittest.TestCase):
                 Path(tmp), active_task_id="TASK__recorded-review", task_state=state,
             )
             task_dir = base / "doc/harness/tasks/TASK__recorded-review"
-            common = {
-                "kind": "review", "lens": "review-code", "agent_id": "reviewer-1",
-                "head_sha": "abc", "diff_fingerprint": "sha256:abc",
-            }
-            start = {**common, "status": "started", "verdict": ""}
-            completion = {**common, "status": "completed", "verdict": "PASS"}
-            (task_dir / "REVIEW_RECEIPTS.jsonl").write_text(
+            start = _receipt(event="started", lens="review-code", agent_id="reviewer-1")
+            completion = _receipt(
+                event="completed", lens="review-code", agent_id="reviewer-1", verdict="PASS"
+            )
+            (task_dir / "RECEIPTS.jsonl").write_text(
                 json.dumps(start) + "\n" + json.dumps(completion) + "\n",
                 encoding="utf-8",
             )
@@ -303,15 +329,11 @@ class TestPromptMemory(unittest.TestCase):
                 ("review-code", "code-1", "PASS"),
                 ("review-security", "security-1", "FAIL"),
             ):
-                common = {
-                    "kind": "review", "lens": lens, "agent_id": agent,
-                    "head_sha": "abc", "diff_fingerprint": "sha256:abc",
-                }
                 events.extend((
-                    {**common, "status": "started", "verdict": ""},
-                    {**common, "status": "completed", "verdict": verdict},
+                    _receipt(event="started", lens=lens, agent_id=agent),
+                    _receipt(event="completed", lens=lens, agent_id=agent, verdict=verdict),
                 ))
-            (task_dir / "REVIEW_RECEIPTS.jsonl").write_text(
+            (task_dir / "RECEIPTS.jsonl").write_text(
                 "".join(json.dumps(item) + "\n" for item in events), encoding="utf-8",
             )
             r = _invoke(str(base))
@@ -331,14 +353,12 @@ class TestPromptMemory(unittest.TestCase):
                 Path(tmp), active_task_id="TASK__stored-review", task_state=state,
             )
             task_dir = base / "doc/harness/tasks/TASK__stored-review"
-            (task_dir / "REVIEW_RECEIPTS.jsonl").write_text(json.dumps({
-                "kind": "review",
-                "status": "completed",
-                "lens": "review-code",
-                "verdict": "PASS",
-                "head_sha": "stale",
-                "diff_fingerprint": "stale",
-            }) + "\n", encoding="utf-8")
+            (task_dir / "RECEIPTS.jsonl").write_text(
+                json.dumps(_receipt(
+                    event="completed", lens="review-code", agent_id="review-stale", verdict="PASS"
+                )) + "\n",
+                encoding="utf-8",
+            )
             r = _invoke(str(base))
 
         self.assertEqual(r.returncode, 0)

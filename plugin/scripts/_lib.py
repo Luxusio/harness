@@ -19,16 +19,13 @@ import hashlib
 import secrets
 from contextlib import contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from types import MappingProxyType
 
 TASK_DIR = "doc/harness/tasks"
 MANIFEST_PATH = "doc/harness/manifest.yaml"
 RECEIPTS_NAME = "RECEIPTS.jsonl"
-LEGACY_SUBAGENT_RECEIPTS_NAME = "SUBAGENT_RECEIPTS.jsonl"
-LEGACY_REVIEW_RECEIPTS_NAME = "REVIEW_RECEIPTS.jsonl"
-# Public read-compat aliases for extensions that inspect legacy task packs.
-SUBAGENT_RECEIPTS_NAME = LEGACY_SUBAGENT_RECEIPTS_NAME
-REVIEW_RECEIPTS_NAME = LEGACY_REVIEW_RECEIPTS_NAME
 TASK_CLOSE_RECEIPT_NAME = "TASK_CLOSE_RECEIPT.json"
 TASK_RUN_NAME = "TASK_RUN.json"
 CONVERSATION_NAME = "CONVERSATION.md"
@@ -2070,14 +2067,6 @@ def _receipts_path(task_dir):
     return os.path.join(task_dir, RECEIPTS_NAME)
 
 
-def _legacy_subagent_receipts_path(task_dir):
-    return os.path.join(task_dir, LEGACY_SUBAGENT_RECEIPTS_NAME)
-
-
-def _legacy_review_receipts_path(task_dir):
-    return os.path.join(task_dir, LEGACY_REVIEW_RECEIPTS_NAME)
-
-
 _RECEIPT_STREAM_MAX_BYTES = 16 * 1024 * 1024
 _RECEIPT_LOCK_HELD = ContextVar("harness_receipt_lock_held", default="")
 
@@ -2197,7 +2186,7 @@ def receipt_stream_transaction(task_dir):
 
 
 def reset_receipt_streams_for_new_run(task_dir):
-    """Remove only the current unified stream; legacy inputs stay read-only."""
+    """Remove the unified receipt stream for a fresh task run."""
     task_dir = _validated_receipt_task_dir(task_dir)
     paths = (_receipts_path(task_dir),)
     with _receipt_stream_lock(task_dir):
@@ -2228,10 +2217,41 @@ def restore_receipt_streams(snapshot):
         _restore_text_snapshots(snapshot)
 
 
-def _read_receipt_stream_unlocked(path, kind=None):
+RECEIPT_FIELDS = frozenset({
+    "receipt_id", "ts", "event", "source", "task_run_id", "agent_id",
+    "agent_type", "lens", "verdict", "summary", "transcript_path",
+    "transcript_sha256", "runtime_event_id", "runtime_session_id",
+    "runtime_thread_id",
+})
+RECEIPT_EVENTS = frozenset({"started", "completed"})
+
+
+@dataclass(frozen=True)
+class ReceiptSnapshot:
+    """One immutable view and fingerprint of the current receipt stream."""
+
+    entries: tuple
+    fingerprint: str
+
+    @property
+    def reviews(self):
+        return tuple(
+            item for item in self.entries
+            if str(item.get("lens") or "").startswith("review-")
+        )
+
+    @property
+    def subagents(self):
+        return tuple(
+            item for item in self.entries
+            if not str(item.get("lens") or "").startswith("review-")
+        )
+
+
+def _read_receipt_bytes_unlocked(path):
     prior = _receipt_stream_info(path)
     if prior is None:
-        return []
+        return None
     flags = os.O_RDONLY
     flags |= (
         getattr(os, "O_CLOEXEC", 0)
@@ -2252,22 +2272,46 @@ def _read_receipt_stream_unlocked(path, kind=None):
             or (opened.st_dev, opened.st_ino) != (prior.st_dev, prior.st_ino)
         ):
             raise RuntimeError("receipt storage integrity unavailable")
-        with os.fdopen(fd, encoding="utf-8") as handle:
+        with os.fdopen(fd, "rb") as handle:
             fd = -1
-            text = handle.read(_RECEIPT_STREAM_MAX_BYTES + 1)
+            raw = handle.read(_RECEIPT_STREAM_MAX_BYTES + 1)
             final = os.fstat(handle.fileno())
+        final_path = os.lstat(path)
         if (
-            len(text.encode("utf-8")) > _RECEIPT_STREAM_MAX_BYTES
+            len(raw) > _RECEIPT_STREAM_MAX_BYTES
             or (final.st_dev, final.st_ino) != (opened.st_dev, opened.st_ino)
             or final.st_size != opened.st_size
+            or final.st_mtime_ns != opened.st_mtime_ns
+            or final.st_ctime_ns != opened.st_ctime_ns
+            or not stat.S_ISREG(final_path.st_mode)
+            or (final_path.st_dev, final_path.st_ino) != (opened.st_dev, opened.st_ino)
         ):
             raise RuntimeError("receipt storage integrity unavailable")
-    except (OSError, UnicodeError) as exc:
+    except OSError as exc:
         raise RuntimeError("receipt storage integrity unavailable") from exc
     finally:
         if fd >= 0:
             os.close(fd)
-    receipts = []
+    return raw
+
+
+def _receipt_snapshot_unlocked(task_dir):
+    path = _receipts_path(task_dir)
+    raw = _read_receipt_bytes_unlocked(path)
+    h = hashlib.sha256()
+    h.update(RECEIPTS_NAME.encode("utf-8"))
+    h.update(b"\0")
+    if raw is None:
+        h.update(b"<missing>\0")
+        text = ""
+    else:
+        h.update(raw)
+        h.update(b"\0")
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeError as exc:
+            raise RuntimeError("receipt storage integrity unavailable") from exc
+    entries = []
     for line in text.splitlines():
         if not line.strip():
             continue
@@ -2275,16 +2319,19 @@ def _read_receipt_stream_unlocked(path, kind=None):
             item = json.loads(line)
         except Exception as exc:
             raise RuntimeError("receipt storage integrity unavailable") from exc
-        if not isinstance(item, dict) or item.get("kind") not in {"review", "subagent"}:
+        if not isinstance(item, dict):
             raise RuntimeError("receipt storage integrity unavailable")
-        if kind is None or item.get("kind") == kind:
-            receipts.append(item)
-    return receipts
+        if set(item) != RECEIPT_FIELDS or item.get("event") not in RECEIPT_EVENTS:
+            raise RuntimeError(
+                "unsupported RECEIPTS.jsonl schema; start a fresh task run to reset receipts"
+            )
+        entries.append(MappingProxyType(item))
+    return ReceiptSnapshot(tuple(entries), "sha256:" + h.hexdigest())
 
 
-def _read_receipt_stream(path, kind):
-    with _receipt_stream_lock(os.path.dirname(path)):
-        return _read_receipt_stream_unlocked(path, kind)
+def receipt_snapshot(task_dir):
+    with _receipt_stream_lock(task_dir):
+        return _receipt_snapshot_unlocked(task_dir)
 
 
 def _hash_file(path):
@@ -2361,75 +2408,12 @@ def required_review_lenses(task_dir, state=None):
     return lenses
 
 
-def review_diff_fingerprint(task_dir, state=None):
-    """Backward-compatible receipt field with no source-state inspection."""
-    return "sha256:" + hashlib.sha256(b"").hexdigest()
-
-
 def _receipt_stream_fingerprint_unlocked(task_dir):
-    """Hash live review/QA receipt streams without request caching."""
-    h = hashlib.sha256()
-    for name in (
-        RECEIPTS_NAME,
-        LEGACY_REVIEW_RECEIPTS_NAME,
-        LEGACY_SUBAGENT_RECEIPTS_NAME,
-    ):
-        path = os.path.join(task_dir, name)
-        h.update(name.encode("utf-8"))
-        h.update(b"\0")
-        try:
-            info = os.lstat(path)
-        except FileNotFoundError:
-            h.update(b"<missing>\0")
-            continue
-        except OSError as exc:
-            raise RuntimeError("receipt stream snapshot unavailable") from exc
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-            raise RuntimeError("receipt stream snapshot unavailable")
-        flags = (
-            os.O_RDONLY
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_NONBLOCK", 0)
-        )
-        fd = None
-        try:
-            fd = os.open(path, flags)
-            opened = os.fstat(fd)
-            if (
-                not stat.S_ISREG(opened.st_mode)
-                or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino)
-            ):
-                raise RuntimeError("receipt stream snapshot unavailable")
-            handle = os.fdopen(fd, "rb")
-            fd = None
-            with handle:
-                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                    h.update(chunk)
-                after = os.fstat(handle.fileno())
-            final_path = os.lstat(path)
-            if (
-                after.st_size != opened.st_size
-                or after.st_mtime_ns != opened.st_mtime_ns
-                or after.st_ctime_ns != opened.st_ctime_ns
-                or not stat.S_ISREG(final_path.st_mode)
-                or (final_path.st_dev, final_path.st_ino) != (opened.st_dev, opened.st_ino)
-            ):
-                raise RuntimeError("receipt stream snapshot unavailable")
-        except OSError as exc:
-            raise RuntimeError("receipt stream snapshot unavailable") from exc
-        finally:
-            if fd is not None:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
-        h.update(b"\0")
-    return "sha256:" + h.hexdigest()
+    return _receipt_snapshot_unlocked(task_dir).fingerprint
 
 
-def receipt_stream_fingerprint(task_dir):
-    with _receipt_stream_lock(task_dir):
-        return _receipt_stream_fingerprint_unlocked(task_dir)
+def receipt_stream_fingerprint(task_dir, snapshot=None):
+    return (snapshot or receipt_snapshot(task_dir)).fingerprint
 
 
 def write_task_close_attestation(
@@ -2437,7 +2421,7 @@ def write_task_close_attestation(
 ):
     """Persist close evidence without binding lifecycle state to Git HEAD."""
     payload = {
-        "version": 2,
+        "version": 3,
         "task_id": str(state.get("task_id") or ""),
         "closed_at": str(state.get("closed_at") or ""),
         "runtime_verdict": str(state.get("runtime_verdict") or "").upper(),
@@ -2468,16 +2452,11 @@ def task_close_attestation_valid(task_dir, state):
         os.path.join(task_dir, TASK_CLOSE_RECEIPT_NAME),
         max_size=16 * 1024,
     )
-    version = payload.get("version")
     if (
-        version not in {1, 2}
+        payload.get("version") != 3
         or payload.get("task_id") != state.get("task_id")
         or payload.get("closed_at") != state.get("closed_at")
         or payload.get("runtime_verdict") != "PASS"
-        or (
-            version == 1
-            and not re.fullmatch(r"[0-9a-f]{40}", str(payload.get("head_sha") or ""))
-        )
         or not re.fullmatch(
             r"sha256:[0-9a-f]{64}",
             str(payload.get("receipt_stream_fingerprint") or ""),
@@ -2528,12 +2507,21 @@ def record_subagent_receipt(task_dir, receipt):
     transcript_path = _receipt_short(receipt.get("transcript_path"), 1000)
     lens = _infer_receipt_lens(agent_type, receipt.get("lens"))
     is_review = lens.startswith("review-")
-    status = _receipt_short(receipt.get("status") or "done", 80)
-    is_completed = status.lower() in {"completed", "done"}
+    event = _receipt_short(receipt.get("event"), 20).lower()
+    if event not in RECEIPT_EVENTS:
+        raise ValueError("event must be started or completed")
+    is_completed = event == "completed"
     now = _receipt_now_iso()
     finding_counts = {"fix_now": 0, "investigate": 0, "optional": 0}
     raw_summary = str(receipt.get("summary") or "")
     summary = _receipt_short(raw_summary, 1000)
+    summary_verdict = extract_qa_verdict(raw_summary) if is_completed else ""
+    if not is_completed:
+        verdict = ""
+    elif not summary_verdict or (verdict and verdict != summary_verdict):
+        verdict = "PENDING"
+    else:
+        verdict = summary_verdict
     summary_lines = raw_summary.splitlines()
     counts_match = _FINDING_COUNTS_RE.fullmatch(summary_lines[1]) if len(summary_lines) > 1 else None
     counts_reported = bool(counts_match) and sum(
@@ -2564,13 +2552,8 @@ def record_subagent_receipt(task_dir, receipt):
     entry = {
         "receipt_id": "",
         "ts": now,
-        "kind": "review" if is_review else "subagent",
-        "event": ("review_completed" if is_completed else "review_started") if is_review else (
-            "subagent_completed" if is_completed else "subagent_started"
-        ),
+        "event": event,
         "source": source,
-        "status": status,
-        "task_id": os.path.basename(os.path.normpath(task_dir)),
         "task_run_id": task_run_id,
         "agent_id": agent_id,
         "agent_type": agent_type,
@@ -2579,17 +2562,9 @@ def record_subagent_receipt(task_dir, receipt):
         "summary": summary,
         "transcript_path": transcript_path,
         "transcript_sha256": _hash_file(transcript_path) if transcript_path else "",
-        "prompt_hash": hashlib.sha256(
-            _receipt_short(receipt.get("prompt"), 10000).encode("utf-8")
-        ).hexdigest() if receipt.get("prompt") else "",
-        "started_at": "" if is_completed else now,
-        "finished_at": now if is_completed else "",
-        "finding_counts": finding_counts,
-        "finding_counts_reported": counts_reported,
         "runtime_event_id": _receipt_short(receipt.get("runtime_event_id"), 500),
         "runtime_session_id": _receipt_short(receipt.get("runtime_session_id"), 160),
         "runtime_thread_id": _receipt_short(receipt.get("runtime_thread_id"), 160),
-        "runtime_agent_path": _receipt_short(receipt.get("runtime_agent_path"), 300),
     }
     seed = "|".join([entry["ts"], entry["source"], entry["agent_id"], entry["agent_type"], entry["lens"]])
     entry["receipt_id"] = "subagent-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
@@ -2604,20 +2579,16 @@ def record_subagent_receipt(task_dir, receipt):
     return entry
 
 
-def list_subagent_receipts(task_dir):
-    receipts = _read_receipt_stream(_receipts_path(task_dir), "subagent")
-    receipts += _read_receipt_stream(_legacy_subagent_receipts_path(task_dir), "subagent")
-    return sorted(receipts, key=lambda item: str(item.get("ts") or ""))
+def list_subagent_receipts(task_dir, snapshot=None):
+    return list((snapshot or receipt_snapshot(task_dir)).subagents)
 
 
-def list_review_receipts(task_dir):
-    receipts = _read_receipt_stream(_receipts_path(task_dir), "review")
-    receipts += _read_receipt_stream(_legacy_review_receipts_path(task_dir), "review")
-    return sorted(receipts, key=lambda item: str(item.get("ts") or ""))
+def list_review_receipts(task_dir, snapshot=None):
+    return list((snapshot or receipt_snapshot(task_dir)).reviews)
 
 
-def subagent_receipt_summary(task_dir):
-    receipts = list_subagent_receipts(task_dir)
+def subagent_receipt_summary(task_dir, snapshot=None):
+    receipts = list_subagent_receipts(task_dir, snapshot)
     by_lens = {}
     by_agent_type = {}
     by_source = {}
@@ -2633,13 +2604,14 @@ def subagent_receipt_summary(task_dir):
         by_verdict[verdict] = by_verdict.get(verdict, 0) + 1
     completed = [
         item for item in receipts
-        if str(item.get("status") or "").lower() in {"completed", "done"}
+        if item.get("event") == "completed"
     ]
     latest = receipts[-1] if receipts else {}
     if latest:
         latest = {
             "receipt_id": latest.get("receipt_id", ""),
             "ts": latest.get("ts", ""),
+            "event": latest.get("event", ""),
             "source": latest.get("source", ""),
             "agent_id": latest.get("agent_id", ""),
             "agent_type": latest.get("agent_type", ""),
@@ -2657,8 +2629,8 @@ def subagent_receipt_summary(task_dir):
     }
 
 
-def review_receipt_summary(task_dir):
-    receipts = list_review_receipts(task_dir)
+def review_receipt_summary(task_dir, snapshot=None):
+    receipts = list_review_receipts(task_dir, snapshot)
     by_lens = {}
     by_verdict = {}
     for item in receipts:
@@ -2669,17 +2641,18 @@ def review_receipt_summary(task_dir):
     return {
         "count": len(receipts),
         "completed_count": sum(
-            str(item.get("status") or "").lower() in {"completed", "done"}
+            item.get("event") == "completed"
             for item in receipts
         ),
         "by_lens": by_lens,
         "by_verdict": by_verdict,
-        "latest": receipts[-1] if receipts else {},
+        "latest": dict(receipts[-1]) if receipts else {},
     }
 
 
-def _completed_review_by_lens(task_dir):
-    receipts = list_review_receipts(task_dir)
+def _completed_review_by_lens(task_dir, snapshot=None):
+    snapshot = snapshot or receipt_snapshot(task_dir)
+    receipts = snapshot.entries
     current_run_id = str(read_task_run(task_dir).get("task_run_id") or "")
     if not current_run_id:
         return {}
@@ -2690,17 +2663,21 @@ def _completed_review_by_lens(task_dir):
             latest_events[lens] = item
     completed = {}
     for lens, item in latest_events.items():
-        if str(item.get("status") or "").lower() not in {"completed", "done"}:
+        if item.get("event") != "completed":
             continue
         if str(item.get("verdict") or "").upper() not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING"}:
+            continue
+        if sum(
+            prior.get("event") == "completed"
+            and _receipt_runtime_identity_matches(prior, item)
+            for prior in receipts
+        ) != 1:
             continue
         completion_index = receipts.index(item)
         matching_starts = [
             prior for prior in receipts[:completion_index]
             if prior is not item
-            and prior.get("lens") == lens
-            and prior.get("agent_id") == item.get("agent_id")
-            and str(prior.get("status") or "").lower() == "started"
+            and prior.get("event") == "started"
             and _receipt_runtime_identity_matches(prior, item)
         ]
         if not matching_starts:
@@ -2709,19 +2686,11 @@ def _completed_review_by_lens(task_dir):
     return completed
 
 
-def _receipt_timestamp(item):
-    try:
-        return datetime.fromisoformat(str(item.get("ts") or "").replace("Z", "+00:00")).timestamp()
-    except (TypeError, ValueError):
-        return 0.0
-
-
 def _receipt_runtime_identity_matches(start, completion):
     """Require exact runtime correlation whenever either event supplies it."""
     keys = (
-        "task_run_id",
+        "task_run_id", "agent_id", "agent_type", "lens",
         "runtime_event_id", "runtime_session_id", "runtime_thread_id",
-        "runtime_agent_path",
     )
     for key in keys:
         start_value = str(start.get(key) or "")
@@ -2731,17 +2700,21 @@ def _receipt_runtime_identity_matches(start, completion):
     return True
 
 
-def _latest_review_pass_timestamp(task_dir, state=None):
+def _latest_review_pass_index(task_dir, state=None, snapshot=None):
     st = state or read_state(task_dir)
-    if receipt_review_verdict(task_dir, st) != "PASS":
-        return 0.0
-    completed = _completed_review_by_lens(task_dir)
-    return max((_receipt_timestamp(completed[lens]) for lens in required_review_lenses(task_dir, st)), default=0.0)
+    snapshot = snapshot or receipt_snapshot(task_dir)
+    if receipt_review_verdict(task_dir, st, snapshot) != "PASS":
+        return -1
+    completed = _completed_review_by_lens(task_dir, snapshot)
+    return max(
+        (snapshot.entries.index(completed[lens]) for lens in required_review_lenses(task_dir, st)),
+        default=-1,
+    )
 
 
-def _qa_started_after_review(task_dir, lens, completion, review_ts):
+def _qa_started_after_review(snapshot, lens, completion, review_index):
     agent_id = completion.get("agent_id")
-    receipts = list_subagent_receipts(task_dir)
+    receipts = snapshot.entries
     try:
         completion_index = receipts.index(completion)
     except ValueError:
@@ -2749,19 +2722,20 @@ def _qa_started_after_review(task_dir, lens, completion, review_ts):
     return any(
         item.get("lens") == lens
         and item.get("agent_id") == agent_id
-        and str(item.get("status") or "").lower() == "started"
+        and item.get("event") == "started"
         and _receipt_runtime_identity_matches(item, completion)
-        and (review_ts <= 0 or _receipt_timestamp(item) >= review_ts)
-        for item in receipts[:completion_index]
+        and index > review_index
+        for index, item in enumerate(receipts[:completion_index])
     )
 
 
-def receipt_review_verdict(task_dir, state=None):
+def receipt_review_verdict(task_dir, state=None, snapshot=None):
     st = state or read_state(task_dir)
     required = required_review_lenses(task_dir, st)
     if not required:
         return "NOT_APPLICABLE"
-    completed = _completed_review_by_lens(task_dir)
+    snapshot = snapshot or receipt_snapshot(task_dir)
+    completed = _completed_review_by_lens(task_dir, snapshot)
     verdicts = []
     for lens in required:
         item = completed.get(lens)
@@ -2785,45 +2759,52 @@ def _required_qa_lenses(task_dir, state=None):
     )
 
 
-def _completed_qa_by_lens(task_dir):
+def _completed_qa_by_lens(task_dir, snapshot=None):
+    snapshot = snapshot or receipt_snapshot(task_dir)
     current_run_id = str(read_task_run(task_dir).get("task_run_id") or "")
     if not current_run_id:
         return {}
     latest_events = {}
-    for item in list_subagent_receipts(task_dir):
+    for item in snapshot.subagents:
         lens = str(item.get("lens") or "").lower()
         if not lens.startswith("qa-") or item.get("task_run_id") != current_run_id:
             continue
         latest_events[lens] = item
     latest = {}
     for lens, item in latest_events.items():
-        status = str(item.get("status") or "").lower()
         verdict = str(item.get("verdict") or "").upper()
-        if status not in {"completed", "done"}:
+        if item.get("event") != "completed":
             continue
         if verdict not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING"}:
+            continue
+        if sum(
+            prior.get("event") == "completed"
+            and _receipt_runtime_identity_matches(prior, item)
+            for prior in snapshot.subagents
+        ) != 1:
             continue
         latest[lens] = item
     return latest
 
 
-def receipt_runtime_verdict(task_dir, state=None):
+def receipt_runtime_verdict(task_dir, state=None, snapshot=None):
     """Compute runtime verdict from completed, explicit QA receipts only."""
     st = state or read_state(task_dir)
     current = (st.get("runtime_verdict") or "pending").upper() if isinstance(st, dict) else "PENDING"
     if current == "BLOCKED_ENV":
         return "BLOCKED_ENV"
-    review_verdict = receipt_review_verdict(task_dir, st)
+    snapshot = snapshot or receipt_snapshot(task_dir)
+    review_verdict = receipt_review_verdict(task_dir, st, snapshot)
     if review_verdict not in {"PASS", "NOT_APPLICABLE"}:
         return "PENDING"
     required = _required_qa_lenses(task_dir, st)
-    completed = _completed_qa_by_lens(task_dir)
-    review_ts = _latest_review_pass_timestamp(task_dir, st)
+    completed = _completed_qa_by_lens(task_dir, snapshot)
+    review_index = _latest_review_pass_index(task_dir, st, snapshot)
     valid = {
         lens: completed[lens] for lens in required
         if (
             lens in completed
-            and _qa_started_after_review(task_dir, lens, completed[lens], review_ts)
+            and _qa_started_after_review(snapshot, lens, completed[lens], review_index)
         )
     }
     verdicts = [str(valid[lens].get("verdict") or "").upper() for lens in required if lens in valid]
@@ -2844,7 +2825,7 @@ def runtime_is_stale(task_dir: str) -> tuple[bool, str]:
     return False, ""
 
 
-def emit_compact_context(task_dir):
+def emit_compact_context(task_dir, snapshot=None):
     """Build the canonical task pack with on-the-fly routing.
 
     Always populates ``stale`` and ``stale_path`` keys via :func:`runtime_is_stale`
@@ -2855,8 +2836,9 @@ def emit_compact_context(task_dir):
     if not st:
         return {"error": "no TASK_STATE.yaml", "task_dir": task_dir}
 
+    snapshot = snapshot or receipt_snapshot(task_dir)
     routing = compile_routing(task_dir)
-    runtime_verdict = receipt_runtime_verdict(task_dir, st)
+    runtime_verdict = receipt_runtime_verdict(task_dir, st, snapshot)
     touched = _effective_touched_paths(task_dir, st.get("touched_paths") or [])
 
     micro_loop = _is_micro_loop_state(st)
@@ -2867,11 +2849,11 @@ def emit_compact_context(task_dir):
     missing_for_close = []
     if not has_plan and not micro_loop:
         missing_for_close.append("PLAN.md")
-    receipt_summary = subagent_receipt_summary(task_dir)
-    review_summary = review_receipt_summary(task_dir)
+    receipt_summary = subagent_receipt_summary(task_dir, snapshot)
+    review_summary = review_receipt_summary(task_dir, snapshot)
     required_reviews = required_review_lenses(task_dir, st)
-    review_verdict = receipt_review_verdict(task_dir, st)
-    completed_reviews = _completed_review_by_lens(task_dir)
+    review_verdict = receipt_review_verdict(task_dir, st, snapshot)
+    completed_reviews = _completed_review_by_lens(task_dir, snapshot)
     missing_reviews = [lens for lens in required_reviews if lens not in completed_reviews]
     if review_verdict not in {"PASS", "NOT_APPLICABLE"}:
         if missing_reviews:
@@ -2879,7 +2861,7 @@ def emit_compact_context(task_dir):
         else:
             missing_for_close.append("completed review verdict PASS for current task run")
     required_qa_lenses = _required_qa_lenses(task_dir, st)
-    completed_qa = _completed_qa_by_lens(task_dir)
+    completed_qa = _completed_qa_by_lens(task_dir, snapshot)
     missing_qa_lenses = [lens for lens in required_qa_lenses if lens not in completed_qa]
     if runtime_verdict != "PASS":
         if missing_qa_lenses:
@@ -3014,14 +2996,12 @@ def artifact_exists(task_dir, filename):
     return os.path.isfile(os.path.join(task_dir, filename))
 
 
-def provenance_from_artifacts(task_dir):
+def provenance_from_artifacts(task_dir, snapshot=None):
     """Derive provenance from artifact existence."""
-    has_subagent = any((
-        artifact_exists(task_dir, RECEIPTS_NAME),
-        artifact_exists(task_dir, LEGACY_SUBAGENT_RECEIPTS_NAME),
-    ))
-    completed = _completed_qa_by_lens(task_dir)
-    reviews = _completed_review_by_lens(task_dir)
+    snapshot = snapshot or receipt_snapshot(task_dir)
+    has_subagent = bool(snapshot.entries)
+    completed = _completed_qa_by_lens(task_dir, snapshot)
+    reviews = _completed_review_by_lens(task_dir, snapshot)
     return {
         "plan-skill": artifact_exists(task_dir, "PLAN.md"),
         "subagent-start-hook": has_subagent,

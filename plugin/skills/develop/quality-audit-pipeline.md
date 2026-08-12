@@ -59,17 +59,14 @@ use wait_agent only to coordinate completion; it does not author receipts
 use list_agents only for operator visibility when needed; it is not receipt evidence
 ```
 
-The structured `task_name` argument is mandatory receipt identity. A first-line
-marker in `message` may mirror it for readability but is not receipt evidence.
-
-The Codex lifecycle watcher records starts and matched completions in unified
-`RECEIPTS.jsonl`. A start, unmatched wait, missing verdict, FAIL,
-BLOCKED_ENV, a mismatched `TASK_RUN`, or invalid event ordering is not PASS. Do
-not write or repair receipts manually.
-On Codex, `wait_agent` and `list_agents` are coordination and visibility tools
-only. The MCP-hosted watcher is the sole Codex receipt owner and accepts the
-direct spawn/activity/output/`FINAL_ANSWER` contract. Never infer receipt
-identity from wait/list output.
+The structured `task_name` argument is mandatory lifecycle identity. A
+first-line marker in `message` may mirror it for readability but is not
+evidence. The MCP-hosted watcher owns `RECEIPTS.jsonl`; never write or repair it
+or infer authority from wait/list output. Codex acquisition and completion are
+defined only by
+`doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md`; stream and
+gate semantics are defined only by
+`doc/harness/patterns/ADR__consolidated-task-artifacts.md`.
 
 ## Finding and fix loop
 
