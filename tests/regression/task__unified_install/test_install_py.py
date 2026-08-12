@@ -17,6 +17,7 @@ import sys
 import tempfile
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 try:
@@ -366,7 +367,7 @@ def test_install_codex_plugin_cache_uses_manifest_version(tmp_path):
     assert (cached / "mcp" / "harness_server.py").is_file()
     assert (cached / "scripts" / "subagent_lifecycle.py").is_file()
     assert not (cached / "scripts" / "background_registry.py").exists()
-    for rel in (
+    shared_rels = (
         "internal-skills/develop/fix-first-pattern.md",
         "internal-skills/develop/runtime-smoke.md",
         "internal-skills/develop/quality-audit-pipeline.md",
@@ -380,18 +381,17 @@ def test_install_codex_plugin_cache_uses_manifest_version(tmp_path):
         "internal-skills/plan-devex-review/dx-hall-of-fame.md",
         "internal-skills/plan-eng-review/rubrics-threat-rollback.md",
         "internal-skills/run/self-improvement.md",
-    ):
+    )
+    for rel in shared_rels:
         assert (cached / rel).is_file(), rel
-    for shared in (
-        cached / "internal-skills/develop/runtime-smoke.md",
-        cached / "internal-skills/develop/verification-gate.md",
-        cached / "internal-skills/plan/review-phases.md",
-        cached / "internal-skills/run/self-improvement.md",
-    ):
+    for rel in shared_rels:
+        shared = cached / rel
         text = shared.read_text(encoding="utf-8")
         assert "${CLAUDE_PLUGIN_ROOT}" not in text, shared
         assert "`plugin/skills/develop/" not in text, shared
         assert "`plugin/skills/plan-" not in text, shared
+        for suffix in re.findall(r"\$\{HARNESS_PLUGIN_ROOT\}(/[A-Za-z0-9_./-]+)", text):
+            assert (cached / suffix.lstrip("/")).exists(), (shared, suffix)
     assert (cached / "skills" / "setup" / "bootstrap.md").is_file()
     assert (cached / "skills" / "setup" / "verify-report.md").is_file()
     assert (cached / "skills" / "setup" / "templates" / "CONTRACTS.md").is_file()

@@ -38,10 +38,39 @@ EXPECTED_TOOLS = {
 }
 
 
+def _record_receipt_fixture(task_dir, receipt):
+    source = harness_lib._receipt_short(receipt.get("source") or "test_fixture", 100)
+    agent_id = harness_lib._receipt_short(receipt.get("agent_id") or receipt.get("id"), 300)
+    agent_type = harness_lib._receipt_short(receipt.get("agent_type"), 300)
+    lens = harness_lib._infer_receipt_lens(agent_type, receipt.get("lens"))
+    event = harness_lib._receipt_short(receipt.get("event"), 20).lower()
+    verdict = harness_lib._receipt_short(receipt.get("verdict") or "", 40).upper()
+    raw_summary = str(receipt.get("summary") or "")
+    if event == "completed":
+        verdict, summary = harness_lib.normalize_receipt_completion(lens, raw_summary, verdict)
+    else:
+        verdict, summary = "", ""
+    control = harness_lib.read_task_control(task_dir)
+    entry = {
+        "ts": harness_lib._receipt_now_iso(), "event": event, "source": source,
+        "task_run_id": str(control["run_id"]),
+        "runtime_id": str(receipt.get("runtime_id") or "").strip(),
+        "agent_id": agent_id, "agent_type": agent_type, "lens": lens,
+        "verdict": verdict, "summary": summary,
+    }
+    harness_lib._validate_receipt_runtime_id(source, entry["runtime_id"])
+    assert harness_lib._receipt_entry_semantics_valid(entry)
+    if harness_lib.task_control_status(task_dir, control) in {"closed", "blocked", "invalid"}:
+        raise RuntimeError("receipt stream is terminal")
+    with (Path(task_dir) / harness_lib.RECEIPTS_NAME).open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+    return entry
+
+
 class HarnessMcpServerTests(unittest.TestCase):
     def setUp(self):
         self._receipt_auth = mock.patch.object(
-            harness_lib, "_runtime_receipt_write_authorized", return_value=True,
+            harness_server, "record_subagent_receipt", side_effect=_record_receipt_fixture,
         )
         self._receipt_auth.start()
 
@@ -1885,7 +1914,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
 
     def setUp(self):
         self._receipt_auth = mock.patch.object(
-            harness_lib, "_runtime_receipt_write_authorized", return_value=True,
+            harness_server, "record_subagent_receipt", side_effect=_record_receipt_fixture,
         )
         self._receipt_auth.start()
 

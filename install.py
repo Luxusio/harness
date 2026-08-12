@@ -366,8 +366,14 @@ def _build_codex_payload(target: Path, final_root: Path) -> None:
         for name in names:
             source_path = source_dir / name
             destination_path = destination_dir / name
-            text = source_path.read_text(encoding="utf-8").replace(
+            text = source_path.read_text(encoding="utf-8")
+            text = text.replace(
+                "${CLAUDE_PLUGIN_ROOT}/skills/",
+                "${HARNESS_PLUGIN_ROOT}/internal-skills/",
+            ).replace(
                 "${CLAUDE_PLUGIN_ROOT}", "${HARNESS_PLUGIN_ROOT}",
+            ).replace(
+                "plugin-codex/agents/", "${HARNESS_PLUGIN_ROOT}/agents/",
             )
             destination_path.write_text(text, encoding="utf-8")
     codex_setup = target / "skills" / "setup"

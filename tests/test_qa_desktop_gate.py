@@ -7,7 +7,6 @@ import os
 import sys
 import tempfile
 import unittest
-from unittest import mock
 
 from conftest import (  # type: ignore
     SCRIPTS_DIR,
@@ -78,20 +77,28 @@ class TestProvenance(unittest.TestCase):
             for agent in ("qa-browser", "qa-api", "qa-cli", "qa-desktop"):
                 self.assertFalse(prov[agent], f"empty receipt stream cannot prove {agent}")
 
-            with mock.patch.object(
-                _lib, "_runtime_receipt_write_authorized", return_value=True,
-            ):
-                _lib.record_subagent_receipt(td, {
-                    "event": "started", "lens": "qa-cli", "agent_id": "qa-cli-1",
-                    "agent_type": "qa_cli", "task_run_id": run_id,
-                    "source": "test_fixture", "runtime_id": "test:qa-cli-1",
-                })
-                _lib.record_subagent_receipt(td, {
-                    "event": "completed", "lens": "qa-cli", "agent_id": "qa-cli-1",
-                    "agent_type": "qa_cli", "task_run_id": run_id,
-                    "verdict": "PASS", "summary": "VERDICT: PASS",
-                    "source": "test_fixture", "runtime_id": "test:qa-cli-1",
-                })
+            completed_summary = _lib.normalize_receipt_completion(
+                "qa-cli", "VERDICT: PASS", "PASS",
+            )[1]
+            rows = [
+                {
+                    "ts": _lib._receipt_now_iso(), "event": "started",
+                    "source": "test_fixture", "task_run_id": run_id,
+                    "runtime_id": "test:qa-cli-1", "agent_id": "qa-cli-1",
+                    "agent_type": "qa_cli", "lens": "qa-cli",
+                    "verdict": "", "summary": "",
+                },
+                {
+                    "ts": _lib._receipt_now_iso(), "event": "completed",
+                    "source": "test_fixture", "task_run_id": run_id,
+                    "runtime_id": "test:qa-cli-1", "agent_id": "qa-cli-1",
+                    "agent_type": "qa_cli", "lens": "qa-cli",
+                    "verdict": "PASS", "summary": completed_summary,
+                },
+            ]
+            with open(os.path.join(td, "RECEIPTS.jsonl"), "w", encoding="utf-8") as handle:
+                for row in rows:
+                    handle.write(json.dumps(row, sort_keys=True) + "\n")
             prov = _lib.provenance_from_artifacts(td)
             self.assertTrue(prov["qa-cli"])
             for agent in ("qa-browser", "qa-api", "qa-desktop"):

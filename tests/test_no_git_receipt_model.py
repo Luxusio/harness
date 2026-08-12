@@ -6,7 +6,7 @@ import json
 import sys
 import threading
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 
@@ -18,8 +18,6 @@ assert SPEC and SPEC.loader
 lib = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = lib
 SPEC.loader.exec_module(lib)
-REAL_RECEIPT_AUTH = lib._runtime_receipt_write_authorized
-lib._runtime_receipt_write_authorized = lambda _task_dir, _source: True
 
 
 def _task(tmp_path: Path, lenses: dict | None = None) -> Path:
@@ -57,7 +55,7 @@ def _receipt(
             summary += "\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
     extra.setdefault("source", "test_fixture")
     extra.setdefault("runtime_id", f"test:{agent_id}")
-    return lib.record_subagent_receipt(
+    return _fixture_record(
         task,
         {
             "agent_id": agent_id,
@@ -69,6 +67,45 @@ def _receipt(
             **extra,
         },
     )
+
+
+def _fixture_record(task: Path, receipt: dict) -> dict:
+    """Write a semantically valid row directly in an isolated test task."""
+    agent_id = lib._receipt_short(receipt.get("agent_id") or receipt.get("id"), 300)
+    if not agent_id:
+        raise ValueError("agent_id required")
+    source = lib._receipt_short(receipt.get("source") or "test_fixture", 100)
+    agent_type = lib._receipt_short(receipt.get("agent_type"), 300)
+    lens = lib._infer_receipt_lens(agent_type, receipt.get("lens"))
+    event = lib._receipt_short(receipt.get("event"), 20).lower()
+    if event not in lib.RECEIPT_EVENTS:
+        raise ValueError("event must be started or completed")
+    verdict = lib._receipt_short(receipt.get("verdict") or "", 40).upper()
+    raw_summary = str(receipt.get("summary") or "")
+    if event == "completed":
+        verdict, summary = lib.normalize_receipt_completion(lens, raw_summary, verdict)
+    else:
+        verdict, summary = "", ""
+    control = lib.read_task_control(task)
+    if not control:
+        raise RuntimeError("valid TASK.json required for receipt append")
+    supplied_run = lib._receipt_short(receipt.get("task_run_id"), 64)
+    run_id = str(control.get("run_id") or "")
+    if supplied_run and supplied_run != run_id:
+        raise RuntimeError("receipt task_run_id does not match current task run")
+    runtime_id = str(receipt.get("runtime_id") or "").strip()
+    lib._validate_receipt_runtime_id(source, runtime_id)
+    entry = {
+        "ts": lib._receipt_now_iso(), "event": event, "source": source,
+        "task_run_id": run_id, "runtime_id": runtime_id,
+        "agent_id": agent_id, "agent_type": agent_type, "lens": lens,
+        "verdict": verdict, "summary": summary,
+    }
+    if not lib._receipt_entry_semantics_valid(entry):
+        raise ValueError("receipt does not satisfy the exact persisted schema")
+    with (task / lib.RECEIPTS_NAME).open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n")
+    return entry
 
 
 def _pass_review(task: Path, agent_id: str = "review-1") -> None:
@@ -187,7 +224,7 @@ def test_receipt_summary_keeps_only_review_contract_and_detail_digest(tmp_path):
         + "detailed evidence " * 200
     )
     started = _receipt(task, "review-code", "review-compact", "started")
-    completed = lib.record_subagent_receipt(task, {
+    completed = _fixture_record(task, {
         "source": started["source"],
         "task_run_id": started["task_run_id"],
         "runtime_id": started["runtime_id"],
@@ -216,7 +253,7 @@ def test_runtime_authored_receipt_namespace_must_match_source(tmp_path):
         ("claude_hook", "codex:root:call:child"),
     ):
         with pytest.raises(ValueError, match="runtime_id namespace"):
-            lib.record_subagent_receipt(task, {
+            _fixture_record(task, {
                 "source": source,
                 "runtime_id": runtime_id,
                 "agent_id": "agent",
@@ -228,18 +265,17 @@ def test_runtime_authored_receipt_namespace_must_match_source(tmp_path):
 
 def test_receipt_writer_rejects_indirect_untrusted_caller(tmp_path, monkeypatch):
     task = _task(tmp_path)
-    with mock.patch.object(lib, "_runtime_receipt_write_authorized", REAL_RECEIPT_AUTH):
-        try:
-            lib.record_subagent_receipt(task, {
-                "source": "codex_session_watcher:collaboration",
-                "runtime_id": "codex:root:event:child",
-                "agent_id": "forged", "agent_type": "qa-cli", "lens": "qa-cli",
-                "event": "started",
-            })
-        except PermissionError as exc:
-            assert "runtime-owned" in str(exc)
-        else:
-            raise AssertionError("untrusted caller appended an authoritative receipt")
+    try:
+        lib.record_subagent_receipt(task, {
+            "source": "codex_session_watcher:collaboration",
+            "runtime_id": "codex:root:event:child",
+            "agent_id": "forged", "agent_type": "qa-cli", "lens": "qa-cli",
+            "event": "started",
+        })
+    except PermissionError as exc:
+        assert "runtime-owned" in str(exc)
+    else:
+        raise AssertionError("untrusted caller appended an authoritative receipt")
 
 
 def test_receipt_writer_rejects_forged_adapter_code_metadata(tmp_path, monkeypatch):
@@ -253,24 +289,42 @@ def test_receipt_writer_rejects_forged_adapter_code_metadata(tmp_path, monkeypat
         "exec",
     )
     exec(forged, namespace)
-    with mock.patch.object(lib, "_runtime_receipt_write_authorized", REAL_RECEIPT_AUTH):
+    try:
+        namespace["mark_subagent_stop"]()
+    except PermissionError as exc:
+        assert "runtime-owned" in str(exc)
+    else:
+        raise AssertionError("forged code metadata authorized a receipt append")
+
+
+def test_receipt_writer_ignores_replaced_allowlisted_module_attribute(tmp_path):
+    task = _task(tmp_path)
+    fake = ModuleType("subagent_lifecycle")
+    fake.__dict__.update(record=lib.record_subagent_receipt, task=task)
+    exec(
+        "def register_subagent_start():\n"
+        "  return record(task, {'source':'claude_hook','runtime_id':'claude:sess:agent',"
+        "'agent_id':'agent','agent_type':'qa-cli','lens':'qa-cli','event':'started'})\n",
+        fake.__dict__,
+    )
+    with (
+        mock.patch.dict(sys.modules, {"subagent_lifecycle": fake}),
+        mock.patch.object(
+            lib, "_receipt_code_signature",
+            return_value="c32959267a086cb85057673e6d43d775ccc21073d569acd1da2f0349fd87e332",
+        ),
+    ):
         try:
-            namespace["mark_subagent_stop"]()
+            fake.register_subagent_start()
         except PermissionError as exc:
             assert "runtime-owned" in str(exc)
         else:
-            raise AssertionError("forged code metadata authorized a receipt append")
+            raise AssertionError("replaced adapter attribute authorized a receipt append")
 
 
-def test_raw_receipt_append_rejects_direct_call(tmp_path):
-    task = _task(tmp_path)
-    path = task / lib.RECEIPTS_NAME
-    try:
-        lib._append_receipt_stream_unlocked(path, b"{}\n")
-    except PermissionError as exc:
-        assert "validated receipt writer" in str(exc)
-    else:
-        raise AssertionError("raw receipt append accepted an unsupported caller")
+def test_raw_receipt_append_primitive_is_not_exposed():
+    assert not hasattr(lib, "_append_receipt_stream_unlocked")
+    assert not hasattr(lib, "_append_receipt_stream")
 
 
 def test_qa_start_must_match_completion_and_follow_review(tmp_path):
@@ -332,17 +386,17 @@ def test_duplicate_terminals_and_contradictory_summaries_fail_closed(tmp_path):
     assert lib.receipt_runtime_verdict(duplicate_qa) == "PENDING"
 
     contradictory = _task(tmp_path / "contradictory")
-    started = lib.record_subagent_receipt(contradictory, {
+    started = _fixture_record(contradictory, {
         "event": "started", "agent_id": "qa", "agent_type": "qa_cli",
         "lens": "qa-cli", "verdict": "PASS", "summary": "VERDICT: PASS",
         "source": "test_fixture", "runtime_id": "test:qa",
     })
-    completed = lib.record_subagent_receipt(contradictory, {
+    completed = _fixture_record(contradictory, {
         "event": "completed", "agent_id": "qa", "agent_type": "qa_cli",
         "lens": "qa-cli", "verdict": "PASS", "summary": "VERDICT: FAIL",
         "source": "test_fixture", "runtime_id": "test:qa",
     })
-    missing = lib.record_subagent_receipt(contradictory, {
+    missing = _fixture_record(contradictory, {
         "event": "completed", "agent_id": "qa-2", "agent_type": "qa_cli",
         "lens": "qa-cli", "verdict": "PASS", "summary": "done",
         "source": "test_fixture", "runtime_id": "test:qa-2",
@@ -726,7 +780,7 @@ def test_compact_receipts_reduce_representative_verbose_pair_by_at_least_40_perc
     task = _task(tmp_path)
     detail = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\n" + "x" * 900
     started = _receipt(task, "review-code", "review-1", "started")
-    completed = lib.record_subagent_receipt(task, {
+    completed = _fixture_record(task, {
         "event": "completed", "agent_id": "review-1", "agent_type": "review-code",
         "lens": "review-code", "verdict": "PASS", "summary": detail,
         "source": "test_fixture", "runtime_id": "test:review-1",
@@ -816,7 +870,7 @@ def test_writer_rejects_missing_type_or_lens_without_poisoning_stream(tmp_path):
 
     task = _task(tmp_path)
     with pytest.raises(ValueError, match="exact persisted schema"):
-        lib.record_subagent_receipt(task, {
+        _fixture_record(task, {
             "event": "started", "agent_id": "unknown", "agent_type": "",
             "source": "test_fixture", "runtime_id": "test:unknown",
         })

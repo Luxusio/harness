@@ -272,8 +272,7 @@ def test_stop_only_append_failure_rolls_back_and_retries(tmp_path, monkeypatch):
         agent_type=agent_type,
     )
     payload = _stop_payload(session_id, agent_id, agent_type, transcript, final_message)
-    monkeypatch.setattr(_lib, "_runtime_receipt_write_authorized", lambda *_args: True)
-    real_record = subagent_lifecycle.record_subagent_receipt
+    real_write = _lib.os.write
     calls = 0
 
     def fail_second_once(*args, **kwargs):
@@ -281,9 +280,9 @@ def test_stop_only_append_failure_rolls_back_and_retries(tmp_path, monkeypatch):
         calls += 1
         if calls == 2:
             raise OSError("injected completion failure")
-        return real_record(*args, **kwargs)
+        return real_write(*args, **kwargs)
 
-    monkeypatch.setattr(subagent_lifecycle, "record_subagent_receipt", fail_second_once)
+    monkeypatch.setattr(_lib.os, "write", fail_second_once)
     assert subagent_lifecycle.mark_subagent_stop(repo, payload)["status"] == "receipt_pending"
     assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
     assert subagent_lifecycle.mark_subagent_stop(repo, payload)["status"] == "done"
@@ -303,8 +302,7 @@ def test_real_stop_append_failure_leaves_start_retryable(tmp_path, monkeypatch):
         agent_type=agent_type,
     )
     payload = _stop_payload(session_id, agent_id, agent_type, transcript, final_message)
-    monkeypatch.setattr(_lib, "_runtime_receipt_write_authorized", lambda *_args: True)
-    real_record = subagent_lifecycle.record_subagent_receipt
+    real_write = _lib.os.write
     failed = False
 
     def fail_once(*args, **kwargs):
@@ -312,9 +310,9 @@ def test_real_stop_append_failure_leaves_start_retryable(tmp_path, monkeypatch):
         if not failed:
             failed = True
             raise OSError("injected completion failure")
-        return real_record(*args, **kwargs)
+        return real_write(*args, **kwargs)
 
-    monkeypatch.setattr(subagent_lifecycle, "record_subagent_receipt", fail_once)
+    monkeypatch.setattr(_lib.os, "write", fail_once)
     assert subagent_lifecycle.mark_subagent_stop(repo, payload)["status"] == "receipt_pending"
     assert [item["event"] for item in _receipts(task_dir)] == ["started"]
     assert subagent_lifecycle.mark_subagent_stop(repo, payload)["status"] == "done"

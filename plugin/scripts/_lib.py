@@ -9,9 +9,9 @@ import tempfile
 import json
 import hashlib
 import inspect
-import sys
 import secrets
 import time
+import types
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -2172,52 +2172,6 @@ def _receipt_stream_info(path):
     return info
 
 
-def _append_receipt_stream_unlocked(path, payload):
-    caller = inspect.currentframe().f_back
-    try:
-        if (
-            caller is None
-            or caller.f_globals is not globals()
-            or caller.f_code is not record_subagent_receipt.__code__
-        ):
-            raise PermissionError("raw receipt append requires the validated receipt writer")
-    finally:
-        del caller
-    task_dir = os.path.dirname(os.path.abspath(path))
-    dir_fd = _receipt_dir_fd(task_dir)
-    prior = _receipt_stream_info(path)
-    flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
-    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        fd = os.open(RECEIPTS_NAME, flags, 0o644, dir_fd=dir_fd)
-    except OSError as exc:
-        raise RuntimeError("receipt storage integrity unavailable") from exc
-    try:
-        opened = os.fstat(fd)
-        if (
-            not stat.S_ISREG(opened.st_mode)
-            or opened.st_uid != os.getuid()
-            or opened.st_nlink != 1
-            or opened.st_mode & 0o022
-            or opened.st_size + len(payload) > _RECEIPT_STREAM_MAX_BYTES
-            or (
-                prior is not None
-                and (opened.st_dev, opened.st_ino) != (prior.st_dev, prior.st_ino)
-            )
-        ):
-            raise RuntimeError("receipt storage integrity unavailable")
-        view = memoryview(payload)
-        while view:
-            written = os.write(fd, view)
-            if written <= 0:
-                raise RuntimeError("receipt storage integrity unavailable")
-            view = view[written:]
-        os.fsync(fd)
-        _revalidate_receipt_transaction(task_dir)
-    finally:
-        os.close(fd)
-
-
 @contextmanager
 def receipt_stream_transaction(task_dir):
     """Hold the receipt stream stable across verdict and state publication."""
@@ -2675,102 +2629,150 @@ def _infer_receipt_lens(agent_type, explicit_lens=""):
     return ""
 
 
-_RUNTIME_RECEIPT_CALLERS = {
-    "claude_hook": ("subagent_lifecycle", {
-        "register_subagent_start", "mark_subagent_stop",
-    }),
-    "codex_session_watcher:collaboration": ("codex_lifecycle_watcher", {
-        "Watcher._invalidate", "Watcher._maybe_start", "Watcher._maybe_complete",
-    }),
-}
+def _receipt_code_signature(code):
+    """Return a location-independent digest for an adapter code object."""
+    digest = hashlib.sha256()
+    digest.update(code.co_code)
+    for value in (
+        code.co_argcount, code.co_posonlyargcount, code.co_kwonlyargcount,
+        code.co_nlocals, code.co_flags,
+    ):
+        digest.update(str(value).encode("ascii"))
+        digest.update(b"|")
+    for values in (code.co_names, code.co_varnames, code.co_freevars, code.co_cellvars):
+        digest.update(repr(values).encode("utf-8"))
+        digest.update(b"|")
+    def constant_bytes(value):
+        if isinstance(value, types.CodeType):
+            return ("code:" + _receipt_code_signature(value)).encode("ascii")
+        if isinstance(value, tuple):
+            return b"tuple:[" + b",".join(constant_bytes(item) for item in value) + b"]"
+        if isinstance(value, frozenset):
+            return b"frozenset:[" + b",".join(sorted(constant_bytes(item) for item in value)) + b"]"
+        return repr((type(value).__name__, value)).encode("utf-8")
+
+    for value in code.co_consts:
+        digest.update(constant_bytes(value))
+        digest.update(b"|")
+    return digest.hexdigest()
 
 
-def _runtime_receipt_write_authorized(task_dir, source):
-    """Bind authoritative appends to exact loaded adapter function objects."""
-    expected = _RUNTIME_RECEIPT_CALLERS.get(source)
-    frame = inspect.currentframe()
-    caller = frame.f_back.f_back if frame and frame.f_back else None
-    try:
-        if expected and caller:
-            module = sys.modules.get(expected[0])
-            if module is None or caller.f_globals is not vars(module):
-                return False
-            for qualified in expected[1]:
-                owner = module
-                parts = qualified.split(".")
-                for part in parts:
-                    owner = getattr(owner, part, None)
-                    if owner is None:
-                        break
-                if owner is not None and caller.f_code is getattr(owner, "__code__", None):
-                    return True
-        return False
-    finally:
-        del caller
-        del frame
-
-
-def record_subagent_receipt(task_dir, receipt):
-    """Append a structured subagent invocation receipt to the task directory.
-
-    This is intentionally hook-owned. Start entries prove delegation;
-    completed QA entries with explicit verdicts drive task verification.
-    """
-    if not isinstance(receipt, dict):
-        raise ValueError("receipt must be an object")
-    agent_id = _receipt_short(receipt.get("agent_id") or receipt.get("id"), 300)
-    if not agent_id:
-        raise ValueError("agent_id required")
-    source = _receipt_short(receipt.get("source") or "spawn_agent", 100)
-    if not _runtime_receipt_write_authorized(task_dir, source):
-        raise PermissionError("receipt append requires a runtime-owned lifecycle adapter")
-    agent_type = _receipt_short(receipt.get("agent_type"), 300)
-    verdict = _receipt_short(receipt.get("verdict") or "", 40).upper()
-    lens = _infer_receipt_lens(agent_type, receipt.get("lens"))
-    is_review = lens.startswith("review-")
-    event = _receipt_short(receipt.get("event"), 20).lower()
-    if event not in RECEIPT_EVENTS:
-        raise ValueError("event must be started or completed")
-    is_completed = event == "completed"
-    now = _receipt_now_iso()
-    raw_summary = str(receipt.get("summary") or "")
-    if not is_completed:
-        verdict = ""
-        summary = ""
-    else:
-        verdict, summary = normalize_receipt_completion(lens, raw_summary, verdict)
-    current_run = read_task_control(task_dir)
-    if not current_run:
-        raise RuntimeError("valid TASK.json required for receipt append")
-    supplied_run_id = _receipt_short(receipt.get("task_run_id"), 64)
-    task_run_id = str(current_run["run_id"])
-    if supplied_run_id and supplied_run_id != task_run_id:
-        raise RuntimeError("receipt task_run_id does not match current task run")
-    runtime_id = str(receipt.get("runtime_id") or "").strip()
-    _validate_receipt_runtime_id(source, runtime_id)
-    entry = {
-        "ts": now,
-        "event": event,
-        "source": source,
-        "task_run_id": task_run_id,
-        "runtime_id": runtime_id,
-        "agent_id": agent_id,
-        "agent_type": agent_type,
-        "lens": lens,
-        "verdict": verdict,
-        "summary": summary,
+def _make_runtime_receipt_writer():
+    # These structural signatures are generated from the reviewed adapter functions.
+    # They are captured in this closure once; mutable module attributes are never
+    # consulted when authorizing publication.
+    expected_callers = {
+        "claude_hook": {
+            ("subagent_lifecycle", "register_subagent_start", "c32959267a086cb85057673e6d43d775ccc21073d569acd1da2f0349fd87e332"),
+            ("subagent_lifecycle", "mark_subagent_stop", "155cee53032fb30e89ed3fcba10d2f3a64c51bc66e70c972021bf1e6c53c6b9a"),
+        },
+        "codex_session_watcher:collaboration": {
+            ("codex_lifecycle_watcher", "Watcher._invalidate", "e8d413109d446f2c16620156d70610254c1c9e8973f7e49402a020fe6d92589c"),
+            ("codex_lifecycle_watcher", "Watcher._maybe_start", "548d4c9e1b1ca9c8425a887a4c3d168c813dc5c999800a396174a1914fe42a60"),
+            ("codex_lifecycle_watcher", "Watcher._maybe_complete", "56ca277108a7f7d2efc5d666303e3f62f9a477346fc5a226cec46f342c6c678e"),
+        },
     }
-    if not _receipt_entry_semantics_valid(entry):
-        raise ValueError("receipt does not satisfy the exact persisted schema")
-    path = _receipts_path(task_dir)
-    _validated_receipt_task_dir(task_dir)
-    payload = (json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
-    with receipt_stream_transaction(task_dir):
-        control = read_task_control(task_dir)
-        if task_control_status(task_dir, control) in {"closed", "blocked", "invalid"}:
-            raise RuntimeError("receipt stream is terminal")
-        _append_receipt_stream_unlocked(path, payload)
-    return entry
+    code_signature = _receipt_code_signature
+
+    def authorized(source):
+        frame = inspect.currentframe()
+        caller = frame.f_back.f_back if frame and frame.f_back else None
+        try:
+            if caller is None:
+                return False
+            identity = (
+                str(caller.f_globals.get("__name__") or ""),
+                caller.f_code.co_qualname,
+                code_signature(caller.f_code),
+            )
+            return identity in expected_callers.get(source, ())
+        finally:
+            del caller
+            del frame
+
+    def record(task_dir, receipt):
+        """Validate and append one runtime-owned structured lifecycle receipt."""
+        if not isinstance(receipt, dict):
+            raise ValueError("receipt must be an object")
+        agent_id = _receipt_short(receipt.get("agent_id") or receipt.get("id"), 300)
+        if not agent_id:
+            raise ValueError("agent_id required")
+        source = _receipt_short(receipt.get("source") or "spawn_agent", 100)
+        if not authorized(source):
+            raise PermissionError("receipt append requires a runtime-owned lifecycle adapter")
+        agent_type = _receipt_short(receipt.get("agent_type"), 300)
+        verdict = _receipt_short(receipt.get("verdict") or "", 40).upper()
+        lens = _infer_receipt_lens(agent_type, receipt.get("lens"))
+        event = _receipt_short(receipt.get("event"), 20).lower()
+        if event not in RECEIPT_EVENTS:
+            raise ValueError("event must be started or completed")
+        now = _receipt_now_iso()
+        raw_summary = str(receipt.get("summary") or "")
+        if event != "completed":
+            verdict = ""
+            summary = ""
+        else:
+            verdict, summary = normalize_receipt_completion(lens, raw_summary, verdict)
+        current_run = read_task_control(task_dir)
+        if not current_run:
+            raise RuntimeError("valid TASK.json required for receipt append")
+        supplied_run_id = _receipt_short(receipt.get("task_run_id"), 64)
+        task_run_id = str(current_run["run_id"])
+        if supplied_run_id and supplied_run_id != task_run_id:
+            raise RuntimeError("receipt task_run_id does not match current task run")
+        runtime_id = str(receipt.get("runtime_id") or "").strip()
+        _validate_receipt_runtime_id(source, runtime_id)
+        entry = {
+            "ts": now, "event": event, "source": source,
+            "task_run_id": task_run_id, "runtime_id": runtime_id,
+            "agent_id": agent_id, "agent_type": agent_type, "lens": lens,
+            "verdict": verdict, "summary": summary,
+        }
+        if not _receipt_entry_semantics_valid(entry):
+            raise ValueError("receipt does not satisfy the exact persisted schema")
+        path = _receipts_path(task_dir)
+        _validated_receipt_task_dir(task_dir)
+        payload = (json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
+        with receipt_stream_transaction(task_dir):
+            control = read_task_control(task_dir)
+            if task_control_status(task_dir, control) in {"closed", "blocked", "invalid"}:
+                raise RuntimeError("receipt stream is terminal")
+            dir_fd = _receipt_dir_fd(task_dir)
+            prior = _receipt_stream_info(path)
+            flags = os.O_APPEND | os.O_CREAT | os.O_WRONLY
+            flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+            try:
+                fd = os.open(RECEIPTS_NAME, flags, 0o644, dir_fd=dir_fd)
+            except OSError as exc:
+                raise RuntimeError("receipt storage integrity unavailable") from exc
+            try:
+                opened = os.fstat(fd)
+                if (
+                    not stat.S_ISREG(opened.st_mode)
+                    or opened.st_uid != os.getuid()
+                    or opened.st_nlink != 1
+                    or opened.st_mode & 0o022
+                    or opened.st_size + len(payload) > _RECEIPT_STREAM_MAX_BYTES
+                    or (prior is not None and (opened.st_dev, opened.st_ino) != (prior.st_dev, prior.st_ino))
+                ):
+                    raise RuntimeError("receipt storage integrity unavailable")
+                view = memoryview(payload)
+                while view:
+                    written = os.write(fd, view)
+                    if written <= 0:
+                        raise RuntimeError("receipt storage integrity unavailable")
+                    view = view[written:]
+                os.fsync(fd)
+                _revalidate_receipt_transaction(task_dir)
+            finally:
+                os.close(fd)
+        return entry
+
+    return record
+
+
+record_subagent_receipt = _make_runtime_receipt_writer()
+del _make_runtime_receipt_writer
 
 
 def _completed_review_by_lens(task_dir, snapshot=None):

@@ -801,25 +801,6 @@ def test_child_status_rejects_symlinked_rollout(tmp_path, monkeypatch):
     assert mod._find_rollout(child_id) is None
 
 
-def test_record_receipt_preserves_runtime_provenance(tmp_path):
-    scripts = str(REPO / "plugin/scripts")
-    if scripts not in os.sys.path:
-        os.sys.path.insert(0, scripts)
-    import _lib
-
-    task = tmp_path / "TASK__provenance"
-    task.mkdir()
-    _write_task_control(task)
-    with mock.patch.object(_lib, "_runtime_receipt_write_authorized", return_value=True):
-        entry = _lib.record_subagent_receipt(task, {
-            "agent_id": "/root/qa_cli", "agent_type": "qa_cli", "event": "started",
-            "source": "codex_session_watcher:collaboration",
-            "runtime_id": "codex:session:call:thread",
-        })
-    assert entry["runtime_id"] == "codex:session:call:thread"
-    assert entry["agent_id"] == "/root/qa_cli"
-
-
 def test_ensure_registers_once_without_forking_for_exact_root_rollout(tmp_path, monkeypatch):
     mod = _load()
     codex_home = tmp_path / ".codex"

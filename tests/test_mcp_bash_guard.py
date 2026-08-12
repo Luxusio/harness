@@ -155,6 +155,9 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 -c \"from importlib import import_module as load; load('subagent_lifecycle').mark_subagent_stop\"",
             "PYTHONPATH=plugin/scripts python3 -c \"m=__import__('plugin.scripts',fromlist=['subagent_lifecycle']).subagent_lifecycle;getattr(m,'record_'+'subagent_'+'receipt')\"",
             "python3 -c 'from _lib import record_subagent_receipt'",
+            "printf '%s' 'pass' | python3 -",
+            "python3 -c \"exec(__import__('base64').b64decode('cGFzcw=='))\"",
+            "python3 -c \"name='subagent_'+'lifecycle'; __import__(name)\"",
         ):
             with self.subTest(command=command):
                 r = _run_bash(command)
@@ -286,11 +289,13 @@ class TestFailSafe(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "")
 
-    def test_oversized_command_short_circuits(self):
+    def test_oversized_command_fails_closed(self):
         huge = "echo " + ("x" * (70 * 1024)) + f" > {SRC_PATH}"
         r = _run_bash(huge)
         self.assertEqual(r.returncode, 0)
-        self.assertEqual(r.stdout, "")
+        decision, reason = parse_decision(r.stdout)
+        self.assertEqual(decision, "deny")
+        self.assertIn("uninspectable oversized command", reason)
 
 
 class TestSegmentedCommand(unittest.TestCase):

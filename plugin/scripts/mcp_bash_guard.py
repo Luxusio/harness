@@ -14,13 +14,13 @@ Known gaps (documented in doc/harness/patterns/mcp-bash-guard.md):
   - Nested shells: ``bash -c "sed -i x file"`` — the mutation is hidden inside
     ``-c``'s argument as a single shlex token; not recursed.
   - ``eval "sed -i ..."`` and command substitution ``$(...)`` / backticks.
-  - Base64 / obfuscated ``python -c`` writes.
   - Symlink resolution (``os.path.realpath``) — not applied before classification.
 """
 from __future__ import annotations
 
 import os
 import ast
+import json
 import re
 import shlex
 import stat
@@ -29,7 +29,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from _lib import (
-        read_hook_input,
         emit_permission_decision,
         _log_gate_error,
         _escape_hint,
@@ -52,6 +51,7 @@ except Exception:
 
 GATE_NAME = "mcp_bash_guard"
 _COMMAND_LENGTH_CAP = 64 * 1024  # short-circuit extremely large commands
+_GUARD_STDIN_CAP = 128 * 1024
 
 REDIRECT_TOKENS = {">", ">>", "1>", "1>>"}
 # Note: 2> stderr redirect is intentionally NOT blocked — logs are common.
@@ -273,14 +273,25 @@ def _python_code_exposes_lifecycle(code):
             if any(alias.name == "record_subagent_receipt" for alias in node.names):
                 return True
         elif isinstance(node, ast.Attribute):
-            if node.attr in LIFECYCLE_RECEIPT_MODULES or node.attr == "record_subagent_receipt":
+            if (
+                node.attr in LIFECYCLE_RECEIPT_MODULES
+                or node.attr == "record_subagent_receipt"
+                or "receipt_stream" in node.attr and "append" in node.attr
+            ):
                 return True
-        elif isinstance(node, ast.Name) and node.id == "record_subagent_receipt":
+        elif isinstance(node, ast.Name) and (
+            node.id == "record_subagent_receipt"
+            or "receipt_stream" in node.id and "append" in node.id
+        ):
             return True
         elif isinstance(node, ast.Call):
             func_name = getattr(node.func, "id", "") or getattr(node.func, "attr", "")
+            if func_name in {"exec", "eval", "compile"}:
+                return True
             if func_name in {"__import__", "import_module"}:
                 imported = string_value(node.args[0]) if node.args else None
+                if imported is None:
+                    return True
                 if imported and imported.rsplit(".", 1)[-1] in LIFECYCLE_RECEIPT_MODULES:
                     return True
                 for keyword in node.keywords:
@@ -290,7 +301,8 @@ def _python_code_exposes_lifecycle(code):
                     ):
                         return True
             if func_name == "getattr" and len(node.args) > 1:
-                if string_value(node.args[1]) == "record_subagent_receipt":
+                attribute = string_value(node.args[1])
+                if attribute is None or attribute == "record_subagent_receipt":
                     return True
     return False
 
@@ -324,6 +336,8 @@ def _protected_lifecycle_execution(argv):
             else:
                 index += 1
         script = args[index] if index < len(args) else ""
+        if not script or script == "-":
+            return True
         if os.path.basename(script) in LIFECYCLE_RECEIPT_ENTRYPOINTS:
             return True
         if script:
@@ -338,8 +352,10 @@ def _protected_lifecycle_execution(argv):
                         code = handle.read(_COMMAND_LENGTH_CAP + 1)
                     if len(code) <= _COMMAND_LENGTH_CAP and _python_code_exposes_lifecycle(code):
                         return True
+                else:
+                    return True
             except (OSError, UnicodeError):
-                pass
+                return True
         return False
     if cmd in {"bash", "sh"}:
         script = next((arg for arg in args if not arg.startswith("-")), "")
@@ -506,15 +522,30 @@ def _deny(target, command):
 
 
 def main():
+    try:
+        raw_input = sys.stdin.read(_GUARD_STDIN_CAP + 1)
+    except Exception:
+        raw_input = ""
+    if len(raw_input) > _GUARD_STDIN_CAP:
+        _deny({
+            "path": "RECEIPTS.jsonl",
+            "category": "protected-artifact",
+            "method": "uninspectable oversized hook payload",
+        }, "oversized hook payload")
+        return 0
+    try:
+        parsed_input = json.loads(raw_input) if raw_input else {}
+        data = parsed_input if isinstance(parsed_input, dict) else {}
+    except (TypeError, ValueError):
+        data = {}
+
     # Escape hatch: one-shot allow + audit.
     if os.environ.get("HARNESS_SKIP_MCP_GUARD") == "1":
-        data = read_hook_input()
         tool_input = data.get("tool_input") or {}
         cmd = tool_input.get("command", "")
         log_gate_bypass(GATE_NAME, cmd[:200])
         return 0
 
-    data = read_hook_input()
     if not data:
         return 0
     if data.get("tool_name") not in ("Bash", "shell"):
@@ -523,10 +554,6 @@ def main():
     tool_input = data.get("tool_input") or {}
     command = tool_input.get("command") or tool_input.get("cmd") or ""
     if not isinstance(command, str) or not command:
-        return 0
-
-    # Short-circuit extremely large commands to protect the 3 s timeout budget.
-    if len(command) > _COMMAND_LENGTH_CAP:
         return 0
 
     payload_cwd = str(data.get("cwd") or "").strip()
@@ -549,6 +576,13 @@ def main():
         )
         return 0
     if not is_harness_enabled_repo(repo_root):
+        return 0
+    if len(command) > _COMMAND_LENGTH_CAP:
+        _deny({
+            "path": "RECEIPTS.jsonl",
+            "category": "protected-artifact",
+            "method": "uninspectable oversized command",
+        }, command[:200])
         return 0
     targets = _extract_mutation_targets(command, repo_root, hook_cwd)
     if targets:
