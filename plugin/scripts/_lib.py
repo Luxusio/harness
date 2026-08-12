@@ -1312,7 +1312,8 @@ def _make_control_writer_authority():
 
     def bind(function):
         module_name = function.__module__
-        if function.__qualname__ not in allowed.get(module_name, set()):
+        role = os.path.splitext(os.path.basename(function.__code__.co_filename))[0]
+        if function.__qualname__ not in allowed.get(role, set()):
             raise PermissionError("unsupported task-control writer")
         module = sys.modules.get(module_name)
         if module is None or function.__globals__ is not vars(module):
@@ -1327,7 +1328,7 @@ def _make_control_writer_authority():
             if name in protected_dependencies and name in function.__globals__
         )
         bindings[(module_name, function.__qualname__)] = (
-            function.__code__, function.__globals__, dependencies,
+            function.__code__, function.__globals__, dependencies, role,
         )
 
     def authorized(marker=False):
@@ -1339,7 +1340,7 @@ def _make_control_writer_authority():
                 identity = (module_name, caller.f_code.co_qualname)
                 binding = bindings.get(identity)
                 if binding is not None and (
-                    marker or module_name == "harness_server"
+                    marker or binding[3] == "harness_server"
                 ):
                     return bool(
                         caller.f_code is binding[0]
