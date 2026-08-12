@@ -38,7 +38,7 @@ acquisition/identity/completion and
 `doc/harness/patterns/ADR__consolidated-task-artifacts.md` for
 storage/schema/gates.
 
-## 3. TASK.json (6 fields only)
+## 3. TASK.json (4 fields only)
 
 ```json
 {

@@ -12,6 +12,7 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, Callable
 
@@ -301,6 +302,9 @@ def handle_task_start(args: dict) -> dict:
         task_dir, tid, request_text=request_text, repo_root=repo_root,
         execution_mode=execution_mode or "standard",
     )
+    transaction_stack = ExitStack()
+    if resumed_existing:
+        transaction_stack.enter_context(receipt_stream_transaction(task_dir))
     original_resumed_control = read_task_control(task_dir) if resumed_existing else {}
     terminal_receipt_snapshot = {}
     task_control_snapshot = {}
@@ -367,7 +371,10 @@ def handle_task_start(args: dict) -> dict:
             except FileNotFoundError:
                 pass
     except Exception:
-        rollback_new_start()
+        try:
+            rollback_new_start()
+        finally:
+            transaction_stack.close()
         raise
 
     try:
@@ -389,8 +396,13 @@ def handle_task_start(args: dict) -> dict:
     try:
         write_active_marker(repo_root, task_dir)
     except Exception:
-        rollback_new_start()
+        try:
+            rollback_new_start()
+        finally:
+            transaction_stack.close()
         raise
+
+    transaction_stack.close()
 
     return _ok({
         "task_dir": task_dir, "task_id": tid, "task_context": ctx,

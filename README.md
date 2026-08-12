@@ -55,7 +55,7 @@ plan → develop → verify → close
 
 After close, the Goal child-task executor performs a self-improvement pass — surfaces friction signals into `learnings.jsonl`, promotes recurring keys into Tier 2 patterns, and prunes stale entries.
 
-## TASK.json (6 fields)
+## TASK.json (4 fields)
 
 ```json
 {

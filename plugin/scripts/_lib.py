@@ -2016,22 +2016,26 @@ def _receipt_lock_binding(task_dir):
 
 
 def _validate_receipt_dir_binding(binding):
-    task_dir, fd, identity = binding
-    try:
-        opened = os.fstat(fd)
-        current = os.lstat(task_dir)
-    except OSError as exc:
-        raise RuntimeError("receipt storage integrity unavailable") from exc
+    task_dir, fd, identity, components = binding
+    for path, component_fd, component_identity in components:
+        try:
+            opened = os.fstat(component_fd)
+            current = os.lstat(path)
+        except OSError as exc:
+            raise RuntimeError("receipt storage integrity unavailable") from exc
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != component_identity
+            or stat.S_ISLNK(current.st_mode)
+            or not stat.S_ISDIR(current.st_mode)
+            or (current.st_dev, current.st_ino) != component_identity
+        ):
+            raise RuntimeError("receipt storage integrity unavailable")
+    task_opened = os.fstat(fd)
     if (
-        not stat.S_ISDIR(opened.st_mode)
-        or opened.st_uid != os.getuid()
-        or stat.S_IMODE(opened.st_mode) & 0o022
-        or (opened.st_dev, opened.st_ino) != identity
-        or stat.S_ISLNK(current.st_mode)
-        or not stat.S_ISDIR(current.st_mode)
-        or current.st_uid != os.getuid()
-        or stat.S_IMODE(current.st_mode) & 0o022
-        or (current.st_dev, current.st_ino) != identity
+        (task_opened.st_dev, task_opened.st_ino) != identity
+        or task_opened.st_uid != os.getuid()
+        or stat.S_IMODE(task_opened.st_mode) & 0o022
     ):
         raise RuntimeError("receipt storage integrity unavailable")
 
@@ -2060,20 +2064,44 @@ def _receipt_stream_lock(task_dir):
         yield
         _validate_receipt_dir_binding(nested)
         return
-    before = os.lstat(task_dir)
+    component_paths = []
+    current = task_dir
+    for _ in range(4):
+        component_paths.append(current)
+        current = os.path.dirname(current)
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    components = []
     try:
-        fd = os.open(task_dir, flags)
-    except OSError as exc:
+        for path in reversed(component_paths):
+            component_fd = os.open(path, flags)
+            component_info = os.fstat(component_fd)
+            current_info = os.lstat(path)
+            if (
+                not stat.S_ISDIR(component_info.st_mode)
+                or stat.S_ISLNK(current_info.st_mode)
+                or not stat.S_ISDIR(current_info.st_mode)
+                or (component_info.st_dev, component_info.st_ino)
+                != (current_info.st_dev, current_info.st_ino)
+            ):
+                os.close(component_fd)
+                raise RuntimeError("receipt storage integrity unavailable")
+            components.append((
+                path, component_fd, (component_info.st_dev, component_info.st_ino),
+            ))
+    except (OSError, RuntimeError) as exc:
+        for _, component_fd, _ in components:
+            os.close(component_fd)
+        if isinstance(exc, RuntimeError):
+            raise
         raise RuntimeError("receipt storage integrity unavailable") from exc
+    fd = components[-1][1]
     try:
         info = os.fstat(fd)
         if (
             not stat.S_ISDIR(info.st_mode)
             or info.st_uid != os.getuid()
             or stat.S_IMODE(info.st_mode) & 0o022
-            or (info.st_dev, info.st_ino) != (before.st_dev, before.st_ino)
         ):
             raise RuntimeError("receipt storage integrity unavailable")
         try:
@@ -2081,7 +2109,9 @@ def _receipt_stream_lock(task_dir):
             fcntl.flock(fd, fcntl.LOCK_EX)
         except (ImportError, OSError) as exc:
             raise RuntimeError("receipt storage integrity unavailable") from exc
-        binding = (task_dir, fd, (info.st_dev, info.st_ino))
+        binding = (
+            task_dir, fd, (info.st_dev, info.st_ino), tuple(components),
+        )
         _validate_receipt_dir_binding(binding)
         token = _RECEIPT_LOCK_HELD.set(_RECEIPT_LOCK_HELD.get() + (binding,))
         try:
@@ -2090,7 +2120,8 @@ def _receipt_stream_lock(task_dir):
         finally:
             _RECEIPT_LOCK_HELD.reset(token)
     finally:
-        os.close(fd)
+        for _, component_fd, _ in reversed(components):
+            os.close(component_fd)
 
 
 def _receipt_stream_info(path):

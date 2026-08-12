@@ -6,6 +6,8 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -1267,6 +1269,34 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(payload["run_id"], resumed["run_id"])
             self.assertEqual(payload["task_context"]["runtime_verdict"], "PENDING")
             self.assertFalse((Path(task_dir) / "RECEIPTS.jsonl").exists())
+
+    def test_task_start_resume_waits_for_task_transaction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__resume-serialized")
+            original_run = harness_server.read_task_control(task_dir)["run_id"]
+            finished = threading.Event()
+            result = {}
+
+            def resume():
+                result.update(self._call_in_repo(
+                    tmp, "task_start", {"task_id": "TASK__resume-serialized"},
+                ))
+                finished.set()
+
+            with harness_server.receipt_stream_transaction(task_dir):
+                worker = threading.Thread(target=resume)
+                worker.start()
+                time.sleep(0.1)
+                self.assertFalse(finished.is_set())
+                self.assertEqual(
+                    harness_server.read_task_control(task_dir)["run_id"], original_run,
+                )
+            worker.join(5)
+            self.assertTrue(finished.is_set())
+            self.assertNotIn("isError", result)
+            self.assertNotEqual(
+                harness_server.read_task_control(task_dir)["run_id"], original_run,
+            )
 
     def test_task_start_returns_ready_with_warnings_after_committed_scaffold(self):
         with tempfile.TemporaryDirectory() as tmp:

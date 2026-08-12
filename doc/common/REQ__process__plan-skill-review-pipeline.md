@@ -39,8 +39,8 @@ must not be restored.
 - No gstack binaries or telemetry (no `~/.gstack/` writes).
 - `codex exec` is optional; fall back to second Agent if unavailable.
 - `PLAN.md` is the mandatory acceptance-intent output.
-- `write_plan` publishes only the explicit review/QA lens arrays into the exact
-  six-field `TASK.json`; it creates no planning metadata sidecar.
+- `write_plan` publishes the canonical `required_lenses` set into the exact
+  four-field `TASK.json`; it creates no planning metadata or audit sidecar.
 - Verification evidence comes from lifecycle-owned `RECEIPTS.jsonl`.
 
 ## Why the old workflow was replaced

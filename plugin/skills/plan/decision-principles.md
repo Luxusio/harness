@@ -27,7 +27,7 @@ Applied to every contested item between Voice A and Voice B. First applicable wi
 
 ## Decision Classification
 
-**Mechanical** — Objectively correct answer exists (wrong import, broken ref, missing required field). Auto-decide silently. Append one audit row.
+**Mechanical** — Objectively correct answer exists (wrong import, broken ref, missing required field). Auto-decide silently and retain any material rationale in PLAN.md.
 
 **Taste** — Two reasonable approaches with tradeoffs (naming, structure, sequencing). Auto-decide via principles. Surface at Phase 5.2 for user awareness.
 

@@ -391,6 +391,35 @@ def test_task_directory_transaction_is_nested_serialized_and_replacement_safe(tm
     assert lib.read_task_control(displaced) == original_control
 
 
+def test_task_publication_rejects_replaced_ancestor_chain(tmp_path):
+    for ancestor_name in ("doc", "harness", "tasks"):
+        root = tmp_path / ancestor_name
+        task = _task(root)
+        original = lib.read_task_control(task)
+        updated = dict(original)
+        updated["required_lenses"] = ["review-code", "review-security", "qa-cli"]
+        ancestors = {
+            "doc": root / "doc",
+            "harness": root / "doc/harness",
+            "tasks": root / "doc/harness/tasks",
+        }
+        target = ancestors[ancestor_name]
+        displaced = target.with_name(target.name + "-displaced")
+        with lib.receipt_stream_transaction(task):
+            target.rename(displaced)
+            target.symlink_to(displaced, target_is_directory=True)
+            try:
+                lib.write_task_control(task, updated)
+            except RuntimeError as exc:
+                assert "integrity" in str(exc)
+            else:
+                raise AssertionError(f"replaced {ancestor_name} ancestor must fail closed")
+            finally:
+                target.unlink()
+                displaced.rename(target)
+        assert lib.read_task_control(task) == original
+
+
 def test_rotated_task_run_rejects_prior_run_receipts_without_source_state(tmp_path):
     task = _task(tmp_path)
     original_run = lib.read_task_control(task)["run_id"]

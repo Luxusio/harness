@@ -71,9 +71,8 @@ Git or hash a concrete payload when that operation intrinsically requires it.
 Those opt-in checks are not task lifecycle prerequisites.
 
 The initialization commit point is a valid `TASK.json` plus the session
-active marker. Optional environment probing remains bounded, performs no Git
-probe, and cannot turn a
-committed scaffold into a failed start.
+active marker. `task_start` does not persist or return an environment snapshot;
+environment facts are recomputed by the operation that needs them.
 
 ## Protected Artifacts
 
@@ -116,12 +115,11 @@ conservative for pre-state task packs so Stop and prewrite gates do not silently
 disengage; active-task iteration filters terminal per-session records as well.
 
 The confinement boundary validates lexical and physical paths and avoids
-following pre-existing control-plane leaf symlinks. Harness runs with the
-calling user's privileges and does not provide a privilege boundary against a
-hostile process running concurrently as that same user; such a process can
-already write every target Harness can write. A descriptor-relative filesystem
-transaction layer is intentionally out of scope unless Harness later gains a
-privilege transition or a distinct lower-trust concurrent repository writer.
+following pre-existing control-plane leaf symlinks. Receipt, plan, block, and
+task-authority publication holds an exclusive lock on the validated task
+directory descriptor and uses descriptor-relative atomic writes and rollback.
+Directory replacement or an unsafe leaf fails closed without publishing into
+the replacement path.
 
 ## Verification
 
@@ -150,12 +148,11 @@ remains valid when it is the lighter available path; its potentially large DOM,
 screenshot, or evaluation payload is an accepted caller-owned context cost and
 does not relax the receipt-backed close requirements above.
 
-`write_plan` owns the canonical audit header but accepts both convenient caller
-forms: audit data rows only, or a complete Markdown audit table with an optional
-`# Audit Trail` heading, header row, and separator. It strips duplicate framing
-and stores exactly one canonical header. Inputs that cannot be normalized are
-rejected before any bundled artifact write, with an accepted example and a
-specific correction instead of an undocumented row-only requirement.
+`write_plan` accepts only the complete non-empty `PLAN.md` body and an optional
+`required_lenses` set. It canonicalizes supported lenses, requires
+`review-code` plus at least one `qa-*` lens, and atomically publishes only
+`PLAN.md` and `TASK.json`. Planning rationale remains in `PLAN.md`; there is no
+audit argument or audit artifact.
 
 `task_context`, `task_verify`, and `task_close` read task artifacts and receipt
 streams only. They do not discover repositories, enumerate changed paths,
@@ -165,13 +162,13 @@ accepts that risk instead of imposing a repository-integrity monitor on local
 development. Missing or malformed task artifacts and receipt streams still fail
 closed.
 
-`TASK.json` contains the non-Git generation identity and start timestamp.
-`task_start` creates it, terminal resume rotates those fields, and the session
-marker carries them to lifecycle watchers,
-and start/completion receipts must match the current generation. A replayed
-rollout event whose timestamp predates the generation start is ignored. This
-prevents a prior-run agent from satisfying a reopened task without restoring any
-source snapshot or change detector.
+`TASK.json.run_id` is the non-Git generation identity and a canonical UUIDv7
+whose embedded millisecond timestamp supplies the run-start cutoff.
+`task_start` creates it and every resume rotates it while clearing prior
+receipts. The session marker carries only that run ID to lifecycle watchers;
+start/completion receipts must match it. A replayed rollout event whose
+timestamp predates the UUIDv7 cutoff is ignored. This prevents prior-run
+evidence from satisfying a resumed task.
 
 Codex SessionStart and spawn-selective PreToolUse establish the bounded root
 registration used by the MCP-hosted watcher. Registration and lifecycle

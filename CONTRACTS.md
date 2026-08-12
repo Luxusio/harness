@@ -108,11 +108,10 @@ redirect, cp, mv, tee, python -c open(…,'w'), …) targeting the same basename
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`
 (Write/Edit/MultiEdit surface) + `plugin/scripts/mcp_bash_guard.py`
 (Bash surface; same helper classifiers).
-**On violation:** hard-block. Agent must route through the owning task MCP tool,
-the hook-owned receipt path. CONVERSATION.md is written by runtime
+**On violation:** hard-block. Agent must route through the owning task MCP tool
+or hook-owned receipt path. CONVERSATION.md is written by runtime
 conversation hooks.
-**Why:** Provenance is derived from artifact existence. Wrong writer = wrong
-provenance = broken audit chain.
+**Why:** Wrong-writer mutation breaks task authority or lifecycle provenance.
 **Note (AC-019):** `doc/changes/**` and `doc/common/**` writes by
 `hygiene_scan.py` and `doc_hygiene.py` are authorized via C-16. These paths
 are NOT in `PROTECTED_ARTIFACTS`; their protection is via `hygiene.yaml`
