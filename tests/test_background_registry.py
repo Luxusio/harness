@@ -451,6 +451,46 @@ def test_stop_only_runtime_records_complete_current_task_lifecycle(tmp_path, mon
     assert len((Path(task_dir) / "RECEIPTS.jsonl").read_text().splitlines()) == 2
 
 
+def test_stop_only_receipt_pair_failure_rolls_back_and_retries(tmp_path, monkeypatch):
+    repo, task_dir = _repo(tmp_path)
+    session_id = "sess-retry"
+    agent_id = "qa-cli-retry"
+    final_message = "VERDICT: PASS"
+    _bind_session(repo, task_dir, session_id)
+    transcript = _write_agent_transcript(
+        tmp_path, monkeypatch, session_id, agent_id, final_message,
+    )
+    payload = {
+        "hook_event_name": "SubagentStop", "session_id": session_id,
+        "agent_id": agent_id, "agent_type": agent_id,
+        "agent_transcript_path": transcript, "last_assistant_message": final_message,
+    }
+    real_record = background_registry.record_subagent_receipt
+    calls = 0
+
+    def fail_second_once(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("injected completion append failure")
+        return real_record(*args, **kwargs)
+
+    monkeypatch.setattr(background_registry, "record_subagent_receipt", fail_second_once)
+    first = background_registry.mark_subagent_stop(repo, payload)
+    assert first["status"] == "receipt_pending"
+    assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
+
+    second = background_registry.mark_subagent_stop(repo, payload)
+    assert second["status"] == "done"
+    receipts = [
+        json.loads(line)
+        for line in (Path(task_dir) / "RECEIPTS.jsonl").read_text().splitlines()
+    ]
+    assert [(item["event"], item["verdict"]) for item in receipts] == [
+        ("started", ""), ("completed", "PASS"),
+    ]
+
+
 def test_stop_only_fallback_rejects_missing_or_foreign_session(tmp_path, monkeypatch):
     repo, task_dir = _repo(tmp_path)
     _bind_session(repo, task_dir, "owner-session")

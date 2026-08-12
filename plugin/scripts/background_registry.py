@@ -30,6 +30,7 @@ try:
         current_session_id,
         now_iso,
         record_subagent_receipt,
+        receipt_stream_savepoint,
         receipt_stream_transaction,
         extract_qa_verdict,
         resolve_active_task_dir,
@@ -69,6 +70,9 @@ except Exception:  # pragma: no cover - imported only inside harness scripts
             return False
 
     def receipt_stream_transaction(task_dir: str):
+        return _NullTransaction()
+
+    def receipt_stream_savepoint(task_dir: str):
         return _NullTransaction()
 
     def extract_qa_verdict(value: str) -> str:
@@ -567,7 +571,11 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
         target["stop_hook_active"] = bool(payload.get("stop_hook_active"))
         return target
 
-    result = _with_registry_lock(repo_root, mark)
+    result = _with_registry_lock(repo_root, mark, write=False)
+    if result.get("status") == "done" and not stop_verdict and not fallback_binding:
+        # Non-authorizing stops still clear the best-effort background registry;
+        # they cannot publish a verdict receipt without an exact task binding.
+        _with_registry_lock(repo_root, mark)
     try:
         final_message = result.get("last_assistant_message") or ""
         verdict = extract_qa_verdict(final_message)
@@ -591,30 +599,44 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
                     or binding.get("run_id") != bound_run_id
                 ):
                     return result
-                if result.get("started_from_stop"):
-                    started = record_subagent_receipt(
-                        task_dir,
-                        {
-                            **identity,
-                            "event": "started",
-                            "summary": "subagent start inferred from authoritative stop hook",
-                        },
-                    )
-                    if started.get("receipt_id"):
-                        result["subagent_receipt_id"] = started["receipt_id"]
-                completion = record_subagent_receipt(
-                    task_dir,
-                    {
-                        **identity,
-                        "event": "completed",
-                        "verdict": verdict or "UNKNOWN",
-                        "summary": final_message,
-                    },
-                )
+                with receipt_stream_savepoint(task_dir):
+                    if result.get("started_from_stop"):
+                        started = record_subagent_receipt(
+                            task_dir,
+                            {
+                                **identity,
+                                "event": "started",
+                                "summary": "subagent start inferred from authoritative stop hook",
+                            },
+                        )
+                        completion = record_subagent_receipt(
+                            task_dir,
+                            {
+                                **identity,
+                                "event": "completed",
+                                "verdict": verdict or "UNKNOWN",
+                                "summary": final_message,
+                            },
+                        )
+                        if started.get("receipt_id"):
+                            result["subagent_receipt_id"] = started["receipt_id"]
+                    else:
+                        completion = record_subagent_receipt(
+                            task_dir,
+                            {
+                                **identity,
+                                "event": "completed",
+                                "verdict": verdict or "UNKNOWN",
+                                "summary": final_message,
+                            },
+                        )
+                _with_registry_lock(repo_root, mark)
             if completion.get("receipt_id"):
                 result["completion_receipt_id"] = completion["receipt_id"]
     except Exception:
-        pass
+        result = dict(result)
+        result["status"] = "receipt_pending"
+        result["reason"] = "Receipt publication failed; the same stop may be retried."
     try:
         if result.get("status") == "done" and result.get("last_assistant_message"):
             append_conversation_entry(

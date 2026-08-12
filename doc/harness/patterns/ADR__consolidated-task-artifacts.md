@@ -88,6 +88,9 @@ PASS. Direct model invocation of lifecycle receipt-authoring scripts is denied.
 The transcript namespace and every path component/leaf are descriptor-bound,
 non-symlink, owner-only provenance; Write/Edit/apply_patch and Bash mutation
 gates deny model-authored changes to Claude subagent transcript leaves.
+The inferred started/completed pair publishes under a receipt savepoint. The
+registry marks the stop single-use only after both entries are durable; an
+append failure restores the prior stream and leaves the same stop retryable.
 
 Old-schema entries in `RECEIPTS.jsonl` are rejected with an actionable message
 to start a fresh task run or reset the unsupported stream. They are not

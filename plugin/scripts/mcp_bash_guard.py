@@ -217,6 +217,14 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
     if idx >= len(segment_tokens):
         return
     non_env = segment_tokens[idx:]
+    while non_env and os.path.basename(non_env[0]) in {"env", "uv", "command"}:
+        non_env = non_env[1:]
+        if non_env and non_env[0] == "run":
+            non_env = non_env[1:]
+        while non_env and (_is_env_assignment(non_env[0]) or non_env[0].startswith("-")):
+            non_env = non_env[1:]
+    if not non_env:
+        return
     cmd = os.path.basename(non_env[0])
 
     visible = " ".join(non_env)
@@ -225,6 +233,11 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
             rf"(?:^|[;\s])(?:from\s+{re.escape(name)}\s+import|import\s+{re.escape(name)}(?:\s|$|[;,]))",
             visible,
         )
+        for name in LIFECYCLE_RECEIPT_MODULES
+    )
+    protected_import = protected_import or any(
+        re.search(rf"(?:__import__|import_module)\s*\(\s*['\"]{re.escape(name)}['\"]\s*\)", visible)
+        or re.search(rf"(?:^|\s)-m\s+{re.escape(name)}(?:\s|$)", visible)
         for name in LIFECYCLE_RECEIPT_MODULES
     )
     if (

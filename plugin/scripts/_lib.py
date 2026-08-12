@@ -2218,6 +2218,23 @@ def receipt_stream_transaction(task_dir):
         yield
 
 
+@contextmanager
+def receipt_stream_savepoint(task_dir):
+    """Roll back the unified stream if a multi-entry publication fails."""
+    with _receipt_stream_lock(task_dir):
+        raw = _read_receipt_bytes_unlocked(_receipts_path(task_dir))
+        snapshot = {
+            "exists": raw is not None,
+            "kind": "regular" if raw is not None else "absent",
+            "text": raw.decode("utf-8") if raw is not None else "",
+        }
+        try:
+            yield
+        except BaseException:
+            _restore_receipt_snapshot_unlocked(task_dir, snapshot)
+            raise
+
+
 def reset_receipt_streams_for_new_run(task_dir):
     """Remove the unified receipt stream for a fresh task run."""
     task_dir = _validated_receipt_task_dir(task_dir)
