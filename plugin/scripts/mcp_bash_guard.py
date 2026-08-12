@@ -206,6 +206,83 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
             )
 
 
+def _unwrap_execution(tokens):
+    """Remove supported command wrappers and return the actual executable argv."""
+    argv = list(tokens)
+    while argv:
+        wrapper = os.path.basename(argv[0])
+        if wrapper == "env":
+            index = 1
+            while index < len(argv):
+                token = argv[index]
+                if token in {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}:
+                    index += 2
+                elif token.startswith("-") or _is_env_assignment(token):
+                    index += 1
+                else:
+                    break
+            argv = argv[index:]
+            continue
+        if wrapper == "uv":
+            try:
+                argv = argv[argv.index("run") + 1:]
+            except ValueError:
+                return []
+            while argv and argv[0].startswith("-"):
+                argv = argv[1:]
+            continue
+        if wrapper in {"command", "exec"}:
+            argv = argv[1:]
+            while argv and argv[0].startswith("-"):
+                argv = argv[1:]
+            continue
+        break
+    return argv
+
+
+def _protected_lifecycle_execution(argv):
+    if not argv:
+        return False
+    cmd = os.path.basename(argv[0])
+    args = argv[1:]
+    if cmd in LIFECYCLE_RECEIPT_ENTRYPOINTS:
+        return True
+    if cmd.startswith(("python", "pypy")):
+        if "-m" in args:
+            try:
+                module = args[args.index("-m") + 1]
+            except IndexError:
+                return False
+            return module.rsplit(".", 1)[-1] in LIFECYCLE_RECEIPT_MODULES
+        if "-c" in args:
+            try:
+                code = args[args.index("-c") + 1]
+            except IndexError:
+                return False
+            compact_code = re.sub(r"[\s'\"+_]", "", code).lower()
+            return (
+                "recordsubagentreceipt" in compact_code
+                or any(name.replace("_", "") in compact_code for name in LIFECYCLE_RECEIPT_MODULES)
+                or any(
+                re.search(
+                    rf"(?:^|[;\s])(?:from\s+(?:[A-Za-z_]\w*\.)*{re.escape(name)}\s+import|import\s+(?:[A-Za-z_]\w*\.)*{re.escape(name)}(?:\s|$|[;,]))",
+                    code,
+                )
+                or re.search(
+                    rf"(?:__import__|import_module)\s*\(\s*['\"](?:[A-Za-z_]\w*\.)*{re.escape(name)}['\"]\s*\)",
+                    code,
+                )
+                for name in LIFECYCLE_RECEIPT_MODULES
+                )
+            )
+        script = next((arg for arg in args if not arg.startswith("-")), "")
+        return os.path.basename(script) in LIFECYCLE_RECEIPT_ENTRYPOINTS
+    if cmd in {"bash", "sh"}:
+        script = next((arg for arg in args if not arg.startswith("-")), "")
+        return os.path.basename(script) in LIFECYCLE_RECEIPT_ENTRYPOINTS
+    return False
+
+
 def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
     """Classify a single command segment (between shell operators)."""
     if not segment_tokens:
@@ -216,35 +293,12 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
         idx += 1
     if idx >= len(segment_tokens):
         return
-    non_env = segment_tokens[idx:]
-    while non_env and os.path.basename(non_env[0]) in {"env", "uv", "command"}:
-        non_env = non_env[1:]
-        if non_env and non_env[0] == "run":
-            non_env = non_env[1:]
-        while non_env and (_is_env_assignment(non_env[0]) or non_env[0].startswith("-")):
-            non_env = non_env[1:]
+    non_env = _unwrap_execution(segment_tokens[idx:])
     if not non_env:
         return
     cmd = os.path.basename(non_env[0])
 
-    visible = " ".join(non_env)
-    protected_import = any(
-        re.search(
-            rf"(?:^|[;\s])(?:from\s+(?:[A-Za-z_]\w*\.)*{re.escape(name)}\s+import|import\s+(?:[A-Za-z_]\w*\.)*{re.escape(name)}(?:\s|$|[;,]))",
-            visible,
-        )
-        for name in LIFECYCLE_RECEIPT_MODULES
-    )
-    protected_import = protected_import or any(
-        re.search(rf"(?:__import__|import_module)\s*\(\s*['\"](?:[A-Za-z_]\w*\.)*{re.escape(name)}['\"]\s*\)", visible)
-        or re.search(rf"(?:^|\s)-m\s+(?:[A-Za-z_]\w*\.)*{re.escape(name)}(?:\s|$)", visible)
-        for name in LIFECYCLE_RECEIPT_MODULES
-    )
-    if (
-        any(name in visible for name in LIFECYCLE_RECEIPT_ENTRYPOINTS)
-        or protected_import
-        or "record_subagent_receipt" in visible
-    ):
+    if _protected_lifecycle_execution(non_env):
         targets.append({
             "path": "RECEIPTS.jsonl",
             "category": "protected-artifact",

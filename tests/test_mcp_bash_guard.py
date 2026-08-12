@@ -97,6 +97,17 @@ class TestMutationsAgainstWorkflowControl(unittest.TestCase):
 
 
 class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
+    def test_read_only_lifecycle_source_references_are_allowed(self):
+        for command in (
+            "uv run pytest -q tests/test_background_registry.py",
+            "git diff -- plugin/scripts/background_registry.py",
+            "sed -n '1,20p' plugin/scripts/background_hook.py",
+        ):
+            with self.subTest(command=command):
+                r = _run_bash(command)
+                decision, _reason = parse_decision(r.stdout)
+                self.assertNotEqual(decision, "deny")
+
     def test_claude_subagent_transcript_mutation_is_denied(self):
         transcript = os.path.expanduser(
             "~/.claude/projects/project/session/subagents/agent-review-code.jsonl"
@@ -129,6 +140,7 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 -m plugin.scripts.background_registry",
             "/usr/bin/env -u X python3 plugin/scripts/background_hook.py --event stop",
             "uv --directory . run python3 plugin/scripts/background_hook.py --event stop",
+            "PYTHONPATH=plugin/scripts python3 -c \"m=__import__('plugin.scripts',fromlist=['background_registry']).background_registry;getattr(m,'record_'+'subagent_'+'receipt')\"",
             "python3 -c 'from _lib import record_subagent_receipt'",
         ):
             with self.subTest(command=command):

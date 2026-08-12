@@ -60,7 +60,10 @@ the configured runtime lifecycle hooks/watchers may author those events.
 Detection normalizes common `env`/`command`/`uv run` wrappers and Python
 `-m`, qualified import, `__import__`, and `import_module` forms. Detection is
 independent of the outer wrapper executable once a protected lifecycle target
-is visible.
+is visible in an executable/module position. Read-only test, diff, and source
+inspection commands remain allowed. Inline Python checks also normalize simple
+string concatenation/qualified access that exposes a protected module or
+receipt-writer symbol.
 Claude `projects/*/<session>/subagents/agent-*.jsonl` transcripts are likewise
 classified as protected receipt provenance even though they live outside the
 repository; redirection, mutator verbs, and recognized inline Python writes to
