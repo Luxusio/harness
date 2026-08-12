@@ -30,6 +30,7 @@ try:
         current_session_id,
         now_iso,
         record_subagent_receipt,
+        receipt_snapshot,
         receipt_stream_savepoint,
         receipt_stream_transaction,
         extract_qa_verdict,
@@ -61,6 +62,9 @@ except Exception:  # pragma: no cover - imported only inside harness scripts
 
     def record_subagent_receipt(task_dir: str, receipt: dict[str, Any]) -> dict[str, Any]:
         return {}
+
+    def receipt_snapshot(task_dir: str):
+        return type("EmptySnapshot", (), {"entries": ()})()
 
     class _NullTransaction:
         def __enter__(self):
@@ -599,8 +603,28 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
                     or binding.get("run_id") != bound_run_id
                 ):
                     return result
+                existing = [
+                    item for item in receipt_snapshot(task_dir).entries
+                    if item.get("source") == identity["source"]
+                    and item.get("task_run_id") == bound_run_id
+                    and item.get("agent_id") == identity["agent_id"]
+                    and item.get("agent_type") == identity["agent_type"]
+                    and item.get("runtime_session_id") == identity["runtime_session_id"]
+                    and item.get("runtime_thread_id") == identity["runtime_thread_id"]
+                ]
+                by_event = {event: [item for item in existing if item.get("event") == event]
+                            for event in ("started", "completed")}
+                if existing and not (
+                    len(by_event["started"]) == 1 and len(by_event["completed"]) == 1
+                    and len(existing) == 2
+                ):
+                    raise RuntimeError("existing lifecycle receipt identity is incomplete or duplicated")
                 with receipt_stream_savepoint(task_dir):
-                    if result.get("started_from_stop"):
+                    if existing:
+                        started = by_event["started"][0]
+                        completion = by_event["completed"][0]
+                        result["subagent_receipt_id"] = started.get("receipt_id") or ""
+                    elif result.get("started_from_stop"):
                         started = record_subagent_receipt(
                             task_dir,
                             {
@@ -630,7 +654,7 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
                                 "summary": final_message,
                             },
                         )
-                _with_registry_lock(repo_root, mark)
+                    _with_registry_lock(repo_root, mark)
             if completion.get("receipt_id"):
                 result["completion_receipt_id"] = completion["receipt_id"]
     except Exception:

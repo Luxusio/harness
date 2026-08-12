@@ -230,32 +230,27 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
     visible = " ".join(non_env)
     protected_import = any(
         re.search(
-            rf"(?:^|[;\s])(?:from\s+{re.escape(name)}\s+import|import\s+{re.escape(name)}(?:\s|$|[;,]))",
+            rf"(?:^|[;\s])(?:from\s+(?:[A-Za-z_]\w*\.)*{re.escape(name)}\s+import|import\s+(?:[A-Za-z_]\w*\.)*{re.escape(name)}(?:\s|$|[;,]))",
             visible,
         )
         for name in LIFECYCLE_RECEIPT_MODULES
     )
     protected_import = protected_import or any(
-        re.search(rf"(?:__import__|import_module)\s*\(\s*['\"]{re.escape(name)}['\"]\s*\)", visible)
-        or re.search(rf"(?:^|\s)-m\s+{re.escape(name)}(?:\s|$)", visible)
+        re.search(rf"(?:__import__|import_module)\s*\(\s*['\"](?:[A-Za-z_]\w*\.)*{re.escape(name)}['\"]\s*\)", visible)
+        or re.search(rf"(?:^|\s)-m\s+(?:[A-Za-z_]\w*\.)*{re.escape(name)}(?:\s|$)", visible)
         for name in LIFECYCLE_RECEIPT_MODULES
     )
     if (
-        cmd in LIFECYCLE_RECEIPT_ENTRYPOINTS
-        or cmd.startswith(("python", "python3", "pypy"))
-        or cmd in {"bash", "sh"}
+        any(name in visible for name in LIFECYCLE_RECEIPT_ENTRYPOINTS)
+        or protected_import
+        or "record_subagent_receipt" in visible
     ):
-        if (
-            any(name in visible for name in LIFECYCLE_RECEIPT_ENTRYPOINTS)
-            or protected_import
-            or "record_subagent_receipt" in visible
-        ):
-            targets.append({
-                "path": "RECEIPTS.jsonl",
-                "category": "protected-artifact",
-                "method": "direct lifecycle receipt entrypoint invocation",
-            })
-            return
+        targets.append({
+            "path": "RECEIPTS.jsonl",
+            "category": "protected-artifact",
+            "method": "direct lifecycle receipt entrypoint invocation",
+        })
+        return
 
     if cmd == "sed" and any(t == "-i" or t.startswith("-i") for t in non_env[1:]):
         _append_target(

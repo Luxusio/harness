@@ -491,6 +491,82 @@ def test_stop_only_receipt_pair_failure_rolls_back_and_retries(tmp_path, monkeyp
     ]
 
 
+def test_stop_only_registry_commit_failure_rolls_back_and_retries(tmp_path, monkeypatch):
+    repo, task_dir = _repo(tmp_path)
+    session_id = "sess-registry-retry"
+    agent_id = "qa-cli-registry-retry"
+    final_message = "VERDICT: PASS"
+    _bind_session(repo, task_dir, session_id)
+    transcript = _write_agent_transcript(
+        tmp_path, monkeypatch, session_id, agent_id, final_message,
+    )
+    payload = {
+        "hook_event_name": "SubagentStop", "session_id": session_id,
+        "agent_id": agent_id, "agent_type": agent_id,
+        "agent_transcript_path": transcript, "last_assistant_message": final_message,
+    }
+    real_write = background_registry._write
+    calls = 0
+
+    def fail_registry_commit_once(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("injected registry publication failure")
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(background_registry, "_write", fail_registry_commit_once)
+    first = background_registry.mark_subagent_stop(repo, payload)
+    assert first["status"] == "receipt_pending"
+    assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
+
+    second = background_registry.mark_subagent_stop(repo, payload)
+    assert second["status"] == "done"
+    receipts = [
+        json.loads(line)
+        for line in (Path(task_dir) / "RECEIPTS.jsonl").read_text().splitlines()
+    ]
+    assert [(item["event"], item["verdict"]) for item in receipts] == [
+        ("started", ""), ("completed", "PASS"),
+    ]
+
+
+def test_concurrent_stop_only_events_publish_one_receipt_pair(tmp_path, monkeypatch):
+    repo, task_dir = _repo(tmp_path)
+    session_id = "sess-concurrent-stop"
+    agent_id = "qa-cli-concurrent-stop"
+    final_message = "VERDICT: PASS"
+    _bind_session(repo, task_dir, session_id)
+    transcript = _write_agent_transcript(
+        tmp_path, monkeypatch, session_id, agent_id, final_message,
+    )
+    payload = {
+        "hook_event_name": "SubagentStop", "session_id": session_id,
+        "agent_id": agent_id, "agent_type": agent_id,
+        "agent_transcript_path": transcript, "last_assistant_message": final_message,
+    }
+    results = []
+    threads = [
+        threading.Thread(target=lambda: results.append(
+            background_registry.mark_subagent_stop(repo, payload)
+        ))
+        for _ in range(2)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    receipts = [
+        json.loads(line)
+        for line in (Path(task_dir) / "RECEIPTS.jsonl").read_text().splitlines()
+    ]
+    assert [(item["event"], item["verdict"]) for item in receipts] == [
+        ("started", ""), ("completed", "PASS"),
+    ]
+    assert all(result["status"] in {"done", "duplicate_stop"} for result in results)
+
+
 def test_stop_only_fallback_rejects_missing_or_foreign_session(tmp_path, monkeypatch):
     repo, task_dir = _repo(tmp_path)
     _bind_session(repo, task_dir, "owner-session")

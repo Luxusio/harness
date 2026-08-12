@@ -125,6 +125,10 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 -m background_registry",
             "/usr/bin/env python3 plugin/scripts/background_registry.py",
             "uv run python3 plugin/scripts/background_hook.py --event stop",
+            "PYTHONPATH=plugin/scripts python3 -c 'import plugin.scripts.background_registry as b'",
+            "python3 -m plugin.scripts.background_registry",
+            "/usr/bin/env -u X python3 plugin/scripts/background_hook.py --event stop",
+            "uv --directory . run python3 plugin/scripts/background_hook.py --event stop",
             "python3 -c 'from _lib import record_subagent_receipt'",
         ):
             with self.subTest(command=command):

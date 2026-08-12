@@ -58,7 +58,9 @@ and direct imports of `record_subagent_receipt` are runtime-owned receipt
 capabilities. A model-issued Bash command may not invoke them directly; only
 the configured runtime lifecycle hooks/watchers may author those events.
 Detection normalizes common `env`/`command`/`uv run` wrappers and Python
-`-m`, import, `__import__`, and `import_module` forms.
+`-m`, qualified import, `__import__`, and `import_module` forms. Detection is
+independent of the outer wrapper executable once a protected lifecycle target
+is visible.
 Claude `projects/*/<session>/subagents/agent-*.jsonl` transcripts are likewise
 classified as protected receipt provenance even though they live outside the
 repository; redirection, mutator verbs, and recognized inline Python writes to
