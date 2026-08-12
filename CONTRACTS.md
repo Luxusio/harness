@@ -218,6 +218,9 @@ and scope drift are developer-owned risks.
 `doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md`; receipt
 storage/schema/gates are owned by
 `doc/harness/patterns/ADR__consolidated-task-artifacts.md`.
+Claude builds that omit `SubagentStart` may derive the ordered started/completed
+pair from one official-identity `SubagentStop` bound to the session's current
+active task; unmatched or unbound stops never authorize PASS.
 
 ### C-14a
 

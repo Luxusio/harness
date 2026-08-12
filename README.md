@@ -142,8 +142,8 @@ All under `plugin/scripts/`. Stdlib only.
 | `hygiene_followup.py` | Post-close scheduler that creates one standalone hygiene review task from pending items | `doc/harness/tasks/TASK__hygiene-review-pending-docs/` |
 | `hygiene_restore.py` | Restore an archived file back to original location via `git mv` | — |
 | `maintain_restore.py` | Legacy wrapper for old archive restore commands | — |
-| `background_registry.py` | Shared registry for Claude subagent lifecycle records used by Stop hook auto-wait | `doc/harness/runtime/background.json` |
-| `background_hook.py` | SubagentStart/SubagentStop hook adapter for `background_registry.py` | `doc/harness/runtime/background.json` |
+| `background_registry.py` | Shared Claude subagent lifecycle registry; stop-only runtimes infer the ordered receipt pair from an identity-bound stop | `doc/harness/runtime/background.json`, task `RECEIPTS.jsonl` |
+| `background_hook.py` | SubagentStart/SubagentStop adapter, including authoritative stop-only receipt fallback | `doc/harness/runtime/background.json`, task `RECEIPTS.jsonl` |
 | `_gate_response.py` | Shared hook deny/allow response helper | — |
 | `verification_gap_check.py` | Resume-time warning for missing verification evidence | — |
 | `drift_warn.py` | SessionStart drift detector: reminds dev-of-harness users when installed plugin lags source (silent in non-dev / non-harness repos) | — |
@@ -166,7 +166,7 @@ The post-close self-improvement pass in the Goal child-task executor auto-promot
 |------|--------|---------|
 | Stop | `stop_gate.py` | Warn if open tasks remain |
 | SubagentStart | `background_hook.py` | Register active Claude subagent work for Stop hook auto-wait |
-| SubagentStop | `background_hook.py` | Mark Claude subagent work complete |
+| SubagentStop | `background_hook.py` | Mark Claude work complete; infer the correlated start when this runtime emitted no start event |
 | PreToolUse (direct writes) | `prewrite_gate.py` | Artifact ownership + plan-first rule |
 | PreToolUse (selected mutation/lifecycle tools) | `hook_pre_tool_use.py` | Codex wrapper for direct-write/Bash gates and spawn registration recovery |
 | PreToolUse (Bash) | `mcp_bash_guard.py` | Block Bash-layer mutations of source / protected / workflow-control paths |

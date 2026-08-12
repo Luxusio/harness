@@ -331,8 +331,9 @@ def test_prune_marks_stale_and_caps_records(tmp_path):
     assert all("agent-" in r["id"] for r in pruned["records"])
 
 
-def test_unmatched_stop_records_nonblocking_diagnostic(tmp_path):
-    repo, _task_dir = _repo(tmp_path)
+def test_unmatched_stop_without_active_task_records_nonblocking_diagnostic(tmp_path):
+    repo, task_dir = _repo(tmp_path)
+    (Path(task_dir).parent / ".active").unlink()
     record = background_registry.mark_subagent_stop(
         repo,
         {
@@ -348,6 +349,39 @@ def test_unmatched_stop_records_nonblocking_diagnostic(tmp_path):
     assert record["transcript_path"] == "/tmp/missing.jsonl"
     assert "diff_fingerprint" not in record
     assert background_registry.active_records(repo, task_id="TASK__bg", session_id="sess-1") == []
+
+
+def test_stop_only_runtime_records_complete_current_task_lifecycle(tmp_path):
+    repo, task_dir = _repo(tmp_path)
+    stopped = background_registry.mark_subagent_stop(
+        repo,
+        {
+            "hook_event_name": "SubagentStop",
+            "session_id": "sess-stop-only",
+            "agent_id": "qa-cli-stop-only",
+            "agent_type": "qa-cli-stop-only",
+            "cwd": repo,
+            "agent_transcript_path": "/tmp/qa-stop-only.jsonl",
+            "last_assistant_message": "VERDICT: PASS\nfocused checks passed",
+        },
+    )
+
+    assert stopped["status"] == "done"
+    assert stopped["started_from_stop"] is True
+    assert stopped["task_id"] == "TASK__bg"
+    assert stopped["task_dir"] == task_dir
+    assert stopped["subagent_receipt_id"].startswith("subagent-")
+    assert stopped["completion_receipt_id"].startswith("subagent-")
+    receipts = [
+        json.loads(line)
+        for line in (Path(task_dir) / "RECEIPTS.jsonl").read_text().splitlines()
+    ]
+    assert [(item["event"], item["verdict"]) for item in receipts] == [
+        ("started", ""), ("completed", "PASS"),
+    ]
+    assert all(item["task_run_id"] == _lib.read_task_control(task_dir)["run_id"] for item in receipts)
+    assert all(item["runtime_session_id"] == "sess-stop-only" for item in receipts)
+    assert all(item["runtime_thread_id"] == "qa-cli-stop-only" for item in receipts)
 
 
 def test_stop_without_agent_id_does_not_close_random_active_record(tmp_path):

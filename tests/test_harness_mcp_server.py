@@ -600,6 +600,32 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertNotIn("Correct the named selector", payload["next_action"])
             self.assertEqual(state.read_bytes(), before)
 
+    def test_fresh_task_start_rejects_directory_replacement_before_publication(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "doc/harness/tasks/TASK__fresh-race"
+            real_atomic_write = harness_lib._atomic_text_write
+            displaced = task_dir.with_name("TASK__fresh-race-displaced")
+            raced = False
+
+            def replace_task_dir(path, text):
+                nonlocal raced
+                if not raced and Path(path).name == "TASK.json":
+                    raced = True
+                    task_dir.rename(displaced)
+                    task_dir.symlink_to(displaced, target_is_directory=True)
+                return real_atomic_write(path, text)
+
+            with (
+                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
+                mock.patch.object(
+                    harness_lib, "_atomic_text_write", side_effect=replace_task_dir,
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "integrity"):
+                    harness_server.handle_task_start({"task_id": "TASK__fresh-race"})
+
+            self.assertFalse((displaced / "TASK.json").exists())
+
     def test_task_selectors_accept_canonical_paths_and_reject_mismatch_or_symlink(self):
         with tempfile.TemporaryDirectory() as tmp:
             task = Path(self._make_task(tmp, "TASK__safe"))
@@ -1484,7 +1510,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 harness_server.read_task_control(str(terminal_task)), original
             )
 
-    def test_old_only_pack_is_replaced_by_task_json_and_legacy_leaves_removed(self):
+    def test_old_only_pack_starts_fresh_without_migrating_legacy_leaves(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._run_git(tmp, "init", "-q")
             self._run_git(tmp, "config", "user.email", "a@b")
@@ -1501,7 +1527,6 @@ class HarnessMcpServerTests(unittest.TestCase):
             )
             for name in obsolete:
                 (task_dir / name).write_text("legacy\n", encoding="utf-8")
-            (task_dir / "RECEIPTS.jsonl").write_text("legacy\n", encoding="utf-8")
             with (
                 mock.patch.object(
                     harness_server, "canonical_task_dir", return_value=str(task_dir)
@@ -1513,9 +1538,8 @@ class HarnessMcpServerTests(unittest.TestCase):
                 )
             self.assertNotIn("isError", result)
             self.assertTrue(harness_server.read_task_control(str(task_dir)))
-            self.assertFalse((task_dir / "RECEIPTS.jsonl").exists())
             for name in obsolete:
-                self.assertFalse((task_dir / name).exists())
+                self.assertEqual((task_dir / name).read_text(), "legacy\n")
 
     def test_failed_resume_preserves_preexisting_active_marker(self):
         with tempfile.TemporaryDirectory() as tmp:

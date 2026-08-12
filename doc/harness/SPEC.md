@@ -135,6 +135,11 @@ for the current task run can close the task; a start or self-authored result
 cannot. Acceptance intent remains in `PLAN.md`, and later source drift is
 developer-owned.
 
+On Claude builds that deliver `SubagentStop` but no `SubagentStart`, the stop
+hook binds official agent/session identity to the current active task and emits
+the correlated inferred-start/completed receipt pair. No active binding or no
+official identity remains a non-authorizing unmatched-stop diagnostic.
+
 Receipt storage, minimal schema, immutable snapshot, and gate semantics are
 normatively defined by
 [ADR__consolidated-task-artifacts.md](patterns/ADR__consolidated-task-artifacts.md).

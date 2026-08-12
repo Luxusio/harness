@@ -27,6 +27,7 @@ try:
         current_session_id,
         now_iso,
         record_subagent_receipt,
+        receipt_stream_transaction,
         extract_qa_verdict,
         resolve_active_task_dir,
     )
@@ -44,6 +45,16 @@ except Exception:  # pragma: no cover - imported only inside harness scripts
 
     def record_subagent_receipt(task_dir: str, receipt: dict[str, Any]) -> dict[str, Any]:
         return {}
+
+    class _NullTransaction:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def receipt_stream_transaction(task_dir: str):
+        return _NullTransaction()
 
     def extract_qa_verdict(value: str) -> str:
         return ""
@@ -270,6 +281,8 @@ def register_subagent_start(
                 "agent_type": _agent_type(payload),
                 "summary": "subagent start hook observed",
                 "transcript_path": _payload_value(payload, "agent_transcript_path", "transcript_path"),
+                "runtime_session_id": sid,
+                "runtime_thread_id": aid,
             },
         )
         if receipt.get("receipt_id"):
@@ -283,6 +296,12 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
     """Mark a subagent done by official agent_id/session_id fields."""
     sid = _session_id(payload)
     aid = _agent_id(payload)
+    stop_message = _payload_value(payload, "last_assistant_message")
+    stop_verdict = extract_qa_verdict(stop_message)
+    fallback_task_dir = (
+        resolve_active_task_dir(repo_root, session_id=sid)
+        if aid and stop_verdict else ""
+    )
     def mark(data: dict[str, Any]):
         candidates: list[dict[str, Any]] = []
         for record in data["records"]:
@@ -291,6 +310,37 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
             if aid and record.get("id") == aid and record.get("session_id") == sid:
                 candidates.append(record)
         if not candidates:
+            if fallback_task_dir:
+                ts = _now()
+                transcript = _payload_value(
+                    payload, "agent_transcript_path", "transcript_path"
+                )
+                last = stop_message
+                inferred = {
+                    "id": aid,
+                    "kind": "subagent",
+                    "status": "done",
+                    "reason": (
+                        "SubagentStop supplied the authoritative lifecycle event; "
+                        "this runtime emitted no matching SubagentStart."
+                    ),
+                    "session_id": sid,
+                    "task_id": _task_id_from_dir(fallback_task_dir),
+                    "task_dir": fallback_task_dir,
+                    "agent_id": aid,
+                    "agent_type": _agent_type(payload),
+                    "event": _event_name(payload) or "SubagentStop",
+                    "started_from_stop": True,
+                    "updated_at": now_iso(),
+                    "updated_ts": ts,
+                    "stop_hook_active": bool(payload.get("stop_hook_active")),
+                }
+                if transcript:
+                    inferred["transcript_path"] = transcript
+                if last:
+                    inferred["last_assistant_message"] = last[:500]
+                data["records"].append(inferred)
+                return inferred
             diag = _diagnostic_record(
                 payload,
                 status="unmatched_stop",
@@ -319,18 +369,36 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
         final_message = result.get("last_assistant_message") or ""
         verdict = extract_qa_verdict(final_message)
         if result.get("status") == "done" and result.get("task_dir"):
-            completion = record_subagent_receipt(
-                result.get("task_dir") or "",
-                {
-                    "source": "subagent_stop_hook",
-                    "event": "completed",
-                    "agent_id": result.get("id") or aid,
-                    "agent_type": result.get("agent_type") or _agent_type(payload),
-                    "verdict": verdict or "UNKNOWN",
-                    "summary": final_message,
-                    "transcript_path": result.get("transcript_path") or "",
-                },
-            )
+            task_dir = result.get("task_dir") or ""
+            identity = {
+                "source": "subagent_stop_hook",
+                "agent_id": result.get("id") or aid,
+                "agent_type": result.get("agent_type") or _agent_type(payload),
+                "transcript_path": result.get("transcript_path") or "",
+                "runtime_session_id": sid,
+                "runtime_thread_id": result.get("id") or aid,
+            }
+            with receipt_stream_transaction(task_dir):
+                if result.get("started_from_stop"):
+                    started = record_subagent_receipt(
+                        task_dir,
+                        {
+                            **identity,
+                            "event": "started",
+                            "summary": "subagent start inferred from authoritative stop hook",
+                        },
+                    )
+                    if started.get("receipt_id"):
+                        result["subagent_receipt_id"] = started["receipt_id"]
+                completion = record_subagent_receipt(
+                    task_dir,
+                    {
+                        **identity,
+                        "event": "completed",
+                        "verdict": verdict or "UNKNOWN",
+                        "summary": final_message,
+                    },
+                )
             if completion.get("receipt_id"):
                 result["completion_receipt_id"] = completion["receipt_id"]
     except Exception:

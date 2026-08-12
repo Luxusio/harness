@@ -72,6 +72,16 @@ Entries correlate by `task_run_id`, `agent_id`, `agent_type`, `lens`, and the
 exact supplied runtime identity. Append position establishes lifecycle order
 and review-before-QA order; wall-clock comparison does not.
 
+Claude runtimes that emit `SubagentStop` without a preceding `SubagentStart`
+use the stop hook as the authoritative lifecycle observation. When the stop
+contains official `agent_id` and `session_id` fields and resolves to that
+session's current active task, the hook appends a correlated inferred
+`started` entry immediately followed by the explicit `completed` entry. The
+completion verdict still comes only from the unique canonical first line of
+`last_assistant_message`; missing identity, active-task binding, or canonical
+verdict cannot yield PASS. This preserves the ordered receipt schema without
+requiring an event the runtime does not deliver.
+
 Old-schema entries in `RECEIPTS.jsonl` are rejected with an actionable message
 to start a fresh task run or reset the unsupported stream. They are not
 normalized, migrated, or partially accepted.

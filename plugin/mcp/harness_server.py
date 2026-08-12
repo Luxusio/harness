@@ -21,16 +21,6 @@ SCRIPTS_DIR = PLUGIN_ROOT / "scripts"
 
 SUPPORTED_PROTOCOLS = ("2025-11-25", "2025-06-18")
 SERVER_INFO = {"name": "harness", "title": "harness Control Plane", "version": "2.0.0"}
-OBSOLETE_TASK_ARTIFACTS = (
-    "TASK_STATE.yaml",
-    "TASK_RUN.json",
-    "PLAN.meta.json",
-    "TASK_CLOSE_RECEIPT.json",
-    "INSTALL_RECEIPT.json",
-    "AUDIT_TRAIL.md",
-    "ENVIRONMENT_SNAPSHOT.md",
-    ".receipts.lock",
-)
 
 
 def _runtime_from_initialize(params: dict) -> str:
@@ -271,13 +261,15 @@ def handle_task_start(args: dict) -> dict:
     repo_root = _control_root()
     task_dir = canonical_task_dir(task_id=ti, slug=sl, task_dir=td, repo_root=repo_root)
     tid = canonical_task_id(task_dir=task_dir, repo_root=repo_root)
+    os.makedirs(task_dir, exist_ok=True)
+    transaction_stack = ExitStack()
+    transaction_stack.enter_context(receipt_stream_transaction(task_dir))
     existing_control_path = task_control_file(task_dir)
     resumed_existing = os.path.lexists(existing_control_path)
-    preexisting_pack = os.path.isdir(task_dir)
     prior_marker_snapshot = active_marker_snapshot(repo_root)
     if resumed_existing:
         if not read_task_control(task_dir):
-            return _err(
+            result = _err(
                 "task_start refused invalid TASK.json: unsupported task-control schema or unsafe control",
                 data={
                     "task_dir": task_dir,
@@ -287,6 +279,8 @@ def handle_task_start(args: dict) -> dict:
                     ),
                 },
             )
+            transaction_stack.close()
+            return result
     request_text = ""
     if rf:
         rp = rf if os.path.isabs(rf) else os.path.join(repo_root, rf)
@@ -298,17 +292,17 @@ def handle_task_start(args: dict) -> dict:
                 pass
 
     warnings = []
-    scaffold = ensure_task_scaffold(
-        task_dir, tid, request_text=request_text, repo_root=repo_root,
-        execution_mode=execution_mode or "standard",
-    )
-    transaction_stack = ExitStack()
-    if resumed_existing:
-        transaction_stack.enter_context(receipt_stream_transaction(task_dir))
+    try:
+        scaffold = ensure_task_scaffold(
+            task_dir, tid, request_text=request_text, repo_root=repo_root,
+            execution_mode=execution_mode or "standard",
+        )
+    except BaseException:
+        transaction_stack.close()
+        raise
     original_resumed_control = read_task_control(task_dir) if resumed_existing else {}
     terminal_receipt_snapshot = {}
     task_control_snapshot = {}
-    obsolete_artifact_snapshot = {}
     blocked_artifact_snapshot = {}
 
     def rollback_new_start():
@@ -321,13 +315,11 @@ def handle_task_start(args: dict) -> dict:
             restore_active_marker_snapshot(prior_marker_snapshot)
             return
         cleanup = list(scaffold.get("created") or [])
-        for artifact in cleanup:
-            try:
-                os.unlink(artifact)
-            except FileNotFoundError:
-                pass
+        _restore_text_snapshots({
+            artifact: {"exists": False, "kind": "absent", "text": ""}
+            for artifact in cleanup
+        })
         restore_receipt_streams(terminal_receipt_snapshot)
-        _restore_text_snapshots(obsolete_artifact_snapshot)
         restore_active_marker_snapshot(prior_marker_snapshot)
 
     try:
@@ -341,23 +333,13 @@ def handle_task_start(args: dict) -> dict:
             else:
                 raise RuntimeError("task_start refused invalid terminal task artifacts")
         terminal_resume = terminal_resume_status in {"blocked", "closed"}
-        fresh_old_pack = not resumed_existing and preexisting_pack
         if resumed_existing:
             _, task_control_snapshot = begin_task_run(task_dir)
             resumed = read_task_control(task_dir)
-        if resumed_existing or fresh_old_pack:
+        if resumed_existing:
             # Every task_start resume is a new lifecycle generation and must
             # not inherit evidence collected for the previous run identity.
             terminal_receipt_snapshot = reset_receipt_streams_for_new_run(task_dir)
-        if fresh_old_pack:
-            for name in OBSOLETE_TASK_ARTIFACTS:
-                path = os.path.join(task_dir, name)
-                obsolete_artifact_snapshot[path] = _strict_regular_text_snapshot(
-                    path, max_size=1024 * 1024,
-                )
-            for path, prior in obsolete_artifact_snapshot.items():
-                if prior["exists"]:
-                    os.unlink(path)
         if execution_mode and resumed.get("execution_mode") != execution_mode:
             resumed["execution_mode"] = execution_mode
             write_task_control(task_dir, resumed)
