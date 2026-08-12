@@ -69,6 +69,24 @@ class TestDenyProtectedArtifact(unittest.TestCase):
         self.assertEqual(decision, "deny")
         self.assertIn("runtime-owned receipt provenance", reason)
 
+    def test_symlinked_runtime_roots_protect_physical_transcripts(self):
+        for env_name, subtree in (
+            ("CODEX_HOME", "sessions/2026/08/13/rollout-runtime-thread.jsonl"),
+            ("CLAUDE_CONFIG_DIR", "projects/project/session/subagents/agent-review.jsonl"),
+        ):
+            with self.subTest(env_name=env_name), tempfile.TemporaryDirectory() as tmp:
+                physical = os.path.join(tmp, "physical")
+                alias = os.path.join(tmp, "alias")
+                os.makedirs(physical)
+                os.symlink(physical, alias, target_is_directory=True)
+                target = os.path.join(physical, subtree)
+                r = invoke_hook(
+                    GATE, "Write", {"file_path": target}, env_extra={env_name: alias},
+                )
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("runtime-owned receipt provenance", reason)
+
     def test_write_plan_md_inside_task_denies(self):
         with scratch_task_in_real_repo("pr1-protected") as task_dir:
             plan = os.path.join(task_dir, "PLAN.md")

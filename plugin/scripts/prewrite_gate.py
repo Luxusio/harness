@@ -153,8 +153,8 @@ def _is_claude_subagent_transcript(path):
     """Return True for the runtime-owned Claude subagent transcript surface."""
     if not path:
         return False
-    candidate = os.path.abspath(os.path.expanduser(str(path)))
-    config_root = os.path.abspath(os.path.expanduser(
+    candidate = os.path.realpath(os.path.expanduser(str(path)))
+    config_root = os.path.realpath(os.path.expanduser(
         os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude"
     ))
     projects_root = os.path.join(config_root, "projects")
@@ -174,8 +174,8 @@ def _is_codex_rollout(path):
     """Return True for runtime-owned Codex session rollout provenance."""
     if not path:
         return False
-    candidate = os.path.abspath(os.path.expanduser(str(path)))
-    codex_root = os.path.abspath(os.path.expanduser(
+    candidate = os.path.realpath(os.path.expanduser(str(path)))
+    codex_root = os.path.realpath(os.path.expanduser(
         os.environ.get("CODEX_HOME") or "~/.codex"
     ))
     sessions_root = os.path.join(codex_root, "sessions")
