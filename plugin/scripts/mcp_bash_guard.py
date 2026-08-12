@@ -61,7 +61,7 @@ LIFECYCLE_RECEIPT_ENTRYPOINTS = {
 }
 LIFECYCLE_RECEIPT_MODULES = {
     os.path.splitext(name)[0] for name in LIFECYCLE_RECEIPT_ENTRYPOINTS
-} | {"_lib"}
+}
 RECEIPT_MUTATION_SYMBOLS = {
     "record_subagent_receipt", "reset_receipt_streams_for_new_run",
     "restore_receipt_streams", "release_receipt_stream_reset",
@@ -310,7 +310,7 @@ def _python_code_exposes_lifecycle(code):
     return False
 
 
-def _protected_lifecycle_execution(argv):
+def _protected_lifecycle_execution(argv, execution_cwd=""):
     if not argv:
         return False
     cmd = os.path.basename(argv[0])
@@ -344,14 +344,17 @@ def _protected_lifecycle_execution(argv):
         if os.path.basename(script) in LIFECYCLE_RECEIPT_ENTRYPOINTS:
             return True
         if script:
+            inspected_script = script if os.path.isabs(script) else os.path.join(
+                execution_cwd or os.getcwd(), script,
+            )
             try:
-                info = os.lstat(script)
+                info = os.lstat(inspected_script)
                 if (
                     stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
                     and info.st_nlink == 1 and not info.st_mode & 0o022
                     and info.st_size <= _COMMAND_LENGTH_CAP
                 ):
-                    with open(script, "r", encoding="utf-8") as handle:
+                    with open(inspected_script, "r", encoding="utf-8") as handle:
                         code = handle.read(_COMMAND_LENGTH_CAP + 1)
                     if len(code) <= _COMMAND_LENGTH_CAP and _python_code_exposes_lifecycle(code):
                         return True
@@ -419,7 +422,7 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
     )
     if (
         (protected_marker and not _safe_lifecycle_source_inspection(non_env))
-        or _protected_lifecycle_execution(non_env)
+        or _protected_lifecycle_execution(non_env, execution_cwd)
     ):
         targets.append({
             "path": "RECEIPTS.jsonl",

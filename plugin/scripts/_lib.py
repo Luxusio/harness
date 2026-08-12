@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from types import MappingProxyType
+from types import CodeType, MappingProxyType
 
 TASK_DIR = "doc/harness/tasks"
 MANIFEST_PATH = "doc/harness/manifest.yaml"
@@ -2452,11 +2452,18 @@ def _receipt_snapshot_unlocked(task_dir):
         except UnicodeError as exc:
             raise RuntimeError("receipt storage integrity unavailable") from exc
     entries = []
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate receipt key: {key}")
+            result[key] = value
+        return result
     for line in text.splitlines():
         if not line.strip():
             continue
         try:
-            item = json.loads(line)
+            item = json.loads(line, object_pairs_hook=unique_object)
         except Exception as exc:
             raise RuntimeError("receipt storage integrity unavailable") from exc
         if not isinstance(item, dict):
@@ -2657,6 +2664,42 @@ def _make_runtime_receipt_writer():
                 if owner is None:
                     break
             info = os.lstat(expected_path)
+            source_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+            source_flags |= getattr(os, "O_NOFOLLOW", 0)
+            source_fd = os.open(expected_path, source_flags)
+            try:
+                opened_info = os.fstat(source_fd)
+                chunks = []
+                while True:
+                    chunk = os.read(source_fd, 64 * 1024)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+                final_info = os.fstat(source_fd)
+            finally:
+                os.close(source_fd)
+            source_identity = lambda value: (
+                value.st_dev, value.st_ino, value.st_size, value.st_mode,
+                value.st_uid, value.st_nlink, value.st_mtime_ns, value.st_ctime_ns,
+            )
+            final_path_info = os.lstat(expected_path)
+            if (
+                (info.st_dev, info.st_ino) != (opened_info.st_dev, opened_info.st_ino)
+                or source_identity(opened_info) != source_identity(final_info)
+                or (final_path_info.st_dev, final_path_info.st_ino) != (info.st_dev, info.st_ino)
+            ):
+                raise PermissionError("receipt adapter source changed during binding")
+            canonical_root = compile(b"".join(chunks), expected_path, "exec")
+            candidates = []
+            pending = [canonical_root]
+            while pending:
+                candidate = pending.pop()
+                if candidate.co_qualname == function.__qualname__:
+                    candidates.append(candidate)
+                pending.extend(
+                    value for value in candidate.co_consts
+                    if isinstance(value, CodeType)
+                )
             if (
                 caller is None
                 or caller.f_code.co_name != "<module>"
@@ -2666,6 +2709,8 @@ def _make_runtime_receipt_writer():
                 or module_path != expected_path
                 or os.path.realpath(function.__code__.co_filename) != expected_path
                 or owner is not function
+                or len(candidates) != 1
+                or candidates[0] != function.__code__
                 or not stat.S_ISREG(info.st_mode)
                 or info.st_uid != os.getuid()
                 or info.st_nlink != 1
@@ -2748,6 +2793,8 @@ def _make_runtime_receipt_writer():
         payload = (json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
         with receipt_stream_transaction(task_dir):
             control = read_task_control(task_dir)
+            if str(control.get("run_id") or "") != task_run_id:
+                raise RuntimeError("receipt task run changed before append")
             if task_control_status(task_dir, control) in {"closed", "blocked", "invalid"}:
                 raise RuntimeError("receipt stream is terminal")
             dir_fd = _receipt_dir_fd(task_dir)

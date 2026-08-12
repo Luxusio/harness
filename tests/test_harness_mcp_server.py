@@ -1393,6 +1393,30 @@ class HarnessMcpServerTests(unittest.TestCase):
             )
             self.assertFalse(receipts.exists())
 
+    def test_verify_and_close_reject_duplicate_receipt_keys(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_id = "TASK__duplicate-receipt-keys"
+            task_dir = self._make_task(tmp, task_id)
+            run_id = harness_server.read_task_control(task_dir)["run_id"]
+            (Path(task_dir) / "RECEIPTS.jsonl").write_text(
+                '{"ts":"2026-08-12T00:00:00Z","event":"started",'
+                '"event":"completed","source":"test_fixture",'
+                f'"task_run_id":"{run_id}","runtime_id":"test:dup",'
+                '"agent_id":"dup","agent_type":"qa-cli","lens":"qa-cli",'
+                '"verdict":"PASS","summary":"VERDICT: PASS\\nDETAIL_SHA256:'
+                + "0" * 64 + '"}\n',
+                encoding="utf-8",
+            )
+
+            for tool in ("task_verify", "task_close"):
+                with self.subTest(tool=tool):
+                    result = self._call_in_repo(tmp, tool, {"task_id": task_id})
+                    self.assertTrue(result["isError"])
+                    self.assertIn(
+                        "receipt storage integrity unavailable",
+                        result["content"][0]["text"],
+                    )
+
     def test_task_start_resume_waits_for_task_transaction(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__resume-serialized")

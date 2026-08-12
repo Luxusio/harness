@@ -320,6 +320,27 @@ def test_raw_receipt_append_primitive_is_not_exposed():
     assert not hasattr(lib, "_append_receipt_stream")
 
 
+def test_receipt_snapshot_rejects_duplicate_json_keys(tmp_path):
+    task = _task(tmp_path)
+    run_id = lib.read_task_control(task)["run_id"]
+    line = (
+        '{"ts":"2026-08-12T00:00:00Z","event":"started",'
+        '"event":"completed","source":"test_fixture",'
+        f'"task_run_id":"{run_id}","runtime_id":"test:dup",'
+        '"agent_id":"dup","agent_type":"qa-cli","lens":"qa-cli",'
+        '"verdict":"PASS","summary":"VERDICT: PASS\\nDETAIL_SHA256:'
+        + "0" * 64 + '"}\n'
+    )
+    (task / lib.RECEIPTS_NAME).write_text(line, encoding="utf-8")
+
+    try:
+        lib.receipt_snapshot(task)
+    except RuntimeError as exc:
+        assert "integrity unavailable" in str(exc)
+    else:
+        raise AssertionError("duplicate receipt key was accepted")
+
+
 def test_qa_start_must_match_completion_and_follow_review(tmp_path):
     early = _task(tmp_path / "early")
     _receipt(early, "qa-cli", "qa-early", "started")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import os
 import subprocess
 import sys
@@ -9,6 +10,7 @@ import threading
 from types import FunctionType
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from conftest import SCRIPTS_DIR
 
@@ -146,6 +148,38 @@ def test_cloned_bound_adapter_with_foreign_globals_cannot_append(tmp_path):
         assert "runtime-owned" in str(exc)
     else:
         raise AssertionError("cloned adapter code authorized a receipt append")
+    assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
+
+
+def test_start_rechecks_run_after_receipt_lock_acquisition(tmp_path):
+    repo, task_dir = _repo(tmp_path)
+    _bind(repo, task_dir, "sess-race")
+    real_read = _lib.read_task_control
+    writer_calls = 0
+
+    def rotate_on_writer_recheck(path):
+        nonlocal writer_calls
+        control = real_read(path)
+        in_writer = any(frame.function == "record" for frame in inspect.stack())
+        if in_writer:
+            writer_calls += 1
+        if writer_calls == 2:
+            rotated = dict(control)
+            rotated["run_id"] = _lib.new_uuid7()
+            _lib.write_task_control(path, rotated)
+            return rotated
+        return control
+
+    with mock.patch.object(_lib, "read_task_control", side_effect=rotate_on_writer_recheck):
+        try:
+            subagent_lifecycle.register_subagent_start(repo, {
+                "session_id": "sess-race", "agent_id": "agent-race",
+                "agent_type": "harness:qa-cli",
+            })
+        except RuntimeError as exc:
+            assert "task run changed" in str(exc)
+        else:
+            raise AssertionError("old-run receipt crossed a run rotation")
     assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
 
 

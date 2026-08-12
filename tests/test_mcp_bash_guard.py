@@ -190,6 +190,17 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             self.assertEqual(decision, "deny")
             self.assertIn("lifecycle receipt entrypoint", reason)
 
+    def test_legitimate_lib_consumers_remain_allowed(self):
+        for script in (
+            "plugin/scripts/install_verified.py",
+            "plugin/scripts/health.py",
+            "plugin/scripts/verification_gap_check.py",
+        ):
+            with self.subTest(script=script):
+                r = _run_bash(f"python3 {script} --help")
+                decision, _ = parse_decision(r.stdout)
+                self.assertIsNone(decision)
+
     def test_redirect_into_subagent_receipt_denies_with_hook_hint(self):
         with scratch_task_in_real_repo("receipt-prot") as task_dir:
             receipt = os.path.join(task_dir, "RECEIPTS.jsonl")
@@ -259,7 +270,7 @@ class TestNestedShellHandling(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             helper = Path(tmp) / "innocent.py"
             helper.write_text(
-                "import _lib\nprint(_lib.__dict__)\n", encoding="utf-8",
+                "import _lib\nprint(_lib.record_subagent_receipt)\n", encoding="utf-8",
             )
             r = _run_bash(f"bash -c 'python3 {helper}'")
             decision, reason = parse_decision(r.stdout)

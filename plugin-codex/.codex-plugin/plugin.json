@@ -1,6 +1,6 @@
 {
   "name": "harness",
-  "version": "2.3.0+codex.20260812140949",
+  "version": "2.3.0+codex.20260812143012",
   "description": "Execution harness for AI-assisted repository work \u2014 Codex CLI runtime. Mirrors plugin/ for Claude Code; both consume the same MCP server and Python scripts.",
   "author": {
     "name": "Luxus",
