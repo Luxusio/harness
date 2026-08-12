@@ -10,9 +10,11 @@ from __future__ import annotations
 import json
 import os
 import hashlib
+import re
 import tempfile
 import threading
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 try:
@@ -30,6 +32,9 @@ try:
         receipt_stream_transaction,
         extract_qa_verdict,
         resolve_active_task_dir,
+        resolve_session_task_binding,
+        read_task_control,
+        task_run_started_at,
     )
 except Exception:  # pragma: no cover - imported only inside harness scripts
     TASK_DIR = "doc/harness/tasks"
@@ -41,6 +46,15 @@ except Exception:  # pragma: no cover - imported only inside harness scripts
         return "unknown"
 
     def resolve_active_task_dir(repo_root: str | None = None, session_id: str | None = None) -> str:
+        return ""
+
+    def resolve_session_task_binding(repo_root: str, session_id: str) -> dict[str, str]:
+        return {}
+
+    def read_task_control(task_dir: str) -> dict[str, Any]:
+        return {}
+
+    def task_run_started_at(control: dict[str, Any]) -> str:
         return ""
 
     def record_subagent_receipt(task_dir: str, receipt: dict[str, Any]) -> dict[str, Any]:
@@ -169,6 +183,103 @@ def _session_id(payload: dict[str, Any]) -> str:
     return _payload_value(payload, "session_id", "sessionId") or current_session_id()
 
 
+def _official_stop_identity(payload: dict[str, Any]) -> tuple[str, str]:
+    sid = payload.get("session_id")
+    aid = payload.get("agent_id")
+    if not isinstance(sid, str) or not isinstance(aid, str):
+        return "", ""
+    sid = sid.strip()
+    aid = aid.strip()
+    if (
+        not sid or not aid or sid == "default"
+        or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-" for ch in sid)
+        or any(ch not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.:-" for ch in aid)
+    ):
+        return "", ""
+    return sid, aid
+
+
+def _trusted_stop_provenance(
+    payload: dict[str, Any], sid: str, aid: str, run_id: str,
+) -> tuple[str, str]:
+    """Return transcript path/type only when runtime start and final text prove the stop."""
+    raw_path = payload.get("agent_transcript_path")
+    final_message = payload.get("last_assistant_message")
+    if not isinstance(raw_path, str) or not isinstance(final_message, str) or not final_message:
+        return "", ""
+    path = os.path.realpath(raw_path)
+    claude_root = os.path.realpath(
+        os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+    )
+    projects_root = os.path.join(claude_root, "projects")
+    try:
+        if os.path.commonpath((projects_root, path)) != projects_root:
+            return "", ""
+        rel = os.path.relpath(path, projects_root).split(os.sep)
+        if len(rel) < 4 or rel[-3:] != [sid, "subagents", f"agent-{aid}.jsonl"]:
+            return "", ""
+        before = os.lstat(path)
+        if (
+            os.path.islink(path) or not os.path.isfile(path)
+            or before.st_uid != os.getuid() or before.st_nlink != 1
+            or before.st_mode & 0o022 or before.st_size > 64 * 1024 * 1024
+        ):
+            return "", ""
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags)
+        with os.fdopen(fd, encoding="utf-8") as handle:
+            lines = handle.readlines()
+        after = os.lstat(path)
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+            after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns,
+        ):
+            return "", ""
+        run_time = datetime.fromisoformat(task_run_started_at({"run_id": run_id}).replace("Z", "+00:00"))
+        items = [json.loads(line) for line in lines if line.strip()]
+        transcript_agent_type = ""
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            if item.get("agentId") not in {None, aid} or item.get("sessionId") not in {None, sid}:
+                return "", ""
+            attachment = item.get("attachment")
+            if not isinstance(attachment, dict) or attachment.get("hookEvent") != "SubagentStart":
+                continue
+            if attachment.get("hookName") != "SubagentStart" or item.get("agentId") != aid:
+                return "", ""
+            event_time = datetime.fromisoformat(
+                str(item.get("timestamp") or "").replace("Z", "+00:00")
+            )
+            if not event_time.tzinfo or event_time.astimezone(timezone.utc) < run_time:
+                return "", ""
+            content = attachment.get("content")
+            if not isinstance(content, list) or len(content) != 1 or not isinstance(content[0], str):
+                return "", ""
+            match = re.fullmatch(
+                rf"Agent ([A-Za-z0-9_.:-]+) started \({re.escape(aid)}\)", content[0],
+            )
+            if not match or transcript_agent_type:
+                return "", ""
+            transcript_agent_type = match.group(1)
+        if not transcript_agent_type:
+            return "", ""
+        for item in reversed(items):
+            message = item.get("message") if isinstance(item, dict) else None
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+            text = "".join(
+                str(part.get("text") or "")
+                for part in message.get("content", [])
+                if isinstance(part, dict) and part.get("type") == "text"
+            )
+            if text == final_message:
+                return path, transcript_agent_type
+            return "", ""
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+        return "", ""
+    return "", ""
+
+
 def _task_id_from_dir(task_dir: str) -> str:
     return os.path.basename(os.path.normpath(task_dir)) if task_dir else ""
 
@@ -248,6 +359,10 @@ def register_subagent_start(
 
             return _with_registry_lock(repo_root, add_diag)
     ts = _now()
+    control = read_task_control(task_dir)
+    run_id = str(control.get("run_id") or "")
+    if not run_id:
+        return {}
     record = {
         "id": aid,
         "kind": "subagent",
@@ -255,6 +370,7 @@ def register_subagent_start(
         "session_id": sid,
         "task_id": _task_id_from_dir(task_dir),
         "task_dir": task_dir,
+        "run_id": run_id,
         "agent_type": _agent_type(payload),
         "started_at": now_iso(),
         "updated_at": now_iso(),
@@ -283,6 +399,7 @@ def register_subagent_start(
                 "transcript_path": _payload_value(payload, "agent_transcript_path", "transcript_path"),
                 "runtime_session_id": sid,
                 "runtime_thread_id": aid,
+                "task_run_id": run_id,
             },
         )
         if receipt.get("receipt_id"):
@@ -294,17 +411,36 @@ def register_subagent_start(
 
 def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any]:
     """Mark a subagent done by official agent_id/session_id fields."""
-    sid = _session_id(payload)
-    aid = _agent_id(payload)
+    sid, aid = _official_stop_identity(payload)
     stop_message = _payload_value(payload, "last_assistant_message")
     stop_verdict = extract_qa_verdict(stop_message)
-    fallback_task_dir = (
-        resolve_active_task_dir(repo_root, session_id=sid)
-        if aid and stop_verdict else ""
+    fallback_binding = resolve_session_task_binding(repo_root, sid) if aid and stop_verdict else {}
+    fallback_task_dir = str(fallback_binding.get("task_dir") or "")
+    fallback_run_id = str(fallback_binding.get("run_id") or "")
+    trusted_transcript, transcript_agent_type = (
+        _trusted_stop_provenance(payload, sid, aid, fallback_run_id)
+        if fallback_task_dir else ("", "")
     )
+    if not trusted_transcript:
+        fallback_task_dir = ""
+        fallback_run_id = ""
     def mark(data: dict[str, Any]):
         candidates: list[dict[str, Any]] = []
         for record in data["records"]:
+            if (
+                record.get("kind") == "subagent"
+                and record.get("status") == "done"
+                and aid and record.get("id") == aid
+                and record.get("session_id") == sid
+                and record.get("run_id") == fallback_run_id
+            ):
+                diag = _diagnostic_record(
+                    payload,
+                    status="duplicate_stop",
+                    reason="SubagentStop identity was already completed.",
+                )
+                data["records"].append(diag)
+                return diag
             if record.get("kind") != "subagent" or record.get("status") != "active":
                 continue
             if aid and record.get("id") == aid and record.get("session_id") == sid:
@@ -327,16 +463,16 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
                     "session_id": sid,
                     "task_id": _task_id_from_dir(fallback_task_dir),
                     "task_dir": fallback_task_dir,
+                    "run_id": fallback_run_id,
                     "agent_id": aid,
-                    "agent_type": _agent_type(payload),
+                    "agent_type": transcript_agent_type,
                     "event": _event_name(payload) or "SubagentStop",
                     "started_from_stop": True,
                     "updated_at": now_iso(),
                     "updated_ts": ts,
                     "stop_hook_active": bool(payload.get("stop_hook_active")),
                 }
-                if transcript:
-                    inferred["transcript_path"] = transcript
+                inferred["transcript_path"] = trusted_transcript
                 if last:
                     inferred["last_assistant_message"] = last[:500]
                 data["records"].append(inferred)
@@ -349,13 +485,31 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
             data["records"].append(diag)
             return diag
         target = sorted(candidates, key=lambda r: float(r.get("updated_ts") or 0))[-1]
+        if stop_verdict and (
+            not fallback_binding
+            or fallback_binding.get("task_dir") != target.get("task_dir")
+            or fallback_binding.get("run_id") != target.get("run_id")
+            or not trusted_transcript
+            or transcript_agent_type != target.get("agent_type")
+        ):
+            diag = _diagnostic_record(
+                payload,
+                status="untrusted_stop",
+                reason=(
+                    "SubagentStop verdict was not bound to the exact active session, "
+                    "run, transcript start attachment, and final assistant text."
+                ),
+            )
+            data["records"].append(diag)
+            return diag
         target["status"] = "done"
         target["updated_at"] = now_iso()
         target["updated_ts"] = _now()
-        agent_type = _agent_type(payload)
-        if agent_type:
-            target["agent_type"] = agent_type
-        transcript = _payload_value(payload, "agent_transcript_path", "transcript_path")
+        if transcript_agent_type:
+            target["agent_type"] = transcript_agent_type
+        transcript = trusted_transcript or _payload_value(
+            payload, "agent_transcript_path", "transcript_path"
+        )
         if transcript:
             target["transcript_path"] = transcript
         last = _payload_value(payload, "last_assistant_message")
@@ -370,6 +524,7 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
         verdict = extract_qa_verdict(final_message)
         if result.get("status") == "done" and result.get("task_dir"):
             task_dir = result.get("task_dir") or ""
+            bound_run_id = str(result.get("run_id") or "")
             identity = {
                 "source": "subagent_stop_hook",
                 "agent_id": result.get("id") or aid,
@@ -377,8 +532,16 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
                 "transcript_path": result.get("transcript_path") or "",
                 "runtime_session_id": sid,
                 "runtime_thread_id": result.get("id") or aid,
+                "task_run_id": bound_run_id,
             }
             with receipt_stream_transaction(task_dir):
+                binding = resolve_session_task_binding(repo_root, sid)
+                if (
+                    not bound_run_id
+                    or binding.get("task_dir") != task_dir
+                    or binding.get("run_id") != bound_run_id
+                ):
+                    return result
                 if result.get("started_from_stop"):
                     started = record_subagent_receipt(
                         task_dir,

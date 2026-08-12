@@ -1806,6 +1806,31 @@ def resolve_active_task_dir(repo_root=None, session_id=None):
     )
 
 
+def resolve_session_task_binding(repo_root, session_id):
+    """Resolve only an exact session marker and its current open run."""
+    if not isinstance(session_id, str) or not session_id or session_id == "default":
+        return {}
+    if sanitize_session_id(session_id) != session_id:
+        return {}
+    try:
+        marker = _read_session_marker(
+            _session_active_path(repo_root, session_id), session_id,
+        )
+    except ValueError:
+        return {}
+    task_dir = _live_active_task_dir(repo_root, marker.get("task_dir"))
+    if not task_dir or marker.get("task_id") != os.path.basename(task_dir):
+        return {}
+    control = read_task_control(task_dir)
+    if (
+        not control
+        or task_control_status(task_dir, control) != "open"
+        or marker.get("run_id") != control.get("run_id")
+    ):
+        return {}
+    return {"task_dir": task_dir, "run_id": control["run_id"]}
+
+
 def iter_active_task_dirs(repo_root=None):
     """Yield unique active task dirs from session markers and legacy fallback."""
     repo_root = repo_root or find_repo_root()

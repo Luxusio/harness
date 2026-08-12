@@ -97,6 +97,22 @@ class TestMutationsAgainstWorkflowControl(unittest.TestCase):
 
 
 class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
+    def test_direct_lifecycle_hook_invocation_is_denied(self):
+        for command in (
+            "python3 plugin/scripts/background_hook.py --event stop",
+            "plugin/scripts/background_hook.py --event stop",
+            "bash plugin/scripts/background_hook.py --event stop",
+            "HARNESS_SKIP_MCP_GUARD=1 python3 plugin/scripts/background_hook.py --event stop",
+            "python3 plugin/scripts/background_registry.py",
+            "python3 -c 'from _lib import record_subagent_receipt'",
+        ):
+            with self.subTest(command=command):
+                r = _run_bash(command)
+                decision, reason = parse_decision(r.stdout)
+                self.assertEqual(decision, "deny")
+                self.assertIn("rule=protected-artifact", reason)
+                self.assertIn("lifecycle receipt entrypoint", reason)
+
     def test_sed_into_plan_md_denies(self):
         with scratch_task_in_real_repo("pr1-bg-prot") as task_dir:
             plan = os.path.join(task_dir, "PLAN.md")

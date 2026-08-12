@@ -136,9 +136,13 @@ cannot. Acceptance intent remains in `PLAN.md`, and later source drift is
 developer-owned.
 
 On Claude builds that deliver `SubagentStop` but no `SubagentStart`, the stop
-hook binds official agent/session identity to the current active task and emits
-the correlated inferred-start/completed receipt pair. No active binding or no
-official identity remains a non-authorizing unmatched-stop diagnostic.
+hook requires exact top-level official agent/session identity, the matching
+session marker and run, and a stable matching current-run Claude transcript
+whose recorded start attachment supplies the agent type before emitting the
+single-use inferred-start/completed pair in one task
+transaction. Missing, foreign, stale, replayed, aliased, untrusted, or unbound
+stops remain non-authorizing diagnostics. Bash cannot directly invoke or import
+lifecycle receipt-authoring entrypoints.
 
 Receipt storage, minimal schema, immutable snapshot, and gate semantics are
 normatively defined by

@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from conftest import SCRIPTS_DIR
@@ -30,6 +31,50 @@ def _mark_harness_enabled(repo: str) -> None:
     os.makedirs(os.path.dirname(manifest), exist_ok=True)
     with open(manifest, "w", encoding="utf-8") as f:
         f.write("type: test\n")
+
+
+def _bind_session(repo: str, task_dir: str, session_id: str) -> None:
+    _lib.write_active_marker(repo, task_dir, session_id=session_id)
+
+
+def _write_agent_transcript(
+    tmp_path: Path, monkeypatch, session_id: str, agent_id: str, final_message: str,
+    *, agent_type: str | None = None,
+) -> str:
+    claude = tmp_path / ".claude"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude))
+    path = claude / "projects/project" / session_id / "subagents" / f"agent-{agent_id}.jsonl"
+    path.parent.mkdir(parents=True)
+    task_dir = next((tmp_path / "doc/harness/tasks").glob("TASK__*"))
+    run_started = datetime.fromisoformat(
+        _lib.task_run_started_at(_lib.read_task_control(task_dir)).replace("Z", "+00:00")
+    )
+    timestamp = (run_started + timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
+    transcript_type = agent_type or agent_id
+    items = [
+        {
+            "timestamp": timestamp,
+            "agentId": agent_id,
+            "sessionId": session_id,
+            "attachment": {
+                "type": "hook_additional_context",
+                "hookName": "SubagentStart",
+                "hookEvent": "SubagentStart",
+                "content": [f"Agent {transcript_type} started ({agent_id})"],
+            },
+        },
+        {
+            "timestamp": timestamp,
+            "agentId": agent_id,
+            "sessionId": session_id,
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": final_message}],
+            },
+        },
+    ]
+    path.write_text("".join(json.dumps(item) + "\n" for item in items), encoding="utf-8")
+    return str(path)
 
 
 def test_subagent_start_and_stop_updates_registry(tmp_path):
@@ -61,6 +106,7 @@ def test_subagent_start_and_stop_updates_registry(tmp_path):
 
 def test_subagent_start_records_task_local_receipt(tmp_path):
     repo, task_dir = _repo(tmp_path)
+    _bind_session(repo, task_dir, "sess-1")
     started = background_registry.register_subagent_start(
         repo,
         {
@@ -205,8 +251,14 @@ def test_background_hook_writes_in_harness_enabled_repo(tmp_path):
     assert os.path.isfile(background_registry.registry_path(repo_path))
 
 
-def test_official_subagent_stop_fields_are_preserved(tmp_path):
+def test_official_subagent_stop_fields_are_preserved(tmp_path, monkeypatch):
     repo, task_dir = _repo(tmp_path)
+    _bind_session(repo, task_dir, "sess-1")
+    final_message = "VERDICT: PASS\ndone"
+    transcript = _write_agent_transcript(
+        tmp_path, monkeypatch, "sess-1", "agent-1", final_message,
+        agent_type="general-purpose",
+    )
     background_registry.register_subagent_start(
         repo,
         {
@@ -225,15 +277,15 @@ def test_official_subagent_stop_fields_are_preserved(tmp_path):
             "stop_hook_active": False,
             "agent_id": "agent-1",
             "agent_type": "general-purpose",
-            "agent_transcript_path": "/tmp/agent.jsonl",
-            "last_assistant_message": "VERDICT: PASS\ndone",
+            "agent_transcript_path": transcript,
+            "last_assistant_message": final_message,
         },
     )
 
     assert stopped["status"] == "done"
     assert stopped["agent_type"] == "general-purpose"
-    assert stopped["transcript_path"] == "/tmp/agent.jsonl"
-    assert stopped["last_assistant_message"] == "VERDICT: PASS\ndone"
+    assert stopped["transcript_path"] == transcript
+    assert stopped["last_assistant_message"] == final_message
     receipts = [json.loads(line) for line in (Path(task_dir) / "RECEIPTS.jsonl").read_text().splitlines()]
     assert receipts[-1]["event"] == "completed"
     assert receipts[-1]["verdict"] == "PASS"
@@ -351,18 +403,25 @@ def test_unmatched_stop_without_active_task_records_nonblocking_diagnostic(tmp_p
     assert background_registry.active_records(repo, task_id="TASK__bg", session_id="sess-1") == []
 
 
-def test_stop_only_runtime_records_complete_current_task_lifecycle(tmp_path):
+def test_stop_only_runtime_records_complete_current_task_lifecycle(tmp_path, monkeypatch):
     repo, task_dir = _repo(tmp_path)
+    session_id = "sess-stop-only"
+    agent_id = "qa-cli-stop-only"
+    final_message = "VERDICT: PASS\nfocused checks passed"
+    _bind_session(repo, task_dir, session_id)
+    transcript = _write_agent_transcript(
+        tmp_path, monkeypatch, session_id, agent_id, final_message,
+    )
     stopped = background_registry.mark_subagent_stop(
         repo,
         {
             "hook_event_name": "SubagentStop",
-            "session_id": "sess-stop-only",
-            "agent_id": "qa-cli-stop-only",
-            "agent_type": "qa-cli-stop-only",
+            "session_id": session_id,
+            "agent_id": agent_id,
+            "agent_type": agent_id,
             "cwd": repo,
-            "agent_transcript_path": "/tmp/qa-stop-only.jsonl",
-            "last_assistant_message": "VERDICT: PASS\nfocused checks passed",
+            "agent_transcript_path": transcript,
+            "last_assistant_message": final_message,
         },
     )
 
@@ -382,6 +441,111 @@ def test_stop_only_runtime_records_complete_current_task_lifecycle(tmp_path):
     assert all(item["task_run_id"] == _lib.read_task_control(task_dir)["run_id"] for item in receipts)
     assert all(item["runtime_session_id"] == "sess-stop-only" for item in receipts)
     assert all(item["runtime_thread_id"] == "qa-cli-stop-only" for item in receipts)
+
+    replay = background_registry.mark_subagent_stop(repo, {
+        "hook_event_name": "SubagentStop", "session_id": session_id,
+        "agent_id": agent_id, "agent_type": agent_id,
+        "agent_transcript_path": transcript, "last_assistant_message": final_message,
+    })
+    assert replay["status"] == "duplicate_stop"
+    assert len((Path(task_dir) / "RECEIPTS.jsonl").read_text().splitlines()) == 2
+
+
+def test_stop_only_fallback_rejects_missing_or_foreign_session(tmp_path, monkeypatch):
+    repo, task_dir = _repo(tmp_path)
+    _bind_session(repo, task_dir, "owner-session")
+    final_message = "VERDICT: PASS"
+    for session_id in ("", "foreign-session"):
+        agent_id = f"qa-cli-{session_id or 'missing'}"
+        transcript = _write_agent_transcript(
+            tmp_path, monkeypatch, session_id or "missing-session", agent_id, final_message,
+        )
+        payload = {
+            "hook_event_name": "SubagentStop",
+            "agent_id": agent_id,
+            "agent_type": agent_id,
+            "agent_transcript_path": transcript,
+            "last_assistant_message": final_message,
+        }
+        if session_id:
+            payload["session_id"] = session_id
+        record = background_registry.mark_subagent_stop(repo, payload)
+        assert record["status"] == "unmatched_stop"
+    assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
+
+
+def test_stop_only_uses_transcript_agent_type_not_payload_claim(tmp_path, monkeypatch):
+    repo, task_dir = _repo(tmp_path)
+    session_id = "sess-type-proof"
+    agent_id = "agent-type-proof"
+    final_message = "VERDICT: PASS"
+    _bind_session(repo, task_dir, session_id)
+    transcript = _write_agent_transcript(
+        tmp_path, monkeypatch, session_id, agent_id, final_message,
+        agent_type="harness:qa-cli",
+    )
+
+    record = background_registry.mark_subagent_stop(repo, {
+        "hook_event_name": "SubagentStop", "session_id": session_id,
+        "agent_id": agent_id, "agent_type": "harness:review-security",
+        "agent_transcript_path": transcript, "last_assistant_message": final_message,
+    })
+
+    assert record["status"] == "done"
+    receipts = [
+        json.loads(line)
+        for line in (Path(task_dir) / "RECEIPTS.jsonl").read_text().splitlines()
+    ]
+    assert {item["agent_type"] for item in receipts} == {"harness:qa-cli"}
+    assert {item["lens"] for item in receipts} == {"qa-cli"}
+
+
+def test_stop_only_rejects_transcript_without_runtime_start_proof(tmp_path, monkeypatch):
+    repo, task_dir = _repo(tmp_path)
+    session_id = "sess-no-start-proof"
+    agent_id = "qa-cli-no-start-proof"
+    final_message = "VERDICT: PASS"
+    _bind_session(repo, task_dir, session_id)
+    transcript = Path(_write_agent_transcript(
+        tmp_path, monkeypatch, session_id, agent_id, final_message,
+    ))
+    transcript.write_text(transcript.read_text().splitlines()[1] + "\n", encoding="utf-8")
+
+    record = background_registry.mark_subagent_stop(repo, {
+        "hook_event_name": "SubagentStop", "session_id": session_id,
+        "agent_id": agent_id, "agent_type": agent_id,
+        "agent_transcript_path": str(transcript), "last_assistant_message": final_message,
+    })
+
+    assert record["status"] == "unmatched_stop"
+    assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
+
+
+def test_stop_only_fallback_rejects_transcript_from_prior_run(tmp_path, monkeypatch):
+    repo, task_dir = _repo(tmp_path)
+    session_id = "sess-rotated"
+    agent_id = "qa-cli-prior-run"
+    final_message = "VERDICT: PASS"
+    _bind_session(repo, task_dir, session_id)
+    transcript = _write_agent_transcript(
+        tmp_path, monkeypatch, session_id, agent_id, final_message,
+    )
+    prior_run_ms = _lib.uuid7_timestamp_ms(
+        _lib.read_task_control(task_dir)["run_id"]
+    )
+    make_uuid7 = _lib.new_uuid7
+    monkeypatch.setattr(_lib, "new_uuid7", lambda: make_uuid7(prior_run_ms + 2_000))
+    with _lib.receipt_stream_transaction(task_dir):
+        _lib.begin_task_run(task_dir)
+        _lib.write_active_marker(repo, task_dir, session_id=session_id)
+
+    record = background_registry.mark_subagent_stop(repo, {
+        "hook_event_name": "SubagentStop", "session_id": session_id,
+        "agent_id": agent_id, "agent_type": agent_id,
+        "agent_transcript_path": transcript, "last_assistant_message": final_message,
+    })
+    assert record["status"] == "unmatched_stop"
+    assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
 
 
 def test_stop_without_agent_id_does_not_close_random_active_record(tmp_path):

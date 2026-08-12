@@ -55,6 +55,9 @@ REDIRECT_TOKENS = {">", ">>", "1>", "1>>"}
 
 LAST_ARG_MUTATORS = {"cp", "mv", "install", "touch", "truncate"}
 TEE_COMMAND = "tee"
+LIFECYCLE_RECEIPT_ENTRYPOINTS = {
+    "background_hook.py", "background_registry.py", "codex_lifecycle_watcher.py",
+}
 
 # Shell operators that separate command units. We shlex-tokenize first
 # (respects quotes — so `;` inside a `python -c "..."` string stays intact)
@@ -207,6 +210,23 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
         return
     non_env = segment_tokens[idx:]
     cmd = os.path.basename(non_env[0])
+
+    visible = " ".join(non_env)
+    if (
+        cmd in LIFECYCLE_RECEIPT_ENTRYPOINTS
+        or cmd.startswith(("python", "python3", "pypy"))
+        or cmd in {"bash", "sh"}
+    ):
+        if (
+            any(name in visible for name in LIFECYCLE_RECEIPT_ENTRYPOINTS)
+            or "record_subagent_receipt" in visible
+        ):
+            targets.append({
+                "path": "RECEIPTS.jsonl",
+                "category": "protected-artifact",
+                "method": "direct lifecycle receipt entrypoint invocation",
+            })
+            return
 
     if cmd == "sed" and any(t == "-i" or t.startswith("-i") for t in non_env[1:]):
         _append_target(

@@ -73,14 +73,18 @@ exact supplied runtime identity. Append position establishes lifecycle order
 and review-before-QA order; wall-clock comparison does not.
 
 Claude runtimes that emit `SubagentStop` without a preceding `SubagentStart`
-use the stop hook as the authoritative lifecycle observation. When the stop
-contains official `agent_id` and `session_id` fields and resolves to that
-session's current active task, the hook appends a correlated inferred
-`started` entry immediately followed by the explicit `completed` entry. The
-completion verdict still comes only from the unique canonical first line of
-`last_assistant_message`; missing identity, active-task binding, or canonical
-verdict cannot yield PASS. This preserves the ordered receipt schema without
-requiring an event the runtime does not deliver.
+use the stop hook as the authoritative lifecycle observation only under the
+full provenance boundary: exact top-level official `agent_id` and `session_id`,
+the matching session marker and current `run_id`, and a stable owner-controlled
+Claude transcript whose path matches that session/agent, whose recorded
+`SubagentStart` attachment supplies the agent type after the UUIDv7 run cutoff,
+and whose final assistant text exactly matches `last_assistant_message`. Payload
+claims cannot override the transcript-derived agent type. The completion identity is single-use. Under
+those conditions the hook appends a correlated inferred `started` entry
+immediately followed by the explicit `completed` entry in one task transaction.
+The verdict still comes only from the unique canonical first line; missing,
+foreign, stale, replayed, aliased, untrusted, or unbound stops cannot yield
+PASS. Direct model invocation of lifecycle receipt-authoring scripts is denied.
 
 Old-schema entries in `RECEIPTS.jsonl` are rejected with an actionable message
 to start a fresh task run or reset the unsupported stream. They are not

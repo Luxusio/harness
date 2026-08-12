@@ -219,8 +219,11 @@ and scope drift are developer-owned risks.
 storage/schema/gates are owned by
 `doc/harness/patterns/ADR__consolidated-task-artifacts.md`.
 Claude builds that omit `SubagentStart` may derive the ordered started/completed
-pair from one official-identity `SubagentStop` bound to the session's current
-active task; unmatched or unbound stops never authorize PASS.
+pair from one exact top-level official-identity `SubagentStop` only when its
+session marker, run ID, stable current-run transcript, final assistant text,
+transcript-derived agent type, and single-use completion identity all match.
+Untrusted, replayed, foreign,
+stale, aliased, or unbound stops never authorize PASS.
 
 ### C-14a
 

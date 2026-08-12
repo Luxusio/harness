@@ -49,8 +49,14 @@ before the command basename is examined (fixes a legacy bypass).
 | `python[3] -c "Path('x').write_text(...)"` | first argument of `Path()` |
 | `python[3] -c "os.replace(src, 'x')"` | second argument of `os.replace()` |
 | `python[3] -c "shutil.copy(src, 'x')"` | second argument of `shutil.copy(...)` |
+| Direct lifecycle receipt entrypoint invocation/import | synthetic `RECEIPTS.jsonl` target |
 
 `2>` stderr redirect is intentionally **not** blocked — logs are common.
+
+`background_hook.py`, `background_registry.py`, `codex_lifecycle_watcher.py`,
+and direct imports of `record_subagent_receipt` are runtime-owned receipt
+capabilities. A model-issued Bash command may not invoke them directly; only
+the configured runtime lifecycle hooks/watchers may author those events.
 
 ## Known-safe verbs (no classification attempt)
 
