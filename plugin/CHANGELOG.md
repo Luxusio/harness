@@ -49,6 +49,12 @@ All notable changes to the harness Claude Code plugin.
 
 ### Fixed
 
+- Verified installation no longer treats a clean Git worktree as proof that
+  the installed plugin is current. Every freshly reviewed and QA-approved
+  invocation now reinstalls the complete tracked payload from its isolated
+  snapshot. Codex installs also carry a new cachebuster, and prewrite coverage
+  proves that nested-worktree micro tasks read `execution_mode` from the
+  canonical four-field `TASK.json` without requiring `PLAN.md`.
 - Explicit local `source_git_roots` now use the same trust model as ordinary
   developer Git workflows. Harness resolves the configured checkout and lets
   required Git commands determine success without linked-worktree

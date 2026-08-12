@@ -217,6 +217,39 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
             decision, reason = _parse_decision(r.stdout)
             self.assertNotEqual(decision, "deny", reason)
 
+    def test_micro_task_without_plan_is_recognized_from_nested_worktree(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tasks_dir = _scaffold(tmpdir)
+            task_dir = _write_task_state(tasks_dir, "micro", "created")
+            control_path = os.path.join(task_dir, "TASK.json")
+            with open(control_path, encoding="utf-8") as f:
+                control = json.load(f)
+            control["execution_mode"] = "micro"
+            with open(control_path, "w", encoding="utf-8") as f:
+                json.dump(control, f)
+                f.write("\n")
+            sessions = os.path.join(tasks_dir, ".active_sessions")
+            os.makedirs(sessions, exist_ok=True)
+            with open(os.path.join(sessions, "s1.json"), "w", encoding="utf-8") as f:
+                json.dump({"session_id": "s1", "task_id": "TASK__micro", "task_dir": task_dir}, f)
+            nested = os.path.join(tmpdir, "packages", "child")
+            os.makedirs(nested)
+            os.mkdir(os.path.join(tmpdir, "packages", ".git"))
+
+            r = _invoke_payload(nested, {
+                "tool_name": "Write",
+                "session_id": "s1",
+                "tool_input": {
+                    "file_path": os.path.join(tmpdir, "foo.py"),
+                    "content": "x = 1\n",
+                },
+            })
+
+            self.assertEqual(r.returncode, 0)
+            decision, reason = _parse_decision(r.stdout)
+            self.assertNotEqual(decision, "deny", reason)
+            self.assertFalse(os.path.exists(os.path.join(task_dir, "PLAN.md")))
+
     def test_task_baseline_is_runtime_owned(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             tasks_dir = _scaffold(tmpdir)

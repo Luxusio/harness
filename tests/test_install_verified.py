@@ -80,7 +80,7 @@ def test_verification_state_uses_one_receipt_snapshot(tmp_path):
     assert runtime.call_args.args[-1] is snapshot
 
 
-def test_stateless_installer_reinstalls_every_verified_dirty_call(tmp_path):
+def test_stateless_installer_reinstalls_every_verified_call_including_clean_source(tmp_path):
     repo, task = _repo(tmp_path)
     installer = subprocess.CompletedProcess([], 0)
     common = (
@@ -88,7 +88,7 @@ def test_stateless_installer_reinstalls_every_verified_dirty_call(tmp_path):
         mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
         mock.patch.object(mod, "_validate_task_dir", return_value=(True, "")),
         mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
-        mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/file.py"}),
+        mock.patch.object(mod, "_dirty_install_payload", return_value=set()),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global.lock"),
         mock.patch.object(mod, "_tracked_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_payload_fingerprint", return_value="payload-1"),
@@ -107,7 +107,7 @@ def test_stateless_installer_reinstalls_every_verified_dirty_call(tmp_path):
         mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
         mock.patch.object(mod, "_validate_task_dir", return_value=(True, "")),
         mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
-        mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/file.py"}),
+        mock.patch.object(mod, "_dirty_install_payload", return_value=set()),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global-2.lock"),
         mock.patch.object(mod, "_verification_state", return_value=(True, "", "fp-2")),
         mock.patch.object(mod, "_tracked_install_payload", return_value={"plugin/file.py"}),

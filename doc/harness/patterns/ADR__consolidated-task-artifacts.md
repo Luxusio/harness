@@ -118,8 +118,10 @@ paths; source drift after evidence remains developer-owned.
 
 Verified installation is stateless. `install_verified.py` holds only its
 transaction lock and in-memory source/receipt fingerprints while it runs. It
-writes no `INSTALL_RECEIPT.json`, install cache, or task-control field. A retry
-after interruption simply installs again.
+writes no `INSTALL_RECEIPT.json`, install cache, or task-control field. Every
+freshly verified invocation reinstalls the complete tracked payload, including
+when the source worktree is clean; dirty-path detection is not persistent
+installation truth. A retry after interruption simply installs again.
 
 `CHECKS.yaml` and `USER_FEEDBACK.jsonl` are not current task artifacts.
 Acceptance intent lives in `PLAN.md`; user feedback remains conversational or

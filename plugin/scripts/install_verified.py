@@ -320,10 +320,6 @@ def install_verified(task_dir: Path) -> int:
                 print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)
                 return 2
             snapshot_paths = _snapshot_paths(repo_root, task_dir)
-            changed_payload = _dirty_install_payload(repo_root)
-            if not changed_payload:
-                print("automatic install not needed: no changed install payload")
-                return 0
             verified, reason, fingerprint = _verification_state(task_dir)
             if not verified:
                 print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)

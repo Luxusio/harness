@@ -135,7 +135,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `verify_runner.py` | Deterministic manifest `verify_commands` runner with optional parallel execution | stdout |
 | `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | stdout |
 | `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |
-| `install_verified.py` | Stateless trusted post-QA harness installer with ordered review/QA receipts, an explicit payload snapshot, and a global concurrency lock | stdout / exit status |
+| `install_verified.py` | Stateless trusted post-QA harness installer; every verified call reinstalls the complete payload from an isolated snapshot | stdout / exit status |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
 | `hygiene_scan.py` | Close-time hygiene scan: Tier A/B auto-apply + doc archive pass | `doc/harness/.hygiene-pending.json` |
 | `doc_hygiene.py` | Content-signal KEEP/REMOVE/REVIEW classifier; archives stale docs via `git mv` | `doc/harness/.hygiene-pending.json` |
