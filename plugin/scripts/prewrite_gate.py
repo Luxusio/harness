@@ -568,7 +568,7 @@ def _check_path(data: dict, file_path: str) -> None:
             "C-05-protected-artifact",
             requested_path,
             "claude-runtime",
-            "Runtime transcripts are receipt provenance and cannot be edited.",
+            "Runtime transcripts are runtime-owned receipt provenance and cannot be edited.",
             repo_root,
         )
         return 0
