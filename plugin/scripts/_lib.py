@@ -1299,10 +1299,10 @@ def read_task_control(task_dir):
 def _make_control_writer_authority():
     allowed = {
         "harness_server": {
-            "handle_task_start", "handle_task_close", "_handle_task_blocked_locked",
-            "_publish_write_plan",
+            "handle_task_start", "handle_task_close", "handle_task_blocked",
+            "handle_write_plan",
         },
-        "codex_hook_registration": {"_bind_active_task_to_root_session"},
+        "codex_hook_registration": {"restore_watcher_registration"},
     }
     canonical_paths = {
         "harness_server": os.path.realpath(os.path.join(
@@ -2836,9 +2836,7 @@ def _make_runtime_receipt_writer():
             ("subagent_lifecycle", "mark_subagent_stop"),
         },
         "codex_session_watcher:collaboration": {
-            ("codex_lifecycle_watcher", "Watcher._invalidate"),
-            ("codex_lifecycle_watcher", "Watcher._maybe_start"),
-            ("codex_lifecycle_watcher", "Watcher._maybe_complete"),
+            ("codex_lifecycle_watcher", "watch"),
         },
     }
     bound_callers = {}
@@ -2930,16 +2928,17 @@ def _make_runtime_receipt_writer():
         frame = inspect.currentframe()
         caller = frame.f_back.f_back if frame and frame.f_back else None
         try:
-            if caller is None:
-                return False
-            identity = (str(caller.f_globals.get("__name__") or ""), caller.f_code.co_qualname)
-            binding = bound_callers.get((source, identity))
-            return bool(
-                binding is not None
-                and caller.f_code is binding[0]
-                and caller.f_globals is binding[1]
-                and all(caller.f_globals.get(name) is value for name, value in binding[2])
-            )
+            while caller is not None:
+                identity = (str(caller.f_globals.get("__name__") or ""), caller.f_code.co_qualname)
+                binding = bound_callers.get((source, identity))
+                if binding is not None:
+                    return bool(
+                        caller.f_code is binding[0]
+                        and caller.f_globals is binding[1]
+                        and all(caller.f_globals.get(name) is value for name, value in binding[2])
+                    )
+                caller = caller.f_back
+            return False
         finally:
             del caller
             del frame

@@ -154,10 +154,6 @@ def _bind_active_task_to_root_session(control_root: str, thread_id: str) -> bool
     return True
 
 
-_bind_control_writer(_bind_active_task_to_root_session)
-del _bind_control_writer
-
-
 def restore_watcher_registration(
     payload: bytes,
     *,
@@ -211,3 +207,7 @@ def restore_watcher_registration(
         if time.monotonic() >= retry_deadline:
             return False
         time.sleep(min(0.05, max(0.0, retry_deadline - time.monotonic())))
+
+
+_bind_control_writer(restore_watcher_registration)
+del _bind_control_writer

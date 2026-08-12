@@ -1417,9 +1417,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "codex_lifecycle_watcher":
-    _bind_runtime_receipt_adapter("codex_session_watcher:collaboration", Watcher._invalidate)
-    _bind_runtime_receipt_adapter("codex_session_watcher:collaboration", Watcher._maybe_start)
-    _bind_runtime_receipt_adapter("codex_session_watcher:collaboration", Watcher._maybe_complete)
+    _bind_runtime_receipt_adapter("codex_session_watcher:collaboration", watch)
 del _bind_runtime_receipt_adapter
 
 

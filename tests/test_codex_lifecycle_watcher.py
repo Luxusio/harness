@@ -14,9 +14,14 @@ PRIOR_RUN_ID = "019fee8c-4d00-7000-8000-000000000001"
 
 
 def _load():
-    spec = importlib.util.spec_from_file_location("codex_lifecycle_watcher_test", SCRIPT)
+    import sys
+    sys.path.insert(0, str(SCRIPT.parent))
+    import _lib
+    importlib.reload(_lib)
+    spec = importlib.util.spec_from_file_location("codex_lifecycle_watcher", SCRIPT)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -26,6 +31,30 @@ def _active_binding(task_dir):
         "task_dir": str(task_dir),
         "run_id": RUN_ID,
     }
+
+
+def test_seeded_watcher_private_helpers_cannot_append_authority(tmp_path, monkeypatch):
+    import pytest
+
+    mod = _load()
+    task = tmp_path / "doc/harness/tasks/TASK__seeded-watcher"
+    task.mkdir(parents=True)
+    _write_task_control(task)
+    watcher = mod.Watcher(str(tmp_path), "019f825b-f25f-70c3-8ee8-071f79fa1c42")
+    item = {
+        "task_name": "qa_cli_seeded",
+        "task_dir": str(task),
+        "task_run_id": RUN_ID,
+        "output_path": "/root/qa_cli_seeded",
+        "agent_path": "/root/qa_cli_seeded",
+        "child_id": "019f825b-f25f-70c3-8ee8-071f79fa1c43",
+    }
+    watcher.calls["call_seededWatcher123"] = item
+    monkeypatch.setattr(mod, "_active_task_binding_for_session", lambda *_: _active_binding(task))
+    monkeypatch.setattr(mod, "_child_status", lambda *_: ("running", Path("child"), ""))
+    with pytest.raises(PermissionError, match="runtime-owned"):
+        watcher._maybe_start("call_seededWatcher123")
+    assert not (task / "RECEIPTS.jsonl").exists()
 
 
 def _write_task_control(task: Path, *, run_id: str = RUN_ID) -> None:

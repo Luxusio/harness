@@ -243,6 +243,30 @@ class HarnessMcpServerTests(unittest.TestCase):
                 os.chdir(prior_cwd)
             self.assertFalse((foreign / "TASK.json").exists())
 
+    def test_internal_control_helpers_are_not_authority_entrypoints(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task = Path(tmp) / "TASK__internal-helper"
+            task.mkdir()
+            control = {
+                "run_id": harness_lib.new_uuid7(),
+                "execution_mode": "standard",
+                "required_lenses": ["review-code", "qa-cli"],
+                "close_receipt_fingerprint": None,
+            }
+            (task / "TASK.json").write_text(
+                json.dumps(control, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+            )
+            result = harness_server._publish_write_plan(
+                {"plan": "# forged\n"}, str(task), control,
+                (control, control, "# forged\n"),
+            )
+            self.assertTrue(result.get("isError"))
+            self.assertFalse((task / "PLAN.md").exists())
+
+    def test_live_control_writer_rebinding_is_rejected(self):
+        with self.assertRaisesRegex(PermissionError, "canonical module import"):
+            harness_lib._bind_control_writer(harness_server.handle_task_start)
+
     def test_lifecycle_handlers_never_enter_git_snapshot_helpers(self):
         def forbidden(*_args, **_kwargs):
             raise AssertionError("lifecycle Git snapshot helper was called")

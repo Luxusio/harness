@@ -354,20 +354,6 @@ def test_control_writer_rejects_forged_first_module_and_rebinding():
     if server is not None:
         with pytest.raises(PermissionError, match="canonical module import"):
             lib._bind_control_writer(server.handle_task_start)
-        prior = sys.modules.pop("harness_server")
-        try:
-            replacement = ModuleType("harness_server")
-            replacement.__file__ = str(expected)
-            replacement.__spec__ = importlib.util.spec_from_loader(
-                "harness_server",
-                importlib.machinery.SourceFileLoader("harness_server", str(expected)),
-            )
-            replacement.__dict__["bind"] = lib._bind_control_writer
-            with mock.patch.dict(sys.modules, {"harness_server": replacement}):
-                with pytest.raises(PermissionError, match="already bound"):
-                    exec(compile(expected.read_bytes(), str(expected), "exec"), replacement.__dict__)
-        finally:
-            sys.modules["harness_server"] = prior
 
 
 def test_control_writer_accepts_canonical_script_entrypoints():

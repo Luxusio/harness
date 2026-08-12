@@ -322,7 +322,14 @@ class TestCodexHookWrappers(unittest.TestCase):
                 str(task) + "\n", encoding="utf-8",
             )
 
-            self.assertTrue(mod._bind_active_task_to_root_session(repo, root_id))
+            manifest = Path(repo) / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
+            payload_bytes = json.dumps({"cwd": repo, "session_id": root_id}).encode()
+            with mock.patch.dict("os.environ", {}, clear=True), mock.patch.object(
+                mod, "_ensure_with_deadline", return_value=True,
+            ):
+                self.assertTrue(mod.restore_watcher_registration(payload_bytes))
 
             marker = (
                 Path(repo)
