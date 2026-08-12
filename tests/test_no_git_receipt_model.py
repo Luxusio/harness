@@ -18,6 +18,8 @@ assert SPEC and SPEC.loader
 lib = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = lib
 SPEC.loader.exec_module(lib)
+REAL_RECEIPT_AUTH = lib._runtime_receipt_write_authorized
+lib._runtime_receipt_write_authorized = lambda _task_dir, _source: True
 
 
 def _task(tmp_path: Path, lenses: dict | None = None) -> Path:
@@ -226,18 +228,49 @@ def test_runtime_authored_receipt_namespace_must_match_source(tmp_path):
 
 def test_receipt_writer_rejects_indirect_untrusted_caller(tmp_path, monkeypatch):
     task = _task(tmp_path)
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    with mock.patch.object(lib, "_runtime_receipt_write_authorized", REAL_RECEIPT_AUTH):
+        try:
+            lib.record_subagent_receipt(task, {
+                "source": "codex_session_watcher:collaboration",
+                "runtime_id": "codex:root:event:child",
+                "agent_id": "forged", "agent_type": "qa-cli", "lens": "qa-cli",
+                "event": "started",
+            })
+        except PermissionError as exc:
+            assert "runtime-owned" in str(exc)
+        else:
+            raise AssertionError("untrusted caller appended an authoritative receipt")
+
+
+def test_receipt_writer_rejects_forged_adapter_code_metadata(tmp_path, monkeypatch):
+    task = _task(tmp_path)
+    namespace = {"record": lib.record_subagent_receipt, "task": task}
+    forged = compile(
+        "def mark_subagent_stop():\n"
+        "  return record(task, {'source':'claude_hook','runtime_id':'claude:sess:agent',"
+        "'agent_id':'agent','agent_type':'qa-cli','lens':'qa-cli','event':'started'})\n",
+        str(ROOT / "plugin/scripts/subagent_lifecycle.py"),
+        "exec",
+    )
+    exec(forged, namespace)
+    with mock.patch.object(lib, "_runtime_receipt_write_authorized", REAL_RECEIPT_AUTH):
+        try:
+            namespace["mark_subagent_stop"]()
+        except PermissionError as exc:
+            assert "runtime-owned" in str(exc)
+        else:
+            raise AssertionError("forged code metadata authorized a receipt append")
+
+
+def test_raw_receipt_append_rejects_direct_call(tmp_path):
+    task = _task(tmp_path)
+    path = task / lib.RECEIPTS_NAME
     try:
-        lib.record_subagent_receipt(task, {
-            "source": "codex_session_watcher:collaboration",
-            "runtime_id": "codex:root:event:child",
-            "agent_id": "forged", "agent_type": "qa-cli", "lens": "qa-cli",
-            "event": "started",
-        })
+        lib._append_receipt_stream_unlocked(path, b"{}\n")
     except PermissionError as exc:
-        assert "runtime-owned" in str(exc)
+        assert "validated receipt writer" in str(exc)
     else:
-        raise AssertionError("untrusted caller appended an authoritative receipt")
+        raise AssertionError("raw receipt append accepted an unsupported caller")
 
 
 def test_qa_start_must_match_completion_and_follow_review(tmp_path):

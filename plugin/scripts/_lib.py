@@ -9,6 +9,7 @@ import tempfile
 import json
 import hashlib
 import inspect
+import sys
 import secrets
 import time
 import uuid
@@ -2172,6 +2173,16 @@ def _receipt_stream_info(path):
 
 
 def _append_receipt_stream_unlocked(path, payload):
+    caller = inspect.currentframe().f_back
+    try:
+        if (
+            caller is None
+            or caller.f_globals is not globals()
+            or caller.f_code is not record_subagent_receipt.__code__
+        ):
+            raise PermissionError("raw receipt append requires the validated receipt writer")
+    finally:
+        del caller
     task_dir = os.path.dirname(os.path.abspath(path))
     dir_fd = _receipt_dir_fd(task_dir)
     prior = _receipt_stream_info(path)
@@ -2205,11 +2216,6 @@ def _append_receipt_stream_unlocked(path, payload):
         _revalidate_receipt_transaction(task_dir)
     finally:
         os.close(fd)
-
-
-def _append_receipt_stream(path, payload):
-    with _receipt_stream_lock(os.path.dirname(path)):
-        _append_receipt_stream_unlocked(path, payload)
 
 
 @contextmanager
@@ -2670,36 +2676,35 @@ def _infer_receipt_lens(agent_type, explicit_lens=""):
 
 
 _RUNTIME_RECEIPT_CALLERS = {
-    "claude_hook": (
-        "subagent_lifecycle.py", {"register_subagent_start", "mark_subagent_stop"},
-    ),
-    "codex_session_watcher:collaboration": (
-        "codex_lifecycle_watcher.py", {"_invalidate", "_maybe_start", "_maybe_complete"},
-    ),
+    "claude_hook": ("subagent_lifecycle", {
+        "register_subagent_start", "mark_subagent_stop",
+    }),
+    "codex_session_watcher:collaboration": ("codex_lifecycle_watcher", {
+        "Watcher._invalidate", "Watcher._maybe_start", "Watcher._maybe_complete",
+    }),
 }
 
 
 def _runtime_receipt_write_authorized(task_dir, source):
-    """Bind authoritative appends to the two runtime-owned adapters."""
+    """Bind authoritative appends to exact loaded adapter function objects."""
     expected = _RUNTIME_RECEIPT_CALLERS.get(source)
     frame = inspect.currentframe()
     caller = frame.f_back.f_back if frame and frame.f_back else None
     try:
         if expected and caller:
-            caller_path = os.path.realpath(str(caller.f_code.co_filename or ""))
-            expected_path = os.path.realpath(os.path.join(os.path.dirname(__file__), expected[0]))
-            if caller_path == expected_path and caller.f_code.co_name in expected[1]:
-                return True
-        # Serializer-focused tests use task packs outside the repository under
-        # test control. This exception can never authorize the active task.
-        if not os.environ.get("PYTEST_CURRENT_TEST"):
-            return False
-        repo_root = os.path.realpath(find_repo_root(os.getcwd()) or os.getcwd())
-        candidate = os.path.realpath(str(task_dir))
-        try:
-            return os.path.commonpath((repo_root, candidate)) != repo_root
-        except ValueError:
-            return True
+            module = sys.modules.get(expected[0])
+            if module is None or caller.f_globals is not vars(module):
+                return False
+            for qualified in expected[1]:
+                owner = module
+                parts = qualified.split(".")
+                for part in parts:
+                    owner = getattr(owner, part, None)
+                    if owner is None:
+                        break
+                if owner is not None and caller.f_code is getattr(owner, "__code__", None):
+                    return True
+        return False
     finally:
         del caller
         del frame

@@ -109,7 +109,7 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 **Eureka check:** if search reveals PLAN.md's approach is suboptimal (reinventing, wrong assumption), flag `EUREKA: AC-NNN — <discovery>` in the conversation and fire the Premise Gate conversational ask before overriding. Persist reusable discoveries as `type:"eureka"` in `learnings.jsonl`, then promote durable ones to a committed skill, pattern, test, or typed doc before close.
 
-**Baseline screenshot (browser projects):** Browser tools are availability-gated on Codex. When available, run `plugin-codex/agents/qa-browser.md` inline; when required but unavailable, record the browser-lens blocker and state the fallback in task state or final response.
+**Baseline screenshot (browser projects):** Browser tools are availability-gated on Codex. When available, run `${HARNESS_PLUGIN_ROOT}/agents/qa-browser.md` inline; when required but unavailable, record the browser-lens blocker and state the fallback in task state or final response.
 
 ### Phase 3.0: AC Dependency Analysis
 
@@ -122,7 +122,7 @@ editing:
 `Route` is `spawn_agent(worker)` for every disjoint lane; spawn one worker per lane. Use one worker per independent AC. Do not assign multiple independent ACs to one worker. This is capability-gated, not user-request-gated: The user does not need to ask for delegation, `user did not ask for delegation` is an invalid reason, `delegation was not requested` is not a fallback, and Do not wait for the user to request delegation. User request is
 not a condition for parallel routing; this is mandatory capability/task-shape routing.
 Sequential fallback must state `ac_count`, `conflict` (specific files/dependency), `estimated_lines`, `estimated_seconds`, and the fallback in task state or final response. Valid reasons are only `spawn_agent-unavailable`, `dependency-conflict`, or `small-task`.
-Workers read `plugin-codex/agents/developer.md`, stay inside explicit ownership, do not edit PROGRESS, and return paths/tests/blockers. Prompts must say: return the exact status `needs-coordinator-review` when ownership, lane, or approved scope needs coordinator judgment.
+Workers read `${HARNESS_PLUGIN_ROOT}/agents/developer.md`, stay inside explicit ownership, do not edit PROGRESS, and return paths/tests/blockers. Prompts must say: return the exact status `needs-coordinator-review` when ownership, lane, or approved scope needs coordinator judgment.
 Handle `needs-coordinator-review` before generic rollback: never retry with the same ownership; reassign ownership, amend PLAN, or escalate to the user. Keep successful independent siblings promoted.
 
 ### Phase 3.1: Scope Lock
@@ -136,7 +136,7 @@ Declare allowed / test / forbidden paths in PROGRESS.md. Before each file edit:
    batches, wait for all sibling worker results, then merge progress once. Skip
    ACs in `completed_acs`.
 2. **Follow existing patterns.** Smallest coherent diff. No speculative features.
-   Apply `plugin-codex/agents/developer.md` minimum-sufficient ladder in the
+   Apply `${HARNESS_PLUGIN_ROOT}/agents/developer.md` minimum-sufficient ladder in the
    coordinator and every spawned worker. A generic worker prompt must tell the
    worker to read that file before editing; parent context is not sufficient.
 3. **Codex tool surface:** use `read_file` for reads, `apply_patch` for edits/writes (Codex envelope-oriented), `shell` for Bash commands. Multi-edit is one `apply_patch` envelope per file. Where the Claude flow says `Edit`/`Write`/`MultiEdit`, read it as `apply_patch`.
@@ -246,7 +246,7 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 Read the required review lenses from `TASK.json`. Discover deferred
 `spawn_agent` in `ALL_TOOLS`. Spawn each review lens declared by TASK.json
 `security_review` when declared, in one message; each reads its matching
-`plugin-codex/agents/*-reviewer.md`, stays read-only, and returns exact VERDICT.
+`${HARNESS_PLUGIN_ROOT}/agents/*-reviewer.md`, stays read-only, and returns exact VERDICT.
 Await all reviewers. Use `wait_agent` only to coordinate completion; its output
 and `list_agents` do not author receipts. Watcher-owned
 review entries in `RECEIPTS.jsonl` must show PASS for the
@@ -287,7 +287,7 @@ judge shippability without reverse-engineering the change.
 ```text
 spawn_agent {
   task_name: "qa_<lens>_<task_slug>_<run_id>",
-  message: "task_name: qa_<lens>_<task_slug>_<run_id>\nYou are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, TASK.json, the PLAN targets, and durable docs named in PLAN. Follow plugin-codex/agents/qa-<lens>.md. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence and concrete findings.",
+  message: "task_name: qa_<lens>_<task_slug>_<run_id>\nYou are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md, TASK.json, the PLAN targets, and durable docs named in PLAN. Follow ${HARNESS_PLUGIN_ROOT}/agents/qa-<lens>.md. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with evidence and concrete findings.",
   fork_turns: "all"
 }
 ```

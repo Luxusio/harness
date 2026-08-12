@@ -810,11 +810,12 @@ def test_record_receipt_preserves_runtime_provenance(tmp_path):
     task = tmp_path / "TASK__provenance"
     task.mkdir()
     _write_task_control(task)
-    entry = _lib.record_subagent_receipt(task, {
-        "agent_id": "/root/qa_cli", "agent_type": "qa_cli", "event": "started",
-        "source": "codex_session_watcher:collaboration",
-        "runtime_id": "codex:session:call:thread",
-    })
+    with mock.patch.object(_lib, "_runtime_receipt_write_authorized", return_value=True):
+        entry = _lib.record_subagent_receipt(task, {
+            "agent_id": "/root/qa_cli", "agent_type": "qa_cli", "event": "started",
+            "source": "codex_session_watcher:collaboration",
+            "runtime_id": "codex:session:call:thread",
+        })
     assert entry["runtime_id"] == "codex:session:call:thread"
     assert entry["agent_id"] == "/root/qa_cli"
 

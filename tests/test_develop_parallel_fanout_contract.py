@@ -138,7 +138,7 @@ def test_coordinator_review_precedes_generic_parallel_failure_retry():
 def test_codex_worker_prompt_produces_coordinator_review_status():
     body = " ".join(_text(CODEX_DEVELOP).lower().split())
 
-    assert "read `plugin-codex/agents/developer.md`" in body
+    assert "read `${harness_plugin_root}/agents/developer.md`" in body
     assert "return the exact status `needs-coordinator-review`" in body
     assert "ownership, lane, or approved scope" in body
 

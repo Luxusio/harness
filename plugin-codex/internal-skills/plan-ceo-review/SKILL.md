@@ -16,7 +16,7 @@ description: |
 > same pass inline only when the current runtime exposes no subagent capability.
 
 Review the plan only. Do not implement code. Apply the shared rules in
-`plugin-codex/internal-skills/plan/SKILL.md` for evidence, context recovery, repository
+`${HARNESS_PLUGIN_ROOT}/internal-skills/plan/SKILL.md` for evidence, context recovery, repository
 ownership, search, completeness, and conversational asks.
 
 ## Contract

@@ -4,12 +4,6 @@ description: Orchestrate full development cycle — plan -> develop -> verify ->
 user-invocable: false
 ---
 
-# GENERATED-CANDIDATE — hand-ported v1.5 spike from plugin/skills/run/SKILL.md (171L source).
-# Source canonical at plugin/skills/run/SKILL.md. v1.5 AC-005 sync engine will replace this
-# hand-port with mechanical emission. Lives here only to measure porting friction for
-# AC-002 of TASK__dual-runtime-v1.5-spike-and-sync.
-
-
 Orchestrate the full harness development cycle for a task.
 
 > Current artifact model: `PLAN.md` owns acceptance intent and unified
@@ -104,7 +98,7 @@ Use inline execution as the fallback for roles that normally benefit from indepe
 
 ## Sub-file
 
-`self-improvement.md` — signal detection, auto-fix, tiered-learning promotion + pruning pipeline (runs after each task close). Not ported in v1.5 spike; the Codex orchestrator reads the Claude-side sub-file at `plugin/skills/run/self-improvement.md` if/when self-improvement runs.
+`${HARNESS_PLUGIN_ROOT}/internal-skills/run/self-improvement.md` — signal detection, auto-fix, tiered-learning promotion + pruning pipeline (runs after each task close).
 
 ## Voice
 
@@ -166,13 +160,13 @@ task_start { slug: "<ARGUMENTS>" }
 
 ### Phase 2: Plan
 
-Read `plugin-codex/internal-skills/plan/SKILL.md` (the v1.5 hand-port; AC-003 spike target) and execute its phases inline, passing `task_id`. The plan skill writes PLAN.md to the task_dir. On BLOCKED: stop and report.
+Read `${HARNESS_PLUGIN_ROOT}/internal-skills/plan/SKILL.md` and execute its phases inline, passing `task_id`. The plan skill writes PLAN.md to the task_dir. On BLOCKED: stop and report.
 
 On Codex side the plan skill uses the available runtime surface. When `spawn_agent` or external model routes are available, use them for independent review voices; otherwise run the review methodology inline and state the fallback in task state or final response if expected independence was lost. The premise gate becomes a conversational ask.
 
 ### Phase 3: Develop
 
-Read `plugin-codex/internal-skills/develop/SKILL.md` and execute its phases, passing `task_id`. The develop skill on Codex is a hand-port of the Claude source (`plugin/skills/develop/SKILL.md`) under the MCP-only-sharing policy (spike-report §3.6) — same canonical-loop methodology, with `Agent` fan-out routed through `spawn_agent` when available, `Skill()` chains rendered as inline-read sub-skill references, and `AskUserQuestion` gates rendered as conversational prose asks. Execute Phase 0 through Phase 9. Develop owns the implementation-through-close transaction, including independent code review, QA, verified installation, durable-doc classification, final freshness restoration, and `task_close`. Execute that lifecycle once, suppress its nested user-facing completion response, and return here for post-close continuation. Do not run a second QA or close cycle after develop succeeds. On BLOCKED: stop and report.
+Read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/SKILL.md` and execute its phases, passing `task_id`. It uses the canonical-loop methodology with `Agent` fan-out routed through `spawn_agent` when available, `Skill()` chains rendered as inline-read sub-skill references, and `AskUserQuestion` gates rendered as conversational prose asks. Execute Phase 0 through Phase 9. Develop owns the implementation-through-close transaction, including independent code review, QA, verified installation, durable-doc classification, final freshness restoration, and `task_close`. Execute that lifecycle once, suppress its nested user-facing completion response, and return here for post-close continuation. Do not run a second QA or close cycle after develop succeeds. On BLOCKED: stop and report.
 
 Multi-lens parallel QA (qa-browser + qa-api in one batch) should use `spawn_agent` when available. Browser MCP verification is availability-gated: if the current Codex session exposes browser tools (for example `chrome_devtools` or a future Playwright MCP), run the qa-browser methodology via subagent when possible or inline when no subagent path exists; if browser verification is required but no browser tool or reachable app exists, write a browser-lens `BLOCKED_ENV` verdict instead of silently falling back to CLI-only QA.
 
@@ -194,7 +188,7 @@ stale required lens.
 Read `doc/harness/manifest.yaml` for project type. On Codex, choose the appropriate QA lens and route it by current capability: discover deferred tools first, use `spawn_agent` when available, and use inline methodology only as fallback. If `spawn_agent` is available, the QA lens MUST run as a subagent; the orchestrator must not invent a PASS from its own context. Also route applicable UX review lenses for user-facing surfaces. Verification is recognized by watcher-recorded QA completions in `RECEIPTS.jsonl`; findings and the explicit verdict come from the subagent final response. A start entry alone cannot pass verification.
 
 **Strategy selection:**
-- **qa-browser** — required when `manifest.qa.browser_qa_supported: true` AND the diff contains frontend files (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). On Codex, check the actual session tool surface first. If browser tools are available, route the qa-browser lens through `spawn_agent` when available; otherwise read `plugin-codex/agents/qa-browser.md` and run that methodology inline, including real page navigation/interactions/screenshots where the tools support it. If browser QA is required but no browser tool is available, the dev server cannot be reached, or a required browser setup is impossible, return `BLOCKED_ENV` with the exact blocker instead of fabricating a PASS.
+- **qa-browser** — required when `manifest.qa.browser_qa_supported: true` AND the diff contains frontend files (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). On Codex, check the actual session tool surface first. If browser tools are available, route the qa-browser lens through `spawn_agent` when available; otherwise read `${HARNESS_PLUGIN_ROOT}/agents/qa-browser.md` and run that methodology inline, including real page navigation/interactions/screenshots where the tools support it. If browser QA is required but no browser tool is available, the dev server cannot be reached, or a required browser setup is impossible, return `BLOCKED_ENV` with the exact blocker instead of fabricating a PASS.
 - `desktop_qa_supported: true` → qa-desktop via `spawn_agent` when available; otherwise run the methodology inline only if desktop tools are available, or write `BLOCKED_ENV` with the missing tool/display condition.
 - `type: api` or diff contains route/endpoint files → qa-api via `spawn_agent` when available; otherwise inline fallback.
 - `type: cli` or `type: library` → qa-cli via `spawn_agent` when available; otherwise inline fallback.
@@ -207,7 +201,7 @@ Read `doc/harness/manifest.yaml` for project type. On Codex, choose the appropri
 
 When QA and UX lenses both apply, use `spawn_agent` to run them in parallel
 where available; otherwise run the UX methodology inline after QA. UX lenses
-read `plugin-codex/agents/ux-<lens>.md` and return findings in their final
+read `${HARNESS_PLUGIN_ROOT}/agents/ux-<lens>.md` and return findings in their final
 response. QA completion receipts are the close-gate verification signal; no
 UX critic artifact is written.
 
@@ -218,7 +212,7 @@ QA subagent pattern on Codex:
 ```text
 spawn_agent {
   task_name: "qa_<lens>_<task_slug>_<run_id>",
-  message: "task_name: qa_<lens>_<task_slug>_<run_id>\nYou are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md and plugin-codex/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with command/browser evidence and concrete findings.",
+  message: "task_name: qa_<lens>_<task_slug>_<run_id>\nYou are the qa-<lens> lens for <task_id>. Read <task_dir>/PLAN.md and ${HARNESS_PLUGIN_ROOT}/agents/qa-<lens>.md. Follow all four roles. Do not modify files. Return PASS/FAIL/BLOCKED_ENV with command/browser evidence and concrete findings.",
   fork_turns: "all"
 }
 ```

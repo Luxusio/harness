@@ -21,7 +21,7 @@ the agreed bar.
 
 > **Codex runtime notes**
 > - Codex does not have Claude's `Skill()` chaining primitive. When this skill
->   says to invoke the harness run flow, read `plugin-codex/internal-skills/run/SKILL.md` and
+>   says to invoke the harness run flow, read `${HARNESS_PLUGIN_ROOT}/internal-skills/run/SKILL.md` and
 >   execute its phases inline, or resume the active harness task via MCP tools.
 > - AskUserQuestion is conversational on Codex. Ask the same questions in prose
 >   with clear options and wait for the user's reply.
@@ -189,7 +189,7 @@ Use `--force` only when the user explicitly wants to replace the current
 For each MVP and hardening slice:
 
 1. Start or resume a harness task with a clear slug for the slice.
-2. Execute the harness run flow from `plugin-codex/internal-skills/run/SKILL.md`.
+2. Execute the harness run flow from `${HARNESS_PLUGIN_ROOT}/internal-skills/run/SKILL.md`.
 3. Let harness perform plan -> develop -> verify -> close.
 4. If QA returns FAIL, send the findings back through harness develop. Keep the
    retry loop active until PASS, BLOCKED_ENV, or the run skill's retry limit.

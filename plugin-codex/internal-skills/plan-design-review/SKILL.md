@@ -12,7 +12,7 @@ description: Review and improve a UI/UX plan before implementation.
 # Design plan review
 
 Review and edit the plan only. Do not implement product code. Apply the shared
-plan rules in `plugin-codex/internal-skills/plan/SKILL.md`, including
+plan rules in `${HARNESS_PLUGIN_ROOT}/internal-skills/plan/SKILL.md`, including
 search-before-building, repo ownership, context recovery, and conversational asks.
 
 ## UI scope detection and setup

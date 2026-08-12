@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 from conftest import (  # type: ignore
     SCRIPTS_DIR,
@@ -20,7 +21,6 @@ import _lib  # type: ignore
 import prewrite_gate  # type: ignore
 
 importlib.reload(prewrite_gate)
-importlib.reload(_lib)
 
 GATE = os.path.join(SCRIPTS_DIR, "prewrite_gate.py")
 
@@ -78,17 +78,20 @@ class TestProvenance(unittest.TestCase):
             for agent in ("qa-browser", "qa-api", "qa-cli", "qa-desktop"):
                 self.assertFalse(prov[agent], f"empty receipt stream cannot prove {agent}")
 
-            _lib.record_subagent_receipt(td, {
-                "event": "started", "lens": "qa-cli", "agent_id": "qa-cli-1",
-                "agent_type": "qa_cli", "task_run_id": run_id,
-                "source": "test_fixture", "runtime_id": "test:qa-cli-1",
-            })
-            _lib.record_subagent_receipt(td, {
-                "event": "completed", "lens": "qa-cli", "agent_id": "qa-cli-1",
-                "agent_type": "qa_cli", "task_run_id": run_id,
-                "verdict": "PASS", "summary": "VERDICT: PASS",
-                "source": "test_fixture", "runtime_id": "test:qa-cli-1",
-            })
+            with mock.patch.object(
+                _lib, "_runtime_receipt_write_authorized", return_value=True,
+            ):
+                _lib.record_subagent_receipt(td, {
+                    "event": "started", "lens": "qa-cli", "agent_id": "qa-cli-1",
+                    "agent_type": "qa_cli", "task_run_id": run_id,
+                    "source": "test_fixture", "runtime_id": "test:qa-cli-1",
+                })
+                _lib.record_subagent_receipt(td, {
+                    "event": "completed", "lens": "qa-cli", "agent_id": "qa-cli-1",
+                    "agent_type": "qa_cli", "task_run_id": run_id,
+                    "verdict": "PASS", "summary": "VERDICT: PASS",
+                    "source": "test_fixture", "runtime_id": "test:qa-cli-1",
+                })
             prov = _lib.provenance_from_artifacts(td)
             self.assertTrue(prov["qa-cli"])
             for agent in ("qa-browser", "qa-api", "qa-desktop"):

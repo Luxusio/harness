@@ -371,8 +371,13 @@ def test_install_codex_plugin_cache_uses_manifest_version(tmp_path):
         "internal-skills/develop/runtime-smoke.md",
         "internal-skills/develop/quality-audit-pipeline.md",
         "internal-skills/develop/verification-gate.md",
+        "internal-skills/plan/decision-principles.md",
+        "internal-skills/plan/intake.md",
+        "internal-skills/plan/review-phases.md",
+        "internal-skills/plan/write-artifacts.md",
         "internal-skills/plan-devex-review/dx-hall-of-fame.md",
         "internal-skills/plan-eng-review/rubrics-threat-rollback.md",
+        "internal-skills/run/self-improvement.md",
     ):
         assert (cached / rel).is_file(), rel
     assert (cached / "skills" / "setup" / "bootstrap.md").is_file()
@@ -817,6 +822,21 @@ def test_codex_skill_files_start_with_yaml_frontmatter():
         text = skill_path.read_text()
         assert text.startswith("---\n"), f"{skill_path} must start with YAML frontmatter"
         assert "\n---\n" in text[4:], f"{skill_path} must close YAML frontmatter"
+
+
+def test_installed_codex_operational_skill_references_are_root_anchored():
+    targets = [
+        REPO_ROOT / "plugin-codex/internal-skills" / name / "SKILL.md"
+        for name in (
+            "develop", "goal-queue", "plan", "run", "plan-ceo-review",
+            "plan-design-review", "plan-devex-review", "plan-eng-review",
+        )
+    ]
+    for path in targets:
+        text = path.read_text(encoding="utf-8")
+        assert "`plugin-codex/internal-skills/" not in text, path
+        assert "`plugin-codex/agents/" not in text, path
+        assert "`plugin/skills/" not in text, path
 
 
 def test_dry_run_mentions_codex_install_root_when_codex_available(tmp_path):

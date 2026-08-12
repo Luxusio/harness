@@ -12,7 +12,7 @@ description: Review and lock an implementation plan's architecture, tests, failu
 # Engineering plan review
 
 Review and edit the plan only; do not implement product code. Apply the shared
-plan rules in `plugin-codex/internal-skills/plan/SKILL.md`, including
+plan rules in `${HARNESS_PLUGIN_ROOT}/internal-skills/plan/SKILL.md`, including
 search-before-building, repo ownership, and conversational ask format. Prefer the smallest explicit,
 well-tested design; flag duplication, accidental complexity, and missing edges.
 

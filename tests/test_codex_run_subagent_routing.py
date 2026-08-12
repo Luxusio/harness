@@ -75,7 +75,7 @@ def test_codex_run_documents_qa_subagent_call_shape():
     assert "Verify recovery (only when develop returned before close)" in body
     assert "not a second QA pass" in body
     assert "You are the qa-<lens> lens for <task_id>" in body
-    assert "plugin-codex/agents/qa-<lens>.md" in body
+    assert "${HARNESS_PLUGIN_ROOT}/agents/qa-<lens>.md" in body
     assert 'task_name: "qa_<lens>_<task_slug>_<run_id>"' in body
     assert "prevents collaboration-tree name collisions" in body
     assert "concrete findings" in body

@@ -4,11 +4,6 @@ description: Harness 7-phase review pipeline that writes PLAN.md and related tas
 user-invocable: false
 ---
 
-# GENERATED-CANDIDATE — hand-ported v1.5 spike from plugin/skills/plan/SKILL.md (298L source).
-# Source canonical at plugin/skills/plan/SKILL.md. Sync engine output for AC-005 will replace.
-# Lives here only to measure porting friction for AC-003 of TASK__dual-runtime-v1.5-spike-and-sync.
-
-
 Codex-variant 7-phase review pipeline. Runs structured review across CEO, Engineering, and DX lenses (Design lens optional); uses independent voices when the current runtime exposes them; classifies every decision; surfaces only contested items to the user; writes the final task contract through the protected-artifact MCP.
 
 > Current artifact model: acceptance criteria live in `PLAN.md`. Write
@@ -16,7 +11,7 @@ Codex-variant 7-phase review pipeline. Runs structured review across CEO, Engine
 
 > **Codex runtime notes** (delta from Claude):
 > - **Dual Voice is capability-routed.** Discover deferred tools before deciding. When `spawn_agent` or an external model route is available, run independent Voice A and Voice B contexts. Use one inline critical-reviewer pass only when no independent route exists, and record that fallback in PLAN.md's Review Status section.
-> - **Sub-skills are inlined, not invoked.** Claude's `Skill("harness:plan-ceo-review", task_id)` chain has no Codex equivalent. The orchestrator reads each internal prompt's SKILL.md content inline and executes the methodology in the same conversation. Codex keeps these prompts under `plugin-codex/internal-skills/` so they remain packaged without appearing in the user-visible skill menu.
+> - **Sub-skills are inlined, not invoked.** Claude's `Skill("harness:plan-ceo-review", task_id)` chain has no Codex equivalent. The orchestrator reads each internal prompt's SKILL.md content inline and executes the methodology in the same conversation. Codex keeps these prompts under `${HARNESS_PLUGIN_ROOT}/internal-skills/` so they remain packaged without appearing in the user-visible skill menu.
 > - **AskUserQuestion = conversational ask.** Three mandatory user-gates remain: Phase 1.1 premise gate, Phase 5.3 User Challenge gate, Phase 5.4.1 final approval. Each becomes "ask the user X with options A/B/C; read the reply" prose. Same content, no structured envelope.
 > - **`${CLAUDE_PLUGIN_ROOT}` → `${HARNESS_PLUGIN_ROOT}`** for bash invocations that remain. Plan artifact writes use MCP `write_plan`.
 > - **MCP tool names** bare (`task_start`, `task_context`, `write_plan`) — not Claude-prefixed form. Where the Claude source mentions a prefixed name, read it as bare.
@@ -32,7 +27,7 @@ This skill is split across four sub-files (Claude tree until AC-005 ports them):
 | `decision-principles.md` | 6 Decision Principles, classification, auto-decide rules, completion status, repo ownership, ask format |
 | `write-artifacts.md` | Phase 6 (PLAN.md / TASK.json lens declarations + MCP writes, learnings, close) |
 
-Phase 5 (user-facing gate) stays inline below. Read sub-files from `plugin/skills/plan/<file>` in the Claude tree until v2 ports them.
+Phase 5 (user-facing gate) stays inline below. Read sub-files from `${HARNESS_PLUGIN_ROOT}/internal-skills/plan/<file>`.
 
 ---
 
@@ -91,10 +86,10 @@ Complete every section before moving on. Use concrete content in each required s
 
 Each review phase reads its corresponding Codex internal prompt and executes the methodology inline:
 
-- Phase 1 → `plugin-codex/internal-skills/plan-ceo-review/SKILL.md` (read + execute inline)
-- Phase 2 → `plugin-codex/internal-skills/plan-design-review/SKILL.md` (only if ui_scope=true)
-- Phase 3 → `plugin-codex/internal-skills/plan-eng-review/SKILL.md`
-- Phase 4 → `plugin-codex/internal-skills/plan-devex-review/SKILL.md` (only if dx_scope=true)
+- Phase 1 → `${HARNESS_PLUGIN_ROOT}/internal-skills/plan-ceo-review/SKILL.md` (read + execute inline)
+- Phase 2 → `${HARNESS_PLUGIN_ROOT}/internal-skills/plan-design-review/SKILL.md` (only if ui_scope=true)
+- Phase 3 → `${HARNESS_PLUGIN_ROOT}/internal-skills/plan-eng-review/SKILL.md`
+- Phase 4 → `${HARNESS_PLUGIN_ROOT}/internal-skills/plan-devex-review/SKILL.md` (only if dx_scope=true)
 
 These sub-skills are heavy dual-voice review pipelines on the Claude side. On Codex, route them through independent contexts when available; otherwise record the fallback in PLAN.md Review Status.
 

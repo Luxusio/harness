@@ -39,6 +39,15 @@ EXPECTED_TOOLS = {
 
 
 class HarnessMcpServerTests(unittest.TestCase):
+    def setUp(self):
+        self._receipt_auth = mock.patch.object(
+            harness_lib, "_runtime_receipt_write_authorized", return_value=True,
+        )
+        self._receipt_auth.start()
+
+    def tearDown(self):
+        self._receipt_auth.stop()
+
     def _run_git(self, cwd: str, *args: str) -> None:
         subprocess.run(
             ["git", *args],
@@ -1873,6 +1882,15 @@ class HarnessMcpServerTests(unittest.TestCase):
 
 class HarnessMcpServerPR2CloseGate(unittest.TestCase):
     """Receipt and runtime-stale gates in task_close / task_verify."""
+
+    def setUp(self):
+        self._receipt_auth = mock.patch.object(
+            harness_lib, "_runtime_receipt_write_authorized", return_value=True,
+        )
+        self._receipt_auth.start()
+
+    def tearDown(self):
+        self._receipt_auth.stop()
 
     def _prepare_task(self, base: str, task_id: str, *, checks_yaml: str | None,
                       write_receipt: bool = True, write_handoff: bool = True,

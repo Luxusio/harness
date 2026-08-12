@@ -17,7 +17,7 @@ description: |
 
 Review the plan only. Apply the shared evidence, context-recovery, ownership, search,
 completeness, and conversational-ask rules in
-`plugin-codex/internal-skills/plan/SKILL.md`.
+`${HARNESS_PLUGIN_ROOT}/internal-skills/plan/SKILL.md`.
 
 ## Contract
 

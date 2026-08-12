@@ -272,6 +272,7 @@ def test_stop_only_append_failure_rolls_back_and_retries(tmp_path, monkeypatch):
         agent_type=agent_type,
     )
     payload = _stop_payload(session_id, agent_id, agent_type, transcript, final_message)
+    monkeypatch.setattr(_lib, "_runtime_receipt_write_authorized", lambda *_args: True)
     real_record = subagent_lifecycle.record_subagent_receipt
     calls = 0
 
@@ -302,6 +303,7 @@ def test_real_stop_append_failure_leaves_start_retryable(tmp_path, monkeypatch):
         agent_type=agent_type,
     )
     payload = _stop_payload(session_id, agent_id, agent_type, transcript, final_message)
+    monkeypatch.setattr(_lib, "_runtime_receipt_write_authorized", lambda *_args: True)
     real_record = subagent_lifecycle.record_subagent_receipt
     failed = False
 

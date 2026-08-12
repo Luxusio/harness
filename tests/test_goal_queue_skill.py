@@ -80,7 +80,7 @@ def test_goal_queue_codex_skill_documents_runtime_substitutions():
     assert "Codex runtime notes" in body
     assert "does not have Claude's `Skill()` chaining primitive" in body
     assert "bare MCP tool names" in body
-    assert "plugin-codex/internal-skills/run/SKILL.md" in body
+    assert "${HARNESS_PLUGIN_ROOT}/internal-skills/run/SKILL.md" in body
 
 
 def test_goal_queue_claude_skill_delegates_slices_to_harness_run():
