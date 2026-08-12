@@ -46,8 +46,8 @@ def test_codex_develop_documents_workflow_subagent_authorization():
 
     assert "Harness workflow authorization covers required subagents" in body
     assert "explicit user invocation or approval of a harness repo-mutating workflow" in body
-    assert "authorization to use the subagents required by that workflow" in body
-    assert "ordinary non-harness work" in body
+    assert "authorizes those required lanes" in body
+    assert "repo-mutating workflow" in body
 
 
 def test_claude_run_and_develop_document_workflow_subagent_authorization():
@@ -65,7 +65,7 @@ def test_run_and_develop_document_subagent_lifecycle_cleanup():
         assert "final response" in body
         assert "`task_close`" in body
         assert "Completed agents can" in body
-        assert "count toward the concurrency limit until closed" in body
+        assert "concurrency" in body and "until closed" in body
 
 
 def test_codex_run_documents_qa_subagent_call_shape():
@@ -80,7 +80,8 @@ def test_codex_run_documents_qa_subagent_call_shape():
     assert "prevents collaboration-tree name collisions" in body
     assert "concrete findings" in body
     assert "must not invent a PASS from its own context" in body
-    assert "`subagent_receipts`" in body
+    assert "`missing_for_close`" in body
+    assert "raw receipt records" in body
     assert "state the fallback in task state or final response" in body
     assert "Agent` fan-out routed through `spawn_agent` when available" in body
 

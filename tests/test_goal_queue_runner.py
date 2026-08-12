@@ -34,25 +34,22 @@ def write_task_state(tmp_path, task_id, status="closed", verdict="PASS"):
     rows = []
     for lens, agent in (("review-code", "review"), ("qa-cli", "qa")):
         for event in ("started", "completed"):
-            summary = "started" if event == "started" else f"VERDICT: {verdict}"
+            summary = "" if event == "started" else f"VERDICT: {verdict}"
             if lens == "review-code" and event == "completed":
                 summary += "\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+            if event == "completed":
+                summary += "\nDETAIL_SHA256:" + "0" * 64
             rows.append({
-                "receipt_id": f"receipt-{agent}-{event}",
                 "ts": "2026-08-12T00:00:00Z",
                 "event": event,
-                "source": "codex-lifecycle-watcher",
+                "source": "test_fixture",
                 "task_run_id": run_id,
+                "runtime_id": f"test:{agent}",
                 "agent_id": agent,
                 "agent_type": lens,
                 "lens": lens,
                 "verdict": "" if event == "started" else verdict,
                 "summary": summary,
-                "transcript_path": "",
-                "transcript_sha256": "",
-                "runtime_event_id": f"event-{agent}",
-                "runtime_session_id": "session",
-                "runtime_thread_id": agent,
             })
     receipt_bytes = "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows)
     (task_dir / "RECEIPTS.jsonl").write_text(receipt_bytes, encoding="utf-8")

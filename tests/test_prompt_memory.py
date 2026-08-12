@@ -25,25 +25,27 @@ RUN_ID = "0198c349-5800-7000-8000-000000000001"
 
 
 def _receipt(*, event: str, lens: str, agent_id: str, verdict: str = "") -> dict:
-    summary = "started" if event == "started" else f"VERDICT: {verdict}"
+    summary = "" if event == "started" else f"VERDICT: {verdict}"
     if lens.startswith("review-") and event == "completed":
-        summary += "\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+        fix_now = 1 if verdict == "FAIL" else 0
+        investigate = 1 if verdict == "BLOCKED_ENV" else 0
+        summary += (
+            f"\nFINDING_COUNTS: FIX_NOW={fix_now} "
+            f"INVESTIGATE={investigate} OPTIONAL=0"
+        )
+    if event == "completed":
+        summary += "\nDETAIL_SHA256:" + "0" * 64
     return {
-        "receipt_id": f"receipt-{agent_id}-{event}",
         "ts": "2026-08-12T00:00:00Z",
         "event": event,
-        "source": "codex-lifecycle-watcher",
+        "source": "test_fixture",
         "task_run_id": RUN_ID,
+        "runtime_id": f"test:{agent_id}",
         "agent_id": agent_id,
         "agent_type": agent_id,
         "lens": lens,
         "verdict": verdict,
         "summary": summary,
-        "transcript_path": "",
-        "transcript_sha256": "",
-        "runtime_event_id": f"event-{agent_id}",
-        "runtime_session_id": "session",
-        "runtime_thread_id": agent_id,
     }
 
 

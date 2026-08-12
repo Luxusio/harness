@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude SubagentStart/SubagentStop hook adapter for background_registry."""
+"""Claude SubagentStart/SubagentStop adapter for receipt-backed lifecycle."""
 from __future__ import annotations
 
 import argparse
@@ -18,7 +18,7 @@ try:
         log_gate_crash,
         read_hook_input,
     )
-    import background_registry  # type: ignore
+    import subagent_lifecycle  # type: ignore
 except Exception:
     sys.exit(0)
 
@@ -44,8 +44,7 @@ def main() -> int:
             repo_root = harness_root or candidate_root
         if not is_harness_enabled_repo(repo_root):
             return 0
-        background_registry.handle_subagent_hook(repo_root, payload, forced_event=args.event)
-        background_registry.prune(repo_root)
+        subagent_lifecycle.handle_subagent_hook(repo_root, payload, forced_event=args.event)
     except Exception as exc:
         try:
             log_gate_crash(exc, "background_hook", last_hook_input())

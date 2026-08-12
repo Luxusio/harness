@@ -6,6 +6,17 @@ All notable changes to the harness Claude Code plugin.
 
 ### Changed
 
+- Claude subagent lifecycle state now lives only in the task's unified
+  `RECEIPTS.jsonl`. The separate background registry, lock, RMW/prune state
+  machine, and diagnostic records were removed; Stop-hook active-work waiting
+  derives unmatched current-run/current-session starts directly from receipts.
+- Receipt rows use ten string fields with one namespaced `runtime_id`. Detailed
+  completion text stays in the runtime transcript while receipts retain the
+  validated verdict, review counts, and a detail digest. `task_context` and
+  `task_verify` no longer embed receipt summaries or duplicate report paths.
+- The paired develop and four plan-review skills now stay below the 500-line
+  budget by deleting repeated orchestration prose while retaining role-specific
+  gates, rubrics, output contracts, and runtime interaction differences.
 - Task packs now use one `RECEIPTS.jsonl` stream for review and QA evidence.
   New flows no longer generate `CHECKS.yaml` or `USER_FEEDBACK.jsonl`; PLAN owns
   acceptance intent and live conversation owns feedback handling. Legacy

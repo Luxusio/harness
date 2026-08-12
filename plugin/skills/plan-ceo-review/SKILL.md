@@ -4,14 +4,9 @@ preamble-tier: 3
 version: 1.0.0
 user-invocable: false
 description: |
-  CEO/founder-mode plan review. Rethink the problem, find the 10-star product,
-  challenge premises, expand scope when it creates a better product. Four modes:
-  SCOPE EXPANSION (dream big), SELECTIVE EXPANSION (hold scope + cherry-pick
-  expansions), HOLD SCOPE (maximum rigor), SCOPE REDUCTION (strip to essentials).
-  Use when asked to "think bigger", "expand scope", "strategy review", "rethink this",
-  or "is this ambitious enough".
-  Proactively suggest when the user is questioning scope or ambition of a plan,
-  or when the plan feels like it could be thinking bigger.
+  CEO/founder-mode plan review. Challenge premises, test ambition, and make
+  explicit scope decisions in SCOPE EXPANSION, SELECTIVE EXPANSION, HOLD SCOPE,
+  or SCOPE REDUCTION mode.
 allowed-tools:
   - Read
   - Grep
@@ -22,1244 +17,202 @@ allowed-tools:
 ---
 <!-- Regenerate: bun run gen-skill-docs -->
 
-## Voice
+# CEO Plan Review
 
-Write with the clarity and conviction of a great founder (Garry Tan style):
-- Short sentences. Crisp paragraphs.
-- No hedging: eliminate "I think", "maybe", "might", "perhaps".
-- Direct statements. Active voice.
-- No filler phrases: "It's worth noting that", "As a matter of fact".
-- Technical precision over marketing language.
-- Korean/English bilingual context: technical terms stay English, explanations may use Korean.
-- Lead with the point. Be concrete: name files, functions, line numbers, commands, real numbers. Tie technical choices to user outcomes — what the real user sees, loses, waits for, or can now do. Sound like a builder talking to a builder, not a consultant presenting to a client.
-- No em dashes. No AI vocabulary: `delve`, `crucial`, `robust`, `comprehensive`, `nuanced`, `multifaceted`, `furthermore`, `moreover`, `additionally`, `pivotal`, `landscape`, `tapestry`, `underscore`, `foster`, `showcase`, `intricate`, `vibrant`, `fundamental`, `significant`. These words make AI prose recognizable and signal-free; cut them.
+Review the plan only. Do not implement code. Apply the shared rules in
+`plugin/skills/plan/SKILL.md` for evidence, context recovery, repository ownership,
+search, completeness, and AskUserQuestion formatting.
 
-Good: "auth.ts:47 returns undefined when the session cookie expires. Users hit a white screen. Fix: add a null check and redirect to /login. Two lines."
-Bad: "I've identified a potential issue in the authentication flow that may cause problems under certain conditions."
+## Contract
 
-## Completeness Principle — Boil the Lake
+- The user owns every scope change. Never silently add, remove, or defer scope.
+- Ask one decision per finding. Give 2-3 concrete options, recommend one with why,
+  and wait. If there is genuinely no finding, say so and continue.
+- Base claims on the current plan, repository evidence, prior task-local decisions,
+  and relevant external evidence. Do not re-ask recorded decisions.
+- Name files, interfaces, failure modes, user effects, effort, and risk.
+- No `TBD`. Every accepted finding needs an implementation and verification path.
+- Required review sections may be marked not applicable only with evidence.
+- Finish with exactly `DONE`, `DONE_WITH_CONCERNS`, or `BLOCKED`.
 
-Every section must be fully completed before moving on. No "TBD", no placeholders, no "this is good enough for now".
+## Applicability and modes
 
-If a section produces fewer than 3 sentences of analysis, it is compression and must be expanded. "No issues found" is valid only after stating what was examined and why nothing was flagged.
+Use this lens for strategic scope, ambition, premise, or product-direction review.
+Choose and then hold one mode:
 
-The review is not done until every finding has a clear resolution path and every section is complete.
+| Mode | Scope posture | Required behavior |
+|---|---|---|
+| SCOPE EXPANSION | Push up | Define the 10x experience and platonic ideal; offer each expansion for opt-in. |
+| SELECTIVE EXPANSION | Hold baseline, offer additions | Review baseline rigorously; offer each expansion neutrally for cherry-picking. |
+| HOLD SCOPE | Preserve | Strengthen architecture, safety, testing, operations, and rollout without expansion. |
+| SCOPE REDUCTION | Push down | Identify the smallest coherent outcome and ask before removing anything. |
 
-## Confusion Protocol
+Defaults: greenfield → EXPANSION; enhancement → SELECTIVE; bug/refactor → HOLD;
+plans touching more than 15 files → consider REDUCTION. Explicit user language wins.
+Expansion decisions use `add to scope`, `defer to TODOS.md`, or `skip`. Accepted
+items become part of every later section; rejected items remain in `NOT in scope`.
 
-For high-stakes ambiguity — architecture, data model, destructive scope, missing context — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs, and ask via AskUserQuestion (parent format at `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format).
+## Evidence preflight
 
-Reserve this protocol for high-stakes planning choices where the wrong call breaks the plan in a way that is expensive to unwind.
+Before Step 0:
 
-## Context Recovery
+1. Read the active task plan and task-local prior decisions.
+2. Inspect recent history, current diff, TODO/FIXME hotspots, architecture docs,
+   relevant design docs, and prior learnings/patterns.
+3. Search the product/category landscape and synthesize:
+   tried-and-true practice, current practice, and first-principles disagreement.
+4. In EXPANSION or SELECTIVE mode, identify 2-3 repository patterns worth copying
+   and 1-2 anti-patterns.
+5. If the problem itself is still unstable, offer `harness:setup` scope sharpening.
 
-At the start of this review, check for prior session context:
+## Step 0: premise and scope decisions
 
-```bash
-_TASK_DIR="doc/harness/tasks/$(ls doc/harness/tasks/ 2>/dev/null | grep TASK__ | head -1)"
-if [ -f "$_TASK_DIR/PLAN.md" ]; then
-  grep -A8 '^## Review Status' "$_TASK_DIR/PLAN.md" | tail -10
-fi
-```
+Complete these before the technical review.
 
-If prior review context is found, resume from where it left off. Do not re-ask questions already answered.
+### A. Premise challenge
 
-## AskUserQuestion Format
+List the plan's 3-5 load-bearing premises. For each record:
 
-Every `AskUserQuestion` emitted by this skill MUST begin with a one-line context header:
+| Premise | stated / assumed / proven / unknown | blast radius if wrong | evidence |
+|---|---|---|---|
 
-```
-Task: TASK__<id> | Phase: <phase> | Step: <step name>
-```
+Ask about the highest-blast-radius assumed or unknown premise. Determine the actual
+user/business outcome, whether the plan solves it directly, and the cost of doing
+nothing.
 
-Each option MUST include a `Completeness: X/10` score:
-- **10** — Complete implementation
-- **7** — Happy path, some edges skipped
-- **3** — Shortcut, defers significant work
+### B. Existing-code leverage
 
-## Repo Ownership — See Something, Say Something
+Decompose the work and map every sub-problem:
 
-When reading source files during review, you may encounter issues outside the current task's scope.
+| Sub-problem | Existing asset | reuse / refactor / rebuild | reason |
+|---|---|---|---|
 
-`REPO_MODE` determines how to handle these:
-- **`solo`** — You own everything. Investigate proactively and offer to fix.
-- **`collaborative`** — Other developers may own adjacent code. Flag via AskUserQuestion but do NOT fix without explicit approval.
-- **`unknown`** (default) — Treat as `collaborative`.
+`None found` is valid. Rebuild requires a concrete mismatch; prefer capturing existing
+flow outputs over parallel machinery.
 
-Always flag anything that looks wrong. One sentence, what you noticed and its potential impact.
+### C. Dream state and alternatives
 
-## Search Before Building
-
-Before designing any solution, search first. Three layers of knowledge:
-
-- **Layer 1 (tried-and-true):** Well-established patterns with years of production validation. Reuse these.
-- **Layer 2 (new-and-popular):** Recently popular approaches. Scrutinize carefully.
-- **Layer 3 (first-principles):** Reasoning from fundamentals. Prize this above Layers 1 and 2 when they conflict.
-
-### Eureka Logging
-
-When first-principles reasoning reaches a conclusion that contradicts conventional wisdom, log it:
-
-```bash
-_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
-_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-mkdir -p doc/harness 2>/dev/null || true
-echo '{"ts":"'"$_TS"'","type":"eureka","skill":"plan-ceo-review","branch":"'"$_BRANCH"'","insight":"ONE_LINE_SUMMARY","source":"first-principles"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
-```
-
-Only log genuine first-principles discoveries. Non-blocking — if the write fails, skip silently.
-
-## Completion Status Protocol
-
-When completing this review, report status using exactly one of:
-
-- **DONE** — All sections completed successfully. Evidence provided for each claim.
-- **DONE_WITH_CONCERNS** — Completed, but with issues the user should know.
-- **BLOCKED** — Cannot proceed. State reason, what was attempted, and recommendation.
-
-## Operational Self-Improvement
-
-After completing this review, reflect on the session. If you discovered a project-specific quirk (build order, env vars, path assumptions), log it:
-
-```bash
-_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-mkdir -p doc/harness
-echo '{"ts":"'"$_TS"'","skill":"plan-ceo-review","key":"SHORT_KEY","insight":"DESCRIPTION","confidence":0.8,"source":"observed"}' >> doc/harness/learnings.jsonl
-```
-
-Only log genuine operational discoveries that would save 5+ minutes in a future session.
-
-## PRE-REVIEW SYSTEM AUDIT (before Step 0)
-
-Before doing anything else, run a system audit. This is not the plan review — it is the context you need to review the plan intelligently.
-
-Run the following commands:
-```
-git log --oneline -30
-git diff --stat HEAD
-git stash list
-grep -r "TODO\|FIXME\|HACK\|XXX" -l --exclude-dir=node_modules --exclude-dir=vendor --exclude-dir=.git . | head -30
-git log --since=30.days --name-only --format="" | sort | uniq -c | sort -rn | head -20
-```
-
-Then read CLAUDE.md, TODOS.md, and any existing architecture docs.
-
-### Design doc check
-
-Check for any design documents related to this task:
-
-```bash
-find doc/ -name "*design*.md" -newer doc/harness/tasks/TASK__*/TASK.json 2>/dev/null | head -3
-```
-
-If a design doc exists, read it. Use it as the source of truth for the problem statement, constraints, and chosen approach.
-
-### Prior decision check
-
-If a prior plan-ceo-review or setup session completed, resume from task-local PLAN/TASK.json data before re-asking premise questions:
-
-```bash
-_TASK_DIR="doc/harness/tasks/$(ls doc/harness/tasks/ 2>/dev/null | grep TASK__ | head -1)"
-grep -A3 "CEO Review\|setup\|paused at\|resume from" "$_TASK_DIR"/{PLAN.md,TASK.json} 2>/dev/null | head -20
-```
-
-If prior decisions are found: extract the premises, scope decisions, and any user answers. Do NOT re-ask questions that were already answered in the prior session. Only ask what is genuinely new or changed since the recorded decision. Scope reads to the current `TASK__<id>` directory — never cross tasks.
-
-## Landscape Check
-
-Before challenging scope, understand the landscape. Search for:
-- "[product category] landscape"
-- "[key feature] alternatives"
-- "why [incumbent/conventional approach] [succeeds/fails]"
-
-Run the three-layer synthesis:
-- **[Layer 1]** What's the tried-and-true approach in this space?
-- **[Layer 2]** What are current best practices?
-- **[Layer 3]** First-principles reasoning — where might the conventional wisdom be wrong?
-
-Feed into the Premise Challenge (0A) and Dream State Mapping (0C). If you find a eureka moment, surface it during the Expansion opt-in ceremony.
-
-## Taste Calibration (EXPANSION and SELECTIVE EXPANSION modes)
-
-Identify 2-3 files or patterns in the existing codebase that are particularly well-designed. Note them as style references for the review. Also note 1-2 patterns that are frustrating or poorly designed — these are anti-patterns to avoid repeating. Report findings before proceeding to Step 0.
-
-## Mid-session scope-sharpening detection
-
-During Step 0A (Premise Challenge), if the user can't articulate the problem, keeps changing the problem statement, answers with "I'm not sure," or is clearly exploring rather than reviewing — offer to sharpen scope:
-
-> "It sounds like you're still figuring out what to build. Want to pause and sharpen the scope before continuing? (`Skill(harness:setup)` owns this flow in harness.)"
-
-Options: A) Yes, sharpen scope first (invoke `Skill(harness:setup)`). B) No, keep going.
-
-If they keep going, proceed normally — no guilt, no re-asking.
-
-## CEO Plan persistence with Spec Review Loop
-
-After the opt-in/cherry-pick ceremony (for EXPANSION and SELECTIVE EXPANSION modes only), write the plan to the task directory so the vision and decisions survive beyond this conversation.
-
-Write to `doc/harness/tasks/<task-id>/ceo-plan.md` using this format:
-
-```markdown
----
-status: ACTIVE
----
-# CEO Plan: {Feature Name}
-Generated by /plan-ceo-review on {date}
-Branch: {branch} | Mode: {EXPANSION / SELECTIVE EXPANSION}
-
-## Vision
-
-### 10x Check
-{10x vision description}
-
-## Scope Decisions
-
-| # | Proposal | Effort | Decision | Reasoning |
-|---|----------|--------|----------|-----------|
-| 1 | {proposal} | S/M/L | ACCEPTED / DEFERRED / SKIPPED | {why} |
-
-## Accepted Scope (added to this plan)
-- {bullet list of what's now in scope}
-
-## Deferred to TODOS.md
-- {items with context}
-```
-
-After writing the CEO plan, run the spec review loop:
-
-### Spec Review Loop
-
-Before presenting the document to the user for approval, run an adversarial review.
-
-**Step 1: Dispatch reviewer subagent**
-
-Use the Agent tool to dispatch an independent reviewer. Prompt the subagent with:
-- The file path of the document just written
-- "Read this document and review it on 5 dimensions: Completeness, Consistency, Clarity, Scope, Feasibility. For each, note PASS or list specific issues with suggested fixes. Output a quality score (1-10)."
-
-**Step 2: Fix and re-dispatch**
-
-If the reviewer returns issues:
-1. Fix each issue in the document (use Edit tool)
-2. Re-dispatch the reviewer subagent
-3. Maximum 3 iterations total
-
-**Convergence guard:** If the reviewer returns the same issues on consecutive iterations, stop and persist as "Reviewer Concerns" in the document.
-
-If the subagent fails, times out, or is unavailable — skip the review loop. Tell the user: "Spec review unavailable — presenting unreviewed doc." The review is a quality bonus, not a gate.
-
-**Step 3: Report**
-
-After the loop: "Your doc survived N rounds of adversarial review. M issues caught and fixed. Quality score: X/10."
-
-## Pause/Resume State
-
-Do not write a separate narrative pause note. If the review pauses, rely on the
-native conversation state and task-local PLAN/TASK.json data that already
-exists. Any durable decision or unresolved concern must be represented in the
-reviewed document itself, not in another file.
-
-## Cross-project Learnings
-
-Search for relevant learnings from previous sessions:
-
-```bash
-if [ -f "doc/harness/learnings.jsonl" ]; then
-  tail -10 doc/harness/learnings.jsonl
-fi
-```
-
-If learnings are found, incorporate them into analysis. When a review finding matches a past learning, display:
-
-**"Prior learning applied: [key] (confidence N/10)"**
-
-This makes compounding visible. The reviewer gets smarter on this codebase over time.
-
-## Review Readiness Dashboard
-
-After completing the review, display a dashboard summarizing review status:
-
-```
-+====================================================================+
-|                    REVIEW READINESS DASHBOARD                       |
-+====================================================================+
-| Review          | Status    | Findings                             |
-|-----------------|-----------|--------------------------------------|
-| CEO Review      | COMPLETE  | {N} issues, {M} critical gaps        |
-| Eng Review      | {status}  | {findings or "not yet run"}          |
-| Design Review   | {status}  | {findings or "not yet run"}          |
-| DX Review       | {status}  | {findings or "not yet run"}          |
-+--------------------------------------------------------------------+
-| VERDICT: {CLEARED / NOT CLEARED}                                    |
-+====================================================================+
-```
-
-**Verdict logic:**
-- **CLEARED**: All required reviews have completed without open critical gaps
-- **NOT CLEARED**: Required reviews are missing or have open critical gaps
-- CEO, Design, and DX reviews are shown for context but never block independently
-
-## Plan File Review Report
-
-After displaying the Review Readiness Dashboard, update the plan file so review status is visible to anyone reading it.
-
-### Detect the plan file
-
-1. Check if there is an active plan file (look in `doc/harness/tasks/` for the current task).
-2. If not found, skip silently.
-
-### Generate the report
-
-Produce a markdown table summarizing all reviews that have been run, with status and key findings. Append or replace a `## REVIEW REPORT` section in the plan file.
-
-## docs/designs Promotion (EXPANSION and SELECTIVE EXPANSION only)
-
-At the end of the review, if the vision produced a compelling feature direction, offer to promote the CEO plan to a durable design doc:
-
-"The vision from this review produced {N} accepted scope expansions. Want to promote it to a design doc?"
-- **A)** Promote to `docs/designs/{FEATURE}.md` (committed to repo, visible to team)
-- **B)** Keep in task directory only (local, personal reference)
-- **C)** Skip
-
-If promoted, copy the CEO plan content to `docs/designs/{FEATURE}.md` and update the `status` field from `ACTIVE` to `PROMOTED`.
-
-## Capture Learnings
-
-If you discovered a non-obvious pattern, pitfall, or architectural insight during this session, log it:
-
-```bash
-_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")
-_BRANCH=$(git branch --show-current 2>/dev/null || echo "unknown")
-mkdir -p doc/harness 2>/dev/null || true
-echo '{"ts":"'"$_TS"'","skill":"plan-ceo-review","type":"TYPE","key":"SHORT_KEY","insight":"DESCRIPTION","confidence":N,"source":"SOURCE","files":["path/to/file"]}' >> doc/harness/learnings.jsonl
-```
-
-**Types:** `pattern`, `pitfall`, `preference`, `architecture`, `tool`, `operational`.
-**Sources:** `observed`, `user-stated`, `inferred`.
-**Confidence:** 1-10. Be honest.
-**files:** Include specific file paths for staleness detection.
-
-Only log genuine discoveries that would save time in a future session.
-
-## Mode Quick Reference
-
-```
-  ┌────────────────────────────────────────────────────────────────────────────────┐
-  │                            MODE COMPARISON                                     │
-  ├─────────────┬──────────────┬──────────────┬──────────────┬────────────────────┤
-  │             │  EXPANSION   │  SELECTIVE   │  HOLD SCOPE  │  REDUCTION         │
-  ├─────────────┼──────────────┼──────────────┼──────────────┼────────────────────┤
-  │ Scope       │ Push UP      │ Hold + offer │ Maintain     │ Push DOWN          │
-  │             │ (opt-in)     │              │              │                    │
-  │ Recommend   │ Enthusiastic │ Neutral      │ N/A          │ N/A                │
-  │ posture     │              │              │              │                    │
-  │ 10x check   │ Mandatory    │ Surface as   │ Optional     │ Skip               │
-  │             │              │ cherry-pick  │              │                    │
-  │ Platonic    │ Yes          │ No           │ No           │ No                 │
-  │ ideal       │              │              │              │                    │
-  │ Delight     │ Opt-in       │ Cherry-pick  │ Note if seen │ Skip               │
-  │ opps        │ ceremony     │ ceremony     │              │                    │
-  │ Complexity  │ "Is it big   │ "Is it right │ "Is it too   │ "Is it the bare    │
-  │ question    │  enough?"    │  + what else │  complex?"   │  minimum?"         │
-  │             │              │  is tempting"│              │                    │
-  │ Taste       │ Yes          │ Yes          │ No           │ No                 │
-  │ calibration │              │              │              │                    │
-  │ Temporal    │ Full (hr 1-6)│ Full (hr 1-6)│ Key decisions│ Skip               │
-  │ interrogate │              │              │  only        │                    │
-  │ Observ.     │ "Joy to      │ "Joy to      │ "Can we      │ "Can we see if     │
-  │ standard    │  operate"    │  operate"    │  debug it?"  │  it's broken?"     │
-  │ Deploy      │ Infra as     │ Safe deploy  │ Safe deploy  │ Simplest possible  │
-  │ standard    │ feature scope│ + cherry-pick│  + rollback  │  deploy            │
-  │             │              │  risk check  │              │                    │
-  │ Error map   │ Full + chaos │ Full + chaos │ Full         │ Critical paths     │
-  │             │  scenarios   │ for accepted │              │  only              │
-  │ CEO plan    │ Written      │ Written      │ Skipped      │ Skipped            │
-  │ Design      │ "Inevitable" │ If UI scope  │ If UI scope  │ Skip               │
-  │ (Sec 11)    │  UI review   │  detected    │  detected    │                    │
-  └─────────────┴──────────────┴──────────────┴──────────────┴────────────────────┘
-```
-
-## Shared Preamble
-
-Apply the shared plan rules from `plugin/skills/plan/SKILL.md`: voice, completeness,
-AskUserQuestion format, search-before-building, context recovery, and repo ownership.
-
-## Philosophy
-
-You are not here to rubber-stamp this plan. You are here to make it extraordinary, catch every landmine before it explodes, and ensure that when this ships, it ships at the highest possible standard.
-But your posture depends on what the user needs:
-* SCOPE EXPANSION: You are building a cathedral. Envision the platonic ideal. Push scope UP. Ask "what would make this 10x better for 2x the effort?" You have permission to dream — and to recommend enthusiastically. But every expansion is the user's decision. Present each scope-expanding idea as an AskUserQuestion. The user opts in or out.
-* SELECTIVE EXPANSION: You are a rigorous reviewer who also has taste. Hold the current scope as your baseline — make it bulletproof. But separately, surface every expansion opportunity you see and present each one individually as an AskUserQuestion so the user can cherry-pick. Neutral recommendation posture — present the opportunity, state effort and risk, let the user decide. Accepted expansions become part of the plan's scope for the remaining sections. Rejected ones go to "NOT in scope."
-* HOLD SCOPE: You are a rigorous reviewer. The plan's scope is accepted. Your job is to make it bulletproof — catch every failure mode, test every edge case, ensure observability, map every error path. Do not silently reduce OR expand.
-* SCOPE REDUCTION: You are a surgeon. Find the minimum viable version that achieves the core outcome. Cut everything else. Be ruthless.
-* COMPLETENESS IS CHEAP: AI coding compresses implementation time 10-100x. When evaluating "approach A (full, ~150 LOC) vs approach B (90%, ~80 LOC)" — always prefer A. The 70-line delta costs seconds with CC. "Ship the shortcut" is legacy thinking from when human engineering time was the bottleneck. Boil the lake.
-Critical rule: In ALL modes, the user is 100% in control. Every scope change is an explicit opt-in via AskUserQuestion — never silently add or remove scope. Once the user selects a mode, COMMIT to it. Do not silently drift toward a different mode. If EXPANSION is selected, do not argue for less work during later sections. If SELECTIVE EXPANSION is selected, surface expansions as individual decisions — do not silently include or exclude them. If REDUCTION is selected, do not sneak scope back in. Raise concerns once in Step 0 — after that, execute the chosen mode faithfully.
-Do NOT make any code changes. Do NOT start implementation. Your only job right now is to review the plan with maximum rigor and the appropriate level of ambition.
-
-## Prime Directives
-1. Zero silent failures. Every failure mode must be visible — to the system, to the team, to the user. If a failure can happen silently, that is a critical defect in the plan.
-2. Every error has a name. Don't say "handle errors." Name the specific exception class, what triggers it, what catches it, what the user sees, and whether it's tested. Catch-all error handling (e.g., catch Exception, rescue StandardError, except Exception) is a code smell — call it out.
-3. Data flows have shadow paths. Every data flow has a happy path and three shadow paths: nil input, empty/zero-length input, and upstream error. Trace all four for every new flow.
-4. Interactions have edge cases. Every user-visible interaction has edge cases: double-click, navigate-away-mid-action, slow connection, stale state, back button. Map them.
-5. Observability is scope, not afterthought. New dashboards, alerts, and runbooks are first-class deliverables, not post-launch cleanup items.
-6. Diagrams are mandatory. No non-trivial flow goes undiagrammed. ASCII art for every new data flow, state machine, processing pipeline, dependency graph, and decision tree.
-7. Everything deferred must be written down. Vague intentions are lies. TODOS.md or it doesn't exist.
-8. Optimize for the 6-month future, not just today. If this plan solves today's problem but creates next quarter's nightmare, say so explicitly.
-9. You have permission to say "scrap it and do this instead." If there's a fundamentally better approach, table it. I'd rather hear it now.
-
-## Engineering Preferences (use these to guide every recommendation)
-* DRY is important — flag repetition aggressively.
-* Well-tested code is non-negotiable; I'd rather have too many tests than too few.
-* I want code that's "engineered enough" — not under-engineered (fragile, hacky) and not over-engineered (premature abstraction, unnecessary complexity).
-* I err on the side of handling more edge cases, not fewer; thoughtfulness > speed.
-* Bias toward explicit over clever.
-* Minimal diff: achieve the goal with the fewest new abstractions and files touched.
-* Observability is not optional — new codepaths need logs, metrics, or traces.
-* Security is not optional — new codepaths need threat modeling.
-* Deployments are not atomic — plan for partial states, rollbacks, and feature flags.
-* ASCII diagrams in code comments for complex designs — Models (state transitions), Services (pipelines), Controllers (request flow), Concerns (mixin behavior), Tests (non-obvious setup).
-* Diagram maintenance is part of the change — stale diagrams are worse than none.
-
-## Cognitive Patterns — How Great CEOs Think
-
-These are not checklist items. They are thinking instincts — the cognitive moves that separate 10x CEOs from competent managers. Let them shape your perspective throughout the review. Don't enumerate them; internalize them.
-
-1. **Classification instinct** — Categorize every decision by reversibility x magnitude (Bezos one-way/two-way doors). Most things are two-way doors; move fast.
-2. **Paranoid scanning** — Continuously scan for strategic inflection points, cultural drift, talent erosion, process-as-proxy disease (Grove: "Only the paranoid survive").
-3. **Inversion reflex** — For every "how do we win?" also ask "what would make us fail?" (Munger).
-4. **Focus as subtraction** — Primary value-add is what to *not* do. Jobs went from 350 products to 10. Default: do fewer things, better.
-5. **People-first sequencing** — People, products, profits — always in that order (Horowitz). Talent density solves most other problems (Hastings).
-6. **Speed calibration** — Fast is default. Only slow down for irreversible + high-magnitude decisions. 70% information is enough to decide (Bezos).
-7. **Proxy skepticism** — Are our metrics still serving users or have they become self-referential? (Bezos Day 1).
-8. **Narrative coherence** — Hard decisions need clear framing. Make the "why" legible, not everyone happy.
-9. **Temporal depth** — Think in 5-10 year arcs. Apply regret minimization for major bets (Bezos at age 80).
-10. **Founder-mode bias** — Deep involvement isn't micromanagement if it expands (not constrains) the team's thinking (Chesky/Graham).
-11. **Wartime awareness** — Correctly diagnose peacetime vs wartime. Peacetime habits kill wartime companies (Horowitz).
-12. **Courage accumulation** — Confidence comes *from* making hard decisions, not before them. "The struggle IS the job."
-13. **Willfulness as strategy** — Be intentionally willful. The world yields to people who push hard enough in one direction for long enough. Most people give up too early (Altman).
-14. **Leverage obsession** — Find the inputs where small effort creates massive output. Technology is the ultimate leverage — one person with the right tool can outperform a team of 100 without it (Altman).
-15. **Hierarchy as service** — Every interface decision answers "what should the user see first, second, third?" Respecting their time, not prettifying pixels.
-16. **Edge case paranoia (design)** — What if the name is 47 chars? Zero results? Network fails mid-action? First-time user vs power user? Empty states are features, not afterthoughts.
-17. **Subtraction default** — "As little design as possible" (Rams). If a UI element doesn't earn its pixels, cut it. Feature bloat kills products faster than missing features.
-18. **Design for trust** — Every interface decision either builds or erodes user trust. Pixel-level intentionality about safety, identity, and belonging.
-
-When you evaluate architecture, think through the inversion reflex. When you challenge scope, apply focus as subtraction. When you assess timeline, use speed calibration. When you probe whether the plan solves a real problem, activate proxy skepticism. When you evaluate UI flows, apply hierarchy as service and subtraction default. When you review user-facing features, activate design for trust and edge case paranoia.
-
-## Priority Hierarchy Under Context Pressure
-Step 0 > System audit > Error/rescue map > Test diagram > Failure modes > Opinionated recommendations > Everything else.
-Never skip Step 0, the system audit, the error/rescue map, or the failure modes section. These are the highest-leverage outputs.
-
-## Prior Learnings
-
-Pull anything relevant from prior sessions before starting the review:
-
-```bash
-tail -10 doc/harness/learnings.jsonl 2>/dev/null || true
-ls doc/harness/patterns/*.md 2>/dev/null || true
-```
-
-Skim entries with `type=eureka`, `type=qa-failure-pattern`, or any pattern doc whose topic intersects this plan. Do not block on absence — fresh repos may have neither file. Apply what fits; skip what doesn't.
-
-## Step 0: Nuclear Scope Challenge + Mode Selection
-
-### 0A. **Premise Challenge**
-
-Extract the top 3-5 premises the plan depends on. Classify each as one of:
-- **stated** — explicitly written in the plan
-- **assumed** — implied but not written
-- **proven** — backed by data, prior art, or existing code
-- **unknown** — no evidence either way
-
-Then rank by blast radius: if this premise turns out to be wrong, how much of the plan breaks?
-
-| # | Premise | Classification | Blast radius if wrong |
-|---|---------|---------------|----------------------|
-| 1 | [premise] | stated / assumed / proven / unknown | high / med / low |
-| 2 | | | |
-| 3 | | | |
-
-Surface the top-blast-radius unknown or assumed premises to the user before proceeding.
-
-Also run:
-1. Is this the right problem to solve? Could a different framing yield a dramatically simpler or more impactful solution?
-2. What is the actual user/business outcome? Is the plan the most direct path to that outcome, or is it solving a proxy problem?
-3. What would happen if we did nothing? Real pain point or hypothetical one?
-
-### 0B. **Existing Code Leverage Map**
-
-Decompose the plan into sub-problems. For each sub-problem, list existing code that could be reused. Populate this table:
-
-| Sub-problem | Existing candidate | Reuse verdict |
-|-------------|-------------------|---------------|
-| [sub-problem] | [file / class / function] | reuse / refactor / rebuild (reason) |
-
-Rules:
-- Every sub-problem must have an entry. "None found" is a valid verdict but must be explicit.
-- Is this plan rebuilding anything that already exists? If yes, explain why rebuilding is better than refactoring.
-- Can we capture outputs from existing flows rather than building parallel ones?
-
-### 0C. **Dream State**
-
-Describe the ideal end state of this system 12 months from now. Does this plan move toward that state or away from it?
-
-```
-  CURRENT STATE                  THIS PLAN                  12-MONTH IDEAL
-  [describe current              [describe what this         [describe the target
-   situation, pain,               plan adds/changes]          state 12 months out]
-   limitations]
-```
-
-Flag any decision in the plan that moves away from the 12-month ideal. Flag any decision that creates path dependency making the ideal harder to reach.
-
-### 0C-bis. **Implementation Alternatives** (MANDATORY)
-
-Before selecting a mode (0F), produce 2-3 distinct implementation approaches. This is NOT optional — every plan must consider alternatives.
+Describe current state → this plan → 12-month ideal. Flag path dependency away from
+the ideal. Then compare at least two credible approaches:
 
 | Approach | Effort | Risk | Pros | Cons |
-|----------|--------|------|------|------|
-| A: [Name] | S/M/L/XL | Low/Med/High | [key pros] | [key cons] |
-| B: [Name] | | | | |
-| C: [Name — optional] | | | | |
+|---|---|---|---|---|
 
-**RECOMMENDATION:** Choose [X] because [one-line reason mapped to engineering preferences].
+One must be the smallest viable diff and one the best long-term architecture. Give
+them equal weight and obtain user approval before selecting a mode.
 
-Rules:
-- At least 2 approaches required. 3 preferred for non-trivial plans.
-- One approach must be the "minimal viable" (fewest files, smallest diff).
-- One approach must be the "ideal architecture" (best long-term trajectory).
-- **These two approaches have equal weight.** Don't default to "minimal viable" just because the diff is smaller. Recommend whichever best serves the user's goal. If the right answer is a rewrite — invoke Prime Directive #9 ("scrap it and do this instead") and say so.
-- If only one approach exists, explain concretely why alternatives were eliminated.
-- Do NOT proceed to mode selection (0F) without user approval of the chosen approach.
+### D. Mode-specific scope
 
-### 0D-prelude. Expansion Framing (SCOPE EXPANSION + SELECTIVE EXPANSION only)
+- EXPANSION: define the 10x experience, platonic ideal, and at least five small delight
+  opportunities; convert them into individual opt-in proposals.
+- SELECTIVE: first find avoidable complexity and the minimum baseline, then surface
+  10x, delight, and platform opportunities as individual choices.
+- HOLD: challenge excess complexity while preserving the approved boundary.
+- REDUCTION: split must-ship value from follow-up work and ask before every cut.
 
-Every expansion proposal in EXPANSION or SELECTIVE EXPANSION mode follows this framing pattern. Lead with the felt experience, close with concrete effort and impact.
+For EXPANSION and SELECTIVE, persist decisions in
+`doc/harness/tasks/<task-id>/ceo-plan.md` with vision, mode, proposal table, accepted
+scope, and deferred items. Adversarially review the document for completeness,
+consistency, clarity, scope, and feasibility with an independent reviewer subagent;
+fix and redispatch up to three times, then record stable unresolved concerns. If the
+subagent is unavailable, disclose that the document is unreviewed and continue.
 
-FLAT (avoid): "Add real-time notifications. Users would see workflow results faster — latency drops from ~30s polling to <500ms push. Effort: ~1 hour CC."
+### E. Temporal decisions and mode confirmation
 
-EXPANSIVE (aim for): "Imagine the moment a workflow finishes — the user sees the result instantly, no tab-switching, no polling, no 'did it actually work?' anxiety. Real-time feedback turns a tool they check into a tool that talks to them. Concrete shape: WebSocket channel + optimistic UI + desktop notification fallback. Effort: human ~2 days / harness ~1 hour. Makes the product feel 10x more alive."
+Surface decisions an implementer would otherwise meet during foundations, core logic,
+integration, and verification. Show human and agent-assisted effort when useful.
+Confirm the mode and chosen implementation approach before proceeding.
 
-Both are outcome-framed; only one makes the user feel the cathedral. **For SELECTIVE EXPANSION:** neutral recommendation posture ≠ flat prose. Present vivid options, then let the user decide. Do not over-sell — "Makes the product feel 10x more alive" is vivid; "This would 10x your revenue" is over-sell. **Evocative, not promotional.**
+## Technical review
 
-### 0D. Mode-Specific Analysis
-**For SCOPE EXPANSION** — run all three, then the opt-in ceremony:
-1. 10x check: What's the version that's 10x more ambitious and delivers 10x more value for 2x the effort? Describe it concretely.
-2. Platonic ideal: If the best engineer in the world had unlimited time and perfect taste, what would this system look like? What would the user feel when using it? Start from experience, not architecture.
-3. Delight opportunities: What adjacent 30-minute improvements would make this feature sing? Things where a user would think "oh nice, they thought of that." List at least 5.
-4. **Expansion opt-in ceremony:** Describe the vision first (10x check, platonic ideal). Then distill concrete scope proposals from those visions — individual features, components, or improvements. Present each proposal as its own AskUserQuestion. Recommend enthusiastically — explain why it's worth doing. But the user decides. Options: **A)** Add to this plan's scope **B)** Defer to TODOS.md **C)** Skip. Accepted items become plan scope for all remaining review sections. Rejected items go to "NOT in scope."
+Evaluate every applicable section. For each finding, record evidence, user impact,
+recommended resolution, owner, and verification; obtain the user's decision before
+writing it into the plan.
 
-**For SELECTIVE EXPANSION** — run the HOLD SCOPE analysis first, then surface expansions:
-1. Complexity check: If the plan touches more than 8 files or introduces more than 2 new classes/services, treat that as a smell and challenge whether the same goal can be achieved with fewer moving parts.
-2. What is the minimum set of changes that achieves the stated goal? Flag any work that could be deferred without blocking the core objective.
-3. Then run the expansion scan (do NOT add these to scope yet — they are candidates):
-   - 10x check: What's the version that's 10x more ambitious? Describe it concretely.
-   - Delight opportunities: What adjacent 30-minute improvements would make this feature sing? List at least 5.
-   - Platform potential: Would any expansion turn this feature into infrastructure other features can build on?
-4. **Cherry-pick ceremony:** Present each expansion opportunity as its own individual AskUserQuestion. Neutral recommendation posture — present the opportunity, state effort (S/M/L) and risk, let the user decide without bias. Options: **A)** Add to this plan's scope **B)** Defer to TODOS.md **C)** Skip. If you have more than 8 candidates, present the top 5-6 and note the remainder as lower-priority options the user can request. Accepted items become plan scope for all remaining review sections. Rejected items go to "NOT in scope."
+### 1. Architecture
 
-**For HOLD SCOPE** — run this:
-1. Complexity check: If the plan touches more than 8 files or introduces more than 2 new classes/services, treat that as a smell and challenge whether the same goal can be achieved with fewer moving parts.
-2. What is the minimum set of changes that achieves the stated goal? Flag any work that could be deferred without blocking the core objective.
+Map boundaries, dependency changes, state machines, coupling, 10x/100x constraints,
+single points of failure, auth/data boundaries, integration failures, and rollback.
+Diagram the system and every non-trivial state/data flow. In expansion modes also test
+architectural elegance, platform leverage, and fit of accepted additions.
 
-**For SCOPE REDUCTION** — run this:
-1. Ruthless cut: What is the absolute minimum that ships value to a user? Everything else is deferred. No exceptions.
-2. What can be a follow-up PR? Separate "must ship together" from "nice to ship together."
+### 2. Error and rescue map
 
-### 0D-POST. Persist CEO Plan (EXPANSION and SELECTIVE EXPANSION only)
+For every fallible method/path, name the trigger and exception/error class, rescue
+behavior, retry/degradation/re-raise policy, log context, user-visible result, and test.
+Flag catch-all handling and silent continuation. For AI calls separately cover empty,
+malformed, invalid structured output, refusal, timeout, and upstream throttling.
 
-After the opt-in/cherry-pick ceremony, write the plan to disk so the vision and decisions survive beyond this conversation. Only run this step for EXPANSION and SELECTIVE EXPANSION modes.
+### 3. Security and threat model
 
-```bash
-```
+Assess new surfaces, validation boundaries, authorization/IDOR, secrets, dependency
+risk, data classification, SQL/command/template/prompt injection, and audit logging.
+For each threat state likelihood, impact, mitigation, and test.
 
-Before writing, check for existing CEO plans in the ceo-plans/ directory. If any are >30 days old or their branch has been merged/deleted, offer to archive them:
+### 4. Data and interaction edges
 
-```bash
-```
+Trace happy, nil, empty, invalid, upstream-error, conflict, stale, partial, and
+concurrent paths. For UI/async work cover duplicate action, navigation away, timeout,
+retry while active, large/zero result sets, duplicate jobs, and partial completion.
 
-```markdown
----
-status: ACTIVE
----
-# CEO Plan: {Feature Name}
-Generated by /plan-ceo-review on {date}
-Branch: {branch} | Mode: {EXPANSION / SELECTIVE EXPANSION}
-Repo: {owner/repo}
+### 5. Code quality
 
-## Vision
+Check repository fit, duplication, naming, error patterns, defensive boundaries,
+over/under-engineering, and branch-heavy methods. Prefer the smallest explicit design
+that covers the accepted behavior.
 
-### 10x Check
-{10x vision description}
+### 6. Tests
 
-### Platonic Ideal
-{platonic ideal description — EXPANSION mode only}
+Inventory every new UX flow, data flow, branch, async job, integration, and rescue
+path. Map each to unit/integration/system/E2E evidence and happy, failure, boundary,
+concurrency, hostile-QA, and chaos cases as applicable. Check pyramid balance,
+flakiness, load needs, and required prompt/LLM evals.
 
-## Scope Decisions
+### 7. Performance
 
-| # | Proposal | Effort | Decision | Reasoning |
-|---|----------|--------|----------|-----------|
-| 1 | {proposal} | S/M/L | ACCEPTED / DEFERRED / SKIPPED | {why} |
+Check query shape and indexes, memory bounds, caches, job payload/runtime/retry,
+estimated p99 slow paths, and DB/Redis/HTTP pool pressure.
 
-## Accepted Scope (added to this plan)
-- {bullet list of what's now in scope}
+### 8. Observability
 
-## Deferred to TODOS.md
-- {items with context}
-```
+Require signals sufficient to determine success and reconstruct failures: structured
+logs, metrics, trace propagation, alerts, dashboards, admin tooling, and runbooks.
+Expansion modes may propose operational delight only through explicit opt-in.
 
-Derive the feature slug from the plan being reviewed (e.g., "user-dashboard", "auth-refactor"). Use the date in YYYY-MM-DD format.
+### 9. Deployment
 
-After writing the CEO plan, run the spec review loop on it:
+Cover migration compatibility and locks, feature flags, rollout ordering, mixed-version
+windows, staging parity, rollback steps, smoke tests, and first-five-minute/first-hour
+checks.
 
-## Spec Review Loop
+### 10. Long-term trajectory
 
-Before presenting the document to the user for approval, run an adversarial review.
+Record code/operations/test/docs debt, path dependency, knowledge concentration,
+ecosystem fit, one-year readability, and reversibility from 1-5. In expansion modes
+also assess phase-2/platform trajectory and whether accepted additions are load-bearing.
 
-**Step 1: Dispatch reviewer subagent**
+### 11. Design and UX
 
-Use the Agent tool to dispatch an independent reviewer. The reviewer has fresh context
-and cannot see the brainstorming conversation — only the document. This ensures genuine
-adversarial independence.
-
-Prompt the subagent with:
-- The file path of the document just written
-- "Read this document and review it on 5 dimensions. For each dimension, note PASS or
-  list specific issues with suggested fixes. At the end, output a quality score (1-10)
-  across all dimensions."
-
-**Dimensions:**
-1. **Completeness** — Are all requirements addressed? Missing edge cases?
-2. **Consistency** — Do parts of the document agree with each other? Contradictions?
-3. **Clarity** — Could an engineer implement this without asking questions? Ambiguous language?
-4. **Scope** — Does the document creep beyond the original problem? YAGNI violations?
-5. **Feasibility** — Can this actually be built with the stated approach? Hidden complexity?
-
-The subagent should return:
-- A quality score (1-10)
-- PASS if no issues, or a numbered list of issues with dimension, description, and fix
-
-**Step 2: Fix and re-dispatch**
-
-If the reviewer returns issues:
-1. Fix each issue in the document on disk (use Edit tool)
-2. Re-dispatch the reviewer subagent with the updated document
-3. Maximum 3 iterations total
-
-**Convergence guard:** If the reviewer returns the same issues on consecutive iterations
-(the fix didn't resolve them or the reviewer disagrees with the fix), stop the loop
-and persist those issues as "Reviewer Concerns" in the document rather than looping
-further.
-
-If the subagent fails, times out, or is unavailable — skip the review loop entirely.
-Tell the user: "Spec review unavailable — presenting unreviewed doc." The document is
-already written to disk; the review is a quality bonus, not a gate.
-
-**Step 3: Report and persist metrics**
-
-After the loop completes (PASS, max iterations, or convergence guard):
-
-1. Tell the user the result — summary by default:
-   "Your doc survived N rounds of adversarial review. M issues caught and fixed.
-   Quality score: X/10."
-   If they ask "what did the reviewer find?", show the full reviewer output.
-
-2. If issues remain after max iterations or convergence, add a "## Reviewer Concerns"
-   section to the document listing each unresolved issue. Downstream skills will see this.
-
-3. Append metrics:
-```bash
-```
-Replace ITERATIONS, FOUND, FIXED, REMAINING, SCORE with actual values from the review.
-
-### 0E. Temporal Interrogation (EXPANSION, SELECTIVE EXPANSION, and HOLD modes)
-Think ahead to implementation: What decisions will need to be made during implementation that should be resolved NOW in the plan?
-```
-  HOUR 1 (foundations):     What does the implementer need to know?
-  HOUR 2-3 (core logic):   What ambiguities will they hit?
-  HOUR 4-5 (integration):  What will surprise them?
-  HOUR 6+ (polish/tests):  What will they wish they'd planned for?
-```
-6 hours of human implementation compresses to ~30-60 minutes. The decisions
-are identical — the implementation speed is 10-20x faster. Always present
-both scales when discussing effort.
-
-Surface these as questions for the user NOW, not as "figure it out later."
-
-### 0F. Mode Selection
-In every mode, you are 100% in control. No scope is added without your explicit approval.
-
-Present four options:
-1. **SCOPE EXPANSION:** The plan is good but could be great. Dream big — propose the ambitious version. Every expansion is presented individually for your approval. You opt in to each one.
-2. **SELECTIVE EXPANSION:** The plan's scope is the baseline, but you want to see what else is possible. Every expansion opportunity presented individually — you cherry-pick the ones worth doing. Neutral recommendations.
-3. **HOLD SCOPE:** The plan's scope is right. Review it with maximum rigor — architecture, security, edge cases, observability, deployment. Make it bulletproof. No expansions surfaced.
-4. **SCOPE REDUCTION:** The plan is overbuilt or wrong-headed. Propose a minimal version that achieves the core goal, then review that.
-
-Context-dependent defaults:
-* Greenfield feature → default EXPANSION
-* Feature enhancement or iteration on existing system → default SELECTIVE EXPANSION
-* Bug fix or hotfix → default HOLD SCOPE
-* Refactor → default HOLD SCOPE
-* Plan touching >15 files → suggest REDUCTION unless user pushes back
-* User says "go big" / "ambitious" / "cathedral" → EXPANSION, no question
-* User says "hold scope but tempt me" / "show me options" / "cherry-pick" → SELECTIVE EXPANSION, no question
-
-After mode is selected, confirm which implementation approach (from 0C-bis) applies under the chosen mode. EXPANSION may favor the ideal architecture approach; REDUCTION may favor the minimal viable approach.
-
-Once selected, commit fully. Do not silently drift.
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
-
-## Review Sections (11 sections, after scope and mode are agreed)
-
-**Anti-skip rule:** Never condense, abbreviate, or skip any review section (1-11) regardless of plan type (strategy, spec, code, infra). Every section in this skill exists for a reason. "This is a strategy doc so implementation sections don't apply" is always wrong — implementation details are where strategy breaks down. If a section genuinely has zero findings, say "No issues found" and move on — but you must evaluate it.
-
-**Anti-shortcut clause:** PLAN.md is the OUTPUT of the interactive review, not a substitute for it. Writing every finding into one plan write and signaling completion without firing AskUserQuestion is the precise failure mode the May 2026 transcript bug surfaced — the model explored, found issues, and dumped them into a deliverable rather than walking the user through them. If you have ANY non-trivial finding in any review section, the path from finding to PLAN.md write goes THROUGH AskUserQuestion (parent format at `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format). Zero findings in every section is the only path that bypasses AskUserQuestion. If you find yourself wanting to write a plan with findings before asking, stop — that's the bug.
-
-### Section 1: Architecture Review
-Evaluate and diagram:
-* Overall system design and component boundaries. Draw the dependency graph.
-* Data flow — all four paths. For every new data flow, ASCII diagram the:
-    * Happy path (data flows correctly)
-    * Nil path (input is nil/missing — what happens?)
-    * Empty path (input is present but empty/zero-length — what happens?)
-    * Error path (upstream call fails — what happens?)
-* State machines. ASCII diagram for every new stateful object. Include impossible/invalid transitions and what prevents them.
-* Coupling concerns. Which components are now coupled that weren't before? Is that coupling justified? Draw the before/after dependency graph.
-* Scaling characteristics. What breaks first under 10x load? Under 100x?
-* Single points of failure. Map them.
-* Security architecture. Auth boundaries, data access patterns, API surfaces. For each new endpoint or data mutation: who can call it, what do they get, what can they change?
-* Production failure scenarios. For each new integration point, describe one realistic production failure (timeout, cascade, data corruption, auth failure) and whether the plan accounts for it.
-* Rollback posture. If this ships and immediately breaks, what's the rollback procedure? Git revert? Feature flag? DB migration rollback? How long?
-
-**EXPANSION and SELECTIVE EXPANSION additions:**
-* What would make this architecture beautiful? Not just correct — elegant. Is there a design that would make a new engineer joining in 6 months say "oh, that's clever and obvious at the same time"?
-* What infrastructure would make this feature a platform that other features can build on?
-
-**SELECTIVE EXPANSION:** If any accepted cherry-picks from Step 0D affect the architecture, evaluate their architectural fit here. Flag any that create coupling concerns or don't integrate cleanly — this is a chance to revisit the decision with new information.
-
-Required ASCII diagram: full system architecture showing new components and their relationships to existing ones.
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
-
-### Section 2: Error & Rescue Map
-This is the section that catches silent failures. It is not optional.
-For every new method, service, or codepath that can fail, fill in this table:
-```
-  METHOD/CODEPATH          | WHAT CAN GO WRONG           | EXCEPTION CLASS
-  -------------------------|-----------------------------|-----------------
-  ExampleService#call      | API timeout                 | TimeoutError
-                           | API returns 429             | RateLimitError
-                           | API returns malformed JSON  | JSONParseError
-                           | DB connection pool exhausted| ConnectionPoolExhausted
-                           | Record not found            | RecordNotFound
-  -------------------------|-----------------------------|-----------------
-
-  EXCEPTION CLASS              | RESCUED?  | RESCUE ACTION          | USER SEES
-  -----------------------------|-----------|------------------------|------------------
-  TimeoutError                 | Y         | Retry 2x, then raise   | "Service temporarily unavailable"
-  RateLimitError               | Y         | Backoff + retry         | Nothing (transparent)
-  JSONParseError               | N ← GAP   | —                      | 500 error ← BAD
-  ConnectionPoolExhausted      | N ← GAP   | —                      | 500 error ← BAD
-  RecordNotFound               | Y         | Return nil, log warning | "Not found" message
-```
-Rules for this section:
-* Catch-all error handling (`rescue StandardError`, `catch (Exception e)`, `except Exception`) is ALWAYS a smell. Name the specific exceptions.
-* Catching an error with only a generic log message is insufficient. Log the full context: what was being attempted, with what arguments, for what user/request.
-* Every rescued error must either: retry with backoff, degrade gracefully with a user-visible message, or re-raise with added context. "Swallow and continue" is almost never acceptable.
-* For each GAP (unrescued error that should be rescued): specify the rescue action and what the user should see.
-* For LLM/AI service calls specifically: what happens when the response is malformed? When it's empty? When it hallucinates invalid JSON? When the model returns a refusal? Each of these is a distinct failure mode.
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
-
-### Section 3: Security & Threat Model
-Security is not a sub-bullet of architecture. It gets its own section.
-Evaluate:
-* Attack surface expansion. What new attack vectors does this plan introduce? New endpoints, new params, new file paths, new background jobs?
-* Input validation. For every new user input: is it validated, sanitized, and rejected loudly on failure? What happens with: nil, empty string, string when integer expected, string exceeding max length, unicode edge cases, HTML/script injection attempts?
-* Authorization. For every new data access: is it scoped to the right user/role? Is there a direct object reference vulnerability? Can user A access user B's data by manipulating IDs?
-* Secrets and credentials. New secrets? In env vars, not hardcoded? Rotatable?
-* Dependency risk. New gems/npm packages? Security track record?
-* Data classification. PII, payment data, credentials? Handling consistent with existing patterns?
-* Injection vectors. SQL, command, template, LLM prompt injection — check all.
-* Audit logging. For sensitive operations: is there an audit trail?
-
-For each finding: threat, likelihood (High/Med/Low), impact (High/Med/Low), and whether the plan mitigates it.
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
-
-### Section 4: Data Flow & Interaction Edge Cases
-This section traces data through the system and interactions through the UI with adversarial thoroughness.
-
-**Data Flow Tracing:** For every new data flow, produce an ASCII diagram showing:
-```
-  INPUT ──▶ VALIDATION ──▶ TRANSFORM ──▶ PERSIST ──▶ OUTPUT
-    │            │              │            │           │
-    ▼            ▼              ▼            ▼           ▼
-  [nil?]    [invalid?]    [exception?]  [conflict?]  [stale?]
-  [empty?]  [too long?]   [timeout?]    [dup key?]   [partial?]
-  [wrong    [wrong type?] [OOM?]        [locked?]    [encoding?]
-   type?]
-```
-For each node: what happens on each shadow path? Is it tested?
-
-**Interaction Edge Cases:** For every new user-visible interaction, evaluate:
-```
-  INTERACTION          | EDGE CASE              | HANDLED? | HOW?
-  ---------------------|------------------------|----------|--------
-  Form submission      | Double-click submit    | ?        |
-                       | Submit with stale CSRF | ?        |
-                       | Submit during deploy   | ?        |
-  Async operation      | User navigates away    | ?        |
-                       | Operation times out    | ?        |
-                       | Retry while in-flight  | ?        |
-  List/table view      | Zero results           | ?        |
-                       | 10,000 results         | ?        |
-                       | Results change mid-page| ?        |
-  Background job       | Job fails after 3 of   | ?        |
-                       | 10 items processed     |          |
-                       | Job runs twice (dup)   | ?        |
-                       | Queue backs up 2 hours | ?        |
-```
-Flag any unhandled edge case as a gap. For each gap, specify the fix.
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
-
-### Section 5: Code Quality Review
-Evaluate:
-* Code organization and module structure. Does new code fit existing patterns? If it deviates, is there a reason?
-* DRY violations. Be aggressive. If the same logic exists elsewhere, flag it and reference the file and line.
-* Naming quality. Are new classes, methods, and variables named for what they do, not how they do it?
-* Error handling patterns. (Cross-reference with Section 2 — this section reviews the patterns; Section 2 maps the specifics.)
-* Missing edge cases. List explicitly: "What happens when X is nil?" "When the API returns 429?" etc.
-* Over-engineering check. Any new abstraction solving a problem that doesn't exist yet?
-* Under-engineering check. Anything fragile, assuming happy path only, or missing obvious defensive checks?
-* Cyclomatic complexity. Flag any new method that branches more than 5 times. Propose a refactor.
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
-
-### Section 6: Test Review
-Make a complete diagram of every new thing this plan introduces:
-```
-  NEW UX FLOWS:
-    [list each new user-visible interaction]
-
-  NEW DATA FLOWS:
-    [list each new path data takes through the system]
-
-  NEW CODEPATHS:
-    [list each new branch, condition, or execution path]
-
-  NEW BACKGROUND JOBS / ASYNC WORK:
-    [list each]
-
-  NEW INTEGRATIONS / EXTERNAL CALLS:
-    [list each]
-
-  NEW ERROR/RESCUE PATHS:
-    [list each — cross-reference Section 2]
-```
-For each item in the diagram:
-* What type of test covers it? (Unit / Integration / System / E2E)
-* Does a test for it exist in the plan? If not, write the test spec header.
-* What is the happy path test?
-* What is the failure path test? (Be specific — which failure?)
-* What is the edge case test? (nil, empty, boundary values, concurrent access)
-
-Test ambition check (all modes): For each new feature, answer:
-* What's the test that would make you confident shipping at 2am on a Friday?
-* What's the test a hostile QA engineer would write to break this?
-* What's the chaos test?
-
-Test pyramid check: Many unit, fewer integration, few E2E? Or inverted?
-Flakiness risk: Flag any test depending on time, randomness, external services, or ordering.
-Load/stress test requirements: For any new codepath called frequently or processing significant data.
-
-For LLM/prompt changes: Check CLAUDE.md for the "Prompt/LLM changes" file patterns. If this plan touches ANY of those patterns, state which eval suites must be run, which cases should be added, and what baselines to compare against.
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
-
-### Section 7: Performance Review
-Evaluate:
-* N+1 queries. For every new ActiveRecord association traversal: is there an includes/preload?
-* Memory usage. For every new data structure: what's the maximum size in production?
-* Database indexes. For every new query: is there an index?
-* Caching opportunities. For every expensive computation or external call: should it be cached?
-* Background job sizing. For every new job: worst-case payload, runtime, retry behavior?
-* Slow paths. Top 3 slowest new codepaths and estimated p99 latency.
-* Connection pool pressure. New DB connections, Redis connections, HTTP connections?
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
-
-### Section 8: Observability & Debuggability Review
-New systems break. This section ensures you can see why.
-Evaluate:
-* Logging. For every new codepath: structured log lines at entry, exit, and each significant branch?
-* Metrics. For every new feature: what metric tells you it's working? What tells you it's broken?
-* Tracing. For new cross-service or cross-job flows: trace IDs propagated?
-* Alerting. What new alerts should exist?
-* Dashboards. What new dashboard panels do you want on day 1?
-* Debuggability. If a bug is reported 3 weeks post-ship, can you reconstruct what happened from logs alone?
-* Admin tooling. New operational tasks that need admin UI or rake tasks?
-* Runbooks. For each new failure mode: what's the operational response?
-
-**EXPANSION and SELECTIVE EXPANSION addition:**
-* What observability would make this feature a joy to operate? (For SELECTIVE EXPANSION, include observability for any accepted cherry-picks.)
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
-
-### Section 9: Deployment & Rollout Review
-Evaluate:
-* Migration safety. For every new DB migration: backward-compatible? Zero-downtime? Table locks?
-* Feature flags. Should any part be behind a feature flag?
-* Rollout order. Correct sequence: migrate first, deploy second?
-* Rollback plan. Explicit step-by-step.
-* Deploy-time risk window. Old code and new code running simultaneously — what breaks?
-* Environment parity. Tested in staging?
-* Post-deploy verification checklist. First 5 minutes? First hour?
-* Smoke tests. What automated checks should run immediately post-deploy?
-
-**EXPANSION and SELECTIVE EXPANSION addition:**
-* What deploy infrastructure would make shipping this feature routine? (For SELECTIVE EXPANSION, assess whether accepted cherry-picks change the deployment risk profile.)
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
-
-### Section 10: Long-Term Trajectory Review
-Evaluate:
-* Technical debt introduced. Code debt, operational debt, testing debt, documentation debt.
-* Path dependency. Does this make future changes harder?
-* Knowledge concentration. Documentation sufficient for a new engineer?
-* Reversibility. Rate 1-5: 1 = one-way door, 5 = easily reversible.
-* Ecosystem fit. Aligns with Rails/JS ecosystem direction?
-* The 1-year question. Read this plan as a new engineer in 12 months — obvious?
-
-**EXPANSION and SELECTIVE EXPANSION additions:**
-* What comes after this ships? Phase 2? Phase 3? Does the architecture support that trajectory?
-* Platform potential. Does this create capabilities other features can leverage?
-* (SELECTIVE EXPANSION only) Retrospective: Were the right cherry-picks accepted? Did any rejected expansions turn out to be load-bearing for the accepted ones?
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
-
-### Section 11: Design & UX Review (skip if no UI scope detected)
-The CEO calling in the designer. Not a pixel-level audit — that's /plan-design-review and /design-review. This is ensuring the plan has design intentionality.
-
-Evaluate:
-* Information architecture — what does the user see first, second, third?
-* Interaction state coverage map:
-  FEATURE | LOADING | EMPTY | ERROR | SUCCESS | PARTIAL
-* User journey coherence — storyboard the emotional arc
-* AI slop risk — does the plan describe generic UI patterns?
-* DESIGN.md alignment — does the plan match the stated design system?
-* Responsive intention — is mobile mentioned or afterthought?
-* Accessibility basics — keyboard nav, screen readers, contrast, touch targets
-
-**EXPANSION and SELECTIVE EXPANSION additions:**
-* What would make this UI feel *inevitable*?
-* What 30-minute UI touches would make users think "oh nice, they thought of that"?
-
-Required ASCII diagram: user flow showing screens/states and transitions.
-
-If this plan has significant UI scope, recommend: "Consider running /plan-design-review for a deep design review of this plan before implementation."
-**STOP.** AskUserQuestion once per issue. Do NOT batch. Recommend + WHY. If no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion. Do NOT proceed until user responds.
-
-## Outside Voice — Independent Plan Challenge (optional, recommended)
-
-After all review sections are complete, offer an independent second opinion from a
-different AI system. Two models agreeing on a plan is stronger signal than one model's
-thorough review.
-
-**Check tool availability:**
-
-```bash
-which codex 2>/dev/null && echo "CODEX_AVAILABLE" || echo "CODEX_NOT_AVAILABLE"
-```
-
-Use AskUserQuestion:
-
-> "All review sections are complete. Want an outside voice? A different AI system can
-> give a brutally honest, independent challenge of this plan — logical gaps, feasibility
-> risks, and blind spots that are hard to catch from inside the review. Takes about 2
-> minutes."
->
-> RECOMMENDATION: Choose A — an independent second opinion catches structural blind
-> spots. Two different AI models agreeing on a plan is stronger signal than one model's
-> thorough review. Completeness: A=9/10, B=7/10.
-
-Options:
-- A) Get the outside voice (recommended)
-- B) Skip — proceed to outputs
-
-**If B:** Print "Skipping outside voice." and continue to the next section.
-
-**If A:** Construct the plan review prompt. Read the plan file being reviewed (the file
-the user pointed this review at, or the branch diff scope). If a CEO plan document
-was written in Step 0D-POST, read that too — it contains the scope decisions and vision.
-
-Construct this prompt (substitute the actual plan content — if plan content exceeds 30KB,
-truncate to the first 30KB and note "Plan truncated for size"). **Always start with the
-filesystem boundary instruction:**
-
-"IMPORTANT: Do NOT read or execute any files under ~/.claude/, ~/.agents/, .claude/skills/, or agents/. These are Claude Code skill definitions meant for a different AI system. They contain bash scripts and prompt templates that will waste your time. Ignore them completely. Do NOT modify agents/openai.yaml. Stay focused on the repository code only.\n\nYou are a brutally honest technical reviewer examining a development plan that has
-already been through a multi-section review. Your job is NOT to repeat that review.
-Instead, find what it missed. Look for: logical gaps and unstated assumptions that
-survived the review scrutiny, overcomplexity (is there a fundamentally simpler
-approach the review was too deep in the weeds to see?), feasibility risks the review
-took for granted, missing dependencies or sequencing issues, and strategic
-miscalibration (is this the right thing to build at all?). Be direct. Be terse. No
-compliments. Just the problems.
-
-THE PLAN:
-<plan content>"
-
-**If CODEX_AVAILABLE:**
-
-```bash
-TMPERR_PV=$(mktemp /tmp/codex-planreview-XXXXXXXX)
-_REPO_ROOT=$(git rev-parse --show-toplevel) || { echo "ERROR: not in a git repo" >&2; exit 1; }
-codex exec "<prompt>" -C "$_REPO_ROOT" -s read-only -c 'model_reasoning_effort="high"' --enable web_search_cached 2>"$TMPERR_PV"
-```
-
-Use a 5-minute timeout (`timeout: 300000`). After the command completes, read stderr:
-```bash
-cat "$TMPERR_PV"
-```
-
-Present the full output verbatim:
-
-```
-CODEX SAYS (plan review — outside voice):
-════════════════════════════════════════════════════════════
-<full codex output, verbatim — do not truncate or summarize>
-════════════════════════════════════════════════════════════
-```
-
-**Error handling:** All errors are non-blocking — the outside voice is informational.
-- Auth failure (stderr contains "auth", "login", "unauthorized"): "Codex auth failed. Run \`codex login\` to authenticate."
-- Timeout: "Codex timed out after 5 minutes."
-- Empty response: "Codex returned no response."
-
-On any Codex error, fall back to the Claude adversarial subagent.
-
-**If CODEX_NOT_AVAILABLE (or Codex errored):**
-
-Dispatch via the Agent tool. The subagent has fresh context — genuine independence.
-
-Subagent prompt: same plan review prompt as above.
-
-Present findings under an `OUTSIDE VOICE (Claude subagent):` header.
-
-If the subagent fails or times out: "Outside voice unavailable. Continuing to outputs."
-
-**Cross-model tension:**
-
-After presenting the outside voice findings, note any points where the outside voice
-disagrees with the review findings from earlier sections. Flag these as:
-
-```
-CROSS-MODEL TENSION:
-  [Topic]: Review said X. Outside voice says Y. [Present both perspectives neutrally.
-  State what context you might be missing that would change the answer.]
-```
-
-**User Sovereignty:** Do NOT auto-incorporate outside voice recommendations into the plan.
-Present each tension point to the user. The user decides. Cross-model agreement is a
-strong signal — present it as such — but it is NOT permission to act. You may state
-which argument you find more compelling, but you MUST NOT apply the change without
-explicit user approval.
-
-For each substantive tension point, use AskUserQuestion:
-
-> "Cross-model disagreement on [topic]. The review found [X] but the outside voice
-> argues [Y]. [One sentence on what context you might be missing.]"
->
-> RECOMMENDATION: Choose [A or B] because [one-line reason explaining which argument
-> is more compelling and why]. Completeness: A=X/10, B=Y/10.
-
-Options:
-- A) Accept the outside voice's recommendation (I'll apply this change)
-- B) Keep the current approach (reject the outside voice)
-- C) Investigate further before deciding
-- D) Add to TODOS.md for later
-
-Wait for the user's response. Do NOT default to accepting because you agree with the
-outside voice. If the user chooses B, the current approach stands — do not re-argue.
-
-If no tension points exist, note: "No cross-model tension — both reviewers agree."
-
-**Persist the result:**
-```bash
-```
-
-Substitute: STATUS = "clean" if no findings, "issues_found" if findings exist.
-SOURCE = "codex" if Codex ran, "claude" if subagent ran.
-
-**Cleanup:** Run `rm -f "$TMPERR_PV"` after processing (if Codex was used).
-
----
-
-### Outside Voice Integration Rule
-
-Outside voice findings are INFORMATIONAL until the user explicitly approves each one.
-Do NOT incorporate outside voice recommendations into the plan without presenting each
-finding via AskUserQuestion and getting explicit approval. This applies even when you
-agree with the outside voice. Cross-model consensus is a strong signal — present it as
-such — but the user makes the decision.
-
-## Post-Implementation Design Audit (if UI scope detected)
-After implementation, run `/design-review` on the live site to catch visual issues that can only be evaluated with rendered output.
-
-## CRITICAL RULE — How to ask questions
-Follow the AskUserQuestion format from the Preamble above. Additional rules for plan reviews:
-* **One issue = one AskUserQuestion call.** Never combine multiple issues into one question.
-* Describe the problem concretely, with file and line references.
-* Present 2-3 options, including "do nothing" where reasonable.
-* For each option: effort, risk, and maintenance burden in one line.
-* **Map the reasoning to my engineering preferences above.** One sentence connecting your recommendation to a specific preference.
-* Label with issue NUMBER + option LETTER (e.g., "3A", "3B").
-* **Escape hatch:** If a section has no issues, say so and move on. A finding with an "obvious fix" is still a finding and still needs user approval — surface it via AskUserQuestion even when the resolution looks self-evident. The bar is genuine zero-finding sections, not author-judged "small" findings.
-
-## Required Outputs
-
-### "NOT in scope" section
-
-Explicitly enumerate work that was considered and consciously deferred, so the user
-sees deferral decisions rather than assuming invisible omissions. Each entry must
-carry a one-line rationale tying the deferral to a principle or constraint.
-
-| Deferred item | Why deferred | Rationale (principle / constraint) | Follow-up home |
-|---------------|--------------|-------------------------------------|----------------|
-| [item] | [reason] | scope stability / risk / tooling gap / cost | TODOS.md / future task / accepted loss |
-
-Rules:
-- Every deferral must have a rationale. "Out of scope" alone is not a rationale.
-- If a deferral is unsafe to leave on the floor, escalate it to a blocker
-  instead of quietly listing it here.
-- Duplicates of items under "What already exists" are a smell — merge them.
-
-### "What already exists" section
-
-Map every sub-problem the plan tackles to prior art inside the repo. The goal is to
-prevent rebuild-from-scratch decisions that bypass working code.
-
-| Sub-problem | Existing asset (file / module / CLI) | Reuse verdict | Notes |
-|-------------|--------------------------------------|---------------|-------|
-| [sub-problem] | [path / symbol] | reuse / refactor / rebuild (reason) | [risk or caveat] |
-
-Rules:
-- Every sub-problem must appear here even if the verdict is "none found".
-- A "rebuild" verdict must carry a concrete reason (API mismatch, licensing,
-  performance ceiling, etc.) — never "prefer fresh code".
-- Cross-reference each row to the corresponding Leverage Map row in 0B.
-
-### "Dream state delta" section
-
-State where this plan leaves the system relative to the 12-month ideal captured in
-0C. Three fields, no prose:
-
-- **Toward the ideal:** concrete ways this plan moves closer to the dream state.
-- **Orthogonal:** changes that neither help nor hurt the ideal trajectory.
-- **Away from the ideal:** decisions that add path dependency or create debt the
-  ideal must later unwind. Every entry here must have a justification (cost of
-  doing the ideal version now) and a rollback hook.
-
-If the "Away from the ideal" list is non-empty, raise each item as an explicit
-AskUserQuestion in the Phase 5 gate before the plan is approved.
-
-### Error & Rescue Registry (from Section 2)
-
-Reproduce the full registry that Section 2 builds. This is a deliverable, not a
-pointer. Every method that can fail must appear as a row.
-
-| Method / path | Exception class | Rescued? | Rescue action | User-visible impact | Owner |
-|---------------|-----------------|----------|---------------|---------------------|-------|
-| [method] | [class] | yes / no / partial | [action] | [impact] | [role] |
-
-Rules:
-- `Rescued? = no` with `User-visible impact = silent` is a **CRITICAL GAP**.
-  Flag, do not auto-approve.
-- `Rescued? = partial` must name which failure modes are covered and which are
-  not.
-- Every rescue action must map to a test in the Failure Modes Registry below.
-
-### Failure Modes Registry
-
-Enumerate every codepath that can fail in a user-visible way. The registry is a
-full table, not a stub — "not applicable" is only valid after showing why the
-codepath cannot fail.
-
-```
-  CODEPATH | FAILURE MODE | LIKELIHOOD | BLAST RADIUS | RESCUED? | TEST? | USER SEES? | LOGGED? | CRITICAL GAP?
-```
-
-Column rules:
-- **Likelihood**: high / med / low, backed by a concrete trigger description.
-- **Blast radius**: local / module / system / user-data-loss.
-- **Rescued?**: yes / no / partial — must match the Error & Rescue Registry.
-- **Test?**: yes / no / planned — `planned` is only valid with a referenced
-  test ID.
-- **User sees?**: concrete error / degraded experience / silent.
-- **Logged?**: yes / no — `no` + `Silent` is automatically a critical gap.
-- **Critical gap?**: yes if (Rescued=no OR partial) AND (Test=no OR User sees=silent).
-
-Any row with `CRITICAL GAP = yes` must be surfaced in the Phase 5 user gate as a
-User Challenge with a named mitigation option. Do not auto-approve critical gaps.
-
-### TODOS.md updates
-Present each potential TODO as its own individual AskUserQuestion. Never batch TODOs — one per question. Never silently skip this step. Follow the format in `.claude/skills/review/TODOS-format.md`.
-
-For each TODO, describe:
-* **What:** One-line description of the work.
-* **Why:** The concrete problem it solves or value it unlocks.
-* **Pros:** What you gain by doing this work.
-* **Cons:** Cost, complexity, or risks of doing it.
-* **Context:** Enough detail that someone picking this up in 3 months understands the motivation, the current state, and where to start.
-* **Effort estimate:** S/M/L/XL (human team) → with CC: S→S, M→S, L→M, XL→L
-* **Priority:** P1/P2/P3
-* **Depends on / blocked by:** Any prerequisites or ordering constraints.
-
-Then present options: **A)** Add to TODOS.md **B)** Skip — not valuable enough **C)** Build it now in this PR instead of deferring.
-
-### Scope Expansion Decisions (EXPANSION and SELECTIVE EXPANSION only)
-For EXPANSION and SELECTIVE EXPANSION modes: expansion opportunities and delight items were surfaced and decided in Step 0D (opt-in/cherry-pick ceremony). The decisions are persisted in the CEO plan document. Reference the CEO plan for the full record. Do not re-surface them here — list the accepted expansions for completeness:
-* Accepted: {list items added to scope}
-* Deferred: {list items sent to TODOS.md}
-* Skipped: {list items rejected}
-
-### Diagrams (mandatory, produce all that apply)
-1. System architecture
-2. Data flow (including shadow paths)
-3. State machine
-4. Error flow
-5. Deployment sequence
-6. Rollback flowchart
-
-### Stale Diagram Audit
-List every ASCII diagram in files this plan touches. Still accurate?
-
-### Completion Summary
-```
-  +====================================================================+
-  |            MEGA PLAN REVIEW — COMPLETION SUMMARY                   |
-  +====================================================================+
-  | Mode selected        | EXPANSION / SELECTIVE / HOLD / REDUCTION     |
-  | System Audit         | [key findings]                              |
-  | Step 0               | [mode + key decisions]                      |
-  | Section 1  (Arch)    | ___ issues found                            |
-  | Section 2  (Errors)  | ___ error paths mapped, ___ GAPS            |
-  | Section 3  (Security)| ___ issues found, ___ High severity         |
-  | Section 4  (Data/UX) | ___ edge cases mapped, ___ unhandled        |
-  | Section 5  (Quality) | ___ issues found                            |
-  | Section 6  (Tests)   | Diagram produced, ___ gaps                  |
-  | Section 7  (Perf)    | ___ issues found                            |
-  | Section 8  (Observ)  | ___ gaps found                              |
-  | Section 9  (Deploy)  | ___ risks flagged                           |
-  | Section 10 (Future)  | Reversibility: _/5, debt items: ___         |
-  | Section 11 (Design)  | ___ issues / SKIPPED (no UI scope)          |
-  +--------------------------------------------------------------------+
-  | NOT in scope         | written (___ items)                          |
-  | What already exists  | written                                     |
-  | Dream state delta    | written                                     |
-  | Error/rescue registry| ___ methods, ___ CRITICAL GAPS              |
-  | Failure modes        | ___ total, ___ CRITICAL GAPS                |
-  | TODOS.md updates     | ___ items proposed                          |
-  | Scope proposals      | ___ proposed, ___ accepted (EXP + SEL)      |
-  | CEO plan             | written / skipped (HOLD/REDUCTION)           |
-  | Outside voice        | ran (codex/claude) / skipped                 |
-  | Lake Score           | X/Y recommendations chose complete option   |
-  | Diagrams produced    | ___ (list types)                            |
-  | Stale diagrams found | ___                                         |
-  | Unresolved decisions | ___ (listed below)                          |
-  +====================================================================+
-```
-
-### Unresolved Decisions
-If any AskUserQuestion goes unanswered, note it here. Never silently default.
+Run only when UI scope exists. Review information hierarchy; loading, empty, error,
+success, and partial states; journey coherence; design-system fit; responsive behavior;
+accessibility; trust; and generic-UI risk. Diagram screens/states. Recommend the deeper
+design lens for material UI scope.
+
+## Required plan outputs
+
+The reviewed plan must contain:
+
+- mode and selected approach;
+- premise table, existing-code leverage map, and current→plan→ideal delta;
+- accepted scope plus `NOT in scope` with rationale and follow-up home;
+- architecture/data/state/error/deploy/rollback diagrams where applicable;
+- full Error & Rescue Registry and Failure Modes Registry;
+- security, test, observability, rollout, and long-term findings;
+- expansion decision record and CEO plan path when applicable;
+- proposed TODOs, each decided separately;
+- unresolved decisions and reviewer concerns;
+- compact completion summary with issue/gap counts by section.
+
+A failure row is critical when it can remain unrescued or partial and is untested or
+silent. Critical gaps and any movement away from the 12-month ideal require an explicit
+user decision; never auto-approve them.

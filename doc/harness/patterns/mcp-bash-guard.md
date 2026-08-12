@@ -53,7 +53,7 @@ before the command basename is examined (fixes a legacy bypass).
 
 `2>` stderr redirect is intentionally **not** blocked — logs are common.
 
-`background_hook.py`, `background_registry.py`, `codex_lifecycle_watcher.py`,
+`background_hook.py`, `subagent_lifecycle.py`, `codex_lifecycle_watcher.py`,
 and direct imports of `record_subagent_receipt` are runtime-owned receipt
 capabilities. A model-issued Bash command may not invoke them directly; only
 the configured runtime lifecycle hooks/watchers may author those events.

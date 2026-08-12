@@ -6,13 +6,13 @@ Harness SessionStart/PreToolUse/PostToolUse/Stop/Subagent hooks must no-op silen
 ## Observable Behavior
 - In a directory whose nearest ancestor with .git lacks doc/harness/manifest.yaml, every harness hook script returns exit 0, prints nothing to stdout, and creates no files anywhere under that directory.
 - The covered hook scripts are: prewrite_gate.py, mcp_bash_guard.py, stop_gate.py, background_hook.py, prompt_memory.py, tool_routing.py, note_freshness.py, hygiene_scan.py, verification_gap_check.py, drift_warn.py.
-- Specifically, none of doc/harness/learnings.jsonl, doc/harness/runtime/background.json, doc/harness/runtime/background.json.lock, doc/harness/.hygiene-*, doc/harness/timeline.jsonl, doc/harness/checkpoints/, or doc/harness/tasks/ appear after firing any of those hooks against a non-harness-enabled repo.
+- Specifically, none of `doc/harness/learnings.jsonl`, `doc/harness/.hygiene-*`, `doc/harness/timeline.jsonl`, `doc/harness/checkpoints/`, or `doc/harness/tasks/` appear after firing any of those hooks against a non-harness-enabled repo. Lifecycle hooks never create a separate background registry or registry lock in any repository.
 - Detection happens through plugin/scripts/_lib.py::is_harness_enabled_repo, which checks for the manifest.yaml file path. Each hook script must call this guard before any write.
 
 ## Acceptance Signals
 - In a directory whose nearest ancestor with .git lacks doc/harness/manifest.yaml, every harness hook script returns exit 0, prints nothing to stdout, and creates no files anywhere under that directory.
 - The covered hook scripts are: prewrite_gate.py, mcp_bash_guard.py, stop_gate.py, background_hook.py, prompt_memory.py, tool_routing.py, note_freshness.py, hygiene_scan.py, verification_gap_check.py, drift_warn.py.
-- Specifically, none of doc/harness/learnings.jsonl, doc/harness/runtime/background.json, doc/harness/runtime/background.json.lock, doc/harness/.hygiene-*, doc/harness/timeline.jsonl, doc/harness/checkpoints/, or doc/harness/tasks/ appear after firing any of those hooks against a non-harness-enabled repo.
+- Specifically, none of `doc/harness/learnings.jsonl`, `doc/harness/.hygiene-*`, `doc/harness/timeline.jsonl`, `doc/harness/checkpoints/`, or `doc/harness/tasks/` appear after firing any of those hooks against a non-harness-enabled repo. Lifecycle hooks never create a separate background registry or registry lock in any repository.
 - Detection happens through plugin/scripts/_lib.py::is_harness_enabled_repo, which checks for the manifest.yaml file path. Each hook script must call this guard before any write.
 
 ## Verification Cues

@@ -58,7 +58,7 @@ REDIRECT_TOKENS = {">", ">>", "1>", "1>>"}
 LAST_ARG_MUTATORS = {"cp", "mv", "install", "touch", "truncate"}
 TEE_COMMAND = "tee"
 LIFECYCLE_RECEIPT_ENTRYPOINTS = {
-    "background_hook.py", "background_registry.py", "codex_lifecycle_watcher.py",
+    "background_hook.py", "subagent_lifecycle.py", "codex_lifecycle_watcher.py",
 }
 LIFECYCLE_RECEIPT_MODULES = {
     os.path.splitext(name)[0] for name in LIFECYCLE_RECEIPT_ENTRYPOINTS

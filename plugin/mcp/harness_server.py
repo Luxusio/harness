@@ -82,8 +82,8 @@ from _lib import (  # type: ignore
     find_harness_root, harness_root_resolution, find_repo_root,
     write_active_marker, clear_active_marker,
     resolve_active_task_dir, active_marker_snapshot, restore_active_marker_snapshot,
-    receipt_runtime_verdict, subagent_receipt_summary, record_subagent_receipt,
-    receipt_review_verdict, review_receipt_summary, required_review_lenses,
+    receipt_runtime_verdict, record_subagent_receipt,
+    receipt_review_verdict, required_review_lenses,
     receipt_snapshot, receipt_stream_fingerprint,
     reset_receipt_streams_for_new_run, restore_receipt_streams,
     receipt_stream_transaction,
@@ -464,8 +464,6 @@ def handle_task_context(args: dict) -> dict:
     return _ok({
         "task_dir": td,
         "task_context": ctx,
-        "subagent_receipts": subagent_receipt_summary(td, snapshot),
-        "review_receipts": review_receipt_summary(td, snapshot),
     })
 
 
@@ -495,9 +493,7 @@ def handle_task_verify(args: dict) -> dict:
         "report_path": _task_artifact_rel(td, "RECEIPTS.jsonl"),
         "review_verdict": review_verdict,
         "required_review_lenses": required_review_lenses(td, st),
-        "review_report_path": _task_artifact_rel(td, "RECEIPTS.jsonl"),
-        "subagent_receipts": subagent_receipt_summary(td, snapshot),
-        "review_receipts": review_receipt_summary(td, snapshot),
+        "required_qa_lenses": ctx.get("required_qa_lenses", []),
     }
     if verify_run is not None:
         payload["verify_run"] = verify_run

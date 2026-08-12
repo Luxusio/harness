@@ -141,8 +141,10 @@ session marker and run, and a stable matching current-run Claude transcript
 whose recorded start attachment supplies the agent type before emitting the
 single-use inferred-start/completed pair in one task
 transaction. Missing, foreign, stale, replayed, aliased, untrusted, or unbound
-stops remain non-authorizing diagnostics. Bash cannot directly invoke or import
-lifecycle receipt-authoring entrypoints.
+stops create no authority. The hook and Stop gate derive lifecycle state from
+the current task's unified receipts and never maintain a background registry
+or registry lock. Bash cannot directly invoke or import lifecycle
+receipt-authoring entrypoints.
 
 Receipt storage, minimal schema, immutable snapshot, and gate semantics are
 normatively defined by
@@ -169,7 +171,10 @@ validate Git metadata, or invalidate PASS because files changed. A developer
 who edits after QA must decide whether to rerun review or QA. Harness deliberately
 accepts that risk instead of imposing a repository-integrity monitor on local
 development. Missing or malformed task artifacts and receipt streams still fail
-closed.
+closed. Public context and verification responses expose verdicts, required
+lenses, `missing_for_close`, `next_action`, and one report path; they do not
+embed raw receipts, completion summaries, transcript locations, or a duplicate
+review report path.
 
 `TASK.json.run_id` is the non-Git generation identity and a canonical UUIDv7
 whose embedded millisecond timestamp supplies the run-start cutoff.

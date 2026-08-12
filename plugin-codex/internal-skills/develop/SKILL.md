@@ -10,32 +10,18 @@ Implement the plan for a harness task. Reads PLAN.md, implements changes, verifi
 > create, read, or update `CHECKS.yaml` or `USER_FEEDBACK.jsonl`, and do not run
 > `update_checks.py`; later legacy ledger wording is non-operative.
 
-> **Codex runtime notes** (delta from Claude develop skill — read these first):
-> - **No `Skill()` chain.** Where Claude invokes `Skill("harness:plan", task_id)` etc., Codex orchestrator reads the relevant SKILL.md inline and executes its phases as part of the same conversation. The plan / verify / close transitions still happen — they're just prose flow, not tool calls.
-> - **Harness workflow authorization covers required subagents.** Treat explicit user invocation or approval of a harness repo-mutating workflow as authorization to use the subagents required by that workflow's verification and review gates. Examples include "use harness", "run/continue/close the harness task", native `/goal`, or clear approval to proceed with a harness task. This does not apply to read-only answers or ordinary non-harness work.
-> - **Agent fan-out is capability-gated, not user-request-gated.** Where Claude spawns `oh-my-claudecode:executor` (per-AC parallel implementation), `harness:qa-*` (verification), `harness:dogfooder` (post-PASS dogfooding), or haiku sub-agents (test-coverage trace, adversarial review, edge-case scan), Codex should check the deferred tool catalog (for example `ALL_TOOLS`) and use `spawn_agent` when exposed. The user does not need to ask for delegation. `user did not ask for delegation`, `delegation was not requested`, and equivalent rationale are invalid skip reasons. QA/review must not be self-authored when `spawn_agent` is available: the Codex watcher records lifecycle receipts, and only ordered completed explicit PASS entries for PLAN-declared lenses satisfy verification. Do not write receipt or critic artifacts yourself. If `spawn_agent` is unavailable after discovery, run the equivalent role methodology inline in the orchestrator's own context and state the fallback in task state or final response only when it affects verification. Multi-AC implementation can remain sequential only when `spawn_agent` is unavailable, ACs are dependent or file-conflicting, or the documented `sequential-small-task` threshold applies; preserve independent QA/review by routing from current session capability.
-> - **Subagent lifecycle cleanup.** Track every `agent_id` returned by `spawn_agent`. After a spawned agent completes, fails, is cancelled, or is no longer needed, call `close_agent` when that tool is available. Before final response, `task_close`, or handoff, close every agent this workflow spawned unless the user explicitly asked to leave a still-running agent open. Completed agents can continue to count toward the concurrency limit until closed.
-> - **No `AskUserQuestion` structured tool.** Where Claude emits an AskUserQuestion with labeled options, Codex emits the question + options as plain prose and reads the user's reply on the next turn. Options stay numbered/lettered so the user can pick them by short response (e.g. "A", "B", "1", "2").
-> - **Browser tools are availability-gated on Codex.** Prefer `spawn_agent` for the qa-browser lens when available and isolation materially reduces context, or run `plugin-codex/agents/qa-browser.md` inline when that is the lightest available path. Browser delegation is workflow guidance rather than a pre-tool block, so inline browser context growth is an accepted caller-owned cost. If browser verification is required and tools or a reachable app are missing, return `BLOCKED_ENV` with the exact blocker instead of fabricating a PASS.
-> - **MCP tool names are bare** on Codex (`task_start`, `task_verify`, `task_close`, `task_context`). The Claude long-form (Claude-prefixed) does not apply.
-> - **Env var is `HARNESS_PLUGIN_ROOT`**, not `CLAUDE_PLUGIN_ROOT`. The Codex plugin install sets it; Bash blocks below use this variant.
-> - **Sub-file fallback.** This SKILL.md does NOT ship Codex-native sub-files in v1.5 (browser-verification.md, fix-first-pattern.md, parallel-fanout.md, quality-audit-pipeline.md, runtime-smoke.md, test-failure-triage.md, verification-gate.md). Where the Claude flow loads a sub-file, the Codex flow reads the same sub-file at `plugin/skills/develop/<name>.md` (Claude tree) and applies the sub-file's methodology with the runtime-substitution rules above. Codex-native sub-files are a v2 ergonomics improvement; v1.5 ships methodology parity by reference.
+> **Codex delta:** execute skill chains inline; use bare MCP names and
+> `${HARNESS_PLUGIN_ROOT}`. Harness workflow authorization covers required subagents: explicit user invocation or approval of a harness repo-mutating workflow authorizes those required lanes. Agent fan-out is capability-gated; route from the capabilities exposed by the current session.
+> session. Use `spawn_agent` for independent lanes/review/QA when available,
+> conversational numbered options instead of AskUserQuestion, and
+> `BLOCKED_ENV` when required browser/desktop evidence is unavailable. Track and
+> close spawned agents with `close_agent` before `task_close` or final response. Completed agents can continue to consume concurrency until closed. Read existing detailed develop sub-files from
+> `plugin/skills/develop/` only when their phase requires them.
 
 ## Voice
 
-Develop-orchestrator voice: opinionated, concrete, builder-to-builder. The develop skill is the entry point for the implement -> audit -> verify -> handoff loop — sub-files inherit voice rules but the parent sets the tone.
-
-- Lead with the point. Say what the phase did, what it found, what changes downstream.
-- Be concrete. Name files, functions, line numbers, AC ids, commit hashes, test names. Real numbers over qualifiers.
-- Tie technical choices to outcomes — what the next phase reads, what the final response should say, what the verifier now has evidence for.
-- Be direct about quality. A confident PASS without test evidence matters more than a thoroughly-explained FAIL. Receipt ordering matters. Scope creep matters.
-- Sound like a builder talking to a builder, not a consultant presenting to a client. No founder cosplay, no hype.
-- No em dashes. No AI vocabulary: `delve`, `crucial`, `robust`, `comprehensive`, `nuanced`, `multifaceted`, `furthermore`, `moreover`, `additionally`, `pivotal`, `landscape`, `tapestry`, `underscore`, `foster`, `showcase`, `intricate`, `vibrant`, `fundamental`, `significant`, `seamless`, `leverage`. These signal AI prose; cut them.
-- Korean/English bilingual context: technical terms stay English, explanations may use Korean.
-- The user has context you do not. Adversarial agreement is a recommendation, not a decision. The user decides at premise gate (Phase 2 EUREKA), at scope-expansion gate (Phase 5), and at any 3-strike escalation.
-
-Good: "AC-003 done. PROGRESS.md:34 records 9/10 completeness. Per-AC test passed (`tests/regression/task_xx/test_ac_003__loop_detect.py`). Edge case deferred: nested phase loops, tracked as a follow-up."
-Bad: "I have successfully completed the implementation of AC-003 and the changes appear to be working as expected based on my analysis."
+Lead with outcomes. Name concrete files, functions, ACs and tests. Speak as a
+builder, avoid hype, and surface premise/scope decisions for the user.
 
 ## Anti-shortcut clause
 
@@ -43,55 +29,25 @@ PROGRESS.md is the scope-lock contract for this task. PLAN.md owns acceptance in
 
 ## Confusion Protocol
 
-For high-stakes implementation ambiguity — blast radius >5 files, 3-strike hypothesis exhaustion, T2 vs T3 test-failure ambiguity, Phase 2 EUREKA flagging PLAN.md as wrong, Phase 5 scope creep mid-fix-loop — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs, and ask the user via conversational prose with numbered options. Read the reply on the next turn and proceed from the user-confirmed direction.
-
-Reserve this protocol for high-stakes ambiguity where the wrong choice changes scope, architecture, or verification outcome. The bar is: "if I pick wrong, the entire implementation is built on a misread of intent or scope, and the cost shows up in verify or close, not now."
-
-## Context Health
-
-Soft directive — degrade gracefully, never block.
-
-- **`[PROGRESS]` summary at phase boundaries.** Phase 3 (per-AC implement) and Phase 4 (quality audit) are the longest runs. Use `spawn_agent` for independent work when available; when phases still exceed ~5 minutes, surface a 1-2 sentence checkpoint: done, next, surprises.
-- **Loop detection.** If the same fix-cycle pattern, the same hypothesis, or the same gate fires 3 times without converging, STOP and reassess. Options: premise re-confirm (Phase 2 EUREKA path) via conversational ask; switch the implementation approach; pause for user check-in. Looping silently is worse than asking.
-- Progress summaries and loop-detection notices NEVER mutate git state.
+For premise, architecture, scope, external-state, or three-attempt ambiguity,
+stop, state the conflict in one sentence, and ask 2-3 numbered options with
+concrete tradeoffs. Required verification is not scope expansion.
 
 ## Premise Gate / User Challenge
 
-Two structured triggers that replace silent overrides in earlier prose. On Codex both render as conversational asks:
-
-1. **Phase 2 EUREKA premise gate** — when the search-before-building scan reveals PLAN.md's approach is suboptimal. Surface the discovery through the EUREKA path and ask the user (prose, with numbered options):
-   ```
-   EUREKA at AC-NNN — PLAN.md's approach looks wrong because <reason>.
-   A) Re-ground premise — re-run plan skill with the new premise.
-   B) Simplify scope — narrow this AC and proceed.
-   C) Proceed as planned — capture EUREKA as a durable learning if reusable.
-   Reply A / B / C, or describe a different direction.
-   ```
-   Wait for the user's next turn. The user-confirmed direction must be visible in task state or a durable artifact, not only conversation history.
-
-2. **Phase 5 scope-expansion challenge** — when the developer notices an unrelated file change is necessary for the AC. Same shape:
-   ```
-   Scope expansion at <file> — touched outside PLAN target list because <reason>.
-   A) Revert — change belongs in a separate task.
-   B) Add to scope — update task state/plan rationale.
-   C) Defer to new task — open follow-up.
-   Reply A / B / C, or describe a different direction.
-   ```
+At Phase 2, ask whether to re-plan, narrow, or proceed when search disproves the
+premise. At Phase 5, ask whether to revert, add to scope, or defer a necessary
+out-of-plan edit. Persist the choice in PLAN/PROGRESS or a durable artifact.
 
 ## Error Philosophy
 
-The harness MCP does not tolerate mid-task stops. **Never halt with a bare BLOCKED.** Emit a conversational ask with concrete options; user decides. Errors are consumed by the running agent, not by humans.
-
-**Scope continuity.** Execute the approved PLAN through develop. If a genuine blocker prevents completion of an AC, escalate with the concrete blocker via the BLOCKED -> conversational-ask path rather than a mid-phase meta scope question.
+Never halt with bare BLOCKED or silently cut an approved AC. Report the exact
+blocker and let the user choose a concrete recovery.
 
 ## Model Routing
 
-On Claude, develop routes mechanical work to haiku and adversarial review
-cross-model. On Codex, route from the capabilities exposed by the current
-session: keep dependent implementation in the coordinator, use spawned workers
-for bounded independent ACs when available, and require spawned independent
-review/QA lenses when the runtime exposes them. Do not hard-code a Codex version
-or assume the whole flow must run in one conversation context.
+Keep dependent implementation in the coordinator, use spawned workers for
+bounded independent ACs, and require independent review/QA when available.
 
 ## Flow
 
@@ -153,61 +109,21 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 **Eureka check:** if search reveals PLAN.md's approach is suboptimal (reinventing, wrong assumption), flag `EUREKA: AC-NNN — <discovery>` in the conversation and fire the Premise Gate conversational ask before overriding. Persist reusable discoveries as `type:"eureka"` in `learnings.jsonl`, then promote durable ones to a committed skill, pattern, test, or typed doc before close.
 
-**Baseline screenshot (browser projects):** if browser tools are available in the current Codex session, capture it inline using the qa-browser methodology. If browser QA is required but unavailable, record the blocker for the browser lens.
+**Baseline screenshot (browser projects):** Browser tools are availability-gated on Codex. When available, run `plugin-codex/agents/qa-browser.md` inline; when required but unavailable, record the browser-lens blocker and state the fallback in task state or final response.
 
 ### Phase 3.0: AC Dependency Analysis
 
-Codex AC implementation is capability-gated, not user-request-gated. Build the
-same lane table as the Claude develop skill before editing files. The user does
-not need to ask for delegation; `user did not ask for delegation` is an invalid
-skip rationale. Do not wait for the user to request delegation. User request is
-not a condition for parallel routing.
+Build the routing contract from PLAN file ownership and dependencies before
+editing:
 
 | AC | Files | Depends on | Lane | Route | Reason |
 |----|-------|------------|------|-------|--------|
 
-`Route` is `spawn_agent(worker)`, `sequential-prelude`,
-`sequential-dependent`, or `sequential-small-task`. When the table has two or
-more independent AC rows and `spawn_agent` is available, you must spawn one worker per independent AC in one assistant message. This is mandatory capability/task-shape routing, not an optional optimization. Use explicit file
-ownership:
-
-```text
-spawn_agent {
-  agent_type: "worker",
-  message: "Read `plugin-codex/agents/developer.md`, then implement AC-00X only. Ownership: <paths>. You are not alone in the codebase; do not revert edits made by others. Edit files directly and list changed paths in your final answer. If convergence requires a change to ownership, lane, or approved scope, do not make that out-of-lane change; return the exact status `needs-coordinator-review` with the evidence and required coordinator action.",
-  fork_context: true
-}
-```
-
-Use one worker per independent AC. Do not assign multiple independent ACs to one
-worker. Workers return status, changed paths, and blockers in their final
-response; the orchestrator merges PROGRESS.md after all
-siblings return.
-
-**Coordinator-review branch (before generic rollback).** If any worker returns
-the exact status `needs-coordinator-review`, handle it before generic rollback
-or sequential retry. This status is not an ordinary worker failure. Read the
-ownership/blocker evidence, keep successful independent siblings promoted, and
-choose one converging action: reassign ownership within the already approved
-PLAN target paths, amend the lane/AC through the protected plan flow when the
-target set or scope must change, or escalate to the user. Never retry the AC
-with the same ownership unchanged. Only `blocked`, process/test failure, or a
-worker crash enters generic failure recovery.
-
-Use `sequential-small-task` only for genuinely trivial N=2 work (estimated <20
-changed lines combined and <30 seconds of editing). Sequential fallback must
-state `ac_count`, AC ids, `conflict` (specific dependency/file conflict, or
-`none`), `estimated_lines`, `estimated_seconds`, and `reason` in the lane table.
-Valid reasons are only `spawn_agent-unavailable`,
-`dependency-conflict`, or `small-task`; `user did not ask for delegation` is
-invalid. When `spawn_agent` is unavailable for otherwise independent ACs, record
-the fallback in task state or final response.
-
-Do not create a separate chronological artifact just because routing was sequential.
-
-If PLAN.md declares a helper-extract AC, run it first, then route the consumer
-ACs from the lane table. The dependency matrix from PLAN.md is still the single
-source of truth.
+`Route` is `spawn_agent(worker)` for every disjoint lane; spawn one worker per lane. Use one worker per independent AC. Do not assign multiple independent ACs to one worker. This is capability-gated, not user-request-gated: The user does not need to ask for delegation, `user did not ask for delegation` is an invalid reason, `delegation was not requested` is not a fallback, and Do not wait for the user to request delegation. User request is
+not a condition for parallel routing; this is mandatory capability/task-shape routing.
+Sequential fallback must state `ac_count`, `conflict` (specific files/dependency), `estimated_lines`, `estimated_seconds`, and the fallback in task state or final response. Valid reasons are only `spawn_agent-unavailable`, `dependency-conflict`, or `small-task`.
+Workers read `plugin-codex/agents/developer.md`, stay inside explicit ownership, do not edit PROGRESS, and return paths/tests/blockers. Prompts must say: return the exact status `needs-coordinator-review` when ownership, lane, or approved scope needs coordinator judgment.
+Handle `needs-coordinator-review` before generic rollback: never retry with the same ownership; reassign ownership, amend PLAN, or escalate to the user. Keep successful independent siblings promoted.
 
 ### Phase 3.1: Scope Lock
 
@@ -225,45 +141,11 @@ Declare allowed / test / forbidden paths in PROGRESS.md. Before each file edit:
    worker to read that file before editing; parent context is not sufficient.
 3. **Codex tool surface:** use `read_file` for reads, `apply_patch` for edits/writes (Codex envelope-oriented), `shell` for Bash commands. Multi-edit is one `apply_patch` envelope per file. Where the Claude flow says `Edit`/`Write`/`MultiEdit`, read it as `apply_patch`.
 
-**PROGRESS.md after each AC:**
-
-```yaml
-task_id: <task_id>
-phase: 3
-completed_acs:
-  - id: AC-001
-    status: done
-    tests: passed
-    completeness: 9
-    deferred_edges: []
-current_ac: <next or "done">
-partial_ac: null
-decisions:
-  - { choice: "...", reason: "...", ac: AC-001 }
-attempts:
-  - { ac: AC-002, tried: "...", failed_because: "...", resolved_with: "..." }
-notes:
-  - "<file:line> — <observation>"
-updated: <ISO timestamp>
-```
-
-**AC Completeness rubric (0-10):** covers how much of the AC's surface area was addressed (NOT confidence that it works — that's Phase 4.6).
-
-| Score | Meaning |
-|-------|---------|
-| 10 | Happy path + all edge cases + negative paths + regression tests |
-| 8-9 | Happy path + common edges + regression test. Rare edges documented |
-| 6-7 | Happy path + main branches. Some edges deferred with justification |
-| 4-5 | Happy path only. Significant surface skipped |
-| <=3 | Partial — AC should not be marked done |
-
-Any AC scoring <=7 MUST list `deferred_edges`. <=5 requires explicit justification in PROGRESS.md or the final response (MVP scope, user-deferred, etc.).
-
-After each AC, record implementation and targeted-test evidence in PROGRESS.md.
-
-**Per-AC test run:** use PLAN targets and the files implemented for the AC to find tests that import/reference them. If no tests exist for a changed module, write one (Phase 3.5 rule). If PLAN.md specifies per-AC verify commands, prefer those.
-
-**Delegation rule (C-18 / Verification delegation).** On both Claude and Codex, prefer the qa-browser lens when an isolated browser pass materially reduces context or process load. Browser interaction may run inline when delegation is unavailable or the inline path is simpler; there is no pre-tool block, and the caller accepts the extra context cost. Write browser-lens `BLOCKED_ENV` when required browser verification cannot run. Bash test runners (`pytest`, `npm test`, `pnpm test`, `vitest`, `cargo test`, `go test`, ...) remain allowed inline. Heavy full-suite execution is still better handled as a downstream verification step than mixed into implementation work.
+After each AC, record status, targeted tests, completeness, deferred edges,
+decisions and attempts in PROGRESS. Completed behavior needs important negative
+paths and regression evidence. Full-suite verification belongs to the required
+qa-* agents; browser evidence may run inline only when that is the available
+path.
 
 Per-AC test failures -> fix immediately. These are free; only Phase 7 full-suite failures count toward the 3-cycle limit.
 
@@ -530,81 +412,27 @@ score = (ac_completion × 0.40) + (test_coverage × 0.30)
 
 ### Phase 8.5: Reflect and Log (capture-when-fresh, no quota)
 
-When you discover something genuinely useful during develop — a real bug whose fix is non-obvious, a build/test/tool gotcha, a workaround worth knowing next time — log it the moment you find it. Log only concrete, reusable facts at discovery time; leave the log untouched when there is no durable learning.
-
-```bash
-echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"operational|pitfall|eureka|feedback","source":"develop","key":"SHORT_KEY","insight":"FACT + FIX","files":["<path>"],"task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
-```
+Capture only concrete reusable fact-plus-fix discoveries while fresh. Leave
+`learnings.jsonl` untouched when there is no signal; it never gates close.
 
 ### Phase 8.5.1: Feedback-Derived Rules (judgment required, capture optional)
 
-Review user corrective feedback from the task. Convert corrective feedback into a reusable conditional behavior rule only when it can be reduced to a readable "When X, do Y. Verify by Z." instruction.
-
-Classify the task as exactly one:
-- `none` — no user feedback implies a future behavior rule.
-- `captured` — feedback produced a reusable conditional rule and it was recorded in `learnings.jsonl` for promotion, or directly in a committed durable artifact.
-- `rejected` — feedback looked like a preference or complaint but should not become a rule. Record the reason in task state or final response.
-
-Capture only rules with all three parts: trigger, action, and verification. Reject blame narratives, task-local preferences, vague style opinions, and one-off urgency requests. Write behavior rules for Tier 2 docs; convert incident-shaped lessons into behavior or reject them.
-
-When captured, the durable artifact or learning text must be readable prose:
-
-```markdown
-## Feedback-Derived Rules
-
-Status: captured
-
-When changing runtime-specific harness plugin behavior, review both the canonical `plugin/` tree and the runtime-specific tree such as `plugin-codex/`.
-
-Verify by explaining in the final response which side changed and why any other side was left unchanged.
-```
-
-If the rule should enter Tier 2, log a structured learning so the promotion script can render readable Markdown:
-
-```bash
-echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"feedback-rule","source":"develop","key":"SHORT_RULE_NAME","trigger":"<situation>","action":"<behavior>","verification":"<how to prove it>","reason":"<why this prevents recurrence>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
-```
+Classify `none | captured | rejected`. Capture only reusable rules of the form
+"When X, do Y. Verify by Z." Write behavior rules for Tier 2 docs; convert
+incident-shaped lessons into behavior or reject them.
 
 ### Phase 8.5.2: Commit-backed Learnings (mandatory classification)
 
-Classify whether this task produced knowledge that must be shared through git.
-`doc/harness/learnings.jsonl` is local, gitignored staging; it does not satisfy
-the shared-memory bar by itself. Future contributors only inherit what lands in
-committed artifacts.
-
-Classify candidates before close:
-
-```markdown
-## Commit-backed Learnings
-
-Status: none | captured | rejected
-
-- captured: <committed path> — <rule/fact now shared>
-- rejected: <candidate> — <why it is task-local, noisy, or not reusable>
-```
-
-Use `captured` when a reusable discovery, dogfood finding, user correction,
-setup command, or repeated friction changed a committed skill, script, test, or
-durable doc in this task. Use `rejected` when you considered a candidate but it
-should remain local. Use `none` only when there was no reusable learning.
+Classify `none | captured | rejected`. `learnings.jsonl` is gitignored staging,
+not shared memory. `captured` requires a committed artifact and names the skill,
+script, test or durable doc that changed a committed rule.
 
 ### Phase 8.5.3: Self-Healing Candidates (mandatory classification)
 
-Classify whether this task revealed a recurring failure mode that the harness or
-project can prevent next time. This includes development friction, QA-discovered
-verification gaps, tool/schema drift, CI command drift, brittle setup commands,
-and repeated manual recovery steps. QA lenses should surface candidates in their
-final response; Phase 8 owns the final classification.
-
-For harness-improvement candidates, treat dogfood feedback and agent retros as
-hypotheses until checked against the repo. Before marking a candidate `applied`
-or proposing follow-up work, inspect the owning code path and relevant tests.
-Classify the claim as `confirmed`, `partially-confirmed`, `already-handled`,
-`duplicate`, `not-found`, or `needs-runtime-check`. If it is
-`partially-confirmed`, rewrite it to the smallest accurate failing case. If the
-raw proposal would weaken an existing QA/runtime/close gate, preserve the gate's
-safety intent by proposing an explicit alternative evidence tier rather than
-removing the gate. Record the corrected scope and evidence path in task state or final response.
+Treat development friction, QA-discovered gaps and agent suggestions as
+hypotheses until checked against the repo. Classify each as `confirmed`,
+`partially-confirmed`, `already-handled`, `duplicate`, `not-found`, or
+`needs-runtime-check`. Preserve gate safety with an alternative evidence tier.
 
 If develop or QA discovered a working repo-local setup/test/dev-server command
 after one or more failed attempts, record it before close as a pending runbook
@@ -622,33 +450,12 @@ python3 ${HARNESS_PLUGIN_ROOT}/scripts/runbook_memory.py capture \
   --gotcha "<why the first attempt failed>"
 ```
 
-The candidate is not shared memory yet. Before close, either approve
-it into a committed artifact (`doc/harness/runbooks.yaml`, manifest, script, or
-durable doc), ask before deferring it, or reject/skip it as one-off/noisy.
-
-Use this structure in task state or the final response:
-
-```markdown
-## Self-Healing Candidates
-
-Status: none | applied | deferred | rejected
-
-- applied: <failure mode> — <changed committed path> now prevents recurrence
-- deferred: <failure mode>
-  user_decision: <separate task | not now | other user wording>
-  reason: <why not in this task>
-  proposed_artifact: <path> | proposed_task: <task>
-- rejected: <candidate> — <why one-off, noisy, or not worth automating>
-```
-
-Use `applied` only when this task changed a committed artifact named on the
-bullet. If the improvement is real but large or risky, do not silently defer:
-ask the user before close. On Claude, use `AskUserQuestion`. On Codex, use
-`request_user_input` when available; otherwise ask in conversation and wait for
-the user's reply. Use `deferred` only after recording that user decision plus
-the reason and proposed artifact/task. Use `rejected` for one-off environment
-noise or non-reproducible complaints. Use `none` only when develop, QA, dogfood,
-and close produced no self-healing signal.
+The candidate is not shared memory yet. Use
+`Status: none | applied | deferred | rejected`. Applied names the changed
+committed artifact. Deferred uses `request_user_input` when available (or a
+conversational AskUserQuestion) and records `user_decision:` plus
+`proposed_artifact:`. Approve reusable commands into
+`doc/harness/runbooks.yaml` or reject one-off noise.
 
 ### Phase 8.6: durable docs
 

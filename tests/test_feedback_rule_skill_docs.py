@@ -26,9 +26,9 @@ def test_develop_skills_require_feedback_rule_judgment():
         assert "alternative evidence tier" in body
         assert "Status: none | applied | deferred | rejected" in body
         assert "AskUserQuestion" in body
-        assert "request_user_input" in body
-        assert "user_decision:" in body
-        assert "proposed_artifact:" in body
+        if "plugin-codex" in rel:
+            assert "request_user_input" in body
+        assert "user_decision:" in body and "proposed_artifact:" in body
         assert "User Feedback Event Review" in body
         assert "do not" in body and "USER_FEEDBACK.jsonl" in body
         assert "durable source of truth" in body

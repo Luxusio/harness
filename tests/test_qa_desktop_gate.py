@@ -81,11 +81,13 @@ class TestProvenance(unittest.TestCase):
             _lib.record_subagent_receipt(td, {
                 "event": "started", "lens": "qa-cli", "agent_id": "qa-cli-1",
                 "agent_type": "qa_cli", "task_run_id": run_id,
+                "source": "test_fixture", "runtime_id": "test:qa-cli-1",
             })
             _lib.record_subagent_receipt(td, {
                 "event": "completed", "lens": "qa-cli", "agent_id": "qa-cli-1",
                 "agent_type": "qa_cli", "task_run_id": run_id,
                 "verdict": "PASS", "summary": "VERDICT: PASS",
+                "source": "test_fixture", "runtime_id": "test:qa-cli-1",
             })
             prov = _lib.provenance_from_artifacts(td)
             self.assertTrue(prov["qa-cli"])

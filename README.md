@@ -142,8 +142,8 @@ All under `plugin/scripts/`. Stdlib only.
 | `hygiene_followup.py` | Post-close scheduler that creates one standalone hygiene review task from pending items | `doc/harness/tasks/TASK__hygiene-review-pending-docs/` |
 | `hygiene_restore.py` | Restore an archived file back to original location via `git mv` | — |
 | `maintain_restore.py` | Legacy wrapper for old archive restore commands | — |
-| `background_registry.py` | Shared Claude subagent lifecycle registry; stop-only runtimes infer the ordered receipt pair from an identity-bound stop | `doc/harness/runtime/background.json`, task `RECEIPTS.jsonl` |
-| `background_hook.py` | SubagentStart/SubagentStop adapter, including authoritative stop-only receipt fallback | `doc/harness/runtime/background.json`, task `RECEIPTS.jsonl` |
+| `subagent_lifecycle.py` | Receipt-backed Claude lifecycle handling, active-work queries, and trusted stop-only inference | task `RECEIPTS.jsonl` |
+| `background_hook.py` | SubagentStart/SubagentStop adapter for direct unified-receipt publication | task `RECEIPTS.jsonl` |
 | `_gate_response.py` | Shared hook deny/allow response helper | — |
 | `verification_gap_check.py` | Resume-time warning for missing verification evidence | — |
 | `drift_warn.py` | SessionStart drift detector: reminds dev-of-harness users when installed plugin lags source (silent in non-dev / non-harness repos) | — |

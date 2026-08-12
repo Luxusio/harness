@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import sys
 import threading
@@ -52,6 +53,8 @@ def _receipt(
         summary = f"VERDICT: {verdict}"
         if lens.startswith("review-"):
             summary += "\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+    extra.setdefault("source", "test_fixture")
+    extra.setdefault("runtime_id", f"test:{agent_id}")
     return lib.record_subagent_receipt(
         task,
         {
@@ -156,21 +159,69 @@ def test_receipts_require_matching_start(tmp_path):
         "PASS",
     )
     assert set(completed) == lib.RECEIPT_FIELDS
+    assert completed["summary"].splitlines() == [
+        "VERDICT: PASS",
+        "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0",
+        "DETAIL_SHA256:" + hashlib.sha256(
+            b"VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+        ).hexdigest(),
+    ]
     assert lib.receipt_review_verdict(task) == "PASS"
 
     _receipt(task, "qa-cli", "qa-1", "started")
-    _receipt(
-        task,
-        "qa-cli",
-        "qa-1",
-        "completed",
-        "PASS",
-    )
+    _receipt(task, "qa-cli", "qa-1", "completed", "PASS")
     assert lib.receipt_runtime_verdict(task) == "PASS"
 
     no_start = _task(tmp_path / "no-start")
     _receipt(no_start, "review-code", "review-orphan", "completed", "PASS")
     assert lib.receipt_review_verdict(no_start) == "PENDING"
+
+
+def test_receipt_summary_keeps_only_review_contract_and_detail_digest(tmp_path):
+    task = _task(tmp_path)
+    final = (
+        "VERDICT: PASS\n"
+        "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\n\n"
+        + "detailed evidence " * 200
+    )
+    started = _receipt(task, "review-code", "review-compact", "started")
+    completed = lib.record_subagent_receipt(task, {
+        "source": started["source"],
+        "task_run_id": started["task_run_id"],
+        "runtime_id": started["runtime_id"],
+        "agent_id": started["agent_id"],
+        "agent_type": started["agent_type"],
+        "lens": "review-code",
+        "event": "completed",
+        "verdict": "PASS",
+        "summary": final,
+    })
+    assert completed["summary"].splitlines()[:2] == [
+        "VERDICT: PASS",
+        "FINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0",
+    ]
+    assert completed["summary"].splitlines()[2].startswith("DETAIL_SHA256:")
+    assert "detailed evidence" not in completed["summary"]
+    assert len(completed["summary"]) < len(final) * 0.1
+
+
+def test_runtime_authored_receipt_namespace_must_match_source(tmp_path):
+    import pytest
+
+    task = _task(tmp_path)
+    for source, runtime_id in (
+        ("codex_session_watcher:collaboration", "claude:sess:agent"),
+        ("claude_hook", "codex:root:call:child"),
+    ):
+        with pytest.raises(ValueError, match="runtime_id namespace"):
+            lib.record_subagent_receipt(task, {
+                "source": source,
+                "runtime_id": runtime_id,
+                "agent_id": "agent",
+                "agent_type": "qa-cli",
+                "lens": "qa-cli",
+                "event": "started",
+            })
 
 
 def test_qa_start_must_match_completion_and_follow_review(tmp_path):
@@ -189,15 +240,24 @@ def test_qa_start_must_match_completion_and_follow_review(tmp_path):
     replay = _task(tmp_path / "runtime-replay")
     _receipt(
         replay, "review-code", "review-reused", "started",
-        runtime_event_id="event-a", runtime_session_id="session-1",
-        runtime_thread_id="thread-a",
+        runtime_id="test:event-a:session-1:thread-a",
     )
     _receipt(
         replay, "review-code", "review-reused", "completed", "PASS",
-        runtime_event_id="event-b", runtime_session_id="session-1",
-        runtime_thread_id="thread-a",
+        runtime_id="test:event-b:session-1:thread-a",
     )
     assert lib.receipt_review_verdict(replay) == "PENDING"
+
+    source_mismatch = _task(tmp_path / "source-mismatch")
+    _receipt(
+        source_mismatch, "review-code", "reviewer", "started",
+        source="source-a",
+    )
+    _receipt(
+        source_mismatch, "review-code", "reviewer", "completed", "PASS",
+        source="source-b",
+    )
+    assert lib.receipt_review_verdict(source_mismatch) == "PENDING"
 
     type_mismatch = _task(tmp_path / "type-mismatch")
     _receipt(type_mismatch, "review-code", "reviewer", "started", agent_type="type-a")
@@ -226,14 +286,17 @@ def test_duplicate_terminals_and_contradictory_summaries_fail_closed(tmp_path):
     started = lib.record_subagent_receipt(contradictory, {
         "event": "started", "agent_id": "qa", "agent_type": "qa_cli",
         "lens": "qa-cli", "verdict": "PASS", "summary": "VERDICT: PASS",
+        "source": "test_fixture", "runtime_id": "test:qa",
     })
     completed = lib.record_subagent_receipt(contradictory, {
         "event": "completed", "agent_id": "qa", "agent_type": "qa_cli",
         "lens": "qa-cli", "verdict": "PASS", "summary": "VERDICT: FAIL",
+        "source": "test_fixture", "runtime_id": "test:qa",
     })
     missing = lib.record_subagent_receipt(contradictory, {
         "event": "completed", "agent_id": "qa-2", "agent_type": "qa_cli",
         "lens": "qa-cli", "verdict": "PASS", "summary": "done",
+        "source": "test_fixture", "runtime_id": "test:qa-2",
     })
     assert started["verdict"] == ""
     assert completed["verdict"] == "PENDING"
@@ -585,8 +648,20 @@ def test_review_and_qa_share_one_receipt_stream(tmp_path):
 
 def test_old_unified_schema_requires_a_fresh_task_run(tmp_path):
     task = _task(tmp_path)
+    legacy = {
+        "receipt_id": "legacy-1", "task_id": "TASK__no-git",
+        "task_run_id": lib.read_task_control(task)["run_id"],
+        "kind": "review", "event": "completed", "status": "done",
+        "source": "codex_session_watcher", "agent_id": "review-1",
+        "agent_type": "review-code", "lens": "review-code",
+        "verdict": "PASS", "summary": "VERDICT: PASS",
+        "transcript_path": "/tmp/legacy", "transcript_sha256": "0" * 64,
+        "runtime_session_id": "session", "runtime_thread_id": "thread",
+        "runtime_event_id": "event", "started_at": "2026-08-12T00:00:00Z",
+        "finished_at": "2026-08-12T00:00:01Z",
+    }
     (task / lib.RECEIPTS_NAME).write_text(
-        json.dumps({"kind": "review", "status": "completed"}) + "\n",
+        json.dumps(legacy) + "\n",
         encoding="utf-8",
     )
 
@@ -596,6 +671,107 @@ def test_old_unified_schema_requires_a_fresh_task_run(tmp_path):
         assert "start a fresh task run" in str(exc)
     else:
         raise AssertionError("old receipt schema must fail closed")
+
+
+def test_compact_receipts_reduce_representative_verbose_pair_by_at_least_40_percent(tmp_path):
+    task = _task(tmp_path)
+    detail = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\n" + "x" * 900
+    started = _receipt(task, "review-code", "review-1", "started")
+    completed = lib.record_subagent_receipt(task, {
+        "event": "completed", "agent_id": "review-1", "agent_type": "review-code",
+        "lens": "review-code", "verdict": "PASS", "summary": detail,
+        "source": "test_fixture", "runtime_id": "test:review-1",
+    })
+    compact = sum(len(json.dumps(row, sort_keys=True)) + 1 for row in (started, completed))
+    legacy_pair = []
+    for event, verdict, summary in (("started", "", ""), ("completed", "PASS", detail[:1000])):
+        legacy_pair.append({
+            "receipt_id": "r" * 64, "task_id": "TASK__no-git",
+            "task_run_id": lib.read_task_control(task)["run_id"], "kind": "review",
+            "event": event, "status": "done" if event == "completed" else "active",
+            "source": "codex_session_watcher:collaboration", "agent_id": "review-1",
+            "agent_type": "review-code", "lens": "review-code", "verdict": verdict,
+            "summary": summary, "transcript_path": "/home/user/.codex/sessions/child.jsonl",
+            "transcript_sha256": "0" * 64, "runtime_session_id": "s" * 36,
+            "runtime_thread_id": "t" * 36, "runtime_event_id": "e" * 36,
+        })
+    legacy_size = sum(len(json.dumps(row, sort_keys=True)) + 1 for row in legacy_pair)
+    assert compact <= legacy_size * 0.60
+
+
+def test_qa_completion_summary_is_digest_only(tmp_path):
+    task = _task(tmp_path)
+    raw = "VERDICT: PASS\n" + "detailed output " * 100
+    entry = _receipt(task, "qa-cli", "qa-1", "completed", "PASS", summary=raw)
+    assert entry["summary"].splitlines() == [
+        "VERDICT: PASS",
+        "DETAIL_SHA256:" + hashlib.sha256(raw.encode()).hexdigest(),
+    ]
+
+
+def test_receipt_runtime_id_requires_parseable_namespace(tmp_path):
+    import pytest
+
+    task = _task(tmp_path)
+    for runtime_id in (
+        "codex", "Codex:session", "codex:", "codex:bad value",
+        "codex:" + "a" * 500,
+    ):
+        try:
+            _receipt(task, "review-code", "review-1", "started", runtime_id=runtime_id)
+        except ValueError as exc:
+            assert "runtime_id" in str(exc)
+        else:
+            raise AssertionError(f"invalid runtime identity accepted: {runtime_id}")
+
+    assert lib.parse_receipt_runtime_id("codex:session:call:thread") == (
+        "codex", "session", "call", "thread",
+    )
+
+    for source, runtime_id in (
+        ("test_fixture", ""),
+        ("codex_session_watcher:collaboration", "codex:root:event"),
+        ("codex_session_watcher:collaboration", "claude:session:agent"),
+        ("claude_hook", "claude:session:agent:extra"),
+        ("claude_hook", "codex:root:event:child"),
+    ):
+        with pytest.raises(ValueError, match="runtime_id"):
+            _receipt(
+                task, "review-code", "review-1", "started",
+                source=source, runtime_id=runtime_id,
+            )
+
+
+def test_exact_schema_rejects_semantically_malformed_rows(tmp_path):
+    import pytest
+
+    task = _task(tmp_path)
+    valid = _receipt(task, "qa-cli", "qa-1", "started")
+    cases = (
+        {**valid, "summary": "start"},
+        {**valid, "verdict": "PASS"},
+        {**valid, "runtime_id": ""},
+        {**valid, "event": "completed", "verdict": "PASS", "summary": "VERDICT: PASS"},
+        {**valid, "event": "completed", "verdict": "FAIL", "summary": (
+            "VERDICT: PASS\nDETAIL_SHA256:" + "0" * 64
+        )},
+    )
+    for item in cases:
+        (task / lib.RECEIPTS_NAME).write_text(json.dumps(item) + "\n", encoding="utf-8")
+        with pytest.raises(RuntimeError, match="start a fresh task run"):
+            lib.receipt_snapshot(task)
+
+
+def test_writer_rejects_missing_type_or_lens_without_poisoning_stream(tmp_path):
+    import pytest
+
+    task = _task(tmp_path)
+    with pytest.raises(ValueError, match="exact persisted schema"):
+        lib.record_subagent_receipt(task, {
+            "event": "started", "agent_id": "unknown", "agent_type": "",
+            "source": "test_fixture", "runtime_id": "test:unknown",
+        })
+    assert not (task / lib.RECEIPTS_NAME).exists()
 
 
 def test_exact_schema_rejects_non_string_values(tmp_path):
@@ -616,3 +792,24 @@ def test_exact_schema_rejects_non_string_values(tmp_path):
         assert "start a fresh task run" in str(exc)
     else:
         raise AssertionError("mutable receipt values must fail closed")
+
+
+def test_exact_schema_rejects_invalid_persisted_runtime_id(tmp_path):
+    task = _task(tmp_path)
+    entry = {field: "" for field in lib.RECEIPT_FIELDS}
+    entry.update(
+        event="started",
+        source="codex_session_watcher:collaboration",
+        task_run_id=lib.read_task_control(task)["run_id"],
+        runtime_id="not-namespaced",
+    )
+    (task / lib.RECEIPTS_NAME).write_text(
+        json.dumps(entry) + "\n", encoding="utf-8"
+    )
+
+    try:
+        lib.receipt_snapshot(task)
+    except RuntimeError as exc:
+        assert "start a fresh task run" in str(exc)
+    else:
+        raise AssertionError("invalid stored runtime identity must fail closed")

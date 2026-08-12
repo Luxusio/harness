@@ -57,20 +57,25 @@ provenance, fingerprints, installation authority, or close authority.
 Every line is a JSON object containing exactly these fields:
 
 ```text
-receipt_id, ts, event, source, task_run_id, agent_id, agent_type, lens,
-verdict, summary, transcript_path, transcript_sha256, runtime_event_id,
-runtime_session_id, runtime_thread_id
+ts, event, source, task_run_id, runtime_id, agent_id, agent_type, lens,
+verdict, summary
 ```
 
 `event` is exactly `started` or `completed`. Category is derived from `lens`;
 lifecycle state is derived from `event`; timestamp role is derived from
 `event + ts`; finding counts are parsed from the canonical completion
-`summary`. A start carries no passing verdict. A completion must carry the
-explicit verdict and canonical summary required by its lens.
+`summary`. A start carries an empty summary and no passing verdict. A
+completion summary retains only its normalized verdict, review finding counts
+when applicable, and a `DETAIL_SHA256` of the validated full final response.
+The detailed response remains in the runtime transcript and is not duplicated
+in the receipt stream.
 
-Entries correlate by `task_run_id`, `agent_id`, `agent_type`, `lens`, and the
-exact supplied runtime identity. Append position establishes lifecycle order
-and review-before-QA order; wall-clock comparison does not.
+Entries correlate by exact `source`, `task_run_id`, `runtime_id`, `agent_id`,
+`agent_type`, and `lens`. Runtime identity is namespaced and parseable:
+`claude:<session>:<agent>` or `codex:<root>:<event>:<child>`. Append position
+establishes lifecycle order and review-before-QA order; wall-clock comparison
+does not. Transcript paths and digests are verification inputs before append,
+not persistent receipt state.
 
 Claude runtimes that emit `SubagentStop` without a preceding `SubagentStart`
 use the stop hook as the authoritative lifecycle observation only under the
@@ -88,11 +93,16 @@ PASS. Direct model invocation of lifecycle receipt-authoring scripts is denied.
 The transcript namespace and every path component/leaf are descriptor-bound,
 non-symlink, owner-only provenance; Write/Edit/apply_patch and Bash mutation
 gates deny model-authored changes to Claude subagent transcript leaves.
-The inferred started/completed pair publishes under a receipt savepoint. The
-registry marks the stop single-use only after both entries are durable; an
-append or registry-publication failure restores the prior stream and leaves the
-same stop retryable. Concurrent/retried stops reuse one exact already-durable
-lifecycle identity instead of appending a duplicate pair.
+The inferred started/completed pair publishes under a receipt savepoint. An
+append failure restores the prior stream and leaves the same stop retryable.
+Concurrent/retried stops reuse one exact already-durable lifecycle identity
+instead of appending a duplicate pair. There is no second registry commit.
+
+Claude Stop-hook active-work protection derives unmatched current-run
+`started` receipts from this stream for the exact session. It does not maintain
+`doc/harness/runtime/background.json` or a registry lock. A valid old start may
+age out of Stop waiting without mutating the append-only evidence; malformed or
+future timestamps remain active and fail closed.
 
 Old-schema entries in `RECEIPTS.jsonl` are rejected with an actionable message
 to start a fresh task run or reset the unsupported stream. They are not

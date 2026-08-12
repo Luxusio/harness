@@ -73,29 +73,34 @@ class HarnessMcpServerTests(unittest.TestCase):
         *,
         agent_id: str = "agent-1",
         agent_type: str = "harness:qa-cli",
-        source: str = "subagent_start_hook",
+        source: str = "test_harness",
     ) -> None:
         if not harness_lib.read_task_control(task_dir):
             raise AssertionError("test task requires valid TASK.json")
         for payload in (
             {
                 "agent_id": "review-1", "agent_type": "harness:review-code",
-                "lens": "review-code", "event": "started",
+                "lens": "review-code", "event": "started", "source": source,
+                "runtime_id": "test:review-1",
             },
             {
                 "agent_id": "review-1", "agent_type": "harness:review-code",
                 "lens": "review-code",
                 "event": "completed", "verdict": "PASS",
                 "summary": "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0",
+                "source": source,
+                "runtime_id": "test:review-1",
             },
             {
                 "agent_id": agent_id, "agent_type": agent_type,
-                "lens": "qa-cli", "event": "started",
+                "lens": "qa-cli", "event": "started", "source": source,
+                "runtime_id": f"test:{agent_id}",
             },
             {
                 "agent_id": agent_id, "agent_type": agent_type, "event": "completed",
                 "lens": "qa-cli", "verdict": "PASS", "summary": "VERDICT: PASS",
                 "source": source,
+                "runtime_id": f"test:{agent_id}",
             },
         ):
             harness_server.record_subagent_receipt(task_dir, payload)
@@ -142,6 +147,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                     {
                         "agent_id": "late-agent", "agent_type": "harness:qa-cli",
                         "lens": "qa-cli", "event": "started",
+                        "source": "test_harness", "runtime_id": "test:late-agent",
                     },
                 )
 
@@ -190,6 +196,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             harness_server.record_subagent_receipt(task_dir, {
                 "agent_id": "qa-1", "agent_type": "harness:qa-cli",
                 "lens": "qa-cli", "event": "started",
+                "source": "test_harness", "runtime_id": "test:qa-1",
             })
             self.assertEqual(harness_server.receipt_runtime_verdict(task_dir), "PENDING")
 
@@ -200,16 +207,19 @@ class HarnessMcpServerTests(unittest.TestCase):
                 {
                     "agent_id": "review-1", "agent_type": "harness:review-code",
                     "lens": "review-code", "event": "started",
+                    "source": "test_harness", "runtime_id": "test:review-1",
                 },
                 {
                     "agent_id": "review-1", "agent_type": "harness:review-code",
                     "lens": "review-code",
                     "event": "completed", "verdict": "PASS",
                     "summary": "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0",
+                    "source": "test_harness", "runtime_id": "test:review-1",
                 },
                 {
                     "agent_id": "qa-1", "agent_type": "harness:qa-cli",
                     "lens": "qa-cli", "event": "started",
+                    "source": "test_harness", "runtime_id": "test:qa-1",
                 },
             ):
                 harness_server.record_subagent_receipt(task_dir, payload)
@@ -222,6 +232,8 @@ class HarnessMcpServerTests(unittest.TestCase):
                     "event": "completed",
                     "verdict": "FAIL",
                     "summary": "VERDICT: FAIL",
+                    "source": "test_harness",
+                    "runtime_id": "test:qa-1",
                 },
             )
             self.assertEqual(harness_server.receipt_runtime_verdict(task_dir), "FAIL")
@@ -237,6 +249,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                     "agent_type": "harness:qa-cli",
                     "event": "started",
                     "summary": "rerun started",
+                    "source": "test_harness", "runtime_id": "test:qa-new",
                 },
             )
             self.assertEqual(harness_server.receipt_runtime_verdict(task_dir), "PENDING")
@@ -970,7 +983,17 @@ class HarnessMcpServerTests(unittest.TestCase):
                 harness_server.canonical_task_dir = original_ctd
             self.assertNotIn("isError", result)
             structured = result["structuredContent"]
-            self.assertEqual(structured["task_context"]["task_id"], "TASK__mcp")
+            self.assertEqual(set(structured), {"task_dir", "task_context"})
+            context = structured["task_context"]
+            self.assertEqual(context["task_id"], "TASK__mcp")
+            self.assertNotIn("subagent_receipts", context)
+            self.assertNotIn("review_receipts", context)
+            self.assertNotIn("subagent_receipts", structured)
+            self.assertNotIn("review_receipts", structured)
+            self.assertEqual(
+                context["report_path"],
+                "doc/harness/tasks/TASK__mcp/RECEIPTS.jsonl",
+            )
 
     def test_critic_tools_are_not_exposed(self):
         for tool in ("write_critic_document", "write_critic_qa", "write_critic_ux"):
@@ -998,7 +1021,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertTrue(result.get("isError"))
         self.assertIn("Unknown tool", result["structuredContent"]["error"])
 
-    def test_record_subagent_receipt_is_not_exposed_and_task_verify_surfaces_hook_summary(self):
+    def test_record_subagent_receipt_is_not_exposed_and_task_verify_is_compact(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__subagentreceipt")
             self._write_subagent_receipt(
@@ -1043,10 +1066,19 @@ class HarnessMcpServerTests(unittest.TestCase):
         self.assertTrue(receipt_exists)
         self.assertEqual(receipt["agent_id"], "agent-123")
         self.assertEqual(receipt["lens"], "qa-cli")
-        self.assertEqual(verify["structuredContent"]["subagent_receipts"]["count"], 2)
-        self.assertEqual(verify["structuredContent"]["subagent_receipts"]["by_lens"]["qa-cli"], 2)
-        self.assertEqual(verify["structuredContent"]["subagent_receipts"]["by_agent_type"]["harness:qa-cli"], 2)
-        self.assertEqual(verify["structuredContent"]["subagent_receipts"]["by_source"]["subagent_start_hook"], 1)
+        self.assertNotIn("subagent_receipts", verify["structuredContent"])
+        self.assertNotIn("review_receipts", verify["structuredContent"])
+        self.assertNotIn("review_report_path", verify["structuredContent"])
+        self.assertEqual(set(verify["structuredContent"]), {
+            "task_dir", "runtime_verdict", "next_action", "missing_for_close",
+            "report_path", "review_verdict", "required_review_lenses",
+            "required_qa_lenses",
+        })
+        self.assertEqual(verify["structuredContent"]["required_qa_lenses"], ["qa-cli"])
+        self.assertEqual(
+            verify["structuredContent"]["report_path"],
+            "doc/harness/tasks/TASK__subagentreceipt/RECEIPTS.jsonl",
+        )
 
     def test_micro_execution_mode_allows_no_plan_but_still_requires_verify(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1295,6 +1327,33 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(payload["run_id"], resumed["run_id"])
             self.assertEqual(payload["task_context"]["runtime_verdict"], "PENDING")
             self.assertFalse((Path(task_dir) / "RECEIPTS.jsonl").exists())
+
+    def test_task_start_resume_discards_unsupported_legacy_receipt_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__resume-legacy-receipts")
+            old_run_id = harness_server.read_task_control(task_dir)["run_id"]
+            legacy = {
+                "receipt_id": "legacy-receipt", "ts": "2026-08-12T00:00:00Z",
+                "event": "completed", "source": "legacy", "task_run_id": old_run_id,
+                "agent_id": "legacy-agent", "agent_type": "harness:qa-cli",
+                "lens": "qa-cli", "verdict": "PASS", "summary": "VERDICT: PASS",
+                "transcript_path": "/tmp/legacy", "transcript_sha256": "0" * 64,
+                "runtime_session_id": "legacy-session",
+                "runtime_thread_id": "legacy-thread", "runtime_event_id": "legacy-event",
+            }
+            receipts = Path(task_dir) / "RECEIPTS.jsonl"
+            receipts.write_text(json.dumps(legacy) + "\n", encoding="utf-8")
+
+            result = self._call_in_repo(
+                tmp, "task_start", {"task_id": "TASK__resume-legacy-receipts"},
+            )
+
+            self.assertNotIn("isError", result)
+            self.assertTrue(result["structuredContent"]["resumed"])
+            self.assertNotEqual(
+                harness_server.read_task_control(task_dir)["run_id"], old_run_id,
+            )
+            self.assertFalse(receipts.exists())
 
     def test_task_start_resume_waits_for_task_transaction(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1876,7 +1935,8 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             for lens in harness_server.required_review_lenses(task_dir):
                 for status, verdict in (("started", ""), ("completed", "PASS")):
                     harness_server.record_subagent_receipt(task_dir, {
-                        "source": "subagent_start_hook" if status == "started" else "subagent_stop_hook",
+                        "source": "test_fixture",
+                        "runtime_id": f"test:{lens}-{task_id}",
                         "event": status,
                         "agent_id": f"{lens}-{task_id}",
                         "agent_type": review_types[lens],
@@ -1889,7 +1949,8 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                     })
             for status, verdict in (("started", ""), ("completed", "PASS")):
                 harness_server.record_subagent_receipt(task_dir, {
-                    "source": "subagent_start_hook" if status == "started" else "subagent_stop_hook",
+                    "source": "test_fixture",
+                    "runtime_id": f"test:agent-{task_id}",
                     "event": status,
                     "agent_id": f"agent-{task_id}",
                     "agent_type": "harness:qa-cli",

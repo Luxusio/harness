@@ -241,8 +241,10 @@ def test_watcher_records_start_then_correlated_review_completion(tmp_path, monke
     assert [(item["event"], item.get("verdict", "")) for item in receipts] == [
         ("started", ""), ("completed", "PASS"),
     ]
-    assert receipts[0]["runtime_thread_id"] == child_id
-    assert receipts[0]["runtime_event_id"] == receipts[1]["runtime_event_id"]
+    assert receipts[0]["runtime_id"] == (
+        f"codex:{root_id}:call_runtime_123456:{child_id}"
+    )
+    assert receipts[0]["runtime_id"] == receipts[1]["runtime_id"]
 
 
 def test_watcher_discovers_child_when_runtime_omits_activity_event(tmp_path, monkeypatch):
@@ -289,7 +291,9 @@ def test_watcher_discovers_child_when_runtime_omits_activity_event(tmp_path, mon
     assert [(item["event"], item.get("verdict", "")) for item in receipts] == [
         ("started", ""), ("completed", "PASS"),
     ]
-    assert receipts[0]["runtime_thread_id"] == child_id
+    assert receipts[0]["runtime_id"] == (
+        f"codex:{root_id}:call_runtime_output_only:{child_id}"
+    )
     assert receipts[0]["agent_id"] == agent_path
 
 
@@ -375,12 +379,11 @@ def test_prior_run_same_agent_path_cannot_replace_current_start(tmp_path):
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
     agent_path = "/root/code_review"
-    event_id = f"{root_id}:call_runtime_123456:{child_id}"
+    runtime_id = f"codex:{root_id}:call_runtime_123456:{child_id}"
     prior = {
         "event": "started",
-        "runtime_event_id": event_id,
-        "runtime_session_id": root_id,
-        "runtime_thread_id": child_id,
+        "runtime_id": runtime_id,
+        "source": "codex_session_watcher:collaboration",
         "agent_id": agent_path,
         "agent_type": "code_review",
         "lens": "review-code",
@@ -579,15 +582,15 @@ def test_watcher_restart_replays_persisted_exact_start_after_child_completes(tmp
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
     agent_path = "/root/code_review"
     call_id = "call_runtime_123456"
-    event_id = f"{root_id}:{call_id}:{child_id}"
+    runtime_id = f"codex:{root_id}:{call_id}:{child_id}"
     final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
     child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
     _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo), final))
     receipts = [{
         "event": "started", "agent_id": agent_path, "lens": "review-code",
         "agent_type": "code_review", "task_run_id": RUN_ID,
-        "runtime_event_id": event_id,
-        "runtime_session_id": root_id, "runtime_thread_id": child_id,
+        "runtime_id": runtime_id,
+        "source": "codex_session_watcher:collaboration",
     }]
 
     def record(_task_dir, receipt):
@@ -809,12 +812,10 @@ def test_record_receipt_preserves_runtime_provenance(tmp_path):
     _write_task_control(task)
     entry = _lib.record_subagent_receipt(task, {
         "agent_id": "/root/qa_cli", "agent_type": "qa_cli", "event": "started",
-        "runtime_event_id": "session:call:thread", "runtime_session_id": "session",
-        "runtime_thread_id": "thread",
+        "source": "codex_session_watcher:collaboration",
+        "runtime_id": "codex:session:call:thread",
     })
-    assert entry["runtime_event_id"] == "session:call:thread"
-    assert entry["runtime_session_id"] == "session"
-    assert entry["runtime_thread_id"] == "thread"
+    assert entry["runtime_id"] == "codex:session:call:thread"
     assert entry["agent_id"] == "/root/qa_cli"
 
 

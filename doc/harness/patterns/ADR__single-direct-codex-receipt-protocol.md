@@ -42,6 +42,11 @@ review or QA lens. The root session's active-task marker and current
 `TASK.json` are the only task authorities. MCP output, prompt text, and
 watcher-local fallback state are not task authorities.
 
+The persisted compact identity is one namespaced `runtime_id`:
+`codex:<root-session>:<spawn-event>:<child-thread>`. Separate runtime event,
+session, and thread fields are not stored. This is a storage projection only;
+all bounded rollout checks above still run before a receipt is appended.
+
 Completion requires one child `task_complete` final and one direct child
 `FINAL_ANSWER` delivered to the root. Their final text must match exactly. If
 the child rollout also contains a distinct child final-answer event, it must

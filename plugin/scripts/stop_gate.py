@@ -23,7 +23,7 @@ from _lib import (  # type: ignore
     is_harness_enabled_repo, write_goal_payload_probe,
 )
 from _gate_response import block as gate_block  # type: ignore
-import background_registry  # type: ignore
+import subagent_lifecycle  # type: ignore
 
 
 def _background_wait_budget() -> float:
@@ -174,7 +174,7 @@ def main():
         # Stop hook already forced the continuation, and re-blocking here loops
         # until Claude Code's consecutive hook cap fires.
         if bool(hook_input.get("stop_hook_active")):
-            active_background = background_registry.active_records(
+            active_background = subagent_lifecycle.active_records(
                 repo_root,
                 task_id=task_id,
                 session_id=current_session_id(),
@@ -183,18 +183,29 @@ def main():
             if active_background:
                 return 0
         else:
-            wait_result = background_registry.wait_for_clear(
-                repo_root,
-                task_id=task_id,
-                session_id=current_session_id(),
-                timeout_secs=_background_wait_budget(),
-                stale_secs=_background_stale_secs(),
-            )
+            try:
+                wait_result = subagent_lifecycle.wait_for_clear(
+                    repo_root,
+                    task_id=task_id,
+                    session_id=current_session_id(),
+                    timeout_secs=_background_wait_budget(),
+                    stale_secs=_background_stale_secs(),
+                )
+            except Exception:
+                json.dump(gate_block(
+                    reason=(
+                        f"Harness lifecycle evidence for {task_id} is malformed or unsafe; "
+                        "Stop is blocked. Start a fresh task run to reset RECEIPTS.jsonl."
+                    ),
+                    owner_skill="harness:run",
+                    docs="doc/harness/patterns/ADR__consolidated-task-artifacts.md",
+                ), sys.stdout)
+                return 0
             if not wait_result.get("cleared"):
                 payload = gate_block(
                     reason=_background_reason(task_id, wait_result.get("active") or []),
                     owner_skill="Claude SubagentStart/SubagentStop hooks",
-                    docs="plugin/scripts/background_registry.py",
+                    docs="plugin/scripts/subagent_lifecycle.py",
                 )
                 json.dump(payload, sys.stdout)
                 return 0

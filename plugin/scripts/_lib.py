@@ -2273,12 +2273,86 @@ def restore_receipt_streams(snapshot):
 
 
 RECEIPT_FIELDS = frozenset({
-    "receipt_id", "ts", "event", "source", "task_run_id", "agent_id",
-    "agent_type", "lens", "verdict", "summary", "transcript_path",
-    "transcript_sha256", "runtime_event_id", "runtime_session_id",
-    "runtime_thread_id",
+    "ts", "event", "source", "task_run_id", "runtime_id", "agent_id",
+    "agent_type", "lens", "verdict", "summary",
 })
 RECEIPT_EVENTS = frozenset({"started", "completed"})
+_RECEIPT_RUNTIME_ID_RE = re.compile(
+    r"^(?P<namespace>[a-z][a-z0-9_-]*):"
+    r"(?P<components>[A-Za-z0-9._/@+-]+(?::[A-Za-z0-9._/@+-]+)*)$"
+)
+
+
+def parse_receipt_runtime_id(value):
+    """Return a namespaced runtime identity as components, or reject it."""
+    runtime_id = str(value or "").strip()
+    if not runtime_id:
+        return ()
+    if len(runtime_id) > 500:
+        raise ValueError("runtime_id must not exceed 500 characters")
+    match = _RECEIPT_RUNTIME_ID_RE.fullmatch(runtime_id)
+    if not match:
+        raise ValueError("runtime_id must be a namespaced colon-separated identity")
+    return (match.group("namespace"), *match.group("components").split(":"))
+
+
+def _validate_receipt_runtime_id(source, runtime_id):
+    parsed = parse_receipt_runtime_id(runtime_id)
+    normalized_source = str(source or "").lower()
+    if not parsed:
+        raise ValueError("receipt requires a namespaced runtime_id")
+    if normalized_source == "codex_session_watcher:collaboration" and (
+        len(parsed) != 4 or parsed[0] != "codex"
+    ):
+        raise ValueError(
+            "Codex receipt runtime_id namespace/shape must be codex:<root>:<event>:<child>"
+        )
+    if normalized_source == "claude_hook" and (
+        len(parsed) != 3 or parsed[0] != "claude"
+    ):
+        raise ValueError(
+            "Claude receipt runtime_id namespace/shape must be claude:<session>:<agent>"
+        )
+    return parsed
+
+
+_RECEIPT_DIGEST_RE = re.compile(r"^DETAIL_SHA256:[0-9a-f]{64}$")
+
+
+def _receipt_entry_semantics_valid(item):
+    """Validate the exact persisted receipt contract, not only its key set."""
+    try:
+        uuid7_timestamp_ms(item["task_run_id"])
+        _validate_receipt_runtime_id(item["source"], item["runtime_id"])
+    except (TypeError, ValueError):
+        return False
+    if (
+        not item["ts"] or not item["source"] or not item["agent_id"] or not item["agent_type"]
+        or item["lens"] not in SUPPORTED_LENSES
+    ):
+        return False
+    if item["event"] == "started":
+        return item["verdict"] == "" and item["summary"] == ""
+    if item["verdict"] not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING"}:
+        return False
+    lines = item["summary"].splitlines()
+    expected_lines = 3 if item["lens"].startswith("review-") else 2
+    if len(lines) != expected_lines or lines[0] != f"VERDICT: {item['verdict']}":
+        return False
+    if item["lens"].startswith("review-") and not (
+        lines[1] == "FINDING_COUNTS: INVALID" or _FINDING_COUNTS_RE.fullmatch(lines[1])
+    ):
+        return False
+    if item["lens"].startswith("review-") and lines[1] != "FINDING_COUNTS: INVALID":
+        counts = _FINDING_COUNTS_RE.fullmatch(lines[1])
+        fix_now, investigate, _optional = (int(value) for value in counts.groups())
+        if item["verdict"] == "PASS" and (fix_now or investigate):
+            return False
+        if item["verdict"] == "FAIL" and not fix_now:
+            return False
+        if item["verdict"] == "BLOCKED_ENV" and not investigate:
+            return False
+    return bool(_RECEIPT_DIGEST_RE.fullmatch(lines[-1]))
 
 
 @dataclass(frozen=True)
@@ -2437,6 +2511,10 @@ def _receipt_snapshot_unlocked(task_dir):
             raise RuntimeError(
                 "unsupported RECEIPTS.jsonl schema; start a fresh task run to reset receipts"
             )
+        if not _receipt_entry_semantics_valid(item):
+            raise RuntimeError(
+                "unsupported RECEIPTS.jsonl schema; start a fresh task run to reset receipts"
+            )
         entries.append(MappingProxyType(item))
     return ReceiptSnapshot(tuple(entries), "sha256:" + h.hexdigest())
 
@@ -2444,17 +2522,6 @@ def _receipt_snapshot_unlocked(task_dir):
 def receipt_snapshot(task_dir):
     with _receipt_stream_lock(task_dir):
         return _receipt_snapshot_unlocked(task_dir)
-
-
-def _hash_file(path):
-    try:
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                h.update(chunk)
-        return h.hexdigest()
-    except Exception:
-        return ""
 
 
 def _receipt_short(value, limit=2000):
@@ -2480,6 +2547,43 @@ def extract_qa_verdict(value):
     matches = [_QA_VERDICT_RE.fullmatch(line.strip()) for line in lines]
     verdicts = [match.group(1) for match in matches if match]
     return verdicts[0] if matches[0] and len(verdicts) == 1 else ""
+
+
+def normalize_receipt_completion(lens, value, supplied_verdict=""):
+    """Validate a completion and retain only verdict/counts plus a detail digest."""
+    raw_summary = str(value or "")
+    verdict = _receipt_short(supplied_verdict, 40).upper()
+    if verdict and verdict not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING", "UNKNOWN"}:
+        verdict = "UNKNOWN"
+    summary_verdict = extract_qa_verdict(raw_summary)
+    if not summary_verdict or (verdict and verdict != summary_verdict):
+        verdict = "PENDING"
+    else:
+        verdict = summary_verdict
+
+    is_review = str(lens or "").startswith("review-")
+    summary_lines = raw_summary.splitlines()
+    counts_match = _FINDING_COUNTS_RE.fullmatch(summary_lines[1]) if len(summary_lines) > 1 else None
+    counts_reported = bool(counts_match) and sum(
+        "FINDING_COUNTS:" in line for line in summary_lines
+    ) == 1
+    if is_review:
+        if not counts_reported:
+            verdict = "PENDING"
+        else:
+            fix_now, investigate, _optional = (int(value) for value in counts_match.groups())
+            if verdict == "PASS" and (fix_now or investigate):
+                verdict = "PENDING"
+            if verdict == "FAIL" and not fix_now:
+                verdict = "PENDING"
+            if verdict == "BLOCKED_ENV" and not investigate:
+                verdict = "PENDING"
+
+    compact = [f"VERDICT: {verdict}"]
+    if is_review:
+        compact.append(counts_match.group(0) if counts_reported else "FINDING_COUNTS: INVALID")
+    compact.append("DETAIL_SHA256:" + hashlib.sha256(raw_summary.encode("utf-8")).hexdigest())
+    return verdict, "\n".join(compact)
 
 
 def _declared_lenses(task_dir, prefix, *, control=None):
@@ -2578,9 +2682,6 @@ def record_subagent_receipt(task_dir, receipt):
     source = _receipt_short(receipt.get("source") or "spawn_agent", 100)
     agent_type = _receipt_short(receipt.get("agent_type"), 300)
     verdict = _receipt_short(receipt.get("verdict") or "", 40).upper()
-    if verdict and verdict not in {"PASS", "FAIL", "BLOCKED_ENV", "PENDING", "UNKNOWN"}:
-        verdict = "UNKNOWN"
-    transcript_path = _receipt_short(receipt.get("transcript_path"), 1000)
     lens = _infer_receipt_lens(agent_type, receipt.get("lens"))
     is_review = lens.startswith("review-")
     event = _receipt_short(receipt.get("event"), 20).lower()
@@ -2588,36 +2689,12 @@ def record_subagent_receipt(task_dir, receipt):
         raise ValueError("event must be started or completed")
     is_completed = event == "completed"
     now = _receipt_now_iso()
-    finding_counts = {"fix_now": 0, "investigate": 0, "optional": 0}
     raw_summary = str(receipt.get("summary") or "")
-    summary = _receipt_short(raw_summary, 1000)
-    summary_verdict = extract_qa_verdict(raw_summary) if is_completed else ""
     if not is_completed:
         verdict = ""
-    elif not summary_verdict or (verdict and verdict != summary_verdict):
-        verdict = "PENDING"
+        summary = ""
     else:
-        verdict = summary_verdict
-    summary_lines = raw_summary.splitlines()
-    counts_match = _FINDING_COUNTS_RE.fullmatch(summary_lines[1]) if len(summary_lines) > 1 else None
-    counts_reported = bool(counts_match) and sum(
-        "FINDING_COUNTS:" in line for line in summary_lines
-    ) == 1
-    if counts_match:
-        finding_counts = {
-            "fix_now": int(counts_match.group(1)),
-            "investigate": int(counts_match.group(2)),
-            "optional": int(counts_match.group(3)),
-        }
-    if is_review and is_completed and not counts_reported:
-        verdict = "PENDING"
-    if is_review and is_completed and counts_reported:
-        if verdict == "PASS" and (finding_counts["fix_now"] or finding_counts["investigate"]):
-            verdict = "PENDING"
-        if verdict == "FAIL" and not finding_counts["fix_now"]:
-            verdict = "PENDING"
-        if verdict == "BLOCKED_ENV" and not finding_counts["investigate"]:
-            verdict = "PENDING"
+        verdict, summary = normalize_receipt_completion(lens, raw_summary, verdict)
     current_run = read_task_control(task_dir)
     if not current_run:
         raise RuntimeError("valid TASK.json required for receipt append")
@@ -2625,25 +2702,22 @@ def record_subagent_receipt(task_dir, receipt):
     task_run_id = str(current_run["run_id"])
     if supplied_run_id and supplied_run_id != task_run_id:
         raise RuntimeError("receipt task_run_id does not match current task run")
+    runtime_id = str(receipt.get("runtime_id") or "").strip()
+    _validate_receipt_runtime_id(source, runtime_id)
     entry = {
-        "receipt_id": "",
         "ts": now,
         "event": event,
         "source": source,
         "task_run_id": task_run_id,
+        "runtime_id": runtime_id,
         "agent_id": agent_id,
         "agent_type": agent_type,
         "lens": lens,
         "verdict": verdict,
         "summary": summary,
-        "transcript_path": transcript_path,
-        "transcript_sha256": _hash_file(transcript_path) if transcript_path else "",
-        "runtime_event_id": _receipt_short(receipt.get("runtime_event_id"), 500),
-        "runtime_session_id": _receipt_short(receipt.get("runtime_session_id"), 160),
-        "runtime_thread_id": _receipt_short(receipt.get("runtime_thread_id"), 160),
     }
-    seed = "|".join([entry["ts"], entry["source"], entry["agent_id"], entry["agent_type"], entry["lens"]])
-    entry["receipt_id"] = "subagent-" + hashlib.sha256(seed.encode("utf-8")).hexdigest()[:16]
+    if not _receipt_entry_semantics_valid(entry):
+        raise ValueError("receipt does not satisfy the exact persisted schema")
     path = _receipts_path(task_dir)
     _validated_receipt_task_dir(task_dir)
     payload = (json.dumps(entry, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8")
@@ -2653,77 +2727,6 @@ def record_subagent_receipt(task_dir, receipt):
             raise RuntimeError("receipt stream is terminal")
         _append_receipt_stream_unlocked(path, payload)
     return entry
-
-
-def list_subagent_receipts(task_dir, snapshot=None):
-    return list((snapshot or receipt_snapshot(task_dir)).subagents)
-
-
-def list_review_receipts(task_dir, snapshot=None):
-    return list((snapshot or receipt_snapshot(task_dir)).reviews)
-
-
-def subagent_receipt_summary(task_dir, snapshot=None):
-    receipts = list_subagent_receipts(task_dir, snapshot)
-    by_lens = {}
-    by_agent_type = {}
-    by_source = {}
-    by_verdict = {}
-    for item in receipts:
-        lens = item.get("lens") or "unknown"
-        agent_type = item.get("agent_type") or "unknown"
-        source = item.get("source") or "unknown"
-        verdict = item.get("verdict") or "UNKNOWN"
-        by_lens[lens] = by_lens.get(lens, 0) + 1
-        by_agent_type[agent_type] = by_agent_type.get(agent_type, 0) + 1
-        by_source[source] = by_source.get(source, 0) + 1
-        by_verdict[verdict] = by_verdict.get(verdict, 0) + 1
-    completed = [
-        item for item in receipts
-        if item.get("event") == "completed"
-    ]
-    latest = receipts[-1] if receipts else {}
-    if latest:
-        latest = {
-            "receipt_id": latest.get("receipt_id", ""),
-            "ts": latest.get("ts", ""),
-            "event": latest.get("event", ""),
-            "source": latest.get("source", ""),
-            "agent_id": latest.get("agent_id", ""),
-            "agent_type": latest.get("agent_type", ""),
-            "lens": latest.get("lens", ""),
-            "verdict": latest.get("verdict", ""),
-        }
-    return {
-        "count": len(receipts),
-        "completed_count": len(completed),
-        "by_lens": by_lens,
-        "by_agent_type": by_agent_type,
-        "by_source": by_source,
-        "by_verdict": by_verdict,
-        "latest": latest,
-    }
-
-
-def review_receipt_summary(task_dir, snapshot=None):
-    receipts = list_review_receipts(task_dir, snapshot)
-    by_lens = {}
-    by_verdict = {}
-    for item in receipts:
-        lens = item.get("lens") or "unknown"
-        verdict = item.get("verdict") or "UNKNOWN"
-        by_lens[lens] = by_lens.get(lens, 0) + 1
-        by_verdict[verdict] = by_verdict.get(verdict, 0) + 1
-    return {
-        "count": len(receipts),
-        "completed_count": sum(
-            item.get("event") == "completed"
-            for item in receipts
-        ),
-        "by_lens": by_lens,
-        "by_verdict": by_verdict,
-        "latest": dict(receipts[-1]) if receipts else {},
-    }
 
 
 def _completed_review_by_lens(task_dir, snapshot=None):
@@ -2763,17 +2766,11 @@ def _completed_review_by_lens(task_dir, snapshot=None):
 
 
 def _receipt_runtime_identity_matches(start, completion):
-    """Require exact runtime correlation whenever either event supplies it."""
+    """Require exact lifecycle correlation across every stable identity."""
     keys = (
-        "task_run_id", "agent_id", "agent_type", "lens",
-        "runtime_event_id", "runtime_session_id", "runtime_thread_id",
+        "source", "task_run_id", "runtime_id", "agent_id", "agent_type", "lens",
     )
-    for key in keys:
-        start_value = str(start.get(key) or "")
-        completion_value = str(completion.get(key) or "")
-        if (start_value or completion_value) and start_value != completion_value:
-            return False
-    return True
+    return all(str(start.get(key) or "") == str(completion.get(key) or "") for key in keys)
 
 
 def _latest_review_pass_index(task_dir, state=None, snapshot=None):
@@ -2914,8 +2911,6 @@ def emit_compact_context(task_dir, snapshot=None):
     missing_for_close = []
     if not has_plan and not micro_loop:
         missing_for_close.append("PLAN.md")
-    receipt_summary = subagent_receipt_summary(task_dir, snapshot)
-    review_summary = review_receipt_summary(task_dir, snapshot)
     required_reviews = required_review_lenses(task_dir, st)
     review_verdict = receipt_review_verdict(task_dir, st, snapshot)
     completed_reviews = _completed_review_by_lens(task_dir, snapshot)
@@ -2969,13 +2964,12 @@ def emit_compact_context(task_dir, snapshot=None):
         "why_source_write_blocked": why_blocked,
         "attempt_count": len(attempts),
         "latest_attempt": attempts[-1] if attempts else {},
-        "subagent_receipts": receipt_summary,
-        "review_receipts": review_summary,
         "review_verdict": review_verdict,
         "required_review_lenses": required_reviews,
         "required_qa_lenses": required_qa_lenses,
         "missing_for_close": missing_for_close,
         "next_action": next_action,
+        "report_path": f"doc/harness/tasks/{os.path.basename(task_dir)}/{RECEIPTS_NAME}",
         "conversation_open_items": open_conversation_items[:10],
         "effective_close_gate": "micro" if micro_loop else "standard",
     }

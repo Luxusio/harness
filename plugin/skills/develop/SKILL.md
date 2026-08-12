@@ -1,6 +1,6 @@
 ---
 name: develop
-description: Implement PLAN.md. Orchestrates per-AC implementation, quality audit, verification gate, durable learning capture, and close. Uses aggressive parallel agents for implementation, quality, and verification phases. Detail lives in sub-files — this file is the orchestration layer.
+description: Implement PLAN.md through scoped development, independent review, QA, verified install when applicable, and task close.
 argument-hint: <task-id>
 user-invocable: false
 allowed-tools: Read, Glob, Grep, Bash, Edit, Write, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context, mcp__chrome-devtools__navigate_page, mcp__chrome-devtools__take_snapshot, mcp__chrome-devtools__take_screenshot, mcp__chrome-devtools__evaluate_script, mcp__chrome-devtools__wait_for, mcp__chrome-devtools__list_pages, mcp__chrome-devtools__new_page, mcp__chrome-devtools__select_page, mcp__chrome-devtools__emulate, mcp__chrome-devtools__click, mcp__chrome-devtools__fill, mcp__chrome-devtools__press_key, mcp__chrome-devtools__type_text, mcp__chrome-devtools__hover, mcp__chrome-devtools__list_network_requests, mcp__chrome-devtools__performance_start_trace, mcp__chrome-devtools__performance_stop_trace, mcp__chrome-devtools__lighthouse_audit
@@ -27,65 +27,32 @@ continue to count toward the concurrency limit until closed.
 
 ## Voice
 
-Develop-orchestrator voice: opinionated, concrete, builder-to-builder. The develop skill is the entry point for the implement → audit → verify → handoff loop — sub-files inherit voice rules but the parent sets the tone.
-
-- Lead with the point. Say what the phase did, what it found, what changes downstream.
-- Be concrete. Name files, functions, line numbers, AC ids, commit hashes, test names. Real numbers over qualifiers.
-- Tie technical choices to outcomes — what the next phase reads, what the final response should say, what the verifier now has evidence for.
-- Be direct about quality. A confident PASS without test evidence matters more than a thoroughly-explained FAIL. Stale verdicts matter. Scope creep matters.
-- Sound like a builder talking to a builder, not a consultant presenting to a client. No founder cosplay, no hype.
-- No em dashes. No AI vocabulary: `delve`, `crucial`, `robust`, `comprehensive`, `nuanced`, `multifaceted`, `furthermore`, `moreover`, `additionally`, `pivotal`, `landscape`, `tapestry`, `underscore`, `foster`, `showcase`, `intricate`, `vibrant`, `fundamental`, `significant`, `seamless`, `leverage`. These signal AI prose; cut them.
-- Korean/English bilingual context: technical terms stay English, explanations may use Korean.
-- The user has context you do not. Adversarial agreement is a recommendation, not a decision. The user decides at premise gate (Phase 2 EUREKA), at scope-expansion gate (Phase 5), and at any 3-strike escalation.
-
-Good: "AC-003 done. PROGRESS.md:34 records 9/10 completeness. Per-AC test passed (`tests/regression/task_xx/test_ac_003__loop_detect.py`). Edge case deferred: nested phase loops, tracked as a follow-up."
-Bad: "I have successfully completed the implementation of AC-003 and the changes appear to be working as expected based on my analysis."
+Lead with outcomes. Name concrete files, functions, ACs and tests. Speak as a
+builder, avoid hype, and surface premise/scope decisions for the user.
 
 ## Anti-shortcut clause
 
 PROGRESS.md is the scope-lock contract for this task. PLAN.md owns acceptance intent, while ordered review and QA entries in the current TASK.json generation provide close evidence. Harness does not inspect source state after a receipt. If code changes after review or QA, the developer owns the decision to rerun the affected evidence.
 
-**Highest-tier verification mandate.** If a task creates, unblocks, or documents a verification path, using that path is part of the same task. Do not ask "should I verify it?" when the required services, rebuild, seed, token, browser, API, or CLI route are locally available. Execute the highest available tier yourself, then report the tier reached and any concrete blocker. Ask only when verification would require destructive state changes, paid/external credentials, production resources, or a genuine product choice between valid approaches.
+**Highest-tier verification mandate.** If a task creates, unblocks, or documents a verification path, using that path is part of the same task. Do not ask "should I verify it?" when the required services, rebuild, seed, token, browser, API, or CLI route are locally available. Execute the highest available tier yourself, then report the tier reached and any concrete blocker. Running the highest available verification tier is not scope expansion. Ask only when verification would require destructive state changes, paid/external credentials, production resources, or a genuine product choice between valid approaches.
 
 ## Confusion Protocol
 
-For high-stakes implementation ambiguity — blast radius >5 files (`verification-gate.md:166-179` has the gate that fires here), 3-strike hypothesis exhaustion (`verification-gate.md:151-164`), T2 vs T3 test-failure ambiguity (`test-failure-triage.md:23-36`), Phase 2 EUREKA flagging PLAN.md as wrong, Phase 5 scope creep mid-fix-loop — STOP. Name it in one sentence, present 2-3 options with concrete tradeoffs, and ask via AskUserQuestion. Cross-reference: parent format at `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format.
-
-Reserve this protocol for high-stakes ambiguity where the wrong choice changes scope, architecture, or verification outcome. The bar is: "if I pick wrong, the entire implementation is built on a misread of intent or scope, and the cost shows up in verify or close, not now." Running the highest available verification tier is not scope expansion and is not a reason to ask; it is the completion condition for the task.
-
-## Context Health
-
-Soft directive — degrade gracefully, never block.
-
-- **`[PROGRESS]` summary at phase boundaries.** Phase 3 (per-AC implement) and Phase 4.5-4.8 (parallel quality audit) are the longest runs. When any phase exceeds ~5 minutes, surface a 1-2 sentence checkpoint: done, next, surprises. Helps the user track progress without scrolling, and helps you self-check direction.
-- **Loop detection.** If the same fix-cycle pattern, the same hypothesis, or the same gate fires 3 times without converging, STOP and reassess. Options: premise re-confirm via AskUserQuestion (Phase 2 EUREKA path); spawn a fresh adversarial agent on a different model (cross-model blind-spot reset); pause for user check-in. Looping silently is worse than asking.
-- Progress summaries and loop-detection notices NEVER mutate git state.
+For premise, architecture, scope, external-state, or three-attempt ambiguity,
+stop, state the conflict in one sentence, and ask 2-3 options with concrete
+tradeoffs via `AskUserQuestion`. Running required verification is not scope
+expansion.
 
 ## Premise Gate / User Challenge
 
-Two structured triggers that replace silent overrides in earlier prose:
-
-1. **Phase 2 EUREKA premise gate** — when the search-before-building scan reveals PLAN.md's approach is suboptimal (the in-place EUREKA flag at Phase 2 below). Surface the discovery through AskUserQuestion with options `[Re-ground premise — re-run plan skill with new premise]`, `[Simplify scope — narrow this AC and proceed]`, `[Proceed as planned — capture EUREKA as a durable learning if reusable]`, or free-text `Other`. The user-confirmed direction must be visible in task state or a durable artifact, not only conversation history.
-2. **Phase 5 scope-expansion challenge** — when scope drift detection finds an unrelated file change that turns out to be necessary for the AC. Surface the scope change through AskUserQuestion with options `[Revert — change belongs in a separate task]`, `[Add to scope — update task state/plan rationale]`, `[Defer to new task — open follow-up]`, or free-text `Other`.
-
-Both triggers cross-reference the AskUserQuestion format from `plugin/skills/plan/decision-principles.md` § AskUserQuestion Format. The plan-orchestrator series proved structured AskUserQuestion at premise-shift / scope-expansion points produces measurably better outcomes than prose directives.
+At Phase 2, ask whether to re-plan, narrow, or proceed when search disproves the
+premise. At Phase 5, ask whether to revert, add to scope, or defer a necessary
+out-of-plan edit. Persist the choice in PLAN/PROGRESS or a durable artifact.
 
 ## Error Philosophy
 
-MCP does not tolerate mid-task stops. **Never halt with a bare BLOCKED.** Use `AskUserQuestion` with options; user decides. Errors are consumed by the running agent, not humans.
-
-**No mid-task scope cuts.** Do NOT fire AskUserQuestion to ask the user whether to drop ACs, split the task, or defer items mid-Phase. The plan was approved at Phase 5 of plan-skill; develop executes it. If a genuine blocker prevents completion of an AC, escalate via the existing BLOCKED → AskUserQuestion path with the concrete blocker, not a meta scope question.
-
-## Model Routing
-
-Route work to the cheapest sufficient model. Inline below; full rationale in sub-files.
-
-| Work | Model |
-|------|-------|
-| Implementation (Phase 3) | inherit |
-| Balanced code review (6.6) | independent highest-available reviewer |
-| Conditional security review (6.6) | independent security reviewer |
-| Everything else mechanical | haiku (test-coverage tracing, completion audit, runtime smoke, visual smoke) |
+Never halt with bare BLOCKED or silently cut an approved AC. Report the exact
+blocker and let the user choose a concrete recovery.
 
 ## Flow
 
@@ -148,88 +115,27 @@ Read target files and dependencies from PLAN.md. For each AC, before implementin
 
 ### Phase 3.0: AC Dependency Analysis
 
-Classify ACs as SEQUENTIAL (shared files or data dependency) or PARALLEL (component-independent). Build a dependency matrix from each AC's `**Files:**` declaration in PLAN.md. **PLAN.md AC dependency matrix is the single source of truth** — `git diff --name-only` is a secondary signal, never a sole trigger.
-
-Before Phase 3 implementation starts, write a visible lane table to the conversation.
-This is the routing contract the user can audit:
+Build the routing contract from PLAN file ownership and dependencies before
+editing:
 
 | AC | Files | Depends on | Lane | Route | Reason |
 |----|-------|------------|------|-------|--------|
-| AC-001 | `<paths>` | none | A | `Agent(...)` | independent files |
-| AC-002 | `<paths>` | AC-001 | A | sequential | declared dependency |
+| AC-001 | `<paths>` | none | A | Agent | disjoint files |
 
-`Route` must be one of: `Agent(...)`, `sequential-prelude`, `sequential-dependent`,
-or `sequential-small-task`. Fill the table before editing files. If the table has
-two or more independent `Agent(...)` rows, spawn those executors in one assistant
-message before doing local implementation work.
-
-**Default posture: parallel-first.** Mandatory parallel delegation is
-capability/task-shape based: if the runtime has `Agent(...)` and the lane table
-shows independent work, spawn one worker per lane. This is mandatory
-capability/task-shape routing; a user request is not a prerequisite for
-delegation. Do not skip parallel fanout because "user did not ask for
-delegation"; that is an invalid skip rationale. Do not wait for the user to
-request delegation. User request is not a condition for parallel routing. Assume
-every AC, QA lens, quality audit, and verification command can run in a subagent
-unless the dependency matrix proves otherwise. The coordinator's job is to split
-work, spawn siblings together, keep shared ledgers serialized, and merge. Inline
-work is reserved for sequential preludes, dependency-bound followups, and tiny
-evidenced exceptions.
-
-**Component-independent (definition for this phase):** two ACs are component-independent iff (a) their PLAN target file sets are disjoint, OR (b) shared files are factored into a dedicated helper-extract AC that runs first (sequential prelude → parallel consumers).
-
-**Enforcement (N>=2 component-independent ACs):** when the matrix yields two or more ACs that are pairwise component-independent, the orchestrator MUST issue N parallel Agent calls in a single assistant message. Treat this as the normal path, not an optimization. Explicit additional triggers (always fanout, even at N=2):
-
-- **API↔frontend split** — PLAN AC matrix declares both backend/API files (`*api*`, `*routes/*`, `*endpoint*`, `*graphql*`) and frontend files (`*.tsx/.jsx/.vue/.svelte/.html/.css/.scss`). Contract-first → parallel consumers.
-- **Helper-extract-first** — PLAN explicitly contains a helper-extraction AC. Run that extract AC sequentially first, then parallel-fanout the consumer ACs.
-
-**Helper-extract-first guard.** The extract trigger fires ONLY when the extract is already a declared AC in PLAN.md. Mid-task "extract while I'm here" is scope creep blocked by Phase 5. If a fanout decision *would* require extracting a helper from shared files but no such AC exists, the trigger does not fire — run sequentially and surface the missing AC in final response or a follow-up plan cycle.
-
-**Sequential fallback.** If a parallel trigger matches but the route is
-sequential, state the concrete reason in the visible lane table before editing:
-`reason`, `ac_count`, affected AC ids, and the blocking fact. Valid reasons are
-`small-task`, `declared-dependency`, and `agent-tool-unavailable`.
-`user-did-not-ask`, "user did not ask for delegation", or any equivalent
-user-request rationale is invalid.
-
-**Small-task edge case.** N=2 ACs where total edit volume is genuinely trivial
-(target estimate <10 changed lines combined and <15 seconds of editing) may use
-`sequential-small-task`. Record the concrete estimate in the lane table. Default
-is parallel; sequential is the narrow exception. User requests for speed or
-aggressive parallelism disable this edge case for the current task.
-
-Inline spawn template (copyable; one block per AC, ALL in one assistant turn):
-
-```
-Agent(name="<task_id>:AC-NNN", subagent_type="harness:ac-worker",
-      prompt="Implement AC-NNN per PLAN.md target files <list>. Return changed paths, test results, and blockers in your final response. Do not edit PROGRESS.md.")
-Agent(name="<task_id>:AC-001", subagent_type="harness:ac-worker",
-      prompt="Implement AC-001 per PLAN.md target files <list>. Return changed paths, test results, and blockers in your final response. Do not edit PROGRESS.md.")
-Agent(name="<task_id>:AC-002", subagent_type="harness:ac-worker",
-      prompt="Implement AC-002 per PLAN.md target files <list>. Return changed paths, test results, and blockers in your final response. Do not edit PROGRESS.md.")
-```
-
+`Route` must be one of: `Agent(...)`, `sequential-prelude`, `sequential-dependent`.
+Fill the table before editing files; two or more independent `Agent(...)` rows
+run in one batch. For example, use `Agent(name="<task_id>:AC-001"` and
+`Agent(name="<task_id>:AC-002"`, each with `subagent_type="harness:ac-worker"`.
 Use one Agent per independent AC. Do not assign multiple independent ACs to one
-executor. The coordinator reads subagent final responses and merges PROGRESS.md
-after all siblings return.
-
-**Coordinator-review branch (before generic rollback).** If any worker returns
-the exact status `needs-coordinator-review`, handle it before generic rollback
-or sequential retry. This status is not an ordinary worker failure. Read the
-ownership/blocker evidence, keep successful independent siblings promoted, and
-choose one converging action: reassign ownership within the already approved
-PLAN target paths, amend the lane/AC through the protected plan flow when the
-target set or scope must change, or escalate to the user. Never retry the AC
-with the same ownership unchanged. Only `blocked`, process/test failure, or a
-worker crash enters the generic rollback protocol below.
-
-See `plugin/skills/develop/parallel-fanout.md` for the full Parallelization Triggers table, Spawn-all-in-one-message rule, Stage Agent Routing matrix, and the Audit hook (the rule's 6-month value is re-verified via `learnings.jsonl type:parallel-trigger` log).
-
-**Rollback protocol** — on ANY sibling Agent failure during a parallel batch:
-
-Record the rollback reason in PROGRESS.md and sequential-retry the failed batch.
-
-After rollback, retry the failed batch sequentially. Do NOT re-fanout the same batch — that masks the underlying failure mode.
+executor. Disjoint ACs use one worker per lane when Agent is available.
+Sequential routes require a declared dependency, unavailable Agent, or a tiny
+evidenced batch. Workers read `plugin/agents/developer.md`, stay inside explicit
+ownership, Do not edit PROGRESS.md, and return changed paths, tests and blockers.
+Handle `needs-coordinator-review` before generic rollback: never retry with the
+same ownership; reassign ownership, amend PLAN, or escalate to the user. Keep
+successful independent siblings promoted. Record a failed parallel lane and
+retry only that dependency path sequentially. Load
+`parallel-fanout.md` only for uncommon routing cases.
 
 ### Phase 3.1: Scope Lock
 
@@ -249,49 +155,18 @@ Declare allowed / test / forbidden paths in PROGRESS.md. Before each file edit:
    current validation, auth, transactions, concurrency safety, cleanup,
    security, accessibility, tests, or requested behavior for fewer lines.
 
-**PROGRESS.md after each AC:**
-
-```yaml
-task_id: <task_id>
-phase: 3
-completed_acs:
-  - id: AC-001
-    status: done
-    tests: passed
-    completeness: 9            # 0-10 — see rubric below
-    deferred_edges: []         # edge cases consciously skipped
-current_ac: <next or "done">
-partial_ac: null               # or { id: AC-003, note: "edits done, regression test pending" }
-decisions:
-  - { choice: "...", reason: "...", ac: AC-001 }
-attempts:
-  - { ac: AC-002, tried: "...", failed_because: "...", resolved_with: "..." }
-notes:
-  - "<file:line> — <observation>"
-updated: <ISO timestamp>
-```
-
-**AC Completeness rubric (0-10):** covers how much of the AC's surface area was addressed (NOT confidence that it works — that's Phase 4.6).
-
-| Score | Meaning |
-|-------|---------|
-| 10 | Happy path + all edge cases + negative paths + regression tests |
-| 8-9 | Happy path + common edges + regression test. Rare edges documented |
-| 6-7 | Happy path + main branches. Some edges deferred with justification |
-| 4-5 | Happy path only. Significant surface skipped |
-| ≤3  | Partial — AC should not be marked done |
-
-Any AC scoring ≤7 MUST list `deferred_edges`. ≤5 requires explicit justification in PROGRESS.md or the final response (MVP scope, user-deferred, etc.).
-
-After each AC, record implementation and targeted-test evidence in PROGRESS.md.
-
-**Per-AC test run:** each executor runs its own targeted tests for the AC it owns. `git diff --name-only HEAD~1` → for each changed source, find test files that import/reference it (mirror path or import search) → run only those. If no tests exist for changed module, write one (Phase 3.5 rule). If PLAN.md specifies per-AC verify commands, prefer those. For parallel AC batches, targeted tests run inside the sibling executor contexts before the coordinator touches PROGRESS.md.
-
-**Delegation rule (C-18 / Verification delegation).** Prefer delegating Browser MCP tools (`mcp__chrome-devtools__*`) to `harness:qa-browser` so browser evidence does not consume the main context; inline use is allowed and its context cost is caller-owned. Bash test runners (`pytest`, `npm test`, `pnpm test`, `vitest`, `cargo test`, `go test`, …) are allowed inline only for small targeted per-AC runs; full-suite verification MUST be delegated to qa-* agents. Spawn every applicable lens (`qa-cli`, `qa-api`, `qa-browser`, `qa-desktop`) in one assistant message, let each lens run its commands in its own context, and await every lens. Claude/Codex hooks record lifecycle events in `RECEIPTS.jsonl`; `task_verify` requires completed explicit PASS verdicts. See `plugin/CLAUDE.md` § 8c.
+After each AC, record status, targeted tests, completeness, deferred edges,
+decisions and failed attempts in PROGRESS. A completed AC needs its happy path,
+important negative/edge paths and regression evidence; partial work remains
+explicit. Each worker runs its own targeted tests. Full-suite verification
+belongs to the required qa-* agents; hooks record their lifecycle and
+`task_verify` requires completed explicit PASS verdicts.
 
 Per-AC test failures → fix immediately. These are free; only Phase 7 full-suite failures count toward the 3-cycle limit.
 
 **Per-AC visual verification** (browser projects only): see `browser-verification.md` → "Per-AC Visual Verification" and "Per-AC Interaction Testing".
+Prefer delegating Browser MCP tools (`mcp__chrome-devtools__*`) to
+`harness:qa-browser`; inline use is allowed for the lightest targeted check.
 
 ### Phase 3.3: Auto-checkpoint (post all ACs)
 
@@ -394,7 +269,7 @@ reviewers again. Do not start Phase 7 QA until review PASS.
 
 Read `verification-gate.md` in full. Delegates full-suite test commands from PLAN.md to all applicable qa-* agents in parallel, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit with investigate-skill escalation on cycle 3.
 
-**Main session MUST spawn the appropriate qa-* lens for full-suite verification (Verification delegation, C-18).** Browser delegation is workflow guidance rather than a PreTool denial; full-suite delegation remains required by the develop contract. Bash test runners remain allowed inline only for targeted per-AC runs and debug reruns. Heavy full-suite execution and background process state belong in qa-* isolated contexts. Let the qa-* lens execute, then run `task_verify`; the hook-recorded `RECEIPTS.jsonl` entry is the verification signal.
+**Main session MUST spawn the appropriate qa-* lens; full-suite verification MUST be delegated to qa-* agents (Verification delegation, C-18).** Spawn every applicable lens. Browser delegation is workflow guidance rather than a PreTool denial; full-suite delegation remains required by the develop contract. Bash test runners remain allowed inline only for targeted per-AC runs and debug reruns. Heavy full-suite execution and background process state belong in qa-* isolated contexts. Let the qa-* lens execute, then run `task_verify`; the hook-recorded `RECEIPTS.jsonl` entry is the verification signal.
 
 QA must be spawned after Phase 6.6 PASS; a QA run started before the latest
 review PASS is stale evidence and cannot close the task.
@@ -526,100 +401,29 @@ score = (ac_completion × 0.40) + (test_coverage × 0.30)
 
 ### Phase 8.5: Reflect and Log (capture-when-fresh, no quota)
 
-When you discover something genuinely useful during develop — a real bug whose fix is non-obvious, a build/test/tool gotcha that wasted a cycle, a workaround that's worth knowing next time — log it the moment you find it, **while it's fresh**. Log only concrete, reusable facts at discovery time; leave the log untouched when there is no durable learning. A signal-free entry is worse than no entry.
-
-A good entry names a concrete fact + a concrete fix, both groundable in files / commands / test output. Examples that pass the bar:
-
-- `pytest tests/regression/<task>/` requires `test_` prefix on filenames; the harness QA codifier auto-prefixes for this reason (file:`plugin/scripts/qa_codifier.py`).
-- `git diff --name-only HEAD~1` returns paths only — to filter by AC-targeted source, mirror-grep the import graph rather than relying on filename prefixes.
-- The `task_close` MCP no longer auto-writes gate-warn entries to learnings.jsonl (changed 2026-05-08); previous logs are noise, not learnings.
-
-Examples that do NOT pass the bar:
-- "What took longer than expected" / "What surprised me" — open-ended self-prompts produce vague entries. If a real friction point exists, it'll surface concretely; if not, leave it.
-- Confidence-calibration tables when AC count is small — statistical noise, not durable knowledge.
-
-Schema:
-
-```bash
-echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"operational|pitfall|eureka|feedback","source":"develop","key":"SHORT_KEY","insight":"FACT + FIX","files":["<path>"],"task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
-```
-
-`type=operational` for tooling/syntax/path facts. `type=pitfall` for traps to avoid. `type=eureka` for first-principles discoveries. `type=feedback` for user-stated preferences. `files` enables staleness detection if a referenced path is later deleted. Silent-fail on write error. Never blocks.
+Capture only concrete, reusable fact-plus-fix discoveries while fresh. Leave
+`learnings.jsonl` untouched when there is no signal; it never gates close.
 
 ### Phase 8.5.1: Feedback-Derived Rules (judgment required, capture optional)
 
-Review user corrective feedback from the task. Convert corrective feedback into a reusable conditional behavior rule only when it can be reduced to a readable "When X, do Y. Verify by Z." instruction.
-
-Classify the task as exactly one:
-- `none` — no user feedback implies a future behavior rule.
-- `captured` — feedback produced a reusable conditional rule and it was recorded in `learnings.jsonl` for promotion, or directly in a committed durable artifact.
-- `rejected` — feedback looked like a preference or complaint but should not become a rule. Record the reason in task state or final response.
-
-Capture only rules that have all three parts:
-- Trigger: the situation where the rule applies.
-- Action: what the agent should do.
-- Verification: how tests, review, task state, or final response can prove the rule was followed.
-
-Reject entries that are blame narratives, task-local preferences, vague style opinions, or one-off urgency requests. Write behavior rules for Tier 2 docs; convert incident-shaped lessons into behavior or reject them.
-
-When captured, the durable artifact or learning text must be readable prose, for example:
-
-```markdown
-## Feedback-Derived Rules
-
-Status: captured
-
-When changing runtime-specific harness plugin behavior, review both the canonical `plugin/` tree and the runtime-specific tree such as `plugin-codex/`.
-
-Verify by explaining in the final response which side changed and why any other side was left unchanged.
-```
-
-If the rule should enter Tier 2, log a structured learning so the promotion script can render readable Markdown:
-
-```bash
-echo '{"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","type":"feedback-rule","source":"develop","key":"SHORT_RULE_NAME","trigger":"<situation>","action":"<behavior>","verification":"<how to prove it>","reason":"<why this prevents recurrence>","task":"'"<task_id>"'"}' >> doc/harness/learnings.jsonl 2>/dev/null || true
-```
+Classify `none | captured | rejected`. Capture only reusable rules of the form
+"When X, do Y. Verify by Z." Write behavior rules for Tier 2 docs; convert
+incident-shaped lessons into behavior or reject them. Blame, urgency and
+task-local preference are not rules.
 
 ### Phase 8.5.2: Commit-backed Learnings (mandatory classification)
 
-Classify whether this task produced knowledge that must be shared through git.
-`doc/harness/learnings.jsonl` is local, gitignored staging; it does not satisfy
-the shared-memory bar by itself. Future contributors only inherit what lands in
-committed artifacts.
-
-Classify candidates before close:
-
-```markdown
-## Commit-backed Learnings
-
-Status: none | captured | rejected
-
-- captured: <committed path> — <rule/fact now shared>
-- rejected: <candidate> — <why it is task-local, noisy, or not reusable>
-```
-
-Use `captured` when a reusable discovery, dogfood finding, user correction,
-setup command, or repeated friction changed a committed skill, script, test, or
-durable doc in this task. Use `rejected` when you considered a candidate but it
-should remain local. Use `none` only when there was no reusable learning.
+Classify `none | captured | rejected`. `learnings.jsonl` is gitignored staging,
+not shared memory. `captured` requires a committed artifact and names the skill,
+script, test or durable doc that changed a committed rule.
 
 ### Phase 8.5.3: Self-Healing Candidates (mandatory classification)
 
-Classify whether this task revealed a recurring failure mode that the harness or
-project can prevent next time. This includes development friction, QA-discovered
-verification gaps, tool/schema drift, CI command drift, brittle setup commands,
-and repeated manual recovery steps. QA lenses should surface candidates in their
-final response; Phase 8 owns the final classification.
-
-For harness-improvement candidates, treat dogfood feedback and agent retros as
-hypotheses until checked against the repo. Before marking a candidate `applied`
-or proposing follow-up work, inspect the owning code path and relevant tests.
-Classify the claim as `confirmed`, `partially-confirmed`, `already-handled`,
-`duplicate`, `not-found`, or `needs-runtime-check`. If it is
-`partially-confirmed`, rewrite it to the smallest accurate failing case. If the
-raw proposal would weaken an existing QA/runtime/close gate, preserve the gate's
-safety intent by proposing an explicit alternative evidence tier rather than
-removing the gate. Record the corrected scope and evidence path in task state or final response.
+Treat development friction, QA-discovered gaps and agent suggestions as
+hypotheses until checked against the repo. Classify each as `confirmed`,
+`partially-confirmed`, `already-handled`, `duplicate`, `not-found`, or
+`needs-runtime-check`. Preserve a gate's safety with an alternative evidence tier
+tier rather than weakening it.
 
 If develop or QA discovered a working repo-local setup/test/dev-server command
 after one or more failed attempts, record it before close as a pending runbook
@@ -637,33 +441,11 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/runbook_memory.py capture \
   --gotcha "<why the first attempt failed>"
 ```
 
-The candidate is not shared memory yet. Before close, either approve
-it into a committed artifact (`doc/harness/runbooks.yaml`, manifest, script, or
-durable doc), ask before deferring it, or reject/skip it as one-off/noisy.
-
-Use this structure in task state or the final response:
-
-```markdown
-## Self-Healing Candidates
-
-Status: none | applied | deferred | rejected
-
-- applied: <failure mode> — <changed committed path> now prevents recurrence
-- deferred: <failure mode>
-  user_decision: <separate task | not now | other user wording>
-  reason: <why not in this task>
-  proposed_artifact: <path> | proposed_task: <task>
-- rejected: <candidate> — <why one-off, noisy, or not worth automating>
-```
-
-Use `applied` only when this task changed a committed artifact named on the
-bullet. If the improvement is real but large or risky, do not silently defer:
-ask the user before close. On Claude, use `AskUserQuestion`. On Codex, use
-`request_user_input` when available; otherwise ask in conversation and wait for
-the user's reply. Use `deferred` only after recording that user decision plus
-the reason and proposed artifact/task. Use `rejected` for one-off environment
-noise or non-reproducible complaints. Use `none` only when develop, QA, dogfood,
-and close produced no self-healing signal.
+The candidate is not shared memory yet. Use
+`Status: none | applied | deferred | rejected`. Applied names the changed
+committed artifact. Deferred requires an `AskUserQuestion` decision and records
+`user_decision:` plus `proposed_artifact:`. Approve reusable commands into
+`doc/harness/runbooks.yaml` or another committed artifact; reject one-off noise.
 
 ### Phase 8.6: durable docs
 

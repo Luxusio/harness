@@ -136,9 +136,9 @@ PASS for every applicable QA lens. A start entry proves delegation only.
 
 When QA and UX lenses both apply, spawn them in the same parallel batch when
 available. Agents return PASS/FAIL/BLOCKED_ENV findings in their final
-response. Do not ask them to write critic artifacts. `task_verify` surfaces the
-`subagent_receipts` summary so missing independent QA/review calls are visible
-instead of being replaced by self-authored PASS claims.
+response. Do not ask them to write critic artifacts. `task_verify` exposes
+required lenses, verdicts, and `missing_for_close`; it does not return raw
+receipt records or completion summaries.
 
 Order matters: the desktop branch is evaluated before the `type: cli` / `type: library`
 fallback so a desktop app declared as `type: cli` still routes to qa-desktop.

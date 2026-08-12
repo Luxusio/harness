@@ -6,6 +6,7 @@ Minimal harness scripts. Self-contained — no plugin-legacy dependency.
 
 - `_lib.py` — core library (YAML helpers, scaffold, routing, context, path sync, frontmatter public API)
 - Receipt snapshots accept only the unified exact-field, string-valued schema defined by the consolidated-artifact ADR.
+- `subagent_lifecycle.py` — direct Claude start/stop and stop-only receipt handling; active work is derived from unmatched current-run starts, with no background registry artifact
 - `note_freshness.py` — flips `freshness: current -> suspect` on invalidated notes
 - `prompt_memory.py` — zero-Git UserPromptSubmit context injection from stored task/receipt state, including active-task restore digest, Goal routing, and runbook reminders
 - `hook_post_tool_use.py` — Codex PostToolUse routing for native `create_goal` and Bash hints

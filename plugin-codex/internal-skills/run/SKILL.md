@@ -231,8 +231,8 @@ Run at most one agent for each required QA lens in a single verification cycle.
 
 After awaiting QA/UX, run `task_verify`. The verify step reads `RECEIPTS.jsonl`
 and computes the verdict from all required ordered review and QA completions.
-`task_verify` returns a `subagent_receipts` summary
-so missing independent QA/UX calls are visible before close.
+Required lenses, verdicts, and `missing_for_close` identify absent evidence;
+raw receipt records and completion summaries are not returned.
 
 QA inline fallback on Codex reads the relevant qa-* prompt, follows the same
 methodology in-conversation. It does not write a critic artifact or handoff

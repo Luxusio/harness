@@ -34,6 +34,7 @@ from _lib import (  # type: ignore
     extract_qa_verdict,
     find_harness_root,
     find_repo_root,
+    parse_receipt_runtime_id,
     receipt_snapshot,
     record_subagent_receipt,
     read_task_control,
@@ -43,7 +44,7 @@ from _lib import (  # type: ignore
 )
 
 THREAD_RE = re.compile(r"^[0-9a-fA-F-]{16,80}$")
-CALL_RE = re.compile(r"^[A-Za-z0-9_.:-]{6,160}$")
+CALL_RE = re.compile(r"^[A-Za-z0-9_.-]{6,160}$")
 AGENT_PATH_RE = re.compile(r"^/root/[A-Za-z0-9_.-]{1,120}$")
 TASK_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
 MAX_LINE_BYTES = 2 * 1024 * 1024
@@ -951,11 +952,10 @@ def _child_status(
 
 def _exact_receipt(
     task_dir: str,
-    event_id: str,
+    runtime_id: str,
     event: str,
     *,
-    root_id: str,
-    child_id: str,
+    source: str,
     agent_path: str,
     lens: str,
     task_run_id: str,
@@ -963,10 +963,9 @@ def _exact_receipt(
 ) -> dict[str, Any] | None:
     for item in receipt_snapshot(task_dir).entries:
         if (
-            item.get("runtime_event_id") == event_id
+            item.get("runtime_id") == runtime_id
             and item.get("event") == event
-            and item.get("runtime_session_id") == root_id
-            and item.get("runtime_thread_id") == child_id
+            and item.get("source") == source
             and item.get("agent_id") == agent_path
             and item.get("lens") == lens
             and item.get("task_run_id") == task_run_id
@@ -974,6 +973,12 @@ def _exact_receipt(
         ):
             return item
     return None
+
+
+def _codex_runtime_id(root_id: str, call_id: str, child_id: str) -> str:
+    runtime_id = f"codex:{root_id}:{call_id}:{child_id}"
+    parse_receipt_runtime_id(runtime_id)
+    return runtime_id
 
 
 class Watcher:
@@ -1020,9 +1025,9 @@ class Watcher:
             "task_run_id": item.get("task_run_id", ""),
             "verdict": "PENDING",
             "summary": summary,
-            "runtime_event_id": item.get("event_id", "") + ":conflict",
-            "runtime_session_id": self.root_id,
-            "runtime_thread_id": item.get("child_id", ""),
+            # A second terminal for the exact identity invalidates the
+            # lifecycle under the normal duplicate-terminal fail-closed rule.
+            "runtime_id": item.get("runtime_id", ""),
         })
 
     def _set_once(self, item: dict[str, Any], key: str, value: Any) -> bool:
@@ -1060,13 +1065,13 @@ class Watcher:
         ):
             item["invalid"] = True
             return
-        event_id = f"{self.root_id}:{call_id}:{item['child_id']}"
+        runtime_id = _codex_runtime_id(self.root_id, call_id, item["child_id"])
+        source = self._receipt_source(item)
         exact_existing = _exact_receipt(
             task_dir,
-            event_id,
+            runtime_id,
             "started",
-            root_id=self.root_id,
-            child_id=item["child_id"],
+            source=source,
             agent_path=self._receipt_agent_id(item),
             lens=lens,
             task_run_id=item["task_run_id"],
@@ -1084,21 +1089,19 @@ class Watcher:
                 self._invalidate(item, "child evidence was invalid or already complete at start capture")
                 return
             record_subagent_receipt(task_dir, {
-                    "source": self._receipt_source(item),
+                    "source": source,
                     "event": "started",
                     "agent_id": self._receipt_agent_id(item),
                     "agent_type": item["task_name"],
                     "lens": lens,
                     "task_run_id": item.get("task_run_id", ""),
                     "summary": "Codex runtime spawn observed before child completion",
-                    "runtime_event_id": event_id,
-                    "runtime_session_id": self.root_id,
-                    "runtime_thread_id": item["child_id"],
+                    "runtime_id": runtime_id,
                 })
         item.update({
             "started": True,
             "task_dir": task_dir,
-            "event_id": event_id,
+            "runtime_id": runtime_id,
         })
         self.by_agent[item["agent_path"]] = item
 
@@ -1130,10 +1133,9 @@ class Watcher:
         lens = _infer_receipt_lens(item["task_name"])
         if _exact_receipt(
             item["task_dir"],
-            item["event_id"],
+            item["runtime_id"],
             "completed",
-            root_id=self.root_id,
-            child_id=item["child_id"],
+            source=self._receipt_source(item),
             agent_path=self._receipt_agent_id(item),
             lens=lens,
             task_run_id=item["task_run_id"],
@@ -1148,10 +1150,7 @@ class Watcher:
                 "task_run_id": item.get("task_run_id", ""),
                 "verdict": verdict,
                 "summary": child_final,
-                "transcript_path": str(transcript),
-                "runtime_event_id": item["event_id"],
-                "runtime_session_id": self.root_id,
-                "runtime_thread_id": item["child_id"],
+                "runtime_id": item["runtime_id"],
             })
         item["completed"] = True
 

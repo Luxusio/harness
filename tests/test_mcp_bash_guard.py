@@ -99,8 +99,8 @@ class TestMutationsAgainstWorkflowControl(unittest.TestCase):
 class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
     def test_read_only_lifecycle_source_references_are_allowed(self):
         for command in (
-            "uv run pytest -q tests/test_background_registry.py",
-            "git diff -- plugin/scripts/background_registry.py",
+            "uv run pytest -q tests/test_subagent_lifecycle.py",
+            "git diff -- plugin/scripts/subagent_lifecycle.py",
             "sed -n '1,20p' plugin/scripts/background_hook.py",
         ):
             with self.subTest(command=command):
@@ -128,16 +128,16 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "plugin/scripts/background_hook.py --event stop",
             "bash plugin/scripts/background_hook.py --event stop",
             "HARNESS_SKIP_MCP_GUARD=1 python3 plugin/scripts/background_hook.py --event stop",
-            "python3 plugin/scripts/background_registry.py",
-            "python3 -c 'import background_registry'",
-            "python3 -c 'from background_registry import mark_subagent_stop'",
+            "python3 plugin/scripts/subagent_lifecycle.py",
+            "python3 -c 'import subagent_lifecycle'",
+            "python3 -c 'from subagent_lifecycle import mark_subagent_stop'",
             "python3 -c 'import codex_lifecycle_watcher as watcher'",
-            "python3 -c \"__import__('background_registry')\"",
-            "python3 -m background_registry",
-            "/usr/bin/env python3 plugin/scripts/background_registry.py",
+            "python3 -c \"__import__('subagent_lifecycle')\"",
+            "python3 -m subagent_lifecycle",
+            "/usr/bin/env python3 plugin/scripts/subagent_lifecycle.py",
             "uv run python3 plugin/scripts/background_hook.py --event stop",
-            "PYTHONPATH=plugin/scripts python3 -c 'import plugin.scripts.background_registry as b'",
-            "python3 -m plugin.scripts.background_registry",
+            "PYTHONPATH=plugin/scripts python3 -c 'import plugin.scripts.subagent_lifecycle as b'",
+            "python3 -m plugin.scripts.subagent_lifecycle",
             "/usr/bin/env -u X python3 plugin/scripts/background_hook.py --event stop",
             "uv --directory . run python3 plugin/scripts/background_hook.py --event stop",
             "uv run --directory . python3 plugin/scripts/background_hook.py --event stop",
@@ -150,8 +150,8 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 -W -m plugin/scripts/background_hook.py --event stop",
             "python3 -W -c plugin/scripts/background_hook.py --event stop",
             "python3 -X -m plugin/scripts/background_hook.py --event stop",
-            "python3 -c \"from importlib import import_module as load; load('background_registry').mark_subagent_stop\"",
-            "PYTHONPATH=plugin/scripts python3 -c \"m=__import__('plugin.scripts',fromlist=['background_registry']).background_registry;getattr(m,'record_'+'subagent_'+'receipt')\"",
+            "python3 -c \"from importlib import import_module as load; load('subagent_lifecycle').mark_subagent_stop\"",
+            "PYTHONPATH=plugin/scripts python3 -c \"m=__import__('plugin.scripts',fromlist=['subagent_lifecycle']).subagent_lifecycle;getattr(m,'record_'+'subagent_'+'receipt')\"",
             "python3 -c 'from _lib import record_subagent_receipt'",
         ):
             with self.subTest(command=command):

@@ -13,9 +13,12 @@ import json
 import os
 import subprocess
 import sys
-import time
+from datetime import datetime, timedelta, timezone
 
 from conftest import SCRIPTS_DIR
+
+sys.path.insert(0, SCRIPTS_DIR)
+import _lib  # noqa: E402
 
 STOP_GATE = os.path.join(SCRIPTS_DIR, "stop_gate.py")
 
@@ -43,6 +46,28 @@ def _run(cwd: str, stdin: str = "{}", env: dict[str, str] | None = None) -> subp
         env=proc_env,
         timeout=5.0,
     )
+
+
+def _write_claude_start(repo: str, task_id: str, session_id: str, *, ts: str = "") -> None:
+    task_dir = os.path.join(repo, "doc", "harness", "tasks", task_id)
+    os.makedirs(task_dir, exist_ok=True)
+    _lib.ensure_task_scaffold(task_dir, task_id)
+    _lib.write_active_marker(repo, task_dir, session_id=session_id)
+    run_id = _lib.read_task_control(task_dir)["run_id"]
+    row = {
+        "ts": ts or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "event": "started",
+        "source": "claude_hook",
+        "task_run_id": run_id,
+        "runtime_id": f"claude:{session_id}:agent-bg",
+        "agent_id": "agent-bg",
+        "agent_type": "harness:qa-cli",
+        "lens": "qa-cli",
+        "verdict": "",
+        "summary": "",
+    }
+    with open(os.path.join(task_dir, "RECEIPTS.jsonl"), "w", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
 def test_blocks_when_active(tmp_path):
@@ -161,24 +186,15 @@ def test_safe_on_error(tmp_path):
 
 
 def test_blocks_for_active_background_subagent_without_manual_command(tmp_path):
-    """Background records cause Stop to auto-wait, then block without a manual wait command."""
+    """Unmatched receipts cause Stop to auto-wait, then block."""
     repo = _fake_repo(tmp_path, active_contents="TASK__with-bg\n")
-    runtime = tmp_path / "doc" / "harness" / "runtime"
-    runtime.mkdir(parents=True)
-    (runtime / "background.json").write_text(json.dumps({
-        "version": 1,
-        "records": [{
-            "id": "agent-bg",
-            "kind": "subagent",
-            "status": "active",
-            "session_id": os.environ.get("CODEX_THREAD_ID") or "default",
-            "task_id": "TASK__with-bg",
-            "agent_type": "harness:qa-cli",
-            "updated_ts": time.time(),
-        }],
-    }), encoding="utf-8")
+    _write_claude_start(repo, "TASK__with-bg", "sess-bg")
 
-    result = _run(repo, env={"HARNESS_BACKGROUND_WAIT_SECS": "0"})
+    result = _run(
+        repo,
+        stdin=json.dumps({"session_id": "sess-bg", "hook_event_name": "Stop"}),
+        env={"HARNESS_BACKGROUND_WAIT_SECS": "0"},
+    )
 
     payload = json.loads(result.stdout)
     assert payload["decision"] == "block"
@@ -190,24 +206,16 @@ def test_blocks_for_active_background_subagent_without_manual_command(tmp_path):
 
 
 def test_stale_background_record_does_not_mask_normal_stop_gate(tmp_path):
-    """Stale records are ignored, so the existing open-task reason is emitted."""
+    """Stale starts are ignored, so the existing open-task reason is emitted."""
     repo = _fake_repo(tmp_path, active_contents="TASK__stale-bg\n")
-    runtime = tmp_path / "doc" / "harness" / "runtime"
-    runtime.mkdir(parents=True)
-    (runtime / "background.json").write_text(json.dumps({
-        "version": 1,
-        "records": [{
-            "id": "agent-stale",
-            "kind": "subagent",
-            "status": "active",
-            "session_id": "default",
-            "task_id": "TASK__stale-bg",
-            "agent_type": "harness:qa-cli",
-            "updated_ts": 1,
-        }],
-    }), encoding="utf-8")
+    old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat().replace("+00:00", "Z")
+    _write_claude_start(repo, "TASK__stale-bg", "sess-stale", ts=old)
 
-    result = _run(repo, env={"HARNESS_BACKGROUND_WAIT_SECS": "0", "HARNESS_BACKGROUND_STALE_SECS": "1"})
+    result = _run(
+        repo,
+        stdin=json.dumps({"session_id": "sess-stale", "hook_event_name": "Stop"}),
+        env={"HARNESS_BACKGROUND_WAIT_SECS": "0", "HARNESS_BACKGROUND_STALE_SECS": "1"},
+    )
 
     payload = json.loads(result.stdout)
     assert payload["decision"] == "block"
@@ -215,23 +223,31 @@ def test_stale_background_record_does_not_mask_normal_stop_gate(tmp_path):
     assert "background subagent work still running" not in payload["reason"]
 
 
+def test_malformed_receipt_stream_blocks_normal_stop(tmp_path):
+    repo = _fake_repo(tmp_path, active_contents="TASK__bad-receipts\n")
+    task_dir = os.path.join(repo, "doc", "harness", "tasks", "TASK__bad-receipts")
+    os.makedirs(task_dir, exist_ok=True)
+    _lib.ensure_task_scaffold(task_dir, "TASK__bad-receipts")
+    _lib.write_active_marker(repo, task_dir, session_id="sess-bad")
+    with open(os.path.join(task_dir, "RECEIPTS.jsonl"), "w", encoding="utf-8") as handle:
+        handle.write('{"legacy":true}\n')
+
+    result = _run(
+        repo,
+        stdin=json.dumps({"session_id": "sess-bad", "hook_event_name": "Stop"}),
+        env={"HARNESS_BACKGROUND_WAIT_SECS": "0"},
+    )
+
+    payload = json.loads(result.stdout)
+    assert payload["decision"] == "block"
+    assert "malformed or unsafe" in payload["reason"]
+    assert "fresh task run" in payload["reason"]
+
+
 def test_stop_hook_active_with_active_background_silently_allows(tmp_path):
     """Recursive Stop hook continuation should not re-block while background work runs."""
     repo = _fake_repo(tmp_path, active_contents="TASK__recursive-bg\n")
-    runtime = tmp_path / "doc" / "harness" / "runtime"
-    runtime.mkdir(parents=True)
-    (runtime / "background.json").write_text(json.dumps({
-        "version": 1,
-        "records": [{
-            "id": "agent-bg",
-            "kind": "subagent",
-            "status": "active",
-            "session_id": "sess-1",
-            "task_id": "TASK__recursive-bg",
-            "agent_type": "harness:qa-cli",
-            "updated_ts": time.time(),
-        }],
-    }), encoding="utf-8")
+    _write_claude_start(repo, "TASK__recursive-bg", "sess-1")
 
     result = _run(
         repo,

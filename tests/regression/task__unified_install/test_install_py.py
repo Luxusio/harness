@@ -364,6 +364,8 @@ def test_install_codex_plugin_cache_uses_manifest_version(tmp_path):
     assert (cached / ".mcp.json").is_file()
     assert (cached / "scripts" / "hook_pre_tool_use.py").is_file()
     assert (cached / "mcp" / "harness_server.py").is_file()
+    assert (cached / "scripts" / "subagent_lifecycle.py").is_file()
+    assert not (cached / "scripts" / "background_registry.py").exists()
     assert (cached / "skills" / "setup" / "bootstrap.md").is_file()
     assert (cached / "skills" / "setup" / "verify-report.md").is_file()
     assert (cached / "skills" / "setup" / "templates" / "CONTRACTS.md").is_file()
@@ -793,6 +795,8 @@ def test_install_codex_plugin_cache_marks_plugin_installed(tmp_path):
     assert (cached / "skills" / "run" / "SKILL.md").is_file()
     assert (cached / "skills" / "run" / "agents" / "openai.yaml").is_file()
     assert (cached / "internal-skills" / "run" / "SKILL.md").is_file()
+    assert (cached / "scripts" / "subagent_lifecycle.py").is_file()
+    assert not (cached / "scripts" / "background_registry.py").exists()
     assert not (cached / "stale.txt").exists()
     assert (stale / "stale.txt").read_text() == "old"
 

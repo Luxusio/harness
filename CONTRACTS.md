@@ -196,7 +196,9 @@ Limits: SKILL.md ≤ 500 lines; sub-files read once per phase. Develop fanout is
 parallel-first: Phase 3 independent ACs, Phase 4.5-4.8 quality agents, Phase 7
 QA lenses, and Phase 7.7 dogfooder follow `plugin/skills/develop/parallel-fanout.md`.
 Agent batches are capped there; do not replace a required fanout with a single
-coordinator lane to satisfy this weight budget.
+coordinator lane to satisfy this weight budget. Meet the budget by deleting
+duplicated generic workflow prose and retaining each role's unique gates and
+rubrics; do not move duplicated prompt text into new reference files.
 **On violation:** soft-warn.
 **Why:** Harness instability grows super-linearly with loop size. Every
 extra phase is a new failure point.
