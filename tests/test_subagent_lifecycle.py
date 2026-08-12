@@ -29,7 +29,25 @@ def _repo(tmp_path: Path) -> tuple[str, str]:
 
 
 def _bind(repo: str, task_dir: str, session_id: str) -> None:
-    _lib.write_active_marker(repo, task_dir, session_id=session_id)
+    sessions = Path(repo) / "doc/harness/tasks/.active_sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    control = _lib.read_task_control(task_dir)
+    (sessions / f"{session_id}.json").write_text(json.dumps({
+        "session_id": session_id, "task_dir": task_dir,
+        "task_id": Path(task_dir).name, "run_id": control["run_id"],
+        "updated": _lib.now_iso(),
+    }) + "\n", encoding="utf-8")
+    (Path(repo) / "doc/harness/tasks/.active").write_text(
+        task_dir + "\n", encoding="utf-8",
+    )
+
+
+def _rotate(task_dir: str, timestamp_ms: int | None = None) -> None:
+    control = _lib.read_task_control(task_dir)
+    control["run_id"] = _lib.new_uuid7(timestamp_ms)
+    Path(task_dir, "TASK.json").write_text(
+        json.dumps(control, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+    )
 
 
 def _transcript(
@@ -163,11 +181,14 @@ def test_start_rechecks_run_after_receipt_lock_acquisition(tmp_path):
         in_writer = any(frame.function == "record" for frame in inspect.stack())
         if in_writer:
             writer_calls += 1
-        if writer_calls == 2:
-            rotated = dict(control)
-            rotated["run_id"] = _lib.new_uuid7()
-            _lib.write_task_control(path, rotated)
-            return rotated
+            if writer_calls == 2:
+                rotated = dict(control)
+                rotated["run_id"] = _lib.new_uuid7()
+                Path(path, "TASK.json").write_text(
+                    json.dumps(rotated, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+                return rotated
         return control
 
     with mock.patch.object(_lib, "read_task_control", side_effect=rotate_on_writer_recheck):
@@ -233,11 +254,9 @@ def test_stop_only_provenance_rejects_foreign_missing_start_symlink_and_prior_ru
     real.rename(transcript)
 
     prior_ms = _lib.uuid7_timestamp_ms(_lib.read_task_control(task_dir)["run_id"])
-    make_uuid7 = _lib.new_uuid7
-    monkeypatch.setattr(_lib, "new_uuid7", lambda: make_uuid7(prior_ms + 2_000))
     with _lib.receipt_stream_transaction(task_dir):
-        _lib.begin_task_run(task_dir)
-        _lib.write_active_marker(repo, task_dir, session_id=session_id)
+        _rotate(task_dir, prior_ms + 2_000)
+        _bind(repo, task_dir, session_id)
     assert subagent_lifecycle.mark_subagent_stop(repo, base) == {}
     assert not (Path(task_dir) / "RECEIPTS.jsonl").exists()
 
@@ -434,8 +453,8 @@ def test_active_records_are_current_run_and_session_scoped(tmp_path):
 
     prior = _lib.read_task_control(task_dir)["run_id"]
     with _lib.receipt_stream_transaction(task_dir):
-        _lib.begin_task_run(task_dir)
-        _lib.write_active_marker(repo, task_dir, session_id="owner-session")
+        _rotate(task_dir)
+        _bind(repo, task_dir, "owner-session")
     assert _lib.read_task_control(task_dir)["run_id"] != prior
     assert subagent_lifecycle.active_records(
         repo, task_id="TASK__bg", session_id="owner-session",

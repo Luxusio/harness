@@ -138,10 +138,15 @@ def _rel(path, repo_root):
 
 
 def _is_protected_artifact(path):
-    """Return True if ``path``'s basename is a protected artifact."""
+    """Return True for task artifacts and active-session authority leaves."""
     if not path:
         return False
-    return os.path.basename(path) in PROTECTED_ARTIFACTS
+    normalized = os.path.normpath(str(path))
+    return (
+        os.path.basename(normalized) in PROTECTED_ARTIFACTS
+        or normalized.endswith(os.path.join(TASK_DIR, ".active"))
+        or os.path.join(TASK_DIR, ".active_sessions") + os.sep in normalized
+    )
 
 
 def _is_claude_subagent_transcript(path):
@@ -580,8 +585,8 @@ def _check_path(data: dict, file_path: str) -> None:
     )
 
     basename = os.path.basename(file_path)
-    if inside_task_dir and basename in PROTECTED_ARTIFACTS:
-        owner = PROTECTED_ARTIFACTS[basename]
+    if inside_task_dir and _is_protected_artifact(file_path):
+        owner = PROTECTED_ARTIFACTS.get(basename, "task-control-runtime")
         owner_human = PROTECTED_ARTIFACT_HUMAN.get(basename, owner)
         human = (
             f"{basename} is owned by {owner_human}. Use the owning skill or MCP "

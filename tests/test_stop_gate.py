@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 from conftest import SCRIPTS_DIR
@@ -52,8 +53,16 @@ def _write_claude_start(repo: str, task_id: str, session_id: str, *, ts: str = "
     task_dir = os.path.join(repo, "doc", "harness", "tasks", task_id)
     os.makedirs(task_dir, exist_ok=True)
     _lib.ensure_task_scaffold(task_dir, task_id)
-    _lib.write_active_marker(repo, task_dir, session_id=session_id)
     run_id = _lib.read_task_control(task_dir)["run_id"]
+    sessions = Path(repo) / "doc/harness/tasks/.active_sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / f"{session_id}.json").write_text(json.dumps({
+        "session_id": session_id, "task_dir": task_dir, "task_id": task_id,
+        "run_id": run_id, "updated": _lib.now_iso(),
+    }) + "\n", encoding="utf-8")
+    (Path(repo) / "doc/harness/tasks/.active").write_text(
+        task_dir + "\n", encoding="utf-8",
+    )
     row = {
         "ts": ts or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "event": "started",
@@ -228,7 +237,7 @@ def test_malformed_receipt_stream_blocks_normal_stop(tmp_path):
     task_dir = os.path.join(repo, "doc", "harness", "tasks", "TASK__bad-receipts")
     os.makedirs(task_dir, exist_ok=True)
     _lib.ensure_task_scaffold(task_dir, "TASK__bad-receipts")
-    _lib.write_active_marker(repo, task_dir, session_id="sess-bad")
+    _write_claude_start(repo, "TASK__bad-receipts", "sess-bad")
     with open(os.path.join(task_dir, "RECEIPTS.jsonl"), "w", encoding="utf-8") as handle:
         handle.write('{"legacy":true}\n')
 
@@ -249,7 +258,7 @@ def test_malformed_receipt_stream_blocks_recursive_stop(tmp_path):
     task_dir = os.path.join(repo, "doc", "harness", "tasks", "TASK__bad-recursive")
     os.makedirs(task_dir, exist_ok=True)
     _lib.ensure_task_scaffold(task_dir, "TASK__bad-recursive")
-    _lib.write_active_marker(repo, task_dir, session_id="sess-bad-recursive")
+    _write_claude_start(repo, "TASK__bad-recursive", "sess-bad-recursive")
     with open(os.path.join(task_dir, "RECEIPTS.jsonl"), "w", encoding="utf-8") as handle:
         handle.write('{"legacy":true}\n')
 

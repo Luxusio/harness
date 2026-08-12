@@ -1235,12 +1235,21 @@ def test_active_task_requires_exact_session_marker_and_state(tmp_path):
     task.mkdir(parents=True)
     _write_task_control(task)
     import _lib
-    _lib.write_active_marker(str(repo), str(task), session_id=root_id)
+    control = _lib.read_task_control(task)
+    (tasks / _lib.ACTIVE_SESSIONS_DIRNAME).mkdir(parents=True)
     marker = tasks / _lib.ACTIVE_SESSIONS_DIRNAME / f"{root_id}.json"
+    marker.write_text(json.dumps({
+        "session_id": root_id, "task_dir": str(task), "task_id": task.name,
+        "run_id": control["run_id"], "updated": _lib.now_iso(),
+    }) + "\n", encoding="utf-8")
+    (tasks / ".active").write_text(str(task) + "\n", encoding="utf-8")
     with mock.patch.object(mod, "resolve_active_task_dir", return_value=str(task)):
         assert mod._active_task_for_session(str(repo), root_id) == str(task.resolve())
         assert mod._active_task_binding_for_session(str(repo), root_id)["run_id"]
-        _lib.begin_task_run(task)
+        control["run_id"] = _lib.new_uuid7()
+        (task / "TASK.json").write_text(
+            json.dumps(control, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+        )
         assert mod._active_task_binding_for_session(str(repo), root_id) == {}
     marker.write_text(json.dumps({
         "session_id": "other", "task_dir": str(task), "task_id": "TASK__active",

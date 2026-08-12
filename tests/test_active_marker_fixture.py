@@ -79,11 +79,25 @@ class ActiveMarkerResolutionTests(unittest.TestCase):
             }, f)
         return task
 
+    def _marker(self, repo: str, task: str, session_id: str) -> None:
+        tasks = os.path.join(repo, "doc", "harness", "tasks")
+        sessions = os.path.join(tasks, ".active_sessions")
+        os.makedirs(sessions, exist_ok=True)
+        control = active_marker_lib.read_task_control(task)
+        with open(os.path.join(sessions, session_id + ".json"), "w", encoding="utf-8") as f:
+            json.dump({
+                "session_id": session_id, "task_dir": task,
+                "task_id": os.path.basename(task), "run_id": control.get("run_id", ""),
+                "updated": active_marker_lib.now_iso(),
+            }, f)
+        with open(os.path.join(tasks, ".active"), "w", encoding="utf-8") as f:
+            f.write(task)
+
     def test_closed_session_marker_falls_back_to_live_legacy_marker(self):
         with tempfile.TemporaryDirectory() as repo:
             closed = self._task(repo, "TASK__closed", "closed")
             live = self._task(repo, "TASK__live", "implementing")
-            active_marker_lib.write_active_marker(repo, closed, session_id="session-a")
+            self._marker(repo, closed, "session-a")
             with open(os.path.join(repo, "doc", "harness", "tasks", ".active"), "w", encoding="utf-8") as f:
                 f.write(live)
             self.assertEqual(
@@ -95,7 +109,7 @@ class ActiveMarkerResolutionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as repo:
             session_task = self._task(repo, "TASK__session", "verifying")
             legacy_task = self._task(repo, "TASK__legacy", "implementing")
-            active_marker_lib.write_active_marker(repo, session_task, session_id="session-a")
+            self._marker(repo, session_task, "session-a")
             with open(os.path.join(repo, "doc", "harness", "tasks", ".active"), "w", encoding="utf-8") as f:
                 f.write(legacy_task)
             self.assertEqual(
@@ -107,8 +121,8 @@ class ActiveMarkerResolutionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as repo:
             closed = self._task(repo, "TASK__closed", "closed")
             live = self._task(repo, "TASK__live", "planning")
-            active_marker_lib.write_active_marker(repo, closed, session_id="closed-session")
-            active_marker_lib.write_active_marker(repo, live, session_id="live-session")
+            self._marker(repo, closed, "closed-session")
+            self._marker(repo, live, "live-session")
             self.assertEqual(list(active_marker_lib.iter_active_task_dirs(repo)), [live])
 
     def test_session_state_task_id_mismatch_falls_back_and_is_not_iterated(self):
@@ -117,7 +131,7 @@ class ActiveMarkerResolutionTests(unittest.TestCase):
             with open(os.path.join(mismatched, "TASK.json"), "w", encoding="utf-8") as f:
                 f.write("{}\n")
             legacy = self._task(repo, "TASK__legacy", "planning")
-            active_marker_lib.write_active_marker(repo, mismatched, session_id="session-a")
+            self._marker(repo, mismatched, "session-a")
             with open(os.path.join(repo, "doc", "harness", "tasks", ".active"), "w", encoding="utf-8") as f:
                 f.write(legacy)
             self.assertEqual(
@@ -132,7 +146,7 @@ class ActiveMarkerResolutionTests(unittest.TestCase):
             with open(os.path.join(missing, "TASK.json"), "w", encoding="utf-8") as f:
                 f.write("{}\n")
             legacy = self._task(repo, "TASK__legacy", "planning")
-            active_marker_lib.write_active_marker(repo, missing, session_id="session-a")
+            self._marker(repo, missing, "session-a")
             with open(os.path.join(repo, "doc", "harness", "tasks", ".active"), "w", encoding="utf-8") as f:
                 f.write(legacy)
             self.assertEqual(
@@ -145,7 +159,7 @@ class ActiveMarkerResolutionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as repo:
             session_task = self._task(repo, "TASK__session", "implementing")
             legacy = self._task(repo, "TASK__legacy", "planning")
-            active_marker_lib.write_active_marker(repo, session_task, session_id="session-a")
+            self._marker(repo, session_task, "session-a")
             tasks = os.path.join(repo, "doc", "harness", "tasks")
             marker = os.path.join(tasks, ".active_sessions", "session-a.json")
             legacy_marker = os.path.join(tasks, ".active")
@@ -177,6 +191,27 @@ class ActiveMarkerResolutionTests(unittest.TestCase):
             )
             self.assertEqual(list(active_marker_lib.iter_active_task_dirs(repo)), [legacy])
 
+    def test_duplicate_session_marker_keys_fail_closed(self):
+        with tempfile.TemporaryDirectory() as repo:
+            session_task = self._task(repo, "TASK__session", "implementing")
+            legacy = self._task(repo, "TASK__legacy", "planning")
+            self._marker(repo, session_task, "session-a")
+            tasks = os.path.join(repo, "doc", "harness", "tasks")
+            marker = os.path.join(tasks, ".active_sessions", "session-a.json")
+            with open(marker, "w", encoding="utf-8") as f:
+                f.write(
+                    '{"session_id":"session-a","session_id":"other",'
+                    f'"task_dir":"{session_task}","task_id":"TASK__session",'
+                    '"run_id":"0198c349-5800-7000-8000-000000000001",'
+                    '"updated":"2026-08-12T00:00:00Z"}\n'
+                )
+            with open(os.path.join(tasks, ".active"), "w", encoding="utf-8") as f:
+                f.write(legacy)
+            self.assertEqual(
+                active_marker_lib.resolve_active_task_dir(repo, session_id="session-a"),
+                legacy,
+            )
+
     def test_symlinked_legacy_marker_is_not_followed(self):
         with tempfile.TemporaryDirectory() as repo:
             live = self._task(repo, "TASK__live", "implementing")
@@ -196,7 +231,7 @@ class ActiveMarkerResolutionTests(unittest.TestCase):
     def test_fifo_session_and_legacy_markers_are_ignored_without_blocking(self):
         with tempfile.TemporaryDirectory() as repo:
             legacy = self._task(repo, "TASK__legacy", "planning")
-            active_marker_lib.write_active_marker(repo, legacy, session_id="session-a")
+            self._marker(repo, legacy, "session-a")
             tasks = os.path.join(repo, "doc", "harness", "tasks")
             session_marker = os.path.join(tasks, ".active_sessions", "session-a.json")
             legacy_marker = os.path.join(tasks, ".active")
@@ -223,7 +258,7 @@ class ActiveMarkerResolutionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as repo:
             task = self._task(repo, "TASK__unsafe-state", "implementing")
             fallback = self._task(repo, "TASK__fallback", "planning")
-            active_marker_lib.write_active_marker(repo, task, session_id="session-a")
+            self._marker(repo, task, "session-a")
             tasks = os.path.join(repo, "doc", "harness", "tasks")
             with open(os.path.join(tasks, ".active"), "w", encoding="utf-8") as f:
                 f.write(fallback)
@@ -257,9 +292,10 @@ class ActiveMarkerResolutionTests(unittest.TestCase):
             with open(sentinel, "w", encoding="utf-8") as f:
                 f.write("keep")
 
-            with self.assertRaisesRegex(ValueError, "active session marker root"):
+            with self.assertRaisesRegex(PermissionError, "task-control runtime"):
                 active_marker_lib.write_active_marker(repo, task, session_id="session-a")
-            active_marker_lib.clear_active_marker(repo, task, session_id="session-a")
+            with self.assertRaisesRegex(PermissionError, "task-control runtime"):
+                active_marker_lib.clear_active_marker(repo, task, session_id="session-a")
 
             with open(sentinel, "r", encoding="utf-8") as f:
                 self.assertEqual(f.read(), "keep")

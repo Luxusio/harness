@@ -1295,12 +1295,74 @@ def read_task_control(task_dir):
     return _validate_task_control(data)
 
 
+def _trusted_control_writer(*, marker=False):
+    """Accept mutations only beneath reviewed control-plane entrypoints."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    allowed = {os.path.join(root, "mcp", "harness_server.py")}
+    if marker:
+        allowed.add(os.path.join(root, "scripts", "codex_hook_registration.py"))
+    frame = inspect.currentframe()
+    try:
+        caller = frame.f_back if frame else None
+        while caller is not None:
+            path = os.path.realpath(caller.f_code.co_filename)
+            if path in allowed:
+                fd = None
+                flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+                flags |= getattr(os, "O_NOFOLLOW", 0)
+                try:
+                    fd = os.open(path, flags)
+                    before = os.fstat(fd)
+                    chunks = []
+                    while True:
+                        chunk = os.read(fd, 64 * 1024)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                    after = os.fstat(fd)
+                except OSError:
+                    return False
+                finally:
+                    if fd is not None:
+                        os.close(fd)
+                identity = lambda value: (
+                    value.st_dev, value.st_ino, value.st_size, value.st_mode,
+                    value.st_uid, value.st_nlink, value.st_mtime_ns, value.st_ctime_ns,
+                )
+                if (
+                    identity(before) != identity(after)
+                    or (os.lstat(path).st_dev, os.lstat(path).st_ino)
+                    != (before.st_dev, before.st_ino)
+                    or not stat.S_ISREG(after.st_mode)
+                    or after.st_uid != os.getuid()
+                    or after.st_nlink != 1
+                    or after.st_mode & 0o022
+                ):
+                    return False
+                root_code = compile(b"".join(chunks), path, "exec")
+                pending = [root_code]
+                while pending:
+                    code = pending.pop()
+                    if code == caller.f_code:
+                        return True
+                    pending.extend(
+                        item for item in code.co_consts if isinstance(item, CodeType)
+                    )
+            caller = caller.f_back
+        return False
+    finally:
+        del caller
+        del frame
+
+
 def write_task_control(task_dir, control):
     """Atomically publish one exact TASK.json value."""
     validated = _validate_task_control(control)
     if not validated:
         raise ValueError("invalid exact TASK.json control value")
     path = task_control_file(task_dir)
+    if os.path.lexists(path) and not _trusted_control_writer():
+        raise PermissionError("TASK.json mutation requires the task-control MCP")
     os.makedirs(task_dir, exist_ok=True)
     _revalidate_receipt_transaction(task_dir)
     if os.path.lexists(path) and not read_task_control(task_dir):
@@ -1326,6 +1388,8 @@ def _new_task_control(*, execution_mode="standard"):
 
 def begin_task_run(task_dir):
     """Rotate TASK.json run identity and clear terminal authority."""
+    if not _trusted_control_writer():
+        raise PermissionError("task run rotation requires the task-control MCP")
     path = task_control_file(task_dir)
     snapshot = {path: _strict_regular_text_snapshot(path, max_size=16 * 1024)}
     current = read_task_control(task_dir)
@@ -1341,6 +1405,8 @@ def begin_task_run(task_dir):
 
 
 def restore_task_control(snapshot):
+    if not _trusted_control_writer():
+        raise PermissionError("TASK.json restoration requires the task-control MCP")
     _restore_text_snapshots(snapshot)
 
 
@@ -1687,6 +1753,8 @@ def write_active_marker(repo_root, task_dir, session_id=None):
     legacy ``.active`` file remains for older hooks/tests and single-session
     installs.
     """
+    if not _trusted_control_writer(marker=True):
+        raise PermissionError("active task binding requires the task-control runtime")
     tasks_dir = os.path.join(repo_root, TASK_DIR)
     os.makedirs(tasks_dir, exist_ok=True)
     os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
@@ -1745,6 +1813,8 @@ def active_marker_snapshot(repo_root, session_id=None):
 
 def restore_active_marker_snapshot(snapshot):
     """Restore an exact marker snapshot captured by active_marker_snapshot."""
+    if not _trusted_control_writer(marker=True):
+        raise PermissionError("active task restoration requires the task-control runtime")
     _restore_text_snapshots(snapshot)
 
 
@@ -1753,8 +1823,15 @@ def _read_regular_marker(path, *, max_size=256 * 1024):
 
 
 def _read_session_marker(path, expected_session_id):
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate active marker key: {key}")
+            result[key] = value
+        return result
     try:
-        data = json.loads(_read_regular_marker(path))
+        data = json.loads(_read_regular_marker(path), object_pairs_hook=unique_object)
     except (TypeError, ValueError):
         return {}
     if not isinstance(data, dict) or data.get("session_id") != expected_session_id:
@@ -1862,6 +1939,8 @@ def iter_active_task_dirs(repo_root=None):
 
 def clear_active_marker(repo_root, task_dir=None, session_id=None, *, strict=False):
     """Clear this session's active marker and matching legacy marker."""
+    if not _trusted_control_writer(marker=True):
+        raise PermissionError("active task cleanup requires the task-control runtime")
     try:
         os.unlink(_session_active_path(repo_root, session_id))
     except FileNotFoundError:
@@ -2606,6 +2685,8 @@ def task_control_status(task_dir, control=None, snapshot=None):
 
 def publish_task_close(task_dir, control, *, receipt_fingerprint):
     """Atomically publish current receipt bytes as the sole close authority."""
+    if not _trusted_control_writer():
+        raise PermissionError("task close publication requires the task-control MCP")
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", str(receipt_fingerprint or "")):
         raise ValueError("invalid task close receipt fingerprint")
     updated = dict(control)

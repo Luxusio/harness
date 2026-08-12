@@ -207,7 +207,14 @@ class TestCodexHookWrappers(unittest.TestCase):
              mock.patch.object(lib, "_LAST_HOOK_INPUT", {}):
             task = Path(repo) / "doc/harness/tasks/TASK__thread-marker"
             task.mkdir(parents=True)
-            lib.write_active_marker(repo, str(task))
+            lib.ensure_task_scaffold(str(task), "TASK__thread-marker", repo_root=repo)
+            sid = lib.current_session_id()
+            sessions = Path(repo) / "doc/harness/tasks/.active_sessions"
+            sessions.mkdir(parents=True)
+            (sessions / f"{sid}.json").write_text(json.dumps({
+                "session_id": sid, "task_dir": str(task), "task_id": task.name,
+                "run_id": lib.read_task_control(task)["run_id"], "updated": lib.now_iso(),
+            }) + "\n", encoding="utf-8")
 
             marker = (
                 Path(repo)
@@ -295,7 +302,15 @@ class TestCodexHookWrappers(unittest.TestCase):
             lib.ensure_task_scaffold(
                 str(task), "TASK__root-binding", repo_root=repo
             )
-            lib.write_active_marker(repo, str(task), session_id="default")
+            sessions = Path(repo) / "doc/harness/tasks/.active_sessions"
+            sessions.mkdir(parents=True, exist_ok=True)
+            (sessions / "default.json").write_text(json.dumps({
+                "session_id": "default", "task_dir": str(task), "task_id": task.name,
+                "run_id": lib.read_task_control(task)["run_id"], "updated": lib.now_iso(),
+            }) + "\n", encoding="utf-8")
+            (Path(repo) / "doc/harness/tasks/.active").write_text(
+                str(task) + "\n", encoding="utf-8",
+            )
 
             self.assertTrue(mod._bind_active_task_to_root_session(repo, root_id))
 

@@ -219,6 +219,17 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             self.assertIn("rule=protected-artifact", reason)
             self.assertIn("task-start runtime", reason)
 
+    def test_redirect_into_active_markers_denies(self):
+        for target in (
+            "doc/harness/tasks/.active",
+            "doc/harness/tasks/.active_sessions/session.json",
+        ):
+            with self.subTest(target=target):
+                r = _run_bash(f"echo x > {target}")
+                decision, reason = parse_decision(r.stdout)
+                self.assertEqual(decision, "deny")
+                self.assertIn("rule=protected-artifact", reason)
+
 
 
 class TestEnvPrefixBypassFix(unittest.TestCase):

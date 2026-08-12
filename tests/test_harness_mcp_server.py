@@ -38,6 +38,24 @@ EXPECTED_TOOLS = {
 }
 
 
+def _write_marker_fixture(repo_root: str, task_dir: str, session_id: str = "") -> None:
+    sid = session_id or harness_lib.current_session_id()
+    sessions = Path(repo_root) / "doc/harness/tasks/.active_sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    control = harness_server.read_task_control(task_dir)
+    payload = {
+        "session_id": sid, "task_dir": task_dir,
+        "task_id": Path(task_dir).name, "run_id": control["run_id"],
+        "updated": harness_lib.now_iso(),
+    }
+    (sessions / f"{sid}.json").write_text(
+        json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8",
+    )
+    (Path(repo_root) / "doc/harness/tasks/.active").write_text(
+        task_dir + "\n", encoding="utf-8",
+    )
+
+
 def _record_receipt_fixture(task_dir, receipt):
     source = harness_lib._receipt_short(receipt.get("source") or "test_fixture", 100)
     agent_id = harness_lib._receipt_short(receipt.get("agent_id") or receipt.get("id"), 300)
@@ -104,6 +122,19 @@ class HarnessMcpServerTests(unittest.TestCase):
     def _call_in_repo(self, repo_root: str, name: str, args: dict) -> dict:
         with mock.patch.object(harness_server, "find_repo_root", return_value=repo_root):
             return harness_server.call_tool(name, args)
+
+    def _write_control_fixture(self, task_dir: str, control: dict) -> None:
+        Path(task_dir, "TASK.json").write_text(
+            json.dumps(control, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+        )
+
+    def _close_fixture(self, task_dir: str) -> None:
+        control = harness_server.read_task_control(task_dir)
+        control["close_receipt_fingerprint"] = harness_server.receipt_stream_fingerprint(task_dir)
+        self._write_control_fixture(task_dir, control)
+
+    def _write_marker_fixture(self, repo_root: str, task_dir: str, session_id: str = "") -> None:
+        _write_marker_fixture(repo_root, task_dir, session_id)
 
     def _write_subagent_receipt(
         self,
@@ -364,10 +395,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                     },
                 )
                 self._write_subagent_receipt(str(task_dir))
-                harness_server.publish_task_close(
-                    str(task_dir), harness_server.read_task_control(str(task_dir)),
-                    receipt_fingerprint=harness_server.receipt_stream_fingerprint(str(task_dir)),
-                )
+                self._close_fixture(str(task_dir))
 
                 nxt = harness_server.call_tool("goal_next_task", {})
                 self.assertIsNone(nxt["structuredContent"]["task"])
@@ -394,16 +422,13 @@ class HarnessMcpServerTests(unittest.TestCase):
 
             control = harness_server.read_task_control(str(task_dir))
             control["close_receipt_fingerprint"] = "sha256:" + "f" * 64
-            harness_server.write_task_control(str(task_dir), control)
+            self._write_control_fixture(str(task_dir), control)
             missing_receipt = self._call_in_repo(tmp, "goal_finish", {"status": "complete"})
             self.assertTrue(missing_receipt.get("isError"))
             control["close_receipt_fingerprint"] = None
-            harness_server.write_task_control(str(task_dir), control)
+            self._write_control_fixture(str(task_dir), control)
             self._write_subagent_receipt(str(task_dir))
-            harness_server.publish_task_close(
-                str(task_dir), harness_server.read_task_control(str(task_dir)),
-                receipt_fingerprint=harness_server.receipt_stream_fingerprint(str(task_dir)),
-            )
+            self._close_fixture(str(task_dir))
             self._call_in_repo(tmp, "goal_add_task", {
                 "task_id": "TASK__goal-child", "status": "closed",
             })
@@ -426,7 +451,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             })
             control = harness_server.read_task_control(str(task_dir))
             control["close_receipt_fingerprint"] = "sha256:" + "f" * 64
-            harness_server.write_task_control(str(task_dir), control)
+            self._write_control_fixture(str(task_dir), control)
 
             finished = self._call_in_repo(tmp, "goal_finish", {"status": "complete"})
 
@@ -1174,7 +1199,7 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_task_blocked_rolls_back_when_marker_cleanup_is_not_confirmed(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__blocked-marker-failure")
-            harness_server.write_active_marker(tmp, task_dir)
+            self._write_marker_fixture(tmp, task_dir)
             with (
                 mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
                 mock.patch.object(
@@ -1319,10 +1344,7 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_task_start_reopens_closed_task_and_clears_close_attestation(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__resume-closed")
-            harness_server.publish_task_close(
-                task_dir, harness_server.read_task_control(task_dir),
-                receipt_fingerprint=harness_server.receipt_stream_fingerprint(task_dir),
-            )
+            self._close_fixture(task_dir)
             original_ctd = harness_server.canonical_task_dir
             original_root = harness_server.find_repo_root
             harness_server.canonical_task_dir = lambda task_id=None, slug=None, repo_root=None, **kw: task_dir
@@ -1562,10 +1584,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 if terminal_status in {"open", "closed"}:
                     self._write_subagent_receipt(str(task_dir))
                 if terminal_status == "closed":
-                    harness_server.publish_task_close(
-                        str(task_dir), harness_server.read_task_control(str(task_dir)),
-                        receipt_fingerprint=harness_server.receipt_stream_fingerprint(str(task_dir)),
-                    )
+                    self._close_fixture(str(task_dir))
                 elif terminal_status == "blocked":
                     (task_dir / "BLOCKED.md").write_text("# BLOCKED\n", encoding="utf-8")
                 state = harness_server.read_task_control(str(task_dir))
@@ -1675,7 +1694,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             lib_globals["ensure_task_scaffold"](
                 str(task_dir), "TASK__active-resume", repo_root=tmp
             )
-            harness_server.write_active_marker(tmp, str(task_dir))
+            self._write_marker_fixture(tmp, str(task_dir))
             original_write_active_marker = harness_server.write_active_marker
 
             def publish_then_fail(repo_root, published_task_dir):
@@ -1715,7 +1734,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             lib_globals["ensure_task_scaffold"](
                 str(task_a), "TASK__active-a", repo_root=tmp
             )
-            harness_server.write_active_marker(tmp, str(task_a))
+            self._write_marker_fixture(tmp, str(task_a))
             original_write_active_marker = harness_server.write_active_marker
 
             def publish_then_fail(repo_root, published_task_dir):
@@ -1740,7 +1759,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             )
             self.assertFalse((task_b / "TASK_STATE.yaml").exists())
 
-    def test_active_marker_snapshot_restores_symlink_without_touching_target(self):
+    def test_active_marker_snapshot_cannot_be_restored_by_arbitrary_caller(self):
         with tempfile.TemporaryDirectory() as tmp:
             tasks = Path(tmp) / "doc/harness/tasks"
             sessions = tasks / ".active_sessions"
@@ -1752,9 +1771,10 @@ class HarnessMcpServerTests(unittest.TestCase):
             snapshot = harness_server.active_marker_snapshot(tmp)
             marker.unlink()
             marker.write_text("replacement\n", encoding="utf-8")
-            harness_server.restore_active_marker_snapshot(snapshot)
-            self.assertTrue(marker.is_symlink())
-            self.assertEqual(os.readlink(marker), str(outside))
+            with self.assertRaisesRegex(PermissionError, "task-control runtime"):
+                harness_server.restore_active_marker_snapshot(snapshot)
+            self.assertFalse(marker.is_symlink())
+            self.assertEqual(marker.read_text(encoding="utf-8"), "replacement\n")
             self.assertEqual(outside.read_text(encoding="utf-8"), "preserve\n")
 
     def test_goal_state_two_file_write_rolls_back_on_second_failure(self):
@@ -2376,7 +2396,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
             )
             before = harness_server.read_task_control(td)
-            harness_server.write_active_marker(tmp, td)
+            _write_marker_fixture(tmp, td)
             self._patch(td)
             try:
                 with mock.patch.object(
@@ -2407,7 +2427,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                     checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
                 )
                 before = harness_server.read_task_control(td)
-                harness_server.write_active_marker(tmp, td)
+                _write_marker_fixture(tmp, td)
                 self._patch(td)
                 try:
                     patches = [

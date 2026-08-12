@@ -36,7 +36,9 @@ def _task(tmp_path: Path, lenses: dict | None = None) -> Path:
         control["required_lenses"] = [
             lens for lens in lib.LENS_ORDER if lens in requested
         ]
-        lib.write_task_control(task, control)
+        (task / lib.TASK_CONTROL_NAME).write_text(
+            json.dumps(control, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+        )
     return task
 
 
@@ -157,7 +159,11 @@ def test_uuid7_identity_is_canonical_timestamped_and_rotates(tmp_path):
 
     task = _task(tmp_path)
     first = lib.read_task_control(task)["run_id"]
-    rotated, _ = lib.begin_task_run(task)
+    rotated = dict(lib.read_task_control(task))
+    rotated["run_id"] = lib.new_uuid7()
+    (task / lib.TASK_CONTROL_NAME).write_text(
+        json.dumps(rotated, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+    )
     assert rotated["run_id"] != first
     assert lib.uuid7_timestamp_ms(rotated["run_id"]) >= lib.uuid7_timestamp_ms(first)
 
@@ -320,6 +326,24 @@ def test_raw_receipt_append_primitive_is_not_exposed():
     assert not hasattr(lib, "_append_receipt_stream")
 
 
+def test_task_control_and_active_marker_mutators_require_runtime_owner(tmp_path):
+    task = _task(tmp_path)
+    control = lib.read_task_control(task)
+    fingerprint = lib.receipt_stream_fingerprint(task)
+    for operation in (
+        lambda: lib.begin_task_run(task),
+        lambda: lib.publish_task_close(task, control, receipt_fingerprint=fingerprint),
+        lambda: lib.write_active_marker(str(tmp_path), str(task), session_id="foreign"),
+        lambda: lib.clear_active_marker(str(tmp_path), str(task), session_id="foreign"),
+    ):
+        try:
+            operation()
+        except PermissionError as exc:
+            assert "task-control" in str(exc)
+        else:
+            raise AssertionError("arbitrary control-authority mutation was accepted")
+
+
 def test_receipt_snapshot_rejects_duplicate_json_keys(tmp_path):
     task = _task(tmp_path)
     run_id = lib.read_task_control(task)["run_id"]
@@ -434,8 +458,10 @@ def test_runtime_never_marks_pass_receipts_stale_after_source_edit(tmp_path):
 def test_close_is_the_current_receipt_fingerprint_in_task_control(tmp_path):
     task = _task(tmp_path)
     fingerprint = lib.receipt_stream_fingerprint(task)
-    control = lib.publish_task_close(
-        task, lib.read_task_control(task), receipt_fingerprint=fingerprint,
+    control = dict(lib.read_task_control(task))
+    control["close_receipt_fingerprint"] = fingerprint
+    (task / lib.TASK_CONTROL_NAME).write_text(
+        json.dumps(control, indent=2, sort_keys=True) + "\n", encoding="utf-8",
     )
     assert control["close_receipt_fingerprint"] == fingerprint
     assert lib.task_control_status(task, control) == "closed"
@@ -454,7 +480,14 @@ def test_ignored_nested_git_resolves_ancestor_harness_root(tmp_path):
     nested.mkdir(parents=True)
     (root / "cleo-v4-web/.git").mkdir()
     task = _task(root)
-    lib.write_active_marker(str(root), str(task))
+    sid = lib.current_session_id()
+    sessions = root / lib.TASK_DIR / lib.ACTIVE_SESSIONS_DIRNAME
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / f"{sid}.json").write_text(json.dumps({
+        "session_id": sid, "task_dir": str(task), "task_id": task.name,
+        "run_id": lib.read_task_control(task)["run_id"], "updated": lib.now_iso(),
+    }) + "\n", encoding="utf-8")
+    (root / lib.TASK_DIR / ".active").write_text(str(task) + "\n", encoding="utf-8")
 
     assert lib.harness_root_resolution(nested) == (str(root.resolve()), "")
     assert lib.find_harness_root(nested) == str(root.resolve())
@@ -503,7 +536,7 @@ def test_receipt_stream_and_task_directory_reject_group_world_writable_modes(tmp
     assert not (writable_dir / ".receipts.lock").exists()
 
 
-def test_task_directory_transaction_is_nested_serialized_and_replacement_safe(tmp_path):
+def test_task_directory_transaction_is_nested_serialized_and_control_is_mcp_owned(tmp_path):
     task = _task(tmp_path / "serialized")
     first_entered = threading.Event()
     release_first = threading.Event()
@@ -546,29 +579,15 @@ def test_task_directory_transaction_is_nested_serialized_and_replacement_safe(tm
     publication = _task(tmp_path / "publication")
     original_control = lib.read_task_control(publication)
     displaced = publication.with_name("TASK__publication-displaced")
-    real_atomic_write = lib._atomic_text_write
-    raced = False
-
-    def replace_before_publication(path, text):
-        nonlocal raced
-        if not raced and Path(path).name == lib.TASK_CONTROL_NAME:
-            raced = True
-            publication.rename(displaced)
-            publication.mkdir()
-        return real_atomic_write(path, text)
-
     updated = dict(original_control)
     updated["required_lenses"] = ["review-code", "review-security", "qa-cli"]
     try:
-        with lib.receipt_stream_transaction(publication):
-            with mock.patch.object(lib, "_atomic_text_write", side_effect=replace_before_publication):
-                lib.write_task_control(publication, updated)
-    except RuntimeError as exc:
-        assert "integrity" in str(exc)
+        lib.write_task_control(publication, updated)
+    except PermissionError as exc:
+        assert "task-control MCP" in str(exc)
     else:
-        raise AssertionError("replaced task-directory publication must fail closed")
-    assert not (publication / lib.TASK_CONTROL_NAME).exists()
-    assert lib.read_task_control(displaced) == original_control
+        raise AssertionError("arbitrary TASK.json mutation was accepted")
+    assert lib.read_task_control(publication) == original_control
 
 
 def test_task_publication_rejects_replaced_ancestor_chain(tmp_path):
@@ -583,20 +602,12 @@ def test_task_publication_rejects_replaced_ancestor_chain(tmp_path):
             "harness": root / "doc/harness",
             "tasks": root / "doc/harness/tasks",
         }
-        target = ancestors[ancestor_name]
-        displaced = target.with_name(target.name + "-displaced")
-        with lib.receipt_stream_transaction(task):
-            target.rename(displaced)
-            target.symlink_to(displaced, target_is_directory=True)
-            try:
-                lib.write_task_control(task, updated)
-            except RuntimeError as exc:
-                assert "integrity" in str(exc)
-            else:
-                raise AssertionError(f"replaced {ancestor_name} ancestor must fail closed")
-            finally:
-                target.unlink()
-                displaced.rename(target)
+        try:
+            lib.write_task_control(task, updated)
+        except PermissionError as exc:
+            assert "task-control MCP" in str(exc)
+        else:
+            raise AssertionError(f"arbitrary mutation through {ancestor_name} was accepted")
         assert lib.read_task_control(task) == original
 
 
@@ -608,7 +619,11 @@ def test_rotated_task_run_rejects_prior_run_receipts_without_source_state(tmp_pa
     _receipt(task, "qa-cli", "qa-1", "completed", "PASS")
     assert lib.receipt_runtime_verdict(task) == "PASS"
 
-    new_run, _ = lib.begin_task_run(task)
+    new_run = dict(lib.read_task_control(task))
+    new_run["run_id"] = lib.new_uuid7()
+    (task / lib.TASK_CONTROL_NAME).write_text(
+        json.dumps(new_run, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+    )
     assert new_run["run_id"] != original_run
     assert lib.receipt_runtime_verdict(task) == "PENDING"
 

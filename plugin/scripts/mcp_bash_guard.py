@@ -66,6 +66,9 @@ RECEIPT_MUTATION_SYMBOLS = {
     "record_subagent_receipt", "reset_receipt_streams_for_new_run",
     "restore_receipt_streams", "release_receipt_stream_reset",
     "receipt_stream_savepoint", "_bind_runtime_receipt_adapter",
+    "write_task_control", "begin_task_run", "restore_task_control",
+    "publish_task_close", "write_active_marker", "clear_active_marker",
+    "restore_active_marker_snapshot",
 }
 
 # Shell operators that separate command units. We shlex-tokenize first
