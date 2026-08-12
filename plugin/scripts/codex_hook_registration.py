@@ -20,6 +20,7 @@ from _lib import (
     resolve_active_task_dir,
     task_control_status,
     write_active_marker,
+    _bind_control_writer,
 )
 
 
@@ -151,6 +152,10 @@ def _bind_active_task_to_root_session(control_root: str, thread_id: str) -> bool
         return False
     write_active_marker(control_root, task_dir, session_id=thread_id)
     return True
+
+
+_bind_control_writer(_bind_active_task_to_root_session)
+del _bind_control_writer
 
 
 def restore_watcher_registration(

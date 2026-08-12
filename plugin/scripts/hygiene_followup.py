@@ -19,7 +19,6 @@ from typing import Any
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _lib import (  # type: ignore
     TASK_DIR,
-    ensure_task_scaffold,
     find_repo_root,
     now_iso,
     read_json_state,
@@ -118,7 +117,12 @@ def create_followup(repo_root: str | None = None) -> dict[str, Any]:
         }
 
     task_dir = Path(root) / TASK_DIR / FOLLOWUP_TASK_ID
-    scaffold = ensure_task_scaffold(str(task_dir), FOLLOWUP_TASK_ID, _request_text(items))
+    task_dir.mkdir(parents=True, exist_ok=True)
+    created = []
+    request_path = task_dir / "REQUEST.md"
+    if _write_if_absent(request_path, _request_text(items)):
+        created.append(str(request_path))
+    scaffold = {"created": created}
     written = [str(Path(path).relative_to(root)) for path in scaffold.get("created", []) if Path(path).is_absolute()]
     written += [path for path in scaffold.get("created", []) if not Path(path).is_absolute()]
 

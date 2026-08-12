@@ -11,12 +11,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SERVER_PATH = REPO_ROOT / "plugin" / "mcp" / "harness_server.py"
 
 
-spec = importlib.util.spec_from_file_location("harness_server_tool_contract", SERVER_PATH)
-assert spec and spec.loader
-harness_server = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(harness_server)
-
-
 def _read_all(root: Path) -> str:
     parts: list[str] = []
     for path in root.rglob("*"):
@@ -33,7 +27,8 @@ def test_claude_plugin_docs_do_not_use_legacy_harness_mcp_prefix():
 def test_claude_plugin_prefixed_tool_names_exist_in_mcp_server():
     body = _read_all(REPO_ROOT / "plugin")
     mentioned = set(re.findall(r"mcp__plugin_harness_harness__([A-Za-z0-9_]+)(?![A-Za-z0-9_*])", body))
-    server_tools = {tool["name"] for tool in harness_server.list_tools()}
+    server = SERVER_PATH.read_text(encoding="utf-8")
+    server_tools = set(re.findall(r'\{"name": "([a-z_]+)"', server))
     unknown = sorted(name for name in mentioned if name not in server_tools)
     assert not unknown
 

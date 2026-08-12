@@ -25,7 +25,14 @@ def _task(tmp_path: Path, lenses: dict | None = None) -> Path:
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
     task = tmp_path / "doc/harness/tasks/TASK__no-git"
-    lib.ensure_task_scaffold(task, "TASK__no-git", repo_root=tmp_path)
+    task.mkdir(parents=True, exist_ok=True)
+    control_path = task / lib.TASK_CONTROL_NAME
+    if not control_path.exists():
+        control_path.write_text(json.dumps({
+            "run_id": lib.new_uuid7(), "execution_mode": "standard",
+            "required_lenses": ["review-code", "qa-cli"],
+            "close_receipt_fingerprint": None,
+        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (task / "PLAN.md").write_text("# plan\n", encoding="utf-8")
     if lenses is not None:
         control = lib.read_task_control(task)

@@ -89,6 +89,7 @@ from _lib import (  # type: ignore
     release_receipt_stream_reset,
     receipt_stream_transaction,
     begin_task_run, restore_task_control,
+    _bind_control_writer,
     _strict_regular_text_snapshot, _restore_text_snapshots, _atomic_text_write as _lib_atomic_text_write,
     LENS_ORDER, SUPPORTED_LENSES, QA_LENSES,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
@@ -775,6 +776,15 @@ def _publish_write_plan(args, td, control, preflight):
         "written": written,
         "bytes_written": bytes_written,
     })
+
+
+for _control_writer in (
+    handle_task_start, handle_task_close, _handle_task_blocked_locked,
+    _publish_write_plan,
+):
+    _bind_control_writer(_control_writer)
+del _control_writer
+del _bind_control_writer
 
 
 # ── Tool definitions ─────────────────────────────────────────────────────

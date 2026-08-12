@@ -1295,64 +1295,68 @@ def read_task_control(task_dir):
     return _validate_task_control(data)
 
 
-def _trusted_control_writer(*, marker=False):
-    """Accept mutations only beneath reviewed control-plane entrypoints."""
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    allowed = {os.path.join(root, "mcp", "harness_server.py")}
-    if marker:
-        allowed.add(os.path.join(root, "scripts", "codex_hook_registration.py"))
-    frame = inspect.currentframe()
-    try:
-        caller = frame.f_back if frame else None
-        while caller is not None:
-            path = os.path.realpath(caller.f_code.co_filename)
-            if path in allowed:
-                fd = None
-                flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
-                flags |= getattr(os, "O_NOFOLLOW", 0)
-                try:
-                    fd = os.open(path, flags)
-                    before = os.fstat(fd)
-                    chunks = []
-                    while True:
-                        chunk = os.read(fd, 64 * 1024)
-                        if not chunk:
-                            break
-                        chunks.append(chunk)
-                    after = os.fstat(fd)
-                except OSError:
-                    return False
-                finally:
-                    if fd is not None:
-                        os.close(fd)
-                identity = lambda value: (
-                    value.st_dev, value.st_ino, value.st_size, value.st_mode,
-                    value.st_uid, value.st_nlink, value.st_mtime_ns, value.st_ctime_ns,
-                )
-                if (
-                    identity(before) != identity(after)
-                    or (os.lstat(path).st_dev, os.lstat(path).st_ino)
-                    != (before.st_dev, before.st_ino)
-                    or not stat.S_ISREG(after.st_mode)
-                    or after.st_uid != os.getuid()
-                    or after.st_nlink != 1
-                    or after.st_mode & 0o022
+def _make_control_writer_authority():
+    allowed = {
+        "harness_server": {
+            "handle_task_start", "handle_task_close", "_handle_task_blocked_locked",
+            "_publish_write_plan",
+        },
+        "codex_hook_registration": {"_bind_active_task_to_root_session"},
+    }
+    bindings = {}
+    protected_dependencies = {
+        "write_task_control", "begin_task_run", "restore_task_control",
+        "write_active_marker", "clear_active_marker",
+        "restore_active_marker_snapshot", "publish_task_close",
+    }
+
+    def bind(function):
+        module_name = function.__module__
+        if function.__qualname__ not in allowed.get(module_name, set()):
+            raise PermissionError("unsupported task-control writer")
+        module = sys.modules.get(module_name)
+        if module is None or function.__globals__ is not vars(module):
+            raise PermissionError("task-control writer requires its canonical module")
+        owner = module
+        for part in function.__qualname__.split("."):
+            owner = getattr(owner, part, None)
+        if owner is not function:
+            raise PermissionError("task-control writer function is not canonical")
+        dependencies = tuple(
+            (name, function.__globals__[name]) for name in function.__code__.co_names
+            if name in protected_dependencies and name in function.__globals__
+        )
+        bindings[(module_name, function.__qualname__)] = (
+            function.__code__, function.__globals__, dependencies,
+        )
+
+    def authorized(marker=False):
+        frame = inspect.currentframe()
+        try:
+            caller = frame.f_back.f_back if frame and frame.f_back else None
+            while caller is not None:
+                module_name = str(caller.f_globals.get("__name__") or "")
+                identity = (module_name, caller.f_code.co_qualname)
+                binding = bindings.get(identity)
+                if binding is not None and (
+                    marker or module_name == "harness_server"
                 ):
-                    return False
-                root_code = compile(b"".join(chunks), path, "exec")
-                pending = [root_code]
-                while pending:
-                    code = pending.pop()
-                    if code == caller.f_code:
-                        return True
-                    pending.extend(
-                        item for item in code.co_consts if isinstance(item, CodeType)
+                    return bool(
+                        caller.f_code is binding[0]
+                        and caller.f_globals is binding[1]
+                        and all(caller.f_globals.get(name) is value for name, value in binding[2])
                     )
-            caller = caller.f_back
-        return False
-    finally:
-        del caller
-        del frame
+                caller = caller.f_back
+            return False
+        finally:
+            del caller
+            del frame
+
+    return authorized, bind
+
+
+_trusted_control_writer, _bind_control_writer = _make_control_writer_authority()
+del _make_control_writer_authority
 
 
 def write_task_control(task_dir, control):
@@ -1361,7 +1365,7 @@ def write_task_control(task_dir, control):
     if not validated:
         raise ValueError("invalid exact TASK.json control value")
     path = task_control_file(task_dir)
-    if os.path.lexists(path) and not _trusted_control_writer():
+    if not _trusted_control_writer():
         raise PermissionError("TASK.json mutation requires the task-control MCP")
     os.makedirs(task_dir, exist_ok=True)
     _revalidate_receipt_transaction(task_dir)

@@ -207,7 +207,11 @@ class TestCodexHookWrappers(unittest.TestCase):
              mock.patch.object(lib, "_LAST_HOOK_INPUT", {}):
             task = Path(repo) / "doc/harness/tasks/TASK__thread-marker"
             task.mkdir(parents=True)
-            lib.ensure_task_scaffold(str(task), "TASK__thread-marker", repo_root=repo)
+            (task / "TASK.json").write_text(json.dumps({
+                "run_id": lib.new_uuid7(), "execution_mode": "standard",
+                "required_lenses": ["review-code", "qa-cli"],
+                "close_receipt_fingerprint": None,
+            }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             sid = lib.current_session_id()
             sessions = Path(repo) / "doc/harness/tasks/.active_sessions"
             sessions.mkdir(parents=True)
@@ -299,9 +303,11 @@ class TestCodexHookWrappers(unittest.TestCase):
         with tempfile.TemporaryDirectory() as repo:
             task = Path(repo) / "doc/harness/tasks/TASK__root-binding"
             task.mkdir(parents=True)
-            lib.ensure_task_scaffold(
-                str(task), "TASK__root-binding", repo_root=repo
-            )
+            (task / "TASK.json").write_text(json.dumps({
+                "run_id": lib.new_uuid7(), "execution_mode": "standard",
+                "required_lenses": ["review-code", "qa-cli"],
+                "close_receipt_fingerprint": None,
+            }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
             sessions = Path(repo) / "doc/harness/tasks/.active_sessions"
             sessions.mkdir(parents=True, exist_ok=True)
             (sessions / "default.json").write_text(json.dumps({

@@ -23,7 +23,11 @@ def _repo(tmp_path: Path) -> tuple[str, str]:
     (tmp_path / ".git").mkdir()
     task_dir = tmp_path / "doc/harness/tasks/TASK__bg"
     task_dir.mkdir(parents=True)
-    _lib.ensure_task_scaffold(str(task_dir), "TASK__bg")
+    (task_dir / "TASK.json").write_text(json.dumps({
+        "run_id": _lib.new_uuid7(), "execution_mode": "standard",
+        "required_lenses": ["review-code", "qa-cli"],
+        "close_receipt_fingerprint": None,
+    }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (tmp_path / "doc/harness/manifest.yaml").write_text("type: test\n", encoding="utf-8")
     return str(tmp_path), str(task_dir)
 

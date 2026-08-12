@@ -5,6 +5,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -19,6 +20,7 @@ SERVER_PATH = REPO_ROOT / "plugin" / "mcp" / "harness_server.py"
 spec = importlib.util.spec_from_file_location("harness_server", SERVER_PATH)
 assert spec and spec.loader
 harness_server = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = harness_server
 spec.loader.exec_module(harness_server)
 import _lib as harness_lib  # type: ignore
 
@@ -107,14 +109,14 @@ class HarnessMcpServerTests(unittest.TestCase):
     def _make_task(self, base_dir: str, task_id: str) -> str:
         task_dir = Path(base_dir) / "doc" / "harness" / "tasks" / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
-        harness_lib.write_task_control(
-            task_dir,
-            {
+        task_dir.joinpath("TASK.json").write_text(
+            json.dumps({
                 "run_id": harness_lib.new_uuid7(),
                 "execution_mode": "standard",
                 "required_lenses": ["review-code", "qa-cli"],
                 "close_receipt_fingerprint": None,
-            },
+            }, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
         )
         (task_dir / "PLAN.md").write_text("# Plan\n\nSmall plan.\n", encoding="utf-8")
         return str(task_dir)
@@ -183,14 +185,14 @@ class HarnessMcpServerTests(unittest.TestCase):
             raise AssertionError("lifecycle Git snapshot helper was called")
 
         with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / ".git").mkdir()
             manifest = Path(tmp) / "doc/harness/manifest.yaml"
             manifest.parent.mkdir(parents=True)
             manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
             task_dir = Path(tmp) / "doc/harness/tasks/TASK__no-git-handlers"
-            with (
-                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
-                mock.patch.object(harness_lib.subprocess, "run", side_effect=forbidden),
-            ):
+            prior_cwd = os.getcwd()
+            with mock.patch.object(harness_lib.subprocess, "run", side_effect=forbidden):
+                os.chdir(tmp)
                 started = harness_server.handle_task_start(
                     {"task_id": "TASK__no-git-handlers"}
                 )
@@ -206,6 +208,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 closed = harness_server.handle_task_close(
                     {"task_id": "TASK__no-git-handlers"}
                 )
+                os.chdir(prior_cwd)
             self.assertNotIn("isError", context)
             self.assertNotIn("isError", verified)
             self.assertNotIn("isError", closed)
@@ -231,20 +234,23 @@ class HarnessMcpServerTests(unittest.TestCase):
                 manifest = Path(tmp) / "doc/harness/manifest.yaml"
                 manifest.parent.mkdir(parents=True)
                 manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
+                (Path(tmp) / ".git").mkdir()
                 task_id = f"TASK__one-snapshot-{index}"
                 task_dir = Path(tmp) / "doc/harness/tasks" / task_id
-                with (
-                    mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
-                ):
+                prior_cwd = os.getcwd()
+                os.chdir(tmp)
+                try:
                     harness_server.handle_task_start({"task_id": task_id})
                     (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
                     self._write_subagent_receipt(str(task_dir))
                     with mock.patch.object(
-                        harness_server,
-                        "receipt_snapshot",
-                        wraps=harness_server.receipt_snapshot,
+                        harness_lib,
+                        "_receipt_snapshot_unlocked",
+                        wraps=harness_lib._receipt_snapshot_unlocked,
                     ) as snapshot:
                         result = handler({"task_id": task_id})
+                finally:
+                    os.chdir(prior_cwd)
                 self.assertNotIn("isError", result)
                 self.assertEqual(snapshot.call_count, 1)
 
@@ -385,15 +391,12 @@ class HarnessMcpServerTests(unittest.TestCase):
 
                 task_dir = Path(tmp) / "doc/harness/tasks/TASK__login-bugs"
                 task_dir.mkdir(parents=True, exist_ok=True)
-                harness_server.write_task_control(
-                    str(task_dir),
-                    {
+                self._write_control_fixture(str(task_dir), {
                         "run_id": harness_lib.new_uuid7(),
                         "execution_mode": "standard",
                         "required_lenses": ["review-code", "qa-cli"],
                         "close_receipt_fingerprint": None,
-                    },
-                )
+                    })
                 self._write_subagent_receipt(str(task_dir))
                 self._close_fixture(str(task_dir))
 
@@ -1546,9 +1549,12 @@ class HarnessMcpServerTests(unittest.TestCase):
             self._run_git(tmp, "add", "README.md")
             self._run_git(tmp, "commit", "-qm", "init")
             task_dir = Path(tmp) / "doc/harness/tasks/TASK__resumed-warning"
-            harness_server.ensure_task_scaffold(
-                str(task_dir), "TASK__resumed-warning"
-            )
+            task_dir.mkdir(parents=True)
+            self._write_control_fixture(str(task_dir), {
+                "run_id": harness_lib.new_uuid7(), "execution_mode": "standard",
+                "required_lenses": ["review-code", "qa-cli"],
+                "close_receipt_fingerprint": None,
+            })
 
             with (
                 mock.patch.object(
@@ -1578,9 +1584,13 @@ class HarnessMcpServerTests(unittest.TestCase):
         for terminal_status in ("open", "closed", "blocked"):
             with self.subTest(status=terminal_status), tempfile.TemporaryDirectory() as tmp:
                 task_dir = Path(tmp) / f"doc/harness/tasks/TASK__resume-{terminal_status}"
-                harness_server.ensure_task_scaffold(
-                    str(task_dir), f"TASK__resume-{terminal_status}", repo_root=tmp,
-                )
+                task_dir.mkdir(parents=True)
+                self._write_control_fixture(str(task_dir), {
+                    "run_id": harness_lib.new_uuid7(),
+                    "execution_mode": "standard",
+                    "required_lenses": ["review-code", "qa-cli"],
+                    "close_receipt_fingerprint": None,
+                })
                 if terminal_status in {"open", "closed"}:
                     self._write_subagent_receipt(str(task_dir))
                 if terminal_status == "closed":
@@ -1590,18 +1600,24 @@ class HarnessMcpServerTests(unittest.TestCase):
                 state = harness_server.read_task_control(str(task_dir))
                 receipt = task_dir / "RECEIPTS.jsonl"
                 prior_receipt = receipt.read_text(encoding="utf-8") if receipt.exists() else None
-                with (
-                    mock.patch.object(harness_server, "canonical_task_dir", return_value=str(task_dir)),
-                    mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
-                    mock.patch.object(
-                        harness_server, "write_active_marker",
-                        side_effect=OSError("marker unavailable"),
-                    ),
-                ):
-                    with self.assertRaisesRegex(OSError, "marker unavailable"):
-                        harness_server.handle_task_start(
-                            {"task_id": f"TASK__resume-{terminal_status}"}
-                        )
+                (Path(tmp) / ".git").mkdir()
+                prior_cwd = os.getcwd()
+                real_replace = harness_lib.os.replace
+
+                def fail_marker_replace(src, dst, *args, **kwargs):
+                    if str(dst).endswith(".json") and ".active_sessions" in str(dst):
+                        raise OSError("marker unavailable")
+                    return real_replace(src, dst, *args, **kwargs)
+
+                with mock.patch.object(harness_lib.os, "replace", side_effect=fail_marker_replace):
+                    os.chdir(tmp)
+                    try:
+                        with self.assertRaisesRegex(OSError, "marker unavailable"):
+                            harness_server.handle_task_start(
+                                {"task_id": f"TASK__resume-{terminal_status}"}
+                            )
+                    finally:
+                        os.chdir(prior_cwd)
                 restored = harness_server.read_task_control(str(task_dir))
                 self.assertEqual(restored, state)
                 self.assertEqual(harness_server.task_control_status(str(task_dir), restored), terminal_status)
@@ -1634,7 +1650,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "required_lenses": ["review-code", "qa-cli"],
                 "close_receipt_fingerprint": None,
             }
-            harness_server.write_task_control(str(terminal_task), original)
+            self._write_control_fixture(str(terminal_task), original)
             with (
                 mock.patch.object(
                     harness_server, "canonical_task_dir", return_value=str(terminal_task)
@@ -1690,31 +1706,28 @@ class HarnessMcpServerTests(unittest.TestCase):
             self._run_git(tmp, "add", "README.md")
             self._run_git(tmp, "commit", "-qm", "init")
             task_dir = Path(tmp) / "doc/harness/tasks/TASK__active-resume"
-            lib_globals = harness_server.ensure_task_scaffold.__globals__
-            lib_globals["ensure_task_scaffold"](
-                str(task_dir), "TASK__active-resume", repo_root=tmp
-            )
+            task_dir.mkdir(parents=True)
+            self._write_control_fixture(str(task_dir), {
+                "run_id": harness_lib.new_uuid7(), "execution_mode": "standard",
+                "required_lenses": ["review-code", "qa-cli"],
+                "close_receipt_fingerprint": None,
+            })
             self._write_marker_fixture(tmp, str(task_dir))
-            original_write_active_marker = harness_server.write_active_marker
+            real_replace = harness_lib.os.replace
 
-            def publish_then_fail(repo_root, published_task_dir):
-                original_write_active_marker(repo_root, published_task_dir)
-                raise OSError("resume marker interrupted")
+            def fail_marker(src, dst, *args, **kwargs):
+                if str(dst).endswith(".json") and ".active_sessions" in str(dst):
+                    raise OSError("resume marker interrupted")
+                return real_replace(src, dst, *args, **kwargs)
 
-            with (
-                mock.patch.object(
-                    harness_server, "canonical_task_dir", return_value=str(task_dir)
-                ),
-                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
-                mock.patch.object(
-                    harness_server, "write_active_marker",
-                    side_effect=publish_then_fail,
-                ),
-            ):
+            prior_cwd = os.getcwd()
+            with mock.patch.object(harness_lib.os, "replace", side_effect=fail_marker):
+                os.chdir(tmp)
                 with self.assertRaisesRegex(OSError, "resume marker interrupted"):
                     harness_server.handle_task_start(
                         {"task_id": "TASK__active-resume"}
                     )
+                os.chdir(prior_cwd)
             self.assertEqual(
                 Path(harness_server.resolve_active_task_dir(tmp)).resolve(),
                 task_dir.resolve(),
@@ -1730,29 +1743,26 @@ class HarnessMcpServerTests(unittest.TestCase):
             self._run_git(tmp, "commit", "-qm", "init")
             task_a = Path(tmp) / "doc/harness/tasks/TASK__active-a"
             task_b = Path(tmp) / "doc/harness/tasks/TASK__failed-b"
-            lib_globals = harness_server.ensure_task_scaffold.__globals__
-            lib_globals["ensure_task_scaffold"](
-                str(task_a), "TASK__active-a", repo_root=tmp
-            )
+            task_a.mkdir(parents=True)
+            self._write_control_fixture(str(task_a), {
+                "run_id": harness_lib.new_uuid7(), "execution_mode": "standard",
+                "required_lenses": ["review-code", "qa-cli"],
+                "close_receipt_fingerprint": None,
+            })
             self._write_marker_fixture(tmp, str(task_a))
-            original_write_active_marker = harness_server.write_active_marker
+            real_replace = harness_lib.os.replace
 
-            def publish_then_fail(repo_root, published_task_dir):
-                original_write_active_marker(repo_root, published_task_dir)
-                raise OSError("task B marker interrupted")
+            def fail_task_b_marker(src, dst, *args, **kwargs):
+                if str(dst).endswith(".json") and ".active_sessions" in str(dst):
+                    raise OSError("task B marker interrupted")
+                return real_replace(src, dst, *args, **kwargs)
 
-            with (
-                mock.patch.object(
-                    harness_server, "canonical_task_dir", return_value=str(task_b)
-                ),
-                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
-                mock.patch.object(
-                    harness_server, "write_active_marker",
-                    side_effect=publish_then_fail,
-                ),
-            ):
+            prior_cwd = os.getcwd()
+            with mock.patch.object(harness_lib.os, "replace", side_effect=fail_task_b_marker):
+                os.chdir(tmp)
                 with self.assertRaisesRegex(OSError, "task B marker interrupted"):
                     harness_server.handle_task_start({"task_id": "TASK__failed-b"})
+                os.chdir(prior_cwd)
             self.assertEqual(
                 Path(harness_server.resolve_active_task_dir(tmp)).resolve(),
                 task_a.resolve(),
@@ -1817,20 +1827,21 @@ class HarnessMcpServerTests(unittest.TestCase):
             self._run_git(tmp, "add", "README.md")
             self._run_git(tmp, "commit", "-qm", "init")
             task_dir = Path(tmp) / "doc/harness/tasks/TASK__marker-failure"
-            with (
-                mock.patch.object(
-                    harness_server, "canonical_task_dir", return_value=str(task_dir)
-                ),
-                mock.patch.object(harness_server, "find_repo_root", return_value=tmp),
-                mock.patch.object(
-                    harness_server, "write_active_marker",
-                    side_effect=OSError("marker unavailable"),
-                ),
-            ):
+            real_replace = harness_lib.os.replace
+
+            def fail_marker(src, dst, *args, **kwargs):
+                if str(dst).endswith(".json") and ".active_sessions" in str(dst):
+                    raise OSError("marker unavailable")
+                return real_replace(src, dst, *args, **kwargs)
+
+            prior_cwd = os.getcwd()
+            with mock.patch.object(harness_lib.os, "replace", side_effect=fail_marker):
+                os.chdir(tmp)
                 with self.assertRaisesRegex(OSError, "marker unavailable"):
                     harness_server.handle_task_start(
                         {"task_id": "TASK__marker-failure"}
                     )
+                os.chdir(prior_cwd)
             self.assertFalse((task_dir / "TASK_BASELINE.json").exists())
             self.assertFalse((task_dir / "TASK_STATE.yaml").exists())
 
@@ -1999,14 +2010,13 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
         ).stdout.strip()
         task_dir = Path(base) / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
-        harness_lib.write_task_control(
-            task_dir,
-            {
+        (task_dir / "TASK.json").write_text(
+            json.dumps({
                 "run_id": harness_lib.new_uuid7(),
                 "execution_mode": "standard",
                 "required_lenses": ["review-code", "qa-cli"],
                 "close_receipt_fingerprint": None,
-            },
+            }, indent=2, sort_keys=True) + "\n", encoding="utf-8",
         )
         (task_dir / "PLAN.md").write_text("# plan\n", encoding="utf-8")
         if write_handoff:

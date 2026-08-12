@@ -52,7 +52,13 @@ def _run(cwd: str, stdin: str = "{}", env: dict[str, str] | None = None) -> subp
 def _write_claude_start(repo: str, task_id: str, session_id: str, *, ts: str = "") -> None:
     task_dir = os.path.join(repo, "doc", "harness", "tasks", task_id)
     os.makedirs(task_dir, exist_ok=True)
-    _lib.ensure_task_scaffold(task_dir, task_id)
+    control_path = Path(task_dir) / "TASK.json"
+    if not control_path.exists():
+        control_path.write_text(json.dumps({
+            "run_id": _lib.new_uuid7(), "execution_mode": "standard",
+            "required_lenses": ["review-code", "qa-cli"],
+            "close_receipt_fingerprint": None,
+        }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     run_id = _lib.read_task_control(task_dir)["run_id"]
     sessions = Path(repo) / "doc/harness/tasks/.active_sessions"
     sessions.mkdir(parents=True, exist_ok=True)
@@ -236,7 +242,6 @@ def test_malformed_receipt_stream_blocks_normal_stop(tmp_path):
     repo = _fake_repo(tmp_path, active_contents="TASK__bad-receipts\n")
     task_dir = os.path.join(repo, "doc", "harness", "tasks", "TASK__bad-receipts")
     os.makedirs(task_dir, exist_ok=True)
-    _lib.ensure_task_scaffold(task_dir, "TASK__bad-receipts")
     _write_claude_start(repo, "TASK__bad-receipts", "sess-bad")
     with open(os.path.join(task_dir, "RECEIPTS.jsonl"), "w", encoding="utf-8") as handle:
         handle.write('{"legacy":true}\n')
@@ -257,7 +262,6 @@ def test_malformed_receipt_stream_blocks_recursive_stop(tmp_path):
     repo = _fake_repo(tmp_path, active_contents="TASK__bad-recursive\n")
     task_dir = os.path.join(repo, "doc", "harness", "tasks", "TASK__bad-recursive")
     os.makedirs(task_dir, exist_ok=True)
-    _lib.ensure_task_scaffold(task_dir, "TASK__bad-recursive")
     _write_claude_start(repo, "TASK__bad-recursive", "sess-bad-recursive")
     with open(os.path.join(task_dir, "RECEIPTS.jsonl"), "w", encoding="utf-8") as handle:
         handle.write('{"legacy":true}\n')
