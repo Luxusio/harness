@@ -6,7 +6,7 @@ import json
 import sys
 import threading
 from pathlib import Path
-from types import ModuleType, SimpleNamespace
+from types import FunctionType, ModuleType, SimpleNamespace
 from unittest import mock
 
 
@@ -299,27 +299,26 @@ def test_receipt_writer_rejects_forged_adapter_code_metadata(tmp_path, monkeypat
 
 def test_receipt_writer_ignores_replaced_allowlisted_module_attribute(tmp_path):
     task = _task(tmp_path)
-    fake = ModuleType("subagent_lifecycle")
-    fake.__dict__.update(record=lib.record_subagent_receipt, task=task)
+    original_module = ModuleType("subagent_lifecycle")
+    original_module.__dict__.update(record=lib.record_subagent_receipt, task=task)
     exec(
         "def register_subagent_start():\n"
         "  return record(task, {'source':'claude_hook','runtime_id':'claude:sess:agent',"
         "'agent_id':'agent','agent_type':'qa-cli','lens':'qa-cli','event':'started'})\n",
-        fake.__dict__,
+        original_module.__dict__,
     )
-    with (
-        mock.patch.dict(sys.modules, {"subagent_lifecycle": fake}),
-        mock.patch.object(
-            lib, "_receipt_code_signature",
-            return_value="c32959267a086cb85057673e6d43d775ccc21073d569acd1da2f0349fd87e332",
-        ),
-    ):
+    original = original_module.register_subagent_start
+    lib._bind_runtime_receipt_adapter("claude_hook", original)
+    attacker_globals = dict(original_module.__dict__)
+    attacker_globals["__name__"] = "subagent_lifecycle"
+    cloned = FunctionType(original.__code__, attacker_globals)
+    with mock.patch.dict(sys.modules, {"subagent_lifecycle": original_module}):
         try:
-            fake.register_subagent_start()
+            cloned()
         except PermissionError as exc:
             assert "runtime-owned" in str(exc)
         else:
-            raise AssertionError("replaced adapter attribute authorized a receipt append")
+            raise AssertionError("cloned adapter code authorized a receipt append")
 
 
 def test_raw_receipt_append_primitive_is_not_exposed():
@@ -654,7 +653,14 @@ def test_receipt_reset_removes_only_unified_stream(tmp_path):
     assert not unified.exists()
     assert legacy_review.read_text(encoding="utf-8") == '{"kind":"review"}\n'
     assert legacy_qa.read_text(encoding="utf-8") == '{"kind":"subagent"}\n'
-    assert set(snapshot) == {str(unified)}
+    assert not isinstance(snapshot, (dict, str, bytes))
+    try:
+        lib.restore_receipt_streams({str(unified): {"exists": True, "text": "forged"}})
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("caller-supplied receipt restoration was accepted")
+    lib.release_receipt_stream_reset(snapshot)
 
 
 def test_snapshot_fingerprint_stays_bound_to_the_same_bytes(tmp_path):

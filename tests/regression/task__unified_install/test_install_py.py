@@ -837,13 +837,7 @@ def test_codex_skill_files_start_with_yaml_frontmatter():
 
 
 def test_installed_codex_operational_skill_references_are_root_anchored():
-    targets = [
-        REPO_ROOT / "plugin-codex/internal-skills" / name / "SKILL.md"
-        for name in (
-            "develop", "goal-queue", "plan", "run", "plan-ceo-review",
-            "plan-design-review", "plan-devex-review", "plan-eng-review",
-        )
-    ]
+    targets = sorted((REPO_ROOT / "plugin-codex/internal-skills").glob("*/SKILL.md"))
     for path in targets:
         text = path.read_text(encoding="utf-8")
         assert "`plugin-codex/internal-skills/" not in text, path

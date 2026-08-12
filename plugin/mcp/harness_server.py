@@ -86,6 +86,7 @@ from _lib import (  # type: ignore
     receipt_review_verdict, required_review_lenses,
     receipt_snapshot, receipt_stream_fingerprint,
     reset_receipt_streams_for_new_run, restore_receipt_streams,
+    release_receipt_stream_reset,
     receipt_stream_transaction,
     begin_task_run, restore_task_control,
     _strict_regular_text_snapshot, _restore_text_snapshots, _atomic_text_write as _lib_atomic_text_write,
@@ -309,7 +310,8 @@ def handle_task_start(args: dict) -> dict:
         if resumed_existing:
             if original_resumed_control:
                 write_task_control(task_dir, original_resumed_control)
-            restore_receipt_streams(terminal_receipt_snapshot)
+            if terminal_receipt_snapshot:
+                restore_receipt_streams(terminal_receipt_snapshot)
             restore_task_control(task_control_snapshot)
             _restore_text_snapshots(blocked_artifact_snapshot)
             restore_active_marker_snapshot(prior_marker_snapshot)
@@ -319,7 +321,8 @@ def handle_task_start(args: dict) -> dict:
             artifact: {"exists": False, "kind": "absent", "text": ""}
             for artifact in cleanup
         })
-        restore_receipt_streams(terminal_receipt_snapshot)
+        if terminal_receipt_snapshot:
+            restore_receipt_streams(terminal_receipt_snapshot)
         restore_active_marker_snapshot(prior_marker_snapshot)
 
     try:
@@ -385,6 +388,8 @@ def handle_task_start(args: dict) -> dict:
         raise
 
     transaction_stack.close()
+    if terminal_receipt_snapshot:
+        release_receipt_stream_reset(terminal_receipt_snapshot)
 
     return _ok({
         "task_dir": task_dir, "task_id": tid, "task_context": ctx,

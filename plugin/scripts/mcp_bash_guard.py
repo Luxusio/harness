@@ -64,6 +64,11 @@ LIFECYCLE_RECEIPT_ENTRYPOINTS = {
 LIFECYCLE_RECEIPT_MODULES = {
     os.path.splitext(name)[0] for name in LIFECYCLE_RECEIPT_ENTRYPOINTS
 }
+RECEIPT_MUTATION_SYMBOLS = {
+    "record_subagent_receipt", "reset_receipt_streams_for_new_run",
+    "restore_receipt_streams", "release_receipt_stream_reset",
+    "receipt_stream_savepoint", "_bind_runtime_receipt_adapter",
+}
 
 # Shell operators that separate command units. We shlex-tokenize first
 # (respects quotes — so `;` inside a `python -c "..."` string stays intact)
@@ -270,17 +275,17 @@ def _python_code_exposes_lifecycle(code):
         elif isinstance(node, ast.ImportFrom):
             if (node.module or "").rsplit(".", 1)[-1] in LIFECYCLE_RECEIPT_MODULES:
                 return True
-            if any(alias.name == "record_subagent_receipt" for alias in node.names):
+            if any(alias.name in RECEIPT_MUTATION_SYMBOLS for alias in node.names):
                 return True
         elif isinstance(node, ast.Attribute):
             if (
                 node.attr in LIFECYCLE_RECEIPT_MODULES
-                or node.attr == "record_subagent_receipt"
+                or node.attr in RECEIPT_MUTATION_SYMBOLS
                 or "receipt_stream" in node.attr and "append" in node.attr
             ):
                 return True
         elif isinstance(node, ast.Name) and (
-            node.id == "record_subagent_receipt"
+            node.id in RECEIPT_MUTATION_SYMBOLS
             or "receipt_stream" in node.id and "append" in node.id
         ):
             return True
@@ -302,7 +307,7 @@ def _python_code_exposes_lifecycle(code):
                         return True
             if func_name == "getattr" and len(node.args) > 1:
                 attribute = string_value(node.args[1])
-                if attribute is None or attribute == "record_subagent_receipt":
+                if attribute is None or attribute in RECEIPT_MUTATION_SYMBOLS:
                     return True
     return False
 
@@ -400,7 +405,7 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
     protected_marker = (
         any(name.replace("_", "").replace(".py", "") in compact
             for name in LIFECYCLE_RECEIPT_ENTRYPOINTS)
-        or "recordsubagentreceipt" in compact
+        or any(name.replace("_", "") in compact for name in RECEIPT_MUTATION_SYMBOLS)
     )
     if (
         (protected_marker and not _safe_lifecycle_source_inspection(non_env))

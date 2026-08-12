@@ -34,6 +34,7 @@ from _lib import (  # type: ignore
     extract_qa_verdict,
     find_harness_root,
     find_repo_root,
+    _bind_runtime_receipt_adapter,
     parse_receipt_runtime_id,
     receipt_snapshot,
     record_subagent_receipt,
@@ -1413,6 +1414,13 @@ def main(argv: list[str] | None = None) -> int:
         if time.monotonic() >= deadline:
             return 1
         time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
+
+
+if __name__ == "codex_lifecycle_watcher":
+    _bind_runtime_receipt_adapter("codex_session_watcher:collaboration", Watcher._invalidate)
+    _bind_runtime_receipt_adapter("codex_session_watcher:collaboration", Watcher._maybe_start)
+    _bind_runtime_receipt_adapter("codex_session_watcher:collaboration", Watcher._maybe_complete)
+del _bind_runtime_receipt_adapter
 
 
 if __name__ == "__main__":

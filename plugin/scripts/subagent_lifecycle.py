@@ -13,6 +13,7 @@ from typing import Any
 try:
     from _lib import (  # type: ignore
         append_conversation_entry,
+        _bind_runtime_receipt_adapter,
         current_session_id,
         normalize_receipt_completion,
         record_subagent_receipt,
@@ -64,6 +65,9 @@ except Exception:  # pragma: no cover - imported only inside harness scripts
 
     def append_conversation_entry(task_dir: str, **kwargs: Any) -> bool:
         return False
+
+    def _bind_runtime_receipt_adapter(source: str, function: Any) -> None:
+        return None
 
 
 DEFAULT_STALE_SECS = 30 * 60
@@ -530,3 +534,8 @@ def wait_for_clear(
         "active": last,
         "waited_secs": max(0.0, timeout_secs - max(0.0, deadline - _now())),
     }
+
+
+_bind_runtime_receipt_adapter(SOURCE, register_subagent_start)
+_bind_runtime_receipt_adapter(SOURCE, mark_subagent_stop)
+del _bind_runtime_receipt_adapter

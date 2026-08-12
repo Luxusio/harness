@@ -11,7 +11,6 @@ import hashlib
 import inspect
 import secrets
 import time
-import types
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -2179,60 +2178,6 @@ def receipt_stream_transaction(task_dir):
         yield
 
 
-@contextmanager
-def receipt_stream_savepoint(task_dir):
-    """Roll back the unified stream if a multi-entry publication fails."""
-    with _receipt_stream_lock(task_dir):
-        raw = _read_receipt_bytes_unlocked(_receipts_path(task_dir))
-        snapshot = {
-            "exists": raw is not None,
-            "kind": "regular" if raw is not None else "absent",
-            "text": raw.decode("utf-8") if raw is not None else "",
-        }
-        try:
-            yield
-        except BaseException:
-            _restore_receipt_snapshot_unlocked(task_dir, snapshot)
-            raise
-
-
-def reset_receipt_streams_for_new_run(task_dir):
-    """Remove the unified receipt stream for a fresh task run."""
-    task_dir = _validated_receipt_task_dir(task_dir)
-    path = _receipts_path(task_dir)
-    with _receipt_stream_lock(task_dir):
-        raw = _read_receipt_bytes_unlocked(path)
-        try:
-            text = raw.decode("utf-8") if raw is not None else ""
-        except UnicodeError as exc:
-            raise RuntimeError("receipt storage integrity unavailable") from exc
-        snapshots = {
-            path: {
-                "exists": raw is not None,
-                "kind": "regular" if raw is not None else "absent",
-                "text": text,
-            },
-        }
-        try:
-            os.unlink(RECEIPTS_NAME, dir_fd=_receipt_dir_fd(task_dir))
-        except FileNotFoundError:
-            pass
-        except BaseException:
-            _restore_receipt_snapshot_unlocked(task_dir, snapshots[path])
-            raise
-        _revalidate_receipt_transaction(task_dir)
-    return snapshots
-
-
-def restore_receipt_streams(snapshot):
-    """Restore an exact prior-run receipt snapshot under the receipt lock."""
-    if not snapshot:
-        return
-    task_dir = os.path.dirname(next(iter(snapshot)))
-    with _receipt_stream_lock(task_dir):
-        _restore_receipt_snapshot_unlocked(task_dir, snapshot[next(iter(snapshot))])
-
-
 RECEIPT_FIELDS = frozenset({
     "ts", "event", "source", "task_run_id", "runtime_id", "agent_id",
     "agent_type", "lens", "verdict", "summary",
@@ -2394,48 +2339,99 @@ def _read_receipt_bytes_unlocked(path):
     return raw
 
 
-def _restore_receipt_snapshot_unlocked(task_dir, snapshot):
-    """Restore one receipt leaf relative to the locked directory descriptor."""
-    dir_fd = _receipt_dir_fd(task_dir)
-    if not snapshot.get("exists"):
+def _make_receipt_rollback_api():
+    class ResetCapability:
+        __slots__ = ()
+
+    pending = {}
+
+    def restore_unlocked(task_dir, raw):
+        """Restore only bytes captured by this closure from the same task leaf."""
+        dir_fd = _receipt_dir_fd(task_dir)
+        if raw is None:
+            _receipt_stream_info(_receipts_path(task_dir))
+            try:
+                os.unlink(RECEIPTS_NAME, dir_fd=dir_fd)
+            except FileNotFoundError:
+                pass
+            _revalidate_receipt_transaction(task_dir)
+            return
+        if not isinstance(raw, bytes) or len(raw) > _RECEIPT_STREAM_MAX_BYTES:
+            raise RuntimeError("receipt storage integrity unavailable")
         _receipt_stream_info(_receipts_path(task_dir))
+        temp_name = f".{RECEIPTS_NAME}.{secrets.token_hex(8)}.tmp"
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(temp_name, flags, 0o600, dir_fd=dir_fd)
         try:
-            os.unlink(RECEIPTS_NAME, dir_fd=dir_fd)
-        except FileNotFoundError:
-            pass
+            view = memoryview(raw)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise RuntimeError("receipt storage integrity unavailable")
+                view = view[written:]
+            os.fsync(fd)
+            os.fchmod(fd, 0o644)
+            os.replace(temp_name, RECEIPTS_NAME, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            os.fsync(dir_fd)
+        finally:
+            os.close(fd)
+            try:
+                os.unlink(temp_name, dir_fd=dir_fd)
+            except FileNotFoundError:
+                pass
         _revalidate_receipt_transaction(task_dir)
-        return
-    if snapshot.get("kind") != "regular":
-        raise RuntimeError("receipt storage integrity unavailable")
-    payload = str(snapshot.get("text") or "").encode("utf-8")
-    if len(payload) > _RECEIPT_STREAM_MAX_BYTES:
-        raise RuntimeError("receipt storage integrity unavailable")
-    _receipt_stream_info(_receipts_path(task_dir))
-    temp_name = f".{RECEIPTS_NAME}.{secrets.token_hex(8)}.tmp"
-    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(temp_name, flags, 0o600, dir_fd=dir_fd)
-    try:
-        view = memoryview(payload)
-        while view:
-            written = os.write(fd, view)
-            if written <= 0:
-                raise RuntimeError("receipt storage integrity unavailable")
-            view = view[written:]
-        os.fsync(fd)
-        os.fchmod(fd, 0o644)
-        os.replace(
-            temp_name, RECEIPTS_NAME,
-            src_dir_fd=dir_fd, dst_dir_fd=dir_fd,
-        )
-        os.fsync(dir_fd)
-    finally:
-        os.close(fd)
-        try:
-            os.unlink(temp_name, dir_fd=dir_fd)
-        except FileNotFoundError:
-            pass
-    _revalidate_receipt_transaction(task_dir)
+
+    @contextmanager
+    def savepoint(task_dir):
+        with _receipt_stream_lock(task_dir):
+            raw = _read_receipt_bytes_unlocked(_receipts_path(task_dir))
+            try:
+                yield
+            except BaseException:
+                restore_unlocked(task_dir, raw)
+                raise
+
+    def reset(task_dir):
+        task_dir = _validated_receipt_task_dir(task_dir)
+        with _receipt_stream_lock(task_dir):
+            raw = _read_receipt_bytes_unlocked(_receipts_path(task_dir))
+            capability = ResetCapability()
+            pending[id(capability)] = (capability, task_dir, raw)
+            try:
+                os.unlink(RECEIPTS_NAME, dir_fd=_receipt_dir_fd(task_dir))
+            except FileNotFoundError:
+                pass
+            except BaseException:
+                pending.pop(id(capability), None)
+                restore_unlocked(task_dir, raw)
+                raise
+            _revalidate_receipt_transaction(task_dir)
+        return capability
+
+    def restore(capability):
+        saved = pending.pop(id(capability), None)
+        if saved is None or saved[0] is not capability:
+            raise PermissionError("receipt reset restoration requires its opaque capability")
+        _, task_dir, raw = saved
+        with _receipt_stream_lock(task_dir):
+            restore_unlocked(task_dir, raw)
+
+    def release(capability):
+        saved = pending.pop(id(capability), None)
+        if saved is None or saved[0] is not capability:
+            raise PermissionError("receipt reset release requires its opaque capability")
+
+    return savepoint, reset, restore, release
+
+
+(
+    receipt_stream_savepoint, reset_receipt_streams_for_new_run,
+    restore_receipt_streams, release_receipt_stream_reset,
+) = (
+    _make_receipt_rollback_api()
+)
+del _make_receipt_rollback_api
 
 
 def _receipt_snapshot_unlocked(task_dir):
@@ -2629,50 +2625,34 @@ def _infer_receipt_lens(agent_type, explicit_lens=""):
     return ""
 
 
-def _receipt_code_signature(code):
-    """Return a location-independent digest for an adapter code object."""
-    digest = hashlib.sha256()
-    digest.update(code.co_code)
-    for value in (
-        code.co_argcount, code.co_posonlyargcount, code.co_kwonlyargcount,
-        code.co_nlocals, code.co_flags,
-    ):
-        digest.update(str(value).encode("ascii"))
-        digest.update(b"|")
-    for values in (code.co_names, code.co_varnames, code.co_freevars, code.co_cellvars):
-        digest.update(repr(values).encode("utf-8"))
-        digest.update(b"|")
-    def constant_bytes(value):
-        if isinstance(value, types.CodeType):
-            return ("code:" + _receipt_code_signature(value)).encode("ascii")
-        if isinstance(value, tuple):
-            return b"tuple:[" + b",".join(constant_bytes(item) for item in value) + b"]"
-        if isinstance(value, frozenset):
-            return b"frozenset:[" + b",".join(sorted(constant_bytes(item) for item in value)) + b"]"
-        return repr((type(value).__name__, value)).encode("utf-8")
-
-    for value in code.co_consts:
-        digest.update(constant_bytes(value))
-        digest.update(b"|")
-    return digest.hexdigest()
-
-
 def _make_runtime_receipt_writer():
-    # These structural signatures are generated from the reviewed adapter functions.
-    # They are captured in this closure once; mutable module attributes are never
-    # consulted when authorizing publication.
-    expected_callers = {
+    allowed_names = {
         "claude_hook": {
-            ("subagent_lifecycle", "register_subagent_start", "c32959267a086cb85057673e6d43d775ccc21073d569acd1da2f0349fd87e332"),
-            ("subagent_lifecycle", "mark_subagent_stop", "155cee53032fb30e89ed3fcba10d2f3a64c51bc66e70c972021bf1e6c53c6b9a"),
+            ("subagent_lifecycle", "register_subagent_start"),
+            ("subagent_lifecycle", "mark_subagent_stop"),
         },
         "codex_session_watcher:collaboration": {
-            ("codex_lifecycle_watcher", "Watcher._invalidate", "e8d413109d446f2c16620156d70610254c1c9e8973f7e49402a020fe6d92589c"),
-            ("codex_lifecycle_watcher", "Watcher._maybe_start", "548d4c9e1b1ca9c8425a887a4c3d168c813dc5c999800a396174a1914fe42a60"),
-            ("codex_lifecycle_watcher", "Watcher._maybe_complete", "56ca277108a7f7d2efc5d666303e3f62f9a477346fc5a226cec46f342c6c678e"),
+            ("codex_lifecycle_watcher", "Watcher._invalidate"),
+            ("codex_lifecycle_watcher", "Watcher._maybe_start"),
+            ("codex_lifecycle_watcher", "Watcher._maybe_complete"),
         },
     }
-    code_signature = _receipt_code_signature
+    bound_callers = {}
+
+    def bind(source, function):
+        identity = (function.__module__, function.__qualname__)
+        if identity not in allowed_names.get(source, ()):
+            raise PermissionError("unsupported receipt lifecycle adapter")
+        existing = bound_callers.get((source, identity))
+        dependencies = tuple(
+            (name, function.__globals__[name])
+            for name in function.__code__.co_names
+            if name in function.__globals__
+        )
+        binding = (function.__code__, function.__globals__, dependencies)
+        if existing is not None and existing != binding:
+            raise PermissionError("receipt lifecycle adapter is already bound")
+        bound_callers[(source, identity)] = binding
 
     def authorized(source):
         frame = inspect.currentframe()
@@ -2680,12 +2660,14 @@ def _make_runtime_receipt_writer():
         try:
             if caller is None:
                 return False
-            identity = (
-                str(caller.f_globals.get("__name__") or ""),
-                caller.f_code.co_qualname,
-                code_signature(caller.f_code),
+            identity = (str(caller.f_globals.get("__name__") or ""), caller.f_code.co_qualname)
+            binding = bound_callers.get((source, identity))
+            return bool(
+                binding is not None
+                and caller.f_code is binding[0]
+                and caller.f_globals is binding[1]
+                and all(caller.f_globals.get(name) is value for name, value in binding[2])
             )
-            return identity in expected_callers.get(source, ())
         finally:
             del caller
             del frame
@@ -2768,10 +2750,10 @@ def _make_runtime_receipt_writer():
                 os.close(fd)
         return entry
 
-    return record
+    return record, bind
 
 
-record_subagent_receipt = _make_runtime_receipt_writer()
+record_subagent_receipt, _bind_runtime_receipt_adapter = _make_runtime_receipt_writer()
 del _make_runtime_receipt_writer
 
 

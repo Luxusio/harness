@@ -171,7 +171,12 @@ def test_develop_installs_harness_after_fresh_qa_before_close():
         close_at = body.index(close_heading)
         assert install_at < close_at
         section = body[install_at:close_at]
-        assert "plugin/scripts/install_verified.py" in section
+        expected_installer = (
+            "${HARNESS_PLUGIN_ROOT}/scripts/install_verified.py"
+            if "plugin-codex" in str(path)
+            else "plugin/scripts/install_verified.py"
+        )
+        assert expected_installer in section
         assert "python3 install.py --force" in section
         assert "terminal ordered" in section
         assert "failed install blocks completion" in section.lower()

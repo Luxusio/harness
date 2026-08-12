@@ -117,7 +117,7 @@ harness task yourself and continue through this flow.
 
 For a user request that names multiple sequential stages, roadmap items, or
 follow-up tasks, create an ordered task pack before implementation when the
-known tasks can be named. Use `plugin/scripts/task_pack_runner.py init` with
+known tasks can be named. Use `${HARNESS_PLUGIN_ROOT}/scripts/task_pack_runner.py init` with
 one `--task "slug:title"` per known stage. The user does not choose the split
 or sequence; derive order from the stated roadmap, dependency order, or
 highest-risk/highest-value order.

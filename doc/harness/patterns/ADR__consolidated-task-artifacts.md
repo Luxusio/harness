@@ -90,10 +90,14 @@ immediately followed by the explicit `completed` entry in one task transaction.
 The verdict still comes only from the unique canonical first line; missing,
 foreign, stale, replayed, aliased, untrusted, or unbound stops cannot yield
 PASS. Direct model invocation of lifecycle receipt-authoring scripts is denied.
-There is no module-visible raw-byte append primitive. The structured writer
-captures the reviewed Claude/Codex adapter module, qualified-name, and stable
-code signatures in a closure; it does not resolve mutable module attributes at
-publication time. Generic, replaced, or indirect callers fail before append.
+There is no module-visible raw-byte append primitive. Each reviewed
+Claude/Codex adapter binds its original code object, globals identity, and
+provenance-dependency identities once during module import; the closure-backed
+writer rejects clones, replacements, dependency mutation, and later rebinding
+without depending on interpreter-specific bytecode hashes. Generic or indirect
+callers fail before append. Receipt reset returns only an opaque one-shot
+capability whose captured bytes remain inside the rollback closure; restoration
+cannot accept caller-supplied text.
 Bash inspection also denies lifecycle imports, dynamic interpreter loading,
 stdin execution, unsafe helper files, and oversized commands that cannot be
 inspected within the hook budget.
