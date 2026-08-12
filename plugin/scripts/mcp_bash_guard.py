@@ -330,6 +330,22 @@ def _protected_lifecycle_execution(argv):
     return False
 
 
+def _safe_lifecycle_source_inspection(argv):
+    if not argv:
+        return False
+    cmd = os.path.basename(argv[0])
+    args = argv[1:]
+    if cmd in {"pytest", "py.test"}:
+        return True
+    if cmd == "git" and args and args[0] in {"diff", "show", "log", "status", "grep"}:
+        return True
+    if cmd in {"cat", "head", "tail", "rg", "grep", "less", "more", "wc"}:
+        return True
+    if cmd == "sed" and not any(arg == "-i" or arg.startswith("-i") for arg in args):
+        return True
+    return False
+
+
 def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
     """Classify a single command segment (between shell operators)."""
     if not segment_tokens:
@@ -340,12 +356,23 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
         idx += 1
     if idx >= len(segment_tokens):
         return
-    non_env = _unwrap_execution(segment_tokens[idx:])
+    raw_argv = segment_tokens[idx:]
+    non_env = _unwrap_execution(raw_argv)
     if not non_env:
         return
     cmd = os.path.basename(non_env[0])
 
-    if _protected_lifecycle_execution(non_env):
+    visible = " ".join(raw_argv)
+    compact = re.sub(r"[^A-Za-z0-9]", "", visible).lower()
+    protected_marker = (
+        any(name.replace("_", "").replace(".py", "") in compact
+            for name in LIFECYCLE_RECEIPT_ENTRYPOINTS)
+        or "recordsubagentreceipt" in compact
+    )
+    if (
+        (protected_marker and not _safe_lifecycle_source_inspection(non_env))
+        or _protected_lifecycle_execution(non_env)
+    ):
         targets.append({
             "path": "RECEIPTS.jsonl",
             "category": "protected-artifact",
