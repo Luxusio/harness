@@ -5,6 +5,7 @@ Minimal harness scripts. Self-contained — no plugin-legacy dependency.
 ## Files
 
 - `_lib.py` — core library (YAML helpers, scaffold, routing, context, path sync, frontmatter public API)
+- Receipt snapshots accept only the unified exact-field, string-valued schema defined by the consolidated-artifact ADR.
 - `note_freshness.py` — flips `freshness: current -> suspect` on invalidated notes
 - `environment_snapshot.py` — task_start snapshot with manifest, tool manager, and tool version probes
 - `prompt_memory.py` — zero-Git UserPromptSubmit context injection from stored task/receipt state, including active-task restore digest, Goal routing, and runbook reminders
