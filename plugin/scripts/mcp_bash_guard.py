@@ -20,6 +20,7 @@ Known gaps (documented in doc/harness/patterns/mcp-bash-guard.md):
 from __future__ import annotations
 
 import os
+import ast
 import re
 import shlex
 import sys
@@ -228,8 +229,15 @@ def _unwrap_execution(tokens):
                 argv = argv[argv.index("run") + 1:]
             except ValueError:
                 return []
+            value_options = {
+                "--directory", "--project", "--python", "--with", "--with-editable",
+                "--with-requirements", "--index", "--default-index", "--index-strategy",
+                "--resolution", "--prerelease", "--fork-strategy", "--config-file",
+                "--env-file", "-C", "-p",
+            }
             while argv and argv[0].startswith("-"):
-                argv = argv[1:]
+                option = argv[0].split("=", 1)[0]
+                argv = argv[2:] if option in value_options and "=" not in argv[0] else argv[1:]
             continue
         if wrapper in {"command", "exec"}:
             argv = argv[1:]
@@ -238,6 +246,52 @@ def _unwrap_execution(tokens):
             continue
         break
     return argv
+
+
+def _python_code_exposes_lifecycle(code):
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return False
+
+    def string_value(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left, right = string_value(node.left), string_value(node.right)
+            return left + right if left is not None and right is not None else None
+        return None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(alias.name.rsplit(".", 1)[-1] in LIFECYCLE_RECEIPT_MODULES for alias in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            if (node.module or "").rsplit(".", 1)[-1] in LIFECYCLE_RECEIPT_MODULES:
+                return True
+            if any(alias.name == "record_subagent_receipt" for alias in node.names):
+                return True
+        elif isinstance(node, ast.Attribute):
+            if node.attr in LIFECYCLE_RECEIPT_MODULES or node.attr == "record_subagent_receipt":
+                return True
+        elif isinstance(node, ast.Name) and node.id == "record_subagent_receipt":
+            return True
+        elif isinstance(node, ast.Call):
+            func_name = getattr(node.func, "id", "") or getattr(node.func, "attr", "")
+            if func_name in {"__import__", "import_module"}:
+                imported = string_value(node.args[0]) if node.args else None
+                if imported and imported.rsplit(".", 1)[-1] in LIFECYCLE_RECEIPT_MODULES:
+                    return True
+                for keyword in node.keywords:
+                    if keyword.arg == "fromlist" and any(
+                        string_value(item) in LIFECYCLE_RECEIPT_MODULES
+                        for item in getattr(keyword.value, "elts", [])
+                    ):
+                        return True
+            if func_name == "getattr" and len(node.args) > 1:
+                if string_value(node.args[1]) == "record_subagent_receipt":
+                    return True
+    return False
 
 
 def _protected_lifecycle_execution(argv):
@@ -259,23 +313,16 @@ def _protected_lifecycle_execution(argv):
                 code = args[args.index("-c") + 1]
             except IndexError:
                 return False
-            compact_code = re.sub(r"[\s'\"+_]", "", code).lower()
-            return (
-                "recordsubagentreceipt" in compact_code
-                or any(name.replace("_", "") in compact_code for name in LIFECYCLE_RECEIPT_MODULES)
-                or any(
-                re.search(
-                    rf"(?:^|[;\s])(?:from\s+(?:[A-Za-z_]\w*\.)*{re.escape(name)}\s+import|import\s+(?:[A-Za-z_]\w*\.)*{re.escape(name)}(?:\s|$|[;,]))",
-                    code,
-                )
-                or re.search(
-                    rf"(?:__import__|import_module)\s*\(\s*['\"](?:[A-Za-z_]\w*\.)*{re.escape(name)}['\"]\s*\)",
-                    code,
-                )
-                for name in LIFECYCLE_RECEIPT_MODULES
-                )
-            )
-        script = next((arg for arg in args if not arg.startswith("-")), "")
+            return _python_code_exposes_lifecycle(code)
+        value_options = {"-X", "-W", "-Q", "--check-hash-based-pycs"}
+        index = 0
+        while index < len(args) and args[index].startswith("-"):
+            option = args[index]
+            if option in value_options:
+                index += 2
+            else:
+                index += 1
+        script = args[index] if index < len(args) else ""
         return os.path.basename(script) in LIFECYCLE_RECEIPT_ENTRYPOINTS
     if cmd in {"bash", "sh"}:
         script = next((arg for arg in args if not arg.startswith("-")), "")
