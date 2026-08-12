@@ -90,6 +90,10 @@ immediately followed by the explicit `completed` entry in one task transaction.
 The verdict still comes only from the unique canonical first line; missing,
 foreign, stale, replayed, aliased, untrusted, or unbound stops cannot yield
 PASS. Direct model invocation of lifecycle receipt-authoring scripts is denied.
+The low-level writer accepts only the exact Claude/Codex runtime sources and
+the corresponding adapter call sites; generic or indirect callers fail before
+append. Bash inspection also denies indirect Python helpers that import the
+writer or lifecycle adapters.
 The transcript namespace and every path component/leaf are descriptor-bound,
 non-symlink, owner-only provenance; Write/Edit/apply_patch and Bash mutation
 gates deny model-authored changes to Claude subagent transcript leaves.

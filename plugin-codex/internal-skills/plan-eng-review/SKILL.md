@@ -7,7 +7,7 @@ description: Review and lock an implementation plan's architecture, tests, failu
 > **Codex runtime delta:** Ask questions as plain conversational prose with
 > lettered options and wait for the next turn; Codex has no structured
 > `AskUserQuestion` tool. Use `apply_patch` for approved plan edits. Read the
-> threat/rollback rubric from the Claude tree path named below; no Codex copy exists.
+> installed threat/rollback rubric path named below.
 
 # Engineering plan review
 
@@ -73,7 +73,7 @@ mandatory and needs no approval.
 
 ## 1. Architecture review
 
-MUST READ `plugin/skills/plan-eng-review/rubrics-threat-rollback.md` and answer
+MUST READ `${HARNESS_PLUGIN_ROOT}/internal-skills/plan-eng-review/rubrics-threat-rollback.md` and answer
 its 6 security and 4 rollback questions inline. This is a plan-time threat and
 recovery check, not a substitute for security review.
 

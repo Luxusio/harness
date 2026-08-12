@@ -12,11 +12,11 @@ Implement the plan for a harness task. Reads PLAN.md, implements changes, verifi
 
 > **Codex delta:** execute skill chains inline; use bare MCP names and
 > `${HARNESS_PLUGIN_ROOT}`. Harness workflow authorization covers required subagents: explicit user invocation or approval of a harness repo-mutating workflow authorizes those required lanes. Agent fan-out is capability-gated; route from the capabilities exposed by the current session.
-> session. Use `spawn_agent` for independent lanes/review/QA when available,
+> Use `spawn_agent` for independent lanes/review/QA when available,
 > conversational numbered options instead of AskUserQuestion, and
 > `BLOCKED_ENV` when required browser/desktop evidence is unavailable. Track and
-> close spawned agents with `close_agent` before `task_close` or final response. Completed agents can continue to consume concurrency until closed. Read existing detailed develop sub-files from
-> `plugin/skills/develop/` only when their phase requires them.
+> close spawned agents with `close_agent` before `task_close` or final response. Completed agents can continue to consume concurrency until closed. Read installed detailed develop sub-files from
+> `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/` only when their phase requires them.
 
 ## Voice
 
@@ -177,7 +177,7 @@ Runs continuously during Phase 3.
   python3 ${HARNESS_PLUGIN_ROOT}/scripts/qa_codifier.py --task-dir <task_dir> 2>/dev/null || true
   ```
   Parses `codifiable:` YAML blocks emitted by the QA pass and stages validated tests to `tests/regression/<sanitized-task-id>/`. Same script as Claude side; runtime-agnostic.
-	- **3.6 Fix-first pattern** — read `plugin/skills/develop/fix-first-pattern.md` (Claude tree fallback). Classify AUTO-FIX (dead code, magic numbers, stale comments, missing guards) and ASK (API design, architecture, security, DRY extractions). Auto-fix immediately; surface ASK items through the current user-input mechanism or final response. The **3-attempt escalation rule** in that sub-file applies to every fix loop (per-AC, Phase 7, debug).
+	- **3.6 Fix-first pattern** — read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/fix-first-pattern.md`. Classify AUTO-FIX (dead code, magic numbers, stale comments, missing guards) and ASK (API design, architecture, security, DRY extractions). Auto-fix immediately; surface ASK items through the current user-input mechanism or final response. The **3-attempt escalation rule** in that sub-file applies to every fix loop (per-AC, Phase 7, debug).
 	- **3.6.1 Durable docs (REQ/GUIDE/ADR/POLICY)** — read PLAN.md `Durable Docs Decision` before implementation. Treat it as a documentation-impact judgment: `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`. Create or update each selected `doc/<area>/<TYPE>__<name>.md` file; selected REQ docs must be written before source implementation, not after code is done. Use a direct `doc/<area>/REQ__*.md` update or `req_scaffold.py` as the happy path when observable behavior is detected and no existing REQ fits. Use DDD-style areas or bounded contexts such as `ui`, `api`, `auth`, `billing`, `catalog`, `runtime`, `verification`, or `common`. Use `REQ` for user-visible behavior, externally consumed API contracts, constraints, and observable bugfixes; write intended observable behavior plus verification cues. Existing-screen state changes count: filters, search, sorting, loading, empty/error states, visibility, labels, native navigation/back-stack behavior, and click/input behavior. New pages, admin/backoffice screens, routes, controllers, and endpoints require a REQ even when additive. PLAN.md acceptance criteria are task-local artifacts and never substitute for a durable `REQ`. Recheck the actual diff after implementation: if you added observable UI/API behavior that PLAN marked `REQ: n/a`, create the missing REQ, link it from PLAN.md or the changed durable doc. If the diff instead changed harness process, agent instructions, testing guidance, or implementation patterns, update the relevant `GUIDE`, skill, pattern doc, or tests rather than inventing a REQ. Use `GUIDE` for reusable coding, design, testing, or implementation guidance. Use `ADR` for significant technical choices with alternatives, reasons, consequences, and tradeoffs. Use `POLICY` only for external security, legal, data-handling, approval, licensing, or organizational constraints that harness cannot fully enforce by itself; keep harness-internal execution rules in skills, agents, scripts, and tests. Keep each updated durable doc directly in the repo and link selected REQ paths from PLAN.md when the close gate needs them. For internal-only refactors, one-off tests, or non-observable maintenance, keep `REQ: n/a` in PLAN.md with a specific non-observable reason; the reason must say which durable knowledge surfaces remain unchanged.
 
 ### Phase 3.7-3.9: Post-implementation health
@@ -186,7 +186,7 @@ After all ACs done. Each runs only if prerequisite exists.
 
 - **3.7 Lint & Format** — run linter and formatter on the PLAN targets actually edited. `--fix` where safe. Re-run per-AC tests after. Skip if none configured.
 - **3.8 Build check** — compile / typecheck the diff (or full project). Build failures are always T1 (our code). Fix immediately.
-- **3.9 Runtime smoke** — read `plugin/skills/develop/runtime-smoke.md` (Claude tree fallback). Project-type-specific (browser / API / CLI). Browser smoke runs when browser tools are available; otherwise required browser smoke becomes browser-lens `BLOCKED_ENV`.
+- **3.9 Runtime smoke** — read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/runtime-smoke.md`. Project-type-specific (browser / API / CLI). Browser smoke runs when browser tools are available; otherwise required browser smoke becomes browser-lens `BLOCKED_ENV`.
 
 ### Phase 4: Plan Completion Audit
 
@@ -196,7 +196,7 @@ For PARTIAL / NOT DONE, classify cause: scope-cut / context-exhaustion / misunde
 
 ### Phase 4.5-4.8: Quality Audit
 
-Read `plugin/skills/develop/quality-audit-pipeline.md`. Phase 4.5 gathers
+Read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/quality-audit-pipeline.md`. Phase 4.5 gathers
 coverage, visual, migration/contract, LLM-trust, and proportional performance
 inputs. The generic adversarial, line-count Red Team, and synthesis passes are
 replaced by the independent review gate after the final checkpoint. Canonical
@@ -271,7 +271,7 @@ semantics. Late observation cannot recover a completed reviewer.
 
 ### Phase 7: Verification Gate
 
-Read `plugin/skills/develop/verification-gate.md` (Claude tree fallback) for the full gate methodology. Runs test commands from PLAN.md, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit.
+Read `${HARNESS_PLUGIN_ROOT}/internal-skills/develop/verification-gate.md` for the full gate methodology. Runs test commands from PLAN.md, classifies failures (GATE/PERIODIC × OWN/PRE-EXISTING), triages with hypothesis-driven debugging, enforces the 3-cycle limit.
 
 Only begin this QA phase after all required Phase 6.6 review lenses PASS. QA
 started before those PASS events is out of order and must be rerun.

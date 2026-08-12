@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import json
 import hashlib
+import inspect
 import secrets
 import time
 import uuid
@@ -2668,6 +2669,42 @@ def _infer_receipt_lens(agent_type, explicit_lens=""):
     return ""
 
 
+_RUNTIME_RECEIPT_CALLERS = {
+    "claude_hook": (
+        "subagent_lifecycle.py", {"register_subagent_start", "mark_subagent_stop"},
+    ),
+    "codex_session_watcher:collaboration": (
+        "codex_lifecycle_watcher.py", {"_invalidate", "_maybe_start", "_maybe_complete"},
+    ),
+}
+
+
+def _runtime_receipt_write_authorized(task_dir, source):
+    """Bind authoritative appends to the two runtime-owned adapters."""
+    expected = _RUNTIME_RECEIPT_CALLERS.get(source)
+    frame = inspect.currentframe()
+    caller = frame.f_back.f_back if frame and frame.f_back else None
+    try:
+        if expected and caller:
+            caller_path = os.path.realpath(str(caller.f_code.co_filename or ""))
+            expected_path = os.path.realpath(os.path.join(os.path.dirname(__file__), expected[0]))
+            if caller_path == expected_path and caller.f_code.co_name in expected[1]:
+                return True
+        # Serializer-focused tests use task packs outside the repository under
+        # test control. This exception can never authorize the active task.
+        if not os.environ.get("PYTEST_CURRENT_TEST"):
+            return False
+        repo_root = os.path.realpath(find_repo_root(os.getcwd()) or os.getcwd())
+        candidate = os.path.realpath(str(task_dir))
+        try:
+            return os.path.commonpath((repo_root, candidate)) != repo_root
+        except ValueError:
+            return True
+    finally:
+        del caller
+        del frame
+
+
 def record_subagent_receipt(task_dir, receipt):
     """Append a structured subagent invocation receipt to the task directory.
 
@@ -2680,6 +2717,8 @@ def record_subagent_receipt(task_dir, receipt):
     if not agent_id:
         raise ValueError("agent_id required")
     source = _receipt_short(receipt.get("source") or "spawn_agent", 100)
+    if not _runtime_receipt_write_authorized(task_dir, source):
+        raise PermissionError("receipt append requires a runtime-owned lifecycle adapter")
     agent_type = _receipt_short(receipt.get("agent_type"), 300)
     verdict = _receipt_short(receipt.get("verdict") or "", 40).upper()
     lens = _infer_receipt_lens(agent_type, receipt.get("lens"))

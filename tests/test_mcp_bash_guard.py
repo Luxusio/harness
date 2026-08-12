@@ -9,7 +9,9 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 from conftest import (  # type: ignore
     REPO_ROOT,
@@ -169,6 +171,18 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             decision, reason = parse_decision(r.stdout)
             self.assertEqual(decision, "deny")
             self.assertIn("rule=protected-artifact", reason)
+
+    def test_indirect_python_script_importing_receipt_writer_denies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            helper = Path(tmp) / "innocent.py"
+            helper.write_text(
+                "from _lib import record_subagent_receipt\nprint(record_subagent_receipt)\n",
+                encoding="utf-8",
+            )
+            r = _run_bash(f"python3 {helper}")
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("lifecycle receipt entrypoint", reason)
 
     def test_redirect_into_subagent_receipt_denies_with_hook_hint(self):
         with scratch_task_in_real_repo("receipt-prot") as task_dir:

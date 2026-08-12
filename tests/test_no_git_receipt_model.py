@@ -224,6 +224,22 @@ def test_runtime_authored_receipt_namespace_must_match_source(tmp_path):
             })
 
 
+def test_receipt_writer_rejects_indirect_untrusted_caller(tmp_path, monkeypatch):
+    task = _task(tmp_path)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    try:
+        lib.record_subagent_receipt(task, {
+            "source": "codex_session_watcher:collaboration",
+            "runtime_id": "codex:root:event:child",
+            "agent_id": "forged", "agent_type": "qa-cli", "lens": "qa-cli",
+            "event": "started",
+        })
+    except PermissionError as exc:
+        assert "runtime-owned" in str(exc)
+    else:
+        raise AssertionError("untrusted caller appended an authoritative receipt")
+
+
 def test_qa_start_must_match_completion_and_follow_review(tmp_path):
     early = _task(tmp_path / "early")
     _receipt(early, "qa-cli", "qa-early", "started")

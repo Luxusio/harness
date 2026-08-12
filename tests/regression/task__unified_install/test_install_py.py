@@ -366,6 +366,15 @@ def test_install_codex_plugin_cache_uses_manifest_version(tmp_path):
     assert (cached / "mcp" / "harness_server.py").is_file()
     assert (cached / "scripts" / "subagent_lifecycle.py").is_file()
     assert not (cached / "scripts" / "background_registry.py").exists()
+    for rel in (
+        "internal-skills/develop/fix-first-pattern.md",
+        "internal-skills/develop/runtime-smoke.md",
+        "internal-skills/develop/quality-audit-pipeline.md",
+        "internal-skills/develop/verification-gate.md",
+        "internal-skills/plan-devex-review/dx-hall-of-fame.md",
+        "internal-skills/plan-eng-review/rubrics-threat-rollback.md",
+    ):
+        assert (cached / rel).is_file(), rel
     assert (cached / "skills" / "setup" / "bootstrap.md").is_file()
     assert (cached / "skills" / "setup" / "verify-report.md").is_file()
     assert (cached / "skills" / "setup" / "templates" / "CONTRACTS.md").is_file()

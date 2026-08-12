@@ -11,8 +11,9 @@ description: |
 
 > **Codex runtime notes:** Use conversational prose with lettered options and wait for
 > the next turn where the Claude source says `AskUserQuestion`. Use bare Harness MCP
-> names and `HARNESS_PLUGIN_ROOT` if needed. Apply edits with `apply_patch`. The CEO-plan
-> adversarial spec pass is single-voice in this skill because it has no Agent primitive.
+> names and `HARNESS_PLUGIN_ROOT` if needed. Apply edits with `apply_patch`. Run the
+> independent CEO adversarial spec pass with `spawn_agent` when available; use the
+> same pass inline only when the current runtime exposes no subagent capability.
 
 Review the plan only. Do not implement code. Apply the shared rules in
 `plugin-codex/internal-skills/plan/SKILL.md` for evidence, context recovery, repository

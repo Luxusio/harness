@@ -12,8 +12,8 @@ description: |
 > **Codex runtime notes:** Use plain conversational prose with lettered options and wait
 > for the next turn where the Claude source says `AskUserQuestion`. Use bare Harness MCP
 > names and `HARNESS_PLUGIN_ROOT` if needed. Apply edits with `apply_patch`. Read Hall of
-> Fame sections from the Claude tree at
-> `plugin/skills/plan-devex-review/dx-hall-of-fame.md`; there is no Codex copy.
+> Fame sections from
+> `${HARNESS_PLUGIN_ROOT}/internal-skills/plan-devex-review/dx-hall-of-fame.md`.
 
 Review the plan only. Apply the shared evidence, context-recovery, ownership, search,
 completeness, and conversational-ask rules in

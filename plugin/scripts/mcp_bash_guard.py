@@ -23,6 +23,7 @@ import os
 import ast
 import re
 import shlex
+import stat
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -323,7 +324,23 @@ def _protected_lifecycle_execution(argv):
             else:
                 index += 1
         script = args[index] if index < len(args) else ""
-        return os.path.basename(script) in LIFECYCLE_RECEIPT_ENTRYPOINTS
+        if os.path.basename(script) in LIFECYCLE_RECEIPT_ENTRYPOINTS:
+            return True
+        if script:
+            try:
+                info = os.lstat(script)
+                if (
+                    stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
+                    and info.st_nlink == 1 and not info.st_mode & 0o022
+                    and info.st_size <= _COMMAND_LENGTH_CAP
+                ):
+                    with open(script, "r", encoding="utf-8") as handle:
+                        code = handle.read(_COMMAND_LENGTH_CAP + 1)
+                    if len(code) <= _COMMAND_LENGTH_CAP and _python_code_exposes_lifecycle(code):
+                        return True
+            except (OSError, UnicodeError):
+                pass
+        return False
     if cmd in {"bash", "sh"}:
         script = next((arg for arg in args if not arg.startswith("-")), "")
         return os.path.basename(script) in LIFECYCLE_RECEIPT_ENTRYPOINTS

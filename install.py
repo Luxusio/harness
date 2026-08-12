@@ -347,6 +347,19 @@ def _build_codex_payload(target: Path, final_root: Path) -> None:
     _copytree_clean(PLUGIN_CODEX_ROOT, target)
     _copytree_clean(PLUGIN_ROOT / "scripts", target / "scripts")
     _copytree_clean(PLUGIN_ROOT / "mcp", target / "mcp")
+    shared_skill_files = {
+        "internal-skills/develop": (
+            "fix-first-pattern.md", "runtime-smoke.md",
+            "quality-audit-pipeline.md", "verification-gate.md",
+        ),
+        "internal-skills/plan-devex-review": ("dx-hall-of-fame.md",),
+        "internal-skills/plan-eng-review": ("rubrics-threat-rollback.md",),
+    }
+    for relative_dir, names in shared_skill_files.items():
+        source_dir = PLUGIN_ROOT / "skills" / relative_dir.removeprefix("internal-skills/")
+        destination_dir = target / relative_dir
+        for name in names:
+            shutil.copy2(source_dir / name, destination_dir / name)
     codex_setup = target / "skills" / "setup"
     claude_setup = PLUGIN_ROOT / "skills" / "setup"
     for name in ("repo-census.md", "project-interview.md", "bootstrap.md", "verify-report.md"):
