@@ -563,7 +563,11 @@ def _check_path(data: dict, file_path: str) -> None:
         return 0
     if not is_harness_enabled_repo(repo_root):
         return 0
-    if _is_claude_subagent_transcript(requested_path) or _is_codex_rollout(requested_path):
+    file_path = os.path.realpath(requested_path)
+    if any(
+        _is_claude_subagent_transcript(path) or _is_codex_rollout(path)
+        for path in (requested_path, file_path)
+    ):
         _deny(
             "C-05-protected-artifact",
             requested_path,
@@ -572,7 +576,6 @@ def _check_path(data: dict, file_path: str) -> None:
             repo_root,
         )
         return 0
-    file_path = os.path.realpath(requested_path)
     try:
         requested_common = os.path.commonpath([repo_root, requested_path])
     except ValueError:

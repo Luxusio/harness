@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 
 from conftest import (  # type: ignore
@@ -51,6 +52,19 @@ class TestDenyProtectedArtifact(unittest.TestCase):
             "~/.claude/projects/project/session/subagents/agent-review-code.jsonl"
         )
         r = invoke_hook(GATE, "Write", {"file_path": transcript})
+        decision, reason = parse_decision(r.stdout)
+        self.assertEqual(decision, "deny")
+        self.assertIn("runtime-owned receipt provenance", reason)
+
+    def test_write_symlink_to_codex_rollout_denies(self):
+        sessions = os.path.expanduser("~/.codex/sessions")
+        with tempfile.TemporaryDirectory() as tmp:
+            alias = os.path.join(tmp, "codex-sessions")
+            os.symlink(sessions, alias, target_is_directory=True)
+            rollout = os.path.join(
+                alias, "2026/08/13/rollout-runtime-thread.jsonl",
+            )
+            r = invoke_hook(GATE, "Write", {"file_path": rollout})
         decision, reason = parse_decision(r.stdout)
         self.assertEqual(decision, "deny")
         self.assertIn("runtime-owned receipt provenance", reason)
