@@ -97,7 +97,7 @@ from _lib import (  # type: ignore
     reset_receipt_streams_for_new_run, restore_receipt_streams,
     receipt_stream_transaction,
     begin_task_run, restore_task_control,
-    _strict_regular_text_snapshot, _restore_text_snapshots,
+    _strict_regular_text_snapshot, _restore_text_snapshots, _atomic_text_write as _lib_atomic_text_write,
     LENS_ORDER, SUPPORTED_LENSES, QA_LENSES,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
@@ -154,23 +154,7 @@ def _task_artifact_rel(td: str, fn: str) -> str:
 
 def _atomic_write_text(path: str, text: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    import tempfile
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".mcp.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-            f.flush()
-            try:
-                os.fsync(f.fileno())
-            except OSError:
-                pass
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    _lib_atomic_text_write(path, text)
 
 
 def _run_verify_runner(td: str, parallel: bool = True, max_workers: int | None = None) -> dict:
@@ -292,7 +276,16 @@ def handle_task_start(args: dict) -> dict:
     prior_marker_snapshot = active_marker_snapshot(repo_root)
     if resumed_existing:
         if not read_task_control(task_dir):
-            raise ValueError("task_start refused unsafe or invalid TASK.json")
+            return _err(
+                "task_start refused invalid TASK.json: unsupported task-control schema or unsafe control",
+                data={
+                    "task_dir": task_dir,
+                    "next_action": (
+                        "Choose a new task_id and call task_start. Harness does not "
+                        "migrate or rewrite an unsupported existing task control."
+                    ),
+                },
+            )
     request_text = ""
     if rf:
         rp = rf if os.path.isabs(rf) else os.path.join(repo_root, rf)
@@ -345,13 +338,12 @@ def handle_task_start(args: dict) -> dict:
                 raise RuntimeError("task_start refused invalid terminal task artifacts")
         terminal_resume = terminal_resume_status in {"blocked", "closed"}
         fresh_old_pack = not resumed_existing and preexisting_pack
-        if resumed_existing and terminal_resume:
+        if resumed_existing:
             _, task_control_snapshot = begin_task_run(task_dir)
             resumed = read_task_control(task_dir)
-        if terminal_resume or fresh_old_pack:
-            # A new lifecycle run must not inherit PASS receipts from the
-            # prior closed/blocked run now that source fingerprints are no
-            # longer part of receipt authority.
+        if resumed_existing or fresh_old_pack:
+            # Every task_start resume is a new lifecycle generation and must
+            # not inherit evidence collected for the previous run identity.
             terminal_receipt_snapshot = reset_receipt_streams_for_new_run(task_dir)
         if fresh_old_pack:
             for name in OBSOLETE_TASK_ARTIFACTS:
@@ -402,6 +394,7 @@ def handle_task_start(args: dict) -> dict:
 
     return _ok({
         "task_dir": task_dir, "task_id": tid, "task_context": ctx,
+        "run_id": resumed["run_id"],
         "start_status": "ready_with_warnings" if warnings else "ready",
         "task_created": not resumed_existing,
         "resumed": resumed_existing,

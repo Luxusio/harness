@@ -29,6 +29,7 @@ from _lib import (  # type: ignore  # noqa: E402
     receipt_review_verdict,
     receipt_runtime_verdict,
     receipt_stream_fingerprint,
+    receipt_stream_transaction,
 )
 
 CANONICAL_REMOTE = "https://github.com/Luxusio/harness"
@@ -313,73 +314,74 @@ def install_verified(task_dir: Path) -> int:
         if not trusted:
             print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)
             return 2
-        valid_task, reason = _validate_task_dir(repo_root, task_dir)
-        if not valid_task:
-            print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)
-            return 2
-        snapshot_paths = _snapshot_paths(repo_root, task_dir)
-        changed_payload = _dirty_install_payload(repo_root)
-        if not changed_payload:
-            print("automatic install not needed: no changed install payload")
-            return 0
-        verified, reason, fingerprint = _verification_state(task_dir)
-        if not verified:
-            print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)
-            return 3
-        if not _payload_modes_match_index(repo_root, snapshot_paths):
-            print("ERROR: install payload mode or file type does not match Git", file=sys.stderr)
-            return 5
-        payload_fingerprint = _payload_fingerprint(repo_root, snapshot_paths)
-        if not payload_fingerprint:
-            print("ERROR: unsafe or unreadable install payload", file=sys.stderr)
-            return 5
-        with tempfile.TemporaryDirectory(prefix="harness-install-snapshot-") as tmp:
-            snapshot_root = Path(tmp)
-            try:
-                _copy_payload_snapshot(repo_root, snapshot_root, snapshot_paths)
-            except OSError as exc:
-                print(f"ERROR: payload changed while snapshot was captured: {exc}", file=sys.stderr)
+        with receipt_stream_transaction(str(task_dir)):
+            valid_task, reason = _validate_task_dir(repo_root, task_dir)
+            if not valid_task:
+                print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)
+                return 2
+            snapshot_paths = _snapshot_paths(repo_root, task_dir)
+            changed_payload = _dirty_install_payload(repo_root)
+            if not changed_payload:
+                print("automatic install not needed: no changed install payload")
+                return 0
+            verified, reason, fingerprint = _verification_state(task_dir)
+            if not verified:
+                print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)
+                return 3
+            if not _payload_modes_match_index(repo_root, snapshot_paths):
+                print("ERROR: install payload mode or file type does not match Git", file=sys.stderr)
                 return 5
-            if _payload_fingerprint(snapshot_root, snapshot_paths) != payload_fingerprint:
-                print("ERROR: payload changed while snapshot was captured", file=sys.stderr)
+            payload_fingerprint = _payload_fingerprint(repo_root, snapshot_paths)
+            if not payload_fingerprint:
+                print("ERROR: unsafe or unreadable install payload", file=sys.stderr)
                 return 5
-            verified_before, reason_before, fingerprint_before = _verification_state(task_dir)
-            payload_before = _payload_fingerprint(repo_root, snapshot_paths)
+            with tempfile.TemporaryDirectory(prefix="harness-install-snapshot-") as tmp:
+                snapshot_root = Path(tmp)
+                try:
+                    _copy_payload_snapshot(repo_root, snapshot_root, snapshot_paths)
+                except OSError as exc:
+                    print(f"ERROR: payload changed while snapshot was captured: {exc}", file=sys.stderr)
+                    return 5
+                if _payload_fingerprint(snapshot_root, snapshot_paths) != payload_fingerprint:
+                    print("ERROR: payload changed while snapshot was captured", file=sys.stderr)
+                    return 5
+                verified_before, reason_before, fingerprint_before = _verification_state(task_dir)
+                payload_before = _payload_fingerprint(repo_root, snapshot_paths)
+                if (
+                    not verified_before
+                    or fingerprint_before != fingerprint
+                    or payload_before != payload_fingerprint
+                    or not _payload_modes_match_index(repo_root, snapshot_paths)
+                ):
+                    print(
+                        "ERROR: source or verification changed before install"
+                        + (f": {reason_before}" if reason_before else ""),
+                        file=sys.stderr,
+                    )
+                    return 5
+                command = [sys.executable, str(snapshot_root / "install.py"), "--force"]
+                result = subprocess.run(command, cwd=snapshot_root)
+            if result.returncode != 0:
+                print(f"ERROR: installer exited {result.returncode}", file=sys.stderr)
+                return result.returncode
+            verified_after, reason_after, fingerprint_after = _verification_state(task_dir)
+            valid_after, task_reason_after = _validate_task_dir(repo_root, task_dir)
+            snapshot_paths_after = _snapshot_paths(repo_root, task_dir)
+            payload_after = _payload_fingerprint(repo_root, snapshot_paths_after)
             if (
-                not verified_before
-                or fingerprint_before != fingerprint
-                or payload_before != payload_fingerprint
-                or not _payload_modes_match_index(repo_root, snapshot_paths)
+                not verified_after
+                or not valid_after
+                or fingerprint_after != fingerprint
+                or snapshot_paths_after != snapshot_paths
+                or payload_after != payload_fingerprint
+                or not _payload_modes_match_index(repo_root, snapshot_paths_after)
             ):
                 print(
-                    "ERROR: source or verification changed before install"
-                    + (f": {reason_before}" if reason_before else ""),
+                    "ERROR: source or verification changed during install; install aborted"
+                    + (f": {reason_after or task_reason_after}" if reason_after or task_reason_after else ""),
                     file=sys.stderr,
                 )
                 return 5
-            command = [sys.executable, str(snapshot_root / "install.py"), "--force"]
-            result = subprocess.run(command, cwd=snapshot_root)
-        if result.returncode != 0:
-            print(f"ERROR: installer exited {result.returncode}", file=sys.stderr)
-            return result.returncode
-        verified_after, reason_after, fingerprint_after = _verification_state(task_dir)
-        valid_after, task_reason_after = _validate_task_dir(repo_root, task_dir)
-        snapshot_paths_after = _snapshot_paths(repo_root, task_dir)
-        payload_after = _payload_fingerprint(repo_root, snapshot_paths_after)
-        if (
-            not verified_after
-            or not valid_after
-            or fingerprint_after != fingerprint
-            or snapshot_paths_after != snapshot_paths
-            or payload_after != payload_fingerprint
-            or not _payload_modes_match_index(repo_root, snapshot_paths_after)
-        ):
-            print(
-                "ERROR: source or verification changed during install; install aborted"
-                + (f": {reason_after or task_reason_after}" if reason_after or task_reason_after else ""),
-                file=sys.stderr,
-            )
-            return 5
     print(f"automatic install PASS for {fingerprint}")
     return 0
 

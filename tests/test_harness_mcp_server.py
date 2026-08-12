@@ -572,6 +572,32 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertFalse((task_dir.parent / ".active").exists())
             self.assertFalse((task_dir.parent / ".active_sessions").exists())
 
+    def test_task_start_rejects_old_six_field_control_with_new_task_guidance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = Path(tmp) / "doc/harness/tasks/TASK__old-control"
+            task_dir.mkdir(parents=True)
+            state = task_dir / "TASK.json"
+            state.write_text(json.dumps({
+                "task_run_id": "a" * 32,
+                "started_at": "2026-08-12T00:00:00Z",
+                "execution_mode": "standard",
+                "review_lenses": ["review-code"],
+                "qa_lenses": ["qa-cli"],
+                "close_receipt_fingerprint": None,
+            }) + "\n", encoding="utf-8")
+            before = state.read_bytes()
+
+            result = self._call_in_repo(
+                tmp, "task_start", {"task_id": "TASK__old-control"},
+            )
+
+            payload = result["structuredContent"]
+            self.assertTrue(result.get("isError"))
+            self.assertIn("unsupported task-control schema", payload["error"])
+            self.assertIn("new task_id", payload["next_action"])
+            self.assertNotIn("Correct the named selector", payload["next_action"])
+            self.assertEqual(state.read_bytes(), before)
+
     def test_task_selectors_accept_canonical_paths_and_reject_mismatch_or_symlink(self):
         with tempfile.TemporaryDirectory() as tmp:
             task = Path(self._make_task(tmp, "TASK__safe"))
@@ -1217,6 +1243,31 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(context["runtime_verdict"], "PENDING")
             self.assertIsNone(harness_server.read_task_control(task_dir)["close_receipt_fingerprint"])
 
+    def test_task_start_open_resume_rotates_generation_and_discards_old_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            task_dir = self._make_task(tmp, "TASK__resume-open")
+            old_run_id = harness_server.read_task_control(task_dir)["run_id"]
+            self._write_subagent_receipt(task_dir)
+            self.assertEqual(
+                harness_server.receipt_runtime_verdict(
+                    task_dir, harness_server.read_task_control(task_dir)
+                ),
+                "PASS",
+            )
+
+            result = self._call_in_repo(
+                tmp, "task_start", {"task_id": "TASK__resume-open"},
+            )
+
+            payload = result["structuredContent"]
+            resumed = harness_server.read_task_control(task_dir)
+            self.assertNotIn("isError", result)
+            self.assertTrue(payload["resumed"])
+            self.assertNotEqual(payload["run_id"], old_run_id)
+            self.assertEqual(payload["run_id"], resumed["run_id"])
+            self.assertEqual(payload["task_context"]["runtime_verdict"], "PENDING")
+            self.assertFalse((Path(task_dir) / "RECEIPTS.jsonl").exists())
+
     def test_task_start_returns_ready_with_warnings_after_committed_scaffold(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._run_git(tmp, "init", "-q")
@@ -1324,20 +1375,21 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "Task ready; full routing context was deferred to keep task_start responsive.",
             )
 
-    def test_failed_terminal_resume_restores_state_and_receipts(self):
-        for terminal_status in ("closed", "blocked"):
+    def test_failed_existing_resume_restores_state_and_receipts(self):
+        for terminal_status in ("open", "closed", "blocked"):
             with self.subTest(status=terminal_status), tempfile.TemporaryDirectory() as tmp:
                 task_dir = Path(tmp) / f"doc/harness/tasks/TASK__resume-{terminal_status}"
                 harness_server.ensure_task_scaffold(
                     str(task_dir), f"TASK__resume-{terminal_status}", repo_root=tmp,
                 )
-                if terminal_status == "closed":
+                if terminal_status in {"open", "closed"}:
                     self._write_subagent_receipt(str(task_dir))
+                if terminal_status == "closed":
                     harness_server.publish_task_close(
                         str(task_dir), harness_server.read_task_control(str(task_dir)),
                         receipt_fingerprint=harness_server.receipt_stream_fingerprint(str(task_dir)),
                     )
-                else:
+                elif terminal_status == "blocked":
                     (task_dir / "BLOCKED.md").write_text("# BLOCKED\n", encoding="utf-8")
                 state = harness_server.read_task_control(str(task_dir))
                 receipt = task_dir / "RECEIPTS.jsonl"

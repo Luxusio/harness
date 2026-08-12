@@ -519,8 +519,21 @@ def _strict_regular_text_snapshot(
     path: str, *, max_size: int = 1024 * 1024, allow_symlink: bool = False,
 ):
     """Snapshot an absent or stable regular UTF-8 leaf without ambiguity."""
+    parent = os.path.abspath(os.path.dirname(path) or ".")
+    leaf = os.path.basename(path)
+    binding_fn = globals().get("_receipt_lock_binding")
+    binding = binding_fn(parent) if callable(binding_fn) else None
+    dir_fd = binding[1] if binding is not None else None
+    if binding is not None:
+        _validate_receipt_dir_binding(binding)
+
+    def leaf_stat():
+        if dir_fd is None:
+            return os.lstat(path)
+        return os.stat(leaf, dir_fd=dir_fd, follow_symlinks=False)
+
     try:
-        before = os.lstat(path)
+        before = leaf_stat()
     except FileNotFoundError:
         return {"exists": False, "kind": "absent", "text": ""}
     except OSError as exc:
@@ -528,8 +541,8 @@ def _strict_regular_text_snapshot(
     if stat.S_ISLNK(before.st_mode):
         if not allow_symlink:
             raise RuntimeError(f"snapshot requires a regular non-symlink file: {path}")
-        target = os.readlink(path)
-        after = os.lstat(path)
+        target = os.readlink(leaf, dir_fd=dir_fd) if dir_fd is not None else os.readlink(path)
+        after = leaf_stat()
         if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino):
             raise RuntimeError(f"snapshot identity changed after read: {path}")
         return {"exists": True, "kind": "symlink", "target": target, "text": ""}
@@ -542,7 +555,7 @@ def _strict_regular_text_snapshot(
         flags |= os.O_CLOEXEC
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
-    fd = os.open(path, flags)
+    fd = os.open(leaf, flags, dir_fd=dir_fd) if dir_fd is not None else os.open(path, flags)
     try:
         opened = os.fstat(fd)
         if (
@@ -560,7 +573,7 @@ def _strict_regular_text_snapshot(
         if fd >= 0:
             os.close(fd)
     try:
-        after = os.lstat(path)
+        after = leaf_stat()
     except OSError as exc:
         raise RuntimeError(f"snapshot identity changed after read: {path}") from exc
     if (
@@ -577,8 +590,15 @@ def _restore_text_snapshots(snapshots):
     for path, snapshot in snapshots.items():
         try:
             if not snapshot["exists"]:
+                parent = os.path.abspath(os.path.dirname(path) or ".")
+                leaf = os.path.basename(path)
+                binding = _receipt_lock_binding(parent) if "_receipt_lock_binding" in globals() else None
                 try:
-                    os.unlink(path)
+                    if binding is not None:
+                        _validate_receipt_dir_binding(binding)
+                        os.unlink(leaf, dir_fd=binding[1])
+                    else:
+                        os.unlink(path)
                 except FileNotFoundError:
                     pass
             elif snapshot.get("kind") == "symlink":
@@ -607,7 +627,36 @@ def _read_json_file(path: str, *, max_size: int = 1024 * 1024) -> dict:
 
 def _atomic_text_write(path: str, text: str) -> None:
     """Replace a text leaf without following a pre-existing leaf symlink."""
-    parent = os.path.dirname(path) or "."
+    parent = os.path.abspath(os.path.dirname(path) or ".")
+    leaf = os.path.basename(path)
+    binding_fn = globals().get("_receipt_lock_binding")
+    binding = binding_fn(parent) if callable(binding_fn) else None
+    if binding is not None:
+        _validate_receipt_dir_binding(binding)
+        dir_fd = binding[1]
+        tmp = f".text.{secrets.token_hex(8)}.tmp"
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(tmp, flags, 0o600, dir_fd=dir_fd)
+        try:
+            payload = text.encode("utf-8")
+            view = memoryview(payload)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("atomic task artifact write made no progress")
+                view = view[written:]
+            os.fsync(fd)
+            os.replace(tmp, leaf, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+            os.fsync(dir_fd)
+            _validate_receipt_dir_binding(binding)
+        finally:
+            os.close(fd)
+            try:
+                os.unlink(tmp, dir_fd=dir_fd)
+            except FileNotFoundError:
+                pass
+        return
     fd, tmp = tempfile.mkstemp(dir=parent, prefix=".text.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -1254,8 +1303,13 @@ def write_task_control(task_dir, control):
     _revalidate_receipt_transaction(task_dir)
     if os.path.lexists(path) and not read_task_control(task_dir):
         raise RuntimeError("existing TASK.json is unsafe or invalid")
-    _atomic_text_write(path, json.dumps(validated, indent=2, sort_keys=True) + "\n")
-    _revalidate_receipt_transaction(task_dir)
+    snapshot = {path: _strict_regular_text_snapshot(path, max_size=16 * 1024)}
+    try:
+        _atomic_text_write(path, json.dumps(validated, indent=2, sort_keys=True) + "\n")
+        _revalidate_receipt_transaction(task_dir)
+    except BaseException:
+        _restore_text_snapshots(snapshot)
+        raise
     return True
 
 

@@ -4,6 +4,8 @@ import importlib.util
 import json
 import subprocess
 import sys
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -116,6 +118,91 @@ def test_stateless_installer_reinstalls_every_verified_dirty_call(tmp_path):
     ):
         assert mod.install_verified(task) == 0
         assert run.call_count == 1
+
+
+def test_task_authority_mutation_waits_for_install_transaction(tmp_path):
+    repo, task = _repo(tmp_path)
+    task_lock = threading.Lock()
+    installer_started = threading.Event()
+    release_installer = threading.Event()
+    installer_finished = threading.Event()
+    mutation_attempted = threading.Event()
+    mutation_finished = threading.Event()
+    final_verification_finished = threading.Event()
+    verification_calls = 0
+    result = []
+
+    @contextmanager
+    def task_transaction(_task_dir):
+        if threading.current_thread().name == "authority-mutator":
+            mutation_attempted.set()
+        with task_lock:
+            yield
+
+    def verification_state(_task_dir):
+        nonlocal verification_calls
+        assert task_lock.locked()
+        verification_calls += 1
+        if verification_calls == 3:
+            final_verification_finished.set()
+        return True, "", "fp"
+
+    def run_installer(*_args, **_kwargs):
+        assert task_lock.locked()
+        installer_started.set()
+        assert release_installer.wait(timeout=5)
+        installer_finished.set()
+        return subprocess.CompletedProcess([], 0)
+
+    def mutate_authority():
+        with mod.receipt_stream_transaction(str(task)):
+            assert installer_finished.is_set()
+            assert final_verification_finished.is_set()
+            (task / "TASK.json").write_text('{"mutated": true}\n', encoding="utf-8")
+        mutation_finished.set()
+
+    install_thread = threading.Thread(
+        target=lambda: result.append(mod.install_verified(task)),
+        name="installer",
+    )
+    mutation_thread = threading.Thread(target=mutate_authority, name="authority-mutator")
+    patches = (
+        mock.patch.object(mod, "find_repo_root", return_value=str(repo)),
+        mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
+        mock.patch.object(mod, "_validate_task_dir", return_value=(True, "")),
+        mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
+        mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/file.py"}),
+        mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global.lock"),
+        mock.patch.object(mod, "_verification_state", side_effect=verification_state),
+        mock.patch.object(mod, "_payload_fingerprint", return_value="payload"),
+        mock.patch.object(mod, "_copy_payload_snapshot"),
+        mock.patch.object(mod, "_payload_modes_match_index", return_value=True),
+        mock.patch.object(mod, "receipt_stream_transaction", side_effect=task_transaction),
+        mock.patch.object(mod.subprocess, "run", side_effect=run_installer),
+    )
+    for patcher in patches:
+        patcher.start()
+    try:
+        install_thread.start()
+        assert installer_started.wait(timeout=5)
+        mutation_thread.start()
+        assert mutation_attempted.wait(timeout=5)
+        assert not mutation_finished.is_set()
+
+        release_installer.set()
+        install_thread.join(timeout=5)
+        mutation_thread.join(timeout=5)
+    finally:
+        release_installer.set()
+        for patcher in reversed(patches):
+            patcher.stop()
+
+    assert not install_thread.is_alive()
+    assert not mutation_thread.is_alive()
+    assert result == [0]
+    assert verification_calls == 3
+    assert mutation_finished.is_set()
+    assert json.loads((task / "TASK.json").read_text(encoding="utf-8")) == {"mutated": True}
 
 
 def test_payload_fingerprint_includes_mode_and_rejects_symlink(tmp_path):

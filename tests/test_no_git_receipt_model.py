@@ -363,6 +363,33 @@ def test_task_directory_transaction_is_nested_serialized_and_replacement_safe(tm
     else:
         raise AssertionError("task-directory replacement must fail closed")
 
+    publication = _task(tmp_path / "publication")
+    original_control = lib.read_task_control(publication)
+    displaced = publication.with_name("TASK__publication-displaced")
+    real_atomic_write = lib._atomic_text_write
+    raced = False
+
+    def replace_before_publication(path, text):
+        nonlocal raced
+        if not raced and Path(path).name == lib.TASK_CONTROL_NAME:
+            raced = True
+            publication.rename(displaced)
+            publication.mkdir()
+        return real_atomic_write(path, text)
+
+    updated = dict(original_control)
+    updated["required_lenses"] = ["review-code", "review-security", "qa-cli"]
+    try:
+        with lib.receipt_stream_transaction(publication):
+            with mock.patch.object(lib, "_atomic_text_write", side_effect=replace_before_publication):
+                lib.write_task_control(publication, updated)
+    except RuntimeError as exc:
+        assert "integrity" in str(exc)
+    else:
+        raise AssertionError("replaced task-directory publication must fail closed")
+    assert not (publication / lib.TASK_CONTROL_NAME).exists()
+    assert lib.read_task_control(displaced) == original_control
+
 
 def test_rotated_task_run_rejects_prior_run_receipts_without_source_state(tmp_path):
     task = _task(tmp_path)
