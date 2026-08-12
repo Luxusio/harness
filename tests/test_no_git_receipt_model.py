@@ -330,6 +330,19 @@ def test_receipt_writer_rejects_first_binder_outside_canonical_module(tmp_path):
             raise AssertionError("non-canonical first binder was accepted")
 
 
+def test_receipt_writer_rejects_source_exec_without_canonical_loader():
+    import pytest
+
+    path = ROOT / "plugin/scripts/codex_lifecycle_watcher.py"
+    module = ModuleType("codex_lifecycle_watcher")
+    module.__file__ = str(path)
+    module.__dict__["__name__"] = "codex_lifecycle_watcher"
+    source = path.read_text(encoding="utf-8")
+    with mock.patch.dict(sys.modules, {"codex_lifecycle_watcher": module}):
+        with pytest.raises(PermissionError, match="canonical module import"):
+            exec(compile(source, str(path), "exec"), module.__dict__)
+
+
 def test_control_writer_rejects_forged_first_module_and_rebinding():
     import pytest
 

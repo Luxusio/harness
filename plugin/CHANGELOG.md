@@ -19,10 +19,9 @@ All notable changes to the harness Claude Code plugin.
   gates, rubrics, output contracts, and runtime interaction differences.
 - Old receipt schemas and side streams have no compatibility reader. Resume
   starts a fresh `TASK.json.run_id` and resets the unified stream.
-- The MCP-hosted Codex watcher consumes direct collaboration spawn, output, and
-  final events. Activity events are ignored; a uniquely discovered trusted
-  child rollout supplies the child identity when the output event is the only
-  rollout-bearing signal.
+- The MCP-hosted Codex watcher correlates direct collaboration spawn, output,
+  structured child activity, and final events. When activity is absent, one
+  uniquely discovered trusted child rollout supplies the child identity.
 - Codex installation now packages every lazily loaded methodology file named by
   its internal skills, while preserving one canonical source copy in the Claude
   skill tree.

@@ -170,6 +170,25 @@ def _is_claude_subagent_transcript(path):
     )
 
 
+def _is_codex_rollout(path):
+    """Return True for runtime-owned Codex session rollout provenance."""
+    if not path:
+        return False
+    candidate = os.path.abspath(os.path.expanduser(str(path)))
+    codex_root = os.path.abspath(os.path.expanduser(
+        os.environ.get("CODEX_HOME") or "~/.codex"
+    ))
+    sessions_root = os.path.join(codex_root, "sessions")
+    try:
+        rel = os.path.relpath(candidate, sessions_root).split(os.sep)
+    except ValueError:
+        return False
+    return (
+        len(rel) >= 4 and rel[0] != ".."
+        and re.fullmatch(r"rollout-[A-Za-z0-9_.:-]+\.jsonl", rel[-1]) is not None
+    )
+
+
 def _is_workflow_control_surface(path, repo_root=None):
     """Return True if ``path`` is a harness workflow-control-surface file."""
     if not path:
@@ -544,12 +563,12 @@ def _check_path(data: dict, file_path: str) -> None:
         return 0
     if not is_harness_enabled_repo(repo_root):
         return 0
-    if _is_claude_subagent_transcript(requested_path):
+    if _is_claude_subagent_transcript(requested_path) or _is_codex_rollout(requested_path):
         _deny(
             "C-05-protected-artifact",
             requested_path,
             "claude-runtime",
-            "Claude subagent transcripts are runtime-owned receipt provenance and cannot be edited.",
+            "Runtime transcripts are receipt provenance and cannot be edited.",
             repo_root,
         )
         return 0

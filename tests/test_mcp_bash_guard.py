@@ -124,6 +124,20 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 self.assertEqual(decision, "deny")
                 self.assertIn("rule=protected-artifact", reason)
 
+    def test_codex_rollout_mutation_is_denied(self):
+        rollout = os.path.expanduser(
+            "~/.codex/sessions/2026/08/13/rollout-runtime-thread.jsonl"
+        )
+        for command in (
+            f"echo forged >> {rollout}",
+            f"truncate -s 0 {rollout}",
+        ):
+            with self.subTest(command=command):
+                r = _run_bash(command)
+                decision, reason = parse_decision(r.stdout)
+                self.assertEqual(decision, "deny")
+                self.assertIn("rule=protected-artifact", reason)
+
     def test_direct_lifecycle_hook_invocation_is_denied(self):
         for command in (
             "python3 plugin/scripts/background_hook.py --event stop",

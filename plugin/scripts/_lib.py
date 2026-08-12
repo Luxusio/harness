@@ -2882,6 +2882,14 @@ def _make_runtime_receipt_writer():
                 os.path.dirname(__file__), function.__module__ + ".py",
             ))
             module_path = os.path.realpath(str(getattr(module, "__file__", "") or ""))
+            spec = getattr(module, "__spec__", None)
+            loader = getattr(spec, "loader", None)
+            canonical_loader = (
+                any(name == function.__module__ for name, _ in allowed_names[source])
+                and isinstance(loader, importlib.machinery.SourceFileLoader)
+                and os.path.realpath(str(getattr(spec, "origin", "") or "")) == expected_path
+                and os.path.realpath(loader.get_filename(function.__module__)) == expected_path
+            )
             owner = module
             for part in function.__qualname__.split("."):
                 owner = getattr(owner, part, None)
@@ -2927,7 +2935,9 @@ def _make_runtime_receipt_writer():
             if (
                 caller is None
                 or caller.f_code.co_name != "<module>"
+                or caller.f_code != canonical_root
                 or module is None
+                or not canonical_loader
                 or caller.f_globals is not vars(module)
                 or function.__globals__ is not vars(module)
                 or module_path != expected_path
@@ -2970,7 +2980,7 @@ def _make_runtime_receipt_writer():
                         caller.f_code is binding[0]
                         and caller.f_globals is binding[1]
                         and all(caller.f_globals.get(name) is value for name, value in binding[2])
-                        and all(getattr(owner, name, None) is value for owner, name, value in binding[4])
+                        and all(vars(owner).get(name) is value for owner, name, value in binding[4])
                     )
                 candidates = [
                     value for (candidate_source, _), value in bound_callers.items()

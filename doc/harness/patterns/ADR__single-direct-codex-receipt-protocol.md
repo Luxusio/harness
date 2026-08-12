@@ -26,15 +26,15 @@ one acquisition path:
 
 1. The registered root calls direct `collaboration.spawn_agent` with a valid
    structured `task_name`.
-2. The matching structured spawn output supplies the child agent identity.
-3. Bounded discovery resolves exactly one trusted depth-1 child rollout whose
-   root, session, cwd, agent path, task name, and child identity match the call
-   and output.
+2. The matching structured spawn output supplies the child agent path.
+3. A matching structured `SubAgentActivity` supplies the child thread identity;
+   when that event is absent, bounded discovery resolves exactly one trusted
+   depth-1 child rollout with the same root, session, cwd, and agent path.
 4. The watcher records the start only after all three records agree.
 
 Zero, multiple, malformed, mismatched, out-of-bound, or already-completed child
-candidates fail closed. Activity events are ignored and cannot start or repair
-a lifecycle.
+candidates fail closed. Activity cannot authorize a lifecycle by itself; its
+path must match the structured spawn output and the trusted child rollout.
 
 The watcher binds the active `TASK.json` generation, canonical repository, root session,
 root rollout, child thread, child agent path, structured task name, and derived
