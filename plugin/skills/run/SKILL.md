@@ -48,7 +48,7 @@ harness task yourself and continue through this flow.
 ### Native Goal continuation
 
 Add Goal children by dependency/risk; future IDs are valid. Use `goal_add_task`;
-`goal_next_task` selects the first queued/active child. Present the selected next task as status; ask only at material decisions/blockers.
+`goal_next_task` selects first queued/active. Present the selected next task as status.
 
 ### Phase 0: Resume detection
 
@@ -66,8 +66,7 @@ Resume routing:
 Only call `task_start` when no active task can be resolved, or when the user
 explicitly asks for a new task.
 
-If only a Goal is active, call `goal_next_task`; if none is queued and the
-objective is unproven, create/attach a thin vertical child.
+If only a Goal is active, call `goal_next_task`; if none and unproven, attach a child.
 
 ### Phase 1: Start task
 
@@ -211,7 +210,7 @@ the diff still has fresh review+QA PASS.
 
 For a Goal child, run `task_close` first, then self-improvement including
 learning promotion and hygiene scheduling; only then call `goal_next_task`.
-Continue unless complete, blocked/stopped, capped, or at a go/no-go boundary.
+Continue unless complete, blocked/stopped, capped, or awaiting go/no-go.
 
 For this harness plugin source repo, successful repo-mutating development is
 not complete at task close. Phase 7.8 must already have run the verified

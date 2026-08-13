@@ -191,8 +191,6 @@ python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
 ```
 
 Note: no `Default agent is X` line. The harness routes via skills, not agent switching.
-Pre-native orchestration is unsupported; setup owns only this routing block.
-
 ## 3.5 Critic playbooks
 
 **doc/harness/critics/plan.md:** scope bounded, ACs testable, verification commands exist. PASS when a dev can implement without guessing intent.

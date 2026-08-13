@@ -388,8 +388,10 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
                 merge_environments(environment, outcomes)
     process_statements(tree.body, strings)
     filesystem_mutators = {
-        "link", "rename", "replace", "remove", "unlink", "write_text",
-        "write_bytes", "hardlink_to", "link_to", "chmod",
+        "link", "rename", "replace", "remove", "unlink", "truncate", "chown",
+        "utime", "move", "copy", "copy2", "copyfile", "touch", "mkdir",
+        "makedirs", "rmdir", "removedirs", "write_text", "write_bytes",
+        "hardlink_to", "link_to", "chmod",
     }
     open_aliases = {"open"}
     os_open_aliases = set()

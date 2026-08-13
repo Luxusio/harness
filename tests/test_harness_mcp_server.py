@@ -2605,6 +2605,25 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                     Path(td).resolve(),
                 )
 
+    def test_concurrent_goal_add_task_preserves_both_children(self):
+        import concurrent.futures
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(harness_server, "find_repo_root", return_value=tmp):
+                started = harness_server.call_tool("goal_start", {"objective": "concurrency"})
+                self.assertFalse(started.get("isError"))
+                def add(index):
+                    return harness_server.call_tool(
+                        "goal_add_task", {"task_id": f"TASK__goal-child-{index}"},
+                    )
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                    results = list(pool.map(add, (1, 2)))
+                self.assertTrue(all(not result.get("isError") for result in results))
+                goal = harness_server.read_current_goal(tmp)
+                self.assertEqual(
+                    {task["task_id"] for task in goal["tasks"]},
+                    {"TASK__goal-child-1", "TASK__goal-child-2"},
+                )
+
     def test_close_evaluates_each_success_gate_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(

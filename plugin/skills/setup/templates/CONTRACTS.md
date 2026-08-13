@@ -98,8 +98,7 @@ edits and source-scope discipline remain the developer's responsibility.
 ### C-05
 
 **Title:** Protected artifact ownership.
-**When:** Any `Write`/`Edit` to PLAN.md, TASK.json, RECEIPTS.jsonl,
-`doc/harness/goals/*.json` — and any
+**When:** Any `Write`/`Edit` to PLAN.md, TASK.json, RECEIPTS.jsonl, or `doc/harness/goals/*.json` — and any
 `Bash` mutation (sed -i,
 redirect, cp, mv, tee, python -c open(…,'w'), …) targeting the same basenames.
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`
@@ -230,8 +229,7 @@ break it immediately.
 ### C-16
 
 **Title:** Close-time hygiene — content-signal doc classification + contract drift auto-apply.
-**When:** Normal harness task close-time self-improvement, before the next
-native Goal child is selected.
+**When:** Close-time self-improvement, before the next Goal child.
 **Enforced by:** `plugin/scripts/hygiene_scan.py` (post-close self-improvement
 pipeline); `plugin/scripts/doc_hygiene.py` (called by hygiene_scan);
 `doc/harness/hygiene.yaml` (config + canonical disable path).

@@ -36,32 +36,8 @@ REVIEW_LENSES = frozenset(lens for lens in LENS_ORDER if lens.startswith("review
 QA_LENSES = frozenset(lens for lens in LENS_ORDER if lens.startswith("qa-"))
 SUPPORTED_LENSES = frozenset(LENS_ORDER)
 
-# ── Plugin-root env var (AC-006 of TASK__dual-runtime-plugin-claude-codex) ─
-#
-# Runtime-private env var rename: `CLAUDE_PLUGIN_ROOT` (Claude Code injects)
-# → `HARNESS_PLUGIN_ROOT` (runtime-agnostic; works on Codex too). v2.3.0
-# ships dual-name fallback. v2.5.0 will drop `CLAUDE_PLUGIN_ROOT` per
-# CHANGELOG deprecation window.
-#
-# External config (`plugin/hooks/hooks.json`, `plugin/.mcp.json`) intentionally
-# stays on `${CLAUDE_PLUGIN_ROOT}` for v2.3.0 because Claude Code injects that
-# variable. The flip is a v2.4/v2.5 task once Codex side has been validated
-# and a parallel injection mechanism is wired.
-
-
 def plugin_root_env(default: str | None = None) -> str | None:
-    """Read the plugin-root env var with dual-name fallback.
-
-    Returns the value of `HARNESS_PLUGIN_ROOT` if set (preferred name).
-    Otherwise returns the value of `CLAUDE_PLUGIN_ROOT` (deprecated but
-    still supported during the v2.3 → v2.5 overlap window). Returns
-    ``default`` (or ``None``) when neither is set.
-
-    Callers reading the env var SHOULD prefer this helper over direct
-    ``os.environ.get`` so the rename rolls out consistently. Subprocess
-    spawners that set the env for child processes SHOULD set BOTH names
-    until v2.5 — see :func:`plugin_root_env_pair` below.
-    """
+    """Return the configured runtime plugin root."""
     new = os.environ.get("HARNESS_PLUGIN_ROOT")
     if new:
         return new
@@ -72,12 +48,7 @@ def plugin_root_env(default: str | None = None) -> str | None:
 
 
 def plugin_root_env_pair(value: str) -> dict[str, str]:
-    """Return a dict with both env-var names set to ``value``.
-
-    For subprocess env mappings during the deprecation window. Once v2.5
-    drops `CLAUDE_PLUGIN_ROOT`, change this to return ``{"HARNESS_PLUGIN_ROOT": value}``
-    only — callsites become a single-key dict assignment automatically.
-    """
+    """Return plugin-root variables for child processes."""
     return {
         "HARNESS_PLUGIN_ROOT": value,
         "CLAUDE_PLUGIN_ROOT": value,  # deprecated; drop in v2.5
@@ -107,6 +78,7 @@ _STDIN_CAP_BYTES = 1 << 16  # 64 KiB read cap for hook payload
 _LAST_HOOK_INPUT: dict = {}
 GOALS_DIR = os.path.join("doc", "harness", "goals")
 GOAL_CURRENT_FILE = os.path.join(GOALS_DIR, "current.json")
+_GOAL_LOCK_HELD = ContextVar("harness_goal_lock_held", default=())
 
 
 def read_hook_input():
@@ -200,6 +172,34 @@ def _goal_path(repo_root: str, goal_id: str) -> str:
 def _current_goal_path(repo_root: str) -> str:
     goals_dir = _validated_control_dir(repo_root, GOALS_DIR, "goal storage root")
     return os.path.join(goals_dir, "current.json")
+
+
+@contextmanager
+def goal_transaction(repo_root: str):
+    root = os.path.realpath(repo_root)
+    held = _GOAL_LOCK_HELD.get()
+    if root in held:
+        yield
+        return
+    goals_dir = _validated_control_dir(root, GOALS_DIR, "goal storage root")
+    os.makedirs(goals_dir, mode=0o700, exist_ok=True)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(goals_dir, flags)
+    try:
+        info, current = os.fstat(fd), os.lstat(goals_dir)
+        if not stat.S_ISDIR(info.st_mode) or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o022:
+            raise RuntimeError("goal storage integrity unavailable")
+        import fcntl
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        token = _GOAL_LOCK_HELD.set(held + (root,))
+        try:
+            yield
+            after = os.lstat(goals_dir)
+            if (after.st_dev, after.st_ino) != (info.st_dev, info.st_ino): raise RuntimeError("goal storage identity changed")
+        finally:
+            _GOAL_LOCK_HELD.reset(token)
+    finally:
+        os.close(fd)
 
 
 def _read_regular_text_file(path: str, *, max_size: int = 1024 * 1024) -> str:
@@ -437,26 +437,21 @@ def read_current_goal(repo_root: str | None = None) -> dict:
 def write_goal_state(repo_root: str, state: dict) -> dict:
     if not _trusted_control_writer():
         raise PermissionError("Goal mutation requires the native Goal MCP")
-    raw_goal_id = str(state.get("goal_id") or "")
-    goal_id = _goal_id(raw_goal_id, str(state.get("objective") or ""))
-    state = dict(state)
-    state["goal_id"] = goal_id
-    state["updated_at"] = now_iso()
-    goals_dir = _validated_control_dir(repo_root, GOALS_DIR, "goal storage root")
-    os.makedirs(goals_dir, exist_ok=True)
-    text = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    paths = (_goal_path(repo_root, goal_id), _current_goal_path(repo_root))
-    snapshots = {
-        path: _strict_regular_text_snapshot(path, allow_symlink=True)
-        for path in paths
-    }
-    try:
-        for path in paths:
-            _atomic_text_write(path, text)
-    except Exception:
-        _restore_text_snapshots(snapshots)
-        raise
-    return state
+    with goal_transaction(repo_root):
+        raw_goal_id = str(state.get("goal_id") or "")
+        goal_id = _goal_id(raw_goal_id, str(state.get("objective") or ""))
+        state = dict(state)
+        state["goal_id"] = goal_id
+        state["updated_at"] = now_iso()
+        text = json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        paths = (_goal_path(repo_root, goal_id), _current_goal_path(repo_root))
+        snapshots = {path: _strict_regular_text_snapshot(path, allow_symlink=True) for path in paths}
+        try:
+            for path in paths: _atomic_text_write(path, text)
+        except Exception:
+            _restore_text_snapshots(snapshots)
+            raise
+        return state
 
 
 def start_harness_goal(
@@ -466,27 +461,23 @@ def start_harness_goal(
     goal_id: str | None = None,
     source: dict | None = None,
 ) -> dict:
-    objective = _goal_probe_text(objective)
-    if not objective:
-        raise ValueError("objective required")
-    gid = _goal_id(goal_id, objective)
-    existing = _read_json_file(_goal_path(repo_root, gid))
-    current = read_current_goal(repo_root)
-    if current.get("status") == "active" and current.get("goal_id") == gid:
-        existing = current
-    state = {
-        "goal_id": gid,
-        "objective": objective,
-        "status": "active",
-        "created_at": existing.get("created_at") or now_iso(),
-        "updated_at": now_iso(),
-        "source": source or existing.get("source") or {},
-        "tasks": existing.get("tasks") if isinstance(existing.get("tasks"), list) else [],
-    }
-    return write_goal_state(repo_root, state)
+    with goal_transaction(repo_root):
+        objective = _goal_probe_text(objective)
+        if not objective: raise ValueError("objective required")
+        gid = _goal_id(goal_id, objective)
+        existing = _read_json_file(_goal_path(repo_root, gid))
+        current = read_current_goal(repo_root)
+        if current.get("status") == "active" and current.get("goal_id") == gid: existing = current
+        return write_goal_state(repo_root, {
+            "goal_id": gid, "objective": objective, "status": "active",
+            "created_at": existing.get("created_at") or now_iso(), "updated_at": now_iso(),
+            "source": source or existing.get("source") or {},
+            "tasks": existing.get("tasks") if isinstance(existing.get("tasks"), list) else [],
+        })
 
 
 def add_goal_task(repo_root: str, task_id: str, *, title: str = "", status: str = "queued", task_dir: str = "") -> dict:
+  with goal_transaction(repo_root):
     current = read_current_goal(repo_root)
     if not current:
         raise ValueError("no active goal")
@@ -531,6 +522,7 @@ def next_goal_task(repo_root: str) -> dict:
 
 
 def finish_harness_goal(repo_root: str, *, status: str = "complete") -> dict:
+  with goal_transaction(repo_root):
     current = read_current_goal(repo_root)
     if not current:
         raise ValueError("no active goal")
