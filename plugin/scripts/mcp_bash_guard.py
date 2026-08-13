@@ -88,13 +88,6 @@ def _is_env_assignment(token: str) -> bool:
 
 
 def _tokenize(command: str):
-    """shlex-parse a command, emitting shell operators as distinct tokens.
-
-    Uses ``shlex.shlex`` with ``punctuation_chars=True`` so ``&&``, ``||``,
-    ``|``, ``;``, ``&`` become their own tokens while quoted strings stay
-    intact. On malformed input (unclosed quote etc.), falls back to a
-    whitespace split.
-    """
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
@@ -140,7 +133,6 @@ def _classify_gated_path(path_value: str, repo_root: str) -> str:
 
 
 def _is_goal_control_inode_alias(token: str, repo_root: str, execution_cwd="") -> bool:
-    """Recognize an existing hard-link alias of a native Goal authority leaf."""
     raw = os.path.expanduser(str(token or "").strip().strip("'").strip('"'))
     if not raw:
         return False
@@ -185,6 +177,14 @@ def _last_non_option(tokens):
             continue
         return token
     return ""
+
+
+def _embedded_path_candidates(tokens):
+    visible = " ".join(tokens)
+    return re.findall(
+        r"(?:~|/|\.?\.?/)?[A-Za-z0-9_.:-]+(?:/[A-Za-z0-9_.:-]+)+",
+        visible,
+    )
 
 
 def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd=""):
@@ -393,14 +393,15 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
                 block = getattr(node, field, None)
                 if isinstance(block, list):
                     child_blocks.append(block)
+            outcomes = [dict(environment)]
             for handler in getattr(node, "handlers", ()):
                 handler_environment = dict(environment)
                 if handler.name:
                     handler_environment.pop(handler.name, None)
                 process_statements(getattr(handler, "body", []), handler_environment)
+                outcomes.append(handler_environment)
             for case in getattr(node, "cases", ()):
                 child_blocks.append(getattr(case, "body", []))
-            outcomes = [dict(environment)]
             for block in child_blocks:
                 child = body_environment(node, environment)
                 process_statements(block, child)
@@ -677,9 +678,6 @@ def _protected_lifecycle_execution(argv, execution_cwd=""):
                 code = args[args.index("-c") + 1]
             except IndexError:
                 return False
-            # The shell resolves these after parsing, so static Python
-            # inspection sees only a placeholder. Fail closed here, while
-            # still allowing ordinary script source to contain prose ticks.
             return "$(" in code or "`" in code or _python_code_exposes_lifecycle(code)
         value_options = {"-X", "-W", "-Q", "--check-hash-based-pycs"}
         index = 0
@@ -737,10 +735,8 @@ def _safe_lifecycle_source_inspection(argv):
 
 
 def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
-    """Classify a single command segment (between shell operators)."""
     if not segment_tokens:
         return
-    # Skip leading env assignments (fixes `FOO=bar sed -i ...` bypass).
     idx = 0
     while idx < len(segment_tokens) and _is_env_assignment(segment_tokens[idx]):
         idx += 1
@@ -858,16 +854,24 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
             non_env, targets, repo_root, execution_cwd
         )
         return
+    if cmd in {
+        "cat", "file", "git", "grep", "head", "less", "ls", "more",
+        "pytest", "py.test", "readlink", "realpath", "rg", "stat", "wc",
+    } or cmd == "sed" and not any(
+        token == "-i" or token.startswith("-i") for token in non_env[1:]
+    ):
+        return
+    for candidate in _embedded_path_candidates(non_env[1:]):
+        before = len(targets)
+        _append_target(
+            targets, candidate, "unrecognized executable with gated path",
+            repo_root, execution_cwd,
+        )
+        if len(targets) > before and targets[-1]["category"] == "source":
+            targets.pop()
 
 
 def _extract_mutation_targets(command, repo_root, execution_cwd=""):
-    """Extract paths the command would mutate + classify against gated categories.
-
-    Shell-aware: shlex-tokenizes first (respecting quotes), then walks the
-    token list with ``BOUNDARY_TOKENS`` marking segment starts. Redirections
-    are scanned across the whole token list; per-command heuristics run on
-    each inter-boundary segment.
-    """
     targets: list[dict] = []
     tokens = _tokenize(command)
     if not tokens:
@@ -877,7 +881,6 @@ def _extract_mutation_targets(command, repo_root, execution_cwd=""):
 
     idx = 0
     while idx < len(tokens):
-        # Find the end of this segment (next boundary operator or EOL).
         j = idx
         while j < len(tokens) and tokens[j] not in BOUNDARY_TOKENS:
             j += 1

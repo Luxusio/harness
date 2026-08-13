@@ -388,13 +388,28 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 self.assertIn("rule=protected-artifact", reason)
 
     def test_python_branch_write_source_denies(self):
-        command = (
+        for command in (
             "python3 -c $'mode=\"r\"\\nif True:\\n mode=\"w\"\\n"
-            "open(\"plugin/scripts/health.py\", mode)'"
-        )
-        decision, reason = parse_decision(_run_bash(command).stdout)
-        self.assertEqual(decision, "deny")
-        self.assertIn("rule=source", reason)
+            "open(\"plugin/scripts/health.py\", mode)'",
+            "python3 -c $'mode=\"r\"\\ntry:\\n raise RuntimeError()\\n"
+            "except RuntimeError:\\n mode=\"w\"\\n"
+            "open(\"plugin/scripts/health.py\", mode)'",
+        ):
+            with self.subTest(command=command):
+                decision, reason = parse_decision(_run_bash(command).stdout)
+                self.assertEqual(decision, "deny")
+                self.assertIn("rule=source", reason)
+
+    def test_unknown_runtime_with_protected_path_denies(self):
+        for path in (
+            "doc/harness/goals/current.json",
+            "doc/harness/tasks/TASK__remove-duplicate-queue-and-legacy-diagnostics/RECEIPTS.jsonl",
+        ):
+            command = f'node -e "require(\'fs\').writeFileSync(\'{path}\',\'{{}}\')"'
+            with self.subTest(path=path):
+                decision, reason = parse_decision(_run_bash(command).stdout)
+                self.assertEqual(decision, "deny")
+                self.assertIn("rule=protected-artifact", reason)
 
     def test_shell_indirect_goal_writes_deny(self):
         for command in (
