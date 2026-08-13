@@ -47,17 +47,9 @@ harness task yourself and continue through this flow.
 
 ### Native Goal continuation
 
-For a request with multiple known stages, sync one native Goal and add its
-children in declared roadmap order, then dependency order, then
-highest-risk/highest-value order. A queued child may be named before its task
-directory exists. Use `goal_next_task` to select the first queued or active
-child; report that selection as status, not a question.
-Present the selected next task as status.
-
-Ask the user only for an agreed go/no-go boundary, a genuine
-product/architecture/auth/billing/data/destructive decision, an environment or
-credential blocker, or a contradiction that would likely implement the wrong
-intent. Task decomposition and ordering are harness decisions.
+Add known Goal children in declared, dependency, then risk/value order; queued
+IDs may be future tasks; use `goal_add_task`. `goal_next_task` selects the first queued/active child.
+Report it as status; ask only at material user decisions or blockers.
 
 ### Phase 0: Resume detection
 
@@ -75,10 +67,8 @@ Resume routing:
 Only call `task_start` when no active task can be resolved, or when the user
 explicitly asks for a new task.
 
-If no task is active but a native Goal is active, call `goal_next_task` and
-start or resume the returned child without asking which task to do next. If no
-child is queued and the objective is not proven, create the next thin vertical
-child with `task_start`, then attach it with `goal_add_task`.
+If only a Goal is active, call `goal_next_task`; if none is queued and the
+objective is unproven, create and attach the next thin vertical child.
 
 ### Phase 1: Start task
 
@@ -220,13 +210,11 @@ the task pending and request a new session; do not write receipts by hand. On
 resume, the stateless root installer may be run again after confirming
 the diff still has fresh review+QA PASS.
 
-For a native Goal child, task close is an iteration checkpoint, not Goal
-completion. Preserve this order: `task_close` first; then run the complete
-self-improvement pipeline, including learning promotion and hygiene scheduling;
-only then call `goal_next_task`. Compare the result with the Goal objective and
-choose the next thin vertical child by user value, risk, or learning. Start or
-queue it unless the Goal is proven complete, blocked/stopped by user or
-environment, budget-capped, or waiting at an explicit go/no-go boundary.
+For a Goal child, run `task_close` first, complete self-improvement including
+learning promotion and hygiene scheduling, and only then call `goal_next_task`.
+Choose the next slice by value, risk,
+or learning unless the Goal is complete, blocked/stopped, capped, or at a
+go/no-go boundary.
 
 For this harness plugin source repo, successful repo-mutating development is
 not complete at task close. Phase 7.8 must already have run the verified

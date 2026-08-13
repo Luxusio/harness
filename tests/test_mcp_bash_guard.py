@@ -406,6 +406,10 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "node -e \"let p='doc/harness/goals/'+'current.json';require('fs').writeFileSync(p,'{}')\"",
             "p=doc/harness/goals/current.json; node -e \"require('fs').writeFileSync(process.argv[1],'{}')\" \"$p\"",
             "ruby -e \"p='doc/harness/goals/'+'current.json';File.write(p,'{}')\"",
+            "node --eval=\"let p='doc/harness/goals/'+'current.json';require('fs').writeFileSync(p,'{}')\"",
+            "ruby -ep=\"'doc/harness/goals/'+'current.json';File.write(p,'{}')\"",
+            "perl -e'$d=\"doc/harness/goals/\";$f=\"current.json\";open(F,\">\",$d.$f)'",
+            "awk 'BEGIN { print \"{}\" > (\"doc/harness/goals/\" \"current.json\") }'",
             "node -e \"require('fs').writeFileSync('doc/harness/tasks/TASK__remove-duplicate-queue-and-legacy-diagnostics/RECEIPTS.jsonl','{}')\"",
         )
         for command in commands:
@@ -418,8 +422,15 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
         for command in (
             "git clean -f doc/harness/goals/current.json",
             "pytest --junitxml=doc/harness/goals/current.json tests/test_mcp_bash_guard.py",
+            "git diff --output=doc/harness/goals/current.json",
+            "sed -n 'w doc/harness/goals/current.json' /dev/null",
+            "find /tmp -fprint0 doc/harness/goals/current.json",
+            "diff -odoc/harness/goals/current.json /tmp/a /tmp/b",
+            "less -odoc/harness/goals/current.json /tmp/a",
+            "rg --pre \"sh -c 'printf x > doc/harness/goals/current.json; cat'\" x doc/harness/goals/current.json",
             "diff --output=doc/harness/goals/current.json /tmp/a /tmp/b",
             "find doc/harness/goals/current.json -delete",
+            "p=doc/harness/goals/current.json; pytest --junitxml=\"$p\" tests/test_mcp_bash_guard.py",
         ):
             with self.subTest(command=command):
                 decision, reason = parse_decision(_run_bash(command).stdout)
@@ -436,6 +447,12 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             with self.subTest(command=command):
                 decision, _ = parse_decision(_run_bash(command).stdout)
                 self.assertIsNone(decision)
+
+    def test_harmless_inline_runtime_allows(self):
+        decision, _ = parse_decision(
+            _run_bash('node -e "console.log(process.version)"').stdout
+        )
+        self.assertIsNone(decision)
 
     def test_shell_indirect_goal_writes_deny(self):
         for command in (

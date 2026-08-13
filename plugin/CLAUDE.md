@@ -30,11 +30,9 @@ No step skipped. Smallest coherent diff per step.
 - `write_plan` → PLAN.md + TASK.json required-lens declaration (plan-skill)
 - durable docs such as `doc/<area>/REQ__*.md` are normal repo docs, not MCP evidence tools
 
-**Native Goal (sole multi-task orchestration):**
-- `goal_start` / `goal_context` — sync and inspect the Goal
-- `goal_add_task` — add ordered children, including future children whose task directory is not created yet
-- `goal_next_task` — return the first queued or active child
-- `goal_finish` — finish only after every child is receipt-verified closed
+**Native Goal (sole multi-task orchestration):** `goal_start`/`goal_context`
+sync/inspect; `goal_add_task` adds ordered future children; `goal_next_task`
+selects the first queued/active child; `goal_finish` requires every child closed.
 
 Static review and runtime QA provenance share `RECEIPTS.jsonl`.
 Codex/Claude lifecycle hooks own it. Applicable lenses come from
