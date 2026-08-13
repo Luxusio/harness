@@ -80,6 +80,14 @@ OPERATIONAL_IGNORES = (
     "doc/harness/.maintain-pending.json",
 )
 
+OBSOLETE_OPERATIONAL_IGNORES = frozenset({
+    "doc/harness/goal-queue.json",
+    "doc/harness/goal-queue-events.jsonl",
+    "doc/harness/legacy/goal-queue-pre-native-state.*.json",
+    "doc/harness/task-packs/",
+    "doc/harness/debug/goal-hook-payloads/",
+})
+
 REQUIRED_SETUP_RESOURCES = (
     "skills/run/SKILL.md",
     "skills/setup/SKILL.md",
@@ -145,7 +153,9 @@ def render_gitignore(original: str) -> str:
     managed = set(OPERATIONAL_IGNORES)
     lines = [
         line for line in original.splitlines()
-        if line not in managed and line not in managed_headers
+        if line not in managed
+        and line not in OBSOLETE_OPERATIONAL_IGNORES
+        and line not in managed_headers
     ]
     while lines and not lines[-1].strip():
         lines.pop()
