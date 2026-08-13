@@ -31,12 +31,9 @@ try:
     )
 except Exception:
     sys.exit(0)
-
-
 GATE_NAME = "mcp_bash_guard"
 _COMMAND_LENGTH_CAP = 64 * 1024  # short-circuit extremely large commands
 _GUARD_STDIN_CAP = 128 * 1024
-
 REDIRECT_TOKENS = {">", ">>", "1>", "1>>"}
 LAST_ARG_MUTATORS = {"cp", "mv", "install", "touch", "truncate"}
 TEE_COMMAND = "tee"
@@ -60,7 +57,12 @@ GOAL_MUTATION_SYMBOLS = {
     "handle_goal_finish", "goal_start", "goal_add_task", "goal_finish",
 }
 PROTECTED_MUTATION_SYMBOLS = RECEIPT_MUTATION_SYMBOLS | GOAL_MUTATION_SYMBOLS
-
+UNINSPECTED_INLINE_RUNTIMES = dict(
+    bun={"-e", "--eval"}, deno={"eval"}, lua={"-e"},
+    node={"-e", "--eval", "-p", "--print"},
+    nodejs={"-e", "--eval", "-p", "--print"}, perl={"-e", "-E"},
+    php={"-r"}, ruby={"-e"},
+)
 BOUNDARY_TOKENS = {"&&", "||", "|", ";", "\n", "&"}
 _INLINE_REDIRECT_RE = re.compile(r"^(?:\d*)?(>>?)(.+)$")
 
@@ -69,20 +71,16 @@ _PY_PATTERNS = [
     re.compile(r"os\.replace\([^,]+,\s*['\"]([^'\"]+)['\"]\)"),
     re.compile(r"shutil\.copy(?:2)?\([^,]+,\s*['\"]([^'\"]+)['\"]\)"),
 ]
-
 _ARTIFACT_TOOL_HINT = {
     "TASK.json": "harness task control MCP",
     "RECEIPTS.jsonl": "runtime review and QA lifecycle hook",
     "PLAN.md": "mcp__plugin_harness_harness__write_plan",
 }
-
 RULE_DOCS = {
     "protected-artifact": "doc/harness/patterns/mcp-bash-guard.md",
     "workflow-control-surface": "doc/harness/patterns/mcp-bash-guard.md",
     "source": "doc/harness/patterns/mcp-bash-guard.md",
 }
-
-
 def _is_env_assignment(token: str) -> bool:
     return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token or ""))
 
@@ -94,8 +92,6 @@ def _tokenize(command: str):
         return [t for t in lexer if t]
     except ValueError:
         return command.split()
-
-
 def _normalize_candidate_path(
     token: str, repo_root: str = "", execution_cwd: str = ""
 ) -> str:
@@ -116,8 +112,6 @@ def _normalize_candidate_path(
     except ValueError:
         return ""
     return os.path.relpath(candidate, root)
-
-
 def _classify_gated_path(path_value: str, repo_root: str) -> str:
     if not path_value:
         return ""
@@ -130,8 +124,6 @@ def _classify_gated_path(path_value: str, repo_root: str) -> str:
     if _is_source_file(path_value, repo_root=repo_root):
         return "source"
     return ""
-
-
 def _is_goal_control_inode_alias(token: str, repo_root: str, execution_cwd="") -> bool:
     raw = os.path.expanduser(str(token or "").strip().strip("'").strip('"'))
     if not raw:
@@ -154,8 +146,6 @@ def _is_goal_control_inode_alias(token: str, repo_root: str, execution_cwd="") -
     except OSError:
         return False
     return False
-
-
 def _append_target(targets, token, method, repo_root, execution_cwd=""):
     path_value = _normalize_candidate_path(token, repo_root, execution_cwd)
     category = _classify_gated_path(path_value, repo_root)
@@ -734,6 +724,20 @@ def _safe_lifecycle_source_inspection(argv):
     return False
 
 
+def _safe_gated_path_inspection(argv):
+    if not argv:
+        return False
+    cmd, args = os.path.basename(argv[0]), argv[1:]
+    readers = {"cat", "file", "head", "less", "ls", "more", "readlink", "realpath", "rg", "grep", "stat", "tail", "wc"}
+    if cmd in readers:
+        return True
+    if cmd == "git": return bool(args) and args[0] in {"diff", "show", "log", "status", "grep"}
+    if cmd == "sed": return not any(arg == "-i" or arg.startswith("-i") for arg in args)
+    if cmd == "diff": return not any(arg in {"-o", "--output"} or arg.startswith("--output=") for arg in args)
+    if cmd == "find": return not any(arg in {"-delete", "-exec", "-execdir", "-fls", "-fprint", "-fprintf"} for arg in args)
+    return False
+
+
 def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
     if not segment_tokens:
         return
@@ -854,12 +858,15 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
             non_env, targets, repo_root, execution_cwd
         )
         return
-    if cmd in {
-        "cat", "file", "git", "grep", "head", "less", "ls", "more",
-        "pytest", "py.test", "readlink", "realpath", "rg", "stat", "wc",
-    } or cmd == "sed" and not any(
-        token == "-i" or token.startswith("-i") for token in non_env[1:]
-    ):
+    inline_flags = UNINSPECTED_INLINE_RUNTIMES.get(cmd, set())
+    if inline_flags.intersection(non_env[1:]):
+        targets.append({
+            "path": "doc/harness/goals/current.json",
+            "category": "protected-artifact",
+            "method": "uninspected inline runtime",
+        })
+        return
+    if _safe_gated_path_inspection(non_env):
         return
     for candidate in _embedded_path_candidates(non_env[1:]):
         before = len(targets)

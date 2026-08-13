@@ -401,15 +401,41 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 self.assertIn("rule=source", reason)
 
     def test_unknown_runtime_with_protected_path_denies(self):
-        for path in (
-            "doc/harness/goals/current.json",
-            "doc/harness/tasks/TASK__remove-duplicate-queue-and-legacy-diagnostics/RECEIPTS.jsonl",
-        ):
-            command = f'node -e "require(\'fs\').writeFileSync(\'{path}\',\'{{}}\')"'
-            with self.subTest(path=path):
+        commands = (
+            "node -e \"require('fs').writeFileSync('doc/harness/goals/current.json','{}')\"",
+            "node -e \"let p='doc/harness/goals/'+'current.json';require('fs').writeFileSync(p,'{}')\"",
+            "p=doc/harness/goals/current.json; node -e \"require('fs').writeFileSync(process.argv[1],'{}')\" \"$p\"",
+            "ruby -e \"p='doc/harness/goals/'+'current.json';File.write(p,'{}')\"",
+            "node -e \"require('fs').writeFileSync('doc/harness/tasks/TASK__remove-duplicate-queue-and-legacy-diagnostics/RECEIPTS.jsonl','{}')\"",
+        )
+        for command in commands:
+            with self.subTest(command=command):
                 decision, reason = parse_decision(_run_bash(command).stdout)
                 self.assertEqual(decision, "deny")
                 self.assertIn("rule=protected-artifact", reason)
+
+    def test_named_readers_do_not_hide_writers(self):
+        for command in (
+            "git clean -f doc/harness/goals/current.json",
+            "pytest --junitxml=doc/harness/goals/current.json tests/test_mcp_bash_guard.py",
+            "diff --output=doc/harness/goals/current.json /tmp/a /tmp/b",
+            "find doc/harness/goals/current.json -delete",
+        ):
+            with self.subTest(command=command):
+                decision, reason = parse_decision(_run_bash(command).stdout)
+                self.assertEqual(decision, "deny")
+                self.assertIn("rule=protected-artifact", reason)
+
+    def test_read_only_goal_commands_allow(self):
+        for command in (
+            "tail doc/harness/goals/current.json",
+            "diff /tmp/a doc/harness/goals/current.json",
+            "find doc/harness/goals/current.json -print",
+            "git diff -- doc/harness/goals/current.json",
+        ):
+            with self.subTest(command=command):
+                decision, _ = parse_decision(_run_bash(command).stdout)
+                self.assertIsNone(decision)
 
     def test_shell_indirect_goal_writes_deny(self):
         for command in (
