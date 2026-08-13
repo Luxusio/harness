@@ -325,6 +325,10 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 -c \"from pathlib import Path; Path('doc/harness/goals/current.json').open('r').read()\"",
             "python3 -c \"import io; io.open('doc/harness/goals/current.json').read()\"",
             "python3 -c \"import io as stream; stream.open('doc/harness/goals/current.json', 'r').read()\"",
+            "python3 -c \"import os; os.open('doc/harness/goals/current.json', os.O_RDONLY)\"",
+            "python3 -c \"import os; os.open('doc/harness/goals/current.json', getattr(os, 'O_'+'RDONLY'))\"",
+            "python3 -c \"p='first'; p='second'; print(p)\"",
+            "python3 -c \"mode='r'; open('doc/harness/goals/current.json', mode)\"",
         ):
             with self.subTest(command=command):
                 r = _run_bash(command)
@@ -350,6 +354,9 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 -c \"p='doc/harness/goals/'+'current.json'; open(p,'w').write('{}')\"",
             "python3 -c \"import builtins; getattr(builtins, 'op'+'en')('doc/harness/goals/current.json','w')\"",
             "python3 -c \"import os; os.open('doc/harness/goals/current.json', os.O_WRONLY)\"",
+            "python3 -c \"import os; o=os.open; o('doc/harness/goals/current.json', os.O_WRONLY)\"",
+            "python3 -c \"from os import open as o; import os; o('doc/harness/goals/current.json', os.O_WRONLY)\"",
+            "python3 -c \"p='ignored'; p='doc/harness/goals/'+'current.json'; open(p,'w')\"",
         )
         for command in commands:
             with self.subTest(command=command):

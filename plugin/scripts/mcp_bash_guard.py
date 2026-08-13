@@ -256,29 +256,33 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
             left, right = string_value(node.left), string_value(node.right)
             return left + right if left is not None and right is not None else None
         return None
-    changed = True
-    while changed:
-        changed = False
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        value = string_value(node.value)
+        targets_nodes = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for target in targets_nodes:
+            if not isinstance(target, ast.Name):
                 continue
-            value = string_value(node.value)
             if value is None:
-                continue
-            targets_nodes = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for target in targets_nodes:
-                if isinstance(target, ast.Name) and strings.get(target.id) != value:
-                    strings[target.id] = value
-                    changed = True
+                strings.pop(target.id, None)
+            else:
+                strings[target.id] = value
     filesystem_mutators = {
         "link", "rename", "replace", "remove", "unlink", "write_text",
         "write_bytes", "hardlink_to", "link_to", "chmod",
     }
     open_aliases = {"open"}
+    os_open_aliases = set()
     io_modules = {"io", "builtins"}
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module in {"io", "builtins"}:
             open_aliases.update(
+                alias.asname or alias.name
+                for alias in node.names if alias.name == "open"
+            )
+        elif isinstance(node, ast.ImportFrom) and node.module == "os":
+            os_open_aliases.update(
                 alias.asname or alias.name
                 for alias in node.names if alias.name == "open"
             )
@@ -302,6 +306,20 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
                 and isinstance(value.value, ast.Name)
                 and value.value.id in io_modules
             )
+            aliases_os_open = (
+                isinstance(value, ast.Name) and value.id in os_open_aliases
+            ) or (
+                isinstance(value, ast.Attribute)
+                and value.attr == "open"
+                and isinstance(value.value, ast.Name)
+                and value.value.id == "os"
+            )
+            if aliases_os_open:
+                targets_nodes = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets_nodes:
+                    if isinstance(target, ast.Name) and target.id not in os_open_aliases:
+                        os_open_aliases.add(target.id)
+                        changed = True
             if not aliases_open:
                 continue
             targets_nodes = node.targets if isinstance(node, ast.Assign) else [node.target]
@@ -333,13 +351,29 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
             and node.func.attr == "open"
             and isinstance(node.func.value, ast.Name)
             and node.func.value.id == "os"
-        )
+        ) or (isinstance(node.func, ast.Name) and node.func.id in os_open_aliases)
         if not direct_open and not module_open and not path_open and not getattr_open and not os_open:
             continue
         if os_open:
             flags = node.args[1] if len(node.args) > 1 else None
-            open_mutation = not (
+            readonly_flag = (
                 isinstance(flags, ast.Constant) and flags.value == os.O_RDONLY
+            ) or (
+                isinstance(flags, ast.Attribute)
+                and flags.attr == "O_RDONLY"
+                and isinstance(flags.value, ast.Name)
+                and flags.value.id == "os"
+            ) or (
+                isinstance(flags, ast.Call)
+                and isinstance(flags.func, ast.Name)
+                and flags.func.id == "getattr"
+                and len(flags.args) > 1
+                and isinstance(flags.args[0], ast.Name)
+                and flags.args[0].id == "os"
+                and string_value(flags.args[1]) == "O_RDONLY"
+            )
+            open_mutation = not (
+                readonly_flag
             )
             if open_mutation:
                 break
@@ -350,8 +384,9 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
         )
         if mode_node is None:
             continue
-        if isinstance(mode_node, ast.Constant) and isinstance(mode_node.value, str):
-            open_mutation = bool(set(mode_node.value) & set("wax+"))
+        mode_value = string_value(mode_node)
+        if mode_value is not None:
+            open_mutation = bool(set(mode_value) & set("wax+"))
         else:
             open_mutation = True
         if open_mutation:
