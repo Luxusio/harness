@@ -1,12 +1,13 @@
 ---
 freshness: current
+updated: 2026-08-13
 ---
 
 # Auto-Maintenance Pattern
 
 The harness post-close pipeline (run/self-improvement.md) automatically fires
 retrospectives and hygiene audits after each task close, surfacing output in the
-developer's HANDOFF.
+close-time command output.
 
 ## Retro auto-trigger semantics
 
@@ -29,21 +30,19 @@ Filter rules:
 - **contradiction**: flags same-key entries that are recent (<30 days apart) OR from the same source.
   Long-term evolution across different sources is intentionally not flagged.
 
-## HANDOFF Auto-ran section format
+## Auto-ran output format
 
-Every HANDOFF.md must include:
+The close-time pipeline prints:
 
 ```markdown
-## Auto-ran
-- retro: doc/harness/retros/2026-04-17.md
-- hygiene: 2 warnings (see stderr during promote_learnings run)
+Auto-ran: retro=doc/harness/retros/2026-04-17.md
+Auto-ran: hygiene=2 warnings
 ```
 
 Or when nothing fired:
 ```markdown
-## Auto-ran
-- retro: (none, threshold not met — 1/3 tasks since last retro)
-- hygiene: (none)
+Auto-ran: retro=(none, threshold not met — 1/3 tasks since last retro)
+Auto-ran: hygiene=(none)
 ```
 
 ## HARNESS_DISABLE_* env vars

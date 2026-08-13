@@ -9,8 +9,7 @@ allowed-tools: Read, Glob, Grep, Bash, Agent, Skill, AskUserQuestion, mcp__plugi
 Orchestrate the full harness development cycle for a task.
 
 > Current artifact model: `PLAN.md` owns acceptance intent and unified
-> `RECEIPTS.jsonl` owns review/QA evidence. Do not create or consume
-> `CHECKS.yaml` or `USER_FEEDBACK.jsonl`; later legacy wording is non-operative.
+> `RECEIPTS.jsonl` owns review/QA evidence.
 > Receipt acquisition is normative in
 > `doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md`; storage,
 > schema, snapshots, and gates are normative in

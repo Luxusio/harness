@@ -3,7 +3,7 @@
 tags: [harness, spec, architecture]
 status: draft
 created: 2026-04-09
-updated: 2026-08-12
+updated: 2026-08-13
 task_ref: TASK__harness-architecture
 
 ---
@@ -81,13 +81,10 @@ environment facts are recomputed by the operation that needs them.
 | `PLAN.md` | MCP `write_plan` |
 | `TASK.json` | task lifecycle MCP tools |
 | `RECEIPTS.jsonl` | Codex/Claude review and QA lifecycle hooks, including the root-hook-registered, MCP-hosted Codex watcher |
-| `CONVERSATION.md` | Codex/Claude UserPromptSubmit/Subagent hooks |
 | durable docs under `doc/<area>/<TYPE>__*.md` | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
 
-Manual evidence writers are intentionally absent. The MCP server does not expose
-manual evidence writers, critic writers, handoff writers, or REQ writer tools.
-`CONVERSATION.md` is readable task history; machine enforcement only reads
-explicit `<!-- item: ... -->` markers.
+Manual evidence writers are intentionally absent. User corrections must be
+promoted directly into `PLAN.md` or durable project documentation.
 
 ### Control-plane artifact integrity
 

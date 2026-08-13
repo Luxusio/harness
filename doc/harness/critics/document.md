@@ -1,25 +1,21 @@
 # document critic project playbook
 summary: harness plugin — Python scripts, Markdown agents/skills/docs
-updated: 2026-03-30
+updated: 2026-08-13
 
 # Hard FAIL conditions
 
 - Facts in documentation contradict observable reality (code, tests, runtime)
 - Two active documents directly contradict each other
 - Documentation changes make things harder to find (broken links, removed indexes without replacement)
-- DOC_SYNC.md claims notes were created but the files don't exist
-- DOC_SYNC.md omits changes that actually happened (drift between claim and reality)
-- DOC_SYNC.md claims "none" across all sections but doc files actually changed on disk
 - Supersede chain is broken: a superseded note is still marked `status: active`
 - Root index was not updated after a note was created or removed
 - A changed `REQ__*.md` is too vague for implementation or QA to verify
 - A changed `REQ__*.md` omits observable UI/API behavior introduced by the diff
-- A changed `REQ__*.md` contradicts PLAN.md, HANDOFF.md, tests, or implementation
+- A changed `REQ__*.md` contradicts PLAN.md, tests, or implementation
 
 # Documentation impact judgment
 
-Before failing a task for a missing REQ, inspect the task's PLAN/HANDOFF/DOC_SYNC
-durable-doc judgment:
+Before failing a task for a missing REQ, inspect PLAN.md's durable-doc judgment:
 
 - `REQ needed` should name a concrete `doc/<area>/REQ__*.md` path or explain why
   an existing REQ already covers the behavior.
@@ -59,12 +55,10 @@ can detect a mismatch without reading the old task transcript.
 
 # Verification procedure
 
-1. Compare DOC_SYNC.md claims against `git diff --name-only` — every changed doc file must appear in DOC_SYNC.md
-2. For each note listed as created: confirm the file exists on disk
-3. For each note listed as updated: confirm the file was actually modified
-4. For each supersede entry: confirm old note is marked `status: superseded` and new note is `status: active`
-5. For each index refresh listed: confirm root CLAUDE.md entry exists and is accurate
-6. Check that no doc file changed silently (changed on disk but absent from DOC_SYNC.md)
-7. For each changed `REQ__*.md`, compare the note to PLAN.md, HANDOFF.md,
-   REQUEST.md if present, changed source files, and tests. FAIL if required
+1. Inspect `git diff --name-only` and confirm every changed durable doc exists.
+2. For each supersede entry, confirm the old note is marked `status: superseded`
+   and the new note is `status: active`.
+3. For each required index refresh, confirm the index entry exists and is accurate.
+4. For each changed `REQ__*.md`, compare the note to PLAN.md, the current
+   conversation, changed source files, and tests. FAIL if required
    observable behavior exists only in task artifacts and not in the REQ.

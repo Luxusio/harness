@@ -111,13 +111,15 @@ The remaining 6 skills (develop, maintain, plan-ceo-review, plan-eng-review, pla
 
 Reversed 2026-05-14 in TASK__codex-develop-port-and-parity-check after user challenged the §3.5 binding during plan-skill premise gate. The reversal is driven by the same measurements that motivated §3.5, read with one more piece of evidence: how much infrastructure cost the 60% sharing actually carries.
 
-**Decision:** the dual-runtime plugin shares **only the protocol-portable substrate** — MCP server (`plugin/mcp/harness_server.py`), hook payload schemas, gate scripts (`plugin/scripts/*.py`), and contract artifacts (PLAN.md, CHECKS.yaml, HANDOFF.md, DOC_SYNC.md, CRITIC__qa.md). SKILL.md trees are **independent per runtime**, hand-authored in each runtime's native idiom. Future authoring is two trees, not one canonical source.
+**Current note:** this 2026-05-14 spike decision predates the consolidated
+artifact model. The portable substrate remains MCP/hooks/gates, while current
+task artifacts are defined only by the consolidated-artifacts ADR.
 
 **What stays shared (protocol-portable, unchanged):**
 - `plugin/mcp/harness_server.py` — 7 MCP tools, runtime-agnostic
 - `plugin/hooks/hooks.json` payload schema — already byte-identical (Codex `ClaudeHooksEngine` is an explicit Claude port)
 - `plugin/scripts/*.py` — `prewrite_gate`, `mcp_bash_guard`, `stop_gate`, `qa_delegation_gate`, `update_checks`, `_lib`, etc.
-- Contract artifacts on disk — PLAN.md, CHECKS.yaml, HANDOFF.md, DOC_SYNC.md, CRITIC__qa.md
+- Current contract artifacts are intentionally not enumerated in this historical spike; see the consolidated-artifacts ADR.
 - `install.py` — emits Codex `~/.codex/config.toml` MCP+hook snippet and installs both runtimes. The Codex config bridge was consolidated into the single root installer after `plugin-codex/install/emit_codex_config.py` proved to be a confusing second install surface.
 
 **What was reverted (would have been infra for YAML canonical):**
@@ -139,7 +141,9 @@ The error was in §3.4's framing. MCP-only sharing does **not** defeat the dual-
 - Drift between trees is acceptable because the trees are not promised equivalent. They're promised to consume the same substrate. A bug fix in Claude's `develop` skill is a candidate port to Codex's `develop` skill, not a forced sync. The MCP and gate scripts catch contract-level drift; SKILL.md drift is editorial.
 - Control-flow primitives stop being a porting problem because each tree writes them natively. No restructure budget needed.
 
-**De-risking effect:** future authoring is two independent trees, both consuming the same MCP + hook + gate substrate. Editing a Claude skill no longer requires thinking about Codex equivalents. The Codex tree grows on its own cadence, hand-shaped to Codex's primitives (sequential execution, conversational asks, multi_agent when ergonomic). The shared substrate is what makes both trees produce equivalent *behavior* — PLAN.md / CHECKS.yaml / HANDOFF.md / CRITIC__qa.md don't care which runtime wrote them.
+**De-risking effect:** future authoring is two independent trees, both consuming
+the same MCP + hook + gate substrate. Current behavior equivalence is defined by
+the live TASK/PLAN/RECEIPTS contracts, not the superseded artifact inventory.
 
 **Cost paid:** v1.5 sync-engine infra (~600 LOC: canonical_schema + transform_skill + corpus + AC-005 tests) is sunk cost. The spike measurements that produced this decision could not have been written without doing the spike first; the data justifies the price.
 

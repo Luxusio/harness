@@ -1,7 +1,7 @@
 # harness runtime rules
 
 Lightweight execution harness for Claude Code.
-Six-field TASK.json + on-the-fly routing + artifact provenance.
+Four-field TASK.json + on-the-fly routing + artifact provenance.
 Self-contained — no plugin-legacy dependency.
 
 Harness rules apply to any caller — the main Claude session, a sub-skill,
@@ -78,7 +78,7 @@ Turn 종결 정당 사유 (runtime_verdict 기반):
 2. **BLOCKED_ENV** — 진짜 blocker 확인 → `task_blocked(blocked_reason, unblock_condition)` 로 unfinished 상태를 기록하고 active marker 해제. PASS로 위장하지 않는다.
 3. 사용자 명시 cancel 단어 → 별도 cancel flow.
 
-멈추려면 `Agent(subagent_type='harness:stop-judge')` 호출. Stop-judge 가 CHECKS+transcript+work 보고 OK/NO 의미 판단을 내림. Tool 호출 카운트, prompt rule 단독, 텍스트 키워드 검사 같은 mechanical/prose-only 게이트는 사용 안 함 — stop-judge 의 의미 판단이 유일한 권한자. PASS 경로는 기존 task_verify+task_close.
+멈추려면 `Agent(subagent_type='harness:stop-judge')` 호출. Stop-judge 가 PLAN+receipts+transcript+work 보고 OK/NO 의미 판단을 내림. Tool 호출 카운트, prompt rule 단독, 텍스트 키워드 검사 같은 mechanical/prose-only 게이트는 사용 안 함 — stop-judge 의 의미 판단이 유일한 권한자. PASS 경로는 기존 task_verify+task_close.
 
 ## 5. Artifact ownership
 
@@ -88,7 +88,6 @@ Turn 종결 정당 사유 (runtime_verdict 기반):
 | TASK.json | task lifecycle MCP tools (`write_plan` may update lens declarations) |
 | source + durable docs | developer |
 | RECEIPTS.jsonl | Codex/Claude review and QA lifecycle hooks |
-| CONVERSATION.md | Codex/Claude UserPromptSubmit/Subagent hooks |
 
 Do not write another role's artifact. Prewrite gate enforces this.
 
@@ -129,10 +128,8 @@ The plan declares required review and QA lenses. Required review evidence must
 PASS before QA starts, and every applicable QA lens must then PASS. Post-QA
 edits and scope drift are developer-owned.
 Use `task_close`. If blocked, fix the stated gate.
-Harness does not create a separate user-feedback artifact; durable requirements belong in PLAN.md or project documentation.
-Task-local `CONVERSATION.md` is human-readable history. The close gate reads
-only explicit item markers such as `<!-- item: type=requirement status=open -->`
-and never infers requirements from prose.
+Promote user corrections directly into PLAN.md or durable project
+documentation before close.
 
 ## 8a. Note freshness
 
@@ -159,8 +156,8 @@ an explicit file list when git history isn't the right source.
 ## 8b. Acceptance intent
 
 PLAN.md is the single acceptance document. Verification is represented by
-ordered review and QA entries in `RECEIPTS.jsonl`; there is no mutable
-acceptance ledger to reconcile and `task_close` does not read `CHECKS.yaml`.
+ordered review and QA entries in `RECEIPTS.jsonl`; there is no second mutable
+acceptance ledger to reconcile.
 
 ## 8c. Verification delegation
 

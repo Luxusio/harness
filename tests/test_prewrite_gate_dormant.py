@@ -250,22 +250,5 @@ class TestOpenTaskWithoutActivePointerDenies(unittest.TestCase):
             self.assertNotEqual(decision, "deny", reason)
             self.assertFalse(os.path.exists(os.path.join(task_dir, "PLAN.md")))
 
-    def test_task_baseline_is_runtime_owned(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tasks_dir = _scaffold(tmpdir)
-            task_dir = _write_task_state(tasks_dir, "baseline", "created")
-            with open(os.path.join(task_dir, "PLAN.md"), "w", encoding="utf-8") as f:
-                f.write("# plan\n")
-            with open(os.path.join(tasks_dir, ".active"), "w", encoding="utf-8") as f:
-                f.write(task_dir + "\n")
-            baseline = os.path.join(task_dir, "TASK_BASELINE.json")
-            r = _invoke(tmpdir, baseline)
-            decision, reason = _parse_decision(r.stdout)
-            self.assertEqual(decision, "deny")
-            self.assertIn("C-05-protected-artifact", reason or "")
-            self.assertIn("task-start-runtime", reason or "")
-
-
-
 if __name__ == "__main__":
     unittest.main()

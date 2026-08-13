@@ -50,14 +50,12 @@ AGENT_PATH_RE = re.compile(r"^/root/[A-Za-z0-9_.-]{1,120}$")
 TASK_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,120}$")
 MAX_LINE_BYTES = 2 * 1024 * 1024
 MAX_CHILD_BYTES = 64 * 1024 * 1024
-MAX_DISCOVERY_FILES = 4096
-DISCOVERY_SECONDS = 2.0
 POLL_SECONDS = 0.20
 IDLE_SECONDS = 8 * 60 * 60
 REGISTRATION_TTL_SECONDS = IDLE_SECONDS
 MAX_WATCHER_THREADS = 16
 RUNTIME_SUBDIR = os.path.join("harness", "codex-watchers")
-REGISTRATION_VERSION = 10
+REGISTRATION_VERSION = 11
 REGISTRATION_OWNER = "codex_root_hook"
 
 
@@ -194,127 +192,18 @@ def _find_rollout(thread_id: str, *, deadline: float | None = None) -> Path | No
     if not THREAD_RE.fullmatch(thread_id):
         return None
     root = _sessions_root()
-    candidates: list[Path] = []
     try:
-        # UUIDv7 gives the runtime creation date. Probe that bounded day first;
-        # older registrations retain the bounded fallback scan below.
-        try:
-            created = datetime.fromtimestamp(uuid7_timestamp_ms(thread_id) / 1000).astimezone()
-            direct_root = root / f"{created:%Y}" / f"{created:%m}" / f"{created:%d}"
-            direct = list(direct_root.glob(f"rollout-*{thread_id}.jsonl"))
-        except (OSError, OverflowError, TypeError, ValueError):
-            direct = []
-        valid_direct = [path for path in direct if _safe_regular_file(path, root)]
-        if len(valid_direct) == 1:
-            return valid_direct[0]
-        if len(valid_direct) > 1:
+        if _deadline_expired(deadline):
             return None
-        for directory, _subdirs, filenames in os.walk(root):
-            if _deadline_expired(deadline):
-                return None
-            suffix = f"{thread_id}.jsonl"
-            for name in filenames:
-                if name.startswith("rollout-") and name.endswith(suffix):
-                    candidates.append(Path(directory) / name)
-                    if len(candidates) >= 3:
-                        break
-            if len(candidates) >= 3:
-                break
-    except OSError:
-        return None
-    valid = [path for path in candidates if _safe_regular_file(path, root)]
-    return valid[0] if len(valid) == 1 else None
-
-
-def _child_identity_from_handle(
-    handle: Any,
-    root_id: str,
-    agent_path: str,
-    session_cwd: str,
-) -> str:
-    """Return the exact child id bound to one trusted child rollout."""
-    handle.seek(0)
-    matches: list[str] = []
-    for _ in range(8):
-        raw = handle.readline(MAX_LINE_BYTES + 1)
-        if not raw:
-            break
-        event = _load_json_line(raw)
-        if not event or event.get("type") != "session_meta":
-            continue
-        payload = event.get("payload") or {}
-        source = payload.get("source") or {}
-        spawn = (
-            source.get("subagent", {}).get("thread_spawn", {})
-            if isinstance(source, dict) else {}
+        created = datetime.fromtimestamp(
+            uuid7_timestamp_ms(thread_id) / 1000, tz=timezone.utc,
         )
-        child_id = str(payload.get("id") or "")
-        if (
-            THREAD_RE.fullmatch(child_id)
-            and payload.get("session_id") == root_id
-            and payload.get("parent_thread_id") == root_id
-            and os.path.realpath(str(payload.get("cwd") or "")) == session_cwd
-            and payload.get("thread_source") == "subagent"
-            and payload.get("agent_path") == agent_path
-            and spawn.get("parent_thread_id") == root_id
-            and spawn.get("agent_path") == agent_path
-            and spawn.get("depth") == 1
-        ):
-            matches.append(child_id)
-    return matches[0] if len(matches) == 1 else ""
-
-
-def _find_child_by_agent_path(
-    root_id: str,
-    agent_path: str,
-    session_cwd: str,
-    rollout_dir: Path | None = None,
-) -> str:
-    """Resolve one trusted depth-1 rollout for a structured spawn output."""
-    if not AGENT_PATH_RE.fullmatch(agent_path):
-        return ""
-    root = _sessions_root()
-    search_root = (rollout_dir or root).resolve()
-    try:
-        search_root.relative_to(root)
-    except ValueError:
-        return ""
-    if search_root != root and not _trusted_parent_tree(
-        search_root / ".rollout-scan", root,
-    ):
-        return ""
-    matches: list[str] = []
-    deadline = time.monotonic() + DISCOVERY_SECONDS
-    candidates = 0
-    try:
-        for directory, _subdirs, filenames in os.walk(search_root):
-            for name in filenames:
-                if not (name.startswith("rollout-") and name.endswith(".jsonl")):
-                    continue
-                candidates += 1
-                if candidates > MAX_DISCOVERY_FILES or time.monotonic() >= deadline:
-                    return ""
-                path = Path(directory) / name
-                opened = _open_trusted_file(path, root, max_size=MAX_CHILD_BYTES)
-                if opened is None:
-                    continue
-                handle, _ = opened
-                try:
-                    child_id = _child_identity_from_handle(
-                        handle, root_id, agent_path, session_cwd,
-                    )
-                    identity_matches = _path_matches_handle(
-                        path, root, handle, max_size=MAX_CHILD_BYTES,
-                    )
-                finally:
-                    handle.close()
-                if child_id and identity_matches:
-                    matches.append(child_id)
-                    if len(matches) > 1:
-                        return ""
-    except OSError:
-        return ""
-    return matches[0] if len(matches) == 1 else ""
+        direct_root = root / f"{created:%Y}" / f"{created:%m}" / f"{created:%d}"
+        direct = list(direct_root.glob(f"rollout-*{thread_id}.jsonl"))
+    except (OSError, OverflowError, TypeError, ValueError):
+        return None
+    valid = [path for path in direct if _safe_regular_file(path, root)]
+    return valid[0] if len(valid) == 1 else None
 
 
 def _load_json_line(raw: bytes) -> dict[str, Any] | None:
@@ -861,17 +750,14 @@ def _spawn_output(event: dict[str, Any]) -> tuple[str, str] | None:
 def _spawn_activity(event: dict[str, Any]) -> tuple[str, str, str] | None:
     """Decode the runtime's structured child-start correlation event."""
     payload = _event_payload(event, "event_msg")
-    if not payload:
+    if not payload or payload.get("type") != "item_completed":
         return None
-    item = payload.get("item") if payload.get("type") == "item_completed" else payload
+    item = payload.get("item")
     if not isinstance(item, dict):
         return None
-    if item.get("type") == "SubAgentActivity":
-        call_id = str(item.get("id") or "")
-    elif item.get("type") == "sub_agent_activity":
-        call_id = str(item.get("event_id") or "")
-    else:
+    if item.get("type") != "SubAgentActivity":
         return None
+    call_id = str(item.get("id") or "")
     child_id = str(item.get("agent_thread_id") or "")
     agent_path = str(item.get("agent_path") or "")
     if (
@@ -1028,12 +914,10 @@ class Watcher:
         root_id: str,
         *,
         session_cwd: str | None = None,
-        rollout_dir: Path | None = None,
     ):
         self.repo_root = repo_root
         self.root_id = root_id
         self.session_cwd = os.path.realpath(session_cwd or repo_root)
-        self.rollout_dir = rollout_dir
         self.calls: dict[str, dict[str, Any]] = {}
         self.by_agent: dict[str, dict[str, Any]] = {}
 
@@ -1079,20 +963,13 @@ class Watcher:
 
     def _maybe_start(self, call_id: str) -> None:
         item = self.calls.get(call_id) or {}
-        if not all(item.get(key) for key in ("task_name", "output_path")):
+        if not all(item.get(key) for key in (
+            "task_name", "output_path", "agent_path", "child_id",
+        )):
             return
         if item.get("agent_path") and item["agent_path"] != item["output_path"]:
             self._invalidate(item, "structured activity and spawn output identities differed")
             return
-        if not item.get("child_id"):
-            child_id = _find_child_by_agent_path(
-                self.root_id, str(item["output_path"]), self.session_cwd,
-                self.rollout_dir,
-            )
-            if not child_id:
-                return
-            item["child_id"] = child_id
-            item["agent_path"] = item["output_path"]
         if item.get("invalid") or item.get("started"):
             return
         task_dir = str(item.get("task_dir") or "")
@@ -1302,7 +1179,6 @@ def watch(
         repo_root,
         thread_id,
         session_cwd=session_cwd,
-        rollout_dir=path.parent,
     )
     stop_event = stop_event or threading.Event()
     rollout_age = max(0.0, time.time() - rollout_info.st_mtime)

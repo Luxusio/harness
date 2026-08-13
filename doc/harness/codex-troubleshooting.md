@@ -126,17 +126,20 @@ If `payload_keys` differs from the documented schema, you may be on a Codex vers
 **What you see:** A review or QA agent returns `VERDICT: PASS`, but
 `task_verify` still reports a missing completed review or QA verdict.
 
-**Cause:** Codex did not complete the supported lifecycle contract, or the
-running Harness/Codex pair does not implement the same protocol version. See
+**Cause:** Codex did not emit the complete supported lifecycle contract — a
+direct structured spawn, exact `SubAgentActivity`, matching structured output,
+trusted child transcript, and matching final delivery — or the running
+Harness/Codex pair does not implement the same protocol version. Harness does
+not scan session history or infer a child from output alone. See
 [`ADR__single-direct-codex-receipt-protocol.md`](patterns/ADR__single-direct-codex-receipt-protocol.md)
 for the authoritative acquisition/identity/completion contract and
 [`ADR__consolidated-task-artifacts.md`](patterns/ADR__consolidated-task-artifacts.md)
 for current-stream/schema rejection rules.
 
 **Fix:** Upgrade Harness and Codex together, reinstall, and restart Codex so the
-new watcher is loaded. Rotate to a fresh task run when the existing unified
-stream uses an old schema, then start one fresh review or QA agent. Do not edit
-receipt files or reuse old evidence.
+new watcher is loaded. Start a fresh task run when the existing unified stream
+is unsupported, then start one fresh review or QA agent. Do not edit receipt
+files or reuse old evidence.
 
 ```bash
 python3 install.py --codex-only --force

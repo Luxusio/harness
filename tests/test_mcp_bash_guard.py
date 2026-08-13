@@ -225,15 +225,6 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             self.assertIn("rule=protected-artifact", reason)
             self.assertIn("review and QA lifecycle hook", reason)
 
-    def test_redirect_into_task_baseline_denies_with_runtime_hint(self):
-        with scratch_task_in_real_repo("baseline-prot") as task_dir:
-            baseline = os.path.join(task_dir, "TASK_BASELINE.json")
-            r = _run_bash(f"echo '{{}}' > {baseline}")
-            decision, reason = parse_decision(r.stdout)
-            self.assertEqual(decision, "deny")
-            self.assertIn("rule=protected-artifact", reason)
-            self.assertIn("task-start runtime", reason)
-
     def test_redirect_into_active_markers_denies(self):
         for target in (
             "doc/harness/tasks/.active",

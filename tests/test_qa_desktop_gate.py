@@ -31,19 +31,9 @@ class TestOwnerTokens(unittest.TestCase):
             "receipt-lifecycle-hook",
         )
 
-    def test_conversation_owner_token_is_hook(self):
-        self.assertEqual(
-            prewrite_gate.PROTECTED_ARTIFACTS["CONVERSATION.md"],
-            "conversation-hook",
-        )
-
     def test_unified_receipt_human_text_names_hooks(self):
         human = prewrite_gate.PROTECTED_ARTIFACT_HUMAN["RECEIPTS.jsonl"]
         self.assertIn("review and QA lifecycle hooks", human)
-
-    def test_conversation_human_text_names_hooks(self):
-        human = prewrite_gate.PROTECTED_ARTIFACT_HUMAN["CONVERSATION.md"]
-        self.assertIn("conversation hooks", human)
 
 
 class TestProvenance(unittest.TestCase):

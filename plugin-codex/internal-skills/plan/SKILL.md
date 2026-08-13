@@ -6,8 +6,8 @@ user-invocable: false
 
 Codex-variant 7-phase review pipeline. Runs structured review across CEO, Engineering, and DX lenses (Design lens optional); uses independent voices when the current runtime exposes them; classifies every decision; surfaces only contested items to the user; writes the final task contract through the protected-artifact MCP.
 
-> Current artifact model: acceptance criteria live in `PLAN.md`. Write
-> `PLAN.md` plus lens declarations in `TASK.json`; do not create `CHECKS.yaml`.
+> Current artifact model: acceptance criteria live in `PLAN.md`; `write_plan`
+> publishes it with required lens declarations in `TASK.json`.
 
 > **Codex runtime notes** (delta from Claude):
 > - **Dual Voice is capability-routed.** Discover deferred tools before deciding. When `spawn_agent` or an external model route is available, run independent Voice A and Voice B contexts. Use one inline critical-reviewer pass only when no independent route exists, and record that fallback in PLAN.md's Review Status section.

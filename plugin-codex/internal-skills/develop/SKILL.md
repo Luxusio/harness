@@ -6,9 +6,8 @@ user-invocable: false
 
 Implement the plan for a harness task. Reads PLAN.md, implements changes, verifies completeness, captures durable learnings, and closes through MCP.
 
-> Current artifact model: use `PLAN.md` plus unified `RECEIPTS.jsonl`. Do not
-> create, read, or update `CHECKS.yaml` or `USER_FEEDBACK.jsonl`, and do not run
-> `update_checks.py`; later legacy ledger wording is non-operative.
+> Current artifact model: acceptance intent lives in `PLAN.md`; independent
+> review and QA evidence lives in the unified `RECEIPTS.jsonl`.
 
 > **Codex delta:** execute skill chains inline; use bare MCP names and
 > `${HARNESS_PLUGIN_ROOT}`. Harness workflow authorization covers required subagents: explicit user invocation or approval of a harness repo-mutating workflow authorizes those required lanes. Agent fan-out is capability-gated; route from the capabilities exposed by the current session.
@@ -386,7 +385,7 @@ durable-doc and learning work:
 1. PLAN.md acceptance criteria are addressed or explicitly deferred.
 2. `task_verify` reports PASS from the required ordered receipt sequence.
 3. Required QA/UX subagents were spawned when the runtime exposed them; watcher-owned receipts prove start and explicit completion.
-4. `CONVERSATION.md` has no open `<!-- item: ... status=open -->` markers.
+4. User corrections are reflected in PLAN.md or durable documentation.
 5. Durable docs are updated when the task changed user-visible behavior, externally consumed API contracts, or reusable guidance.
 
 Do not call `task_close` or emit the final response yet. Draft a concise
@@ -465,8 +464,7 @@ surface, then call `task_verify`.
 When the task changes `doc/<area>/REQ__*.md`, `GUIDE__*.md`, `ADR__*.md`, or
 `POLICY__*.md`, spawn the documentation-review subagent after durable docs. It
 verifies both durable docs consistency and durable doc quality. A changed REQ with
-vague or missing observable behavior is a FAIL, not a warning. Do not write
-legacy critic markdown artifacts.
+vague or missing observable behavior is a FAIL, not a warning.
 
 ### Phase 8.7: Distilled Change Doc
 

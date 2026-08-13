@@ -86,8 +86,7 @@ diffs.
 recorded separately in `RECEIPTS.jsonl`.
 **On violation:** hard-block when PLAN.md is missing for a standard task.
 **Why:** A second mutable acceptance ledger duplicated plan state and created
-extra reconciliation failure modes. Harness no longer creates or gates on
-`CHECKS.yaml`.
+extra reconciliation failure modes.
 
 ### C-04
 
@@ -102,15 +101,14 @@ edits and source-scope discipline remain the developer's responsibility.
 ### C-05
 
 **Title:** Protected artifact ownership.
-**When:** Any `Write`/`Edit` to PLAN.md, TASK.json,
-RECEIPTS.jsonl, or CONVERSATION.md — and any `Bash` mutation (sed -i,
+**When:** Any `Write`/`Edit` to PLAN.md, TASK.json, or
+RECEIPTS.jsonl — and any `Bash` mutation (sed -i,
 redirect, cp, mv, tee, python -c open(…,'w'), …) targeting the same basenames.
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`
 (Write/Edit/MultiEdit surface) + `plugin/scripts/mcp_bash_guard.py`
 (Bash surface; same helper classifiers).
 **On violation:** hard-block. Agent must route through the owning task MCP tool
-or hook-owned receipt path. CONVERSATION.md is written by runtime
-conversation hooks.
+or hook-owned receipt path.
 **Why:** Wrong-writer mutation breaks task authority or lifecycle provenance.
 **Note (AC-019):** `doc/changes/**` and `doc/common/**` writes by
 `hygiene_scan.py` and `doc_hygiene.py` are authorized via C-16. These paths

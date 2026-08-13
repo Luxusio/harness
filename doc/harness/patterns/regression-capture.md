@@ -1,5 +1,6 @@
 ---
 freshness: current
+updated: 2026-08-13
 ---
 
 # Regression Capture Pattern
@@ -45,7 +46,7 @@ python3 ${CLAUDE_PLUGIN_ROOT}/scripts/qa_codifier.py --task-dir <task_dir> 2>/de
 ```
 
 Pipeline:
-1. Read `<task_dir>/CRITIC__runtime.md` for codifiable blocks.
+1. Read the explicit QA transcript path for codifiable blocks.
 2. Infer test format from `manifest.yaml test_command` (pytest / bun:test / vitest / shell).
 3. Stage rendered test at `<task_dir>/audit/regression-draft/<sanitized-task-id>/<behavior>.<ext>`.
 4. Compile-check: `python3 -c compile(...)` or `node --check`.
@@ -55,8 +56,8 @@ Pipeline:
 
 ## Regression test quarantine rule
 
-`tests/regression/<task-id>/` may be deleted when the owning task's HANDOFF.md
-is quoted in the retiring commit message. Do not delete while the task is still
+`tests/regression/<task-id>/` may be deleted only when the behavior is covered
+elsewhere or intentionally retired. Do not delete while the task is still
 referenced in active post-mortems or CONTRACTS.
 
 ## Pattern entries

@@ -147,6 +147,7 @@ def test_start_and_real_stop_use_only_receipts(tmp_path, monkeypatch):
     ]
     assert {item["source"] for item in receipts} == {"claude_hook"}
     assert {item["runtime_id"] for item in receipts} == {"claude:sess-1:agent-1"}
+    assert not (Path(task_dir) / "CONVERSATION.md").exists()
     assert not (Path(repo) / "doc/harness/runtime/background.json").exists()
     assert not (Path(repo) / "doc/harness/runtime/background.json.lock").exists()
 
@@ -577,4 +578,5 @@ def test_background_hook_publishes_stop_only_pair_without_registry(tmp_path, mon
     assert [(item["event"], item["verdict"]) for item in _receipts(task_dir)] == [
         ("started", ""), ("completed", "PASS"),
     ]
+    assert not (Path(task_dir) / "CONVERSATION.md").exists()
     assert not (Path(repo) / "doc/harness/runtime").exists()

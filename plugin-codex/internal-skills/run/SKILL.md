@@ -7,12 +7,11 @@ user-invocable: false
 Orchestrate the full harness development cycle for a task.
 
 > Current artifact model: `PLAN.md` owns acceptance intent and unified
-> `RECEIPTS.jsonl` owns review/QA evidence. Do not create or consume
-> `CHECKS.yaml` or `USER_FEEDBACK.jsonl`; later legacy wording is non-operative.
+> `RECEIPTS.jsonl` owns review/QA evidence.
 
 > **Codex runtime notes** (delta from Claude):
 > - Claude's `Skill("harness:plan", task_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. Effect is identical (plan -> develop -> verify -> close), but the chain is sequential prose, not tool calls.
-> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. Check the deferred tool catalog (for example `ALL_TOOLS`) before declaring `spawn_agent` unavailable. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. For QA/review, `spawn_agent` is mandatory when available: the orchestrator must not self-author a PASS while skipping an available independent subagent. The Codex lifecycle watcher records starts and observed completions in `RECEIPTS.jsonl`; do not call a receipt writer or critic writer yourself. If `spawn_agent` is unavailable after discovery, run the role methodology inline and state the fallback in task state or final response only when it affects verification.
+> - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. Check the deferred tool catalog (for example `ALL_TOOLS`) before declaring `spawn_agent` unavailable. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. For QA/review, `spawn_agent` is mandatory when available: the orchestrator must not self-author a PASS while skipping an available independent subagent. The Codex lifecycle watcher records starts and observed completions in `RECEIPTS.jsonl`; never self-author receipt evidence. If `spawn_agent` is unavailable after discovery, run the role methodology inline and state the fallback in task state or final response only when it affects verification.
 > - MCP tool names on Codex use bare form (`task_start`, `task_verify`, `task_close`) — not Claude-prefixed form. Where this skill mentions a prefixed name, read it as the bare form.
 > - `${CLAUDE_PLUGIN_ROOT}` is not injected on Codex. Use `${HARNESS_PLUGIN_ROOT}` (set by the Codex plugin install).
 > - AskUserQuestion (Phase 4 FAIL retry) is conversational prose on Codex — emit the question + options, read the reply from the next user turn.

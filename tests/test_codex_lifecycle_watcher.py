@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from datetime import datetime, timezone
 from unittest import mock
 
 
@@ -140,7 +141,6 @@ mod._open_trusted_file = original_open
 mod._active_task_binding_for_session = lambda *_: {{
     "task_dir": {str(task)!r}, "run_id": {RUN_ID!r},
 }}
-mod._find_child_by_agent_path = lambda *_args, **_kwargs: {child_id!r}
 mod._child_status = lambda *_args, **_kwargs: ("running", None, "")
 try:
     mod.watch(str(repo), {root_id!r}, str(rollout), 0, idle_seconds=1)
@@ -201,6 +201,17 @@ def _write_jsonl(path: Path, events: list[dict]) -> None:
     path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
 
 
+def _rollout_path(codex_home: Path, thread_id: str) -> Path:
+    created = datetime.fromtimestamp(
+        int(thread_id.replace("-", "")[:12], 16) / 1000,
+        tz=timezone.utc,
+    )
+    return (
+        codex_home / "sessions" / f"{created:%Y}" / f"{created:%m}" / f"{created:%d}"
+        / f"rollout-{thread_id}.jsonl"
+    )
+
+
 def _snapshot(entries):
     return type("Snapshot", (), {"entries": tuple(entries)})()
 
@@ -259,8 +270,13 @@ def _child_events(
     return events
 
 
-def _spawn_events(root_id: str, child_id: str, task_name: str, agent_path: str):
-    call_id = "call_runtime_123456"
+def _spawn_events(
+    root_id: str,
+    child_id: str,
+    task_name: str,
+    agent_path: str,
+    call_id: str = "call_runtime_123456",
+):
     return [
         {"timestamp": "2026-08-11T05:00:00Z", "type": "response_item", "payload": {
             "type": "function_call", "namespace": "collaboration", "name": "spawn_agent",
@@ -408,7 +424,7 @@ def test_watcher_records_start_then_correlated_review_completion(tmp_path, monke
     assert receipts[0]["runtime_id"] == receipts[1]["runtime_id"]
 
 
-def test_watcher_discovers_child_when_runtime_omits_activity_event(tmp_path, monkeypatch):
+def test_watcher_requires_activity_when_runtime_emits_only_spawn_output(tmp_path, monkeypatch):
     mod = _load()
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
@@ -432,9 +448,7 @@ def test_watcher_discovers_child_when_runtime_omits_activity_event(tmp_path, mon
     ):
         for event in _spawn_events_without_activity("code_review_output_only", agent_path):
             watcher.feed(event)
-        assert [(item["event"], item["lens"]) for item in receipts] == [
-            ("started", "review-code"),
-        ]
+        assert receipts == []
         final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nClean."
         _write_jsonl(
             child,
@@ -448,75 +462,7 @@ def test_watcher_discovers_child_when_runtime_omits_activity_event(tmp_path, mon
             ),
         )
         watcher.feed(_delivery(agent_path, final))
-
-    assert [(item["event"], item.get("verdict", "")) for item in receipts] == [
-        ("started", ""), ("completed", "PASS"),
-    ]
-    assert receipts[0]["runtime_id"] == (
-        f"codex:{root_id}:call_runtime_output_only:{child_id}"
-    )
-    assert receipts[0]["agent_id"] == agent_path
-
-
-def test_child_discovery_fails_closed_for_zero_multiple_and_bounds(tmp_path, monkeypatch):
-    mod = _load()
-    codex_home = tmp_path / ".codex"
-    monkeypatch.setenv("CODEX_HOME", str(codex_home))
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
-    agent_path = "/root/code_review_discovery"
-
-    assert mod._find_child_by_agent_path(root_id, agent_path, str(repo)) == ""
-
-    for child_id in (
-        "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f",
-        "019f82a6-ce64-75a3-b01d-92f7b0b4fe70",
-    ):
-        _write_jsonl(
-            codex_home / "sessions/day" / f"rollout-{child_id}.jsonl",
-            _child_events(root_id, child_id, agent_path, str(repo)),
-        )
-    assert mod._find_child_by_agent_path(root_id, agent_path, str(repo)) == ""
-
-    monkeypatch.setattr(mod, "MAX_DISCOVERY_FILES", 0)
-    assert mod._find_child_by_agent_path(root_id, agent_path, str(repo)) == ""
-    monkeypatch.setattr(mod, "MAX_DISCOVERY_FILES", 4096)
-    with mock.patch.object(mod.time, "monotonic", side_effect=[0.0, 3.0]):
-        assert mod._find_child_by_agent_path(root_id, agent_path, str(repo)) == ""
-
-
-def test_child_discovery_can_be_scoped_to_registered_root_rollout_dir(tmp_path, monkeypatch):
-    mod = _load()
-    codex_home = tmp_path / ".codex"
-    monkeypatch.setenv("CODEX_HOME", str(codex_home))
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
-    agent_path = "/root/code_review_scoped"
-    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
-    current = codex_home / "sessions/2026/08/12"
-    old = codex_home / "sessions/2026/08/11"
-    _write_jsonl(
-        current / f"rollout-{child_id}.jsonl",
-        _child_events(root_id, child_id, agent_path, str(repo)),
-    )
-    _write_jsonl(
-        old / "rollout-019f82a6-ce64-75a3-b01d-92f7b0b4fe70.jsonl",
-        _child_events(
-            root_id,
-            "019f82a6-ce64-75a3-b01d-92f7b0b4fe70",
-            agent_path,
-            str(repo),
-        ),
-    )
-
-    assert mod._find_child_by_agent_path(
-        root_id, agent_path, str(repo), current,
-    ) == child_id
-    assert mod._find_child_by_agent_path(
-        root_id, agent_path, str(repo), tmp_path,
-    ) == ""
+    assert receipts == []
 
 
 def test_activity_event_without_structured_spawn_output_is_ignored(tmp_path):
@@ -531,6 +477,24 @@ def test_activity_event_without_structured_spawn_output_is_ignored(tmp_path):
     watcher.feed(activity)
     assert watcher.calls == {}
     assert watcher.by_agent == {}
+
+
+def test_activity_rejects_legacy_and_direct_envelopes():
+    mod = _load()
+    canonical = _spawn_events(
+        "019f825b-f25f-70c3-8ee8-071f79fa1c42",
+        "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f",
+        "qa_cli_activity",
+        "/root/qa_cli_activity",
+    )[1]
+    direct = {"type": "event_msg", "payload": dict(canonical["payload"]["item"])}
+    legacy = json.loads(json.dumps(canonical))
+    legacy["payload"]["item"].update({
+        "type": "sub_agent_activity",
+        "event_id": legacy["payload"]["item"].pop("id"),
+    })
+    assert mod._spawn_activity(direct) is None
+    assert mod._spawn_activity(legacy) is None
 
 
 def test_prior_run_same_agent_path_cannot_replace_current_start(tmp_path):
@@ -557,8 +521,6 @@ def test_prior_run_same_agent_path_cannot_replace_current_start(tmp_path):
         mod, "_active_task_binding_for_session", return_value=_active_binding(task_dir),
     ), mock.patch.object(
         mod, "_child_status", return_value=("running", None, ""),
-    ), mock.patch.object(
-        mod, "_find_child_by_agent_path", return_value=child_id,
     ), mock.patch.object(
         mod, "receipt_snapshot", return_value=_snapshot([prior]),
     ), mock.patch.object(
@@ -588,8 +550,7 @@ def test_spawn_task_binding_is_immutable_across_task_switch(tmp_path):
         mod, "_active_task_binding_for_session",
         side_effect=lambda *_args: _active_binding(active[0]),
     ), mock.patch.object(mod, "record_subagent_receipt") as record, \
-         mock.patch.object(mod, "_child_status", return_value=("running", None, "")), \
-         mock.patch.object(mod, "_find_child_by_agent_path", return_value=child_id):
+         mock.patch.object(mod, "_child_status", return_value=("running", None, "")):
         watcher.feed(spawn)
         assert watcher.calls["call_runtime_123456"]["task_dir"] == task_a
         active[0] = task_b
@@ -654,15 +615,10 @@ def test_watcher_records_sequential_unique_qa_names_in_one_root(tmp_path, monkey
          mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
          mock.patch.object(mod, "receipt_snapshot", side_effect=lambda _td: _snapshot(receipts)):
         for child_id, task_name, agent_path, call_id in runs:
-            child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+            child = _rollout_path(codex_home, child_id)
             _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo)))
-            events = _spawn_events(root_id, child_id, task_name, agent_path)
+            events = _spawn_events(root_id, child_id, task_name, agent_path, call_id)
             for event in events:
-                payload = event["payload"]
-                if payload.get("call_id") == "call_runtime_123456":
-                    payload["call_id"] = call_id
-                if payload.get("event_id") == "call_runtime_123456":
-                    payload["event_id"] = call_id
                 watcher.feed(event)
             final = "VERDICT: PASS\nQA passed"
             _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo), final))
@@ -684,7 +640,7 @@ def test_watcher_ignores_intermediate_message_before_final_delivery(tmp_path, mo
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
     agent_path = "/root/qa_cli_status_r1"
-    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    child = _rollout_path(codex_home, child_id)
     _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo)))
     receipts = []
 
@@ -764,7 +720,7 @@ def test_watcher_restart_replays_persisted_exact_start_after_child_completes(tmp
     call_id = "call_runtime_123456"
     runtime_id = f"codex:{root_id}:{call_id}:{child_id}"
     final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
-    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    child = _rollout_path(codex_home, child_id)
     _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo), final))
     receipts = [{
         "event": "started", "agent_id": agent_path, "lens": "review-code",
@@ -800,7 +756,7 @@ def test_watcher_keeps_completion_pass_when_source_changes(tmp_path, monkeypatch
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
     agent_path = "/root/code_review"
-    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    child = _rollout_path(codex_home, child_id)
     _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo)))
     receipts = []
     def record(_task_dir, receipt):
@@ -833,7 +789,7 @@ def test_watcher_records_child_repo_receipt_for_parent_control_workspace(tmp_pat
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
     agent_path = "/root/qa_cli"
     final = "VERDICT: PASS\nQA passed"
-    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    child = _rollout_path(codex_home, child_id)
     _write_jsonl(
         child,
         _child_events(root_id, child_id, agent_path, str(session_cwd)),
@@ -876,7 +832,7 @@ def test_child_status_rejects_duplicate_child_boundary(tmp_path, monkeypatch):
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
     agent_path = "/root/qa_cli"
-    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    child = _rollout_path(codex_home, child_id)
     events = _child_events(root_id, child_id, agent_path, "/repo")
     events.append(events[-1])
     _write_jsonl(child, events)
@@ -889,7 +845,7 @@ def test_child_status_rejects_malformed_complete_record(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
-    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    child = _rollout_path(codex_home, child_id)
     _write_jsonl(child, _child_events(root_id, child_id, "/root/qa_cli", "/repo"))
     with child.open("a", encoding="utf-8") as handle:
         handle.write("{malformed}\n")
@@ -902,7 +858,7 @@ def test_child_status_retries_newline_incomplete_tail(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
-    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    child = _rollout_path(codex_home, child_id)
     _write_jsonl(child, _child_events(root_id, child_id, "/root/qa_cli", "/repo"))
     with child.open("ab") as handle:
         handle.write(b'{"type":"event_msg","payload":{"type":"agent_message"')
@@ -914,7 +870,7 @@ def test_child_status_retries_before_child_metadata_is_written(tmp_path, monkeyp
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
-    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    child = _rollout_path(codex_home, child_id)
     child.parent.mkdir(parents=True)
     child.touch()
     assert mod._child_status(
@@ -929,7 +885,7 @@ def test_child_status_does_not_accept_prompt_task_marker_as_turn_boundary(tmp_pa
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
     agent_path = "/root/qa_cli"
-    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    child = _rollout_path(codex_home, child_id)
     events = _child_events(root_id, child_id, agent_path, "/repo")[:1]
     events.extend([
         {"type": "response_item", "payload": {
@@ -956,7 +912,7 @@ def test_child_status_rejects_cross_repo_and_mismatched_final(tmp_path, monkeypa
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
     agent_path = "/root/security_review"
-    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    child = _rollout_path(codex_home, child_id)
     events = _child_events(root_id, child_id, agent_path, "/other/repo")
     _write_jsonl(child, events)
     assert mod._child_status(child_id, root_id, agent_path, "/expected/repo")[0] == "invalid"
@@ -975,31 +931,27 @@ def test_child_status_rejects_symlinked_rollout(tmp_path, monkeypatch):
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
     real = tmp_path / "outside.jsonl"
     _write_jsonl(real, _child_events(root_id, child_id, "/root/qa_cli", "/repo"))
-    link = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    link = _rollout_path(codex_home, child_id)
     link.parent.mkdir(parents=True)
     link.symlink_to(real)
     assert mod._find_rollout(child_id) is None
 
 
-def test_find_rollout_uses_uuid_day_before_recursive_fallback(tmp_path, monkeypatch):
+def test_find_rollout_uses_uuid_utc_day_without_recursive_fallback(tmp_path, monkeypatch):
     mod = _load()
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     child_id = "019ff6e0-b765-7aa3-b9cb-e6d4f5c8b1b7"
-    created = mod.datetime.fromtimestamp(mod.uuid7_timestamp_ms(child_id) / 1000).astimezone()
+    created = mod.datetime.fromtimestamp(
+        mod.uuid7_timestamp_ms(child_id) / 1000, tz=mod.timezone.utc,
+    )
     rollout = (
         codex_home / "sessions" / f"{created:%Y}" / f"{created:%m}" / f"{created:%d}"
         / f"rollout-now-{child_id}.jsonl"
     )
     _write_jsonl(rollout, [{"type": "session_meta", "payload": {"id": child_id}}])
-    original_walk = mod.os.walk
-    monkeypatch.setattr(mod.os, "walk", lambda *_args, **_kwargs: (_ for _ in ()).throw(
-        AssertionError("recursive fallback must not run for the current UUID day")
-    ))
-    try:
-        assert mod._find_rollout(child_id) == rollout
-    finally:
-        monkeypatch.setattr(mod.os, "walk", original_walk)
+    assert mod._find_rollout(child_id) == rollout
+    assert "walk" not in mod._find_rollout.__code__.co_names
 
 
 def test_ensure_registers_once_without_forking_for_exact_root_rollout(tmp_path, monkeypatch):
@@ -1058,7 +1010,7 @@ def test_ensure_replaces_legacy_process_state_with_registration(tmp_path, monkey
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
-    rollout = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
+    rollout = _rollout_path(codex_home, root_id)
     _write_jsonl(rollout, [{"type": "session_meta", "payload": {
         "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
     }}])
@@ -1081,7 +1033,7 @@ def test_ensure_restarts_old_registration_at_current_offset(tmp_path, monkeypatc
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
-    rollout = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
+    rollout = _rollout_path(codex_home, root_id)
     _write_jsonl(rollout, [{"type": "session_meta", "payload": {
         "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
     }}, {"type": "event_msg", "payload": {"type": "old-event"}}])
@@ -1112,7 +1064,7 @@ def test_ensure_rejects_symlinked_runtime_registry(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
-    rollout = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
+    rollout = _rollout_path(codex_home, root_id)
     _write_jsonl(rollout, [{"type": "session_meta", "payload": {
         "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
     }}])
@@ -1131,7 +1083,7 @@ def test_root_meta_rejects_path_replacement_after_descriptor_open(tmp_path, monk
     repo = tmp_path / "repo"
     repo.mkdir()
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
-    rollout = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
+    rollout = _rollout_path(codex_home, root_id)
     _write_jsonl(rollout, [{"type": "session_meta", "payload": {
         "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
     }}])
@@ -1160,7 +1112,7 @@ def test_child_status_rejects_path_replacement_during_parse(tmp_path, monkeypatc
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
     agent_path = "/root/qa_cli"
     final = "VERDICT: PASS"
-    rollout = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    rollout = _rollout_path(codex_home, child_id)
     _write_jsonl(rollout, _child_events(root_id, child_id, agent_path, str(repo), final))
     original = mod._load_json_line
     swapped = False
@@ -1185,7 +1137,7 @@ def test_rollout_rejects_group_or_world_writable_session_ancestor(tmp_path, monk
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
-    rollout = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
+    rollout = _rollout_path(codex_home, root_id)
     _write_jsonl(rollout, [{"type": "session_meta", "payload": {"id": root_id}}])
     rollout.parent.chmod(0o777)
     try:
@@ -1202,8 +1154,8 @@ def test_rollout_rejects_group_or_world_writable_root_and_child_files(tmp_path, 
     repo.mkdir()
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
-    root = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
-    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    root = _rollout_path(codex_home, root_id)
+    child = _rollout_path(codex_home, child_id)
     _write_jsonl(root, [{"type": "session_meta", "payload": {
         "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
     }}])
@@ -1224,7 +1176,7 @@ def test_registrations_revalidates_exact_root_and_rejects_symlink(tmp_path, monk
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
-    rollout = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
+    rollout = _rollout_path(codex_home, root_id)
     _write_jsonl(rollout, [{"type": "session_meta", "payload": {
         "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
     }}])
@@ -1250,7 +1202,7 @@ def test_registrations_prunes_expired_root_state(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
-    rollout = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
+    rollout = _rollout_path(codex_home, root_id)
     _write_jsonl(rollout, [{"type": "session_meta", "payload": {
         "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
     }}])
@@ -1401,7 +1353,7 @@ def test_watch_inherits_rollout_idle_age_instead_of_resetting_lifetime(tmp_path,
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
-    rollout = codex_home / "sessions/day" / f"rollout-{root_id}.jsonl"
+    rollout = _rollout_path(codex_home, root_id)
     _write_jsonl(rollout, [{"type": "session_meta", "payload": {
         "session_id": root_id, "id": root_id, "cwd": str(repo), "thread_source": "user",
     }}])
@@ -1549,7 +1501,7 @@ def test_duplicate_identical_root_delivery_is_idempotent(tmp_path, monkeypatch):
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
     agent_path = "/root/code_review"
-    child = codex_home / "sessions/day" / f"rollout-{child_id}.jsonl"
+    child = _rollout_path(codex_home, child_id)
     _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo)))
     receipts = []
     def record(_task_dir, receipt):

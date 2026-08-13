@@ -1139,6 +1139,12 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertEqual(set(structured), {"task_dir", "task_context"})
             context = structured["task_context"]
             self.assertEqual(context["task_id"], "TASK__mcp")
+            self.assertEqual(set(context), {
+                "task_id", "status", "task_dir", "routing", "runtime_verdict",
+                "source_write_allowed", "why_source_write_blocked", "review_verdict",
+                "required_review_lenses", "required_qa_lenses", "missing_for_close",
+                "next_action", "report_path", "effective_close_gate",
+            })
             self.assertNotIn("subagent_receipts", context)
             self.assertNotIn("review_receipts", context)
             self.assertNotIn("subagent_receipts", structured)
@@ -2181,7 +2187,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             self._orig_context_git_changed_paths
         )
 
-    def test_conversation_open_item_blocks_close(self):
+    def test_legacy_conversation_file_has_no_close_authority(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(
                 tmp,
@@ -2200,32 +2206,6 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             try:
                 result = harness_server.call_tool(
                     "task_close", {"task_id": "TASK__conversation-open"}
-                )
-            finally:
-                self._unpatch()
-        self.assertTrue(result.get("isError"))
-        ctx = result["structuredContent"]["task_context"]
-        self.assertIn("CONVERSATION.md open items", ctx["missing_for_close"])
-        self.assertEqual(ctx["conversation_open_items"][0]["key"], "reader-back-stack")
-        self.assertIn("CONVERSATION.md open item markers", ctx["next_action"])
-
-    def test_conversation_captured_item_does_not_block_close(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            td = self._prepare_task(
-                tmp,
-                "TASK__conversation-captured",
-                checks_yaml='- id: AC-001\n  title: "x"\n  status: passed\n',
-            )
-            Path(td, "CONVERSATION.md").write_text(
-                "# Conversation\n\n"
-                "<!-- harness:conversation-log v1 -->\n\n"
-                "<!-- item: type=requirement status=captured key=reader-back-stack ref=doc/ui/REQ__reader.md -->\n",
-                encoding="utf-8",
-            )
-            self._patch(td)
-            try:
-                result = harness_server.call_tool(
-                    "task_close", {"task_id": "TASK__conversation-captured"}
                 )
             finally:
                 self._unpatch()

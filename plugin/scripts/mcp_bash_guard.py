@@ -37,8 +37,7 @@ try:
     )
     from prewrite_gate import (
         _is_protected_artifact,
-        _is_claude_subagent_transcript,
-        _is_codex_rollout,
+        _is_runtime_provenance,
         _is_source_file,
         _is_workflow_control_surface,
         PROTECTED_ARTIFACTS,
@@ -90,9 +89,7 @@ _PY_PATTERNS = [
 _ARTIFACT_TOOL_HINT = {
     "TASK.json": "harness task control MCP",
     "RECEIPTS.jsonl": "runtime review and QA lifecycle hook",
-    "TASK_BASELINE.json": "task-start runtime",
     "PLAN.md": "mcp__plugin_harness_harness__write_plan",
-    "CONVERSATION.md": "runtime conversation hook",
 }
 
 RULE_DOCS = {
@@ -137,7 +134,7 @@ def _normalize_candidate_path(
     candidate = os.path.realpath(
         value if os.path.isabs(value) else os.path.join(cwd, value)
     )
-    if _is_claude_subagent_transcript(candidate) or _is_codex_rollout(candidate):
+    if _is_runtime_provenance(candidate):
         return candidate
     try:
         if os.path.commonpath((root, candidate)) != root:
@@ -150,7 +147,7 @@ def _normalize_candidate_path(
 def _classify_gated_path(path_value: str, repo_root: str) -> str:
     if not path_value:
         return ""
-    if _is_claude_subagent_transcript(path_value) or _is_codex_rollout(path_value):
+    if _is_runtime_provenance(path_value):
         return "protected-artifact"
     if _is_workflow_control_surface(path_value, repo_root=repo_root):
         return "workflow-control-surface"
@@ -526,7 +523,6 @@ def _deny(target, command):
         "TASK.json": "Use task_start, write_plan, task_blocked, or task_close",
         "PLAN.md": "mcp__plugin_harness_harness__write_plan",
         "RECEIPTS.jsonl": "Spawn and await the required reviewer or QA agent; lifecycle hooks record this file",
-        "CONVERSATION.md": "Let the runtime hooks record conversation history",
     }
     next_action = _NEXT.get(base, "")
     if not next_action and category == "source":

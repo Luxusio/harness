@@ -30,7 +30,8 @@ def test_develop_skills_require_feedback_rule_judgment():
             assert "request_user_input" in body
         assert "user_decision:" in body and "proposed_artifact:" in body
         assert "User Feedback Event Review" in body
-        assert "do not" in body and "USER_FEEDBACK.jsonl" in body
+        assert "explicit user corrections from the conversation" in body
+        assert "PLAN/task state/durable docs" in body
         assert "durable source of truth" in body
         assert "by itself" in body
         assert "before the next action that depends on it" in body
@@ -51,8 +52,7 @@ def test_handoff_close_gate_guide_removed():
 def test_run_skills_check_feedback_events_before_dependent_actions():
     for rel in ("plugin/skills/run/SKILL.md", "plugin-codex/internal-skills/run/SKILL.md"):
         body = (REPO / rel).read_text(encoding="utf-8")
-        assert "USER_FEEDBACK.jsonl" in body
-        assert "does not" in body
+        assert "USER_FEEDBACK.jsonl" not in body
         assert "separate feedback sidecar" in body
         assert "explicit user corrections" in body
 

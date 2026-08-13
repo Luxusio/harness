@@ -21,7 +21,8 @@ def test_develop_skill_phase_86_uses_conversation_requirements():
 
 def test_plugin_claude_md_declares_no_feedback_sidecar():
     text = CLAUDE_RUNTIME.read_text(encoding="utf-8")
-    assert "does not create a separate user-feedback artifact" in text
+    assert "Promote user corrections directly into PLAN.md or durable project" in text
+    assert "USER_FEEDBACK.jsonl" not in text
 
 
 def test_contracts_local_c101_present_with_four_fields():

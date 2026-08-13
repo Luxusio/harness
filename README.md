@@ -51,7 +51,7 @@ plan → develop → verify → close
 | **plan** | 7-phase dual-voice review pipeline writes PLAN.md and declares required lenses in TASK.json |
 | **develop** | Implement per-AC, checkpoint progress, run quality audit, dogfood |
 | **verify** | Ordered review/QA completions are hook-recorded and checked against TASK.json lens declarations |
-| **close** | Gate: PLAN.md exists + ordered review/QA receipts yield runtime_verdict = PASS + no open CONVERSATION.md items |
+| **close** | Gate: PLAN.md exists + ordered review/QA receipts yield runtime_verdict = PASS |
 
 After close, the Goal child-task executor performs a self-improvement pass — surfaces friction signals into `learnings.jsonl`, promotes recurring keys into Tier 2 patterns, and prunes stale entries.
 

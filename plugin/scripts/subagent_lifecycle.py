@@ -12,7 +12,6 @@ from typing import Any
 
 try:
     from _lib import (  # type: ignore
-        append_conversation_entry,
         _bind_runtime_receipt_adapter,
         current_session_id,
         normalize_receipt_completion,
@@ -62,9 +61,6 @@ except Exception:  # pragma: no cover - imported only inside harness scripts
 
     def normalize_receipt_completion(lens: str, value: str, supplied_verdict: str = ""):
         return "PENDING", ""
-
-    def append_conversation_entry(task_dir: str, **kwargs: Any) -> bool:
-        return False
 
     def _bind_runtime_receipt_adapter(source: str, function: Any) -> None:
         return None
@@ -475,18 +471,6 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
         result = dict(result)
         result["status"] = "receipt_pending"
         result["reason"] = "Receipt publication failed; the same stop may be retried."
-    try:
-        if result.get("status") in {"done", "duplicate_stop"}:
-            append_conversation_entry(
-                task_dir,
-                role="subagent",
-                text=stop_message,
-                source=SOURCE,
-                event_id=runtime_id,
-                agent_type=transcript_agent_type,
-            )
-    except Exception:
-        pass
     return result
 
 

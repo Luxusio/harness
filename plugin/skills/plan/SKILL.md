@@ -8,8 +8,8 @@ allowed-tools: Read, Glob, Grep, Bash, AskUserQuestion, Agent, mcp__plugin_harne
 
 Harness-native 7-phase dual-voice review pipeline. Runs structured review across CEO, Design, Engineering, and DX lenses; builds adversarial consensus via two independent voices; classifies every decision; surfaces only contested items to the user; writes the final task contract through the protected-artifact MCP.
 
-> Current artifact model: acceptance criteria live in `PLAN.md`. Do not create
-> `CHECKS.yaml`; `write_plan` does not accept a legacy checks input.
+> Current artifact model: acceptance criteria live in `PLAN.md`; `write_plan`
+> publishes it with required lens declarations in `TASK.json`.
 
 ## Sub-files
 

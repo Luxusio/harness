@@ -65,8 +65,6 @@ PROTECTED_ARTIFACTS = {
     "TASK.json": "task-control-mcp",
     "PLAN.md": "plan-skill",
     "RECEIPTS.jsonl": "receipt-lifecycle-hook",
-    "TASK_BASELINE.json": "task-start-runtime",
-    "CONVERSATION.md": "conversation-hook",
 }
 
 # Human-readable owner description (used in deny message text, not in the tail).
@@ -74,8 +72,6 @@ PROTECTED_ARTIFACT_HUMAN = {
     "TASK.json": "task control MCP tools",
     "PLAN.md": "plan-skill (Skill(harness:plan))",
     "RECEIPTS.jsonl": "Codex/Claude review and QA lifecycle hooks",
-    "TASK_BASELINE.json": "task-start runtime",
-    "CONVERSATION.md": "Codex/Claude conversation hooks",
 }
 
 SOURCE_EXTENSIONS = {
@@ -187,6 +183,10 @@ def _is_codex_rollout(path):
         len(rel) >= 4 and rel[0] != ".."
         and re.fullmatch(r"rollout-[A-Za-z0-9_.:-]+\.jsonl", rel[-1]) is not None
     )
+
+
+def _is_runtime_provenance(path):
+    return _is_claude_subagent_transcript(path) or _is_codex_rollout(path)
 
 
 def _is_workflow_control_surface(path, repo_root=None):
@@ -565,7 +565,7 @@ def _check_path(data: dict, file_path: str) -> None:
         return 0
     file_path = os.path.realpath(requested_path)
     if any(
-        _is_claude_subagent_transcript(path) or _is_codex_rollout(path)
+        _is_runtime_provenance(path)
         for path in (requested_path, file_path)
     ):
         _deny(

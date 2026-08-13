@@ -8,9 +8,8 @@ allowed-tools: Read, Glob, Grep, Bash, Edit, Write, Agent, Skill, AskUserQuestio
 
 Implement the plan for a harness task. Reads PLAN.md, implements changes, verifies completeness, captures durable learnings, and closes through MCP.
 
-> Current artifact model: use `PLAN.md` and unified `RECEIPTS.jsonl`. Do not
-> create, read, or update `CHECKS.yaml` or `USER_FEEDBACK.jsonl`; later legacy
-> ledger wording is non-operative.
+> Current artifact model: acceptance intent lives in `PLAN.md`; independent
+> review and QA evidence lives in the unified `RECEIPTS.jsonl`.
 
 Explicit user invocation or approval of this harness repo-mutating workflow
 authorizes the subagents required by the workflow's verification and review
@@ -376,7 +375,7 @@ Before `task_close`, verify these are true:
 1. PLAN.md acceptance criteria are addressed or explicitly deferred.
 2. `task_verify` reports PASS from ordered receipts in the current TASK.json generation.
 3. Required QA/UX subagents were spawned when available; hook-owned `RECEIPTS.jsonl` proves their lifecycle.
-4. `CONVERSATION.md` has no open `<!-- item: ... status=open -->` markers.
+4. User corrections are reflected in PLAN.md or durable documentation.
 5. Durable docs are updated when the task changed user-visible behavior, external contracts, or reusable guidance.
 
 Call `task_close`, then provide a concise final response with:
@@ -460,7 +459,7 @@ requirements that closed without becoming durable REQ docs. The task cannot
 close with unresolved durable-doc gaps; a changed REQ with vague or missing
 observable behavior is a FAIL, not a warning. Candidate REQs written by the
 Retrospective pass land with `status: candidate` frontmatter and do not block
-close on their own. Do not write legacy critic markdown artifacts.
+close on their own.
 
 ### Phase 8.7: Distilled Change Doc
 

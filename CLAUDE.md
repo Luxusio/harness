@@ -43,8 +43,7 @@ do not create tasks automatically. Do not use legacy autopilot commands.
 - Notes under `doc/**/*.md` may carry `freshness: current|suspect|stale` + optional `invalidated_by_paths`. Run `plugin/scripts/note_freshness.py --paths ...` explicitly when maintaining them; SessionStart does not inspect Git.
 - Protected artifacts (enforced by `plugin/scripts/prewrite_gate.py`):
   PLAN.md/TASK.json via task MCP tools, and RECEIPTS.jsonl via
-  Codex/Claude lifecycle hooks. CONVERSATION.md is append-only runtime history
-  owned by UserPromptSubmit/Subagent hooks.
+  Codex/Claude lifecycle hooks.
 - Pre-plan source writes are blocked until PLAN.md exists on the active task (plan-first rule).
 - Only one repo-mutating task may hold write focus at a time. A second mutating request creates or resumes a separate task that stays queued until the user switches focus or the current task closes.
 - Short approvals such as `ㅇㅇ ㄱ` approve only the last explicit transition the harness proposed; they never authorize skipping task creation, planning, or verify gates.

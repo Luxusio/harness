@@ -152,7 +152,7 @@ Auto-routing is harness's zero-learning-curve interface. When a user expresses i
 
 ---
 
-### document (DOC_SYNC)
+### document
 
 **Activates when:**
 - "문서 업데이트", "docs update", "sync documentation"
@@ -161,7 +161,8 @@ Auto-routing is harness's zero-learning-curve interface. When a user expresses i
 - "CLAUDE.md 업데이트", "README 업데이트"
 - "keep docs in sync"
 
-**Routing action:** Invoke `writer` agent → produce DOC_SYNC.md → critic-document pass.
+**Routing action:** Update the applicable durable docs directly, then run the
+documentation review methodology against the diff and those docs.
 
 **Example triggers:**
 ```
@@ -183,7 +184,7 @@ Auto-routing is harness's zero-learning-curve interface. When a user expresses i
 | Save state / resume session | checkpoint | |
 | Past patterns / learnings | learn | |
 | Retrospective / sprint review | retro | |
-| Doc sync / update docs | writer (DOC_SYNC) | |
+| Doc sync / update docs | direct durable-doc update + review | |
 | New task / feature request | plan-skill (canonical loop start) | |
 | Question / explanation | direct answer (no routing) | Not all requests need routing |
 

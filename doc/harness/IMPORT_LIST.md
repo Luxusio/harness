@@ -30,7 +30,7 @@ A skill is imported if it meets all three:
 | checkpoint | IMPORT | Session state save/restore across context breaks | same preamble block pattern |
 | learn | IMPORT | Session learnings management | same preamble block; gstack-learnings-search binary calls |
 | retro | IMPORT | Weekly engineering retrospective | same preamble block; team contribution breakdown usable without gstack |
-| document-release | SKIP | Covered by harness DOC_SYNC + writer agent | redundant with existing harness doc infrastructure |
+| document-release | SKIP | Covered by direct durable-doc updates and documentation review | redundant parallel path |
 | office-hours | SKIP | YC-structured product ideation, gstack-specific framing | entire skill is gstack-flavored (YC plea, startup mode framing) |
 
 ---
@@ -152,9 +152,12 @@ A skill is imported if it meets all three:
 
 ### document-release — SKIP
 
-**Rationale:** harness already has a complete documentation infrastructure: DOC_SYNC.md, writer agent, and critic-document. document-release duplicates this with a gstack-flavored approach. Importing it would create a redundant parallel path and potential conflict with harness's structured doc loop.
+**Rationale:** harness already updates the applicable durable docs directly and
+reviews them against the implementation diff. document-release would create a
+redundant parallel path.
 
-**What to keep instead:** The concept of cross-referencing diff vs. docs is already embedded in harness's writer agent and DOC_SYNC.md format. No import needed.
+**What to keep instead:** Cross-reference the implementation diff with its
+REQ/GUIDE/ADR/POLICY surfaces during the normal documentation review. No import needed.
 
 ---
 

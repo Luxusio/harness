@@ -1,11 +1,11 @@
 # REQ process controlled artifact writes
 summary: Agents must use the owning control surface for protected task artifacts
 status: accepted
-updated: 2026-08-12
+updated: 2026-08-13
 freshness: current
 confidence: high
 kind: process
-source: User directive stated 2026-03-31; updated 2026-06-22 after removal of manual evidence writers.
+source: User directive stated 2026-03-31; updated 2026-08-13 for the minimal current artifact set.
 
 Protected harness artifacts must be written only by their owning control
 surface. Agents must not hand-author files that the close gate treats as
@@ -15,21 +15,19 @@ provenance.
 
 | Artifact | Owner |
 |---|---|
-| `PLAN.md` / `TASK.json` required-lens declaration | MCP `write_plan` |
+| `PLAN.md` | MCP `write_plan` |
+| exact four-field `TASK.json` | harness MCP task tools; `write_plan` may update required lenses |
 | `RECEIPTS.jsonl` | Codex/Claude review and QA lifecycle hooks |
-| `CONVERSATION.md` | Codex/Claude UserPromptSubmit/Subagent hooks |
-| exact four-field `TASK.json` lifecycle control | harness MCP task tools |
 | `doc/<area>/REQ__*.md` and other durable docs | normal committed doc edits or `plugin/scripts/req_scaffold.py` |
 
 ## Requirements
 
-- The MCP server must not expose manual evidence writers, critic writers,
-  handoff writers, or REQ writers.
+- The MCP server must not expose manual evidence writers; durable docs remain
+  normal committed repository edits.
 - A PASS verdict must be backed by ordered hook-observed review and QA start
-  and completion receipts, not by a narrative critic file.
-- Task-local conversation history is human-readable Markdown. Close gates may
-  read only explicit `<!-- item: ... status=open -->` markers from it, never
-  infer requirements from free-form prose.
+  and completion receipts, not by self-authored narrative evidence.
+- User corrections that affect acceptance must be reflected directly in
+  `PLAN.md` or promoted to durable documentation before close.
 - Durable user requirements and reusable discoveries must be promoted to
   committed docs, skills, patterns, scripts, or tests. Task-local notes and
   transient `learnings.jsonl` rows are staging only.
