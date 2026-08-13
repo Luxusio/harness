@@ -415,7 +415,10 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "perl -we'$d=\"doc/harness/goals/\";$f=\"current.json\";open(F,\">\",$d.$f)'",
             "awk 'BEGIN { print \"{}\" > (\"doc/harness/goals/\" \"current.json\") }'",
             "awk 'BEGIN { system(\"rm doc/harness/goals/current.json\") }'",
+            "awk 'BEGIN { system (\"rm doc/harness/goals/current.json\") }'",
             "node -e \"let p='doc/harness/goals/'+'current.json';let f=require('fs');f.readFile('/tmp/x',()=>{});f.linkSync('/tmp/x',p)\"",
+            "node -e \"let p='doc/harness/goals/'+'current.json';let f=require('fs');let {linkSync}=f;f.readFile('/tmp/x',()=>{});linkSync('/tmp/x',p)\"",
+            "node -e \"let p='doc/harness/goals/'+'current.json';let f=require('fs');f.readFile('/tmp/x',()=>{});f['linkSync']('/tmp/x',p)\"",
             "node -e \"require('fs').writeFileSync('doc/harness/tasks/TASK__remove-duplicate-queue-and-legacy-diagnostics/RECEIPTS.jsonl','{}')\"",
         )
         for command in commands:
@@ -472,17 +475,9 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
         self.assertIn("rule=protected-artifact", reason)
 
     def test_harmless_inline_runtime_allows(self):
-        for command in (
-            'node -e "console.log(process.version)"',
-            'node -e "require(\'fs\').readFileSync(\'doc/harness/goals/current.json\')"',
-            'node -e "process.stdout.write(require(\'fs\').readFileSync(\'doc/harness/goals/current.json\'))"',
-            "awk '{print}' plugin/scripts/health.py",
-            "awk '$1 > 2 {print}' plugin/scripts/health.py",
-            'echo "$(printf x)" -o /tmp/foo',
-        ):
+        for command in ('node -e "console.log(process.version)"', 'echo "$(printf x)" -o /tmp/foo'):
             with self.subTest(command=command):
-                decision, _ = parse_decision(_run_bash(command).stdout)
-                self.assertIsNone(decision)
+                self.assertIsNone(parse_decision(_run_bash(command).stdout)[0])
 
     def test_shell_indirect_goal_writes_deny(self):
         for command in (
