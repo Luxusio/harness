@@ -73,6 +73,7 @@ PROTECTED_ARTIFACT_HUMAN = {
     "PLAN.md": "plan-skill (Skill(harness:plan))",
     "RECEIPTS.jsonl": "Codex/Claude review and QA lifecycle hooks",
 }
+GOAL_CONTROL_DIR = os.path.join("doc", "harness", "goals")
 
 SOURCE_EXTENSIONS = {
     ".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java",
@@ -133,13 +134,25 @@ def _rel(path, repo_root):
     return rel
 
 
+def _is_goal_control_artifact(path):
+    if not path:
+        return False
+    normalized = os.path.normpath(str(path))
+    marker = os.sep + GOAL_CONTROL_DIR + os.sep
+    suffix = normalized.split(marker, 1)[1] if marker in normalized else ""
+    if not suffix and normalized.startswith(GOAL_CONTROL_DIR + os.sep):
+        suffix = normalized[len(GOAL_CONTROL_DIR) + 1:]
+    return bool(suffix and os.sep not in suffix and suffix.endswith(".json"))
+
+
 def _is_protected_artifact(path):
-    """Return True for task artifacts and active-session authority leaves."""
+    """Return True for task, Goal, and active-session authority leaves."""
     if not path:
         return False
     normalized = os.path.normpath(str(path))
     return (
         os.path.basename(normalized) in PROTECTED_ARTIFACTS
+        or _is_goal_control_artifact(normalized)
         or normalized.endswith(os.path.join(TASK_DIR, ".active"))
         or os.path.join(TASK_DIR, ".active_sessions") + os.sep in normalized
     )
@@ -607,9 +620,16 @@ def _check_path(data: dict, file_path: str) -> None:
     )
 
     basename = os.path.basename(file_path)
-    if inside_task_dir and _is_protected_artifact(file_path):
-        owner = PROTECTED_ARTIFACTS.get(basename, "task-control-runtime")
-        owner_human = PROTECTED_ARTIFACT_HUMAN.get(basename, owner)
+    if _is_protected_artifact(file_path):
+        goal_control = _is_goal_control_artifact(file_path)
+        owner = (
+            "goal-control-mcp" if goal_control
+            else PROTECTED_ARTIFACTS.get(basename, "task-control-runtime")
+        )
+        owner_human = (
+            "native Goal MCP tools" if goal_control
+            else PROTECTED_ARTIFACT_HUMAN.get(basename, owner)
+        )
         human = (
             f"{basename} is owned by {owner_human}. Use the owning skill or MCP "
             f"tool (e.g. write_plan for PLAN.md)."

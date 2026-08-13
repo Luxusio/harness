@@ -47,6 +47,14 @@ class TestAllowSilent(unittest.TestCase):
 
 
 class TestDenyProtectedArtifact(unittest.TestCase):
+    def test_write_native_goal_control_denies(self):
+        goal = os.path.join(REPO_ROOT, "doc/harness/goals/current.json")
+        r = invoke_hook(GATE, "Write", {"file_path": goal})
+        decision, reason = parse_decision(r.stdout)
+        self.assertEqual(decision, "deny")
+        self.assertIn("owner=goal-control-mcp", reason)
+        self.assertIn("native Goal MCP tools", reason)
+
     def test_write_claude_subagent_transcript_denies(self):
         transcript = os.path.expanduser(
             "~/.claude/projects/project/session/subagents/agent-review-code.jsonl"
@@ -100,6 +108,14 @@ class TestDenyProtectedArtifact(unittest.TestCase):
             self.assertIn("HARNESS_SKIP_PREWRITE", reason)
 
 class TestMultiEdit(unittest.TestCase):
+    def test_apply_patch_native_goal_control_denies(self):
+        goal = os.path.join(REPO_ROOT, "doc/harness/goals/GOAL__forged.json")
+        patch = f"*** Begin Patch\n*** Add File: {goal}\n+{{}}\n*** End Patch"
+        r = invoke_hook(GATE, "apply_patch", {"patch": patch})
+        decision, reason = parse_decision(r.stdout)
+        self.assertEqual(decision, "deny")
+        self.assertIn("goal-control-mcp", reason)
+
     def test_multiedit_triggers_gate(self):
         """MultiEdit on a protected artifact must deny."""
         with scratch_task_in_real_repo("pr1-multiedit") as task_dir:

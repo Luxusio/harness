@@ -236,6 +236,17 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 self.assertEqual(decision, "deny")
                 self.assertIn("rule=protected-artifact", reason)
 
+    def test_redirect_into_native_goal_control_denies(self):
+        for target in (
+            "doc/harness/goals/current.json",
+            "doc/harness/goals/GOAL__forged.json",
+        ):
+            with self.subTest(target=target):
+                r = _run_bash(f"echo '{{}}' > {target}")
+                decision, reason = parse_decision(r.stdout)
+                self.assertEqual(decision, "deny")
+                self.assertIn("rule=protected-artifact", reason)
+
 
 
 class TestEnvPrefixBypassFix(unittest.TestCase):
