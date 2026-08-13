@@ -291,10 +291,25 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
 
     def stamp_expression_calls(node, environment):
         if isinstance(node, ast.Lambda):
+            for default in (
+                list(node.args.defaults)
+                + [item for item in node.args.kw_defaults if item is not None]
+            ):
+                stamp_expression_calls(default, environment)
             child = dict(environment)
             for name in argument_names(node.args):
                 child.pop(name, None)
             stamp_expression_calls(node.body, child)
+            return
+        if isinstance(node, ast.NamedExpr):
+            stamp_expression_calls(node.value, environment)
+            value = string_value(node.value, environment)
+            for name in bound_names(node.target):
+                if value is None:
+                    environment.pop(name, None)
+                else:
+                    environment[name] = value
+                    string_history.add(value)
             return
         if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
             child = dict(environment)
