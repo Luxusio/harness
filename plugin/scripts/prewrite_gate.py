@@ -137,6 +137,8 @@ def _rel(path, repo_root):
 def _is_goal_control_artifact(path):
     if not path: return False
     normalized = os.path.normpath(str(path))
+    if normalized == GOAL_CONTROL_DIR or normalized.endswith(os.sep + GOAL_CONTROL_DIR):
+        return True
     marker = os.sep + GOAL_CONTROL_DIR + os.sep
     suffix = normalized.split(marker, 1)[1] if marker in normalized else ""
     if not suffix and normalized.startswith(GOAL_CONTROL_DIR + os.sep): suffix = normalized[len(GOAL_CONTROL_DIR) + 1:]

@@ -88,6 +88,7 @@ from _lib import (  # type: ignore
     reset_receipt_streams_for_new_run, restore_receipt_streams,
     release_receipt_stream_reset,
     receipt_stream_transaction,
+    goal_transaction,
     begin_task_run, restore_task_control,
     _bind_control_writer,
     _strict_regular_text_snapshot, _restore_text_snapshots, _atomic_text_write as _lib_atomic_text_write,
@@ -519,12 +520,12 @@ def handle_task_close(args: dict) -> dict:
             data={"task_dir": td, "status": initial_status,
                   "next_action": "Call task_start to begin a fresh task run."},
         )
-    with receipt_stream_transaction(td):
+    control_root = find_harness_root(td) or find_repo_root(td)
+    with goal_transaction(control_root), receipt_stream_transaction(td):
         snapshot = receipt_snapshot(td)
         def close_error(message, data):
             return _err(message, data=dict(data))
 
-        control_root = find_harness_root(td) or find_repo_root(td)
         ctx = emit_compact_context(td, snapshot)
         missing = ctx.get("missing_for_close") or []
         if missing:

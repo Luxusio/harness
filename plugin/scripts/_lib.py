@@ -79,6 +79,11 @@ _LAST_HOOK_INPUT: dict = {}
 GOALS_DIR = os.path.join("doc", "harness", "goals")
 GOAL_CURRENT_FILE = os.path.join(GOALS_DIR, "current.json")
 _GOAL_LOCK_HELD = ContextVar("harness_goal_lock_held", default=())
+_GOAL_DIR_BINDING = ContextVar("harness_goal_dir_binding", default=())
+
+
+def _goal_dir_fd(parent: str):
+    return next((fd for path, fd in reversed(_GOAL_DIR_BINDING.get()) if parent == path), None)
 
 
 def read_hook_input():
@@ -192,11 +197,13 @@ def goal_transaction(repo_root: str):
         import fcntl
         fcntl.flock(fd, fcntl.LOCK_EX)
         token = _GOAL_LOCK_HELD.set(held + (root,))
+        binding_token = _GOAL_DIR_BINDING.set(_GOAL_DIR_BINDING.get() + ((goals_dir, fd),))
         try:
             yield
             after = os.lstat(goals_dir)
             if (after.st_dev, after.st_ino) != (info.st_dev, info.st_ino): raise RuntimeError("goal storage identity changed")
         finally:
+            _GOAL_DIR_BINDING.reset(binding_token)
             _GOAL_LOCK_HELD.reset(token)
     finally:
         os.close(fd)
@@ -234,9 +241,10 @@ def _strict_regular_text_snapshot(
     """Snapshot an absent or stable regular UTF-8 leaf without ambiguity."""
     parent = os.path.abspath(os.path.dirname(path) or ".")
     leaf = os.path.basename(path)
+    goal_fd = _goal_dir_fd(parent)
     binding_fn = globals().get("_receipt_lock_binding")
     binding = binding_fn(parent) if callable(binding_fn) else None
-    dir_fd = binding[1] if binding is not None else None
+    dir_fd = goal_fd if goal_fd is not None else binding[1] if binding is not None else None
     if binding is not None:
         _validate_receipt_dir_binding(binding)
 
@@ -305,9 +313,12 @@ def _restore_text_snapshots(snapshots):
             if not snapshot["exists"]:
                 parent = os.path.abspath(os.path.dirname(path) or ".")
                 leaf = os.path.basename(path)
+                goal_fd = _goal_dir_fd(parent)
                 binding = _receipt_lock_binding(parent) if "_receipt_lock_binding" in globals() else None
                 try:
-                    if binding is not None:
+                    if goal_fd is not None:
+                        os.unlink(leaf, dir_fd=goal_fd)
+                    elif binding is not None:
                         _validate_receipt_dir_binding(binding)
                         os.unlink(leaf, dir_fd=binding[1])
                     else:
@@ -315,11 +326,13 @@ def _restore_text_snapshots(snapshots):
                 except FileNotFoundError:
                     pass
             elif snapshot.get("kind") == "symlink":
+                parent, leaf = os.path.abspath(os.path.dirname(path) or "."), os.path.basename(path)
+                goal_fd = _goal_dir_fd(parent)
                 try:
-                    os.unlink(path)
+                    os.unlink(leaf, dir_fd=goal_fd) if goal_fd is not None else os.unlink(path)
                 except FileNotFoundError:
                     pass
-                os.symlink(snapshot["target"], path)
+                os.symlink(snapshot["target"], leaf, dir_fd=goal_fd) if goal_fd is not None else os.symlink(snapshot["target"], path)
             else:
                 os.makedirs(os.path.dirname(path), exist_ok=True)
                 _atomic_text_write(path, snapshot["text"])
@@ -333,9 +346,11 @@ def _restore_text_snapshots(snapshots):
 def _read_json_file(path: str, *, max_size: int = 1024 * 1024) -> dict:
     """Read a stable, single-link, owner-controlled Goal authority object."""
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    binding = next((item for item in reversed(_GOAL_DIR_BINDING.get()) if os.path.dirname(path) == item[0]), None)
+    leaf, dir_fd = os.path.basename(path), binding[1] if binding else None
     try:
-        before = os.lstat(path)
-        fd = os.open(path, flags)
+        before = os.stat(leaf, dir_fd=dir_fd, follow_symlinks=False) if dir_fd is not None else os.lstat(path)
+        fd = os.open(leaf, flags, dir_fd=dir_fd) if dir_fd is not None else os.open(path, flags)
     except OSError:
         return {}
     try:
@@ -355,7 +370,7 @@ def _read_json_file(path: str, *, max_size: int = 1024 * 1024) -> dict:
             text = handle.read(max_size + 1)
         if len(text.encode("utf-8")) > max_size:
             return {}
-        after = os.lstat(path)
+        after = os.stat(leaf, dir_fd=dir_fd, follow_symlinks=False) if dir_fd is not None else os.lstat(path)
         if (
             stat.S_ISLNK(after.st_mode)
             or (after.st_dev, after.st_ino) != identity
@@ -385,11 +400,12 @@ def _atomic_text_write(path: str, text: str) -> None:
     """Replace a text leaf without following a pre-existing leaf symlink."""
     parent = os.path.abspath(os.path.dirname(path) or ".")
     leaf = os.path.basename(path)
+    goal_fd = _goal_dir_fd(parent)
     binding_fn = globals().get("_receipt_lock_binding")
     binding = binding_fn(parent) if callable(binding_fn) else None
-    if binding is not None:
-        _validate_receipt_dir_binding(binding)
-        dir_fd = binding[1]
+    if goal_fd is not None or binding is not None:
+        if binding is not None: _validate_receipt_dir_binding(binding)
+        dir_fd = goal_fd if goal_fd is not None else binding[1]
         tmp = f".text.{secrets.token_hex(8)}.tmp"
         flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
         flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
@@ -405,7 +421,7 @@ def _atomic_text_write(path: str, text: str) -> None:
             os.fsync(fd)
             os.replace(tmp, leaf, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
             os.fsync(dir_fd)
-            _validate_receipt_dir_binding(binding)
+            if binding is not None: _validate_receipt_dir_binding(binding)
         finally:
             os.close(fd)
             try:

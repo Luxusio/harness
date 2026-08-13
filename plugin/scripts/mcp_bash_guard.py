@@ -390,8 +390,9 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
     filesystem_mutators = {
         "link", "rename", "replace", "remove", "unlink", "truncate", "chown",
         "utime", "move", "copy", "copy2", "copyfile", "touch", "mkdir",
-        "makedirs", "rmdir", "removedirs", "write_text", "write_bytes",
-        "hardlink_to", "link_to", "chmod",
+        "makedirs", "rmdir", "removedirs", "rmtree", "copytree", "symlink",
+        "symlink_to", "mknod", "mkfifo", "write_text", "write_bytes",
+        "hardlink_to", "link_to", "chmod", "lchmod", "lchown",
     }
     open_aliases = {"open"}
     os_open_aliases = set()

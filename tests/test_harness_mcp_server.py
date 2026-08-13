@@ -2624,6 +2624,20 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                     {"TASK__goal-child-1", "TASK__goal-child-2"},
                 )
 
+    def test_goal_transaction_writes_through_pinned_directory(self):
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as outside:
+            with mock.patch.object(harness_server, "find_repo_root", return_value=tmp):
+                started = harness_server.call_tool("goal_start", {"objective": "pinned"})
+                self.assertFalse(started.get("isError"))
+                goals = Path(tmp, "doc/harness/goals")
+                moved = goals.with_name("goals-original")
+                with self.assertRaises((RuntimeError, ValueError)):
+                    with harness_server.goal_transaction(tmp):
+                        goals.rename(moved)
+                        goals.symlink_to(outside, target_is_directory=True)
+                        harness_server.add_goal_task(tmp, "TASK__pinned-child")
+                self.assertFalse(any(Path(outside).iterdir()))
+
     def test_close_evaluates_each_success_gate_once(self):
         with tempfile.TemporaryDirectory() as tmp:
             td = self._prepare_task(
