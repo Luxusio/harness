@@ -332,6 +332,7 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 -c \"mode='w'; mode='r'; open('doc/harness/goals/current.json', mode)\"",
             "python3 -c \"mode='r'; f=lambda x=open('doc/harness/goals/current.json', mode): None\"",
             "python3 -c \"mode='w'; (mode := 'r'); open('doc/harness/goals/current.json', mode)\"",
+            "python3 -c \"mode='w'; open((mode := 'r') and 'doc/harness/goals/current.json', mode)\"",
         ):
             with self.subTest(command=command):
                 r = _run_bash(command)
@@ -370,6 +371,9 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 -c \"mode='r'; f=lambda mode: open('doc/harness/goals/current.json', mode); f('w')\"",
             "python3 -c \"mode='w'; f=lambda x=open('doc/harness/goals/current.json', mode): None; mode='r'\"",
             "python3 -c \"mode='r'; (mode := 'w'); open('doc/harness/goals/current.json', mode)\"",
+            "python3 -c \"mode='r'; mode += '+'; open('doc/harness/goals/current.json', mode)\"",
+            "python3 -c \"mode='r'; mode, = ('w',); open('doc/harness/goals/current.json', mode)\"",
+            "python3 -c \"mode='r'; open((mode := 'w') and 'doc/harness/goals/current.json', mode)\"",
         )
         for command in commands:
             with self.subTest(command=command):

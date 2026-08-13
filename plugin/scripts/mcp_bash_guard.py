@@ -327,7 +327,13 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
                 stamp_expression_calls(value, child)
             return
         if isinstance(node, ast.Call):
+            stamp_expression_calls(node.func, environment)
+            for argument in node.args:
+                stamp_expression_calls(argument, environment)
+            for keyword in node.keywords:
+                stamp_expression_calls(keyword.value, environment)
             call_environments[id(node)] = dict(environment)
+            return
         for child in ast.iter_child_nodes(node):
             if not isinstance(child, ast.stmt):
                 stamp_expression_calls(child, environment)
@@ -353,13 +359,17 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
                 value = string_value(node.value, environment)
                 targets_nodes = node.targets if isinstance(node, ast.Assign) else [node.target]
                 for target in targets_nodes:
-                    if not isinstance(target, ast.Name):
-                        continue
-                    if value is None:
-                        environment.pop(target.id, None)
-                    else:
-                        environment[target.id] = value
-                        string_history.add(value)
+                    names = bound_names(target)
+                    for name in names:
+                        if value is not None and isinstance(target, ast.Name):
+                            environment[name] = value
+                            string_history.add(value)
+                        else:
+                            environment.pop(name, None)
+                continue
+            if isinstance(node, ast.AugAssign):
+                for name in bound_names(node.target):
+                    environment.pop(name, None)
                 continue
             child_blocks = []
             for field in ("body", "orelse", "finalbody"):
