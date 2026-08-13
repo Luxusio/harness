@@ -33,11 +33,8 @@ try:
         TASK_DIR,
         _log_gate_error,
         resolve_active_task_dir,
-        goal_command_objective,
         read_current_goal,
         next_goal_task,
-        start_harness_goal,
-        _goal_probe_runtime,
     )
 except Exception:
     sys.exit(0)
@@ -227,22 +224,6 @@ def main() -> int:
     repo_root = find_repo_root()
     if not is_harness_enabled_repo(repo_root):
         return 0
-    synced_goal = None
-    objective = goal_command_objective(data.get("prompt") if isinstance(data, dict) else "")
-    if objective:
-        try:
-            synced_goal = start_harness_goal(
-                repo_root,
-                objective,
-                source={
-                    "runtime": _goal_probe_runtime(data),
-                    "hook_event": "UserPromptSubmit",
-                    "session_id": data.get("session_id") if isinstance(data, dict) else "",
-                    "transcript_path": data.get("transcript_path") if isinstance(data, dict) else "",
-                },
-            )
-        except Exception:
-            synced_goal = None
     task_dir = _find_active_task_dir(repo_root)
 
     output_parts = [DOC_GATE]
@@ -270,8 +251,8 @@ def main() -> int:
         if runbook_block:
             output_parts.append(runbook_block)
 
-    if synced_goal or not task_dir:
-        output_parts.append(_build_goal_block(repo_root, synced_goal))
+    if not task_dir:
+        output_parts.append(_build_goal_block(repo_root))
 
     if output_parts:
         sys.stdout.write(_truncate_output("\n".join(output_parts)))

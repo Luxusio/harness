@@ -249,7 +249,7 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
         return
     filesystem_mutators = {
         "link", "rename", "replace", "remove", "unlink", "write_text",
-        "write_bytes", "open", "hardlink_to", "link_to", "chmod",
+        "write_bytes", "hardlink_to", "link_to", "chmod",
     }
     if any(
         isinstance(node, ast.Call)

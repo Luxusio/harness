@@ -411,7 +411,8 @@ class TestPromptMemory(unittest.TestCase):
             debug_dir = base / "doc" / "harness" / "debug" / "goal-hook-payloads"
         self.assertEqual(r.returncode, 0)
         self.assertFalse(debug_dir.exists())
-        self.assertIn("active=GOAL__", r.stdout)
+        self.assertIn("get_goal->goal_start", r.stdout)
+        self.assertFalse((base / "doc/harness/goals/current.json").exists())
 
     def test_removed_capture_marker_is_ignored(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -463,7 +464,7 @@ class TestPromptMemory(unittest.TestCase):
         self.assertEqual(outside_files, [])
         self.assertEqual(outside_mode, 0o700)
 
-    def test_claude_goal_prompt_syncs_harness_goal(self):
+    def test_claude_goal_prompt_routes_to_native_goal_mcp_without_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             r = _invoke(
@@ -476,15 +477,13 @@ class TestPromptMemory(unittest.TestCase):
                 },
             )
             current = base / "doc" / "harness" / "goals" / "current.json"
-            record = json.loads(current.read_text(encoding="utf-8"))
         self.assertEqual(r.returncode, 0)
         self.assertIn("[harness-goal]", r.stdout)
+        self.assertIn("get_goal->goal_start", r.stdout)
         self.assertIn("goal_next_task", r.stdout)
-        self.assertEqual(record["objective"], "Fix login bug cleanly")
-        self.assertNotIn("strategy", record)
-        self.assertEqual(record["source"]["hook_event"], "UserPromptSubmit")
+        self.assertFalse(current.exists())
 
-    def test_codex_goal_prompt_records_codex_runtime(self):
+    def test_codex_goal_prompt_routes_without_writing_runtime_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             payload = {
@@ -498,13 +497,11 @@ class TestPromptMemory(unittest.TestCase):
                 input=json.dumps(payload), capture_output=True, text=True,
                 cwd=str(base), timeout=5,
             )
-            record = json.loads(
-                (base / "doc/harness/goals/current.json").read_text(encoding="utf-8")
-            )
         self.assertEqual(r.returncode, 0)
-        self.assertEqual(record["source"]["runtime"], "codex")
+        self.assertIn("get_goal->goal_start", r.stdout)
+        self.assertFalse((base / "doc/harness/goals/current.json").exists())
 
-    def test_claude_korean_goal_prompt_syncs_harness_goal(self):
+    def test_claude_korean_goal_prompt_routes_without_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             r = _invoke(
@@ -516,10 +513,9 @@ class TestPromptMemory(unittest.TestCase):
                     "prompt": "/골 특정 페이지 버그 전부 다 찾아서 고쳐",
                 },
             )
-            record = json.loads((base / "doc" / "harness" / "goals" / "current.json").read_text(encoding="utf-8"))
         self.assertEqual(r.returncode, 0)
-        self.assertNotIn("strategy", record)
-        self.assertIn("특정 페이지", record["objective"])
+        self.assertIn("get_goal->goal_start", r.stdout)
+        self.assertFalse((base / "doc/harness/goals/current.json").exists())
 
     # ---- AC-005: suspect note listing suppressed ----
     def test_suspect_note_not_listed(self):

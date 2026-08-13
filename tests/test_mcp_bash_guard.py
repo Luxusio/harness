@@ -318,6 +318,13 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 self.assertEqual(decision, "deny")
                 self.assertIn("rule=protected-artifact", reason)
 
+    def test_python_read_only_goal_inspection_allows(self):
+        r = _run_bash(
+            "python3 -c \"open('doc/harness/goals/current.json').read()\""
+        )
+        decision, _ = parse_decision(r.stdout)
+        self.assertIsNone(decision)
+
 
 
 class TestEnvPrefixBypassFix(unittest.TestCase):

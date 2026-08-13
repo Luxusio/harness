@@ -30,13 +30,10 @@ attached to a Goal unless the user or agent later establishes one.
 
 ## Runtime Split
 
-Claude exposes `/goal ...` text through `UserPromptSubmit`, so hooks can sync a
-harness Goal automatically when the user invokes `/goal` or `/골`.
-
-Codex native goal objective should be read by the agent from native goal
-context/tooling, then synced with `goal_start`. Codex hook payloads are not the
-authoritative objective source, but hooks still inject the short runtime
-procedure that tells the agent to run `get_goal -> goal_start`, inspect
+UserPromptSubmit hooks are advisory and never write Goal authority. Claude and
+Codex read the native objective from the current conversation or Goal tooling,
+then sync it through the sole writer, `goal_start`. Hooks inject the short
+runtime procedure that tells the agent to run `get_goal -> goal_start`, inspect
 `goal_context`, create/attach a child task when needed, continue via
 `goal_next_task`, and call `goal_finish` only after child tasks prove the
 objective.

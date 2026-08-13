@@ -146,32 +146,10 @@ def last_hook_input() -> dict:
     return _LAST_HOOK_INPUT
 
 
-def _goal_probe_runtime(data: dict) -> str:
-    raw = (
-        os.environ.get("HARNESS_RUNTIME")
-        or data.get("runtime")
-        or data.get("client")
-        or data.get("source")
-        or "unknown"
-    )
-    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(raw)).strip("._")
-    return (safe or "unknown")[:80]
-
-
 def _goal_probe_text(value: object) -> str:
     cleaned = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
     cleaned = re.sub(r"</?system-reminder[^>]*>", "[SANITIZED]", cleaned, flags=re.IGNORECASE)
     return " ".join(cleaned.split()).strip()
-
-
-def goal_command_objective(prompt: object) -> str:
-    """Return objective text from a native /goal or /골 prompt, if present."""
-    text = _goal_probe_text(prompt)
-    lowered = text.lower()
-    for prefix in ("/goal", "/골"):
-        if lowered == prefix or lowered.startswith(prefix + " "):
-            return text[len(prefix):].strip()
-    return ""
 
 
 def _goal_slug(value: str) -> str:
