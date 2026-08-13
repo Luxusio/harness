@@ -10,8 +10,6 @@ with exit 0; silent on allow; fail-open on unexpected exceptions.
 
 Escape hatch: ``HARNESS_SKIP_MCP_GUARD=1`` → one-shot allow + log ``gate-bypass``.
 
-Known gap (documented in doc/harness/patterns/mcp-bash-guard.md):
-  - Symlink resolution (``os.path.realpath``) — not applied before classification.
 """
 from __future__ import annotations
 

@@ -86,10 +86,6 @@ resolved code cannot be inspected statically. Other dynamic constructs remain:
 - command substitution or backticks around non-Python mutators — not extracted.
 - `python -c` with base64 / `exec(...)` obfuscation — regex patterns miss
   dynamically-constructed writes.
-- Symlink target resolution — `os.path.realpath` is not applied before
-  `_classify_gated_path`, so `ln -s plugin/CLAUDE.md /tmp/link && echo x > /tmp/link`
-  bypasses classification.
-
 Gaps are tracked in `doc/harness/tasks/TASK__gate-reliability-pr1/deferred-scope.md`
 and will be revisited in later PRs. `HARNESS_SKIP_MCP_GUARD=1` is the current
 manual override if you need to work around one.
