@@ -269,13 +269,6 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
             right = string_value(node.right, environment)
             return left + right if left is not None and right is not None else None
         return None
-    def stamp_expression_calls(node, environment):
-        if isinstance(node, ast.Call):
-            call_environments[id(node)] = dict(environment)
-        for child in ast.iter_child_nodes(node):
-            if not isinstance(child, ast.stmt):
-                stamp_expression_calls(child, environment)
-
     def bound_names(target):
         if isinstance(target, ast.Name):
             return {target.id}
@@ -283,21 +276,54 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
             return set().union(*(bound_names(item) for item in target.elts))
         return set()
 
+    def argument_names(arguments):
+        names = {
+            arg.arg for arg in (
+                list(arguments.posonlyargs) + list(arguments.args)
+                + list(arguments.kwonlyargs)
+            )
+        }
+        if arguments.vararg:
+            names.add(arguments.vararg.arg)
+        if arguments.kwarg:
+            names.add(arguments.kwarg.arg)
+        return names
+
+    def stamp_expression_calls(node, environment):
+        if isinstance(node, ast.Lambda):
+            child = dict(environment)
+            for name in argument_names(node.args):
+                child.pop(name, None)
+            stamp_expression_calls(node.body, child)
+            return
+        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+            child = dict(environment)
+            for generator in node.generators:
+                stamp_expression_calls(generator.iter, child)
+                for name in bound_names(generator.target):
+                    child.pop(name, None)
+                for condition in generator.ifs:
+                    stamp_expression_calls(condition, child)
+            values = (
+                (node.key, node.value) if isinstance(node, ast.DictComp)
+                else (node.elt,)
+            )
+            for value in values:
+                stamp_expression_calls(value, child)
+            return
+        if isinstance(node, ast.Call):
+            call_environments[id(node)] = dict(environment)
+        for child in ast.iter_child_nodes(node):
+            if not isinstance(child, ast.stmt):
+                stamp_expression_calls(child, environment)
+
     def body_environment(node, environment):
         child = dict(environment)
         names = set()
         if isinstance(node, (ast.For, ast.AsyncFor)):
             names.update(bound_names(node.target))
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            arguments = node.args
-            names.update(arg.arg for arg in (
-                list(arguments.posonlyargs) + list(arguments.args)
-                + list(arguments.kwonlyargs)
-            ))
-            if arguments.vararg:
-                names.add(arguments.vararg.arg)
-            if arguments.kwarg:
-                names.add(arguments.kwarg.arg)
+            names.update(argument_names(node.args))
         for item in getattr(node, "items", ()):
             if item.optional_vars is not None:
                 names.update(bound_names(item.optional_vars))
