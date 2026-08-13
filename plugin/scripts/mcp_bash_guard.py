@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""Block direct Bash mutations of source and harness control artifacts."""
 from __future__ import annotations
-
 import os
 import ast
 import json
 import re
 import shlex
+import shutil
 import stat
 import sys
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from _lib import (
@@ -32,7 +30,7 @@ try:
 except Exception:
     sys.exit(0)
 GATE_NAME = "mcp_bash_guard"
-_COMMAND_LENGTH_CAP = 64 * 1024  # short-circuit extremely large commands
+_COMMAND_LENGTH_CAP = 64 * 1024
 _GUARD_STDIN_CAP = 128 * 1024
 REDIRECT_TOKENS = {">", ">>", "1>", "1>>"}
 LAST_ARG_MUTATORS = {"cp", "mv", "install", "touch", "truncate"}
@@ -65,7 +63,6 @@ UNINSPECTED_INLINE_RUNTIMES = dict(
 )
 BOUNDARY_TOKENS = {"&&", "||", "|", ";", "\n", "&"}
 _INLINE_REDIRECT_RE = re.compile(r"^(?:\d*)?(>>?)(.+)$")
-
 _PY_PATTERNS = [
     re.compile(r"(?:pathlib\.)?Path\(\s*['\"]([^'\"]+)['\"]\s*\)\.(?:write_text|write_bytes)"),
     re.compile(r"os\.replace\([^,]+,\s*['\"]([^'\"]+)['\"]\)"),
@@ -248,7 +245,6 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
         if arguments.kwarg:
             names.add(arguments.kwarg.arg)
         return names
-
     def merge_environments(environment, candidates):
         if not candidates:
             return
@@ -260,7 +256,6 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
         }
         environment.clear()
         environment.update(merged)
-
     def stamp_expression_calls(node, environment):
         if isinstance(node, ast.Lambda):
             for default in (
@@ -326,7 +321,6 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
         for child in ast.iter_child_nodes(node):
             if not isinstance(child, ast.stmt):
                 stamp_expression_calls(child, environment)
-
     def body_environment(node, environment):
         child = dict(environment)
         names = set()
@@ -340,7 +334,6 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
         for name in names:
             child.pop(name, None)
         return child
-
     def process_statements(statements, environment):
         for node in statements:
             stamp_expression_calls(node, environment)
@@ -393,7 +386,6 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
                 outcomes.append(child)
             if child_blocks:
                 merge_environments(environment, outcomes)
-
     process_statements(tree.body, strings)
     filesystem_mutators = {
         "link", "rename", "replace", "remove", "unlink", "write_text",
@@ -597,7 +589,6 @@ def _python_code_exposes_lifecycle(code):
             left, right = string_value(node.left), string_value(node.right)
             return left + right if left is not None and right is not None else None
         return None
-
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             if any(alias.name.rsplit(".", 1)[-1] in LIFECYCLE_RECEIPT_MODULES for alias in node.names):
@@ -711,20 +702,30 @@ def _safe_lifecycle_source_inspection(argv):
     if cmd == "sed" and not any(arg == "-i" or arg.startswith("-i") for arg in args):
         return True
     return False
-def _safe_gated_path_inspection(argv):
+def _safe_gated_path_inspection(argv, raw_argv=()):
     if not argv:
         return False
     cmd, args = os.path.basename(argv[0]), argv[1:]
+    resolved = shutil.which(cmd)
+    if not resolved or os.sep in argv[0] and os.path.realpath(argv[0]) != os.path.realpath(resolved):
+        return False
+    if any(
+        _is_env_assignment(arg) and arg.split("=", 1)[0] in {
+            "PATH", "LESSOPEN", "LESSCLOSE", "GIT_EXTERNAL_DIFF", "GIT_PAGER",
+        }
+        for arg in raw_argv
+    ):
+        return False
     readers = {"cat", "file", "head", "ls", "more", "readlink", "realpath", "grep", "stat", "tail", "wc"}
     if cmd in readers:
         return True
     output_option = any(arg in {"-o", "--output"} or arg.startswith(("-o", "--output=")) for arg in args)
     if cmd == "less": return not any(arg.startswith(("-o", "-O")) for arg in args)
     if cmd == "rg": return not any(arg == "--pre" or arg.startswith("--pre=") for arg in args)
-    if cmd == "git": return bool(args) and args[0] in {"diff", "show", "log", "status", "grep"} and not output_option and not any(arg in {"--ext-diff", "--textconv"} for arg in args)
-    if cmd == "sed": return not any(arg == "-i" or arg.startswith("-i") or re.search(r"(?:^|[;/ ])(?:w|W|e)(?:\s|$)", arg) for arg in args)
+    if cmd == "git": return bool(args) and args[0] in {"diff", "show", "log", "status", "grep"} and not output_option and not any("pager" in arg or arg in {"--ext-diff", "--textconv"} for arg in args)
+    if cmd == "sed": return not any(arg in {"-i", "--in-place"} or arg.startswith(("-i", "--in-place=")) or re.search(r"(?:^|[;/0-9,$ ])(?:w|W|e)(?:\s|[A-Za-z0-9_.-]+/|$)", arg) for arg in args)
     if cmd == "diff": return not output_option
-    if cmd == "find": return not any(arg.startswith(("-delete", "-exec", "-execdir", "-fls", "-fprint")) for arg in args)
+    if cmd == "find": return not any(arg.startswith(("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls", "-fprint")) for arg in args)
     return False
 def _uninspected_inline(argv):
     flags = UNINSPECTED_INLINE_RUNTIMES.get(os.path.basename(argv[0]), set())
@@ -733,9 +734,19 @@ def _uninspected_inline(argv):
     return any(
         arg in flags
         or any(arg.startswith(flag + "=") for flag in flags if flag.startswith("--"))
-        or any(arg.startswith(flag) and arg != flag for flag in flags if len(flag) == 2)
+        or any(
+            arg.startswith("-") and not arg.startswith("--") and flag[1:] in arg[1:]
+            for flag in flags if len(flag) == 2
+        )
         for arg in argv[1:]
     )
+def _inline_mutation_risk(argv):
+    code = " ".join(argv[1:]).lower()
+    return bool(re.search(
+        r"(?:write|append|unlink|rename|replace|remove|delete|truncate|chmod|"
+        r"hardlink|\bopen\s*\([^)]*['\"](?:[wax]|r\+|>)|>{1,2})",
+        code,
+    ))
 def _gated_path_risk(tokens, repo_root, execution_cwd):
     candidates = _embedded_path_candidates(tokens)
     if any(_classify_gated_path(
@@ -774,6 +785,16 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
         except IndexError:
             nested = ""
         if nested:
+            if _gated_path_risk(raw_argv, repo_root, execution_cwd) and re.search(
+                r"(?:write|append|unlink|rename|replace|remove|delete|truncate|chmod|>)",
+                nested, re.I,
+            ):
+                targets.append({
+                    "path": "doc/harness/goals/current.json",
+                    "category": "protected-artifact",
+                    "method": "nested runtime with gated environment",
+                })
+                return
             targets.extend(_extract_mutation_targets(
                 nested, repo_root, execution_cwd,
             ))
@@ -868,16 +889,17 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
             non_env, targets, repo_root, execution_cwd
         )
         return
-    if _uninspected_inline(non_env) and _gated_path_risk(
-        segment_tokens, repo_root, execution_cwd,
-    ):
-        targets.append({
-            "path": "doc/harness/goals/current.json",
-            "category": "protected-artifact",
-            "method": "uninspected inline runtime",
-        })
+    if _uninspected_inline(non_env):
+        if _inline_mutation_risk(non_env) and _gated_path_risk(
+            segment_tokens, repo_root, execution_cwd,
+        ):
+            targets.append({
+                "path": "doc/harness/goals/current.json",
+                "category": "protected-artifact",
+                "method": "uninspected inline runtime",
+            })
         return
-    if _safe_gated_path_inspection(non_env):
+    if _safe_gated_path_inspection(non_env, segment_tokens):
         return
     for candidate in _embedded_path_candidates(non_env[1:]):
         before = len(targets)
@@ -894,6 +916,15 @@ def _extract_mutation_targets(command, repo_root, execution_cwd=""):
         return targets
 
     _extract_redirect_targets(tokens, targets, repo_root, execution_cwd)
+    if ("$(" in command or "`" in command) and re.search(
+        r"(?:--junitxml|--output|-o(?:\S|\s))", command,
+    ):
+        targets.append({
+            "path": "doc/harness/goals/current.json",
+            "category": "protected-artifact",
+            "method": "unresolved dynamic output path",
+        })
+        return targets
 
     shell_values = {}
     idx = 0
@@ -907,21 +938,24 @@ def _extract_mutation_targets(command, repo_root, execution_cwd=""):
             for token in assignments:
                 name, value = token.split("=", 1)
                 shell_values[name] = value
+        local_values = dict(shell_values)
+        for token in segment:
+            if not _is_env_assignment(token):
+                break
+            name, value = token.split("=", 1)
+            local_values[name] = value
         expanded = []
         for token in segment:
-            value = token
-            for name, replacement in shell_values.items():
-                value = value.replace("${" + name + "}", replacement).replace("$" + name, replacement)
+            value = re.sub(
+                r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)",
+                lambda match: local_values.get(match.group(1) or match.group(2), match.group(0)),
+                token,
+            )
             expanded.append(value)
         _process_segment(expanded, targets, repo_root, execution_cwd)
-        idx = j + 1  # advance past the boundary token
+        idx = j + 1
 
     return targets
-
-
-# ── Deny emission ──────────────────────────────────────────────────────────
-
-
 def _deny(target, command):
     rel = target.get("path", "")
     category = target.get("category", "file")
@@ -944,8 +978,6 @@ def _deny(target, command):
         f" Command: {trimmed_cmd}"
     )
     hint = _escape_hint(GATE_NAME)
-    # 2026-05-12 gate-friction retro: include next_action_command so the
-    # orchestrator gets an actionable resolution path inline.
     base = os.path.basename(rel)
     _NEXT = {
         "TASK.json": "Use task_start, write_plan, task_blocked, or task_close",
@@ -964,11 +996,6 @@ def _deny(target, command):
         owner_skill=owner,
         docs=docs,
     )
-
-
-# ── Main ───────────────────────────────────────────────────────────────────
-
-
 def main():
     try:
         raw_input = sys.stdin.read(_GUARD_STDIN_CAP + 1)
@@ -986,24 +1013,19 @@ def main():
         data = parsed_input if isinstance(parsed_input, dict) else {}
     except (TypeError, ValueError):
         data = {}
-
-    # Escape hatch: one-shot allow + audit.
     if os.environ.get("HARNESS_SKIP_MCP_GUARD") == "1":
         tool_input = data.get("tool_input") or {}
         cmd = tool_input.get("command", "")
         log_gate_bypass(GATE_NAME, cmd[:200])
         return 0
-
     if not data:
         return 0
     if data.get("tool_name") not in ("Bash", "shell"):
         return 0
-
     tool_input = data.get("tool_input") or {}
     command = tool_input.get("command") or tool_input.get("cmd") or ""
     if not isinstance(command, str) or not command:
         return 0
-
     payload_cwd = str(data.get("cwd") or "").strip()
     hook_cwd = os.path.realpath(payload_cwd or os.getcwd())
     if payload_cwd:
@@ -1036,13 +1058,10 @@ def main():
     if targets:
         _deny(targets[0], command)
     return 0
-
-
 if __name__ == "__main__":
     try:
         sys.exit(main() or 0)
     except Exception as exc:
-        # AC-007: payload-aware crash log (gate-crash).
         try:
             from _lib import log_gate_crash, last_hook_input
             log_gate_crash(exc, "mcp_bash_guard", last_hook_input())

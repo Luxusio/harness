@@ -115,8 +115,9 @@ harness task yourself and continue through this flow.
 ### Native Goal continuation
 
 Add known Goal children in declared, dependency, then risk/value order; queued
-IDs may be future tasks; use `goal_add_task`. `goal_next_task` selects the first queued/active child.
-Report it as status; ask only at material user decisions or blockers.
+IDs may be future tasks; use `goal_add_task`. `goal_next_task` selects the first
+queued/active child. Present the selected next task as status; ask only at
+material user decisions or blockers.
 
 ### Phase 0: Resume detection
 

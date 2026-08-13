@@ -409,6 +409,7 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "node --eval=\"let p='doc/harness/goals/'+'current.json';require('fs').writeFileSync(p,'{}')\"",
             "ruby -ep=\"'doc/harness/goals/'+'current.json';File.write(p,'{}')\"",
             "perl -e'$d=\"doc/harness/goals/\";$f=\"current.json\";open(F,\">\",$d.$f)'",
+            "perl -we'$d=\"doc/harness/goals/\";$f=\"current.json\";open(F,\">\",$d.$f)'",
             "awk 'BEGIN { print \"{}\" > (\"doc/harness/goals/\" \"current.json\") }'",
             "node -e \"require('fs').writeFileSync('doc/harness/tasks/TASK__remove-duplicate-queue-and-legacy-diagnostics/RECEIPTS.jsonl','{}')\"",
         )
@@ -428,9 +429,17 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "diff -odoc/harness/goals/current.json /tmp/a /tmp/b",
             "less -odoc/harness/goals/current.json /tmp/a",
             "rg --pre \"sh -c 'printf x > doc/harness/goals/current.json; cat'\" x doc/harness/goals/current.json",
+            "sed --in-place 's/a/b/' doc/harness/goals/current.json",
+            "sed -n 'wdoc/harness/goals/current.json' /dev/null",
+            "sed -n -e '1w doc/harness/goals/current.json' /dev/null",
+            "git grep --open-files-in-pager=\"sh -c 'printf x > doc/harness/goals/current.json'\" x",
             "diff --output=doc/harness/goals/current.json /tmp/a /tmp/b",
             "find doc/harness/goals/current.json -delete",
+            "find /tmp -maxdepth 0 -ok sh -c 'printf x > doc/harness/goals/current.json' ';'",
             "p=doc/harness/goals/current.json; pytest --junitxml=\"$p\" tests/test_mcp_bash_guard.py",
+            "env TARGET=doc/harness/goals/current.json sh -c 'node -e \"require(\\\"fs\\\").writeFileSync(process.env.TARGET,\\\"{}\\\")\"'",
+            "pytest --junitxml=\"$(printf 'doc/harness/goals/%s' current.json)\" tests/test_mcp_bash_guard.py",
+            "git diff --output=\"$(printf 'doc/harness/goals/%s' current.json)\"",
         ):
             with self.subTest(command=command):
                 decision, reason = parse_decision(_run_bash(command).stdout)
@@ -448,11 +457,22 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 decision, _ = parse_decision(_run_bash(command).stdout)
                 self.assertIsNone(decision)
 
-    def test_harmless_inline_runtime_allows(self):
-        decision, _ = parse_decision(
-            _run_bash('node -e "console.log(process.version)"').stdout
+    def test_noncanonical_reader_denies(self):
+        decision, reason = parse_decision(
+            _run_bash("/tmp/cat doc/harness/goals/current.json").stdout
         )
-        self.assertIsNone(decision)
+        self.assertEqual(decision, "deny")
+        self.assertIn("rule=protected-artifact", reason)
+
+    def test_harmless_inline_runtime_allows(self):
+        for command in (
+            'node -e "console.log(process.version)"',
+            'node -e "require(\'fs\').readFileSync(\'doc/harness/goals/current.json\')"',
+            "awk '{print}' plugin/scripts/health.py",
+        ):
+            with self.subTest(command=command):
+                decision, _ = parse_decision(_run_bash(command).stdout)
+                self.assertIsNone(decision)
 
     def test_shell_indirect_goal_writes_deny(self):
         for command in (

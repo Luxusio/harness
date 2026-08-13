@@ -30,10 +30,6 @@ No step skipped. Smallest coherent diff per step.
 - `write_plan` → PLAN.md + TASK.json required-lens declaration (plan-skill)
 - durable docs such as `doc/<area>/REQ__*.md` are normal repo docs, not MCP evidence tools
 
-**Native Goal (sole multi-task orchestration):** `goal_start`/`goal_context`
-sync/inspect; `goal_add_task` adds ordered future children; `goal_next_task`
-selects the first queued/active child; `goal_finish` requires every child closed.
-
 Static review and runtime QA provenance share `RECEIPTS.jsonl`.
 Codex/Claude lifecycle hooks own it. Applicable lenses come from
 `TASK.json`; receipts do not bind Git state. The normative contracts are
@@ -120,13 +116,6 @@ apply to read-only answers or ordinary non-harness work.
 | CEO / Architecture / Design / DX review | Goal child task plan phase; review lenses are internal sub-skills |
 | Contract drift / "CLAUDE.md 정리" / "규약 정비" / post-upgrade cleanup | Use the close-time self-improvement flow: run hygiene after task close, then schedule cleanup as a separate follow-up task when needed |
 | Explanation | Direct answer |
-
-For known multi-stage work, attach children to the native Goal in declared
-roadmap order, then dependency order, then highest-risk/highest-value order.
-After each child preserve the exact transition order: `task_close` → complete
-self-improvement, learning promotion, and hygiene scheduling →
-`goal_next_task`. Runbooks, `learnings.jsonl`, promotion, search, and hygiene
-remain active after every child.
 
 ## 7. Verification
 
