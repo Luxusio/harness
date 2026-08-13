@@ -83,9 +83,7 @@ BOUNDARY_TOKENS = {"&&", "||", "|", ";", "\n", "&"}
 _INLINE_REDIRECT_RE = re.compile(r"^(?:\d*)?(>>?)(.+)$")
 
 _PY_PATTERNS = [
-    re.compile(r"open\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"][wa+]"),
     re.compile(r"(?:pathlib\.)?Path\(\s*['\"]([^'\"]+)['\"]\s*\)\.(?:write_text|write_bytes)"),
-    re.compile(r"(?:pathlib\.)?Path\(\s*['\"]([^'\"]+)['\"]\s*\)\.open\(\s*['\"][^'\"]*[wax+][^'\"]*['\"]"),
     re.compile(r"os\.replace\([^,]+,\s*['\"]([^'\"]+)['\"]\)"),
     re.compile(r"shutil\.copy(?:2)?\([^,]+,\s*['\"]([^'\"]+)['\"]\)"),
 ]
@@ -252,7 +250,38 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
         "link", "rename", "replace", "remove", "unlink", "write_text",
         "write_bytes", "hardlink_to", "link_to", "chmod",
     }
-    if any(
+    open_aliases = {"open"}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, (ast.Assign, ast.AnnAssign))
+            and isinstance(node.value, ast.Name)
+            and node.value.id in open_aliases
+        ):
+            targets_nodes = node.targets if isinstance(node, ast.Assign) else [node.target]
+            open_aliases.update(
+                target.id for target in targets_nodes if isinstance(target, ast.Name)
+            )
+    open_mutation = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        direct_open = isinstance(node.func, ast.Name) and node.func.id in open_aliases
+        method_open = getattr(node.func, "attr", "") == "open"
+        if not direct_open and not method_open:
+            continue
+        mode_index = 1 if direct_open else 0
+        mode_node = node.args[mode_index] if len(node.args) > mode_index else next(
+            (item.value for item in node.keywords if item.arg == "mode"), None,
+        )
+        if mode_node is None:
+            continue
+        if isinstance(mode_node, ast.Constant) and isinstance(mode_node.value, str):
+            open_mutation = bool(set(mode_node.value) & set("wax+"))
+        else:
+            open_mutation = True
+        if open_mutation:
+            break
+    if open_mutation or any(
         isinstance(node, ast.Call)
         and (getattr(node.func, "id", "") or getattr(node.func, "attr", ""))
         in filesystem_mutators

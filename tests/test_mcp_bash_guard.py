@@ -330,12 +330,22 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 self.assertIsNone(decision)
 
     def test_python_path_open_write_goal_denies(self):
-        for mode in ("w", "a", "x", "r+"):
-            with self.subTest(mode=mode):
-                r = _run_bash(
-                    "python3 -c \"from pathlib import Path; "
-                    f"Path('doc/harness/goals/current.json').open('{mode}')\""
-                )
+        commands = tuple(
+            "python3 -c \"from pathlib import Path; "
+            f"Path('doc/harness/goals/current.json').open('{mode}')\""
+            for mode in ("w", "a", "x", "r+")
+        ) + (
+            "python3 -c \"from pathlib import Path; Path('doc/harness/goals/current.json').open(mode='w')\"",
+            "python3 -c \"from pathlib import Path; p=Path; p('doc/harness/goals/current.json').open(mode='a')\"",
+            "python3 -c \"from pathlib import Path; mode=input(); Path('doc/harness/goals/current.json').open(mode=mode)\"",
+            "python3 -c \"open('doc/harness/goals/current.json', 'x')\"",
+            "python3 -c \"open('doc/harness/goals/current.json', 'r+')\"",
+            "python3 -c \"open('doc/harness/goals/current.json', mode='w')\"",
+            "python3 -c \"o=open; o('doc/harness/goals/current.json', mode='a')\"",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                r = _run_bash(command)
                 decision, reason = parse_decision(r.stdout)
                 self.assertEqual(decision, "deny")
                 self.assertIn("rule=protected-artifact", reason)
