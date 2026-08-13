@@ -319,11 +319,26 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 self.assertIn("rule=protected-artifact", reason)
 
     def test_python_read_only_goal_inspection_allows(self):
-        r = _run_bash(
-            "python3 -c \"open('doc/harness/goals/current.json').read()\""
-        )
-        decision, _ = parse_decision(r.stdout)
-        self.assertIsNone(decision)
+        for command in (
+            "python3 -c \"open('doc/harness/goals/current.json').read()\"",
+            "python3 -c \"from pathlib import Path; Path('doc/harness/goals/current.json').open().read()\"",
+            "python3 -c \"from pathlib import Path; Path('doc/harness/goals/current.json').open('r').read()\"",
+        ):
+            with self.subTest(command=command):
+                r = _run_bash(command)
+                decision, _ = parse_decision(r.stdout)
+                self.assertIsNone(decision)
+
+    def test_python_path_open_write_goal_denies(self):
+        for mode in ("w", "a", "x", "r+"):
+            with self.subTest(mode=mode):
+                r = _run_bash(
+                    "python3 -c \"from pathlib import Path; "
+                    f"Path('doc/harness/goals/current.json').open('{mode}')\""
+                )
+                decision, reason = parse_decision(r.stdout)
+                self.assertEqual(decision, "deny")
+                self.assertIn("rule=protected-artifact", reason)
 
 
 

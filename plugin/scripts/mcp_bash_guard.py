@@ -84,7 +84,8 @@ _INLINE_REDIRECT_RE = re.compile(r"^(?:\d*)?(>>?)(.+)$")
 
 _PY_PATTERNS = [
     re.compile(r"open\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"][wa+]"),
-    re.compile(r"(?:pathlib\.)?Path\(\s*['\"]([^'\"]+)['\"]\s*\)\.(?:write_text|write_bytes|open)"),
+    re.compile(r"(?:pathlib\.)?Path\(\s*['\"]([^'\"]+)['\"]\s*\)\.(?:write_text|write_bytes)"),
+    re.compile(r"(?:pathlib\.)?Path\(\s*['\"]([^'\"]+)['\"]\s*\)\.open\(\s*['\"][^'\"]*[wax+][^'\"]*['\"]"),
     re.compile(r"os\.replace\([^,]+,\s*['\"]([^'\"]+)['\"]\)"),
     re.compile(r"shutil\.copy(?:2)?\([^,]+,\s*['\"]([^'\"]+)['\"]\)"),
 ]
