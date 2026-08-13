@@ -24,7 +24,7 @@ Three gated categories (imported from `prewrite_gate`):
 
 | Category | Rule id | Owner hint |
 |----------|---------|-----------|
-| protected-artifact | `protected-artifact` | MCP write tool for that artifact (e.g. `mcp__harness__write_handoff`) |
+| protected-artifact | `protected-artifact` | artifact owner, such as `write_plan`, task-control MCP, or runtime lifecycle hook |
 | workflow-control-surface | `workflow-control-surface` | `maintain-skill` |
 | source | `source` | `developer` |
 
