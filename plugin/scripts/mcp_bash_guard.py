@@ -276,6 +276,35 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
             if not isinstance(child, ast.stmt):
                 stamp_expression_calls(child, environment)
 
+    def bound_names(target):
+        if isinstance(target, ast.Name):
+            return {target.id}
+        if isinstance(target, (ast.Tuple, ast.List)):
+            return set().union(*(bound_names(item) for item in target.elts))
+        return set()
+
+    def body_environment(node, environment):
+        child = dict(environment)
+        names = set()
+        if isinstance(node, (ast.For, ast.AsyncFor)):
+            names.update(bound_names(node.target))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            arguments = node.args
+            names.update(arg.arg for arg in (
+                list(arguments.posonlyargs) + list(arguments.args)
+                + list(arguments.kwonlyargs)
+            ))
+            if arguments.vararg:
+                names.add(arguments.vararg.arg)
+            if arguments.kwarg:
+                names.add(arguments.kwarg.arg)
+        for item in getattr(node, "items", ()):
+            if item.optional_vars is not None:
+                names.update(bound_names(item.optional_vars))
+        for name in names:
+            child.pop(name, None)
+        return child
+
     def process_statements(statements, environment):
         for node in statements:
             stamp_expression_calls(node, environment)
@@ -297,11 +326,14 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
                 if isinstance(block, list):
                     child_blocks.append(block)
             for handler in getattr(node, "handlers", ()):
-                child_blocks.append(getattr(handler, "body", []))
+                handler_environment = dict(environment)
+                if handler.name:
+                    handler_environment.pop(handler.name, None)
+                process_statements(getattr(handler, "body", []), handler_environment)
             for case in getattr(node, "cases", ()):
                 child_blocks.append(getattr(case, "body", []))
             for block in child_blocks:
-                process_statements(block, dict(environment))
+                process_statements(block, body_environment(node, environment))
 
     process_statements(tree.body, strings)
     filesystem_mutators = {
