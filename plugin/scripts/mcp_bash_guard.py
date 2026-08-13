@@ -237,6 +237,15 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
         code = tokens[tokens.index("-c") + 1]
     except IndexError:
         return
+    if code.startswith("$"):
+        try:
+            code = bytes(code[1:], "utf-8").decode("unicode_escape")
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            _append_target(
+                targets, "doc/harness/goals/current.json",
+                "unresolved ANSI-C Python command", repo_root, execution_cwd,
+            )
+            return
     for pat in _PY_PATTERNS:
         for match in pat.findall(code):
             _append_target(
@@ -260,22 +269,41 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
             right = string_value(node.right, environment)
             return left + right if left is not None and right is not None else None
         return None
-    for node in tree.body:
-        environment = dict(strings)
-        for call in (item for item in ast.walk(node) if isinstance(item, ast.Call)):
-            call_environments[id(call)] = environment
-        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-            continue
-        value = string_value(node.value)
-        targets_nodes = node.targets if isinstance(node, ast.Assign) else [node.target]
-        for target in targets_nodes:
-            if not isinstance(target, ast.Name):
+    def stamp_expression_calls(node, environment):
+        if isinstance(node, ast.Call):
+            call_environments[id(node)] = dict(environment)
+        for child in ast.iter_child_nodes(node):
+            if not isinstance(child, ast.stmt):
+                stamp_expression_calls(child, environment)
+
+    def process_statements(statements, environment):
+        for node in statements:
+            stamp_expression_calls(node, environment)
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                value = string_value(node.value, environment)
+                targets_nodes = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets_nodes:
+                    if not isinstance(target, ast.Name):
+                        continue
+                    if value is None:
+                        environment.pop(target.id, None)
+                    else:
+                        environment[target.id] = value
+                        string_history.add(value)
                 continue
-            if value is None:
-                strings.pop(target.id, None)
-            else:
-                strings[target.id] = value
-                string_history.add(value)
+            child_blocks = []
+            for field in ("body", "orelse", "finalbody"):
+                block = getattr(node, field, None)
+                if isinstance(block, list):
+                    child_blocks.append(block)
+            for handler in getattr(node, "handlers", ()):
+                child_blocks.append(getattr(handler, "body", []))
+            for case in getattr(node, "cases", ()):
+                child_blocks.append(getattr(case, "body", []))
+            for block in child_blocks:
+                process_statements(block, dict(environment))
+
+    process_statements(tree.body, strings)
     filesystem_mutators = {
         "link", "rename", "replace", "remove", "unlink", "write_text",
         "write_bytes", "hardlink_to", "link_to", "chmod",

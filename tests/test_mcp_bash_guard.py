@@ -361,6 +361,7 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 -c \"p='ignored'; p='doc/harness/goals/'+'current.json'; open(p,'w')\"",
             "python3 -c \"mode='w'; open('doc/harness/goals/current.json', mode); mode='r'\"",
             "python3 -c \"base='doc/harness/goals/'; p=base+'current.json'; open(p,'w'); base='/tmp/'; p='/tmp/safe'\"",
+            "python3 -c $'if True:\\n base=\"doc/harness/goals/\"\\n p=base+\"current.json\"\\n open(p,\"w\")'",
         )
         for command in commands:
             with self.subTest(command=command):
