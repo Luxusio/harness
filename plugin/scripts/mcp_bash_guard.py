@@ -722,7 +722,11 @@ def _safe_gated_path_inspection(argv, raw_argv=()):
     output_option = any(arg in {"-o", "--output"} or arg.startswith(("-o", "--output=")) for arg in args)
     if cmd == "less": return not any(arg.startswith(("-o", "-O")) for arg in args)
     if cmd == "rg": return not any(arg == "--pre" or arg.startswith("--pre=") for arg in args)
-    if cmd == "git": return bool(args) and args[0] in {"diff", "show", "log", "status", "grep"} and not output_option and not any("pager" in arg or arg in {"--ext-diff", "--textconv"} for arg in args)
+    if cmd == "git":
+        index = 0
+        while index < len(args) and (args[index].startswith("--") or args[index] == "-C"):
+            index += 2 if args[index] == "-C" else 1
+        return index < len(args) and args[index] in {"diff", "show", "log", "status", "grep"} and not output_option and not any("open-files-in-pager" in arg or arg in {"--ext-diff", "--textconv"} for arg in args)
     if cmd == "sed": return not any(arg in {"-i", "--in-place"} or arg.startswith(("-i", "--in-place=")) or re.search(r"(?:^|[;/0-9,$ ])(?:w|W|e)(?:\s|[A-Za-z0-9_.-]+/|$)", arg) for arg in args)
     if cmd == "diff": return not output_option
     if cmd == "find": return not any(arg.startswith(("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls", "-fprint")) for arg in args)
@@ -742,9 +746,12 @@ def _uninspected_inline(argv):
     )
 def _inline_mutation_risk(argv):
     code = " ".join(argv[1:]).lower()
+    if os.path.basename(argv[0]) in {"awk", "gawk", "mawk"}:
+        return bool(re.search(r"\b(?:print|printf)\b[^;]*>{1,2}", code))
     return bool(re.search(
-        r"(?:write|append|unlink|rename|replace|remove|delete|truncate|chmod|"
-        r"hardlink|\bopen\s*\([^)]*['\"](?:[wax]|r\+|>)|>{1,2})",
+        r"(?:writefilesync|appendfilesync|copyfilesync|rename|replace|unlink|"
+        r"remove|delete|truncate|chmod|hardlink|file\.write|file\.open|"
+        r"\bopen\s*\([^)]*['\"](?:[wax]|r\+|>))",
         code,
     ))
 def _gated_path_risk(tokens, repo_root, execution_cwd):
@@ -916,7 +923,9 @@ def _extract_mutation_targets(command, repo_root, execution_cwd=""):
         return targets
 
     _extract_redirect_targets(tokens, targets, repo_root, execution_cwd)
-    if ("$(" in command or "`" in command) and re.search(
+    if ("$(" in command or "`" in command) and _gated_path_risk(
+        tokens, repo_root, execution_cwd,
+    ) and re.search(
         r"(?:--junitxml|--output|-o(?:\S|\s))", command,
     ):
         targets.append({

@@ -114,10 +114,8 @@ harness task yourself and continue through this flow.
 
 ### Native Goal continuation
 
-Add known Goal children in declared, dependency, then risk/value order; queued
-IDs may be future tasks; use `goal_add_task`. `goal_next_task` selects the first
-queued/active child. Present the selected next task as status; ask only at
-material user decisions or blockers.
+Add Goal children by dependency/risk; future IDs are valid. Use `goal_add_task`;
+`goal_next_task` selects the first queued/active child. Present the selected next task as status; ask only at material decisions/blockers.
 
 ### Phase 0: Resume detection
 
@@ -136,7 +134,7 @@ Only call `task_start` when no active task can be resolved, or when the user
 explicitly asks for a new task.
 
 If only a Goal is active, call `goal_next_task`; if none is queued and the
-objective is unproven, create and attach the next thin vertical child.
+objective is unproven, create/attach a thin vertical child.
 
 ### Phase 1: Start task
 
@@ -268,11 +266,9 @@ the task pending and request a new thread; do not write receipts by hand. On
 resume, the stateless root installer may be run again after confirming
 the diff still has fresh review+QA PASS.
 
-For a Goal child, run `task_close` first, complete self-improvement including
-learning promotion and hygiene scheduling, and only then call `goal_next_task`.
-Choose the next slice by value, risk,
-or learning unless the Goal is complete, blocked/stopped, capped, or at a
-go/no-go boundary.
+For a Goal child, run `task_close` first, then self-improvement including
+learning promotion and hygiene scheduling; only then call `goal_next_task`.
+Continue unless complete, blocked/stopped, capped, or at a go/no-go boundary.
 
 For this harness plugin source repo, successful repo-mutating development is
 not complete at task close. Phase 7.8 must already have run the verified

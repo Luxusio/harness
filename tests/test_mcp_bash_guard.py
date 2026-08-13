@@ -407,6 +407,7 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "p=doc/harness/goals/current.json; node -e \"require('fs').writeFileSync(process.argv[1],'{}')\" \"$p\"",
             "ruby -e \"p='doc/harness/goals/'+'current.json';File.write(p,'{}')\"",
             "node --eval=\"let p='doc/harness/goals/'+'current.json';require('fs').writeFileSync(p,'{}')\"",
+            "node -e \"let p='doc/harness/goals/'+'current.json';require('fs').copyFileSync('/tmp/x',p)\"",
             "ruby -ep=\"'doc/harness/goals/'+'current.json';File.write(p,'{}')\"",
             "perl -e'$d=\"doc/harness/goals/\";$f=\"current.json\";open(F,\">\",$d.$f)'",
             "perl -we'$d=\"doc/harness/goals/\";$f=\"current.json\";open(F,\">\",$d.$f)'",
@@ -452,6 +453,8 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "diff /tmp/a doc/harness/goals/current.json",
             "find doc/harness/goals/current.json -print",
             "git diff -- doc/harness/goals/current.json",
+            "git --no-pager diff -- doc/harness/goals/current.json",
+            f"git -C {REPO_ROOT} diff -- doc/harness/goals/current.json",
         ):
             with self.subTest(command=command):
                 decision, _ = parse_decision(_run_bash(command).stdout)
@@ -468,7 +471,10 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
         for command in (
             'node -e "console.log(process.version)"',
             'node -e "require(\'fs\').readFileSync(\'doc/harness/goals/current.json\')"',
+            'node -e "process.stdout.write(require(\'fs\').readFileSync(\'doc/harness/goals/current.json\'))"',
             "awk '{print}' plugin/scripts/health.py",
+            "awk '$1 > 2 {print}' plugin/scripts/health.py",
+            'echo "$(printf x)" -o /tmp/foo',
         ):
             with self.subTest(command=command):
                 decision, _ = parse_decision(_run_bash(command).stdout)

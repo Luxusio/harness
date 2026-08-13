@@ -191,9 +191,7 @@ python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
 ```
 
 Note: no `Default agent is X` line. The harness routes via skills, not agent switching.
-Pre-native orchestration files are unsupported; setup does not read,
-translate, or archive them. The runtime project-document helper owns only the
-current bounded routing block.
+Pre-native orchestration is unsupported; setup owns only this routing block.
 
 ## 3.5 Critic playbooks
 
