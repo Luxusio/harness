@@ -142,10 +142,8 @@ Do not ask about either setting. On every fresh, repair, or upgrade setup:
 1. Run `_harness_config_set proactive true` and
    `_harness_config_set routing_declined false`.
 2. Touch `"$_MARKER_DIR/proactive-prompted"`.
-3. Run the Goal queue migration from `bootstrap.md` §3.4
-   (`Goal queue migration from §3.4`).
-4. Emit or replace the idempotent Harness routing block in CLAUDE.md.
-5. Touch `"$_MARKER_DIR/routing-injected"`.
+3. Emit or replace the idempotent Harness routing block in CLAUDE.md.
+4. Touch `"$_MARKER_DIR/routing-injected"`.
 
 The routing block includes the Durable Decision Documentation Gate. Setup
 owns these defaults and reapplies them on rerun so onboarding stays consistent.

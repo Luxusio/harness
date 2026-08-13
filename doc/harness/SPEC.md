@@ -242,6 +242,7 @@ candidates but does not satisfy the durable-memory requirement by itself.
 
 ## Runtime Boundaries
 
-harness does not require users to choose between run/autopilot modes. A Goal may
-remain small or expand child tasks dynamically. Hooks provide compact context
+harness does not require users to choose between Goal and direct-task modes. A
+Goal may remain small or expand child tasks dynamically; a focused plain request
+may remain one direct task. Hooks provide compact context
 and record subagent starts; MCP tools own explicit state transitions.
