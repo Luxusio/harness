@@ -414,6 +414,8 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "perl -e'$d=\"doc/harness/goals/\";$f=\"current.json\";open(F,\">\",$d.$f)'",
             "perl -we'$d=\"doc/harness/goals/\";$f=\"current.json\";open(F,\">\",$d.$f)'",
             "awk 'BEGIN { print \"{}\" > (\"doc/harness/goals/\" \"current.json\") }'",
+            "awk 'BEGIN { system(\"rm doc/harness/goals/current.json\") }'",
+            "node -e \"let p='doc/harness/goals/'+'current.json';let f=require('fs');f.readFile('/tmp/x',()=>{});f.linkSync('/tmp/x',p)\"",
             "node -e \"require('fs').writeFileSync('doc/harness/tasks/TASK__remove-duplicate-queue-and-legacy-diagnostics/RECEIPTS.jsonl','{}')\"",
         )
         for command in commands:

@@ -758,12 +758,11 @@ def _safe_inline_read(argv):
     code = " ".join(argv[1:]).lower()
     cmd = os.path.basename(argv[0])
     if cmd in {"awk", "gawk", "mawk"}:
-        return not _inline_mutation_risk(argv)
-    return bool(re.search(r"(?:readfilesync|readfile|stat|exists|access)", code)) and not re.search(
-        r"(?:writefile|createwritestream|append|copyfile|rename|unlink|remove|"
-        r"delete|truncate|chmod|hardlink|\bopen\s*\()",
-        code,
-    )
+        return "system(" not in code and not _inline_mutation_risk(argv)
+    code = code.replace("process.stdout.write", "process.stdout.emit")
+    calls = re.findall(r"\.([a-z][a-z0-9_]*)\s*\(", code)
+    allowed = {"readfile", "readfilesync", "stat", "statsync", "exists", "existssync", "access", "accesssync", "emit", "log"}
+    return bool(calls) and set(calls) <= allowed
 def _gated_path_risk(tokens, repo_root, execution_cwd):
     candidates = _embedded_path_candidates(tokens)
     if any(_classify_gated_path(
