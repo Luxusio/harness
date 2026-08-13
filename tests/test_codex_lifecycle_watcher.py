@@ -937,14 +937,12 @@ def test_child_status_rejects_symlinked_rollout(tmp_path, monkeypatch):
     assert mod._find_rollout(child_id) is None
 
 
-def test_find_rollout_uses_uuid_utc_day_without_recursive_fallback(tmp_path, monkeypatch):
+def test_find_rollout_uses_uuid_local_day_without_recursive_fallback(tmp_path, monkeypatch):
     mod = _load()
     codex_home = tmp_path / ".codex"
     monkeypatch.setenv("CODEX_HOME", str(codex_home))
     child_id = "019ff6e0-b765-7aa3-b9cb-e6d4f5c8b1b7"
-    created = mod.datetime.fromtimestamp(
-        mod.uuid7_timestamp_ms(child_id) / 1000, tz=mod.timezone.utc,
-    )
+    created = mod.datetime.fromtimestamp(mod.uuid7_timestamp_ms(child_id) / 1000).astimezone()
     rollout = (
         codex_home / "sessions" / f"{created:%Y}" / f"{created:%m}" / f"{created:%d}"
         / f"rollout-now-{child_id}.jsonl"
@@ -952,6 +950,26 @@ def test_find_rollout_uses_uuid_utc_day_without_recursive_fallback(tmp_path, mon
     _write_jsonl(rollout, [{"type": "session_meta", "payload": {"id": child_id}}])
     assert mod._find_rollout(child_id) == rollout
     assert "walk" not in mod._find_rollout.__code__.co_names
+
+
+def test_find_rollout_honors_local_date_at_utc_boundary(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    monkeypatch.setenv("TZ", "Asia/Seoul")
+    if hasattr(mod.time, "tzset"):
+        mod.time.tzset()
+    try:
+        thread_id = "019ff16c-e8de-78c3-8f18-879fd945e8bc"
+        local = codex_home / "sessions/2026/08/12" / f"rollout-local-{thread_id}.jsonl"
+        utc = codex_home / "sessions/2026/08/11" / f"rollout-utc-{thread_id}.jsonl"
+        _write_jsonl(local, [{"type": "session_meta", "payload": {"id": thread_id}}])
+        _write_jsonl(utc, [{"type": "session_meta", "payload": {"id": thread_id}}])
+        assert mod._find_rollout(thread_id) == local
+    finally:
+        monkeypatch.delenv("TZ", raising=False)
+        if hasattr(mod.time, "tzset"):
+            mod.time.tzset()
 
 
 def test_ensure_registers_once_without_forking_for_exact_root_rollout(tmp_path, monkeypatch):

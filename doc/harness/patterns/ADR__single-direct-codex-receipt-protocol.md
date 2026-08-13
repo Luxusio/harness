@@ -53,7 +53,8 @@ out-of-order boundaries invalidate the lifecycle rather than selecting a
 convenient candidate.
 
 SessionStart creates the versioned root registration. Root and child rollout
-paths are resolved only in the UUIDv7-derived UTC day directory. Spawn-selective
+paths are resolved only in the UUIDv7-derived runtime-local day directory used
+by Codex session storage. Spawn-selective
 PreToolUse may restore a missing registration immediately before a supported
 spawn, beginning at the current rollout offset. UserPromptSubmit, PostToolUse,
 and Stop do not recover registration. A stale registration is recreated, not

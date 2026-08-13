@@ -195,9 +195,7 @@ def _find_rollout(thread_id: str, *, deadline: float | None = None) -> Path | No
     try:
         if _deadline_expired(deadline):
             return None
-        created = datetime.fromtimestamp(
-            uuid7_timestamp_ms(thread_id) / 1000, tz=timezone.utc,
-        )
+        created = datetime.fromtimestamp(uuid7_timestamp_ms(thread_id) / 1000).astimezone()
         direct_root = root / f"{created:%Y}" / f"{created:%m}" / f"{created:%d}"
         direct = list(direct_root.glob(f"rollout-*{thread_id}.jsonl"))
     except (OSError, OverflowError, TypeError, ValueError):
