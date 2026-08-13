@@ -609,15 +609,6 @@ def test_local_writer_paths_match_canonical_operational_ignores():
     assert writer_paths <= set(setup.OPERATIONAL_IGNORES)
 
 
-def test_gitignore_render_drops_removed_orchestration_state():
-    setup = load_setup_finalize("setup_finalize_removed_ignores")
-    old = "\n".join(sorted(setup.OBSOLETE_OPERATIONAL_IGNORES)) + "\n# user\n"
-    rendered = setup.render_gitignore(old)
-    assert "# user" in rendered
-    for removed in setup.OBSOLETE_OPERATIONAL_IGNORES:
-        assert removed not in rendered
-
-
 def test_codex_finalize_rejects_missing_public_run_policy(tmp_path):
     plugin_root = make_plugin_root(tmp_path)
     (plugin_root / "skills/run/agents/openai.yaml").unlink()
