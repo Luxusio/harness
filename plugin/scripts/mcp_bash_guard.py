@@ -449,6 +449,13 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
             targets, _last_non_option(non_env), cmd, repo_root, execution_cwd
         )
         return
+    if cmd == "ln":
+        operands = [token for token in non_env[1:] if not token.startswith("-")]
+        for source in operands:
+            _append_target(
+                targets, source, "ln protected source", repo_root, execution_cwd
+            )
+        return
     if cmd == TEE_COMMAND:
         for token in non_env[1:]:
             if token.startswith("-"):

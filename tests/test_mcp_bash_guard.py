@@ -247,6 +247,18 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 self.assertEqual(decision, "deny")
                 self.assertIn("rule=protected-artifact", reason)
 
+    def test_link_export_of_native_goal_control_denies(self):
+        for command in (
+            "ln doc/harness/goals/current.json /tmp/harness-goal-alias",
+            "ln -s doc/harness/goals/current.json /tmp/harness-goal-symlink",
+            "bash -c 'ln doc/harness/goals/current.json /tmp/harness-goal-nested'",
+        ):
+            with self.subTest(command=command):
+                r = _run_bash(command)
+                decision, reason = parse_decision(r.stdout)
+                self.assertEqual(decision, "deny")
+                self.assertIn("rule=protected-artifact", reason)
+
 
 
 class TestEnvPrefixBypassFix(unittest.TestCase):
