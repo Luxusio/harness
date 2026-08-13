@@ -251,25 +251,55 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
         "write_bytes", "hardlink_to", "link_to", "chmod",
     }
     open_aliases = {"open"}
+    io_modules = {"io", "builtins"}
     for node in ast.walk(tree):
-        if (
-            isinstance(node, (ast.Assign, ast.AnnAssign))
-            and isinstance(node.value, ast.Name)
-            and node.value.id in open_aliases
-        ):
-            targets_nodes = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if isinstance(node, ast.ImportFrom) and node.module in {"io", "builtins"}:
             open_aliases.update(
-                target.id for target in targets_nodes if isinstance(target, ast.Name)
+                alias.asname or alias.name
+                for alias in node.names if alias.name == "open"
             )
+        elif isinstance(node, ast.Import):
+            io_modules.update(
+                alias.asname or alias.name
+                for alias in node.names if alias.name in {"io", "builtins"}
+            )
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            value = node.value
+            aliases_open = (
+                isinstance(value, ast.Name) and value.id in open_aliases
+            ) or (
+                isinstance(value, ast.Attribute)
+                and value.attr == "open"
+                and isinstance(value.value, ast.Name)
+                and value.value.id in io_modules
+            )
+            if not aliases_open:
+                continue
+            targets_nodes = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets_nodes:
+                if isinstance(target, ast.Name) and target.id not in open_aliases:
+                    open_aliases.add(target.id)
+                    changed = True
     open_mutation = False
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         direct_open = isinstance(node.func, ast.Name) and node.func.id in open_aliases
-        method_open = getattr(node.func, "attr", "") == "open"
-        if not direct_open and not method_open:
+        module_open = (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "open"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in io_modules
+        )
+        path_open = getattr(node.func, "attr", "") == "open" and not module_open
+        if not direct_open and not module_open and not path_open:
             continue
-        mode_index = 1 if direct_open else 0
+        mode_index = 1 if direct_open or module_open else 0
         mode_node = node.args[mode_index] if len(node.args) > mode_index else next(
             (item.value for item in node.keywords if item.arg == "mode"), None,
         )

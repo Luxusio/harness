@@ -323,6 +323,8 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 -c \"open('doc/harness/goals/current.json').read()\"",
             "python3 -c \"from pathlib import Path; Path('doc/harness/goals/current.json').open().read()\"",
             "python3 -c \"from pathlib import Path; Path('doc/harness/goals/current.json').open('r').read()\"",
+            "python3 -c \"import io; io.open('doc/harness/goals/current.json').read()\"",
+            "python3 -c \"import io as stream; stream.open('doc/harness/goals/current.json', 'r').read()\"",
         ):
             with self.subTest(command=command):
                 r = _run_bash(command)
@@ -342,6 +344,9 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 -c \"open('doc/harness/goals/current.json', 'r+')\"",
             "python3 -c \"open('doc/harness/goals/current.json', mode='w')\"",
             "python3 -c \"o=open; o('doc/harness/goals/current.json', mode='a')\"",
+            "python3 -c \"from builtins import open as o; o('doc/harness/goals/current.json', 'w')\"",
+            "python3 -c \"from io import open as o; o('doc/harness/goals/current.json', mode='a')\"",
+            "python3 -c \"import io as stream; stream.open('doc/harness/goals/current.json', 'x')\"",
         )
         for command in commands:
             with self.subTest(command=command):
