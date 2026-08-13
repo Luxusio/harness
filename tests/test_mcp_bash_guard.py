@@ -347,8 +347,23 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 -c \"from builtins import open as o; o('doc/harness/goals/current.json', 'w')\"",
             "python3 -c \"from io import open as o; o('doc/harness/goals/current.json', mode='a')\"",
             "python3 -c \"import io as stream; stream.open('doc/harness/goals/current.json', 'x')\"",
+            "python3 -c \"p='doc/harness/goals/'+'current.json'; open(p,'w').write('{}')\"",
+            "python3 -c \"import builtins; getattr(builtins, 'op'+'en')('doc/harness/goals/current.json','w')\"",
+            "python3 -c \"import os; os.open('doc/harness/goals/current.json', os.O_WRONLY)\"",
         )
         for command in commands:
+            with self.subTest(command=command):
+                r = _run_bash(command)
+                decision, reason = parse_decision(r.stdout)
+                self.assertEqual(decision, "deny")
+                self.assertIn("rule=protected-artifact", reason)
+
+    def test_shell_indirect_goal_writes_deny(self):
+        for command in (
+            "eval 'printf {} > doc/harness/goals/current.json'",
+            "printf '{}' | dd of=doc/harness/goals/current.json",
+            "bash -c \"eval 'printf {} > doc/harness/goals/current.json'\"",
+        ):
             with self.subTest(command=command):
                 r = _run_bash(command)
                 decision, reason = parse_decision(r.stdout)
@@ -413,10 +428,11 @@ class TestNestedShellHandling(unittest.TestCase):
             self.assertEqual(decision, "deny")
             self.assertIn("lifecycle receipt entrypoint", reason)
 
-    def test_eval_is_known_gap(self):
+    def test_eval_recurses_into_mutation_guard(self):
         r = _run_bash(f"eval 'sed -i s/a/b/ {SRC_PATH}'")
-        decision, _ = parse_decision(r.stdout)
-        self.assertIsNone(decision)
+        decision, reason = parse_decision(r.stdout)
+        self.assertEqual(decision, "deny")
+        self.assertIn("rule=source", reason)
 
 
 class TestEnvEscape(unittest.TestCase):

@@ -246,6 +246,30 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
         tree = ast.parse(code)
     except (SyntaxError, ValueError):
         return
+    strings = {}
+    def string_value(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.Name):
+            return strings.get(node.id)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left, right = string_value(node.left), string_value(node.right)
+            return left + right if left is not None and right is not None else None
+        return None
+    changed = True
+    while changed:
+        changed = False
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            value = string_value(node.value)
+            if value is None:
+                continue
+            targets_nodes = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets_nodes:
+                if isinstance(target, ast.Name) and strings.get(target.id) != value:
+                    strings[target.id] = value
+                    changed = True
     filesystem_mutators = {
         "link", "rename", "replace", "remove", "unlink", "write_text",
         "write_bytes", "hardlink_to", "link_to", "chmod",
@@ -297,9 +321,30 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
             and node.func.value.id in io_modules
         )
         path_open = getattr(node.func, "attr", "") == "open" and not module_open
-        if not direct_open and not module_open and not path_open:
+        getattr_open = (
+            isinstance(node.func, ast.Call)
+            and isinstance(node.func.func, ast.Name)
+            and node.func.func.id == "getattr"
+            and len(node.func.args) > 1
+            and string_value(node.func.args[1]) == "open"
+        )
+        os_open = (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "open"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "os"
+        )
+        if not direct_open and not module_open and not path_open and not getattr_open and not os_open:
             continue
-        mode_index = 1 if direct_open or module_open else 0
+        if os_open:
+            flags = node.args[1] if len(node.args) > 1 else None
+            open_mutation = not (
+                isinstance(flags, ast.Constant) and flags.value == os.O_RDONLY
+            )
+            if open_mutation:
+                break
+            continue
+        mode_index = 1 if direct_open or module_open or getattr_open else 0
         mode_node = node.args[mode_index] if len(node.args) > mode_index else next(
             (item.value for item in node.keywords if item.arg == "mode"), None,
         )
@@ -311,16 +356,18 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
             open_mutation = True
         if open_mutation:
             break
-    if open_mutation or any(
+    filesystem_mutation = open_mutation or any(
         isinstance(node, ast.Call)
         and (getattr(node.func, "id", "") or getattr(node.func, "attr", ""))
         in filesystem_mutators
         for node in ast.walk(tree)
-    ):
+    )
+    if filesystem_mutation:
         for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            value = string_value(node)
+            if value is not None:
                 _append_target(
-                    targets, node.value, "python filesystem mutation",
+                    targets, value, "python filesystem mutation",
                     repo_root, execution_cwd,
                 )
     for node in ast.walk(tree):
@@ -564,6 +611,12 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
         return
     cmd = os.path.basename(non_env[0])
 
+    if cmd == "eval":
+        nested = " ".join(non_env[1:])
+        if nested:
+            targets.extend(_extract_mutation_targets(nested, repo_root, execution_cwd))
+        return
+
     if cmd in {"bash", "sh"} and "-c" in non_env[1:]:
         try:
             nested = non_env[non_env.index("-c") + 1]
@@ -651,6 +704,13 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
             if token.startswith("-"):
                 continue
             _append_target(targets, token, "tee", repo_root, execution_cwd)
+        return
+    if cmd == "dd":
+        for token in non_env[1:]:
+            if token.startswith("of="):
+                _append_target(
+                    targets, token[3:], "dd output", repo_root, execution_cwd,
+                )
         return
     if cmd.startswith(("python", "python3", "pypy")):
         _extract_python_inline_targets(
