@@ -289,6 +289,18 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
             names.add(arguments.kwarg.arg)
         return names
 
+    def merge_environments(environment, candidates):
+        if not candidates:
+            return
+        common = set.intersection(*(set(item) for item in candidates))
+        merged = {
+            name: candidates[0][name]
+            for name in common
+            if all(item[name] == candidates[0][name] for item in candidates[1:])
+        }
+        environment.clear()
+        environment.update(merged)
+
     def stamp_expression_calls(node, environment):
         if isinstance(node, ast.Lambda):
             for default in (
@@ -310,6 +322,23 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
                 else:
                     environment[name] = value
                     string_history.add(value)
+            return
+        if isinstance(node, ast.IfExp):
+            stamp_expression_calls(node.test, environment)
+            branches = []
+            for expression in (node.body, node.orelse):
+                child = dict(environment)
+                stamp_expression_calls(expression, child)
+                branches.append(child)
+            merge_environments(environment, branches)
+            return
+        if isinstance(node, ast.BoolOp):
+            continuation = dict(environment)
+            outcomes = []
+            for value in node.values:
+                stamp_expression_calls(value, continuation)
+                outcomes.append(dict(continuation))
+            merge_environments(environment, outcomes)
             return
         if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
             child = dict(environment)
