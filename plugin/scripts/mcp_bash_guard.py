@@ -225,6 +225,18 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
             left = string_value(node.left, environment)
             right = string_value(node.right, environment)
             return left + right if left is not None and right is not None else None
+        if isinstance(node, ast.JoinedStr):
+            parts = []
+            for item in node.values:
+                value = string_value(item.value, environment) if isinstance(item, ast.FormattedValue) else string_value(item, environment)
+                if value is None: return None
+                parts.append(value)
+            return "".join(parts)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "join":
+            separator = string_value(node.func.value, environment)
+            if separator is not None and node.args and isinstance(node.args[0], (ast.List, ast.Tuple)):
+                values = [string_value(item, environment) for item in node.args[0].elts]
+                if all(value is not None for value in values): return separator.join(values)
         return None
     def bound_names(target):
         if isinstance(target, ast.Name):
@@ -392,7 +404,8 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
         "utime", "move", "copy", "copy2", "copyfile", "touch", "mkdir",
         "makedirs", "rmdir", "removedirs", "rmtree", "copytree", "symlink",
         "symlink_to", "mknod", "mkfifo", "write_text", "write_bytes",
-        "hardlink_to", "link_to", "chmod", "lchmod", "lchown",
+        "hardlink_to", "link_to", "chmod", "lchmod", "lchown", "fchmod",
+        "fchown", "ftruncate",
     }
     open_aliases = {"open"}
     os_open_aliases = set()
@@ -529,6 +542,17 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
         for node in ast.walk(tree)
     )
     if filesystem_mutation:
+        for node in ast.walk(tree):
+            value = string_value(node, call_environments.get(id(node), strings))
+            if value is not None:
+                _append_target(targets, value, "python filesystem mutation", repo_root, execution_cwd)
+        fragments = [
+            node.value for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        ]
+        joined = "/".join(part.strip("/") for part in fragments if part)
+        if joined:
+            _append_target(targets, joined, "python filesystem mutation", repo_root, execution_cwd)
         for value in string_history:
             _append_target(
                 targets, value, "python filesystem mutation",

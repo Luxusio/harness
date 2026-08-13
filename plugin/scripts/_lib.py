@@ -61,9 +61,6 @@ def now_iso():
 
 # ── Hook I/O + gate signalling ───────────────────────────────────────────
 #
-# Claude Code hooks receive tool context on stdin (JSON) and signal decisions
-# via stdout JSON. Exit codes are masked by `|| true` (C-12 fail-safe), so
-# exit-based signalling is unreliable; stdout payload is authoritative.
 
 import json as _json  # noqa: E402  (kept after module constants on purpose)
 import sys as _sys    # noqa: E402
@@ -71,10 +68,6 @@ import sys as _sys    # noqa: E402
 
 _STDIN_CAP_BYTES = 1 << 16  # 64 KiB read cap for hook payload
 
-# Module-level cache of the most-recent parsed hook input, populated by
-# read_hook_input() on first call. AC-007 of TASK__dual-runtime-plugin-claude-codex
-# uses last_hook_input() in gate scripts' outer except so log_gate_crash can
-# capture payload keys + tool_name even when main() raises before returning.
 _LAST_HOOK_INPUT: dict = {}
 GOALS_DIR = os.path.join("doc", "harness", "goals")
 GOAL_CURRENT_FILE = os.path.join(GOALS_DIR, "current.json")
@@ -86,14 +79,17 @@ def _goal_dir_fd(parent: str):
     return next((fd for path, fd in reversed(_GOAL_DIR_BINDING.get()) if parent == path), None)
 
 
-def read_hook_input():
-    """Read stdin payload from Claude Code hook (capped at 64 KiB).
+def _validate_goal_dir_binding(repo_root: str):
+    goals_dir = os.path.join(os.path.realpath(repo_root), GOALS_DIR)
+    fd = _goal_dir_fd(goals_dir)
+    if fd is None: raise RuntimeError("goal storage binding unavailable")
+    opened, current = os.fstat(fd), os.lstat(goals_dir)
+    if stat.S_ISLNK(current.st_mode) or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino):
+        raise RuntimeError("goal storage identity changed")
 
-    Returns parsed JSON dict, or empty dict on any failure. Never raises —
-    callers on the hot path must not block when stdin is malformed or absent.
-    Also stashes the parsed dict in module-level cache so :func:`last_hook_input`
-    can retrieve it from an outer except where the local was lost.
-    """
+
+def read_hook_input():
+    """Read and cache a bounded hook JSON object, returning {} on failure."""
     global _LAST_HOOK_INPUT
     try:
         raw = _sys.stdin.read(_STDIN_CAP_BYTES)
@@ -114,12 +110,7 @@ def read_hook_input():
 
 
 def last_hook_input() -> dict:
-    """Return the most recent parsed hook input, or empty dict.
-
-    Populated by :func:`read_hook_input`. Used by gate scripts' top-level
-    except wrappers to thread the original payload into :func:`log_gate_crash`
-    without having to refactor every gate's main() signature.
-    """
+    """Return the most recently parsed hook object."""
     return _LAST_HOOK_INPUT
 
 
@@ -151,7 +142,6 @@ def _goal_id(goal_id: str | None = None, objective: str = "") -> str:
 
 
 def _validated_control_dir(repo_root: str, relative_dir: str, label: str) -> str:
-    """Validate existing path components without creating control-plane state."""
     root = os.path.abspath(repo_root)
     current = root
     for part in relative_dir.split("/"):
@@ -186,13 +176,24 @@ def goal_transaction(repo_root: str):
     if root in held:
         yield
         return
-    goals_dir = _validated_control_dir(root, GOALS_DIR, "goal storage root")
+    goals_dir = os.path.join(root, GOALS_DIR)
     os.makedirs(goals_dir, mode=0o700, exist_ok=True)
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(goals_dir, flags)
+    component_fds = []
     try:
-        info, current = os.fstat(fd), os.lstat(goals_dir)
-        if not stat.S_ISDIR(info.st_mode) or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o022:
+        fd = os.open(root, flags)
+    except OSError as exc:
+        raise ValueError("invalid goal storage root; repository root must be a real directory") from exc
+    try:
+        component_fds.append(fd)
+        try:
+            for part in GOALS_DIR.split(os.sep):
+                fd = os.open(part, flags, dir_fd=fd)
+                component_fds.append(fd)
+        except OSError as exc:
+            raise ValueError("invalid goal storage root; doc/harness/goals must be real directories") from exc
+        info = os.fstat(fd)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o022:
             raise RuntimeError("goal storage integrity unavailable")
         import fcntl
         fcntl.flock(fd, fcntl.LOCK_EX)
@@ -206,7 +207,7 @@ def goal_transaction(repo_root: str):
             _GOAL_DIR_BINDING.reset(binding_token)
             _GOAL_LOCK_HELD.reset(token)
     finally:
-        os.close(fd)
+        for component_fd in reversed(component_fds): os.close(component_fd)
 
 
 def _read_regular_text_file(path: str, *, max_size: int = 1024 * 1024) -> str:
@@ -238,7 +239,6 @@ def _read_regular_text_file(path: str, *, max_size: int = 1024 * 1024) -> str:
 def _strict_regular_text_snapshot(
     path: str, *, max_size: int = 1024 * 1024, allow_symlink: bool = False,
 ):
-    """Snapshot an absent or stable regular UTF-8 leaf without ambiguity."""
     parent = os.path.abspath(os.path.dirname(path) or ".")
     leaf = os.path.basename(path)
     goal_fd = _goal_dir_fd(parent)
@@ -344,7 +344,6 @@ def _restore_text_snapshots(snapshots):
 
 
 def _read_json_file(path: str, *, max_size: int = 1024 * 1024) -> dict:
-    """Read a stable, single-link, owner-controlled Goal authority object."""
     flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
     binding = next((item for item in reversed(_GOAL_DIR_BINDING.get()) if os.path.dirname(path) == item[0]), None)
     leaf, dir_fd = os.path.basename(path), binding[1] if binding else None
@@ -397,7 +396,6 @@ def _read_json_file(path: str, *, max_size: int = 1024 * 1024) -> dict:
 
 
 def _atomic_text_write(path: str, text: str) -> None:
-    """Replace a text leaf without following a pre-existing leaf symlink."""
     parent = os.path.abspath(os.path.dirname(path) or ".")
     leaf = os.path.basename(path)
     goal_fd = _goal_dir_fd(parent)
@@ -464,6 +462,7 @@ def write_goal_state(repo_root: str, state: dict) -> dict:
         snapshots = {path: _strict_regular_text_snapshot(path, allow_symlink=True) for path in paths}
         try:
             for path in paths: _atomic_text_write(path, text)
+            _validate_goal_dir_binding(repo_root)
         except Exception:
             _restore_text_snapshots(snapshots)
             raise
@@ -592,7 +591,6 @@ def finish_harness_goal(repo_root: str, *, status: str = "complete") -> dict:
 
 
 def _hook_payload_cwd():
-    """Return Codex/Claude hook payload cwd when it is present and usable."""
     cwd = _LAST_HOOK_INPUT.get("cwd")
     if isinstance(cwd, str) and cwd:
         return cwd
@@ -600,12 +598,6 @@ def _hook_payload_cwd():
 
 
 def current_session_id(default="default"):
-    """Return the current hook/session id in a filesystem-safe form.
-
-    Codex hook payloads include ``session_id``. Claude-side availability varies,
-    so env vars are accepted as a fallback and ``default`` preserves legacy
-    behavior for MCP calls/tests that do not run inside a hook.
-    """
     raw = (
         _LAST_HOOK_INPUT.get("session_id")
         or _LAST_HOOK_INPUT.get("sessionId")
@@ -625,20 +617,7 @@ def sanitize_session_id(value, default="default"):
 
 def emit_permission_decision(decision, reason="", *, next_action_command="",
                              owner_skill="", docs=""):
-    """Emit a Claude Code PreToolUse permission decision on stdout.
-
-    ``decision="deny"`` writes the hookSpecificOutput envelope and returns.
-    Any other value (``"allow"``) is silent — silence is the trust signal for
-    allowed calls (Phase 4 DX consensus). Never raises.
-
-    The optional ``next_action_command`` / ``owner_skill`` / ``docs`` fields are
-    appended to the permissionDecisionReason as an arrow-prefixed tail so the
-    PreToolUse envelope stays shape-stable while the orchestrator gets the
-    actionable next step inline (2026-05-12 gate-friction retro).
-
-    Caller is responsible for exiting 0 after this returns; the hook's ``|| true``
-    wrapper guarantees the shell exit code is 0 regardless.
-    """
+    """Emit a deny decision; allow remains silent."""
     if decision != "deny":
         return
     full_reason = str(reason)
@@ -672,13 +651,6 @@ _ESCAPE_KEYS = {
 
 
 def _escape_hint(gate_name):
-    """Render the one-shot escape-hatch hint appended to deny messages.
-
-    ``gate_name`` is the canonical gate name. Returns a string like
-    ``escape: HARNESS_SKIP_PREWRITE=1 <retry>``. Unknown gate names fall back
-    to ``HARNESS_SKIP_<UPPER>`` but callers should use the canonical keys so
-    the hint stays grep-stable across scripts.
-    """
     key = _ESCAPE_KEYS.get(
         gate_name,
         "HARNESS_SKIP_" + str(gate_name or "").upper().replace("-", "_"),
