@@ -44,11 +44,14 @@ before the command basename is examined (fixes a legacy bypass).
 | `tee` / `tee -a` | every non-option argument |
 | `sed -i` (and `sed -iBACKUP`) | last non-option argument |
 | `perl -pi` (and `perl -pi.bak`) | last non-option argument |
-| `cp`, `mv`, `install`, `touch`, `truncate` | last non-option argument |
+| `cp`, `install`, `touch`, `truncate` | last non-option argument |
+| `ln`, `link`, `cp -l` / `cp --link` | every source/destination operand (hard-link export protection) |
+| `mv`, `rm`, `unlink`, `chmod`, `chown`, `chgrp` | every non-option operand |
 | `python[3] -c "open('x','w')"` | first argument of `open()` |
 | `python[3] -c "Path('x').write_text(...)"` | first argument of `Path()` |
 | `python[3] -c "os.replace(src, 'x')"` | second argument of `os.replace()` |
 | `python[3] -c "shutil.copy(src, 'x')"` | second argument of `shutil.copy(...)` |
+| static `os.link` / `os.rename` / `os.replace` / `os.remove` / `os.unlink` and `Path` mutation calls | protected source and destination arguments |
 | Direct lifecycle receipt entrypoint invocation/import | synthetic `RECEIPTS.jsonl` target |
 
 `2>` stderr redirect is intentionally **not** blocked — logs are common.
@@ -65,6 +68,10 @@ inspection, and non-mutating text inspection of those source files; other
 commands that mention protected lifecycle modules fail closed. Inline Python
 checks also normalize simple string concatenation/qualified access that exposes
 a protected module or receipt-writer symbol.
+Existing hard-link aliases of native Goal JSON are recognized by inode even
+outside the repository. Goal readers independently require owner-controlled,
+single-link, stable regular files, so an unrecognized alias cannot become
+Goal authority.
 Claude `projects/*/<session>/subagents/agent-*.jsonl` transcripts are likewise
 classified as protected receipt provenance even though they live outside the
 repository; redirection, mutator verbs, and recognized inline Python writes to

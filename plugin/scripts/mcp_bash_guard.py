@@ -156,9 +156,39 @@ def _classify_gated_path(path_value: str, repo_root: str) -> str:
     return ""
 
 
+def _is_goal_control_inode_alias(token: str, repo_root: str, execution_cwd="") -> bool:
+    """Recognize an existing hard-link alias of a native Goal authority leaf."""
+    raw = os.path.expanduser(str(token or "").strip().strip("'").strip('"'))
+    if not raw:
+        return False
+    candidate = raw if os.path.isabs(raw) else os.path.join(
+        execution_cwd or repo_root or os.getcwd(), raw,
+    )
+    try:
+        candidate_info = os.lstat(candidate)
+        if not stat.S_ISREG(candidate_info.st_mode) or candidate_info.st_nlink < 2:
+            return False
+        goals_dir = os.path.join(os.path.realpath(repo_root), "doc", "harness", "goals")
+        with os.scandir(goals_dir) as entries:
+            for entry in entries:
+                if not entry.name.endswith(".json") or not entry.is_file(follow_symlinks=False):
+                    continue
+                info = entry.stat(follow_symlinks=False)
+                if (info.st_dev, info.st_ino) == (candidate_info.st_dev, candidate_info.st_ino):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
 def _append_target(targets, token, method, repo_root, execution_cwd=""):
     path_value = _normalize_candidate_path(token, repo_root, execution_cwd)
     category = _classify_gated_path(path_value, repo_root)
+    if not category and _is_goal_control_inode_alias(
+        token, repo_root, execution_cwd,
+    ):
+        category = "protected-artifact"
+        path_value = os.path.abspath(os.path.expanduser(str(token)))
     if not category:
         return
     item = {"path": path_value, "category": category, "method": method}
@@ -207,6 +237,56 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
             _append_target(
                 targets, match, "python inline write", repo_root, execution_cwd
             )
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        return
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        os_mutator = (
+            func.attr
+            if isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "os"
+            else ""
+        )
+        if os_mutator in {"link", "rename", "replace"}:
+            args = node.args[:2]
+        elif os_mutator in {"remove", "unlink"}:
+            args = node.args[:1]
+        else:
+            args = ()
+        for arg in args:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                _append_target(
+                    targets, arg.value, f"python os.{os_mutator}",
+                    repo_root, execution_cwd,
+                )
+        is_path_mutator = (
+            isinstance(func, ast.Attribute)
+            and func.attr in {
+                "unlink", "rename", "replace", "chmod", "hardlink_to", "link_to",
+            }
+            and isinstance(func.value, ast.Call)
+            and getattr(func.value.func, "id", "") == "Path"
+        )
+        if not is_path_mutator or not func.value.args:
+            continue
+        path_arg = func.value.args[0]
+        if isinstance(path_arg, ast.Constant) and isinstance(path_arg.value, str):
+            _append_target(
+                targets, path_arg.value, f"python Path.{func.attr}",
+                repo_root, execution_cwd,
+            )
+        if func.attr in {"hardlink_to", "link_to"}:
+            for arg in node.args[:1]:
+                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                    _append_target(
+                        targets, arg.value, f"python Path.{func.attr}",
+                        repo_root, execution_cwd,
+                    )
 
 
 def _unwrap_execution(tokens):
@@ -444,16 +524,35 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
             repo_root, execution_cwd,
         )
         return
+    if cmd == "cp" and any(
+        option == "--link" or re.fullmatch(r"-[^-]*l[^-]*", option)
+        for option in non_env[1:]
+    ):
+        for operand in non_env[1:]:
+            if not operand.startswith("-"):
+                _append_target(
+                    targets, operand, "cp hard-link source",
+                    repo_root, execution_cwd,
+                )
+        return
+    if cmd in {"mv", "rm", "unlink", "chmod", "chown", "chgrp"}:
+        for operand in non_env[1:]:
+            if not operand.startswith("-"):
+                _append_target(
+                    targets, operand, f"{cmd} protected operand",
+                    repo_root, execution_cwd,
+                )
+        return
     if cmd in LAST_ARG_MUTATORS:
         _append_target(
             targets, _last_non_option(non_env), cmd, repo_root, execution_cwd
         )
         return
-    if cmd == "ln":
+    if cmd in {"ln", "link"}:
         operands = [token for token in non_env[1:] if not token.startswith("-")]
         for source in operands:
             _append_target(
-                targets, source, "ln protected source", repo_root, execution_cwd
+                targets, source, f"{cmd} protected source", repo_root, execution_cwd
             )
         return
     if cmd == TEE_COMMAND:

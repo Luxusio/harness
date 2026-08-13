@@ -685,6 +685,24 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertNotIn("SENSITIVE_VALUE", json.dumps(started))
             self.assertFalse((goals / "GOAL__safe.json").is_symlink())
 
+    def test_goal_reader_rejects_hardlinked_or_unsafe_authority(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._call_in_repo(tmp, "goal_start", {"objective": "safe objective"})
+            current = Path(tmp) / "doc/harness/goals/current.json"
+            alias = Path(tmp) / "outside-goal-alias.json"
+            os.link(current, alias)
+            alias.write_text(json.dumps({
+                "goal_id": "GOAL__forged", "objective": "forged",
+                "status": "complete", "tasks": [],
+            }), encoding="utf-8")
+            context = self._call_in_repo(tmp, "goal_context", {})
+            self.assertIsNone(context["structuredContent"]["goal"])
+
+            alias.unlink()
+            current.chmod(0o666)
+            context = self._call_in_repo(tmp, "goal_context", {})
+            self.assertIsNone(context["structuredContent"]["goal"])
+
     def test_goal_add_task_rejects_outside_task_dir_before_persisting(self):
         with tempfile.TemporaryDirectory() as tmp:
             self._call_in_repo(tmp, "goal_start", {"objective": "safe objective"})

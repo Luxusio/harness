@@ -251,7 +251,51 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
         for command in (
             "ln doc/harness/goals/current.json /tmp/harness-goal-alias",
             "ln -s doc/harness/goals/current.json /tmp/harness-goal-symlink",
+            "link doc/harness/goals/current.json /tmp/harness-goal-link",
+            "cp -l doc/harness/goals/current.json /tmp/harness-goal-cp-link",
+            "cp --link doc/harness/goals/current.json /tmp/harness-goal-cp-long",
+            "python3 -c \"import os; os.link('doc/harness/goals/current.json', '/tmp/harness-goal-python')\"",
+            "python3 -c \"from pathlib import Path; Path('/tmp/harness-goal-pathlib').hardlink_to('doc/harness/goals/current.json')\"",
+            "python3 -c \"from pathlib import Path; Path('/tmp/harness-goal-pathlib-old').link_to('doc/harness/goals/current.json')\"",
             "bash -c 'ln doc/harness/goals/current.json /tmp/harness-goal-nested'",
+            "bash -c 'link doc/harness/goals/current.json /tmp/harness-goal-link-nested'",
+            "bash -c 'cp -l doc/harness/goals/current.json /tmp/harness-goal-cp-nested'",
+        ):
+            with self.subTest(command=command):
+                r = _run_bash(command)
+                decision, reason = parse_decision(r.stdout)
+                self.assertEqual(decision, "deny")
+                self.assertIn("rule=protected-artifact", reason)
+
+    def test_existing_external_goal_hardlink_alias_denies(self):
+        goals = Path(REPO_ROOT) / "doc/harness/goals"
+        goals.mkdir(parents=True, exist_ok=True)
+        source = goals / "GOAL__guard-alias-test.json"
+        alias = Path(REPO_ROOT) / "doc/harness/checkpoints/.goal-existing-alias"
+        source.write_text("{}\n", encoding="utf-8")
+        alias.unlink(missing_ok=True)
+        os.link(source, alias)
+        try:
+            r = _run_bash(f"printf '{{}}' > {alias}")
+            decision, reason = parse_decision(r.stdout)
+            self.assertEqual(decision, "deny")
+            self.assertIn("rule=protected-artifact", reason)
+        finally:
+            alias.unlink(missing_ok=True)
+            source.unlink(missing_ok=True)
+
+    def test_source_mutation_of_native_goal_control_denies(self):
+        for command in (
+            "mv doc/harness/goals/current.json /tmp/harness-goal-moved",
+            "rm doc/harness/goals/current.json",
+            "unlink doc/harness/goals/current.json",
+            "chmod 600 doc/harness/goals/current.json",
+            "chown 0 doc/harness/goals/current.json",
+            "bash -c 'mv doc/harness/goals/current.json /tmp/harness-goal-moved-nested'",
+            "bash -c 'rm doc/harness/goals/current.json'",
+            "python3 -c \"import os; os.unlink('doc/harness/goals/current.json')\"",
+            "python3 -c \"import os; os.rename('doc/harness/goals/current.json', '/tmp/harness-goal-renamed')\"",
+            "python3 -c \"from pathlib import Path; Path('doc/harness/goals/current.json').unlink()\"",
         ):
             with self.subTest(command=command):
                 r = _run_bash(command)
