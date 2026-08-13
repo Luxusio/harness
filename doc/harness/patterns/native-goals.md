@@ -20,9 +20,9 @@ objective and a list of child harness tasks. A focused request can stay as one
 child task. A broad request can append more child tasks as bugs, pages, domains,
 or follow-up slices are discovered.
 
-The Goal state and child tasks are the durable source of truth. The optional
-Goal queue runner is an implementation helper for long-running child-task
-queues; it is not a separate user-facing mode.
+The Goal state and child tasks are the sole durable orchestration source of
+truth. There is no separate orchestration runner, heartbeat, event log, or
+migration state.
 
 When no native Goal is active, task state is still valid for plain requests.
 Those tasks follow the same plan, develop, verify, and close gates, but are not
@@ -47,18 +47,43 @@ Harness tasks remain the execution unit for plan, develop, verify, and close.
 Goal tools attach those tasks as children. This keeps existing task artifacts
 and close gates intact while making Goal the public control surface.
 
-## Existing Repo Migration
+## Ordered Children
 
-Repair/Upgrade setup runs `plugin/scripts/goal_queue_migrate.py`. The script is
-idempotent and handles the two pre-native artifacts that can remain in user
-repositories:
+For a request with multiple known stages, add children in the user's declared
+roadmap order. If none is declared, use dependency order and then
+highest-risk/highest-value order. A queued child may be recorded before its task
+directory exists; `task_start` materializes it when selected.
 
-- `doc/harness/autopilot.yaml` is converted to `doc/harness/goal-queue.json`.
-  Legacy `TASK__autopilot-*` child IDs are preserved when the corresponding
-  `doc/harness/tasks/<task_id>/` directory exists, so migrated state does not
-  point at missing task artifacts. Missing task-dir references are rewritten to
-  `TASK__goal-queue-*`. Migration metadata records which policy was used, and
-  the old state file is archived under `doc/harness/legacy/`.
-- A marked `## Harness routing` block in `CLAUDE.md` is replaced with the
-  current Goal-or-direct-task routing block. Stale `Default agent is harness`
-  lines are removed.
+`goal_next_task` returns the first queued or active child. Selecting, splitting,
+and ordering these children are internal workflow decisions, so report the next
+child and its reason as status. Ask only for a real product, architecture,
+billing, auth, data, privacy, destructive-operation, environment, credential,
+contradiction, or agreed go/no-go decision.
+
+Each child should be the smallest thin vertical workflow that can produce
+user-visible evidence. After it closes, compare the result with the Goal and
+choose the next child by user value, risk, or learning. `goal_finish` remains
+fail-closed until every child has canonical receipt-verified closed state.
+
+## Learning Before Continuation
+
+The transition order is fixed:
+
+```text
+task_close
+-> self-improvement, learning promotion, and hygiene scheduling
+-> goal_next_task
+-> goal_finish when the objective is proven
+```
+
+This keeps automatic learning active after every child, including long Goals.
+Runbook memory, `learnings.jsonl`, `promote_learnings.py`, search, doc hygiene,
+and hygiene follow-up are independent of orchestration and remain unchanged.
+
+## Removed State
+
+Pre-native orchestration artifacts are unsupported. Setup does not read,
+translate, archive, or advertise them; start a native Goal and add the remaining
+children explicitly. Conversation history and discarded orchestration JSON are not
+durable memory—reusable knowledge belongs in committed docs, patterns, tests,
+skills, or approved runbooks through the normal self-improvement pipeline.

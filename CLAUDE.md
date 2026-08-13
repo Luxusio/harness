@@ -14,13 +14,16 @@ updated: 2026-04-15
 entry skill for repository mutation before editing; it loads the internal
 canonical workflow. Native `/goal` owns explicit goals and broad work. Plain
 repo-mutating requests are also valid task intake. Hooks inject context; they
-do not create tasks automatically. Do not use legacy autopilot commands.
+do not create tasks automatically.
 
 - Repo-mutating intent (feature, fix, refactor, behavior change) → Codex uses
   `$harness:run`; the workflow syncs a native Goal when present and otherwise
   opens or resumes a harness task directly.
 - Broad goals grow child tasks as bugs, pages, domains, or follow-up gaps are
   discovered.
+- Known children retain declared order; after each `task_close`, complete
+  self-improvement, learning promotion, and hygiene scheduling before
+  `goal_next_task` selects the next child.
 - Focused goals can remain a single child task.
 - Bootstrap harness in a new project / repair existing → `Skill(harness:setup)`.
 - Read-only question or explanation → answer directly, no harness task.
@@ -34,6 +37,9 @@ do not create tasks automatically. Do not use legacy autopilot commands.
   right committed surface: REQ/GUIDE/ADR/POLICY, skill/pattern docs, or tests.
   Do not create narrative task artifacts for routine task
   evidence.
+- Memory and automatic learning are part of every Goal child lifecycle:
+  runbook memory, staged learnings, promotion, and hygiene remain active even
+  when several children execute consecutively.
 - Browser-first QA is default for web frontend projects when `browser_qa_supported: true` in manifest.
 - Acceptance criteria live in `PLAN.md`; current-run review and QA authority
   comes only from lifecycle-owned `RECEIPTS.jsonl` entries. Receipt acquisition

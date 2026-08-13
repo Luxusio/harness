@@ -112,21 +112,19 @@ re-issue a clear feature, fix, refactor, behavior change, or durable process/doc
 request as `/goal`. If no active task can be resolved, create or resume the
 harness task yourself and continue through this flow.
 
-### Task-pack continuation
+### Native Goal continuation
 
-For a user request that names multiple sequential stages, roadmap items, or
-follow-up tasks, create an ordered task pack before implementation when the
-known tasks can be named. Use `${HARNESS_PLUGIN_ROOT}/scripts/task_pack_runner.py init` with
-one `--task "slug:title"` per known stage. The user does not choose the split
-or sequence; derive order from the stated roadmap, dependency order, or
-highest-risk/highest-value order.
+For a request with multiple known stages, sync one native Goal and add its
+children in declared roadmap order, then dependency order, then
+highest-risk/highest-value order. A queued child may be named before its task
+directory exists. Use `goal_next_task` to select the first queued or active
+child; report that selection as status, not a question.
+Present the selected next task as status.
 
-When a task pack exists, use `task_pack_runner.py next` / `claim-next` to report
-and claim the next queued task. Present the selected next task as status, not a
-question. Ask the user only for go/no-go at an agreed batch boundary, genuine
-product/architecture/auth/billing/data/destructive decisions, environment or
-credential blockers, or contradictions that would likely implement the wrong
-intent.
+Ask the user only for an agreed go/no-go boundary, a genuine
+product/architecture/auth/billing/data/destructive decision, an environment or
+credential blocker, or a contradiction that would likely implement the wrong
+intent. Task decomposition and ordering are harness decisions.
 
 ### Phase 0: Resume detection
 
@@ -144,10 +142,10 @@ Resume routing:
 Only call `task_start` when no active task can be resolved, or when the user
 explicitly asks for a new task.
 
-If no active task exists and `doc/harness/task-packs/current.json` is active,
-run `python3 ${HARNESS_PLUGIN_ROOT}/scripts/task_pack_runner.py next` and then
-`claim-next` for the next queued item. Start that returned `task_id` or slug
-without asking which task to do next.
+If no task is active but a native Goal is active, call `goal_next_task` and
+start or resume the returned child without asking which task to do next. If no
+child is queued and the objective is not proven, create the next thin vertical
+child with `task_start`, then attach it with `goal_add_task`.
 
 ### Phase 1: Start task
 
@@ -279,18 +277,13 @@ the task pending and request a new thread; do not write receipts by hand. On
 resume, the stateless root installer may be run again after confirming
 the diff still has fresh review+QA PASS.
 
-If this run belongs to an active task pack, mark the item closed with
-`python3 ${HARNESS_PLUGIN_ROOT}/scripts/task_pack_runner.py close --task <slug>`.
-If the runner prints another `next:` item, start or queue that task before a
-final DONE response unless the pack is done, blocked/stopped, budget-capped, or
-waiting at an explicit user go/no-go boundary.
-
-If this run is a Goal queue child task, task close is an iteration checkpoint
-rather than a final Goal completion. Before any final response, run the Goal
-queue iteration review: compare the implementation to the locked Goal, list
-remaining gaps, choose the next highest-value slice, and start or queue that
-slice unless the Goal is done, blocked/stopped by user or environment, or the
-Goal queue budget/cap has been reached.
+For a native Goal child, task close is an iteration checkpoint, not Goal
+completion. Preserve this order: `task_close` first; then run the complete
+self-improvement pipeline, including learning promotion and hygiene scheduling;
+only then call `goal_next_task`. Compare the result with the Goal objective and
+choose the next thin vertical child by user value, risk, or learning. Start or
+queue it unless the Goal is proven complete, blocked/stopped by user or
+environment, budget-capped, or waiting at an explicit go/no-go boundary.
 
 For this harness plugin source repo, successful repo-mutating development is
 not complete at task close. Phase 7.8 must already have run the verified
@@ -327,7 +320,7 @@ Before writing DONE, assert:
 - runtime_verdict is PASS or task is BLOCKED
 - post-close self-improvement returned `none` or `queued`
 - no auto-runnable follow-up task remains open
-- if this was a Goal queue child task, the Goal is done/blocked/stopped/budgeted
+- if this was a native Goal child task, the Goal is done/blocked/stopped/budgeted
   or the next slice is already active/queued
 - for this harness plugin source repo, the completed diff has been committed
   and `python3 install.py --force` has run, unless the user explicitly opted out

@@ -173,19 +173,6 @@ Match → apply without asking. Only confirm if ambiguous or no match.
 Create `$_PROJECT_DOC` if absent; append the harness section if present. Codex
 uses `AGENTS.md`; Claude Code uses `CLAUDE.md`. Keep it under 40 lines.
 
-### Legacy line cleanup (migration)
-
-Run the native Goal queue migration before routing-block injection. This
-migrates pre-native queue state from `doc/harness/autopilot.yaml` to
-`doc/harness/goal-queue.json`, archives the legacy state file, removes stale
-`Default agent is harness` lines, and replaces any old marked `## Harness
-routing` block with the current Goal-or-direct-task routing block.
-
-```bash
-python3 "${_PLUGIN_ROOT}/scripts/goal_queue_migrate.py" \
-  --repo "$(pwd)" --state-only
-```
-
 ### Harness routing block (emit into the runtime project document)
 
 Use the setup finalizer's containment-safe, no-follow project-document helper.
@@ -204,6 +191,9 @@ python3 "${_PLUGIN_ROOT}/scripts/setup_finalize.py" \
 ```
 
 Note: no `Default agent is X` line. The harness routes via skills, not agent switching.
+Pre-native orchestration files are unsupported; setup does not read,
+translate, or archive them. The runtime project-document helper owns only the
+current bounded routing block.
 
 ## 3.5 Critic playbooks
 

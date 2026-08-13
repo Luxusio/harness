@@ -20,7 +20,7 @@ from _lib import (  # type: ignore
     TASK_DIR, find_repo_root, find_harness_root, harness_root_resolution,
     read_hook_input, emit_compact_context,
     log_gate_crash, last_hook_input, resolve_active_task_dir, current_session_id,
-    is_harness_enabled_repo, write_goal_payload_probe,
+    is_harness_enabled_repo,
 )
 from _gate_response import block as gate_block  # type: ignore
 import subagent_lifecycle  # type: ignore
@@ -161,7 +161,6 @@ def main():
             return 0
         if not is_harness_enabled_repo(repo_root):
             return 0
-        write_goal_payload_probe(repo_root, hook_input, source="Stop")
         active_path = os.path.join(repo_root, TASK_DIR, ".active")
         td = resolve_active_task_dir(repo_root)
         if not td:

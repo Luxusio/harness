@@ -1,19 +1,19 @@
-# REQ - Process Autonomous Task Pack Execution
+# REQ - Process Autonomous Native Goal Child Execution
 
 ## Intent
 
-When a user gives a multi-step product, project, or roadmap request, harness should
-turn the request into an ordered task pack and execute the tasks one by one without
-asking the user how to split or sequence the work. Task decomposition and ordering
-are harness operating details, not user decisions.
+When a user gives a multi-step product, project, or roadmap request, Harness
+should add ordered child tasks to one native Goal and execute them without
+asking the user how to split or sequence the work. Task decomposition and
+ordering are harness operating details, not user decisions.
 
 ## Observable Behavior
 
-- Harness must derive a task pack from the user's stated goal when the request
-  clearly contains multiple sequential stages, roadmap items, or follow-up tasks.
-- Harness must create or queue the task records up front when enough information
-  exists to name the work and its acceptance boundary.
-- Harness must choose the next task from the task pack deterministically from the
+- Harness must add native Goal children when the request clearly contains
+  multiple sequential stages, roadmap items, or follow-up tasks.
+- Harness must queue known child IDs up front when enough information exists to
+  name the work and its acceptance boundary, even before task directories exist.
+- Harness must choose the next child deterministically from the
   declared roadmap order, dependency order, or highest-risk/highest-value order
   when no explicit order is supplied.
 - Harness must not ask the user which task to do next, whether to split the work,
@@ -25,15 +25,18 @@ are harness operating details, not user decisions.
     operation decision,
   - an environment or credential blocker,
   - a contradiction where continuing would likely implement the wrong intent.
-- Closing one task in a task pack is a checkpoint, not completion of the user's
-  overall request. Harness must start or queue the next task unless the task pack
+- Closing one Goal child is a checkpoint, not completion of the user's overall
+  request. Harness must run self-improvement, learning promotion, and hygiene
+  scheduling before selecting the next child with `goal_next_task`. It then
+  starts or queues the child unless the Goal
   is done, blocked, stopped by the user, or a configured budget/cap is reached.
 - Status updates should report the chosen next task and reason as execution
   context, not present it as a question.
 
 ## Acceptance Signals
 
-- A roadmap request with stages 1, 2, and 3 produces queued task records for the
+- A roadmap request with stages 1, 2, and 3 produces ordered native Goal child
+  records for the
   known stages before implementation starts, or records why a stage cannot be
   named yet.
 - After stage 1 closes, harness proceeds to stage 2 without asking "stage 2 or
@@ -46,12 +49,13 @@ are harness operating details, not user decisions.
 
 ## Verification Cues
 
-- Add tests or golden transcripts covering task-pack creation, next-task
-  selection, post-close continuation, and suppression of scope-partition
+- Add tests covering ordered native Goal children, queued future task IDs,
+  `goal_next_task`, post-close continuation, and suppression of scope-partition
   questions.
-- Verify the run/autopilot prompt surfaces and prompt-memory text say "start or
-  queue the next task" rather than asking the user to choose task order.
-- Verify task-pack state survives interruption and resume.
+- Verify `goal_finish` refuses unfinished or unverified children.
+- Verify run instructions preserve `task_close -> self-improvement/promotion/
+  hygiene -> goal_next_task` and do not bypass automatic learning.
+- Verify Goal state survives interruption and resume.
 
 ## Non-Goals
 

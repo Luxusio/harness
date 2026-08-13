@@ -105,11 +105,6 @@ _STDIN_CAP_BYTES = 1 << 16  # 64 KiB read cap for hook payload
 # uses last_hook_input() in gate scripts' outer except so log_gate_crash can
 # capture payload keys + tool_name even when main() raises before returning.
 _LAST_HOOK_INPUT: dict = {}
-GOAL_PAYLOAD_DEBUG_DIR = os.path.join("doc", "harness", "debug", "goal-hook-payloads")
-GOAL_PAYLOAD_MARKER = os.path.join("doc", "harness", "debug", "CAPTURE_GOAL_PAYLOADS")
-GOAL_PAYLOAD_VALUE_CAP = 2000
-GOAL_PAYLOAD_RAW_CAP = 32000
-GOAL_TRANSCRIPT_TAIL_CAP = 65536
 GOALS_DIR = os.path.join("doc", "harness", "goals")
 GOAL_CURRENT_FILE = os.path.join(GOALS_DIR, "current.json")
 
@@ -151,18 +146,6 @@ def last_hook_input() -> dict:
     return _LAST_HOOK_INPUT
 
 
-def _goal_probe_capture_enabled(repo_root: str) -> bool:
-    env = str(os.environ.get("HARNESS_CAPTURE_GOAL_PAYLOADS") or "").strip().lower()
-    if env in {"1", "true", "yes", "on"}:
-        return True
-    return os.path.isfile(os.path.join(repo_root, GOAL_PAYLOAD_MARKER))
-
-
-def _goal_probe_safe(value: object, default: str = "unknown") -> str:
-    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value or default)).strip("._")
-    return (safe or default)[:80]
-
-
 def _goal_probe_runtime(data: dict) -> str:
     raw = (
         os.environ.get("HARNESS_RUNTIME")
@@ -171,144 +154,14 @@ def _goal_probe_runtime(data: dict) -> str:
         or data.get("source")
         or "unknown"
     )
-    return _goal_probe_safe(raw)
-
-
-def _goal_probe_session(data: dict) -> str:
-    raw = (
-        data.get("session_id")
-        or data.get("sessionId")
-        or os.environ.get("CODEX_SESSION_ID")
-        or os.environ.get("CLAUDE_SESSION_ID")
-        or "no-session"
-    )
-    return _goal_probe_safe(raw, default="no-session")[:40]
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(raw)).strip("._")
+    return (safe or "unknown")[:80]
 
 
 def _goal_probe_text(value: object) -> str:
     cleaned = re.sub(r"[\x00-\x1f\x7f]", " ", str(value or ""))
     cleaned = re.sub(r"</?system-reminder[^>]*>", "[SANITIZED]", cleaned, flags=re.IGNORECASE)
     return " ".join(cleaned.split()).strip()
-
-
-def _goal_probe_prompt_candidates(data: dict) -> list[dict]:
-    out: list[dict] = []
-    for key in ("prompt", "user_prompt", "message", "text", "content"):
-        value = data.get(key)
-        if not isinstance(value, str) or not value.strip():
-            continue
-        clean = _goal_probe_text(value)[:GOAL_PAYLOAD_VALUE_CAP]
-        lowered = clean.lower()
-        out.append({
-            "field": key,
-            "length": len(value),
-            "excerpt": clean,
-            "looks_like_goal_command": lowered.startswith("/goal") or lowered.startswith("/골"),
-        })
-    return out
-
-
-def _goal_probe_transcript_candidates(data: dict) -> list[dict]:
-    path = data.get("transcript_path")
-    if not isinstance(path, str) or not path:
-        return []
-    try:
-        with open(path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            size = f.tell()
-            f.seek(max(0, size - GOAL_TRANSCRIPT_TAIL_CAP))
-            tail = f.read().decode("utf-8", errors="replace")
-    except OSError:
-        return []
-    out: list[dict] = []
-    for line in tail.splitlines():
-        if "/goal" not in line and "Goal set" not in line and "goal" not in line.lower():
-            continue
-        clean = _goal_probe_text(line)
-        if not clean:
-            continue
-        out.append({
-            "excerpt": clean[:GOAL_PAYLOAD_VALUE_CAP],
-            "contains_slash_goal": "/goal" in clean,
-            "contains_goal_set": "Goal set" in clean,
-        })
-        if len(out) >= 10:
-            break
-    return out
-
-
-def write_goal_payload_probe(repo_root: str, data: dict, *, source: str = "") -> bool:
-    """Opt-in /goal payload probe for discovering runtime hook envelope shape.
-
-    Disabled by default because hook payloads and transcripts can contain user
-    prompt text. Enable with HARNESS_CAPTURE_GOAL_PAYLOADS=1 or by creating
-    doc/harness/debug/CAPTURE_GOAL_PAYLOADS in the repo.
-    """
-    if not isinstance(data, dict) or not _goal_probe_capture_enabled(repo_root):
-        return False
-    try:
-        override_dir = os.environ.get("HARNESS_GOAL_PAYLOAD_DIR")
-        out_dir = override_dir or os.path.join(repo_root, GOAL_PAYLOAD_DEBUG_DIR)
-        if not override_dir:
-            repo_abs = os.path.abspath(repo_root)
-            out_abs = os.path.abspath(out_dir)
-            if os.path.commonpath((repo_abs, out_abs)) != repo_abs:
-                return False
-            current = repo_abs
-            parts = os.path.relpath(out_abs, repo_abs).split(os.sep)
-        else:
-            out_abs = os.path.abspath(out_dir)
-            current = os.path.sep
-            parts = out_abs.strip(os.sep).split(os.sep)
-        for part in parts:
-            current = os.path.join(current, part)
-            if os.path.islink(current):
-                return False
-        existed = os.path.isdir(out_abs)
-        os.makedirs(out_abs, mode=0o700, exist_ok=True)
-        if os.path.islink(out_abs):
-            return False
-        if existed:
-            if os.stat(out_abs).st_mode & 0o077:
-                return False
-        else:
-            os.chmod(out_abs, 0o700)
-        out_dir = out_abs
-        ts = now_iso().replace("-", "").replace(":", "")
-        runtime = _goal_probe_runtime(data)
-        event = str(data.get("hook_event_name") or data.get("hookEventName") or source or "hook")
-        event_safe = _goal_probe_safe(event, default="hook")
-        session = _goal_probe_session(data)
-        raw = json.dumps(data, ensure_ascii=False, sort_keys=True)
-        record = {
-            "_captured_at": now_iso(),
-            "_event_inferred": event,
-            "_keys_at_top_level": sorted(data.keys()),
-            "_runtime_inferred": runtime,
-            "prompt_candidates": _goal_probe_prompt_candidates(data),
-            "transcript_candidates": _goal_probe_transcript_candidates(data),
-            "raw_payload_truncated": len(raw) > GOAL_PAYLOAD_RAW_CAP,
-            "envelope": data if len(raw) <= GOAL_PAYLOAD_RAW_CAP else {"_raw_head": raw[:GOAL_PAYLOAD_RAW_CAP]},
-        }
-        path = os.path.join(out_dir, f"{runtime}_{event_safe}__{ts}__{session}.json")
-        fd, tmp = tempfile.mkstemp(dir=out_dir, prefix=".goal-payload.", suffix=".tmp")
-        try:
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp, path)
-            os.chmod(path, 0o600)
-        except BaseException:
-            try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            raise
-        return True
-    except OSError:
-        return False
 
 
 def goal_command_objective(prompt: object) -> str:

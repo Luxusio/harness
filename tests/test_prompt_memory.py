@@ -152,7 +152,7 @@ class TestPromptMemory(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(r.stdout, "")
 
-    def test_goal_queue_state_emits_continuation_reminder(self):
+    def test_removed_goal_queue_state_is_ignored(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             state = {
@@ -168,11 +168,9 @@ class TestPromptMemory(unittest.TestCase):
             )
             r = _invoke(str(base))
         self.assertEqual(r.returncode, 0)
-        self.assertIn("[harness-goal-queue]", r.stdout)
-        self.assertIn("Child task close is not final", r.stdout)
-        self.assertIn("start/queue the next child task", r.stdout)
+        self.assertNotIn("[harness-goal-queue]", r.stdout)
 
-    def test_completed_goal_queue_state_does_not_emit_reminder(self):
+    def test_removed_completed_goal_queue_state_is_ignored(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             state = {
@@ -187,7 +185,7 @@ class TestPromptMemory(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertNotIn("[harness-goal-queue]", r.stdout)
 
-    def test_task_pack_state_emits_continuation_reminder(self):
+    def test_removed_task_pack_state_is_ignored(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             state = {
@@ -202,9 +200,7 @@ class TestPromptMemory(unittest.TestCase):
             (pack_dir / "current.json").write_text(json.dumps(state), encoding="utf-8")
             r = _invoke(str(base))
         self.assertEqual(r.returncode, 0)
-        self.assertIn("[harness-task-pack]", r.stdout)
-        self.assertIn("Task close is not final", r.stdout)
-        self.assertIn("claim/start the next queued", r.stdout)
+        self.assertNotIn("[harness-task-pack]", r.stdout)
 
     def test_active_points_nowhere_is_silent(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -391,7 +387,7 @@ class TestPromptMemory(unittest.TestCase):
                 (base / "doc" / "harness" / "tasks" / "TASK__disabled" / "CONVERSATION.md").exists()
             )
 
-    def test_goal_payload_probe_is_opt_in(self):
+    def test_goal_payload_capture_is_removed(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             r = _invoke(str(base), payload={"prompt": "/goal fix login"})
@@ -399,7 +395,7 @@ class TestPromptMemory(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertFalse(debug_dir.exists())
 
-    def test_goal_payload_probe_records_payload_shape_when_enabled(self):
+    def test_removed_capture_environment_is_ignored(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             r = _invoke(
@@ -413,20 +409,11 @@ class TestPromptMemory(unittest.TestCase):
                 },
             )
             debug_dir = base / "doc" / "harness" / "debug" / "goal-hook-payloads"
-            files = sorted(debug_dir.glob("codex_UserPromptSubmit__*__goal-session.json"))
-            record = json.loads(files[0].read_text(encoding="utf-8"))
-            directory_mode = debug_dir.stat().st_mode & 0o777
-            file_mode = files[0].stat().st_mode & 0o777
         self.assertEqual(r.returncode, 0)
-        self.assertEqual(len(files), 1)
-        self.assertEqual(record["_event_inferred"], "UserPromptSubmit")
-        self.assertIn("prompt", record["_keys_at_top_level"])
-        self.assertEqual(record["prompt_candidates"][0]["field"], "prompt")
-        self.assertTrue(record["prompt_candidates"][0]["looks_like_goal_command"])
-        self.assertEqual(directory_mode, 0o700)
-        self.assertEqual(file_mode, 0o600)
+        self.assertFalse(debug_dir.exists())
+        self.assertIn("active=GOAL__", r.stdout)
 
-    def test_goal_payload_probe_can_be_enabled_by_repo_marker(self):
+    def test_removed_capture_marker_is_ignored(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             marker = base / "doc" / "harness" / "debug" / "CAPTURE_GOAL_PAYLOADS"
@@ -436,9 +423,9 @@ class TestPromptMemory(unittest.TestCase):
             debug_dir = base / "doc" / "harness" / "debug" / "goal-hook-payloads"
             files = sorted(debug_dir.glob("*_UserPromptSubmit__*.json"))
         self.assertEqual(r.returncode, 0)
-        self.assertEqual(len(files), 1)
+        self.assertEqual(len(files), 0)
 
-    def test_goal_payload_probe_rejects_symlinked_default_output(self):
+    def test_removed_capture_never_touches_symlinked_default_output(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             outside = Path(tmp) / "outside"
@@ -455,7 +442,7 @@ class TestPromptMemory(unittest.TestCase):
         self.assertEqual(r.returncode, 0)
         self.assertEqual(outside_files, [])
 
-    def test_goal_payload_probe_rejects_symlinked_override_output(self):
+    def test_removed_capture_never_touches_override_output(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = _build_scratch_repo(Path(tmp))
             outside = Path(tmp) / "outside"

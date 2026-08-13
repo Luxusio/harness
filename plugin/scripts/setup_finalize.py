@@ -51,13 +51,7 @@ decision.
 OPERATIONAL_IGNORES = (
     "doc/harness/tasks/",
     "doc/harness/goals/",
-    "doc/harness/goal-queue.json",
-    "doc/harness/goal-queue-events.jsonl",
-    "doc/harness/legacy/goal-queue-pre-native-state.*.json",
-    "doc/harness/task-packs/",
     "doc/harness/reviews/",
-    "doc/harness/debug/goal-hook-payloads/",
-    "doc/harness/debug/CAPTURE_GOAL_PAYLOADS",
     "doc/harness/learnings.jsonl",
     "doc/harness/runbook_candidates.yaml",
     "doc/harness/checkpoints/",
@@ -97,7 +91,6 @@ REQUIRED_SETUP_RESOURCES = (
     "skills/setup/templates/CONTRACTS.local.md",
     "skills/setup/templates/hygiene.yaml",
     "scripts/contract_lint.py",
-    "scripts/goal_queue_migrate.py",
     "scripts/setup_finalize.py",
 )
 
@@ -522,14 +515,6 @@ def operational_symlink_errors(repo: Path) -> list[str]:
             except ValueError as exc:
                 errors.append(str(exc))
                 continue
-            if pattern == "doc/harness/debug/goal-hook-payloads/" and candidate.is_dir():
-                for current, dirs, files in os.walk(candidate, followlinks=False):
-                    for name in dirs + files:
-                        nested = Path(current) / name
-                        if nested.is_symlink():
-                            errors.append(
-                                f"operational path contains symlink: {nested.relative_to(repo)}"
-                            )
     return errors
 
 
@@ -553,10 +538,6 @@ def effective_ignore_errors(repo: Path) -> list[str]:
         for candidate in candidates:
             if candidate.is_file() or candidate.is_symlink():
                 existing.add(candidate)
-            elif pattern == "doc/harness/debug/goal-hook-payloads/" and candidate.is_dir():
-                # Payloads are flat. Check real sensitive files in addition to
-                # the directory probe without walking every task/runtime file.
-                existing.update(path for path in candidate.iterdir() if path.is_file() or path.is_symlink())
     existing_rel = {str(path.relative_to(repo)) for path in existing}
     requested = sorted(probes | existing_rel)
     result = subprocess.run(

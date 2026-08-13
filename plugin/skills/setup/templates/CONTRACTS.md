@@ -229,7 +229,8 @@ break it immediately.
 ### C-16
 
 **Title:** Close-time hygiene — content-signal doc classification + contract drift auto-apply.
-**When:** Normal harness task close-time self-healing.
+**When:** Normal harness task close-time self-improvement, before the next
+native Goal child is selected.
 **Enforced by:** `plugin/scripts/hygiene_scan.py` (post-close self-improvement
 pipeline); `plugin/scripts/doc_hygiene.py` (called by hygiene_scan);
 `doc/harness/hygiene.yaml` (config + canonical disable path).

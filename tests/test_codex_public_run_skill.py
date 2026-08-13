@@ -32,7 +32,6 @@ def test_codex_routing_surfaces_all_point_to_public_run_entry():
         REPO / "CLAUDE.md",
         REPO / "plugin/CLAUDE.md",
         REPO / "plugin/skills/setup/bootstrap.md",
-        REPO / "plugin/scripts/goal_queue_migrate.py",
         REPO / "plugin/scripts/hook_user_prompt_submit.py",
         REPO / "plugin/scripts/hook_post_tool_use.py",
     )
@@ -77,3 +76,32 @@ def test_canonical_run_has_one_normal_qa_and_close_owner():
     assert "current task receipt run" in develop
     assert "checks are not lifecycle gates" in develop
     assert "Do not rerun installation for docs-only edits" in develop
+
+
+def test_run_skills_use_only_native_goal_and_learn_before_next_child():
+    native = (REPO / "doc/harness/patterns/native-goals.md").read_text(encoding="utf-8")
+    requirement = (
+        REPO / "doc/common/REQ__process__autonomous-task-pack-execution.md"
+    ).read_text(encoding="utf-8")
+
+    for path in (
+        REPO / "plugin/skills/run/SKILL.md",
+        REPO / "plugin-codex/internal-skills/run/SKILL.md",
+    ):
+        body = path.read_text(encoding="utf-8")
+        assert "### Native Goal continuation" in body
+        assert "goal_add_task" in body
+        assert "goal_next_task" in body
+        assert body.index("`task_close` first") < body.index("only then call `goal_next_task`")
+        assert "learning promotion and hygiene scheduling" in body
+        assert "task_pack_runner.py" not in body
+        assert "goal_queue_runner.py" not in body
+
+    assert "## Ordered Children" in native
+    assert "## Learning Before Continuation" in native
+    assert "Runbook memory" in native
+    assert "promote_learnings.py" in native
+    assert "ordered native Goal child" in requirement
+    assert "goal_finish" in requirement
+    assert not (REPO / "plugin/skills/goal-queue/SKILL.md").exists()
+    assert not (REPO / "plugin-codex/internal-skills/goal-queue/SKILL.md").exists()

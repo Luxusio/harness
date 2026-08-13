@@ -9,7 +9,6 @@ REPO = Path(__file__).resolve().parents[1]
 CLAUDE_PUBLIC_SKILLS = {"setup"}
 CODEX_PUBLIC_SKILLS = {"setup", "run"}
 INTERNAL_SKILLS = {
-    "goal-queue",
     "run",
     "plan",
     "develop",

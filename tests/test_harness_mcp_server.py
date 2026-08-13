@@ -496,6 +496,25 @@ class HarnessMcpServerTests(unittest.TestCase):
             finally:
                 harness_server.find_repo_root = original_find_repo_root
 
+    def test_native_goal_preserves_future_child_order_without_task_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self._call_in_repo(tmp, "goal_start", {"objective": "ship three ordered stages"})
+            for task_id in ("TASK__stage-one", "TASK__stage-two", "TASK__stage-three"):
+                added = self._call_in_repo(tmp, "goal_add_task", {
+                    "task_id": task_id,
+                    "status": "queued",
+                })
+                self.assertNotIn("isError", added)
+                self.assertFalse((Path(tmp) / "doc/harness/tasks" / task_id).exists())
+
+            current = self._call_in_repo(tmp, "goal_context", {})["structuredContent"]["goal"]
+            self.assertEqual(
+                [task["task_id"] for task in current["tasks"]],
+                ["TASK__stage-one", "TASK__stage-two", "TASK__stage-three"],
+            )
+            next_task = self._call_in_repo(tmp, "goal_next_task", {})["structuredContent"]["task"]
+            self.assertEqual(next_task["task_id"], "TASK__stage-one")
+
     def test_goal_completion_rejects_unfinished_child_and_restart_reactivates(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = Path(self._make_task(tmp, "TASK__goal-child"))

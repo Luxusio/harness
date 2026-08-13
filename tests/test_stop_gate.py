@@ -106,8 +106,7 @@ def test_silent_when_no_active(tmp_path):
     assert result.stdout == "", f"expected empty stdout, got {result.stdout!r}"
 
 
-def test_goal_payload_probe_runs_on_stop_without_active_task(tmp_path):
-    """Opt-in goal probe should observe Stop payloads without changing stdout."""
+def test_removed_goal_payload_capture_does_not_write_on_stop(tmp_path):
     repo = _fake_repo(tmp_path, active_contents=None)
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text(
@@ -133,13 +132,7 @@ def test_goal_payload_probe_runs_on_stop_without_active_task(tmp_path):
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
-    files = list(out_dir.glob("claude_Stop__*__claude-goal-test.json"))
-    assert len(files) == 1
-    record = json.loads(files[0].read_text(encoding="utf-8"))
-    assert record["_event_inferred"] == "Stop"
-    assert record["_runtime_inferred"] == "claude"
-    assert record["transcript_candidates"]
-    assert record["transcript_candidates"][0]["contains_goal_set"] is True
+    assert not out_dir.exists()
 
 
 def test_reason_contains_task_id_and_exits(tmp_path):

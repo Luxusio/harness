@@ -31,9 +31,10 @@ native Goal -> harness Goal -> child task(s) -> verify -> close task -> next tas
 ```
 
 The Goal is not a skill. Hooks inject the synchronization instruction and MCP
-tools maintain the harness Goal/task queue. The agent chooses whether the Goal
-needs another child task by inspecting the current task result, discovered gaps,
-and pending user feedback.
+tools maintain the only ordered Goal child list. Known future children may be recorded
+before their task directories exist and retain list order. The agent chooses
+whether the Goal needs another thin vertical child by inspecting the current
+task result, discovered gaps, pending user feedback, and durable learnings.
 
 Closing a task also marks the matching child entry closed in the active
 Goal. A Goal can become `complete` only when it has at least one child and every
@@ -54,6 +55,12 @@ plan when needed -> minimum-sufficient develop -> independent review -> runtime 
 
 No verification is skipped. If verification finds a gap, the task returns to
 develop or creates a follow-up child task when the gap is separable.
+
+For each Goal child, post-close continuation is ordered as:
+`task_close -> self-improvement/learning promotion/hygiene scheduling ->
+goal_next_task`. Memory and automatic learning are independent of orchestration;
+runbooks, staged learnings, promotion, search, doc hygiene, and hygiene follow-up
+remain active after every child.
 
 Harness lifecycle operations do not inspect Git state. `task_start` creates the
 task artifacts and active marker without capturing HEAD, dirty paths,
@@ -106,10 +113,10 @@ Per-session active markers are authoritative only while their canonical task
 state is live. Marker leaves must be regular files and are read without
 following symlinks; a session marker's embedded session and task identities
 must match its filename and resolved task. A malformed or mismatched marker,
-or one pointing at a closed/blocked task, falls back to the legacy `.active`
-marker. The legacy marker remains
-conservative for pre-state task packs so Stop and prewrite gates do not silently
-disengage; active-task iteration filters terminal per-session records as well.
+or one pointing at a closed/blocked task, falls back to the global `.active`
+marker. That marker remains a conservative Claude/session compatibility bridge
+so Stop and prewrite gates do not silently disengage; active-task iteration
+filters terminal per-session records as well.
 
 The confinement boundary validates lexical and physical paths and avoids
 following pre-existing control-plane leaf symlinks. Receipt, plan, block, and

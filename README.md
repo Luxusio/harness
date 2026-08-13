@@ -53,7 +53,10 @@ plan → develop → verify → close
 | **verify** | Ordered review/QA completions are hook-recorded and checked against TASK.json lens declarations |
 | **close** | Gate: PLAN.md exists + ordered review/QA receipts yield runtime_verdict = PASS |
 
-After close, the Goal child-task executor performs a self-improvement pass — surfaces friction signals into `learnings.jsonl`, promotes recurring keys into Tier 2 patterns, and prunes stale entries.
+After every child close, the Goal executor performs self-improvement before
+selecting the next child: it surfaces friction signals into `learnings.jsonl`,
+promotes recurring keys into Tier 2 patterns, schedules hygiene follow-up, and
+prunes stale entries.
 
 ## TASK.json (4 fields)
 
@@ -128,9 +131,6 @@ All under `plugin/scripts/`. Stdlib only.
 | `golden_replay.py` | Record/replay runtime smoke runs for deterministic regression | `doc/harness/replays/` |
 | `contract_lint.py` | CONTRACTS.md managed-block lint and skill weight checks | — |
 | `runtime_services.py` | Start/status/log helper for manifest-declared runtime services | `doc/harness/runtime/` |
-| `goal_queue_runner.py` | Persistent Goal child-task queue runner with heartbeat, recover, event log, failure policy, and optional harness-close verification | `doc/harness/goal-queue.json` |
-| `goal_queue_migrate.py` | Existing-repo migration for pre-native Goal queue state and stale AGENTS/CLAUDE routing blocks | `doc/harness/goal-queue.json` |
-| `task_pack_runner.py` | Ordered task-pack state for multi-step harness requests; records the user's known ordered work and makes the next task deterministic after each close | task pack state files |
 | `setup_finalize.py` | Canonical setup validation, legacy manifest migration, operational ignores, and success-only version stamping | `.gitignore`, `doc/harness/manifest.yaml`, `doc/harness/.version` |
 | `verify_runner.py` | Deterministic manifest `verify_commands` runner with optional parallel execution | stdout |
 | `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | stdout |
@@ -141,7 +141,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `doc_hygiene.py` | Content-signal KEEP/REMOVE/REVIEW classifier; archives stale docs via `git mv` | `doc/harness/.hygiene-pending.json` |
 | `hygiene_followup.py` | Post-close scheduler that creates one standalone hygiene review task from pending items | `doc/harness/tasks/TASK__hygiene-review-pending-docs/` |
 | `hygiene_restore.py` | Restore an archived file back to original location via `git mv` | — |
-| `maintain_restore.py` | Legacy wrapper for old archive restore commands | — |
+| `maintain_restore.py` | Compatibility entry point that delegates old restore commands to `hygiene_restore.py` | — |
 | `subagent_lifecycle.py` | Receipt-backed Claude lifecycle handling, active-work queries, and trusted stop-only inference | task `RECEIPTS.jsonl` |
 | `background_hook.py` | SubagentStart/SubagentStop adapter for direct unified-receipt publication | task `RECEIPTS.jsonl` |
 | `_gate_response.py` | Shared hook deny/allow response helper | — |
@@ -158,7 +158,11 @@ doc/harness/patterns/*.md     # Tier 2: detailed patterns, read when relevant
 doc/harness/learnings.jsonl   # Tier 3: raw signals, session-transient
 ```
 
-The post-close self-improvement pass in the Goal child-task executor auto-promotes keys with 2+ occurrences from Tier 3 → Tier 2, prunes stale entries (>90 days, keeps eureka/calibration forever), and reports Tier 1 candidates. `qa_codifier.py` separately turns validated QA failures into regression tests.
+The post-close self-improvement pass auto-promotes keys with 2+ occurrences
+from Tier 3 → Tier 2, prunes stale entries (>90 days, keeps
+eureka/calibration forever), and reports Tier 1 candidates. It completes before
+`goal_next_task`, so every child contributes to subsequent work.
+`qa_codifier.py` separately turns validated QA failures into regression tests.
 
 ## Hooks
 
@@ -193,7 +197,7 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 | `task_close` | Gate: all verdicts PASS → close |
 | `task_blocked` | Park a task on a genuine environment blocker |
 | `goal_start` | Start/sync native goal state |
-| `goal_context` | Read active goal and child task queue |
+| `goal_context` | Read active Goal and ordered children |
 | `goal_add_task` | Attach or update a child task under the goal |
 | `goal_next_task` | Return the next queued/active child task |
 | `goal_finish` | Mark the active goal complete or blocked |
@@ -209,22 +213,11 @@ All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook 
 Normal usage is `/harness:setup` once per repository. On Codex, `$harness:run`
 is implicitly selected for plain repository mutation and may also be invoked
 explicitly; it loads the internal canonical workflow. Native `/goal` remains
-the explicit/broad objective container and the run skill attaches its child
-task. On Claude Code, native Goal/task routing remains the entry. `plan`,
-`develop`, `goal-queue`, and the four plan-review sub-skills remain internal.
-
-Existing repositories from the pre-native Goal queue model should run setup
-Repair/Upgrade, or run the migration directly:
-
-```bash
-python3 "${CLAUDE_PLUGIN_ROOT}/scripts/goal_queue_migrate.py" --repo "$(pwd)"
-```
-
-The migration is idempotent. It converts `doc/harness/autopilot.yaml` into
-`doc/harness/goal-queue.json`, archives the legacy state under
-`doc/harness/legacy/`, removes stale `Default agent is harness` lines, and
-replaces old marked `## Harness routing` blocks with the Goal-or-direct-task
-routing block.
+the explicit/broad objective container and the run skill attaches ordered child
+tasks through `goal_add_task` and continues them through `goal_next_task`. On
+Claude Code, native Goal/task routing remains the entry. `plan`, `develop`, and
+the four plan-review sub-skills remain internal. Pre-native orchestration state
+is unsupported and is neither read nor migrated.
 
 ## Plugin structure
 

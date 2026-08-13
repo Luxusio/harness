@@ -217,7 +217,6 @@ def test_sync_codex_payload_produces_complete_plugin_bundle(tmp_path):
     )
     assert internal_skill_names == [
         "develop",
-        "goal-queue",
         "plan",
         "plan-ceo-review",
         "plan-design-review",
@@ -232,6 +231,12 @@ def test_sync_codex_payload_produces_complete_plugin_bundle(tmp_path):
     assert str(REPO_ROOT) not in mcp_text
     assert str(plugin_root) in mcp_text
     assert (codex_plugin / "scripts" / "hook_pre_tool_use.py").is_file()
+    for removed in (
+        "goal_queue_runner.py",
+        "goal_queue_migrate.py",
+        "task_pack_runner.py",
+    ):
+        assert not (codex_plugin / "scripts" / removed).exists()
     assert (codex_plugin / "mcp" / "harness_server.py").is_file()
     assert (codex_plugin / "agents" / "code-reviewer.md").is_file()
     assert (codex_plugin / "agents" / "security-reviewer.md").is_file()

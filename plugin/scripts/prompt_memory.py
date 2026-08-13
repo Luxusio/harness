@@ -19,8 +19,6 @@ from __future__ import annotations
 import os
 import re
 import sys
-import json
-import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
@@ -39,7 +37,6 @@ try:
         read_current_goal,
         next_goal_task,
         start_harness_goal,
-        write_goal_payload_probe,
         _goal_probe_runtime,
     )
 except Exception:
@@ -71,15 +68,6 @@ REVIEW_GATE = (
 REVIEW_RECORDED_GATE = (
     "[harness-review/qa] RECORDED review PASS only; task_verify must validate "
     "lenses/freshness, then run required QA. Do not respawn solely from this hint."
-)
-GOAL_QUEUE_GATE = (
-    "[harness-goal-queue] Child task close is not final; review gaps and "
-    "start/queue the next child task unless the Goal is done, blocked, "
-    "stopped, or budget-capped."
-)
-TASK_PACK_GATE = (
-    "[harness-task-pack] Task close is not final; claim/start the next queued "
-    "task-pack item unless the pack is done, blocked, stopped, or budget-capped."
 )
 RESTORE_INJECT_CAP = 1400
 RESTORE_ARTIFACTS = ("RECEIPTS.jsonl", "BLOCKED.md")
@@ -234,52 +222,11 @@ def _build_restore_block(task_dir: str) -> str:
     return block
 
 
-def _build_goal_queue_block(repo_root: str) -> str:
-    path = os.path.join(repo_root, "doc", "harness", "goal-queue.json")
-    if not os.path.isfile(path):
-        return ""
-    try:
-        with open(path, encoding="utf-8") as f:
-            state = json.load(f)
-    except Exception:
-        return ""
-    status = str(state.get("status") or "").lower()
-    if status in {"done", "blocked", "stopped"}:
-        return ""
-    slices = state.get("slices") if isinstance(state.get("slices"), list) else []
-    if slices and all(str(item.get("status") or "") == "passed" for item in slices if isinstance(item, dict)):
-        return ""
-    return GOAL_QUEUE_GATE
-
-
-def _build_task_pack_block(repo_root: str) -> str:
-    path = os.path.join(repo_root, "doc", "harness", "task-packs", "current.json")
-    if not os.path.isfile(path):
-        return ""
-    try:
-        with open(path, encoding="utf-8") as f:
-            state = json.load(f)
-    except Exception:
-        return ""
-    status = str(state.get("status") or "").lower()
-    if status in {"done", "blocked", "stopped"}:
-        return ""
-    tasks = state.get("tasks") if isinstance(state.get("tasks"), list) else []
-    if tasks and all(
-        str(item.get("status") or "") in {"closed", "blocked", "skipped"}
-        for item in tasks
-        if isinstance(item, dict)
-    ):
-        return ""
-    return TASK_PACK_GATE
-
-
 def main() -> int:
     data = read_hook_input()
     repo_root = find_repo_root()
     if not is_harness_enabled_repo(repo_root):
         return 0
-    write_goal_payload_probe(repo_root, data, source="UserPromptSubmit")
     synced_goal = None
     objective = goal_command_objective(data.get("prompt") if isinstance(data, dict) else "")
     if objective:
@@ -322,14 +269,6 @@ def main() -> int:
         runbook_block = _render_runbook_block(repo_root)
         if runbook_block:
             output_parts.append(runbook_block)
-
-    goal_queue_block = _build_goal_queue_block(repo_root)
-    if goal_queue_block:
-        output_parts.append(goal_queue_block)
-
-    task_pack_block = _build_task_pack_block(repo_root)
-    if task_pack_block:
-        output_parts.append(task_pack_block)
 
     if synced_goal or not task_dir:
         output_parts.append(_build_goal_block(repo_root, synced_goal))

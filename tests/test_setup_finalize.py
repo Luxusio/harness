@@ -34,7 +34,6 @@ def make_plugin_root(tmp_path: Path) -> Path:
         "skills/setup/templates/CONTRACTS.local.md",
         "skills/setup/templates/hygiene.yaml",
         "scripts/contract_lint.py",
-        "scripts/goal_queue_migrate.py",
         "scripts/setup_finalize.py",
     ):
         source = REPO / "plugin" / rel
@@ -559,10 +558,7 @@ def test_fresh_setup_ignores_all_operational_artifacts_and_stamps_version(tmp_pa
     for rel in (
         "doc/harness/goals/current.json",
         "doc/harness/tasks/TASK__probe/STATE.json",
-        "doc/harness/task-packs/current.json",
         "doc/harness/reviews/main-reviews.jsonl",
-        "doc/harness/debug/goal-hook-payloads/prompt.json",
-        "doc/harness/debug/CAPTURE_GOAL_PAYLOADS",
         "doc/harness/runbook_candidates.yaml",
         "doc/harness/maintenance/probe.json",
         "doc/harness/archive/probe.json",
@@ -582,10 +578,7 @@ def test_fresh_setup_ignores_all_operational_artifacts_and_stamps_version(tmp_pa
 
 def test_local_operational_files_are_rejected_when_already_tracked(tmp_path):
     plugin_root = make_plugin_root(tmp_path)
-    for index, rel in enumerate((
-        "doc/harness/debug/CAPTURE_GOAL_PAYLOADS",
-        "doc/harness/runbook_candidates.yaml",
-    )):
+    for index, rel in enumerate(("doc/harness/runbook_candidates.yaml",)):
         repo = make_repo(tmp_path / str(index), manifest=canonical_manifest())
         artifact = repo / rel
         artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -611,12 +604,8 @@ def test_local_writer_paths_match_canonical_operational_ignores():
 
     setup = load("setup_finalize_contract", SCRIPT)
     runbooks = load("runbook_memory_contract", REPO / "plugin/scripts/runbook_memory.py")
-    harness_lib = load("harness_lib_contract", REPO / "plugin/scripts/_lib.py")
 
-    writer_paths = {
-        runbooks.CANDIDATES_REL,
-        harness_lib.GOAL_PAYLOAD_MARKER.replace(os.sep, "/"),
-    }
+    writer_paths = {runbooks.CANDIDATES_REL}
     assert writer_paths <= set(setup.OPERATIONAL_IGNORES)
 
 
@@ -815,59 +804,6 @@ def test_missing_resource_or_contract_does_not_stamp_or_mutate_manifest(tmp_path
     assert not (repo / ".gitignore").exists()
 
 
-def test_broad_negation_is_overridden_and_tracked_artifact_is_blocked(tmp_path):
-    plugin_root = make_plugin_root(tmp_path)
-    repo = make_repo(tmp_path, manifest=canonical_manifest())
-    original = (
-        "doc/harness/debug/goal-hook-payloads/\n"
-        "!doc/harness/debug/goal-hook-payloads/\n"
-        "!doc/harness/debug/goal-hook-payloads/**\n"
-    )
-    (repo / ".gitignore").write_text(original)
-
-    result = run(repo, plugin_root)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert (repo / ".gitignore").read_text().splitlines()[-1] == "doc/harness/.maintain-pending.json"
-
-    tracked_repo = make_repo(tmp_path / "tracked", manifest=canonical_manifest())
-    payload = tracked_repo / "doc/harness/debug/goal-hook-payloads/tracked.json"
-    payload.parent.mkdir(parents=True)
-    payload.write_text("secret")
-    subprocess.run(
-        ["git", "-C", str(tracked_repo), "add", "-f", str(payload.relative_to(tracked_repo))],
-        check=True,
-    )
-    result = run(tracked_repo, plugin_root)
-    assert result.returncode == 1
-    assert "operational artifact is already tracked" in result.stdout
-
-
-def test_selective_payload_negation_is_overridden_by_final_managed_block(tmp_path):
-    plugin_root = make_plugin_root(tmp_path)
-    repo = make_repo(tmp_path, manifest=canonical_manifest())
-    (repo / ".gitignore").write_text(
-        "doc/harness/debug/goal-hook-payloads/\n"
-        "!doc/harness/debug/goal-hook-payloads/\n"
-        "doc/harness/debug/goal-hook-payloads/*\n"
-        "!doc/harness/debug/goal-hook-payloads/codex_*\n"
-    )
-    payload = repo / "doc/harness/debug/goal-hook-payloads/codex_UserPromptSubmit__secret.json"
-    payload.parent.mkdir(parents=True)
-    payload.write_text("secret")
-
-    result = run(repo, plugin_root)
-
-    assert result.returncode == 0, result.stdout + result.stderr
-    check = subprocess.run(
-        ["git", "-C", str(repo), "check-ignore", "-q", "--no-index", str(payload.relative_to(repo))]
-    )
-    assert check.returncode == 0
-    lines = (repo / ".gitignore").read_text().splitlines()
-    assert lines[-1] == "doc/harness/.maintain-pending.json"
-    assert lines.count("doc/harness/debug/goal-hook-payloads/") == 1
-
-
 def test_check_is_read_only_and_atomic_write_preserves_modes(tmp_path):
     plugin_root = make_plugin_root(tmp_path)
     repo = make_repo(tmp_path, manifest=canonical_manifest())
@@ -908,12 +844,12 @@ def test_exact_operational_file_symlink_is_rejected(tmp_path):
     repo = make_repo(tmp_path, manifest=canonical_manifest())
     outside = tmp_path / "outside.json"
     outside.write_text("{}")
-    (repo / "doc/harness/goal-queue.json").symlink_to(outside)
+    (repo / "doc/harness/runbook_candidates.yaml").symlink_to(outside)
 
     result = run(repo, plugin_root)
 
     assert result.returncode == 1
-    assert "managed path contains symlink: doc/harness/goal-queue.json" in result.stdout
+    assert "managed path contains symlink: doc/harness/runbook_candidates.yaml" in result.stdout
     assert not (repo / "doc/harness/.version").exists()
 
 

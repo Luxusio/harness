@@ -39,7 +39,7 @@ Further references:
 - `.codex-version` — minimum Codex CLI version pin (0.130.0). Setup refuses registration if installed Codex is older.
 - `config.toml.example` — annotated snippet showing the `~/.codex/config.toml` block that Codex needs for harness to be discoverable. Setup's additive-merge appends a copy to your real config with a timestamped backup, using the installed copy under `~/.codex/harness/plugins/harness`.
 - `skills/` — user-visible Codex entry skills: `setup` for bootstrap/repair and `run` for repository mutation. `run` is implicitly invocable and loads the canonical internal workflow before edits.
-- `internal-skills/` — hand-authored Codex methodology prompts hidden from the user skill menu (`run`, `goal-queue`, `plan`, `develop`, `plan-*-review`).
+- `internal-skills/` — hand-authored Codex methodology prompts hidden from the user skill menu (`run`, `plan`, `develop`, `plan-*-review`).
 - `agents/` — QA/UX/review methodology references. On Codex, the orchestrator checks the current and deferred tool catalogs and uses `spawn_agent` when available; inline execution is the explicit fallback when no independent agent route exists.
 - Codex hook config is emitted by `install.py` as plugin-local `hooks.json`; Codex flow is prompt-controlled by the skills and the Harness MCP server hosts the sole receipt watcher. The normative acquisition/identity/completion contract is in `doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md`; storage/schema/gates are in `doc/harness/patterns/ADR__consolidated-task-artifacts.md`.
 
