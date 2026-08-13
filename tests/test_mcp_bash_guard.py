@@ -334,6 +334,7 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 -c \"mode='w'; (mode := 'r'); open('doc/harness/goals/current.json', mode)\"",
             "python3 -c \"mode='w'; open((mode := 'r') and 'doc/harness/goals/current.json', mode)\"",
             "python3 -c \"mode='w'; ((mode := 'r') if True else (mode := 'r')); open('doc/harness/goals/current.json', mode)\"",
+            "python3 -c $'mode=\"w\"\\nif True:\\n mode=\"r\"\\nopen(\"doc/harness/goals/current.json\", mode)'",
         ):
             with self.subTest(command=command):
                 r = _run_bash(command)
@@ -377,6 +378,7 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 -c \"mode='r'; open((mode := 'w') and 'doc/harness/goals/current.json', mode)\"",
             "python3 -c \"mode='r'; ((mode := 'w') if True else (mode := 'r')); open('doc/harness/goals/current.json', mode)\"",
             "python3 -c \"mode='r'; ((mode := 'w') or (mode := 'r')); open('doc/harness/goals/current.json', mode)\"",
+            "python3 -c $'mode=\"r\"\\nif True:\\n mode=\"w\"\\nopen(\"doc/harness/goals/current.json\", mode)'",
         )
         for command in commands:
             with self.subTest(command=command):
@@ -384,6 +386,15 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 decision, reason = parse_decision(r.stdout)
                 self.assertEqual(decision, "deny")
                 self.assertIn("rule=protected-artifact", reason)
+
+    def test_python_branch_write_source_denies(self):
+        command = (
+            "python3 -c $'mode=\"r\"\\nif True:\\n mode=\"w\"\\n"
+            "open(\"plugin/scripts/health.py\", mode)'"
+        )
+        decision, reason = parse_decision(_run_bash(command).stdout)
+        self.assertEqual(decision, "deny")
+        self.assertIn("rule=source", reason)
 
     def test_shell_indirect_goal_writes_deny(self):
         for command in (

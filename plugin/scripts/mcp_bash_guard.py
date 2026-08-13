@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse hook (matcher: Bash) — block direct Bash file mutations.
-
-Closes the Bash-layer bypass where agents write to source / protected-artifact
-/ workflow-control-surface paths via ``sed -i``, ``cp``, ``mv``, ``tee``,
-shell redirection, ``python -c "open(...,'w')"``, etc.
-
-Signalling contract matches ``prewrite_gate.py``: deny via stdout JSON envelope
-with exit 0; silent on allow; fail-open on unexpected exceptions.
-
-Escape hatch: ``HARNESS_SKIP_MCP_GUARD=1`` → one-shot allow + log ``gate-bypass``.
-
-"""
+"""Block direct Bash mutations of source and harness control artifacts."""
 from __future__ import annotations
 
 import os
@@ -49,8 +38,6 @@ _COMMAND_LENGTH_CAP = 64 * 1024  # short-circuit extremely large commands
 _GUARD_STDIN_CAP = 128 * 1024
 
 REDIRECT_TOKENS = {">", ">>", "1>", "1>>"}
-# Note: 2> stderr redirect is intentionally NOT blocked — logs are common.
-
 LAST_ARG_MUTATORS = {"cp", "mv", "install", "touch", "truncate"}
 TEE_COMMAND = "tee"
 LIFECYCLE_RECEIPT_ENTRYPOINTS = {
@@ -74,12 +61,7 @@ GOAL_MUTATION_SYMBOLS = {
 }
 PROTECTED_MUTATION_SYMBOLS = RECEIPT_MUTATION_SYMBOLS | GOAL_MUTATION_SYMBOLS
 
-# Shell operators that separate command units. We shlex-tokenize first
-# (respects quotes — so `;` inside a `python -c "..."` string stays intact)
-# and then walk tokens with these markers resetting per-segment state.
 BOUNDARY_TOKENS = {"&&", "||", "|", ";", "\n", "&"}
-
-# Precompiled once at module load (perf: hook spawns fresh python per call).
 _INLINE_REDIRECT_RE = re.compile(r"^(?:\d*)?(>>?)(.+)$")
 
 _PY_PATTERNS = [
@@ -88,7 +70,6 @@ _PY_PATTERNS = [
     re.compile(r"shutil\.copy(?:2)?\([^,]+,\s*['\"]([^'\"]+)['\"]\)"),
 ]
 
-# Protected-artifact → owning MCP/CLI tool (for human-text fix hint).
 _ARTIFACT_TOOL_HINT = {
     "TASK.json": "harness task control MCP",
     "RECEIPTS.jsonl": "runtime review and QA lifecycle hook",
@@ -100,9 +81,6 @@ RULE_DOCS = {
     "workflow-control-surface": "doc/harness/patterns/mcp-bash-guard.md",
     "source": "doc/harness/patterns/mcp-bash-guard.md",
 }
-
-
-# ── Token helpers ──────────────────────────────────────────────────────────
 
 
 def _is_env_assignment(token: str) -> bool:
@@ -207,9 +185,6 @@ def _last_non_option(tokens):
             continue
         return token
     return ""
-
-
-# ── Mutation-target extraction ─────────────────────────────────────────────
 
 
 def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd=""):
@@ -400,6 +375,19 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
                 for name in bound_names(node.target):
                     environment.pop(name, None)
                 continue
+            if isinstance(node, ast.If):
+                test = node.test.value if isinstance(node.test, ast.Constant) else None
+                if test is True or test is False:
+                    selected = node.body if test else node.orelse
+                    process_statements(selected, environment)
+                else:
+                    outcomes = [dict(environment)] if not node.orelse else []
+                    for block in (node.body, node.orelse):
+                        child = dict(environment)
+                        process_statements(block, child)
+                        outcomes.append(child)
+                    merge_environments(environment, outcomes)
+                continue
             child_blocks = []
             for field in ("body", "orelse", "finalbody"):
                 block = getattr(node, field, None)
@@ -412,8 +400,13 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
                 process_statements(getattr(handler, "body", []), handler_environment)
             for case in getattr(node, "cases", ()):
                 child_blocks.append(getattr(case, "body", []))
+            outcomes = [dict(environment)]
             for block in child_blocks:
-                process_statements(block, body_environment(node, environment))
+                child = body_environment(node, environment)
+                process_statements(block, child)
+                outcomes.append(child)
+            if child_blocks:
+                merge_environments(environment, outcomes)
 
     process_statements(tree.body, strings)
     filesystem_mutators = {
@@ -566,54 +559,6 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
                     targets, node.value, "python filesystem mutation",
                     repo_root, execution_cwd,
                 )
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        os_mutator = (
-            func.attr
-            if isinstance(func, ast.Attribute)
-            and isinstance(func.value, ast.Name)
-            and func.value.id == "os"
-            else ""
-        )
-        if os_mutator in {"link", "rename", "replace"}:
-            args = node.args[:2]
-        elif os_mutator in {"remove", "unlink"}:
-            args = node.args[:1]
-        else:
-            args = ()
-        for arg in args:
-            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                _append_target(
-                    targets, arg.value, f"python os.{os_mutator}",
-                    repo_root, execution_cwd,
-                )
-        is_path_mutator = (
-            isinstance(func, ast.Attribute)
-            and func.attr in {
-                "unlink", "rename", "replace", "chmod", "hardlink_to", "link_to",
-            }
-            and isinstance(func.value, ast.Call)
-            and getattr(func.value.func, "id", "") == "Path"
-        )
-        if not is_path_mutator or not func.value.args:
-            continue
-        path_arg = func.value.args[0]
-        if isinstance(path_arg, ast.Constant) and isinstance(path_arg.value, str):
-            _append_target(
-                targets, path_arg.value, f"python Path.{func.attr}",
-                repo_root, execution_cwd,
-            )
-        if func.attr in {"hardlink_to", "link_to"}:
-            for arg in node.args[:1]:
-                if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
-                    _append_target(
-                        targets, arg.value, f"python Path.{func.attr}",
-                        repo_root, execution_cwd,
-                    )
-
-
 def _unwrap_execution(tokens):
     """Remove supported command wrappers and return the actual executable argv."""
     argv = list(tokens)
