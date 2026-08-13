@@ -408,6 +408,8 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "ruby -e \"p='doc/harness/goals/'+'current.json';File.write(p,'{}')\"",
             "node --eval=\"let p='doc/harness/goals/'+'current.json';require('fs').writeFileSync(p,'{}')\"",
             "node -e \"let p='doc/harness/goals/'+'current.json';require('fs').copyFileSync('/tmp/x',p)\"",
+            "node -e \"let p='doc/harness/goals/'+'current.json';require('fs/promises').writeFile(p,'{}')\"",
+            "node -e \"let p='doc/harness/goals/'+'current.json';require('fs').createWriteStream(p).end('{}')\"",
             "ruby -ep=\"'doc/harness/goals/'+'current.json';File.write(p,'{}')\"",
             "perl -e'$d=\"doc/harness/goals/\";$f=\"current.json\";open(F,\">\",$d.$f)'",
             "perl -we'$d=\"doc/harness/goals/\";$f=\"current.json\";open(F,\">\",$d.$f)'",

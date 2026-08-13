@@ -754,6 +754,16 @@ def _inline_mutation_risk(argv):
         r"\bopen\s*\([^)]*['\"](?:[wax]|r\+|>))",
         code,
     ))
+def _safe_inline_read(argv):
+    code = " ".join(argv[1:]).lower()
+    cmd = os.path.basename(argv[0])
+    if cmd in {"awk", "gawk", "mawk"}:
+        return not _inline_mutation_risk(argv)
+    return bool(re.search(r"(?:readfilesync|readfile|stat|exists|access)", code)) and not re.search(
+        r"(?:writefile|createwritestream|append|copyfile|rename|unlink|remove|"
+        r"delete|truncate|chmod|hardlink|\bopen\s*\()",
+        code,
+    )
 def _gated_path_risk(tokens, repo_root, execution_cwd):
     candidates = _embedded_path_candidates(tokens)
     if any(_classify_gated_path(
@@ -897,7 +907,7 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
         )
         return
     if _uninspected_inline(non_env):
-        if _inline_mutation_risk(non_env) and _gated_path_risk(
+        if not _safe_inline_read(non_env) and _gated_path_risk(
             segment_tokens, repo_root, execution_cwd,
         ):
             targets.append({
