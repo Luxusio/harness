@@ -67,6 +67,12 @@ RECEIPT_MUTATION_SYMBOLS = {
     "publish_task_close", "write_active_marker", "clear_active_marker",
     "restore_active_marker_snapshot",
 }
+GOAL_MUTATION_SYMBOLS = {
+    "write_goal_state", "start_harness_goal", "add_goal_task",
+    "finish_harness_goal", "handle_goal_start", "handle_goal_add_task",
+    "handle_goal_finish", "goal_start", "goal_add_task", "goal_finish",
+}
+PROTECTED_MUTATION_SYMBOLS = RECEIPT_MUTATION_SYMBOLS | GOAL_MUTATION_SYMBOLS
 
 # Shell operators that separate command units. We shlex-tokenize first
 # (respects quotes — so `;` inside a `python -c "..."` string stays intact)
@@ -241,6 +247,22 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
         tree = ast.parse(code)
     except (SyntaxError, ValueError):
         return
+    filesystem_mutators = {
+        "link", "rename", "replace", "remove", "unlink", "write_text",
+        "write_bytes", "open", "hardlink_to", "link_to", "chmod",
+    }
+    if any(
+        isinstance(node, ast.Call)
+        and (getattr(node.func, "id", "") or getattr(node.func, "attr", ""))
+        in filesystem_mutators
+        for node in ast.walk(tree)
+    ):
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                _append_target(
+                    targets, node.value, "python filesystem mutation",
+                    repo_root, execution_cwd,
+                )
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -351,17 +373,17 @@ def _python_code_exposes_lifecycle(code):
         elif isinstance(node, ast.ImportFrom):
             if (node.module or "").rsplit(".", 1)[-1] in LIFECYCLE_RECEIPT_MODULES:
                 return True
-            if any(alias.name in RECEIPT_MUTATION_SYMBOLS for alias in node.names):
+            if any(alias.name in PROTECTED_MUTATION_SYMBOLS for alias in node.names):
                 return True
         elif isinstance(node, ast.Attribute):
             if (
                 node.attr in LIFECYCLE_RECEIPT_MODULES
-                or node.attr in RECEIPT_MUTATION_SYMBOLS
+                or node.attr in PROTECTED_MUTATION_SYMBOLS
                 or "receipt_stream" in node.attr and "append" in node.attr
             ):
                 return True
         elif isinstance(node, ast.Name) and (
-            node.id in RECEIPT_MUTATION_SYMBOLS
+            node.id in PROTECTED_MUTATION_SYMBOLS
             or "receipt_stream" in node.id and "append" in node.id
         ):
             return True
@@ -383,7 +405,7 @@ def _python_code_exposes_lifecycle(code):
                         return True
             if func_name == "getattr" and len(node.args) > 1:
                 attribute = string_value(node.args[1])
-                if attribute is None or attribute in RECEIPT_MUTATION_SYMBOLS:
+                if attribute is None or attribute in PROTECTED_MUTATION_SYMBOLS:
                     return True
     return False
 
@@ -499,16 +521,25 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
     protected_marker = (
         any(name.replace("_", "").replace(".py", "") in compact
             for name in LIFECYCLE_RECEIPT_ENTRYPOINTS)
-        or any(name.replace("_", "") in compact for name in RECEIPT_MUTATION_SYMBOLS)
+        or any(name.replace("_", "") in compact for name in PROTECTED_MUTATION_SYMBOLS)
     )
     if (
         (protected_marker and not _safe_lifecycle_source_inspection(non_env))
         or _protected_lifecycle_execution(non_env, execution_cwd)
     ):
+        goal_control = any(
+            name.replace("_", "") in compact for name in GOAL_MUTATION_SYMBOLS
+        )
         targets.append({
-            "path": "RECEIPTS.jsonl",
+            "path": (
+                "doc/harness/goals/current.json" if goal_control
+                else "RECEIPTS.jsonl"
+            ),
             "category": "protected-artifact",
-            "method": "direct lifecycle receipt entrypoint invocation",
+            "method": (
+                "direct native Goal control entrypoint invocation" if goal_control
+                else "direct lifecycle receipt entrypoint invocation"
+            ),
         })
         return
 

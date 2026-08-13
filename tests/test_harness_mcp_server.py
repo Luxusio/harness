@@ -267,6 +267,17 @@ class HarnessMcpServerTests(unittest.TestCase):
         with self.assertRaisesRegex(PermissionError, "canonical module import"):
             harness_lib._bind_control_writer(harness_server.handle_task_start)
 
+    def test_goal_writers_reject_arbitrary_python_callers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(PermissionError, "native Goal MCP"):
+                harness_lib.start_harness_goal(tmp, "forged goal")
+            with self.assertRaisesRegex(PermissionError, "native Goal MCP"):
+                harness_lib.write_goal_state(tmp, {
+                    "goal_id": "GOAL__forged", "objective": "forged",
+                    "status": "active", "tasks": [],
+                })
+            self.assertFalse((Path(tmp) / "doc/harness/goals/current.json").exists())
+
     def test_lifecycle_handlers_never_enter_git_snapshot_helpers(self):
         def forbidden(*_args, **_kwargs):
             raise AssertionError("lifecycle Git snapshot helper was called")
@@ -1919,7 +1930,9 @@ class HarnessMcpServerTests(unittest.TestCase):
 
     def test_goal_state_two_file_write_rolls_back_on_second_failure(self):
         with tempfile.TemporaryDirectory() as tmp:
-            goal = harness_server.start_harness_goal(tmp, "transactional goal")
+            goal = self._call_in_repo(
+                tmp, "goal_start", {"objective": "transactional goal"},
+            )["structuredContent"]["goal"]
             goal_id = goal["goal_id"]
             goal_path = Path(tmp) / f"doc/harness/goals/{goal_id}.json"
             current_path = Path(tmp) / "doc/harness/goals/current.json"
@@ -1941,10 +1954,12 @@ class HarnessMcpServerTests(unittest.TestCase):
             with mock.patch.dict(
                 goal_globals, {"_atomic_text_write": fail_current_once}
             ):
-                with self.assertRaisesRegex(OSError, "current goal publication"):
-                    harness_server.add_goal_task(
-                        tmp, "TASK__goal-child", task_dir=str(task_dir), status="closed"
-                    )
+                result = self._call_in_repo(tmp, "goal_add_task", {
+                    "task_id": "TASK__goal-child", "task_dir": str(task_dir),
+                    "status": "closed",
+                })
+                self.assertTrue(result.get("isError"))
+                self.assertIn("current goal publication", result["structuredContent"]["error"])
             self.assertEqual(goal_path.read_text(encoding="utf-8"), before_goal)
             self.assertEqual(current_path.read_text(encoding="utf-8"), before_current)
 
@@ -2105,6 +2120,10 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
 
     def tearDown(self):
         self._receipt_auth.stop()
+
+    def _call_in_repo(self, repo_root: str, name: str, args: dict) -> dict:
+        with mock.patch.object(harness_server, "find_repo_root", return_value=repo_root):
+            return harness_server.call_tool(name, args)
 
     def _prepare_task(self, base: str, task_id: str, *, checks_yaml: str | None,
                       write_receipt: bool = True, write_handoff: bool = True,
@@ -2417,12 +2436,12 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             canonical.parent.mkdir(parents=True)
             Path(td).rename(canonical)
             td = str(canonical)
-            harness_server.start_harness_goal(
-                tmp, "close child", goal_id="GOAL__close-child",
-            )
-            harness_server.add_goal_task(
-                tmp, "TASK__goal-close-sync", status="active",
-            )
+            self._call_in_repo(tmp, "goal_start", {
+                "objective": "close child", "goal_id": "GOAL__close-child",
+            })
+            self._call_in_repo(tmp, "goal_add_task", {
+                "task_id": "TASK__goal-close-sync", "status": "active",
+            })
             clean = {"missing_for_close": [], "next_action": "close"}
             with (
                 mock.patch.object(harness_server, "canonical_task_dir", return_value=td),
@@ -2459,9 +2478,13 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 prepared.rename(canonical)
                 task_dirs[task_id] = str(canonical)
 
-            harness_server.start_harness_goal(tmp, "two children", goal_id="GOAL__two-children")
+            self._call_in_repo(tmp, "goal_start", {
+                "objective": "two children", "goal_id": "GOAL__two-children",
+            })
             for task_id in task_dirs:
-                harness_server.add_goal_task(tmp, task_id, status="active")
+                self._call_in_repo(tmp, "goal_add_task", {
+                    "task_id": task_id, "status": "active",
+                })
 
             clean = {"missing_for_close": [], "next_action": "close"}
             for index, (task_id, task_dir) in enumerate(task_dirs.items()):
@@ -2475,7 +2498,9 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                 if index == 0:
                     (repo / "later-child.py").write_text("changed later\n", encoding="utf-8")
 
-            finished = harness_server.finish_harness_goal(tmp, status="complete")
+            finished = self._call_in_repo(
+                tmp, "goal_finish", {"status": "complete"},
+            )["structuredContent"]["goal"]
             self.assertEqual(finished["status"], "complete")
 
     def test_close_rolls_back_when_control_publication_fails(self):

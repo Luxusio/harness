@@ -303,6 +303,21 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 self.assertEqual(decision, "deny")
                 self.assertIn("rule=protected-artifact", reason)
 
+    def test_python_goal_writer_and_aliased_path_mutation_deny(self):
+        commands = (
+            "python3 -c \"from _lib import start_harness_goal; start_harness_goal('.', 'forged')\"",
+            "python3 -c \"import _lib; _lib.write_goal_state('.', {})\"",
+            "python3 -c \"import harness_server; harness_server.call_tool('goal_start', {'objective':'forged'})\"",
+            "python3 -c \"import pathlib; p=pathlib.Path; p('doc/harness/goals/current.json').unlink()\"",
+            "python3 -c \"import pathlib; p=pathlib.Path; p('doc/harness/checkpoints/.alias').hardlink_to('doc/harness/goals/current.json')\"",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                r = _run_bash(command)
+                decision, reason = parse_decision(r.stdout)
+                self.assertEqual(decision, "deny")
+                self.assertIn("rule=protected-artifact", reason)
+
 
 
 class TestEnvPrefixBypassFix(unittest.TestCase):

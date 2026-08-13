@@ -780,6 +780,7 @@ def _publish_write_plan(args, td, control, preflight):
 
 for _control_writer in (
     handle_task_start, handle_task_close, handle_task_blocked, handle_write_plan,
+    handle_goal_start, handle_goal_add_task, handle_goal_finish,
 ):
     _bind_control_writer(_control_writer)
 del _control_writer

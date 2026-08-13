@@ -457,6 +457,8 @@ def read_current_goal(repo_root: str | None = None) -> dict:
 
 
 def write_goal_state(repo_root: str, state: dict) -> dict:
+    if not _trusted_control_writer():
+        raise PermissionError("Goal mutation requires the native Goal MCP")
     raw_goal_id = str(state.get("goal_id") or "")
     goal_id = _goal_id(raw_goal_id, str(state.get("objective") or ""))
     state = dict(state)
@@ -1075,7 +1077,8 @@ def _make_control_writer_authority():
     allowed = {
         "harness_server": {
             "handle_task_start", "handle_task_close", "handle_task_blocked",
-            "handle_write_plan",
+            "handle_write_plan", "handle_goal_start", "handle_goal_add_task",
+            "handle_goal_finish",
         },
         "codex_hook_registration": {"restore_watcher_registration"},
     }
@@ -1112,6 +1115,8 @@ def _make_control_writer_authority():
         "write_task_control", "begin_task_run", "restore_task_control",
         "write_active_marker", "clear_active_marker",
         "restore_active_marker_snapshot", "publish_task_close",
+        "start_harness_goal", "add_goal_task", "finish_harness_goal",
+        "write_goal_state",
     }
     def bind(function):
         module_name = function.__module__
