@@ -80,7 +80,7 @@ from _lib import (  # type: ignore
     ensure_task_scaffold, emit_compact_context,
     artifact_exists, canonical_task_dir, canonical_task_id,
     find_harness_root, harness_root_resolution, find_repo_root,
-    write_active_marker, clear_active_marker,
+    write_active_marker, clear_active_marker, read_session_hint,
     resolve_active_task_dir, active_marker_snapshot, restore_active_marker_snapshot,
     receipt_runtime_verdict, record_subagent_receipt,
     receipt_review_verdict, required_review_lenses,
@@ -381,7 +381,13 @@ def handle_task_start(args: dict) -> dict:
                 "retry_action": ctx["next_action"],
             })
     try:
-        write_active_marker(repo_root, task_dir)
+        # This host receives no session id of its own, so current_session_id()
+        # would resolve to "default" and produce a marker no lifecycle hook
+        # reads. Prefer the id recorded by a hook that does receive it; fall
+        # back to the legacy default when no usable hint exists.
+        write_active_marker(
+            repo_root, task_dir, session_id=read_session_hint(repo_root) or None,
+        )
     except Exception:
         try:
             rollback_new_start()

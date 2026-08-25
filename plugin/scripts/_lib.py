@@ -807,8 +807,8 @@ def _yaml_fmt(val):
 # ── Frontmatter public API (AC-001) ─────────────────────────────────────
 #
 # Promoted from note_freshness.py private helpers. These four functions form
-# the canonical frontmatter read/write surface used by doc_hygiene.py,
-# hygiene_scan.py, and note_freshness.py (which re-imports them).
+# the canonical frontmatter read/write surface used by note_freshness.py
+# (which re-imports them).
 
 
 def split_frontmatter(text: str) -> "tuple[str | None, str, int]":
@@ -1592,6 +1592,54 @@ def _active_sessions_dir(repo_root):
         f"{TASK_DIR}/{ACTIVE_SESSIONS_DIRNAME}",
         "active session marker root",
     )
+
+
+SESSION_HINT_NAME = ".session-hint"
+
+
+def _session_hint_path(repo_root):
+    return os.path.join(_active_sessions_dir(repo_root), SESSION_HINT_NAME)
+
+
+def _usable_session_hint(value):
+    """Return a session id safe to bind a marker to, or '' when unusable."""
+    sid = str(value or "").strip()
+    if not sid or sid == "default" or sanitize_session_id(sid) != sid:
+        return ""
+    return sid
+
+
+def write_session_hint(repo_root, session_id):
+    """Record the runtime session id for MCP hosts that never receive it.
+
+    Claude Code passes no session id into the MCP server environment, so
+    ``current_session_id()`` resolves to ``default`` there and the active marker
+    lands under a filename no lifecycle hook ever reads. Hooks *do* receive the
+    real id; recording it here lets ``task_start`` bind the marker correctly at
+    creation time instead of repairing it afterwards.
+
+    Best-effort by contract: this runs inside hooks, so any failure degrades to
+    "no hint" (and the conservative ``default`` marker) rather than raising.
+    """
+    sid = _usable_session_hint(session_id)
+    if not sid:
+        return False
+    try:
+        os.makedirs(_active_sessions_dir(repo_root), exist_ok=True)
+        _atomic_text_write(_session_hint_path(repo_root), sid + "\n")
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def read_session_hint(repo_root):
+    """Return the recorded runtime session id, or '' when absent/unusable."""
+    try:
+        raw = _read_regular_text_file(_session_hint_path(repo_root), max_size=4096)
+    except (OSError, ValueError):
+        return ""
+    first = (str(raw or "").strip().splitlines() or [""])[0]
+    return _usable_session_hint(first)
 
 
 def _session_active_path(repo_root, session_id=None):

@@ -5,9 +5,8 @@ Emits a short ``[harness-context]`` block on stdout when a harness task is
 active, so agents don't burn a turn re-reading task artifacts to orient
 themselves in fix rounds.
 
-Pending hygiene and suspect-note summaries are intentionally not injected here.
-The post-close `hygiene_followup.py` scheduler turns hygiene output into a
-separate task so prompt hooks do not dilute the active task's attention scope.
+Suspect-note summaries are intentionally not injected here, so prompt hooks do
+not dilute the active task's attention scope.
 
 Output is silent outside harness-enabled repos. Total length is hard-capped at
 400 chars for the compact prompt context; excess truncates with ``…``. The
@@ -35,6 +34,7 @@ try:
         resolve_active_task_dir,
         read_current_goal,
         next_goal_task,
+        write_session_hint,
     )
 except Exception:
     sys.exit(0)
@@ -224,6 +224,16 @@ def main() -> int:
     repo_root = find_repo_root()
     if not is_harness_enabled_repo(repo_root):
         return 0
+
+    # This hook is one of the few places that receives the real runtime session
+    # id. Record it so task_start can bind the active marker to this session
+    # instead of the unreadable "default" marker. Advisory and fail-safe: a
+    # failure here must never block prompt submission.
+    try:
+        write_session_hint(repo_root, data.get("session_id"))
+    except Exception:
+        pass
+
     task_dir = _find_active_task_dir(repo_root)
 
     output_parts = [DOC_GATE]

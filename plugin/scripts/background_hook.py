@@ -17,10 +17,38 @@ try:
         last_hook_input,
         log_gate_crash,
         read_hook_input,
+        resolve_active_task_dir,
+        _log_gate_error,
     )
     import subagent_lifecycle  # type: ignore
 except Exception:
     sys.exit(0)
+
+
+def _log_binding_miss(repo_root: str, payload: dict, event: str) -> None:
+    """Leave a breadcrumb when a subagent ran but produced no receipt.
+
+    An empty lifecycle result means the session/task binding did not resolve,
+    so no receipt was written. Without this signal that failure is completely
+    invisible: the subagent completes normally, receipts stay empty, and
+    task_close blocks with no indication of why. Only logged when an active
+    task exists, i.e. when a receipt was actually expected.
+
+    Best-effort: never raises into the hook.
+    """
+    try:
+        if not resolve_active_task_dir(repo_root):
+            return
+        _log_gate_error(
+            RuntimeError(
+                "subagent lifecycle produced no receipt: session/task binding "
+                f"did not resolve (event={event}, "
+                f"session_id={str(payload.get('session_id') or '')!r})"
+            ),
+            "background_hook:binding-miss",
+        )
+    except Exception:
+        pass
 
 
 def main() -> int:
@@ -44,7 +72,11 @@ def main() -> int:
             repo_root = harness_root or candidate_root
         if not is_harness_enabled_repo(repo_root):
             return 0
-        subagent_lifecycle.handle_subagent_hook(repo_root, payload, forced_event=args.event)
+        result = subagent_lifecycle.handle_subagent_hook(
+            repo_root, payload, forced_event=args.event
+        )
+        if not result:
+            _log_binding_miss(repo_root, payload, args.event)
     except Exception as exc:
         try:
             log_gate_crash(exc, "background_hook", last_hook_input())
