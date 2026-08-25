@@ -33,6 +33,62 @@ GATE_NAME = "mcp_bash_guard"
 _COMMAND_LENGTH_CAP = 64 * 1024
 _GUARD_STDIN_CAP = 128 * 1024
 REDIRECT_TOKENS = {">", ">>", "1>", "1>>"}
+# Commands that cannot themselves write a file. Naming a protected artifact or
+# lifecycle symbol in their arguments (a grep pattern, an `echo` banner) is
+# inspection, not mutation, so it must not deny the segment.
+#
+# Safety: this list only suppresses the *name-mention* heuristics. Redirections
+# are detected independently by _extract_redirect_targets() over the token
+# stream, so `echo x > RECEIPTS.jsonl` stays denied via its redirect target.
+# Deliberately excluded because they can write: tee, dd, cp, mv, install,
+# truncate, touch, ln, sed -i, perl -pi, awk (`print > "file"`), env (runs an
+# arbitrary command), and sort/diff when given an output option.
+NON_MUTATING_COMMANDS = {
+    "echo", "printf", "true", "false", ":", "test", "[", "[[",
+    "pwd", "date", "seq", "basename", "dirname", "realpath", "readlink",
+    "file", "stat", "ls", "nl", "od", "strings", "cut", "comm", "uniq",
+    "tr", "jq", "column",
+}
+_OUTPUT_OPTION_COMMANDS = {"sort", "diff"}
+# Git subcommands that never rewrite a working-tree file. `add` and `commit`
+# move content into the index and object store; they cannot change what a
+# protected artifact contains on disk. Without these, harness lifecycle files
+# could not even be staged: `git add plugin/scripts/background_hook.py` tripped
+# the name-mention heuristic and was denied.
+#
+# Deliberately excluded because they DO rewrite the working tree:
+# checkout, restore, rm, clean, mv, apply, stash, reset (--hard), revert,
+# merge, rebase, cherry-pick, pull.
+GIT_NON_MUTATING_SUBCOMMANDS = {
+    "add", "commit", "diff", "show", "log", "status", "grep",
+    "branch", "rev-parse", "ls-files", "check-ignore", "blame",
+}
+# Shell keywords and non-mutating builtins. These are not executables, so
+# shutil.which() cannot resolve them and they were falling through to the
+# "unrecognized executable with gated path" branch, denying every compound
+# command that merely mentioned a gated path.
+SHELL_CONTROL_WORDS = {
+    "for", "while", "until", "if", "then", "else", "elif", "fi",
+    "do", "done", "case", "esac", "select", "function", "time",
+    "{", "}", "!", "cd", "pushd", "popd", "shift", "return",
+    "local", "export", "set", "unset", "read", "declare", "typeset",
+}
+
+
+def _has_output_option(args):
+    return any(
+        arg in {"-o", "--output"} or arg.startswith(("-o", "--output="))
+        for arg in args
+    )
+
+
+def _is_non_mutating_command(cmd, args):
+    """Return True when this command word cannot write a file on its own."""
+    if cmd in NON_MUTATING_COMMANDS or cmd in SHELL_CONTROL_WORDS:
+        return True
+    if cmd in _OUTPUT_OPTION_COMMANDS:
+        return not _has_output_option(args)
+    return False
 LAST_ARG_MUTATORS = {"cp", "mv", "install", "touch", "truncate"}
 TEE_COMMAND = "tee"
 LIFECYCLE_RECEIPT_ENTRYPOINTS = {
@@ -722,17 +778,22 @@ def _safe_lifecycle_source_inspection(argv):
     args = argv[1:]
     if cmd in {"pytest", "py.test"}:
         return True
-    if cmd == "git" and args and args[0] in {"diff", "show", "log", "status", "grep"}:
+    if cmd == "git" and args and args[0] in GIT_NON_MUTATING_SUBCOMMANDS:
         return True
     if cmd in {"cat", "head", "tail", "rg", "grep", "less", "more", "wc"}:
         return True
     if cmd == "sed" and not any(arg == "-i" or arg.startswith("-i") for arg in args):
         return True
-    return False
+    return _is_non_mutating_command(cmd, args)
 def _safe_gated_path_inspection(argv, raw_argv=()):
     if not argv:
         return False
     cmd, args = os.path.basename(argv[0]), argv[1:]
+    # Shell keywords/builtins never resolve via which(); check them before the
+    # executable-identity test so compound commands are not misread as an
+    # unrecognized executable holding a gated path.
+    if _is_non_mutating_command(cmd, args):
+        return True
     resolved = shutil.which(cmd)
     if not resolved or os.sep in argv[0] and os.path.realpath(argv[0]) != os.path.realpath(resolved):
         return False
@@ -753,7 +814,7 @@ def _safe_gated_path_inspection(argv, raw_argv=()):
         index = 0
         while index < len(args) and (args[index].startswith("--") or args[index] == "-C"):
             index += 2 if args[index] == "-C" else 1
-        return index < len(args) and args[index] in {"diff", "show", "log", "status", "grep"} and not output_option and not any("open-files-in-pager" in arg or arg in {"--ext-diff", "--textconv"} for arg in args)
+        return index < len(args) and args[index] in GIT_NON_MUTATING_SUBCOMMANDS and not output_option and not any("open-files-in-pager" in arg or arg in {"--ext-diff", "--textconv"} for arg in args)
     if cmd == "sed": return not any(arg in {"-i", "--in-place"} or arg.startswith(("-i", "--in-place=")) or re.search(r"(?:^|[;/0-9,$ ])(?:w|W|e)(?:\s|[A-Za-z0-9_.-]+/|$)", arg) for arg in args)
     if cmd == "diff": return not output_option
     if cmd == "find": return not any(arg.startswith(("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls", "-fprint")) for arg in args)

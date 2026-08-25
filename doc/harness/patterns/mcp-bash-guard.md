@@ -83,6 +83,53 @@ those leaves are denied.
 `git diff`, etc. The guard is silent on allow, so these produce no audit
 noise.
 
+## Read-only inspection is not mutation
+
+The guard flattens the whole command to alphanumerics and raises
+`protected_marker` when any name in `LIFECYCLE_RECEIPT_ENTRYPOINTS` or
+`PROTECTED_MUTATION_SYMBOLS` appears anywhere in it. That heuristic cannot tell
+a write from a mention, so `echo "=== write_active_marker ==="` or
+`grep -n "RECEIPTS_NAME" plugin/scripts/_lib.py` used to be denied. Compound
+commands failed the same way: shell keywords (`for`, `if`, `[`) do not resolve
+through `shutil.which()`, so a segment holding a gated path was classified as
+"unrecognized executable with gated path".
+
+Two sets in `mcp_bash_guard.py` express the relief:
+
+- `NON_MUTATING_COMMANDS` — command words that cannot write a file on their own
+  (`echo`, `printf`, `stat`, `basename`, `cut`, `jq`, …).
+- `SHELL_CONTROL_WORDS` — shell keywords and non-mutating builtins.
+
+`_is_non_mutating_command()` combines them and is consulted from both
+`_safe_lifecycle_source_inspection()` and `_safe_gated_path_inspection()`.
+
+**Why this is safe, and the invariant to preserve:** these sets suppress only
+the *name-mention* heuristics. Redirections are detected independently by
+`_extract_redirect_targets()`, which walks the token stream for
+`REDIRECT_TOKENS` and inline redirect forms regardless of the command word, so
+`echo x > RECEIPTS.jsonl` is still denied — via its redirect target, not via
+the command name. The relief is also per segment: a `for` wrapper does not
+launder a redirect inside its body.
+
+`GIT_NON_MUTATING_SUBCOMMANDS` covers the same idea for git. `add` and `commit`
+move content into the index and object store and cannot change what a protected
+artifact contains on disk, so they are admitted — without them harness lifecycle
+files could not even be staged (`git add plugin/scripts/background_hook.py` hit
+the name-mention heuristic and was denied). Subcommands that rewrite the working
+tree stay blocked: `checkout`, `restore`, `rm`, `clean`, `mv`, `apply`, `stash`,
+`reset`, `revert`, `merge`, `rebase`, `cherry-pick`, `pull`.
+
+**Do not add** anything that can write: `tee`, `dd`, `cp`, `mv`, `install`,
+`truncate`, `touch`, `ln`, `sed -i`, `perl -pi`, `awk` (`print > "file"`), or
+`env` (runs an arbitrary command). `sort` and `diff` are admitted only when no
+`-o` / `--output` option is present.
+
+This matters more than ordinary ergonomics: receipt entries carry no signature
+or HMAC, so this guard is the only control preventing a forged `VERDICT: PASS`
+from being appended by a shell one-liner. Both directions are pinned by
+`tests/test_mcp_bash_guard_readonly_inspection.py`; keep the negative cases
+passing before touching either set.
+
 ## Known gaps
 
 The current guard descends through direct `bash -c` / `sh -c` command strings.
