@@ -110,16 +110,41 @@ def test_run_skills_document_resume_detection_and_verify_reconciliation():
         assert "PLAN.md" in body and "RECEIPTS.jsonl" in body
 
 
-def test_run_skills_require_auto_followup_before_done():
+def test_run_skills_share_one_completion_report_checklist():
+    """The Codex and Claude run skills must carry the same DONE checklist.
+
+    Replaces test_run_skills_require_auto_followup_before_done. Five of its
+    seven assertions covered the Mandatory Follow-up Continuation protocol,
+    which was deleted with the hygiene subsystem (6fcf300) — but the other two
+    were the only automated check that the two run skills agree, and 6fcf300
+    applied its Completion Report edit to the Claude tree only. Dropping the
+    test outright would have converted that red signal into silent drift, so
+    the cross-tree assertion is kept and narrowed.
+    """
+    checklists = []
     for path in (CODEX_RUN, CLAUDE_RUN):
         body = _text(path)
-        assert "Mandatory Follow-up Continuation" in body
-        assert 'returns `"action": "run_followup"`' in body
-        assert "Do not send a final completion response yet" in body
-        assert "continue the follow-up unless the user explicitly" in body
-        assert "HARNESS_AUTO_FOLLOWUP_MAX" in body
         assert "Before writing DONE, assert:" in body
-        assert "no auto-runnable follow-up task remains open" in body
+        # The scheduler these two bullets belonged to no longer exists.
+        assert "no auto-runnable follow-up task remains open" not in body
+        assert "post-close self-improvement returned" not in body
+        tail = body.split("Before writing DONE, assert:", 1)[1].splitlines()
+        bullets = []
+        for line in tail:
+            if not line.strip():
+                if bullets:
+                    break  # blank line ends the checklist block
+                continue
+            if line.startswith(("#", "```")):
+                break
+            # Keep continuation lines so drift in a wrapped bullet is caught too.
+            bullets.append(line.rstrip())
+        checklists.append(bullets)
+    assert checklists[0], "Completion Report checklist is empty"
+    assert checklists[0] == checklists[1], (
+        "plugin-codex/internal-skills/run/SKILL.md and plugin/skills/run/SKILL.md "
+        "have diverged; see the template sync rule in CLAUDE.md"
+    )
 
 
 def test_codex_develop_no_longer_says_agent_absence_is_absolute():

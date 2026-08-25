@@ -109,14 +109,34 @@ def _official_stop_identity(payload: dict[str, Any]) -> tuple[str, str]:
     return sid, aid
 
 
+def _reject(diagnostics: dict[str, Any] | None, reason: str) -> tuple[str, str]:
+    """Record why provenance rejected a stop, then reject.
+
+    Provenance has many independent hard-fail paths and rejects by returning an
+    empty tuple, so at the call site every failure looks identical. That opacity
+    is what made the 2026-08-25 completion-receipt outage expensive to diagnose.
+
+    The reason travels through a caller-supplied dict rather than module state:
+    `record_subagent_receipt`'s adapter pins this module's globals as an
+    integrity check, so any mutable module-level variable invalidates the
+    binding on first write and every later receipt append fails with
+    PermissionError. Reason codes are short fixed strings — never transcript
+    content or assistant text.
+    """
+    if diagnostics is not None:
+        diagnostics["provenance_reason"] = reason
+    return "", ""
+
+
 def _trusted_stop_provenance(
     payload: dict[str, Any], sid: str, aid: str, run_id: str,
+    diagnostics: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     """Return transcript path/type only when runtime start and final text prove the stop."""
     raw_path = payload.get("agent_transcript_path")
     final_message = payload.get("last_assistant_message")
     if not isinstance(raw_path, str) or not isinstance(final_message, str) or not final_message:
-        return "", ""
+        return _reject(diagnostics, "missing-transcript-path-or-final-message")
     path = os.path.abspath(raw_path)
     claude_root = os.path.abspath(
         os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
@@ -125,13 +145,13 @@ def _trusted_stop_provenance(
     opened: list[tuple[int, str, os.stat_result]] = []
     try:
         if os.path.commonpath((projects_root, path)) != projects_root:
-            return "", ""
+            return _reject(diagnostics, "path-outside-projects-root")
         rel = os.path.relpath(path, projects_root).split(os.sep)
         if (
             len(rel) < 4 or any(part in {"", ".", ".."} for part in rel)
             or rel[-3:] != [sid, "subagents", f"agent-{aid}.jsonl"]
         ):
-            return "", ""
+            return _reject(diagnostics, "unexpected-transcript-path-shape")
         dir_flags = (
             os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0)
             | getattr(os, "O_NOFOLLOW", 0)
@@ -140,7 +160,7 @@ def _trusted_stop_provenance(
         root_stat = os.fstat(current_fd)
         opened.append((current_fd, projects_root, root_stat))
         if root_stat.st_uid != os.getuid() or root_stat.st_mode & 0o022:
-            return "", ""
+            return _reject(diagnostics, "projects-root-ownership")
         for part in rel[:-1]:
             child_fd = os.open(part, dir_flags, dir_fd=current_fd)
             child_stat = os.fstat(child_fd)
@@ -149,7 +169,7 @@ def _trusted_stop_provenance(
                 not stat.S_ISDIR(child_stat.st_mode)
                 or child_stat.st_uid != os.getuid() or child_stat.st_mode & 0o022
             ):
-                return "", ""
+                return _reject(diagnostics, "transcript-dir-ownership")
             current_fd = child_fd
         leaf_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
         leaf_fd = os.open(rel[-1], leaf_flags, dir_fd=current_fd)
@@ -160,7 +180,7 @@ def _trusted_stop_provenance(
             or before.st_uid != os.getuid() or before.st_nlink != 1
             or before.st_mode & 0o022 or before.st_size > 64 * 1024 * 1024
         ):
-            return "", ""
+            return _reject(diagnostics, "transcript-file-attributes")
         raw = bytearray()
         while True:
             chunk = os.read(leaf_fd, 64 * 1024)
@@ -176,7 +196,7 @@ def _trusted_stop_provenance(
             after.st_dev, after.st_ino, after.st_size,
             after.st_mtime_ns, after.st_ctime_ns,
         ):
-            return "", ""
+            return _reject(diagnostics, "transcript-changed-during-read")
         for index, (fd, name, expected) in enumerate(opened):
             actual = (
                 os.stat(name, dir_fd=opened[index - 1][0], follow_symlinks=False)
@@ -185,7 +205,7 @@ def _trusted_stop_provenance(
             if (actual.st_dev, actual.st_ino, actual.st_mode) != (
                 expected.st_dev, expected.st_ino, expected.st_mode,
             ):
-                return "", ""
+                return _reject(diagnostics, "transcript-path-swapped-during-read")
         run_time = datetime.fromisoformat(task_run_started_at({"run_id": run_id}).replace("Z", "+00:00"))
         items = [json.loads(line) for line in lines if line.strip()]
         transcript_agent_type = ""
@@ -193,49 +213,66 @@ def _trusted_stop_provenance(
             if not isinstance(item, dict):
                 continue
             if item.get("agentId") not in {None, aid} or item.get("sessionId") not in {None, sid}:
-                return "", ""
+                return _reject(diagnostics, "foreign-agent-or-session-in-transcript")
             attachment = item.get("attachment")
             if not isinstance(attachment, dict) or attachment.get("hookEvent") != "SubagentStart":
                 continue
-            if attachment.get("hookName") != "SubagentStart" or item.get("agentId") != aid:
-                return "", ""
+            hook_name = attachment.get("hookName")
+            if hook_name != "SubagentStart":
+                # Claude 2.1.x emits a matcher-qualified duplicate alongside the
+                # canonical attachment ("SubagentStart:<matcher>") and writes it
+                # first. It carries no identity payload, so skip it rather than
+                # treating it as a forgery; the canonical attachment below stays
+                # the sole source of transcript_agent_type. Any other hookName
+                # under this hookEvent is still untrusted.
+                #
+                # Deliberately no agentId check here: the loop-wide guard above
+                # already rejects a foreign agentId, and demanding the key be
+                # present would re-couple completion receipts to an undocumented
+                # field of a duplicate line we do not otherwise read — the exact
+                # shape of the outage this tolerance fixes.
+                if isinstance(hook_name, str) and hook_name.startswith("SubagentStart:"):
+                    continue
+                return _reject(diagnostics, "unrecognized-start-hook-name")
+            if item.get("agentId") != aid:
+                return _reject(diagnostics, "canonical-start-agent-id-mismatch")
             event_time = datetime.fromisoformat(
                 str(item.get("timestamp") or "").replace("Z", "+00:00")
             )
             if not event_time.tzinfo or event_time.astimezone(timezone.utc) < run_time:
-                return "", ""
+                return _reject(diagnostics, "start-precedes-task-run")
             content = attachment.get("content")
             if not isinstance(content, list) or len(content) != 1 or not isinstance(content[0], str):
-                return "", ""
+                return _reject(diagnostics, "start-content-shape")
             match = re.fullmatch(
                 rf"Agent ([A-Za-z0-9_.:-]+) started \({re.escape(aid)}\)", content[0],
             )
-            if not match or transcript_agent_type:
-                return "", ""
+            if not match:
+                return _reject(diagnostics, "start-identity-mismatch")
+            if transcript_agent_type:
+                return _reject(diagnostics, "duplicate-canonical-start")
             transcript_agent_type = match.group(1)
         if not transcript_agent_type:
-            return "", ""
-        for item in reversed(items):
-            message = item.get("message") if isinstance(item, dict) else None
-            if not isinstance(message, dict) or message.get("role") != "assistant":
-                continue
-            text = "".join(
-                str(part.get("text") or "")
-                for part in message.get("content", [])
-                if isinstance(part, dict) and part.get("type") == "text"
-            )
-            if text == final_message:
-                return path, transcript_agent_type
-            return "", ""
-    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
-        return "", ""
+            return _reject(diagnostics, "no-canonical-start-attachment")
+        # The transcript proves a real subagent of this type started in this run.
+        # It deliberately does NOT cross-check the final assistant text against
+        # the payload: the runtime appends that text around the same instant
+        # SubagentStop fires, so the check rejected genuine stops as often as it
+        # passed them, and the only thing it added was resistance to a
+        # deliberate multi-step forgery (spawn a decoy agent, then replay a
+        # hand-written payload against its session). That is not the failure
+        # mode receipts exist for — confabulation is — and an agent that can
+        # write files could fabricate the transcript anyway. The verdict comes
+        # from the runtime-supplied payload.
+        return path, transcript_agent_type
+    except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        return _reject(diagnostics, f"exception:{type(exc).__name__}")
     finally:
         for fd, _name, _expected in reversed(opened):
             try:
                 os.close(fd)
             except OSError:
                 pass
-    return "", ""
 
 
 def _task_id_from_dir(task_dir: str) -> str:
@@ -384,13 +421,40 @@ def register_subagent_start(
     }
 
 
-def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any]:
-    """Append a trusted completion, or an atomic pair in stop-only runtimes."""
+def mark_subagent_stop(
+    repo_root: str, payload: dict[str, Any],
+    diagnostics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Append a trusted completion, or an atomic pair in stop-only runtimes.
+
+    ``diagnostics`` is an optional caller-owned dict that receives a reason code
+    when no receipt is produced. It exists so the hook can say *why* a stop was
+    refused; see :func:`_reject`.
+    """
     sid, aid = _official_stop_identity(payload)
     stop_message = _payload_value(payload, "last_assistant_message")
     task_dir, run_id = _binding(repo_root, sid) if sid and aid and stop_message else ("", "")
+    if not task_dir and diagnostics is not None:
+        diagnostics["provenance_reason"] = (
+            "stop-identity-incomplete" if not (sid and aid and stop_message)
+            else "session-task-binding-unresolved"
+        )
+    if diagnostics is not None:
+        # Best-effort: a corrupt receipt stream must not escape here, or the
+        # hook crashes instead of leaving the breadcrumb this exists to enable.
+        try:
+            diagnostics["expected_receipt"] = bool(task_dir) and any(
+                item.get("source") == SOURCE
+                and item.get("task_run_id") == run_id
+                and item.get("runtime_id") == _runtime_id(sid, aid)
+                and item.get("event") == "started"
+                for item in receipt_snapshot(task_dir).entries
+            )
+        except Exception:
+            diagnostics["expected_receipt"] = bool(task_dir)
     trusted_transcript, transcript_agent_type = (
-        _trusted_stop_provenance(payload, sid, aid, run_id) if task_dir else ("", "")
+        _trusted_stop_provenance(payload, sid, aid, run_id, diagnostics)
+        if task_dir else ("", "")
     )
     if not trusted_transcript or not transcript_agent_type:
         return {}
@@ -474,12 +538,15 @@ def mark_subagent_stop(repo_root: str, payload: dict[str, Any]) -> dict[str, Any
     return result
 
 
-def handle_subagent_hook(repo_root: str, payload: dict[str, Any], *, forced_event: str = "") -> dict[str, Any]:
+def handle_subagent_hook(
+    repo_root: str, payload: dict[str, Any], *, forced_event: str = "",
+    diagnostics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     event = (forced_event or _event_name(payload)).lower()
     if event in ("start", "subagentstart", "subagent_start"):
         return register_subagent_start(repo_root, payload)
     if event in ("stop", "subagentstop", "subagent_stop"):
-        return mark_subagent_stop(repo_root, payload)
+        return mark_subagent_stop(repo_root, payload, diagnostics)
     return {}
 
 

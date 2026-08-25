@@ -188,7 +188,9 @@ def test_continuous_maintenance_doc_maps_former_maintain_work():
     )
 
     assert "Maintain Responsibility Map" in body
-    assert "REVIEW queue" in body
+    # The REVIEW-queue row described `.hygiene-pending.json` inspection and was
+    # removed with the hygiene subsystem (6fcf300); that responsibility no
+    # longer exists, so there is nothing left for it to map onto.
     assert "Tier C contract drift" in body
     assert "Runbook candidate" in body
     assert "Self-Healing Candidates" in body

@@ -63,7 +63,19 @@ def _transcript(
     final_message: str,
     *,
     agent_type: str,
+    qualified_hook_name: str = "",
+    qualified_agent_id: str = "",
+    qualified_content=None,
+    canonical_starts: int = 1,
+    transcript_final_message: str | None = None,
 ) -> str:
+    """Build a subagent transcript.
+
+    ``qualified_hook_name`` prepends an extra ``hookEvent: SubagentStart``
+    attachment carrying that ``hookName`` and no identity payload, reproducing
+    the matcher-qualified duplicate Claude 2.1.x writes ahead of the canonical
+    attachment.
+    """
     claude = tmp_path / ".claude"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude))
     path = claude / "projects/project" / session_id / "subagents" / f"agent-{agent_id}.jsonl"
@@ -72,7 +84,33 @@ def _transcript(
         _lib.task_run_started_at(_lib.read_task_control(task_dir)).replace("Z", "+00:00")
     )
     timestamp = (run_started + timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
-    items = [
+    items = []
+    if qualified_hook_name:
+        qualified_item = {
+            "timestamp": timestamp,
+            "sessionId": session_id,
+            # Field set copied from a real Claude 2.1.220 transcript: the
+            # qualified duplicate is a hook_success record whose stdout embeds
+            # the same identity string the canonical attachment carries.
+            "attachment": {
+                "type": "hook_success",
+                "hookName": qualified_hook_name,
+                "hookEvent": "SubagentStart",
+                "content": "" if qualified_content is None else qualified_content,
+                "stdout": f"Agent {agent_type} started ({agent_id})",
+                "stderr": "",
+                "exitCode": 0,
+                "command": "python3 background_hook.py --event start",
+                "durationMs": 12,
+                "toolUseID": f"hook_{agent_id}",
+            },
+        }
+        # qualified_agent_id=None omits the key entirely, proving the validator
+        # does not depend on it.
+        if qualified_agent_id is not None:
+            qualified_item["agentId"] = qualified_agent_id or agent_id
+        items.append(qualified_item)
+    items += [
         {
             "timestamp": timestamp,
             "agentId": agent_id,
@@ -84,13 +122,20 @@ def _transcript(
                 "content": [f"Agent {agent_type} started ({agent_id})"],
             },
         },
+    ] * canonical_starts + [
         {
             "timestamp": timestamp,
             "agentId": agent_id,
             "sessionId": session_id,
             "message": {
                 "role": "assistant",
-                "content": [{"type": "text", "text": final_message}],
+                "content": [{
+                    "type": "text",
+                    "text": (
+                        final_message if transcript_final_message is None
+                        else transcript_final_message
+                    ),
+                }],
             },
         },
     ]
@@ -150,6 +195,122 @@ def test_start_and_real_stop_use_only_receipts(tmp_path, monkeypatch):
     assert not (Path(task_dir) / "CONVERSATION.md").exists()
     assert not (Path(repo) / "doc/harness/runtime/background.json").exists()
     assert not (Path(repo) / "doc/harness/runtime/background.json.lock").exists()
+
+
+def _run_stop(
+    tmp_path, monkeypatch, session_id, agent_id, agent_type,
+    final_message="VERDICT: PASS\nchecks passed", **transcript_kwargs,
+):
+    """Register a start, then stop against a transcript built with the given shape."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    repo, task_dir = _repo(tmp_path)
+    _bind(repo, task_dir, session_id)
+    subagent_lifecycle.register_subagent_start(repo, {
+        "session_id": session_id, "agent_id": agent_id, "agent_type": agent_type,
+    })
+    transcript = _transcript(
+        tmp_path, monkeypatch, task_dir, session_id, agent_id, final_message,
+        agent_type=agent_type, **transcript_kwargs,
+    )
+    stopped = subagent_lifecycle.mark_subagent_stop(
+        repo, _stop_payload(session_id, agent_id, agent_type, transcript, final_message),
+    )
+    return stopped, task_dir
+
+
+def test_matcher_qualified_start_attachment_still_completes(tmp_path, monkeypatch):
+    """Claude 2.1.x writes 'SubagentStart:<matcher>' before the canonical entry.
+
+    Regression: that duplicate carries no identity payload and used to abort
+    provenance outright, so no subagent could ever record a completion and
+    task_verify could never reach PASS.
+    """
+    agent_type = "harness:code-reviewer"
+    stopped, task_dir = _run_stop(
+        tmp_path, monkeypatch, "sess-q", "agent-q", agent_type,
+        final_message="VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nclean",
+        qualified_hook_name=f"SubagentStart:{agent_type}",
+    )
+    assert stopped["status"] == "done"
+    assert stopped["agent_type"] == agent_type
+    assert [(item["event"], item["verdict"]) for item in _receipts(task_dir)] == [
+        ("started", ""), ("completed", "PASS"),
+    ]
+
+
+def test_qualified_start_attachment_bound_to_another_agent_is_rejected(tmp_path, monkeypatch):
+    stopped, task_dir = _run_stop(
+        tmp_path, monkeypatch, "sess-f", "agent-f", "harness:qa-cli",
+        qualified_hook_name="SubagentStart:harness:qa-cli",
+        qualified_agent_id="agent-other",
+    )
+    assert stopped == {}
+    assert [item["event"] for item in _receipts(task_dir)] == ["started"]
+
+
+def test_stop_completes_when_the_final_text_has_not_been_flushed(tmp_path, monkeypatch):
+    """The transcript need not yet carry the agent's final assistant message.
+
+    The runtime appends it around the same instant SubagentStop fires. Requiring
+    it to match made genuine stops fail roughly as often as they succeeded.
+    """
+    agent_type = "harness:qa-cli"
+    stopped, task_dir = _run_stop(
+        tmp_path, monkeypatch, "sess-flush", "agent-flush", agent_type,
+        final_message="VERDICT: PASS\nnot yet written to the transcript",
+        transcript_final_message="",
+    )
+    assert stopped["status"] == "done"
+    assert [(item["event"], item["verdict"]) for item in _receipts(task_dir)] == [
+        ("started", ""), ("completed", "PASS"),
+    ]
+
+
+def test_qualified_start_attachment_cannot_spoof_the_agent_type(tmp_path, monkeypatch):
+    """A qualified duplicate carries no identity, even with a valid-looking payload."""
+    agent_type = "harness:code-reviewer"
+    stopped, _task_dir = _run_stop(
+        tmp_path, monkeypatch, "sess-s", "agent-s", agent_type,
+        final_message="VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nclean",
+        qualified_hook_name=f"SubagentStart:{agent_type}",
+        qualified_content=["Agent harness:attacker started (agent-s)"],
+    )
+    assert stopped["status"] == "done"
+    assert stopped["agent_type"] == agent_type
+
+
+def test_qualified_start_attachment_without_agent_id_still_completes(tmp_path, monkeypatch):
+    """The duplicate's own agentId is not load-bearing.
+
+    Requiring it would re-couple completion receipts to an undocumented field of
+    a line the validator otherwise ignores — the failure shape this fix removes.
+    """
+    agent_type = "harness:qa-cli"
+    stopped, _task_dir = _run_stop(
+        tmp_path, monkeypatch, "sess-n", "agent-n", agent_type,
+        qualified_hook_name=f"SubagentStart:{agent_type}",
+        qualified_agent_id=None,
+    )
+    assert stopped["status"] == "done"
+    assert stopped["agent_type"] == agent_type
+
+
+def test_unrecognized_start_hook_name_is_still_rejected(tmp_path, monkeypatch):
+    for hook_name in ("SubagentStarted", "Subagent:Start", "SubagentStar", "evil"):
+        stopped, _task_dir = _run_stop(
+            tmp_path / hook_name, monkeypatch, "sess-u", "agent-u", "harness:qa-cli",
+            qualified_hook_name=hook_name,
+        )
+        assert stopped == {}, hook_name
+
+
+def test_two_canonical_start_attachments_are_still_rejected(tmp_path, monkeypatch):
+    stopped, task_dir = _run_stop(
+        tmp_path, monkeypatch, "sess-d", "agent-d", "harness:qa-cli",
+        canonical_starts=2,
+    )
+    assert stopped == {}
+    assert [item["event"] for item in _receipts(task_dir)] == ["started"]
 
 
 def test_cloned_bound_adapter_with_foreign_globals_cannot_append(tmp_path):
@@ -553,6 +714,68 @@ def test_background_hook_publishes_start_without_registry(tmp_path):
     assert result.returncode == 0, result.stderr
     assert [item["event"] for item in _receipts(task_dir)] == ["started"]
     assert not (Path(repo) / "doc/harness/runtime").exists()
+
+
+def _run_background_hook(repo: str, event: str, payload: dict) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, os.path.join(SCRIPTS_DIR, "background_hook.py"), "--event", event],
+        cwd=repo, input=json.dumps({"cwd": repo, **payload}),
+        text=True, capture_output=True, timeout=10,
+    )
+
+
+def _learnings(repo: str) -> list[dict]:
+    path = Path(repo) / "doc/harness/learnings.jsonl"
+    if not path.exists():
+        return []
+    return [
+        json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def test_binding_miss_breadcrumb_is_written_when_a_receipt_was_owed(tmp_path):
+    """A lens agent that produces no receipt must stay visible.
+
+    This breadcrumb is the documented diagnostic entry point; the 2026-08-25
+    outage was only findable because of it.
+    """
+    repo, task_dir = _repo(tmp_path)
+    _bind(repo, task_dir, "sess-owed")
+    result = _run_background_hook(repo, "stop", {
+        "session_id": "sess-owed", "agent_id": "agent-owed",
+        "agent_type": "harness:qa-cli",
+        "agent_transcript_path": "/nonexistent/subagents/agent-owed.jsonl",
+        "last_assistant_message": "VERDICT: PASS",
+    })
+    assert result.returncode == 0, result.stderr
+    assert not (Path(task_dir) / "RECEIPTS.jsonl").exists(), "no receipt may be written"
+    misses = [
+        item for item in _learnings(repo)
+        if item.get("source") == "background_hook:binding-miss"
+    ]
+    assert len(misses) == 1, misses
+    # Assert the specific code, not merely that the field is present: the
+    # breadcrumb formats `provenance_reason={reason or 'n/a'}` unconditionally,
+    # so a weaker assertion would still pass if the diagnostics plumbing were
+    # removed entirely.
+    assert "provenance_reason=path-outside-projects-root" in misses[0]["error"]
+
+
+def test_binding_miss_breadcrumb_is_silent_when_no_receipt_was_owed(tmp_path):
+    """Agent classes with no transcript and no started receipt owe no completion."""
+    repo, task_dir = _repo(tmp_path)
+    _bind(repo, task_dir, "sess-unowed")
+    result = _run_background_hook(repo, "stop", {
+        "session_id": "sess-unowed", "agent_id": "agent-unowed",
+        "agent_transcript_path": "/nonexistent/subagents/agent-unowed.jsonl",
+        "last_assistant_message": "some text",
+    })
+    assert result.returncode == 0, result.stderr
+    assert [
+        item for item in _learnings(repo)
+        if item.get("source") == "background_hook:binding-miss"
+    ] == []
 
 
 def test_background_hook_publishes_stop_only_pair_without_registry(tmp_path, monkeypatch):

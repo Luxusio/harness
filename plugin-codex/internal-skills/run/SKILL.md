@@ -281,8 +281,7 @@ the commit hash and pre-close force-install result in the completion report.
 Before writing DONE, assert:
 - primary task is closed
 - runtime_verdict is PASS or task is BLOCKED
-- post-close self-improvement returned `none` or `queued`
-- no auto-runnable follow-up task remains open
+- post-close self-improvement has run
 - if this was a native Goal child task, the Goal is done/blocked/stopped/budgeted
   or the next slice is already active/queued
 - for this harness plugin source repo, the completed diff has been committed

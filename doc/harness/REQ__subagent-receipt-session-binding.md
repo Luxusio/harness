@@ -13,7 +13,7 @@ A lens subagent that runs to completion under an open harness task must always p
 
 ## Acceptance Signals
 - Exact-session isolation is preserved: a subagent whose session id does not match the marker records nothing. Promoting or accepting a `default` marker for an arbitrary session is not an acceptable fix, because a concurrent session's subagents would be attributed to this task.
-- A subagent that runs but produces no receipt leaves a diagnosable trace in `doc/harness/learnings.jsonl` whenever an active task exists. Silent `{}` returns from `register_subagent_start` / `mark_subagent_stop` are what made the original outage untraceable; the lifecycle must stay fail-safe but must not stay invisible.
+- A subagent that runs but produces no receipt leaves a diagnosable trace in `doc/harness/learnings.jsonl` whenever a receipt was actually owed — a matching `started` receipt exists for the run, or the payload names an agent type. Agent classes that never write a subagent transcript and never record a start owe no completion; logging them buried the real failures under noise on 2026-08-25. See `doc/harness/REQ__subagent-completion-receipt-transcript-shape.md` for the narrowed rule and its rationale. Silent `{}` returns from `register_subagent_start` / `mark_subagent_stop` are what made the original outage untraceable; the lifecycle must stay fail-safe but must not stay invisible where a receipt was expected.
 - No verdict is inferred, forged, or defaulted to compensate for a missing receipt. A binding failure surfaces as a blocked close, never as a synthesized PASS.
 
 ## Verification Cues
