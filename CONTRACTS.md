@@ -44,7 +44,6 @@ Lookup table. Find your current situation, apply the listed contracts.
 | `doc/` 노트 freshness 점검 | [C-06](#c-06) | soft |
 | `CLAUDE.md` 편집 필요 | [C-10](#c-10), [C-11](#c-11), [C-15](#c-15) | hard |
 | Maintenance 태스크 (MAINTENANCE 마커) | C-01 완화, [C-05](#c-05) 유지 | — |
-| `doc/changes/` 또는 `doc/common/` 자동 정리 | [C-16](#c-16) | auto |
 | Task in_progress 동안 turn 종결 시점 | [C-17](#c-17) | hard |
 | 브라우저 또는 full-suite 검증의 실행 위치 선택 | [C-18](#c-18) | soft |
 
@@ -110,10 +109,6 @@ redirect, cp, mv, tee, python -c open(…,'w'), …) targeting the same basename
 **On violation:** hard-block. Agent must route through the owning task MCP tool
 or hook-owned receipt path.
 **Why:** Wrong-writer mutation breaks task authority or lifecycle provenance.
-**Note (AC-019):** `doc/changes/**` and `doc/common/**` writes by
-`hygiene_scan.py` and `doc_hygiene.py` are authorized via C-16. These paths
-are NOT in `PROTECTED_ARTIFACTS`; their protection is via `hygiene.yaml`
-validation + observer phase + `maintain_restore.py` reversibility.
 
 ### C-06
 
@@ -165,10 +160,10 @@ edits CLAUDE.md's harness-managed section.
 **Title:** `CONTRACTS.md` managed block is not hand-edited.
 **When:** Any change to rules between the `harness:managed-begin/end` markers.
 **Enforced by:** `plugin/scripts/contract_lint.py` (SessionStart hook) —
-detects marker tampering; `maintain` skill regenerates from template.
-Authorized writers for additive Edits within the managed block:
-`maintain` skill (all changes) and `hygiene_scan.py` (additive Edits only,
-never deletions, never edits outside the managed block markers).
+detects marker tampering; setup regenerates from template. Authorized writers
+for additive Edits within the managed block: active tasks with a `MAINTENANCE`
+marker (additive Edits only, never deletions, never edits outside the managed
+block markers).
 **On violation:** soft-warn. User can move content to `CONTRACTS.local.md`.
 **Why:** The managed block is upgraded atomically on harness release; manual
 edits are lost.
@@ -251,48 +246,6 @@ user-owned.
 setup-owned operations must present a diff via `AskUserQuestion` first.
 **Why:** User trust is the most load-bearing contract. Surprise overwrites
 break it immediately.
-
-### C-16
-
-**Title:** Auto-hygiene — observer-mode content-signal doc classification + contract drift auto-apply.
-**When:** SessionStart (automatic, gated by `observer_until_session`) and whenever `Skill(maintain)` is invoked.
-**Enforced by:** `plugin/scripts/hygiene_scan.py` (SessionStart hook, after
-`contract_lint --quick`); `plugin/scripts/doc_hygiene.py` (called by
-hygiene_scan); `doc/harness/hygiene.yaml` (config + canonical disable path).
-**On violation:** auto — hygiene is advisory; failure degrades to no-op.
-**Why:** Without automatic cleanup, `doc/changes/` and `doc/common/` accumulate
-indefinitely. Institutional memory erodes when the signal-to-noise ratio drops.
-Frontmatter signals: `superseded_by` and `distilled_to`; observer mode is
-controlled by `observer_until_session`.
-
-**Tier A/B/C mapping (contract drift):**
-- `[INFO]` (Tier A): auto-applied as additive Edit within managed-block markers. No deletions.
-- `[SOFT]` additive (Tier B): auto-applied if action is matrix-row addition or contract heading addition only. Modifications/deletions deferred.
-- `[HARD]` (Tier C): deferred. Entry written to `.maintain-pending.json`; user confirms via `Skill(maintain)`.
-
-**Commit timing:** `doc_hygiene.py` stages archive moves at SessionStart but
-does NOT commit. Batch commits happen only via `Skill(maintain)` user
-invocation (see `plugin/skills/maintain/SKILL.md` Phase 2.5). Rationale:
-a SessionStart hook running `git commit` without an internal timeout can
-be SIGKILL'd by the outer hook timeout mid-write, leaving a stale
-`.git/index.lock`.
-
-**KEEP-on-doubt rule:** absence of `superseded_by` or `distilled_to` frontmatter
-fields NEVER alone classifies a doc as REMOVE. Cold-start docs (no new frontmatter)
-always classify as KEEP or REVIEW.
-
-**Observer phase:** first `observer_until_session` sessions (default 14) run
-in observer-only mode — no archive writes, no contract edits. Intentions logged
-to `doc/harness/.maintain-observe.log`.
-
-**Restore:** `python3 plugin/scripts/maintain_restore.py <archive-path>`.
-Archive commit message always embeds the copy-pasteable restore command.
-
-**Frontmatter fields (optional, added to individual doc files):**
-- `superseded_by: <path>` — this doc is replaced by `<path>`; if target exists
-  AND `reference_count == 0`, classify REMOVE.
-- `distilled_to: <path>` — key content promoted to `<path>`; if target exists
-  AND `reference_count == 0`, classify REMOVE.
 
 ### C-17
 

@@ -114,7 +114,7 @@ apply to read-only answers or ordinary non-harness work.
 | User explicitly says "implement PLAN.md" / "develop only" | Resume the active Goal child task through the internal develop path |
 | Multi-component or API↔frontend change in one task | Goal child task with develop Phase 3.0 auto-fanout |
 | CEO / Architecture / Design / DX review | Goal child task plan phase; review lenses are internal sub-skills |
-| Contract drift / "CLAUDE.md 정리" / "규약 정비" / post-upgrade cleanup | Use the close-time self-improvement flow: run hygiene after task close, then schedule cleanup as a separate follow-up task when needed |
+| Contract drift / "CLAUDE.md 정리" / "규약 정비" / post-upgrade cleanup | Schedule cleanup as a separate follow-up task |
 | Explanation | Direct answer |
 
 ## 7. Verification
@@ -210,7 +210,6 @@ All scripts under `plugin/scripts/`. Stdlib only (PIL optional for canary).
 | `inject_checkpoint.py` | Manual resume helper — surface latest checkpoint | reads `doc/harness/checkpoints/` |
 | `promote_learnings.py` | Tier 3→2 promotion + stale pruning | `doc/harness/patterns/<topic>.md` |
 | `retro.py` | Weekly retrospective (git + tasks + learnings) | stdout; `--save` writes `doc/harness/retros/<date>.md` |
-| `hygiene_scan.py` | Close-time hygiene scan (contract drift + doc classification) | `doc/harness/.hygiene-last-run` + `doc/harness/.hygiene-session-count` |
 
 Health is activated via the manifest optional key `health_components` and falls
 back to `test_command` when no components are declared. Benchmark and audit are

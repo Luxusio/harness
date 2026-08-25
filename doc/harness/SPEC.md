@@ -57,10 +57,9 @@ No verification is skipped. If verification finds a gap, the task returns to
 develop or creates a follow-up child task when the gap is separable.
 
 For each Goal child, post-close continuation is ordered as:
-`task_close -> self-improvement/learning promotion/hygiene scheduling ->
-goal_next_task`. Memory and automatic learning are independent of orchestration;
-runbooks, staged learnings, promotion, search, doc hygiene, and hygiene follow-up
-remain active after every child.
+`task_close -> self-improvement/learning promotion -> goal_next_task`. Memory
+and automatic learning are independent of orchestration; runbooks, staged
+learnings, promotion, and search remain active after every child.
 
 Harness lifecycle operations do not inspect Git state. `task_start` creates the
 task artifacts and active marker without capturing HEAD, dirty paths,

@@ -191,7 +191,6 @@ def test_continuous_maintenance_doc_maps_former_maintain_work():
     assert "REVIEW queue" in body
     assert "Tier C contract drift" in body
     assert "Runbook candidate" in body
-    assert "Staged hygiene archive" in body
     assert "Self-Healing Candidates" in body
     assert "user_decision" in body
     assert "proposed_artifact" in body
@@ -199,20 +198,3 @@ def test_continuous_maintenance_doc_maps_former_maintain_work():
     assert "request_user_input" in body
 
 
-def test_maintenance_state_naming_doc_records_compatibility_plan():
-    body = (REPO / "doc/harness/patterns/maintenance-state-naming.md").read_text(
-        encoding="utf-8"
-    )
-
-    assert "compatibility surfaces" in body
-    assert ".maintain-pending.json" in body
-    assert ".maintain-last-run" in body
-    assert ".maintain-observe.log" in body
-    assert "maintain_restore.py" in body
-    assert "hygiene_restore.py" in body
-    assert ".hygiene-pending.json" in body
-    assert ".hygiene-last-run" in body
-    assert ".hygiene-observe.log" in body
-    assert "Read both old and new locations" in body
-    assert "no-loss migration" in body
-    assert "The first compatibility slice is implemented" in body

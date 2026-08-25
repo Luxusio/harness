@@ -2,7 +2,7 @@
 
 Imperative checklist for plan-eng-review Section 1 (Architecture review). **MUST be answered** inline in every Architecture review pass — not browsed on demand. Skipping a question is a compression violation unless the "skip if trivially N/A" condition applies (see below).
 
-This rubric is a **plan-time gut-check**. For runtime security depth, invoke an external `/cso`-equivalent security skill separately — this rubric does not replace that. For harness-native primitives cited in each question, see `plugin/scripts/prewrite_gate.py`, `plugin/scripts/mcp_bash_guard.py`, and `CONTRACTS.md` § C-05 / C-13 / C-16.
+This rubric is a **plan-time gut-check**. For runtime security depth, invoke an external `/cso`-equivalent security skill separately — this rubric does not replace that. For harness-native primitives cited in each question, see `plugin/scripts/prewrite_gate.py`, `plugin/scripts/mcp_bash_guard.py`, and `CONTRACTS.md` § C-05 / C-13.
 
 ## Security Threat Model (hybrid: 3 STRIDE + 3 harness-native)
 
@@ -34,4 +34,4 @@ R2. **Schema safety** — does the change alter any on-disk schema (TASK.json, R
 
 R3. **Feature-flag path** — can this change be disabled at runtime via a `HARNESS_DISABLE_*` env var or manifest toggle without a code revert? If no, justify why a binary `git revert` is acceptable for this change's blast radius; list the downstream tasks that would need replay.
 
-R4. **Data migration reversibility** — if this change moves, renames, or deletes files under `doc/**`, `plugin/**`, or task directories, is there an undo script (`maintain_restore.py`-style) or an inverse operation documented in the commit message? `git revert` alone does NOT restore moved task directories if the move crossed a sync boundary.
+R4. **Data migration reversibility** — if this change moves, renames, or deletes files under `doc/**`, `plugin/**`, or task directories, is there an undo script or an inverse operation documented in the commit message? `git revert` alone does NOT restore moved task directories if the move crossed a sync boundary.

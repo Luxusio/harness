@@ -19,11 +19,6 @@ Minimal harness scripts. Self-contained — no plugin-legacy dependency.
 - `golden_replay.py` — regression smoke tests for the scripts above (stdlib only)
 - `review-log` / `review-read` — standalone plan review tools
 - `runbook_memory.py` — manages `doc/harness/runbooks.yaml` and `doc/harness/runbook_candidates.yaml`; approved runbooks are surfaced by `prompt_memory.py`, candidates are reviewed in the active/next harness task and recorded through close-time Self-Healing Candidates
-- `hygiene_scan.py` — close-time hygiene scan: contract drift Tier A/B auto-apply + doc_hygiene invocation. State: `doc/harness/.hygiene-last-run`, `doc/harness/.hygiene-pending.json`, `doc/harness/.hygiene-observe.log` (legacy read fallback for old `.maintain-*` names; see `doc/harness/patterns/maintenance-state-naming.md`)
-- `doc_hygiene.py` — content-signal KEEP/REMOVE/REVIEW classifier for `doc/changes/` and `doc/common/`. Archives REMOVE files via `git mv` to `_archive/`. State: `doc/harness/.hygiene-pending.json` with legacy `.maintain-pending.json` read fallback
-- `hygiene_followup.py` — post-close scheduler that turns pending hygiene review items into one standalone follow-up task so cleanup does not dilute the primary task
-- `hygiene_restore.py` — restore a file previously archived by doc_hygiene.py via `git mv`. Usage: `python3 plugin/scripts/hygiene_restore.py <archive-path>`
-- `maintain_restore.py` — legacy-compatible wrapper for old restore commands; delegates to `hygiene_restore.py`
 # Runtime services
 
 `runtime_services.py` starts, checks, logs, and stops background services from

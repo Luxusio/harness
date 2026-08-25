@@ -68,14 +68,14 @@ The transition order is fixed:
 
 ```text
 task_close
--> self-improvement, learning promotion, and hygiene scheduling
+-> self-improvement and learning promotion
 -> goal_next_task
 -> goal_finish when the objective is proven
 ```
 
 This keeps automatic learning active after every child, including long Goals.
-Runbook memory, `learnings.jsonl`, `promote_learnings.py`, search, doc hygiene,
-and hygiene follow-up are independent of orchestration and remain unchanged.
+Runbook memory, `learnings.jsonl`, `promote_learnings.py`, and search are
+independent of orchestration and remain unchanged.
 
 ## Removed State
 

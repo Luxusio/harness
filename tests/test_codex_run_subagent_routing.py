@@ -110,14 +110,6 @@ def test_run_skills_document_resume_detection_and_verify_reconciliation():
         assert "PLAN.md" in body and "RECEIPTS.jsonl" in body
 
 
-def test_run_skills_document_separate_hygiene_followup_policy():
-    for path in (CODEX_RUN, CLAUDE_RUN):
-        body = _text(path)
-        assert "Schedule pending hygiene as a separate follow-up task" in body
-        assert "do not mix unrelated" in body
-        assert "primary task" in body
-
-
 def test_run_skills_require_auto_followup_before_done():
     for path in (CODEX_RUN, CLAUDE_RUN):
         body = _text(path)

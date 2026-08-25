@@ -300,65 +300,6 @@ python3 "${_PLUGIN_ROOT}/scripts/contract_lint.py" \
 
 WARN is non-blocking. Use the continuous maintenance flow to repair drift.
 
-### 3.7.5 Close-time hygiene bootstrap (single atomic step)
-
-This step installs the close-time hygiene system. **Order is critical:** C-16 in
-CONTRACTS.md MUST land before close-time hygiene is considered enabled, so that
-`hygiene_scan.py`'s own C-16 self-detect passes on first run. Do not add
-`hygiene_scan.py` to SessionStart hooks; the Goal child-task executor invokes it post-close
-from `self-improvement.md` and schedules any pending cleanup as a separate task.
-
-Run as a single logical transaction (all-or-nothing):
-
-**Step A — hygiene.yaml stub (idempotent)**
-
-```bash
-_HYGIENE_YAML="${_ROOT}/doc/harness/hygiene.yaml"
-_HYGIENE_TEMPLATE="${_PLUGIN_ROOT}/skills/setup/templates/hygiene.yaml"
-if [ ! -f "$_HYGIENE_YAML" ]; then
-  cp "$_HYGIENE_TEMPLATE" "$_HYGIENE_YAML"
-  echo "hygiene.yaml installed"
-else
-  echo "hygiene.yaml already present — skip"
-fi
-```
-
-**Step B — CONTRACTS.md C-16 patch (idempotent, managed-block only)**
-
-Fresh install: template already includes C-16 (§3.7.1 above). For upgrade
-installs where CONTRACTS.md exists with `harness:managed-begin` but lacks C-16,
-apply a managed-block patch. Per C-15, show AskUserQuestion diff preview first:
-
-```bash
-if grep -q "harness:managed-begin" CONTRACTS.md 2>/dev/null && \
-   ! grep -q "### C-16" CONTRACTS.md 2>/dev/null; then
-  echo "CONTRACTS.md missing C-16 — upgrade patch needed"
-  # AskUserQuestion: show diff of C-16 addition, A) Apply B) Skip
-  # On A: Edit tool appends C-16 stanza inside managed-block BEFORE managed-end marker
-fi
-```
-
-The C-16 text to insert is the full 4-field stanza from the managed template.
-Also ensure C-11 names `hygiene_scan.py` as authorized additive writer (already
-in template; for upgrades, patch C-11 body via the same AskUserQuestion flow).
-Also ensure C-05 contains the AC-019 doc/changes note (already in template).
-
-**Step C — close-time invocation check (idempotent, AFTER steps A+B)**
-
-Only after CONTRACTS.md has C-16 (step B verified), confirm that the run skill
-invokes hygiene from `self-improvement.md`:
-
-```bash
-if grep -q "hygiene_scan.py --apply-safe" "${_PLUGIN_ROOT}/skills/run/self-improvement.md" 2>/dev/null; then
-  echo "hygiene_scan.py close-time invocation present"
-else
-  echo "WARN: self-improvement.md missing hygiene_scan.py close-time invocation"
-fi
-```
-
-**Invariant:** If step B fails or is skipped, step C must NOT claim hygiene is
-enabled. Hygiene runs after close, never as a SessionStart reminder.
-
 ## 3.8 Finalize only after verification
 
 Phase 4 invokes `setup_finalize.py` without `--check`. The command applies the

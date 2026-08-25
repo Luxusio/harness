@@ -55,7 +55,7 @@ plan → develop → verify → close
 
 After every child close, the Goal executor performs self-improvement before
 selecting the next child: it surfaces friction signals into `learnings.jsonl`,
-promotes recurring keys into Tier 2 patterns, schedules hygiene follow-up, and
+promotes recurring keys into Tier 2 patterns, and
 prunes stale entries.
 
 ## TASK.json (4 fields)
@@ -137,11 +137,6 @@ All under `plugin/scripts/`. Stdlib only.
 | `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |
 | `install_verified.py` | Stateless trusted post-QA harness installer; every verified call reinstalls the complete payload from an isolated snapshot | stdout / exit status |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
-| `hygiene_scan.py` | Close-time hygiene scan: Tier A/B auto-apply + doc archive pass | `doc/harness/.hygiene-pending.json` |
-| `doc_hygiene.py` | Content-signal KEEP/REMOVE/REVIEW classifier; archives stale docs via `git mv` | `doc/harness/.hygiene-pending.json` |
-| `hygiene_followup.py` | Post-close scheduler that creates one standalone hygiene review task from pending items | `doc/harness/tasks/TASK__hygiene-review-pending-docs/` |
-| `hygiene_restore.py` | Restore an archived file back to original location via `git mv` | — |
-| `maintain_restore.py` | Compatibility entry point that delegates old restore commands to `hygiene_restore.py` | — |
 | `subagent_lifecycle.py` | Receipt-backed Claude lifecycle handling, active-work queries, and trusted stop-only inference | task `RECEIPTS.jsonl` |
 | `background_hook.py` | SubagentStart/SubagentStop adapter for direct unified-receipt publication | task `RECEIPTS.jsonl` |
 | `_gate_response.py` | Shared hook deny/allow response helper | — |

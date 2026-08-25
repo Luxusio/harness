@@ -69,12 +69,6 @@ OPERATIONAL_IGNORES = (
     "doc/harness/benchmark/",
     "doc/harness/audits/",
     "doc/harness/quality-trend.jsonl",
-    "doc/harness/hygiene.yaml",
-    "doc/harness/.hygiene-last-run",
-    "doc/harness/.hygiene-observe.log",
-    "doc/harness/.hygiene-pending.json",
-    "doc/harness/.hygiene.lock",
-    "doc/harness/.hygiene-session-count",
     "doc/harness/.maintain-last-run",
     "doc/harness/.maintain-observe.log",
     "doc/harness/.maintain-pending.json",
@@ -89,7 +83,6 @@ REQUIRED_SETUP_RESOURCES = (
     "skills/setup/verify-report.md",
     "skills/setup/templates/CONTRACTS.md",
     "skills/setup/templates/CONTRACTS.local.md",
-    "skills/setup/templates/hygiene.yaml",
     "scripts/contract_lint.py",
     "scripts/setup_finalize.py",
 )
@@ -140,6 +133,8 @@ def render_gitignore(original: str) -> str:
     managed_headers = {
         "# harness - operational artifacts (ephemeral, not durable knowledge)",
         "# harness — operational artifacts (ephemeral, not durable knowledge)",
+        # Retained so regeneration strips this header from repos set up before
+        # the hygiene subsystem was removed.
         "# auto-hygiene runtime state (per-user; template at plugin/skills/setup/templates/hygiene.yaml)",
     }
     managed = set(OPERATIONAL_IGNORES)

@@ -93,7 +93,7 @@ def test_run_skills_use_only_native_goal_and_learn_before_next_child():
         assert "goal_add_task" in body
         assert "goal_next_task" in body
         assert body.index("`task_close` first") < body.index("only then call `goal_next_task`")
-        assert "learning promotion and hygiene scheduling" in body
+        assert "learning promotion" in body
         assert "task_pack_runner.py" not in body
         assert "goal_queue_runner.py" not in body
 

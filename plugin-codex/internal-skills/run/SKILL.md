@@ -266,36 +266,15 @@ resume, the stateless root installer may be run again after confirming
 the diff still has fresh review+QA PASS.
 
 For a Goal child, run `task_close` first, then self-improvement including
-learning promotion and hygiene scheduling; only then call `goal_next_task`.
+learning promotion; only then call `goal_next_task`.
 Continue unless complete, blocked/stopped, capped, or awaiting go/no-go.
 
 For this harness plugin source repo, successful repo-mutating development is
 not complete at task close. Phase 7.8 must already have run the verified
 auto-install helper after the last source edit and fresh QA. After
-post-close self-improvement returns `none` or `queued`, commit the completed diff
+post-close self-improvement has run, commit the completed diff
 before the final response unless the user explicitly says not to. Include
 the commit hash and pre-close force-install result in the completion report.
-
-## Mandatory Follow-up Continuation
-
-Post-close self-improvement is part of the same Goal child-task transaction.
-Do not report DONE until the pipeline has been evaluated.
-
-If `hygiene_followup.py --json` returns `"action": "run_followup"`:
-- Treat the returned `task_id` as the next active harness task immediately.
-- Do not send a final completion response yet.
-- Do not treat this as optional cleanup or a recommendation.
-- Run that follow-up through plan/develop/verify/close before reporting DONE.
-- If the user asks for a commit, status, or summary during this window, satisfy
-  that request briefly, then continue the follow-up unless the user explicitly
-  says stop, pause, or cancel.
-- If another follow-up returns `"action": "run_followup"`, continue up to
-  `HARNESS_AUTO_FOLLOWUP_MAX` (default 3). After the cap, report the queued
-  work instead of continuing indefinitely.
-
-If the result is `"queued"`, report the queued task and stop. If the result is
-`"none"`, the harness run may complete. If the follow-up is blocked, record the
-blocker through the normal task-blocked path and report it.
 
 ## Completion Report
 
@@ -340,10 +319,6 @@ Stop on phase failures, report the failure, check task state, and ask how to pro
 ## Self-Improvement (post-close)
 
 After every task close, run the pipeline in `self-improvement.md` (Claude tree):
-- Schedule pending hygiene as a separate follow-up task; do not mix unrelated
-  hygiene cleanup into the just-finished primary task
-- If the scheduler returns `run_followup`, continue that task before reporting
-  DONE; this is a mandatory continuation, not advisory cleanup
 - Detect friction signals (wrong verify strategy, stale manifest, repeated failures, new project patterns)
 - Treat dogfooding feedback, retrospectives, QA complaints, and agent-proposed
   harness improvements as hypotheses until the repo proves them. Before shaping

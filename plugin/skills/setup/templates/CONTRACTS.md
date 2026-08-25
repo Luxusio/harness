@@ -42,7 +42,6 @@ Lookup table. Find your current situation, apply the listed contracts.
 | `doc/` 노트 freshness 점검 | [C-06](#c-06) | soft |
 | `CLAUDE.md` 편집 필요 | [C-10](#c-10), [C-11](#c-11), [C-15](#c-15) | hard |
 | Maintenance 태스크 (MAINTENANCE 마커) | C-01 완화, [C-05](#c-05) 유지 | — |
-| `doc/changes/` 또는 `doc/common/` 자동 정리 | [C-16](#c-16) | auto |
 | 브라우저 또는 full-suite 검증의 실행 위치 선택 | [C-18](#c-18) | soft |
 
 Levels:
@@ -108,11 +107,6 @@ redirect, cp, mv, tee, python -c open(…,'w'), …) targeting the same basename
 or lifecycle hook.
 **Why:** Wrong-writer mutation breaks task authority or lifecycle provenance.
 
-**Note (AC-019):** `doc/changes/**` and `doc/common/**` writes by
-`hygiene_scan.py` and `doc_hygiene.py` are authorized via C-16. These paths
-are NOT in PROTECTED_ARTIFACTS; their protection comes from hygiene.yaml
-validation, the observer phase, and `hygiene_restore.py`.
-
 ### C-06
 
 **Title:** Note freshness is an explicit developer check.
@@ -165,8 +159,8 @@ Self-Healing Candidates.
 **Enforced by:** `plugin/scripts/contract_lint.py` (setup/explicit check) —
 detects marker tampering; setup/continuous maintenance regenerates from template.
 Authorized writers for additive Edits within the managed block:
-active tasks with a `MAINTENANCE` marker and `hygiene_scan.py` (additive Edits
-only, never deletions, never edits outside the managed block markers).
+active tasks with a `MAINTENANCE` marker (additive Edits only, never deletions,
+never edits outside the managed block markers).
 **On violation:** soft-warn. User can move content to `CONTRACTS.local.md`.
 **Why:** The managed block is upgraded atomically on harness release; manual
 edits are lost.
@@ -225,39 +219,6 @@ user-owned.
 setup-owned operations must present a diff via `AskUserQuestion` first.
 **Why:** User trust is the most load-bearing contract. Surprise overwrites
 break it immediately.
-
-### C-16
-
-**Title:** Close-time hygiene — content-signal doc classification + contract drift auto-apply.
-**When:** Close-time self-improvement, before the next Goal child.
-**Enforced by:** `plugin/scripts/hygiene_scan.py` (post-close self-improvement
-pipeline); `plugin/scripts/doc_hygiene.py` (called by hygiene_scan);
-`doc/harness/hygiene.yaml` (config + canonical disable path).
-**On violation:** auto — hygiene is advisory; failure degrades to no-op.
-**Why:** Without automatic cleanup, `doc/changes/` and `doc/common/` accumulate
-indefinitely. Institutional memory erodes when the signal-to-noise ratio drops.
-
-**Tier A/B/C mapping (contract drift):**
-- `[INFO]` (Tier A): auto-applied as additive Edit within managed-block markers. No deletions.
-- `[SOFT]` additive (Tier B): auto-applied if action is matrix-row addition or contract heading addition only. Modifications/deletions deferred.
-- `[HARD]` (Tier C): deferred. Entry written to `.hygiene-pending.json` (legacy read fallback: `.maintain-pending.json`); user confirms in the active/next harness task and the decision is recorded in close-time Self-Healing Candidates.
-
-**KEEP-on-doubt rule:** absence of `superseded_by` or `distilled_to` frontmatter
-fields NEVER alone classifies a doc as REMOVE. Cold-start docs (no new frontmatter)
-always classify as KEEP or REVIEW.
-
-**Observer phase:** first `observer_until_session` sessions (default 14) run
-in observer-only mode — no archive writes, no contract edits. Intentions logged
-to `doc/harness/.hygiene-observe.log`.
-
-**Restore:** `python3 plugin/scripts/hygiene_restore.py <archive-path>`.
-Archive commit message always embeds the copy-pasteable restore command.
-
-**Frontmatter fields (optional, added to individual doc files):**
-- `superseded_by: <path>` — this doc is replaced by `<path>`; if target exists
-  AND `reference_count == 0`, classify REMOVE.
-- `distilled_to: <path>` — key content promoted to `<path>`; if target exists
-  AND `reference_count == 0`, classify REMOVE.
 
 ### C-18
 

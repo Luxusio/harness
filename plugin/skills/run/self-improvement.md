@@ -200,33 +200,6 @@ Reject feedback-derived entries when they lack a trigger, action, or verificatio
 
 Housekeeping, not a gate. If any step fails, log a warning and continue. learnings.jsonl is staging, not permanent storage.
 
-### Step 0: Run close-time hygiene scan, then schedule a separate follow-up
-
-After the primary task closes, run one quiet hygiene scan. This is deliberately
-post-close rather than SessionStart/UserPromptSubmit work, so the active task
-keeps one objective and prompt hooks stay lightweight.
-
-Then, if `doc/harness/.hygiene-pending.json` has items, do **not** process them
-inside the just-finished primary task. Keep one objective per task.
-
-Run the scan and scheduler:
-
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_scan.py --apply-safe >/dev/null 2>/dev/null || true
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/hygiene_followup.py --json 2>/dev/null || true
-```
-
-If it returns `"action": "run_followup"`, immediately continue with that
-reported `task_id` as the next standalone harness task. This is a mandatory
-continuation before DONE, not optional cleanup or a recommendation. Do not send
-the final completion report while an auto-runnable follow-up remains open. Run
-only one follow-up task at a time. If another follow-up returns
-`"action": "run_followup"`, continue up to `HARNESS_AUTO_FOLLOWUP_MAX`
-(default 3) and then report queued work instead of continuing indefinitely. If
-the user asks for a commit, status, or summary during this window, satisfy that
-request briefly, then continue the follow-up unless the user explicitly says
-stop, pause, or cancel.
-
 If it returns `"queued"`, report the queued task and stop unless the user
 explicitly asks to continue. If it returns `"none"`, continue the normal
 self-improvement pipeline.

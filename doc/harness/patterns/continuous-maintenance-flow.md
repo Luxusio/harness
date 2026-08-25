@@ -11,19 +11,12 @@ in committed artifacts before close or ask the user where the follow-up belongs.
 Private memory and gitignored queues are staging only; they are not shared
 maintenance.
 
-Some old on-disk state paths used `maintain` in their filename. New writes use
-canonical `.hygiene-*` state names, with legacy `.maintain-*` read fallback.
-See `doc/harness/patterns/maintenance-state-naming.md`; those names are not
-standalone skill entrypoints.
-
 ## Maintain Responsibility Map
 
 | Former maintain responsibility | Continuous home | Required behavior |
 | --- | --- | --- |
-| REVIEW queue inspection from `.hygiene-pending.json` with legacy `.maintain-pending.json` fallback | SessionStart/prompt memory, then normal task planning | Surface the item as context. If the current task touches that area, fold the decision into the task; otherwise leave it pending without forcing a separate maintain command. |
 | Tier C contract drift confirmation | Close-time Self-Healing Candidates or setup/update task | Ask one explicit user question before applying or deferring a risky contract change. Deferred items must name `user_decision`, `reason`, and `proposed_artifact` or `proposed_task`. |
 | Runbook candidate approval | Close-time self-healing for setup/runtime discoveries | If the run command was proven during the task, update committed runbook/docs/scripts. If it is too broad, ask the user whether to create a separate task. |
-| Staged hygiene archive batch commit | Normal git hygiene before close | Report staged archive moves in the task handoff/close summary. Commit only when user intent is clear; otherwise leave the staged state visible. |
 | Pending state rewrite/reporting | Harness close gates and prompt memory | The close gate validates committed HANDOFF evidence. Prompt memory surfaces remaining pending items at the next session. |
 
 ## Close-Time Self-Healing

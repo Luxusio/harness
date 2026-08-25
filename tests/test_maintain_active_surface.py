@@ -1,8 +1,7 @@
 """Regression guard for standalone maintain-skill removal.
 
 The active plugin surface must not route users or agents back to
-`harness:maintain`. Compatibility names such as `maintain_restore.py` and
-legacy `.maintain-*` state fallbacks are allowed.
+`harness:maintain`. Legacy `.maintain-*` state fallbacks are allowed.
 """
 from __future__ import annotations
 
@@ -41,7 +40,6 @@ ALLOWED_FILES = {
 }
 
 ALLOWED_SUBSTRINGS = [
-    "maintain_restore.py",
     ".maintain-",
     "standalone maintain skill",
     "after standalone maintain skill removal",

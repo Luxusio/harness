@@ -130,17 +130,12 @@ class TestFirstFireBanner(unittest.TestCase):
                       "HARNESS_DISABLE_RETRO should be in self-improvement.md")
         self.assertIn("Auto-ran", content, "Auto-ran section reference should be present")
 
-    def test_self_improvement_md_has_hygiene_call(self):
+    def test_self_improvement_md_invokes_promote_learnings(self):
         """promote_learnings.py should still be invoked in self-improvement.md."""
         path = os.path.join(REPO_ROOT, "plugin", "skills", "run", "self-improvement.md")
         with open(path) as f:
             content = f.read()
         self.assertIn("promote_learnings.py", content)
-        self.assertIn("hygiene_scan.py --apply-safe", content)
-        self.assertIn("hygiene_followup.py --json", content)
-        self.assertLess(content.find("hygiene_scan.py --apply-safe"),
-                        content.find("hygiene_followup.py --json"))
-        self.assertIn("one follow-up", content)
 
 
 if __name__ == "__main__":

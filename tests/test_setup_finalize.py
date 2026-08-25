@@ -32,7 +32,6 @@ def make_plugin_root(tmp_path: Path) -> Path:
         "skills/setup/verify-report.md",
         "skills/setup/templates/CONTRACTS.md",
         "skills/setup/templates/CONTRACTS.local.md",
-        "skills/setup/templates/hygiene.yaml",
         "scripts/contract_lint.py",
         "scripts/setup_finalize.py",
     ):
@@ -909,7 +908,7 @@ def test_codex_installed_mirror_prepare_and_finalize_end_to_end(tmp_path):
 def test_canonical_setup_resources_exist_in_source_tree():
     for rel in (
         "repo-census.md", "project-interview.md", "bootstrap.md", "verify-report.md",
-        "templates/CONTRACTS.md", "templates/CONTRACTS.local.md", "templates/hygiene.yaml",
+        "templates/CONTRACTS.md", "templates/CONTRACTS.local.md",
     ):
         assert (SETUP_SOURCE / rel).is_file(), rel
 
