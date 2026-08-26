@@ -32,7 +32,13 @@ except Exception:
 GATE_NAME = "mcp_bash_guard"
 _COMMAND_LENGTH_CAP = 64 * 1024
 _GUARD_STDIN_CAP = 128 * 1024
-REDIRECT_TOKENS = {">", ">>", "1>", "1>>"}
+# `punctuation_chars=True` emits `>|`, `&>`, `&>>` and `>&` as single tokens.
+# None of them start with `>` or a digit, so `_INLINE_REDIRECT_RE` misses them
+# too, and the path token that follows was never inspected: `echo x >| PLAN.md`
+# truncated a protected artifact through the gate. `>&` is included for the same
+# reason; the fd-duplication spelling (`2>&1`) is harmless here because the
+# following token is `1`, which is not a protected path.
+REDIRECT_TOKENS = {">", ">>", "1>", "1>>", ">|", "&>", "&>>", ">&"}
 # Commands that cannot themselves write a file. Naming a protected artifact or
 # lifecycle symbol in their arguments (a grep pattern, an `echo` banner) is
 # inspection, not mutation, so it must not deny the segment.

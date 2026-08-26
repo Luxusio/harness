@@ -211,6 +211,29 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             decision, _ = parse_decision(r.stdout)
             self.assertIsNone(decision)
 
+    def test_alternate_redirect_operators_deny(self):
+        """`>|`, `&>`, `&>>`, `>&` are redirects too.
+
+        They tokenize as single punctuation tokens that start with neither `>`
+        nor a digit, so both REDIRECT_TOKENS and _INLINE_REDIRECT_RE missed them
+        and the following path was never inspected. `echo x >| PLAN.md`
+        truncated a protected artifact straight through the gate.
+        """
+        with scratch_task_in_real_repo("pr1-altredir") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for op in (">|", "&>", "&>>", ">&"):
+                with self.subTest(op=op):
+                    decision, reason = parse_decision(
+                        _run_bash(f"echo x {op} {receipts}").stdout
+                    )
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_fd_duplication_still_allows(self):
+        """`2>&1` must not be read as a redirect onto a protected path."""
+        decision, _ = parse_decision(_run_bash("echo hello 2>&1").stdout)
+        self.assertIsNone(decision)
+
     def test_python_c_command_substitution_denies(self):
         """Command substitution defeats the inline `-c` AST parse.
 

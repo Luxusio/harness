@@ -40,7 +40,7 @@ before the command basename is examined (fixes a legacy bypass).
 
 | Verb / pattern | Target extracted from |
 |----------------|------------------------|
-| `>`, `>>` (+ inline `N>`, `N>>`) | the token immediately following the redirect operator |
+| `>`, `>>`, `>\|`, `&>`, `&>>`, `>&` (+ inline `N>`, `N>>`) | the token immediately following the redirect operator |
 | `tee` / `tee -a` | every non-option argument |
 | `sed -i` (and `sed -iBACKUP`) | last non-option argument |
 | `perl -pi` (and `perl -pi.bak`) | last non-option argument |
@@ -141,6 +141,14 @@ the *name-mention* heuristics. Redirections are detected independently by
 the command name. The relief is also per segment: a `for` wrapper does not
 launder a redirect inside its body.
 
+This invariant only holds for operators actually in `REDIRECT_TOKENS`. Until
+2026-08-26 it silently did not: `>|`, `&>`, `&>>` and `>&` tokenize as single
+punctuation tokens starting with neither `>` nor a digit, so they matched
+neither the set nor `_INLINE_REDIRECT_RE`, and `echo x >| RECEIPTS.jsonl`
+truncated a protected artifact through the gate. Before admitting a new command
+word to the relief sets, confirm the operator inventory here is still complete —
+this argument is what makes that relief safe.
+
 `GIT_NON_MUTATING_SUBCOMMANDS` covers the same idea for git. `add` and `commit`
 move content into the index and object store and cannot change what a protected
 artifact contains on disk, so they are admitted — without them harness lifecycle
@@ -183,6 +191,14 @@ accepted over-block, since shell quoting is not recoverable after tokenization.
 Other dynamic constructs remain:
 
 - command substitution or backticks around non-Python mutators — not extracted.
+- `python -m <module> <protected path>` is not inspected. The python branch
+  returns after the inline `-c` check, so a stdlib module used as a file-writing
+  utility (`python3 -m json.tool in.json <protected path>`) overwrites the
+  target. This sits on the seam between "script execution is not gated" (which
+  covers `-m`) and the mutation-verb class the gate does enforce. Left open
+  deliberately: gating non-option operands of `-m` would re-deny read-only tools
+  such as `python3 -m mypy plugin/scripts/mcp_bash_guard.py`, which is the false
+  deny this whole change removed.
 - **variable indirection defeats redirect detection entirely.**
   `F=<protected path>; echo x >> $F` allows, and the write succeeds. Redirect
   targets are extracted from *unexpanded* tokens, before the shell-value
