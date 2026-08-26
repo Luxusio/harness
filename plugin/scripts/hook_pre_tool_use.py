@@ -38,6 +38,70 @@ def _is_subagent_spawn_tool(tool_name: str) -> bool:
 
 HOOK_TIMEOUT_SECONDS = 5.0
 REGISTRATION_BUDGET_SECONDS = 0.5
+
+WATCHER_DIAGNOSTICS_RELPATH = "doc/harness/.watcher-diagnostics.json"
+
+
+def _diagnostics_path(payload: bytes) -> str:
+    cwd = _payload_cwd(payload)
+    if not cwd:
+        return ""
+    root = cwd
+    while True:
+        if os.path.isdir(os.path.join(root, "doc", "harness")):
+            return os.path.join(root, WATCHER_DIAGNOSTICS_RELPATH)
+        parent = os.path.dirname(root)
+        if parent == root:
+            return ""
+        root = parent
+
+
+def _update_diagnostics(payload: bytes, updates: dict) -> None:
+    """Leave the registration result where the MCP control plane can read it.
+
+    Diagnostic only. Nothing written here can authorize a PASS; the close gate
+    still reads only hook-owned RECEIPTS.jsonl entries.
+    """
+    path = _diagnostics_path(payload)
+    if not path:
+        return
+    data = {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            loaded = json.load(handle)
+        if isinstance(loaded, dict):
+            data = loaded
+    except Exception:
+        data = {}
+    data.update(updates)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def _report_registration_failure(payload: bytes, reason: str) -> None:
+    _update_diagnostics(payload, {
+        "registration_present": False,
+        "last_registration_error": reason,
+    })
+    sys.stderr.write(
+        "[harness] receipt watcher registration failed: "
+        f"{reason}. This subagent's start and completion will NOT be recorded "
+        "in RECEIPTS.jsonl, so task_verify cannot reach PASS from it. Repair "
+        "receipt capability and re-run the lens; do not hand-author receipts.\n"
+    )
+
+
+def _clear_registration_failure(payload: bytes) -> None:
+    _update_diagnostics(payload, {
+        "registration_present": True,
+        "last_registration_error": "",
+    })
 CHILD_TIMEOUT_SECONDS = 1.5
 
 
@@ -60,8 +124,30 @@ def main() -> int:
     payload = sys.stdin.buffer.read()
     tool_name = _tool_name(payload)
     if _is_subagent_spawn_tool(tool_name):
-        if restore_watcher_registration is not None:
-            restore_watcher_registration(payload, budget_seconds=REGISTRATION_BUDGET_SECONDS)
+        # Registration stays best-effort — per C-12 this hook must never block
+        # the session. What must not stay best-effort is the *result*: an
+        # unregistered spawn produces no receipt, and discovering that after
+        # review and QA have finished wastes the whole verification pass.
+        if restore_watcher_registration is None:
+            _report_registration_failure(
+                payload, "codex_hook_registration is unavailable in this hook tree",
+            )
+            return 0
+        try:
+            registered = restore_watcher_registration(
+                payload, budget_seconds=REGISTRATION_BUDGET_SECONDS,
+            )
+        except Exception as exc:
+            _report_registration_failure(payload, f"{type(exc).__name__}: {exc}")
+            return 0
+        if registered:
+            _clear_registration_failure(payload)
+        else:
+            _report_registration_failure(
+                payload,
+                "watcher registration did not complete within "
+                f"{REGISTRATION_BUDGET_SECONDS}s",
+            )
         return 0
 
     script = ""

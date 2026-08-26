@@ -993,6 +993,11 @@ class HarnessMcpServerTests(unittest.TestCase):
         server = harness_server.McpServer()
         with (
             mock.patch.object(harness_server, "_WatcherManager", side_effect=RuntimeError("boom")),
+            # Without this the real writer persists "RuntimeError: boom" into the
+            # developer's own doc/harness/.watcher-diagnostics.json, and every
+            # later task_context in that repo reports the test's failure as live
+            # session state.
+            mock.patch.object(harness_server, "_record_watcher_error"),
             mock.patch.object(server, "_reply") as reply,
         ):
             server.handle_request({
@@ -1184,7 +1189,9 @@ class HarnessMcpServerTests(unittest.TestCase):
                 harness_server.canonical_task_dir = original_ctd
             self.assertNotIn("isError", result)
             structured = result["structuredContent"]
-            self.assertEqual(set(structured), {"task_dir", "task_context"})
+            self.assertEqual(
+                set(structured), {"task_dir", "task_context", "watcher_status"},
+            )
             context = structured["task_context"]
             self.assertEqual(context["task_id"], "TASK__mcp")
             self.assertEqual(set(context), {

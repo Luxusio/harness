@@ -115,6 +115,179 @@ try:
 except Exception:
     _WatcherManager = None
 
+# ── Watcher diagnostics ──────────────────────────────────────────────────
+#
+# The hook process and this server are separate processes, so a registration
+# failure observed in a PreToolUse hook has to be left somewhere the control
+# plane can read it. This file is diagnostic only: nothing here can produce a
+# PASS, and no reader treats its contents as attestation.
+
+WATCHER_DIAGNOSTICS_RELPATH = "doc/harness/.watcher-diagnostics.json"
+
+# Set by McpServer.__init__ so the stateless handler functions can report live
+# watcher state. Stays None under direct handler unit tests.
+_SERVER: "McpServer | None" = None
+
+
+def _watcher_diagnostics_path(control_root: str = "") -> str:
+    try:
+        root = control_root or _control_root()
+    except Exception:
+        return ""
+    return os.path.join(root, WATCHER_DIAGNOSTICS_RELPATH)
+
+
+def _read_watcher_diagnostics(control_root: str = "") -> dict:
+    path = _watcher_diagnostics_path(control_root)
+    if not path:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_watcher_diagnostics(updates: dict, control_root: str = "") -> None:
+    path = _watcher_diagnostics_path(control_root)
+    if not path:
+        return
+    data = _read_watcher_diagnostics(control_root)
+    data.update(updates)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        os.replace(tmp, path)
+    except Exception:
+        # Diagnostics must never break the control plane.
+        pass
+
+
+def _clearing_a_recorded_error(message: str, control_root: str = "") -> bool:
+    """Is this an error-clear with no prior error on disk?
+
+    The success path calls `_record_watcher_error("")` on every watcher start.
+    Writing that would materialize a diagnostics file in any repo the server
+    runs in, purely to record the absence of a problem. There is nothing to
+    clear unless a previous run left an error behind.
+    """
+    if message:
+        return False
+    path = _watcher_diagnostics_path(control_root)
+    return not (path and os.path.exists(path))
+
+
+def _record_watcher_error(message: str, control_root: str = "") -> None:
+    if _clearing_a_recorded_error(message, control_root):
+        return
+    _write_watcher_diagnostics({"last_watcher_error": message or ""}, control_root)
+
+
+def _receipts_writable(task_dir: str) -> bool | None:
+    """True/False when it can be determined, None when it cannot.
+
+    A guessed True here would be the worst possible answer, so an
+    indeterminate result stays indeterminate.
+    """
+    if not task_dir:
+        return None
+    try:
+        return os.access(task_dir, os.W_OK)
+    except Exception:
+        return None
+
+
+def _watcher_status(task_dir: str = "", task_id: str = "", run_id: str = "") -> dict:
+    """Diagnostic snapshot of receipt-recording readiness.
+
+    Every field is advisory. Nothing here can authorize a PASS: the close gate
+    still reads only hook-owned entries in RECEIPTS.jsonl. Fields this runtime
+    cannot determine are reported as null rather than guessed.
+    """
+    diagnostics = _read_watcher_diagnostics()
+    try:
+        capability_warning = receipt_capability_warning()
+    except Exception:
+        capability_warning = ""
+    manager_running = _SERVER.watcher_manager is not None if _SERVER is not None else None
+    if _WatcherManager is None:
+        # This runtime has no Codex watcher at all; the Claude hook tree is the
+        # recording path, so manager state is not a meaningful signal here.
+        manager_running = None
+
+    registration_present = diagnostics.get("registration_present")
+    last_registration_error = diagnostics.get("last_registration_error") or ""
+    last_watcher_error = (
+        (_SERVER.last_watcher_error if _SERVER is not None else "")
+        or diagnostics.get("last_watcher_error")
+        or ""
+    )
+
+    # Readiness is per-runtime. `capability_warning` inspects the *Claude*
+    # plugin registration only, so on Codex it is silent even when the Codex
+    # watcher never registered — which is exactly how a session can spend three
+    # review agents and a full QA suite and end with no receipts. The Codex
+    # signals below are what catch that case.
+    unrecordable_reason = ""
+    if capability_warning:
+        unrecordable_reason = capability_warning
+    elif registration_present is False:
+        unrecordable_reason = (
+            "The receipt watcher is not registered for this session"
+            + (f": {last_registration_error}" if last_registration_error else ".")
+        )
+    elif last_registration_error:
+        unrecordable_reason = f"Receipt watcher registration failed: {last_registration_error}"
+    elif last_watcher_error:
+        unrecordable_reason = f"Receipt watcher failed to start: {last_watcher_error}"
+
+    return {
+        "receipt_capability_warning": capability_warning,
+        "receipts_recordable": not unrecordable_reason,
+        "receipts_unrecordable_reason": unrecordable_reason,
+        "manager_running": manager_running,
+        "registration_present": registration_present,
+        "root_thread_id": diagnostics.get("root_thread_id"),
+        "rollout_offset": diagnostics.get("rollout_offset"),
+        "active_task_id": task_id or None,
+        "active_run_id": run_id or None,
+        "receipts_writable": _receipts_writable(task_dir),
+        "last_registration_error": last_registration_error,
+        "last_watcher_error": last_watcher_error,
+    }
+
+
+RECEIPT_REPAIR_NEXT_ACTION = (
+    "Receipts cannot be recorded in this session, so review and QA subagents "
+    "would run unattested and task_verify could not reach PASS. Do not spawn "
+    "them yet. Repair receipt capability first, then resume. Planning and "
+    "implementation still work in this session."
+)
+
+
+def _gate_next_action(ctx: dict, status: dict) -> dict:
+    """Replace a spawn instruction the runtime cannot attest.
+
+    Instructing a spawn that cannot produce a receipt spends the user's time and
+    money on evidence that is then discarded — three review agents and a full QA
+    suite can complete and leave RECEIPTS.jsonl empty.
+    """
+    if status.get("receipts_recordable"):
+        return ctx
+    current = str(ctx.get("next_action", ""))
+    if "subagent" in current.lower() or "spawn" in current.lower():
+        ctx = dict(ctx)
+        reason = str(status.get("receipts_unrecordable_reason") or "")
+        ctx["next_action"] = (
+            f"{RECEIPT_REPAIR_NEXT_ACTION} Cause: {reason}" if reason
+            else RECEIPT_REPAIR_NEXT_ACTION
+        )
+    return ctx
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 
@@ -313,6 +486,7 @@ def handle_task_start(args: dict) -> dict:
     terminal_receipt_snapshot = {}
     task_control_snapshot = {}
     blocked_artifact_snapshot = {}
+    superseded_run_id = ""
 
     def rollback_new_start():
         if resumed_existing:
@@ -345,8 +519,12 @@ def handle_task_start(args: dict) -> dict:
                 raise RuntimeError("task_start refused invalid terminal task artifacts")
         terminal_resume = terminal_resume_status in {"blocked", "closed"}
         if resumed_existing:
+            previous_run_id = str(read_task_control(task_dir).get("run_id") or "")
             _, task_control_snapshot = begin_task_run(task_dir)
             resumed = read_task_control(task_dir)
+            new_run_id = str(resumed.get("run_id") or "")
+            if previous_run_id and new_run_id and previous_run_id != new_run_id:
+                superseded_run_id = previous_run_id
         if resumed_existing:
             # Every task_start resume is a new lifecycle generation and must
             # not inherit evidence collected for the previous run identity.
@@ -423,6 +601,23 @@ def handle_task_start(args: dict) -> dict:
             "retry_action": "Update the harness plugin, then restart the session.",
         })
 
+    if superseded_run_id:
+        warnings.append({
+            "code": "EVIDENCE_RUN_SUPERSEDED",
+            "stage": "task_start",
+            "message": (
+                "새 evidence run이 생성되었습니다. 이전 review/QA 결과는 사용할 수 "
+                "없으며 모두 다시 실행해야 합니다. "
+                f"Superseded run_id: {superseded_run_id} -> {resumed['run_id']}."
+            ),
+            "retry_action": "Re-run every required review lens, then every required QA lens.",
+        })
+
+    status = _watcher_status(
+        task_dir=task_dir, task_id=tid, run_id=str(resumed.get("run_id") or ""),
+    )
+    ctx = _gate_next_action(ctx, status)
+
     return _ok({
         "task_dir": task_dir, "task_id": tid, "task_context": ctx,
         "run_id": resumed["run_id"],
@@ -430,6 +625,7 @@ def handle_task_start(args: dict) -> dict:
         "task_created": not resumed_existing,
         "resumed": resumed_existing,
         "warnings": warnings,
+        "watcher_status": status,
         "next_action": ctx.get("next_action", ""),
     })
 
@@ -498,9 +694,12 @@ def handle_task_context(args: dict) -> dict:
     ctx = emit_compact_context(td, snapshot)
     if "error" in ctx:
         return _err("task_context failed", data=ctx)
+    status = _watcher_status(task_dir=td, task_id=ti)
+    ctx = _gate_next_action(ctx, status)
     return _ok({
         "task_dir": td,
         "task_context": ctx,
+        "watcher_status": status,
     })
 
 
@@ -979,16 +1178,26 @@ class McpServer:
         self.protocol_version = SUPPORTED_PROTOCOLS[0]
         self.framed_stdio = False
         self.watcher_manager = None
+        self.last_watcher_error = ""
+        global _SERVER
+        _SERVER = self
 
     def _start_codex_watchers(self) -> None:
         if self.watcher_manager is not None or _WatcherManager is None:
             return
         try:
             self.watcher_manager = _WatcherManager(_control_root()).start()
-        except Exception:
+            self.last_watcher_error = ""
+            _record_watcher_error("")
+        except Exception as exc:
             # Lifecycle attestation is fail-closed.  A watcher failure must not
-            # take down task_context or other MCP control-plane operations.
+            # take down task_context or other MCP control-plane operations —
+            # but it must not be silent either.  Without the cause recorded the
+            # only symptom is an absent receipt, discovered after review and QA
+            # have already been paid for.
             self.watcher_manager = None
+            self.last_watcher_error = f"{type(exc).__name__}: {exc}"
+            _record_watcher_error(self.last_watcher_error)
 
     def close(self) -> None:
         manager = self.watcher_manager
