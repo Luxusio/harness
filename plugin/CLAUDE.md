@@ -201,19 +201,29 @@ or promote its own PASS.
 
 All scripts under `plugin/scripts/`. Stdlib only (PIL optional for canary).
 
+**Invoked by the loop** — a skill phase calls these:
+
+| Script | Purpose | Output | Caller |
+|--------|---------|--------|--------|
+| `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/<task-id>.md` | develop Phase 3.3 |
+| `promote_learnings.py` | Tier 3→2 promotion + stale pruning | `doc/harness/patterns/<topic>.md` | run self-improvement |
+| `health.py --dry-run` | Weighted composite 0–10 score | stdout | run Phase 4.5 |
+| `retro.py` | Weekly retrospective (git + tasks + learnings) | stdout; `--save` writes `doc/harness/retros/<date>.md` | run self-improvement auto-trigger |
+
+**Manual diagnostics** — no phase calls these; run them yourself when you want
+the answer. Their absence from the loop is intentional, not rot:
+
 | Script | Purpose | Output |
 |--------|---------|--------|
-| `health.py --dry-run` | Weighted composite 0–10 score | stdout |
 | `canary.py` | Visual regression baseline + sha/pixel diff | `doc/harness/visual-baselines/<task-id>/` |
 | `search_learnings.py` | Keyword/type/skill/since search over Tier 3 | reads `doc/harness/learnings.jsonl` |
-| `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/<task-id>.md` |
-| `inject_checkpoint.py` | Manual resume helper — surface latest checkpoint | reads `doc/harness/checkpoints/` |
-| `promote_learnings.py` | Tier 3→2 promotion + stale pruning | `doc/harness/patterns/<topic>.md` |
-| `retro.py` | Weekly retrospective (git + tasks + learnings) | stdout; `--save` writes `doc/harness/retros/<date>.md` |
+| `inject_checkpoint.py` | Surface the latest checkpoint for a manual resume | reads `doc/harness/checkpoints/` |
+| `audit.py` | Categorized audit from manifest `audit_categories` | stdout |
+| `benchmark.py` | Numeric metric snapshot from manifest `benchmark_components` | stdout |
 
 Health is activated via the manifest optional key `health_components` and falls
-back to `test_command` when no components are declared. Benchmark and audit are
-stdout-only helpers for explicit diagnostics; they do not write history files.
+back to `test_command` when no components are declared. The manual diagnostics
+are stdout-only except `canary.py`; none of them write history files.
 
 ## 11. Tiered Learning
 
