@@ -300,7 +300,7 @@ def test_task_dir_must_be_canonical_and_active(tmp_path):
     repo, _ = _repo(tmp_path)
     rogue = repo / "rogue/TASK__fake"
     rogue.mkdir(parents=True)
-    valid, reason = mod._validate_task_dir(repo, rogue.resolve())
+    valid, reason = mod._validate_task_dir(repo, rogue.resolve(), "sid-9")
     assert not valid
     assert "not canonical" in reason
 
@@ -317,10 +317,60 @@ def test_task_dir_requires_open_exact_session_generation(tmp_path):
         mock.patch.object(mod, "read_task_control", return_value=control),
         mock.patch.object(mod, "active_task_binding_matches", return_value=False) as binding,
     ):
-        valid, reason = mod._validate_task_dir(repo, task.resolve())
+        valid, reason = mod._validate_task_dir(repo, task.resolve(), "sid-9")
     assert not valid
     assert "open active TASK.json generation" in reason
-    binding.assert_called_once_with(str(repo), str(task.resolve()), control)
+    # The resolved id must reach the binding check; without it the lookup falls
+    # back to "default" and misses the marker this session wrote.
+    binding.assert_called_once_with(
+        str(repo), str(task.resolve()), control, session_id="sid-9",
+    )
+
+
+def test_resolved_session_id_prefers_a_real_id_over_the_hint(tmp_path):
+    repo, _ = _repo(tmp_path)
+    with (
+        mock.patch.object(mod, "current_session_id", return_value="real-sid"),
+        mock.patch.object(mod, "read_session_hint", return_value="stale-hint") as hint,
+    ):
+        assert mod._resolved_session_id(repo) == "real-sid"
+    # A caller with genuine hook input or HARNESS_SESSION_ID must never be
+    # redirected by a hint file another session left behind.
+    hint.assert_not_called()
+
+
+def test_resolved_session_id_falls_back_to_the_hint(tmp_path):
+    repo, _ = _repo(tmp_path)
+    with (
+        mock.patch.object(mod, "current_session_id", return_value="default"),
+        mock.patch.object(mod, "read_session_hint", return_value="hinted-sid"),
+    ):
+        assert mod._resolved_session_id(repo) == "hinted-sid"
+
+
+def test_resolved_session_id_stays_default_without_a_usable_hint(tmp_path):
+    repo, _ = _repo(tmp_path)
+    # read_session_hint already rejects empty, literal "default", and
+    # non-sanitizing values, returning "". Staying on "default" fails the
+    # binding check closed rather than binding to an arbitrary task.
+    with (
+        mock.patch.object(mod, "current_session_id", return_value="default"),
+        mock.patch.object(mod, "read_session_hint", return_value=""),
+    ):
+        assert mod._resolved_session_id(repo) == "default"
+
+
+def test_resolved_session_id_reads_a_real_hint_file(tmp_path):
+    """End-to-end over the real hint reader, not a mocked one."""
+    repo, _ = _repo(tmp_path)
+    sessions = repo / "doc/harness/tasks/.active_sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    (sessions / ".session-hint").write_text("hinted-sid\n", encoding="utf-8")
+    with mock.patch.object(mod, "current_session_id", return_value="default"):
+        assert mod._resolved_session_id(repo) == "hinted-sid"
+    (sessions / ".session-hint").write_text("default\n", encoding="utf-8")
+    with mock.patch.object(mod, "current_session_id", return_value="default"):
+        assert mod._resolved_session_id(repo) == "default"
 
 
 def test_snapshot_paths_use_tracked_and_dirty_payload_files(tmp_path):
@@ -356,12 +406,11 @@ def test_global_lock_ignores_xdg_cache_and_follows_installer_home(tmp_path, monk
 
 def test_active_task_switch_during_install_withholds_marker(tmp_path):
     repo, task = _repo(tmp_path)
+    validate = mock.Mock(side_effect=[(True, ""), (False, "task is not active")])
     with (
         mock.patch.object(mod, "find_repo_root", return_value=str(repo)),
         mock.patch.object(mod, "_trusted_harness_repo", return_value=(True, "")),
-        mock.patch.object(mod, "_validate_task_dir", side_effect=[
-            (True, ""), (False, "task is not active"),
-        ]),
+        mock.patch.object(mod, "_validate_task_dir", validate),
         mock.patch.object(mod, "_snapshot_paths", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_dirty_install_payload", return_value={"plugin/file.py"}),
         mock.patch.object(mod, "_global_lock_path", return_value=tmp_path / "global.lock"),
@@ -374,3 +423,9 @@ def test_active_task_switch_during_install_withholds_marker(tmp_path):
     ):
         assert mod.install_verified(task) == 5
     assert not (task / "INSTALL_RECEIPT.json").exists()
+    # Both binding checks must use one id resolved once. Re-inlining the
+    # resolution inside _validate_task_dir would let a prompt hook rewriting
+    # .session-hint mid-install make the post-check consult a different
+    # session than the pre-check.
+    assert validate.call_count == 2
+    assert validate.call_args_list[0].args[2] == validate.call_args_list[1].args[2]

@@ -23,7 +23,9 @@ sys.path.insert(0, str(SCRIPTS_DIR))
 from _lib import (  # type: ignore  # noqa: E402
     _git_changed_paths,
     active_task_binding_matches,
+    current_session_id,
     find_repo_root,
+    read_session_hint,
     read_task_control,
     receipt_snapshot,
     receipt_review_verdict,
@@ -273,14 +275,42 @@ def _dirty_install_payload(repo_root: Path) -> set[str]:
     return {path for path in paths if path}
 
 
-def _validate_task_dir(repo_root: Path, task_dir: Path) -> tuple[bool, str]:
+def _resolved_session_id(repo_root: Path) -> str:
+    """Resolve the runtime session id for a helper that runs outside a hook.
+
+    This script is invoked as a plain subprocess by the develop workflow's
+    mandatory pre-close install step, so it has neither hook input nor a session
+    environment variable. `current_session_id()` therefore degrades to
+    "default", and the session-marker lookup below misses the marker this
+    session actually wrote — the contract-mandated step then refuses with
+    "task is not the open active TASK.json generation" (observed 2026-08-25).
+
+    The session hint exists for exactly this gap: a hook that does receive the
+    real id records it. A real id still wins, so a caller with genuine hook
+    input or HARNESS_SESSION_ID is never overridden by a stale hint; the hint
+    only replaces the "default" fallback. That is deliberately narrower than
+    harness_server.py, whose host never has a real id and prefers the hint
+    unconditionally.
+
+    Never raises: an absent or unusable hint degrades to "default", which fails
+    the binding check closed rather than binding to the wrong task.
+    """
+    sid = current_session_id()
+    if sid != "default":
+        return sid
+    return read_session_hint(str(repo_root)) or sid
+
+
+def _validate_task_dir(repo_root: Path, task_dir: Path, session_id: str) -> tuple[bool, str]:
     expected_parent = (repo_root / "doc/harness/tasks").resolve()
     if task_dir.parent != expected_parent or not task_dir.name.startswith("TASK__"):
         return False, "task directory is not canonical"
     if not read_task_control(str(task_dir)):
         return False, "missing or invalid TASK.json"
     control = read_task_control(str(task_dir))
-    if not active_task_binding_matches(str(repo_root), str(task_dir), control):
+    if not active_task_binding_matches(
+        str(repo_root), str(task_dir), control, session_id=session_id,
+    ):
         return False, "task is not the open active TASK.json generation"
     return True, ""
 
@@ -304,6 +334,9 @@ def _global_lock_path() -> Path:
 def install_verified(task_dir: Path) -> int:
     task_dir = task_dir.resolve()
     repo_root = Path(find_repo_root(str(task_dir))).resolve()
+    # Resolved once so the pre- and post-install binding checks cannot disagree
+    # because the hint file changed mid-install.
+    session_id = _resolved_session_id(repo_root)
     lock_path = _global_lock_path()
     task_dir.mkdir(parents=True, exist_ok=True)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -315,7 +348,7 @@ def install_verified(task_dir: Path) -> int:
             print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)
             return 2
         with receipt_stream_transaction(str(task_dir)):
-            valid_task, reason = _validate_task_dir(repo_root, task_dir)
+            valid_task, reason = _validate_task_dir(repo_root, task_dir, session_id)
             if not valid_task:
                 print(f"ERROR: automatic install refused: {reason}", file=sys.stderr)
                 return 2
@@ -361,7 +394,7 @@ def install_verified(task_dir: Path) -> int:
                 print(f"ERROR: installer exited {result.returncode}", file=sys.stderr)
                 return result.returncode
             verified_after, reason_after, fingerprint_after = _verification_state(task_dir)
-            valid_after, task_reason_after = _validate_task_dir(repo_root, task_dir)
+            valid_after, task_reason_after = _validate_task_dir(repo_root, task_dir, session_id)
             snapshot_paths_after = _snapshot_paths(repo_root, task_dir)
             payload_after = _payload_fingerprint(repo_root, snapshot_paths_after)
             if (
