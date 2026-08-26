@@ -217,6 +217,11 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 scripts/gen.py",
             "python3 manage.py migrate",
             "python3 tools/build_docs.py --check",
+            # Documented allow rows with no other coverage: 105fda4 removed both
+            # from the deny list, so without these a future tightening could
+            # re-deny stdin execution with the suite still green.
+            "printf '%s' 'pass' | python3 -",
+            "python3 -c \"exec(__import__('base64').b64decode('cGFzcw=='))\"",
         ):
             with self.subTest(command=command):
                 decision, _ = parse_decision(_run_bash(command).stdout)

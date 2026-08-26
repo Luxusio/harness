@@ -71,10 +71,14 @@ and nothing re-checks it at exec time.
 - Non-python interpreters (`node`, `ruby`, …) were never inspected; that
   asymmetry is now moot since python is not inspected either.
 - A read-only linter invoked with a gated path argument (`ruff check
-  plugin/scripts/mcp_bash_guard.py`) is denied as an "unrecognized executable
-  with gated path", and a task `MAINTENANCE` marker does not relax it. This also
-  blocks `git checkout` of the guard itself, so reverting it requires the
-  `HARNESS_SKIP_MCP_GUARD` escape or a non-Bash edit path.
+  plugin/scripts/mcp_bash_guard.py`) is denied by `rule=workflow-control-surface`,
+  and a task `MAINTENANCE` marker does not relax it. This also blocks
+  `git checkout` of the guard itself, so reverting it requires the
+  `HARNESS_SKIP_MCP_GUARD` escape or a non-Bash edit path. The relevant
+  classifier is `_is_workflow_control_surface`, not `_embedded_path_candidates`.
+- Inline `python -c` code is still AST-parsed for filesystem writes. Removing
+  *script* inspection did not remove that, and it is what denies a one-line
+  `open('…/RECEIPTS.jsonl','a').write(…)`.
 
 ## Verification
 

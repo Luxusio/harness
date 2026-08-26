@@ -67,8 +67,10 @@ is visible. A small explicit read-only allowlist preserves pytest, git
 inspection, and non-mutating text inspection of those source files; other
 commands that mention protected lifecycle modules fail closed. Concatenated or
 qualified references (`'subagent_'+'lifecycle'`, `_lib.record_subagent_receipt`)
-are caught by the alphanumeric-flattening text match, not by AST inspection —
-the guard no longer parses Python at all.
+are caught by the alphanumeric-flattening text match, not by AST inspection.
+The guard no longer reads or parses *script files*; inline `python -c` code is
+still AST-parsed for filesystem writes (see the verb table above), and that
+parse is what blocks a forged `VERDICT: PASS` one-liner.
 **Script execution is not gated** (see
 `doc/common/REQ__process__bash-guard-script-execution.md` for the settled
 decision and evidence). The guard does not read, AST-scan, or deny a script it
@@ -152,9 +154,13 @@ passing before touching either set.
 ## Known gaps
 
 The current guard descends through direct `bash -c` / `sh -c` command strings.
-For Python `-c`, command substitution or backticks fail closed because the
-resolved code cannot be inspected statically. Other dynamic constructs remain:
+Other dynamic constructs remain:
 
+- command substitution or backticks around `python -c` — **not** caught.
+  `python3 -c "$(cat x.py)"` and the backtick form allow. This was documented as
+  failing closed, which was already untrue before the 2026-08-26 change (the
+  same commands allow on the pre-change guard); the rule that once did it had
+  been narrowed to gated-path-plus-output-flag long before.
 - command substitution or backticks around non-Python mutators — not extracted.
 - `python -c` with base64 / `exec(...)` obfuscation — regex patterns miss
   dynamically-constructed writes.
