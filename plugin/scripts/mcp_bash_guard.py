@@ -243,11 +243,21 @@ def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd=""):
 def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd=""):
     if "-c" not in tokens:
         return
+    operand_index = tokens.index("-c") + 1
     try:
-        code = tokens[tokens.index("-c") + 1]
+        code = tokens[operand_index]
     except IndexError:
         return
-    if "$(" in code or "`" in code:
+    # An *unquoted* substitution does not survive tokenization as one token:
+    # `python3 -c $(cat f.py)` splits to [..., '-c', '$', '(', 'cat', 'f.py', ')'],
+    # leaving a bare `$` as the operand. Checking only the operand text would
+    # miss it, then `unicode_escape('')` and `ast.parse('')` both succeed and the
+    # command allows. Bash word-splitting makes the route practical for exactly
+    # the whitespace-free payloads a forgery one-liner uses.
+    unquoted_substitution = code in {"$", "`"} or (
+        code == "$" and tokens[operand_index + 1:operand_index + 2] == ["("]
+    )
+    if unquoted_substitution or "$(" in code or "`" in code:
         # Command substitution resolves at exec time, so the string parsed below
         # is not the program that runs. The AST parse is the control that catches
         # an inline receipt write, and this defeats it. Removing *script*

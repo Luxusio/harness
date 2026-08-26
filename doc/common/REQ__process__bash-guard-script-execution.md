@@ -51,7 +51,8 @@ and nothing re-checks it at exec time.
 | `python3 <path>` whose source imports a receipt writer | allow | Content of an executed file is not inspected |
 | `python3 -` or piped/heredoc stdin | allow | Uninspectable, and denying it stopped nobody |
 | Command text literally naming a lifecycle entrypoint or receipt symbol | deny | Cheap, reliable text match on the obvious case |
-| `python -c` with command substitution or backticks (`$(…)`, `` `…` ``) | deny | The executed code is not the string the gate can parse, and the inline AST parse is what catches a one-line receipt write |
+| `python -c` with command substitution or backticks (`$(…)`, `` `…` ``), quoted **or** unquoted | deny | The executed code is not the string the gate can parse, and the inline AST parse is what catches a one-line receipt write. The unquoted form leaves a bare `$` as the operand and needs its own check |
+| `python -c` whose code contains a literal backtick | deny | Accepted over-block: quoting is not recoverable after tokenization, so a backtick cannot be told apart from a substitution |
 | Obfuscated reference (`base64`, computed `__import__`) | allow | Not detectable without inspection this gate no longer performs |
 | `tee`, `sed -i`, `>`/`>>`, `cp`, `mv`, `truncate` targeting a protected artifact | deny | Direct file mutation — this is what the gate actually enforces |
 | Hardlink or inode-alias route to a protected artifact | deny | Identity evasion on the mutation surface |

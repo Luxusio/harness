@@ -166,11 +166,20 @@ passing before touching either set.
 ## Known gaps
 
 The current guard descends through direct `bash -c` / `sh -c` command strings.
-For Python `-c`, command substitution and backticks fail closed: the resolved
-code cannot be inspected statically, and it is the inline AST parse that catches
-a one-line receipt write. That deny lived inside the script-inspection function
-until 2026-08-26 and was dropped with it by accident; it was restored separately
-because it belongs to the inline `-c` control, which was deliberately kept.
+For Python `-c`, command substitution and backticks fail closed in both the
+quoted and unquoted forms: the resolved code cannot be inspected statically, and
+it is the inline AST parse that catches a one-line receipt write. That deny
+lived inside the script-inspection function until 2026-08-26 and was dropped
+with it by accident; it was restored separately because it belongs to the inline
+`-c` control, which was deliberately kept.
+
+The unquoted form needs its own check. `python3 -c $(cat f.py)` tokenizes to
+`[…, '-c', '$', '(', 'cat', 'f.py', ')']`, so the operand is a bare `$`;
+inspecting only the operand text misses it, and the resulting empty string then
+parses cleanly. The pre-2026-08-26 guard had the same hole. Note the deny also
+fires on a literal backtick inside otherwise legitimate inline code — an
+accepted over-block, since shell quoting is not recoverable after tokenization.
+
 Other dynamic constructs remain:
 
 - command substitution or backticks around non-Python mutators — not extracted.

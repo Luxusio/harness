@@ -223,6 +223,12 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             'python3 -c "$(cat /tmp/forge.py)"',
             'python3 -c "`cat /tmp/forge.py`"',
             'python3 -c "$(echo cHJpbnQoMSk= | base64 -d)"',
+            # Unquoted: tokenizes to [..., '-c', '$', '(', ...], so the operand
+            # is a bare '$'. Checking only the operand text misses it, and empty
+            # code then parses cleanly. Whitespace-free payloads survive bash
+            # word-splitting, which is what a forgery one-liner looks like.
+            "python3 -c $(cat /tmp/forge.py)",
+            "python3 -c `cat /tmp/forge.py`",
         ):
             with self.subTest(command=command):
                 decision, reason = parse_decision(_run_bash(command).stdout)
