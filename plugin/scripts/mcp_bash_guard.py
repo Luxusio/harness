@@ -247,6 +247,19 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
         code = tokens[tokens.index("-c") + 1]
     except IndexError:
         return
+    if "$(" in code or "`" in code:
+        # Command substitution resolves at exec time, so the string parsed below
+        # is not the program that runs. The AST parse is the control that catches
+        # an inline receipt write, and this defeats it. Removing *script*
+        # inspection on 2026-08-26 dropped this deny as a side effect; it belongs
+        # to the inline `-c` control that was deliberately kept, so it is
+        # restored here rather than left to the caller's discretion.
+        _append_target(
+            targets, "doc/harness/goals/current.json",
+            "python -c with command substitution, so the executed code cannot "
+            "be inspected", repo_root, execution_cwd,
+        )
+        return
     if code.startswith("$"):
         try:
             code = bytes(code[1:], "utf-8").decode("unicode_escape")

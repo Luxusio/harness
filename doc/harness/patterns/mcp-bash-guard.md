@@ -54,14 +54,23 @@ before the command basename is examined (fixes a legacy bypass).
 | static `os.link` / `os.rename` / `os.replace` / `os.remove` / `os.unlink` and `Path` mutation calls | protected source and destination arguments |
 | Direct lifecycle receipt entrypoint invocation/import | synthetic `RECEIPTS.jsonl` target |
 
-`2>` stderr redirect is intentionally **not** blocked — logs are common.
+`2>` stderr redirect **is** blocked when it targets a protected artifact:
+`_INLINE_REDIRECT_RE` matches any file-descriptor number, not just `1`. This is
+an over-block relative to the original "logs are common" intent, kept because a
+stderr redirect onto a receipt file is not a logging pattern worth preserving.
 
 `background_hook.py`, `subagent_lifecycle.py`, `codex_lifecycle_watcher.py`,
 and direct imports of `record_subagent_receipt` are runtime-owned receipt
 capabilities. A model-issued Bash command may not invoke them directly; only
 the configured runtime lifecycle hooks/watchers may author those events.
-Detection normalizes common `env`/`command`/`uv run` wrappers and Python
-`-m`, qualified import, `__import__`, and `import_module` forms. Detection is
+Detection normalizes common `env`/`command`/`uv run` wrappers, and catches
+Python `-m` and import forms whose module or symbol name appears *literally* in
+the command text. Computed forms no longer resolve: the AST walker that
+normalized `__import__`/`import_module`/`getattr` over concatenated names was
+deleted with script inspection on 2026-08-26, so
+`python3 -c "n=chr(115)+'ubagent_lifecycle'; __import__(n)"` now allows. That
+allow is recorded in `doc/common/REQ__process__bash-guard-script-execution.md`.
+Detection is
 independent of the outer wrapper executable once a protected lifecycle target
 is visible. A small explicit read-only allowlist preserves pytest, git
 inspection, and non-mutating text inspection of those source files; other
@@ -146,22 +155,32 @@ tree stay blocked: `checkout`, `restore`, `rm`, `clean`, `mv`, `apply`, `stash`,
 `-o` / `--output` option is present.
 
 This matters more than ordinary ergonomics: receipt entries carry no signature
-or HMAC, so this guard is the only control preventing a forged `VERDICT: PASS`
-from being appended by a shell one-liner. Both directions are pinned by
+or HMAC. But this guard is **not** the only control, and must not be described
+as one — integrity rests on hook ownership of `RECEIPTS.jsonl` and on
+`task_verify` ordering. The guard raises the cost of an accidental or careless
+append; a determined caller has documented routes past it (see Known gaps).
+Both directions are pinned by
 `tests/test_mcp_bash_guard_readonly_inspection.py`; keep the negative cases
 passing before touching either set.
 
 ## Known gaps
 
 The current guard descends through direct `bash -c` / `sh -c` command strings.
+For Python `-c`, command substitution and backticks fail closed: the resolved
+code cannot be inspected statically, and it is the inline AST parse that catches
+a one-line receipt write. That deny lived inside the script-inspection function
+until 2026-08-26 and was dropped with it by accident; it was restored separately
+because it belongs to the inline `-c` control, which was deliberately kept.
 Other dynamic constructs remain:
 
-- command substitution or backticks around `python -c` — **not** caught.
-  `python3 -c "$(cat x.py)"` and the backtick form allow. This was documented as
-  failing closed, which was already untrue before the 2026-08-26 change (the
-  same commands allow on the pre-change guard); the rule that once did it had
-  been narrowed to gated-path-plus-output-flag long before.
 - command substitution or backticks around non-Python mutators — not extracted.
+- **variable indirection defeats redirect detection entirely.**
+  `F=<protected path>; echo x >> $F` allows, and the write succeeds. Redirect
+  targets are extracted from *unexpanded* tokens, before the shell-value
+  expansion loop runs, so an expansion never reaches them. The `${F}` brace form
+  and `xargs -I{} sh -c '... >> {}'` behave the same. This is pre-existing, not
+  a consequence of the 2026-08-26 change, and it is the clearest illustration of
+  why this gate is a guardrail rather than a control.
 - `python -c` with base64 / `exec(...)` obfuscation — regex patterns miss
   dynamically-constructed writes.
 Gaps are tracked in `doc/harness/tasks/TASK__gate-reliability-pr1/deferred-scope.md`

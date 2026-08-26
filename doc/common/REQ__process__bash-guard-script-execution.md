@@ -51,6 +51,7 @@ and nothing re-checks it at exec time.
 | `python3 <path>` whose source imports a receipt writer | allow | Content of an executed file is not inspected |
 | `python3 -` or piped/heredoc stdin | allow | Uninspectable, and denying it stopped nobody |
 | Command text literally naming a lifecycle entrypoint or receipt symbol | deny | Cheap, reliable text match on the obvious case |
+| `python -c` with command substitution or backticks (`$(…)`, `` `…` ``) | deny | The executed code is not the string the gate can parse, and the inline AST parse is what catches a one-line receipt write |
 | Obfuscated reference (`base64`, computed `__import__`) | allow | Not detectable without inspection this gate no longer performs |
 | `tee`, `sed -i`, `>`/`>>`, `cp`, `mv`, `truncate` targeting a protected artifact | deny | Direct file mutation — this is what the gate actually enforces |
 | Hardlink or inode-alias route to a protected artifact | deny | Identity evasion on the mutation surface |
@@ -64,7 +65,12 @@ and nothing re-checks it at exec time.
   bypass table above.
 - Receipt integrity is enforced by hook ownership of `RECEIPTS.jsonl` and by
   `task_verify` ordering, not by the Bash gate. Treat the Bash gate as a
-  guardrail against accident, not a control against a determined caller.
+  guardrail against accident, not a control against a determined caller. No
+  document may describe it as the only control preventing a forged verdict.
+- Known routes past it are documented rather than implied closed. The clearest
+  is variable indirection (`F=<protected path>; echo x >> $F`), which allows
+  because redirect targets are read from unexpanded tokens. See
+  `doc/harness/patterns/mcp-bash-guard.md` § Known gaps.
 
 ## Known remaining friction (not fixed here)
 
@@ -78,7 +84,9 @@ and nothing re-checks it at exec time.
   classifier is `_is_workflow_control_surface`, not `_embedded_path_candidates`.
 - Inline `python -c` code is still AST-parsed for filesystem writes. Removing
   *script* inspection did not remove that, and it is what denies a one-line
-  `open('…/RECEIPTS.jsonl','a').write(…)`.
+  `open('…/RECEIPTS.jsonl','a').write(…)`. Command substitution around `-c`
+  defeats that parse, so it denies; this deny was dropped by accident when
+  script inspection was removed and restored once review caught it.
 
 ## Verification
 

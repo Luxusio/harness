@@ -211,6 +211,29 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             decision, _ = parse_decision(r.stdout)
             self.assertIsNone(decision)
 
+    def test_python_c_command_substitution_denies(self):
+        """Command substitution defeats the inline `-c` AST parse.
+
+        The pre-2026-08-26 guard denied this inside the script-inspection
+        function. Removing script inspection dropped it as a side effect, which
+        left `python3 -c "$(cat forge.py)"` reaching the interpreter ungated
+        while the equivalent literal one-liner still denied.
+        """
+        for command in (
+            'python3 -c "$(cat /tmp/forge.py)"',
+            'python3 -c "`cat /tmp/forge.py`"',
+            'python3 -c "$(echo cHJpbnQoMSk= | base64 -d)"',
+        ):
+            with self.subTest(command=command):
+                decision, reason = parse_decision(_run_bash(command).stdout)
+                self.assertEqual(decision, "deny")
+                self.assertIn("command substitution", reason)
+
+    def test_plain_python_c_still_allows(self):
+        """The deny above must key on substitution, not on `-c` itself."""
+        decision, _ = parse_decision(_run_bash('python3 -c "print(1)"').stdout)
+        self.assertIsNone(decision)
+
     def test_ordinary_script_execution_allows(self):
         """The defect this replaced: a literal path that does not resolve."""
         for command in (
