@@ -97,72 +97,43 @@ incorporate explicit user corrections from the conversation. Promote durable
 rules directly into PLAN.md or the applicable project documentation; Harness
 does not maintain a separate feedback sidecar.
 
-### Phase 4: Verify (QA agent)
+### Phase 4: Verify recovery (only when develop returned before close)
 
-Read `doc/harness/manifest.yaml` for project type. Spawn appropriate QA agent(s).
-Also spawn applicable UX review agents for user-facing surfaces. UX review is
-not a replacement for QA: qa-* proves correctness; ux-* judges whether the
-experience is shippable. Claude hooks record subagent lifecycle events in
-`RECEIPTS.jsonl`; `task_verify` requires a completed explicit
-PASS for every applicable QA lens. A start entry proves delegation only.
+Skip this phase when Phase 3 closed the task. Develop Phase 7 owns QA lens
+selection and spawning, and develop Phase 6.6 owns review; this phase is a
+recovery path for an interrupted or older develop flow, not a second QA pass.
 
-**Strategy selection:**
-- **MUST spawn qa-browser when** `manifest.qa.browser_qa_supported: true` AND the diff contains any frontend file (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss` or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments). Skipping leaves no completed qa-browser receipt and is blocked by `task_close`.
-- `desktop_qa_supported: true` → qa-desktop
-- `type: api` or diff contains route/endpoint files → qa-api
-- `type: cli` or `type: library` → qa-cli
-- Multiple types match (fullstack) → spawn relevant agents **in parallel**
+First call `task_context`. When the required review and QA lenses already have
+completed PASS receipts for the current run, call `task_verify` only. Spawn a
+lens here solely for one that is missing, failed, or stale.
 
-**UX strategy selection:**
-- frontend/browser UI diff with `browser_qa_supported: true` or `ux_review_supported: true` → ux-browser
-- CLI command/help/output/error diff with `ux_review_supported: true` → ux-cli
-- API route/schema/error/docs diff with `ux_review_supported: true` → ux-api
-- desktop GUI diff with `desktop_qa_supported: true` or `ux_review_supported: true` → ux-desktop
+For a lens that must be re-run, follow `develop/SKILL.md` Phase 7 and
+`develop/quality-audit-pipeline.md` — do not restate routing here. Use the
+native subagent types (`harness:qa-cli`, `harness:qa-api`, `harness:qa-browser`,
+`harness:qa-desktop`, and the matching `harness:ux-*`), and issue multiple
+lenses in a single assistant message so every start is hook-recorded.
 
-When QA and UX lenses both apply, spawn them in the same parallel batch when
-available. Agents return PASS/FAIL/BLOCKED_ENV findings in their final
-response. Do not ask them to write critic artifacts. `task_verify` exposes
-required lenses, verdicts, and `missing_for_close`; it does not return raw
-receipt records or completion summaries.
+Two selection rules are gates rather than routing detail, so they are stated
+here and not delegated:
 
-Order matters: the desktop branch is evaluated before the `type: cli` / `type: library`
-fallback so a desktop app declared as `type: cli` still routes to qa-desktop.
+- You **MUST spawn qa-browser** when `manifest.qa.browser_qa_supported: true`
+  AND the diff contains any frontend file (`.tsx/.jsx/.vue/.svelte/.html/.css/.scss`
+  or `/components/`, `/pages/`, `/views/`, `/routes/` path fragments).
+  Skipping leaves no completed qa-browser receipt, and `task_close` blocks on it.
+- Spawn the applicable UX lens alongside QA for user-facing surfaces:
+  `ux-browser` for browser UI, `ux-cli` for command/help/output/error changes,
+  `ux-api` for route/schema/error/docs changes, `ux-desktop` for desktop GUI —
+  each gated on `ux_review_supported: true` (or the matching
+  `browser_qa_supported`/`desktop_qa_supported`). UX review does not replace QA:
+  `qa-*` proves correctness, `ux-*` judges whether the experience is shippable.
 
-Agent spawn template (substitute `<lens>` ∈ {browser, desktop, api, cli}):
+Agents return PASS/FAIL/BLOCKED_ENV findings in their final response; do not ask
+them to write critic artifacts.
 
-**Single lens** (one type matches):
-
-```
-Agent(
-  name="<task_id>:qa-<lens>",
-  subagent_type="oh-my-claudecode:executor",
-  prompt="You are the <lens> QA agent for <task_id>.
-Task dir: <task_dir>
-Read ${CLAUDE_PLUGIN_ROOT}/agents/qa-<lens>.md for your full role definition.
-Follow it exactly — all four roles (operation, intent, UX/design, runtime).
-Return PASS/FAIL/BLOCKED_ENV with concrete findings and evidence. Do not modify files and do not write critic artifacts."
-)
-```
-
-**Multi-lens fullstack** (two or more types match) — spawn ALL agents in a single assistant message so all starts are hook-recorded:
-
-```
-# Issue these N Agent calls in ONE assistant message
-Agent(
-  name="<task_id>:qa-cli",
-  subagent_type="oh-my-claudecode:executor",
-  prompt="You are the cli QA agent for <task_id>. ... Return PASS/FAIL/BLOCKED_ENV with findings."
-)
-Agent(
-  name="<task_id>:qa-browser",
-  subagent_type="oh-my-claudecode:executor",
-  prompt="You are the browser QA agent for <task_id>. ... Return PASS/FAIL/BLOCKED_ENV with findings."
-)
-```
-
-After awaiting every QA/UX subagent, run `task_verify`. It computes the verdict
-from required ordered review and QA completions in `RECEIPTS.jsonl`; PLAN.md
-remains the sole acceptance document.
+Then run `task_verify`. It computes the verdict from required ordered review and
+QA completions in `RECEIPTS.jsonl`; PLAN.md remains the sole acceptance
+document. It exposes required lenses, verdicts, and `missing_for_close`, not raw
+receipt records.
 
 After completion, check runtime_verdict:
 - **PASS**: proceed to Phase 5.
