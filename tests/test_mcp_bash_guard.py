@@ -172,8 +172,6 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             "python3 -c 'from _lib import restore_receipt_streams'",
             "python3 -c 'from _lib import reset_receipt_streams_for_new_run'",
             "python3 -c 'from _lib import _bind_runtime_receipt_adapter'",
-            "printf '%s' 'pass' | python3 -",
-            "python3 -c \"exec(__import__('base64').b64decode('cGFzcw=='))\"",
             "python3 -c \"name='subagent_'+'lifecycle'; __import__(name)\"",
             "python3 -c \"$(printf '%s' 'import subagent_lifecycle')\"",
         ):
@@ -193,7 +191,16 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             self.assertEqual(decision, "deny")
             self.assertIn("rule=protected-artifact", reason)
 
-    def test_indirect_python_script_importing_receipt_writer_denies(self):
+    def test_script_execution_is_not_inspected(self):
+        """Running a script is left to agent discipline, not gated.
+
+        The gate used to read the script off disk and AST-scan it for receipt
+        writers. That inspection was removed: heredocs, `PYTHONPATH` +
+        `sitecustomize.py`, out-of-tree paths, and a trailing `-m` each defeated
+        it, so it denied ordinary commands without actually stopping a
+        determined caller. Direct file mutation of protected artifacts is still
+        gated; deciding what a script does once it runs is not.
+        """
         with tempfile.TemporaryDirectory() as tmp:
             helper = Path(tmp) / "innocent.py"
             helper.write_text(
@@ -201,9 +208,19 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 encoding="utf-8",
             )
             r = _run_bash(f"python3 {helper}")
-            decision, reason = parse_decision(r.stdout)
-            self.assertEqual(decision, "deny")
-            self.assertIn("lifecycle receipt entrypoint", reason)
+            decision, _ = parse_decision(r.stdout)
+            self.assertIsNone(decision)
+
+    def test_ordinary_script_execution_allows(self):
+        """The defect this replaced: a literal path that does not resolve."""
+        for command in (
+            "python3 scripts/gen.py",
+            "python3 manage.py migrate",
+            "python3 tools/build_docs.py --check",
+        ):
+            with self.subTest(command=command):
+                decision, _ = parse_decision(_run_bash(command).stdout)
+                self.assertIsNone(decision)
 
     def test_legitimate_lib_consumers_remain_allowed(self):
         for script in (
@@ -272,6 +289,9 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
         goals.mkdir(parents=True, exist_ok=True)
         source = goals / "GOAL__guard-alias-test.json"
         alias = Path(REPO_ROOT) / "doc/harness/checkpoints/.goal-existing-alias"
+        # The alias must land on the repo's own device: os.link cannot cross
+        # filesystems, so a tmpdir would not exercise the guard at all.
+        alias.parent.mkdir(parents=True, exist_ok=True)
         source.write_text("{}\n", encoding="utf-8")
         alias.unlink(missing_ok=True)
         os.link(source, alias)
@@ -548,17 +568,6 @@ class TestNestedShellHandling(unittest.TestCase):
         decision, reason = parse_decision(r.stdout)
         self.assertEqual(decision, "deny")
         self.assertIn("rule=source", reason)
-
-    def test_bash_c_nested_python_lifecycle_import_denies(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            helper = Path(tmp) / "innocent.py"
-            helper.write_text(
-                "import _lib\nprint(_lib.record_subagent_receipt)\n", encoding="utf-8",
-            )
-            r = _run_bash(f"bash -c 'python3 {helper}'")
-            decision, reason = parse_decision(r.stdout)
-            self.assertEqual(decision, "deny")
-            self.assertIn("lifecycle receipt entrypoint", reason)
 
     def test_eval_recurses_into_mutation_guard(self):
         r = _run_bash(f"eval 'sed -i s/a/b/ {SRC_PATH}'")

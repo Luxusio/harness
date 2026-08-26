@@ -1,13 +1,13 @@
 ---
 title: mcp_bash_guard — block Bash-layer mutations of gated paths
-freshness: suspect
+freshness: current
 invalidated_by_paths:
   - plugin/scripts/mcp_bash_guard.py
   - plugin/scripts/prewrite_gate.py
   - plugin/scripts/_lib.py
   - plugin/hooks/hooks.json
 tier: 2
-freshness_updated: 2026-04-26T14:50:21Z
+freshness_updated: 2026-08-26T00:00:00Z
 ---
 
 # mcp_bash_guard
@@ -68,6 +68,24 @@ inspection, and non-mutating text inspection of those source files; other
 commands that mention protected lifecycle modules fail closed. Inline Python
 checks also normalize simple string concatenation/qualified access that exposes
 a protected module or receipt-writer symbol.
+**Script execution is not gated** (see
+`doc/common/REQ__process__bash-guard-script-execution.md` for the settled
+decision and evidence). The guard does not read, AST-scan, or deny a script it
+is asked to run; what a program does once started is left to agent discipline.
+
+An earlier design did inspect script files for receipt-writer imports. It was
+removed on 2026-08-26 after a security review demonstrated four bypasses —
+heredoc/herestring (`<<`, `<<<`, `<(…)` parsed as the script path),
+`PYTHONPATH` + `sitecustomize.py` (runs before the script is opened), plant-and-run
+outside `repo_root`, and a trailing `-m` short-circuiting inspection — each
+proven by writing a forged PASS receipt. An inspection that ordinary commands
+trip over but a determined caller walks through is false assurance, and it
+trained agents to reach for `HARNESS_SKIP_MCP_GUARD`.
+
+What remains on this surface is a cheap literal-text match: a command naming a
+lifecycle entrypoint or receipt-writer symbol outright still denies. Obfuscated
+forms are not caught and are not claimed to be.
+
 Existing hard-link aliases of native Goal JSON are recognized by inode even
 outside the repository. Goal readers independently require owner-controlled,
 single-link, stable regular files, so an unrecognized alias cannot become

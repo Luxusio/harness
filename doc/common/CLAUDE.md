@@ -14,4 +14,5 @@ updated: 2026-03-30
 - [INF harness spec-exists](INF__harness__spec-exists.md) — harness architecture spec at doc/harness/ (SPEC.md, IMPORT_LIST.md, AUTO_ROUTING.md)
 - [REQ process plan-skill-review-pipeline](REQ__process__plan-skill-review-pipeline.md) — plan skill must run 7-phase dual-voice pipeline; old linear procedure retired (2026-04-10)
 - [GUIDE document taxonomy](GUIDE__document-taxonomy.md) — durable project knowledge uses typed documents under `doc/<area>/`
+- [REQ process bash-guard-script-execution](REQ__process__bash-guard-script-execution.md) — the Bash guard gates protected-artifact file mutation, not script execution; execution inspection was removed as bypassable (2026-08-26)
 - [GUIDE mcp tool-naming](GUIDE__mcp-tool-naming.md) — Claude plugin uses `mcp__plugin_harness_harness__`, Codex uses bare names, `mcp__harness__` is legacy/banned in `plugin/`; dev sessions exposing bare names see qa-* relay (expected, not a bug)

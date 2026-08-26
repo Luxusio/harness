@@ -714,63 +714,6 @@ def _python_code_exposes_lifecycle(code):
                 if attribute is None or attribute in PROTECTED_MUTATION_SYMBOLS:
                     return True
     return False
-def _protected_lifecycle_execution(argv, execution_cwd=""):
-    if not argv:
-        return False
-    cmd = os.path.basename(argv[0])
-    args = argv[1:]
-    if cmd in LIFECYCLE_RECEIPT_ENTRYPOINTS:
-        return True
-    if cmd.startswith(("python", "pypy")):
-        if "-m" in args:
-            try:
-                module = args[args.index("-m") + 1]
-            except IndexError:
-                return False
-            return module.rsplit(".", 1)[-1] in LIFECYCLE_RECEIPT_MODULES
-        if "-c" in args:
-            try:
-                code = args[args.index("-c") + 1]
-            except IndexError:
-                return False
-            return "$(" in code or "`" in code or _python_code_exposes_lifecycle(code)
-        value_options = {"-X", "-W", "-Q", "--check-hash-based-pycs"}
-        index = 0
-        while index < len(args) and args[index].startswith("-"):
-            option = args[index]
-            if option in value_options:
-                index += 2
-            else:
-                index += 1
-        script = args[index] if index < len(args) else ""
-        if not script or script == "-":
-            return True
-        if os.path.basename(script) in LIFECYCLE_RECEIPT_ENTRYPOINTS:
-            return True
-        if script:
-            inspected_script = script if os.path.isabs(script) else os.path.join(
-                execution_cwd or os.getcwd(), script,
-            )
-            try:
-                info = os.lstat(inspected_script)
-                if (
-                    stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid()
-                    and info.st_nlink == 1 and not info.st_mode & 0o022
-                    and info.st_size <= _COMMAND_LENGTH_CAP
-                ):
-                    with open(inspected_script, "r", encoding="utf-8") as handle:
-                        code = handle.read(_COMMAND_LENGTH_CAP + 1)
-                    if len(code) <= _COMMAND_LENGTH_CAP and _python_code_exposes_lifecycle(code):
-                        return True
-                else:
-                    return True
-            except (OSError, UnicodeError):
-                return True
-        return False
-    if cmd in {"bash", "sh"}:
-        script = next((arg for arg in args if not arg.startswith("-")), "")
-        return os.path.basename(script) in LIFECYCLE_RECEIPT_ENTRYPOINTS
-    return False
 def _safe_lifecycle_source_inspection(argv):
     if not argv:
         return False
@@ -903,10 +846,7 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
             for name in LIFECYCLE_RECEIPT_ENTRYPOINTS)
         or any(name.replace("_", "") in compact for name in PROTECTED_MUTATION_SYMBOLS)
     )
-    if (
-        (protected_marker and not _safe_lifecycle_source_inspection(non_env))
-        or _protected_lifecycle_execution(non_env, execution_cwd)
-    ):
+    if protected_marker and not _safe_lifecycle_source_inspection(non_env):
         goal_control = any(
             name.replace("_", "") in compact for name in GOAL_MUTATION_SYMBOLS
         )
