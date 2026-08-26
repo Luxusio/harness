@@ -97,6 +97,12 @@ from _lib import (  # type: ignore
     finish_harness_goal,
 )
 
+try:
+    from hook_tree_health import receipt_capability_warning  # type: ignore
+except Exception:  # pragma: no cover - advisory check must never block startup
+    def receipt_capability_warning(config_dir=None):  # type: ignore[misc]
+        return ""
+
 
 def _control_root() -> str:
     candidate = find_repo_root()
@@ -398,6 +404,24 @@ def handle_task_start(args: dict) -> dict:
     transaction_stack.close()
     if terminal_receipt_snapshot:
         release_receipt_stream_reset(terminal_receipt_snapshot)
+
+    # Hooks and this server can resolve to different plugin trees. When the
+    # registered hook tree predates the receipt subsystem, subagents still run
+    # and return verdicts but nothing is ever written to RECEIPTS.jsonl, so the
+    # task cannot close and the only symptom is an absence. Warn here because a
+    # SessionStart hook would be loaded from the same stale tree it must indict.
+    # Advisory only: the task is created either way.
+    try:
+        receipt_warning = receipt_capability_warning()
+    except Exception:
+        receipt_warning = ""
+    if receipt_warning:
+        warnings.append({
+            "code": "RECEIPT_HOOKS_UNAVAILABLE",
+            "stage": "hook_registration",
+            "message": receipt_warning,
+            "retry_action": "Update the harness plugin, then restart the session.",
+        })
 
     return _ok({
         "task_dir": task_dir, "task_id": tid, "task_context": ctx,

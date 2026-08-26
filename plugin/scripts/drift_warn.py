@@ -1,11 +1,31 @@
 #!/usr/bin/env python3
-"""SessionStart hook — warn when installed plugin is behind source.
+"""SessionStart hook — warn when the loaded plugin is behind source.
 
 Compares SHA256 of every *.py file in plugin/scripts/ (source) against the
-installed copy at ~/.claude/harness-dev/plugin/scripts/. Prints a one-line
-warning when any source file is missing from or differs in the installed dir.
+scripts directory this file is executing from — which is, by definition, the
+tree the session actually loaded.
 
-Files that exist only in the installed dir (legacy/leftover) are NOT counted
+That self-location matters. This check previously hardcoded
+``~/.claude/harness-dev/plugin/scripts`` as "the installed copy", which is
+exactly the directory ``install.py --force`` faithfully updates. On 2026-08-26
+the session was loading hooks from an entirely different tree
+(``~/.claude/plugins/cache/harness/harness/2.3.0``, registered in
+``installed_plugins.json`` and never re-resolved after the marketplace was
+repointed). Source and harness-dev agreed byte for byte, so this hook reported
+no drift while the loaded tree was three months stale and missing the whole
+receipt subsystem. The one check meant to catch that was structurally incapable
+of catching it.
+
+Reading ``__file__`` needs no env var and no config parsing, and it works across
+layout changes (``scripts/`` at tree root in 2.3.0, ``plugin/scripts/`` now).
+
+Scope note: this reports staleness of the *loaded* tree only. When hooks are
+loaded straight from the repo checkout the check goes silent, even though a
+separate install target may itself be behind — the MCP server is registered by
+absolute path and can resolve to a different tree than the hooks do. That split
+is the whole subject of `hook_tree_health.py`; this hook covers one side of it.
+
+Files that exist only in the loaded dir (legacy/leftover) are NOT counted
 as diffs — they are harmless.
 
 Fail-safe: any exception → silent exit 0. Hook wrapper has `|| true` anyway.
@@ -15,7 +35,6 @@ from __future__ import annotations
 import hashlib
 import os
 import sys
-from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -62,25 +81,31 @@ def main() -> int:
         if not os.path.isdir(source_dir):
             return 0
 
-        installed_dir = str(
-            Path.home() / ".claude" / "harness-dev" / "plugin" / "scripts"
-        )
-        if not os.path.isdir(installed_dir):
+        # The tree this hook was loaded from, not a guess at where it should be.
+        loaded_dir = os.path.dirname(os.path.abspath(__file__))
+        if not os.path.isdir(loaded_dir) or os.path.samefile(loaded_dir, source_dir):
+            # Running straight out of the repo checkout: there is no separate
+            # installed copy to be behind.
             return 0
 
         source_manifest = _build_manifest(source_dir)
-        installed_manifest = _build_manifest(installed_dir)
+        loaded_manifest = _build_manifest(loaded_dir)
 
         diff_count = 0
         for name, src_hash in source_manifest.items():
-            inst_hash = installed_manifest.get(name)
-            if inst_hash is None or inst_hash != src_hash:
+            loaded_hash = loaded_manifest.get(name)
+            if loaded_hash is None or loaded_hash != src_hash:
                 diff_count += 1
 
         if diff_count > 0:
+            # Name the resolved root: when the loaded tree is not the one
+            # install.py writes to, "run install.py --force" is the wrong
+            # remedy and the path is the only way to tell.
             print(
-                f"[drift] installed plugin behind source ({diff_count} files differ)"
-                " — run `python3 install.py --force`"
+                f"[drift] loaded plugin behind source ({diff_count} files differ)"
+                f" — loaded from {loaded_dir}"
+                " — run `python3 install.py --force`, and if that path is not"
+                " the tree you install to, update the plugin and restart"
             )
     except Exception:
         pass

@@ -141,7 +141,8 @@ All under `plugin/scripts/`. Stdlib only.
 | `background_hook.py` | SubagentStart/SubagentStop adapter for direct unified-receipt publication | task `RECEIPTS.jsonl` |
 | `_gate_response.py` | Shared hook deny/allow response helper | — |
 | `verification_gap_check.py` | Resume-time warning for missing verification evidence | — |
-| `drift_warn.py` | SessionStart drift detector: reminds dev-of-harness users when installed plugin lags source (silent in non-dev / non-harness repos) | — |
+| `drift_warn.py` | SessionStart drift detector: compares source against the scripts dir it is executing from, so a session loading a different tree is visible (silent in non-dev / non-harness repos) | — |
+| `hook_tree_health.py` | Reports when the registered hook tree lacks the `SubagentStart`/`SubagentStop` receipt subsystem, so `task_start` can warn that receipts cannot be recorded | — |
 
 Activated via optional manifest keys: `health_components`, `benchmark_components`, `audit_categories`. These scripts print their results; durable follow-up belongs in REQ/GUIDE/ADR/POLICY, skills, patterns, or tests.
 
