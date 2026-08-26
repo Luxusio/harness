@@ -65,9 +65,10 @@ Detection normalizes common `env`/`command`/`uv run` wrappers and Python
 independent of the outer wrapper executable once a protected lifecycle target
 is visible. A small explicit read-only allowlist preserves pytest, git
 inspection, and non-mutating text inspection of those source files; other
-commands that mention protected lifecycle modules fail closed. Inline Python
-checks also normalize simple string concatenation/qualified access that exposes
-a protected module or receipt-writer symbol.
+commands that mention protected lifecycle modules fail closed. Concatenated or
+qualified references (`'subagent_'+'lifecycle'`, `_lib.record_subagent_receipt`)
+are caught by the alphanumeric-flattening text match, not by AST inspection —
+the guard no longer parses Python at all.
 **Script execution is not gated** (see
 `doc/common/REQ__process__bash-guard-script-execution.md` for the settled
 decision and evidence). The guard does not read, AST-scan, or deny a script it

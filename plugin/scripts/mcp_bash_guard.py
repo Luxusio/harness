@@ -94,9 +94,6 @@ TEE_COMMAND = "tee"
 LIFECYCLE_RECEIPT_ENTRYPOINTS = {
     "background_hook.py", "subagent_lifecycle.py", "codex_lifecycle_watcher.py",
 }
-LIFECYCLE_RECEIPT_MODULES = {
-    os.path.splitext(name)[0] for name in LIFECYCLE_RECEIPT_ENTRYPOINTS
-}
 RECEIPT_MUTATION_SYMBOLS = {
     "record_subagent_receipt", "reset_receipt_streams_for_new_run",
     "restore_receipt_streams", "release_receipt_stream_reset",
@@ -659,61 +656,6 @@ def _unwrap_execution(tokens):
             continue
         break
     return argv
-def _python_code_exposes_lifecycle(code):
-    try:
-        tree = ast.parse(code)
-    except (SyntaxError, ValueError):
-        return False
-
-    def string_value(node):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            return node.value
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-            left, right = string_value(node.left), string_value(node.right)
-            return left + right if left is not None and right is not None else None
-        return None
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            if any(alias.name.rsplit(".", 1)[-1] in LIFECYCLE_RECEIPT_MODULES for alias in node.names):
-                return True
-        elif isinstance(node, ast.ImportFrom):
-            if (node.module or "").rsplit(".", 1)[-1] in LIFECYCLE_RECEIPT_MODULES:
-                return True
-            if any(alias.name in PROTECTED_MUTATION_SYMBOLS for alias in node.names):
-                return True
-        elif isinstance(node, ast.Attribute):
-            if (
-                node.attr in LIFECYCLE_RECEIPT_MODULES
-                or node.attr in PROTECTED_MUTATION_SYMBOLS
-                or "receipt_stream" in node.attr and "append" in node.attr
-            ):
-                return True
-        elif isinstance(node, ast.Name) and (
-            node.id in PROTECTED_MUTATION_SYMBOLS
-            or "receipt_stream" in node.id and "append" in node.id
-        ):
-            return True
-        elif isinstance(node, ast.Call):
-            func_name = getattr(node.func, "id", "") or getattr(node.func, "attr", "")
-            if func_name in {"exec", "eval", "compile"}:
-                return True
-            if func_name in {"__import__", "import_module"}:
-                imported = string_value(node.args[0]) if node.args else None
-                if imported is None:
-                    return True
-                if imported and imported.rsplit(".", 1)[-1] in LIFECYCLE_RECEIPT_MODULES:
-                    return True
-                for keyword in node.keywords:
-                    if keyword.arg == "fromlist" and any(
-                        string_value(item) in LIFECYCLE_RECEIPT_MODULES
-                        for item in getattr(keyword.value, "elts", [])
-                    ):
-                        return True
-            if func_name == "getattr" and len(node.args) > 1:
-                attribute = string_value(node.args[1])
-                if attribute is None or attribute in PROTECTED_MUTATION_SYMBOLS:
-                    return True
-    return False
 def _safe_lifecycle_source_inspection(argv):
     if not argv:
         return False
