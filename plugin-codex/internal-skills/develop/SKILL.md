@@ -71,12 +71,6 @@ Verify `doc/harness/manifest.yaml` and the exact four-field `TASK.json` parse. D
 and list the 3 newest task directories. If an in-progress task matches the
 current `task_id`, state "resuming from prior session" in the conversation.
 
-**Health score snapshot:** capture a composite health score for Phase 8 comparison. Best-effort — skip cleanly.
-
-Run `python3 ${HARNESS_PLUGIN_ROOT}/scripts/health.py --dry-run || true`.
-
-Reads `health_components` from manifest (falls back to `test_command`). Output includes per-component PASS/FAIL + composite 0-10 score. `--dry-run` prevents appending to project-level history at this stage.
-
 ### Phase 1: Load plan
 
 Read `doc/harness/tasks/<task_id>/`:
@@ -319,20 +313,6 @@ When durable docs changed under `doc/<area>/<TYPE>__*.md`, pass those paths to t
   Lower severities may be deferred in final response or follow-up tasks — do not block close.
 - **Acceptance result** — on gate fail, loop back to the fix cycle; on pass, retain evidence in the review/QA receipt stream.
 
-### Phase 7.5: Auto-checkpoint (post verify gate)
-
-```bash
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/write_checkpoint.py \
-  --task-dir doc/harness/tasks/<task_id>/ \
-  --note "Phase 7 done — task_verify completed; see RECEIPTS.jsonl"
-```
-
-### Phase 7.6: Health score capture
-
-```bash
-python3 ${HARNESS_PLUGIN_ROOT}/scripts/health.py --dry-run || true
-```
-
 ### Phase 7.7: Dogfood (post-QA, pre-close)
 
 On Claude this is a `harness:dogfooder` agent spawn. On Codex, use `spawn_agent` when available; otherwise the dogfooder methodology runs inline in the orchestrator's context after Phase 7 PASS.
@@ -397,41 +377,23 @@ completion report with:
 4. Durable docs or learning artifacts updated, or a specific no-doc rationale
 5. Remaining risks, deferred items, or follow-up tasks
 
-**Quality Score:**
-```
-score = (ac_completion × 0.40) + (test_coverage × 0.30)
-      + (adversarial_clean × 0.20) + (scope_discipline × 0.10)
-```
-- `ac_completion` = (done / total) × 10. Deferred = 0.5.
-- `test_coverage` = (tested paths / total changed paths) × 10. No framework -> 5.
-- `adversarial_clean` = max(0, 10 - (crit × 3 + high × 1.5 + med × 0.5)).
-- `scope_discipline` = 10 / 7 / 4 / 0 (none / auto-added / justified / unjustified).
-
 **Cleanup:** PROGRESS.md persists through final close as the scope-lock contract. Keep PROGRESS.md in place; do not create a separate narrative handoff artifact.
 
-### Phase 8.5: Reflect and Log (capture-when-fresh, no quota)
+### Phase 8.5: Reflect and Log
 
-Capture only concrete reusable fact-plus-fix discoveries while fresh. Leave
-`learnings.jsonl` untouched when there is no signal; it never gates close.
+Capture-when-fresh, no quota. Capture only concrete reusable fact-plus-fix
+discoveries while they are fresh. Leave `learnings.jsonl` untouched when there is
+no signal; it is gitignored staging, not shared memory, and it never gates close.
 
-### Phase 8.5.1: Feedback-Derived Rules (judgment required, capture optional)
+**Commit-backed Learnings (mandatory classification):** classify each candidate
+`none | captured | rejected`. `captured` requires a committed artifact and names
+the skill, script, test or durable doc that changed a committed rule — a
+`learnings.jsonl` row alone is never `captured`.
 
-Classify `none | captured | rejected`. Capture only reusable rules of the form
-"When X, do Y. Verify by Z." Write behavior rules for Tier 2 docs; convert
-incident-shaped lessons into behavior or reject them.
-
-### Phase 8.5.2: Commit-backed Learnings (mandatory classification)
-
-Classify `none | captured | rejected`. `learnings.jsonl` is gitignored staging,
-not shared memory. `captured` requires a committed artifact and names the skill,
-script, test or durable doc that changed a committed rule.
-
-### Phase 8.5.3: Self-Healing Candidates (mandatory classification)
-
-Treat development friction, QA-discovered gaps and agent suggestions as
-hypotheses until checked against the repo. Classify each as `confirmed`,
-`partially-confirmed`, `already-handled`, `duplicate`, `not-found`, or
-`needs-runtime-check`. Preserve gate safety with an alternative evidence tier.
+| Candidate source | Additional rule |
+|---|---|
+| Feedback-Derived Rules (judgment required, capture optional) | Capture only reusable rules shaped `When X, do Y. Verify by Z.` Write behavior rules for Tier 2 docs; convert incident-shaped lessons into behavior or reject them. |
+| Self-Healing Candidates (development friction, QA-discovered gaps, agent suggestions) | Treat as hypotheses until checked against the repo. Classify `confirmed`, `partially-confirmed`, `already-handled`, `duplicate`, `not-found`, or `needs-runtime-check`. Preserve gate safety with an alternative evidence tier. |
 
 If develop or QA discovered a working repo-local setup/test/dev-server command
 after one or more failed attempts, record it before close as a pending runbook

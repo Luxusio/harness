@@ -74,12 +74,6 @@ Verify `doc/harness/manifest.yaml` and the exact four-field `TASK.json` parse. D
 and list the 3 newest task directories. If an in-progress task matches the
 current `task_id`, state "resuming from prior session" in the conversation.
 
-**Health baseline snapshot:** capture composite health score for Phase 8 delta. Best-effort — skip cleanly.
-
-Run `python3 ${CLAUDE_PLUGIN_ROOT}/scripts/health.py --dry-run || true`.
-
-Reads `health_components` from manifest (falls back to `test_command`). Output includes per-component PASS/FAIL + composite 0–10 score. `--dry-run` prevents appending to project-level history at this stage.
-
 ### Phase 1: Load plan
 
 Read `doc/harness/tasks/<task_id>/`:
@@ -88,7 +82,17 @@ Read `doc/harness/tasks/<task_id>/`:
 3. **Resume check:** `PROGRESS.md` → skip ACs listed in `completed_acs`. For each completed AC, compare target-file mtimes against `PROGRESS.md` mtime; files modified post-PROGRESS → mark "needs re-verification", do not blindly skip.
 4. **Learnings bootstrap:** `head -20 doc/harness/learnings.jsonl` and `ls doc/harness/patterns/*.md`. If PLAN.md absent, `AskUserQuestion` (run plan skill / check task_id / abort).
 
-**Durable Docs Preflight:** before source implementation, read PLAN.md `Durable Docs Decision` as a documentation-impact judgment, not a rote REQ checklist. Confirm whether the task is `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`, then run the REQ detector mentally or via `plugin/scripts/req_detector.py` when request, feedback, target files, or planned surfaces imply observable UI/API/mobile/native/desktop behavior. If a REQ path is selected or detector output is high-confidence, create or update that `doc/<area>/REQ__*.md` before editing source files, using `direct REQ doc edit` or `plugin/scripts/req_scaffold.py` when no existing REQ fits. If the task touches observable UI/API/backoffice/admin screens, routes, controllers, native navigation/back-stack behavior, or endpoints and PLAN says `REQ: n/a`, stop source implementation and amend/create the REQ first; do not wait for close or durable docs to discover the missing REQ. For harness process, agent instruction, testing guidance, or implementation-pattern changes, prefer `GUIDE` or skill/pattern docs and keep `REQ: n/a` with a specific reason.
+**Durable Docs Preflight:** read PLAN.md `Durable Docs Decision` as a
+documentation-impact judgment, not a rote REQ checklist, and confirm whether the task
+is `REQ needed`, `Pattern/skill doc enough`, or `No durable doc needed`. Phase
+3.6.1 owns the type taxonomy, area vocabulary, and observable-behavior examples —
+do not restate them here.
+
+What this phase uniquely owns is **ordering**: a selected REQ doc is written
+before any source edit, not after the code is done. When the decision is
+ambiguous, run `plugin/scripts/req_detector.py` (or reason it through) against the
+request, feedback, target files, and planned surfaces.
+If the task touches observable UI/API/backoffice/admin screens, routes, controllers, native navigation/back-stack behavior, or endpoints and PLAN says `REQ: n/a`, stop source implementation and amend or create the REQ now — do not defer that discovery to Phase 8.6.
 
 **User Feedback Event Review:** before each dependent build/test/review action
 at phase boundaries, incorporate explicit user corrections from the conversation. The
@@ -252,8 +256,10 @@ Each commit must leave the codebase working. Bisect stops at infra layer, not mi
 ### Phase 6.5: Verification Gate
 
 - **6.5 IRON LAW** — PASS = PASS. No unverified claim. Runtime verdict must come from the current task receipt run.
-- Use the current quality score to decide whether to continue fixing or proceed.
-  Do not write a project stats series for per-task scores.
+- Decide whether to continue fixing or proceed from the concrete open review and
+  QA findings — unresolved `FIX_NOW` items, failing GATE tests, uncovered
+  behavioral ACs. Do not compute a summary score and do not write a project
+  stats series for per-task scores.
 
 ### Phase 6.6: Independent Code Review Gate
 
@@ -291,25 +297,6 @@ When durable docs changed under `doc/<area>/<TYPE>__*.md`, pass those paths to t
   - `high` AND confidence ≥ 8
   Lower severities may be deferred in final response or follow-up tasks — do not block close.
 - **Acceptance result** — on gate fail, loop back to the fix cycle; on pass, retain the evidence in the review/QA receipt stream.
-
-### Phase 7.5: Auto-checkpoint (post verify gate)
-
-After Phase 7 completes (pass or fail), snapshot for mid-task resume:
-
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/write_checkpoint.py \
-  --task-dir doc/harness/tasks/<task_id>/ \
-  --note "Phase 7 done — task_verify completed; see RECEIPTS.jsonl"
-```
-
-### Phase 7.6: Health score capture
-
-Run health score and compare it to the Phase 0 baseline if still available in
-context:
-
-```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/scripts/health.py --dry-run || true
-```
 
 ### Phase 7.7: Dogfood (post-QA, pre-close)
 
@@ -386,43 +373,23 @@ Call `task_close`, then provide a concise final response with:
 4. Durable docs or learning artifacts updated, or a specific no-doc rationale
 5. Remaining risks, deferred items, or follow-up tasks
 
-**Quality Score:**
-```
-score = (ac_completion × 0.40) + (test_coverage × 0.30)
-      + (adversarial_clean × 0.20) + (scope_discipline × 0.10)
-```
-- `ac_completion` = (done / total) × 10. Deferred = 0.5.
-- `test_coverage` = (tested paths / total changed paths) × 10. No framework → 5.
-- `adversarial_clean` = max(0, 10 - (crit × 3 + high × 1.5 + med × 0.5)). Fixed at 0.25 weight.
-- `scope_discipline` = 10 / 7 / 4 / 0 (none / auto-added / justified / unjustified).
-
 **Cleanup:** PROGRESS.md persists beyond Phase 8 as the scope-lock contract for any post-close edits. Keep PROGRESS.md in place; do not create a separate narrative handoff artifact.
 
-### Phase 8.5: Reflect and Log (capture-when-fresh, no quota)
+### Phase 8.5: Reflect and Log
 
-Capture only concrete, reusable fact-plus-fix discoveries while fresh. Leave
-`learnings.jsonl` untouched when there is no signal; it never gates close.
+Capture-when-fresh, no quota. Capture only concrete, reusable fact-plus-fix
+discoveries while they are fresh. Leave `learnings.jsonl` untouched when there is
+no signal; it is gitignored staging, not shared memory, and it never gates close.
 
-### Phase 8.5.1: Feedback-Derived Rules (judgment required, capture optional)
+**Commit-backed Learnings (mandatory classification):** classify each candidate
+`none | captured | rejected`. `captured` requires a committed artifact and names
+the skill, script, test or durable doc that changed a committed rule — a
+`learnings.jsonl` row alone is never `captured`.
 
-Classify `none | captured | rejected`. Capture only reusable rules of the form
-"When X, do Y. Verify by Z." Write behavior rules for Tier 2 docs; convert
-incident-shaped lessons into behavior or reject them. Blame, urgency and
-task-local preference are not rules.
-
-### Phase 8.5.2: Commit-backed Learnings (mandatory classification)
-
-Classify `none | captured | rejected`. `learnings.jsonl` is gitignored staging,
-not shared memory. `captured` requires a committed artifact and names the skill,
-script, test or durable doc that changed a committed rule.
-
-### Phase 8.5.3: Self-Healing Candidates (mandatory classification)
-
-Treat development friction, QA-discovered gaps and agent suggestions as
-hypotheses until checked against the repo. Classify each as `confirmed`,
-`partially-confirmed`, `already-handled`, `duplicate`, `not-found`, or
-`needs-runtime-check`. Preserve a gate's safety with an alternative evidence tier
-tier rather than weakening it.
+| Candidate source | Additional rule |
+|---|---|
+| Feedback-Derived Rules (judgment required, capture optional) | Capture only reusable rules shaped `When X, do Y. Verify by Z.` Write behavior rules for Tier 2 docs; convert incident-shaped lessons into behavior or reject them. Blame, urgency and task-local preference are not rules. |
+| Self-Healing Candidates (development friction, QA-discovered gaps, agent suggestions) | Treat as hypotheses until checked against the repo. Classify `confirmed`, `partially-confirmed`, `already-handled`, `duplicate`, `not-found`, or `needs-runtime-check`. Preserve a gate's safety with an alternative evidence tier rather than weakening it. |
 
 If develop or QA discovered a working repo-local setup/test/dev-server command
 after one or more failed attempts, record it before close as a pending runbook
