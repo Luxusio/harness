@@ -8,6 +8,54 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+
+def _report_import_failure(exc: BaseException) -> None:
+    """Leave a breadcrumb when this hook cannot import its own dependencies.
+
+    Without it the receipt subsystem fails completely silently: the hook runs,
+    exits 0, writes no receipt, and logs nothing — because every logger it would
+    use lives in the import that just failed. On 2026-08-26 a stale
+    `__pycache__` entry made `subagent_lifecycle` raise PermissionError from the
+    receipt-adapter binding, disabling receipts entirely. Three sessions
+    diagnosed it as three different causes because there was no signal at all.
+
+    Stdlib only, and deliberately not `_lib`: the point is to work when `_lib`
+    is exactly what is broken. Never raises into the hook.
+    """
+    try:
+        import json
+        import traceback
+        from datetime import datetime, timezone
+
+        root = os.path.dirname(os.path.abspath(__file__))
+        while True:
+            if os.path.isdir(os.path.join(root, "doc", "harness")):
+                break
+            parent = os.path.dirname(root)
+            if parent == root:
+                return
+            root = parent
+        entry = {
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "type": "gate-crash",
+            "source": "background_hook:import",
+            "key": "receipt-subsystem-unavailable",
+            "error": f"{type(exc).__name__}: {exc}",
+            "insight": (
+                "background_hook could not import its dependencies, so NO receipt "
+                "can be written and task_close will refuse. A stale __pycache__ "
+                "in the loaded plugin tree is a known cause; clearing it is safe."
+            ),
+            "traceback_tail": traceback.format_exc().strip().splitlines()[-3:],
+        }
+        with open(
+            os.path.join(root, "doc", "harness", "learnings.jsonl"), "a", encoding="utf-8",
+        ) as handle:
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
 try:
     from _lib import (  # type: ignore
         find_repo_root,
@@ -21,7 +69,8 @@ try:
         _log_gate_error,
     )
     import subagent_lifecycle  # type: ignore
-except Exception:
+except Exception as exc:
+    _report_import_failure(exc)
     sys.exit(0)
 
 
