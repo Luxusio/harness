@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import os
+import collections
 import glob
 import itertools
 import json
@@ -684,6 +685,12 @@ def _append_directory_destination_targets(
 def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd="",
                               quoted=None):
     for index, token in enumerate(tokens):
+        # The last cost loop outside the fail-closed handoff. Each redirect
+        # operator costs a path resolution, so ~16 KB of `> ` padding overran
+        # the 3 s hook timeout — and a killed hook allows. main() turns an
+        # exhausted budget into a deny, so returning here fails closed.
+        if not index % 256 and _budget_exhausted():
+            return
         # A quoted token is a literal argument, not an operator: `grep -n '2>'`
         # was being denied as a source mutation. Unknown alignment is treated
         # as unquoted here — the opposite default from _strip_redirect_syntax,
@@ -1493,24 +1500,46 @@ def _quotable_operators(command):
     command and denied — a reader, blocked, with the deny naming an `rm` operand
     it never had.
 
-    A quoted operator appears in the source as a *quoted word* — `'|'`, `"&&"`.
-    The first version of this looked for a quote character merely touching the
-    operator anywhere on the line, which let one occurrence lend its mark to
-    every other occurrence of the same operator: `echo "ok"; rm -rf /tmp/build;
-    cat "$PWD"/<task>/RECEIPTS.jsonl` denied, because the `"` closing `"ok"`
-    sits against a `;` that has nothing to do with the `;` before `cat`. Adding
-    one space before that first `;` made it allow. Requiring the operator to be
-    quoted *as a whole word* removes the borrowing without alignment
-    bookkeeping, which cannot be done here anyway — a `;` inside `"a;b"` is in
-    the text but is not a token, and the reason we are in this branch at all is
-    that quoting is unknown.
+    A quoted operator appears in the source as a *quoted word* — `'|'`, `"&&"`,
+    `$'|'` — so the test is against the lexer's raw words, not the raw text.
+
+    Two earlier spellings of this both leaked, in the same direction, and the
+    difference between them is the lesson. First it looked for a quote merely
+    *touching* an operator anywhere on the line, so the `"` closing `"ok"` lent
+    its mark to an unrelated `;` and `echo "ok"; rm -rf /tmp/build; cat
+    "$PWD"/<task>/RECEIPTS.jsonl` denied. Narrowing that to the substring
+    `"'" + op + "'"` looked like it fixed the class and did not: `-d';'`
+    contains `';'` while the word it produces is `-d;`, so every everyday
+    delimiter idiom — `cut -d';'`, `sort -t';'`, `awk -F';'`, `IFS=';'` — lent
+    its quote to the real `;` separators on the line and denied ordinary
+    readers, one of them naming an `install.py` that appeared nowhere in the
+    command.
+
+    A substring is not a word. Only a whole word that is a quoted spelling of
+    the operator is evidence that a boundary might be a filename; anything
+    glued to other characters is a normal argument that happens to contain
+    quotes.
     """
     if not command:
         return frozenset()
-    return frozenset(
-        operator for operator in BOUNDARY_TOKENS
-        if f"'{operator}'" in command or f'"{operator}"' in command
-    )
+    try:
+        lexer = shlex.shlex(command, posix=False, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        raw_words = list(lexer)
+    except ValueError:
+        raw_words = command.split()
+    found = collections.Counter()
+    for word in raw_words:
+        if word.startswith("$'") and word.endswith("'") and len(word) > 2:
+            inner = word[2:-1]
+        elif len(word) > 1 and word[0] == word[-1] and word[0] in "'\"":
+            inner = word[1:-1]
+        else:
+            continue
+        if inner in BOUNDARY_TOKENS:
+            found[inner] += 1
+    return found
 
 
 def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
@@ -1560,7 +1589,23 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
                         execution_cwd="", quoted=None, depth=0, *, command):
     idx = 0
     ambiguous_previous = None
-    quotable = _quotable_operators(command) if quoted is None else frozenset()
+    quotable = (
+        _quotable_operators(command) if quoted is None
+        else collections.Counter()
+    )
+    boundaries = collections.Counter(
+        token for token in tokens if token in BOUNDARY_TOKENS
+    )
+    # An operator is only reinterpretable when there are at least as many
+    # quoted spellings of it as there are boundaries of it. This gates the
+    # pairwise merge as well as the whole-line reading: one quoted `;` was
+    # licensing a merge across a *real* `;`, which joined `rm -rf /tmp/build`
+    # to `find . -name '*.py' …` and glob-expanded into a deny on `install.py`,
+    # a file appearing nowhere on the line.
+    mergeable = {
+        operator for operator, available in quotable.items()
+        if boundaries[operator] <= available
+    }
     segments_walked = 0
     while idx < len(tokens):
         # Segment count is its own cost multiplier, independent of operand
@@ -1625,7 +1670,7 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
             # `echo` and the write allowed. Pairwise merging is linear: every
             # token appears in at most two merged pairs.
             if (ambiguous_previous is not None
-                    and tokens[idx - 1] in quotable):
+                    and tokens[idx - 1] in mergeable):
                 merged: list[dict] = []
                 _process_segment(
                     ambiguous_previous + [tokens[idx - 1]] + expanded,
@@ -1634,8 +1679,14 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
                 targets.extend(item for item in merged if item not in targets)
             ambiguous_previous = expanded
         idx = j + 1
-    unsplit_is_possible = quotable and all(
-        token in quotable for token in tokens if token in BOUNDARY_TOKENS
+    # Every boundary must be accounted for by a *distinct* quoted-operator
+    # word. Presence alone is not enough: `find . -exec grep -l foo {} ';' ;
+    # wc -l <plan>` has two `;` boundaries and only one quoted `;` to explain
+    # them, so the whole-line reading is impossible however you assign it —
+    # one real separator is left over. Treating one quoted word as licence for
+    # every boundary of its kind denied that ordinary `find` idiom.
+    unsplit_is_possible = bool(quotable) and all(
+        operator in mergeable for operator in boundaries
     )
     if quoted is None and unsplit_is_possible:
         # The split itself may be wrong: a quoted `|` is an argument, not a

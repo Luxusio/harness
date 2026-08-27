@@ -145,6 +145,16 @@ Other dynamic constructs remain:
   `PLAN.md` and `TASK.json` are matched by path and basename, so writing through
   a pre-existing hard link to one of them allows. Creating the alias in-band
   still denies, so this needs an alias planted by some other route.
+- **a quoted operator sharing its spelling with a real separator on the same
+  line is not reinterpreted.** `cp /tmp/f ';' <artifact>` denies on its own,
+  but `echo "a"b ; cp /tmp/f ';' <artifact>` allows: two `;` boundaries, one
+  quoted `;`, and no way to tell which is which without the positional
+  alignment this branch by definition lacks. Preferring the merge is worse —
+  it denied `find . -name '*.py' -exec grep -l foo {} ';' ; wc -l <plan>`,
+  reporting an `install.py` that appears nowhere on the line, because the merge
+  glued `rm -rf /tmp/build` to the `find` and glob-expanded `'*.py'`. A file
+  literally named `;` is obfuscation; `find -exec … ';'` is an everyday idiom.
+  The count rule takes the idiom.
 - **an operator spelled across quote runs is not recognised as quotable.**
   `touch '&''&' <artifact>` builds the token `&&` while the raw text contains
   no `&&` substring, so the merged reading is not offered and the write
