@@ -835,8 +835,9 @@ def _env_argv_after_options(argv):
     trailing member of a bundle of valueless shorts — `-iS "cmd"` and
     `-iu FOO cmd` are both legal and both execute — so the bundle forms are
     matched for `S`, `u` and `C` alike. `-uS "cmd"` is *not* a bundle: there
-    the `S` begins -u's NAME, which is why the value options are tested after
-    the split-string branches.
+    the `S` begins -u's NAME. The two matchers are disjoint rather than
+    order-dependent — a token ending in `u`/`C` cannot also end in `S` — so
+    swapping the blocks would change nothing.
 
     `--` is skipped like any other leading dash word — this loop does *not*
     stop parsing options there, unlike real `env`. That divergence can only
@@ -890,17 +891,20 @@ def _env_argv_after_options(argv):
         # `env -iu FOO cp <payload> <artifact>` really writes. Matching only
         # the unbundled `-u`/`-C` left `FOO` at argv[0], where it is neither
         # option nor assignment, so the loop broke and handed a non-verb to
-        # `_unwrap_execution`. Cannot collide with the `-S` branches above:
-        # those are tested first, and `-[i0v]*[uC]` cannot end in `S`.
+        # `_unwrap_execution`. Cannot collide with the `-S` branches: a token
+        # matching `-[i0v]*[uC]` ends in `u`/`C` and so can never also end in
+        # `S`. Disjoint, not order-dependent — swapping the blocks changes
+        # nothing.
         if _is_env_value_option(token) or re.fullmatch(r"-[i0v]*[uC]", token):
             if index + 1 >= len(argv):
-                # Dangling: this option's value is not in `argv` at all — it
-                # comes from whatever argv the split words are prepended to.
-                # Stepping over two positions overran the list and returned
-                # `[]`, so the next outer word landed at argv[0] and the verb
-                # was lost: `env -S "-S -u FOO cp <payload> <artifact>"` wrote
-                # the artifact with the gate silent. Hand the option word back
-                # so the outer loop pairs it with the following value.
+                # Dangling: this option's value is not in `argv`. Stepping over
+                # two positions overran the list and returned `[]`, so the next
+                # word landed at argv[0] and the verb was lost:
+                # `env -S "-S -u FOO cp <payload> <artifact>"` wrote the
+                # artifact with the gate silent. Hand the option word back so
+                # the caller can pair it with whatever follows. (Reached from
+                # the outer argv too — `env -u` — where nothing follows and
+                # real `env` errors; allowing that matches reality.)
                 return argv[index:]
             index += 2
         elif token.startswith("-") or _is_env_assignment(token):

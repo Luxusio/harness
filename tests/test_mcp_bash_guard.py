@@ -1333,16 +1333,21 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 # bundle takes the following word. Matching only the unbundled
                 # `-u`/`-C` left the value at argv[0], where it is neither
                 # option nor assignment, so the loop broke on a non-verb.
-                # Ground-truthed: real env executes both of these.
+                # Ground-truthed: real env executes these.
                 f"env -iu FOO cp /tmp/pay.txt {receipts}",
                 f"env -vu FOO cp /tmp/pay.txt {receipts}",
-                f"env -0C /tmp cp /tmp/pay.txt {receipts}",
+                f"env -iC /tmp cp /tmp/pay.txt {receipts}",
                 f'env -S "-iu FOO cp /tmp/pay.txt {receipts}"',
+                # `-0` is the exception: `env -0C …` never runs, because `-0`
+                # with a command present is a hard env error. Kept as a row
+                # because the regex accepts it and over-denying a line that
+                # cannot execute is the safe direction.
+                f"env -0C /tmp cp /tmp/pay.txt {receipts}",
                 # A value-taking option DANGLING at the end of a split value
-                # takes its value from the argv the split words are prepended
-                # to. Stepping over two positions overran the list and yielded
-                # [], so the next outer word landed at argv[0] and the verb was
-                # lost. Ground-truthed: real env executes these.
+                # has no value among the split words. Stepping over two
+                # positions overran the list and yielded [], so the next outer
+                # word landed at argv[0] and the verb was lost.
+                # Ground-truthed: real env executes these.
                 f'env -S "-S -u FOO cp /tmp/pay.txt {receipts}"',
                 f'env -S "-S -C . cp /tmp/pay.txt {receipts}"',
                 f'env -S "-S --unset FOO cp /tmp/pay.txt {receipts}"',

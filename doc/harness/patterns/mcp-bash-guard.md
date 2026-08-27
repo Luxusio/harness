@@ -398,8 +398,7 @@ Other dynamic constructs remain:
   `test_env_split_string_value_is_a_command_not_an_option_value`, not for the
   whole option**: `-S "cmd"`, `-S"cmd"`, `--split-string=cmd`, `S` at the end of
   a bundle of valueless short options (`-iS "cmd"`, `-v0S"cmd"`), and leading
-  `VAR=value` words inside the value. `-u`/`-C` deliberately do not bundle —
-  they take values, so `-uS "cmd"` is -u's NAME.
+  `VAR=value` words inside the value.
 
   The option loop is shared between the outer `env` argv and the `-S`
   recursion, because real `env` re-parses the split words as its own arguments.
@@ -420,12 +419,15 @@ Other dynamic constructs remain:
 
   A value-taking short option may also be the **trailing member of a bundle**,
   where it takes the following word: `env -iu FOO cp <payload> <artifact>` and
-  `env -0C /tmp cp …` both execute, and both allowed while only the unbundled
-  `-u`/`-C` were matched. An earlier version of this paragraph said `-u`/`-C`
-  "deliberately do not bundle", which was a false statement about the boundary
-  rather than a hedged gap. The true distinction is narrower: `-uS "cmd"` is
-  not a bundle — there the `S` begins -u's NAME — which is why the split-string
-  branches are tested before the value options.
+  `env -iC /tmp cp …` both execute, and both allowed while only the unbundled
+  `-u`/`-C` were matched. `-uS "cmd"` is *not* such a bundle — there the `S`
+  begins -u's NAME — and the two matchers are disjoint, since a token ending in
+  `u`/`C` cannot also end in `S`.
+
+  (`-0` is the exception among the valueless shorts: `env -0C /tmp cp …` never
+  runs, because `-0` with a command present is a hard `env` error. The bundle
+  regex accepts it anyway, which over-denies a line that cannot execute — the
+  safe direction, and the same regex arm serves `-iC`/`-vC`, which do run.)
 
   And the split words are *prepended* to the argv that follows rather than
   replacing it, so `env -S "cp" <payload> <artifact>` is a write.
