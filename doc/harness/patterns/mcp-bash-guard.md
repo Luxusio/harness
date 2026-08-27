@@ -35,7 +35,7 @@ categories. Paths outside all three are silent allow.
 
 The guard splits the command at newlines **outside quotes**, shlex-tokenises
 each line (respecting quotes + shell operators), splits those at
-`BOUNDARY_TOKENS` (`&&`, `||`, `|`, `;`, `&`), then inspects each command
+`BOUNDARY_TOKENS` (`&&`, `||`, `|`, `;`, `&`, `(`, `)`), then inspects each command
 segment. The line split is separate and necessary:
 `shlex(whitespace_split=True)` consumes newlines as whitespace and never emits
 them, so a `"\n"` boundary token could never match and a multi-line command

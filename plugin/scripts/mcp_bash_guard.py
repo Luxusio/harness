@@ -65,17 +65,16 @@ GIT_NON_MUTATING_SUBCOMMANDS = {
     "branch", "rev-parse", "ls-files", "check-ignore", "blame",
 }
 # Words that may precede a real command without changing what it does. Dispatch
-# is on the first token, and `_is_non_mutating_command` treats any
-# SHELL_CONTROL_WORDS head as relief, so `time cp <payload> <receipt>` and
-# `{ cp …; }` suppressed the entire mutation-verb dispatch, the
-# lifecycle-entrypoint deny and the uninspected-inline-runtime deny in one call.
-# Strip them and dispatch on what actually runs.
+# is on the first token, so a decorating prefix used to select the relief path
+# and suppress every verb branch: `time cp <payload> <receipt>` and `{ cp …; }`
+# wrote a protected artifact with the guard silent. Strip them and dispatch on
+# what actually runs.
 #
 # Loop and conditional *headers* (`for`, `while`, `until`, `if`, `case`,
 # `select`, `function`) stay out: their first operand is a variable or word
 # list, not a command, and stripping them would classify it as one.
 COMMAND_PREFIX_WORDS = {"time", "!", "{", "then", "else", "elif", "do", "command",
-                        "builtin", "exec", "nohup", "nice"}
+                        "builtin", "exec"}
 # Wrappers whose tail is a whole command, mapped to their value-taking options.
 # `sudo cp /tmp/f <receipt>` and `xargs -I{} cp /tmp/f <receipt>` put both the
 # verb and the target in the token stream; without unwrapping, dispatch saw the
@@ -90,6 +89,12 @@ _COMMAND_CARRYING_WRAPPERS = {
               "-d", "--delimiter", "-E", "-s", "--max-chars", "-a", "--arg-file"},
     "ionice": {"-c", "-n", "-p"},
     "chroot": set(),
+    # `nice`/`nohup` belong here, not in COMMAND_PREFIX_WORDS: that list advances
+    # only while the token *is* a prefix word, so `nice -n5 cp <receipt>` left
+    # `-n5` as the command word and no verb branch ran. Their sibling `ionice`
+    # was already modelled with value options; these two were not.
+    "nice": {"-n", "--adjustment"},
+    "nohup": set(),
 }
 LAST_ARG_MUTATORS = {"cp", "mv", "install", "touch", "truncate", "rsync"}
 TEE_COMMAND = "tee"
@@ -235,17 +240,6 @@ def _last_non_option(tokens):
             continue
         return token
     return ""
-def _embedded_path_candidates(tokens):
-    visible = " ".join(tokens)
-    candidates = re.findall(
-        r"(?:~|/|\.?\.?/)?[A-Za-z0-9_.:-]+(?:/[A-Za-z0-9_.:-]+)+",
-        visible,
-    )
-    candidates.extend(re.findall(
-        r"(?:doc/harness|plugin(?:-codex)?|\.codex|\.claude)/[A-Za-z0-9_./:-]+",
-        visible,
-    ))
-    return candidates
 def _target_directory_option(non_env):
     """Destination named by `-t <dir>` / `--target-directory[=<dir>]`.
 
@@ -382,7 +376,9 @@ def _unwrap_execution(tokens):
         if wrapper in {"command", "exec"}:
             argv = argv[1:]
             while argv and argv[0].startswith("-"):
-                argv = argv[1:]
+                # `exec -a <name> <cmd>`: `-a` takes a value, so skipping only
+                # the flag left `<name>` as the command word.
+                argv = argv[2:] if argv[0] == "-a" and len(argv) > 1 else argv[1:]
             continue
         # Wrappers that carry a complete command as their tail. Both the verb
         # and the protected target are ordinary tokens here — this is the kept
@@ -403,18 +399,6 @@ def _unwrap_execution(tokens):
             continue
         break
     return argv
-def _gated_path_risk(tokens, repo_root, execution_cwd):
-    candidates = _embedded_path_candidates(tokens)
-    if any(_classify_gated_path(
-        _normalize_candidate_path(value, repo_root, execution_cwd), repo_root,
-    ) for value in candidates):
-        return True
-    compact = re.sub(r"[^a-z0-9]", "", " ".join(tokens).lower())
-    return (
-        "receiptsjsonl" in compact or "taskjson" in compact
-        or "docharnessgoals" in compact and "json" in compact
-        or "activesessions" in compact
-    )
 def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
     if not segment_tokens:
         return
@@ -449,16 +433,14 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
             ))
             if targets:
                 return
-            if _gated_path_risk(raw_argv, repo_root, execution_cwd) and re.search(
-                r"(?:write|append|unlink|rename|replace|remove|delete|truncate|chmod|>)",
-                nested, re.I,
-            ):
-                targets.append({
-                    "path": "doc/harness/goals/current.json",
-                    "category": "protected-artifact",
-                    "method": "nested runtime with gated environment",
-                })
-                return
+            # A keyword heuristic used to fire when extraction found nothing:
+            # any gated-path mention plus a word like "write"/"append"/">"
+            # anywhere in the nested string denied with a synthetic
+            # `goals/current.json` target. It denied `bash -c "grep -n write
+            # <receipt>"` — a read — while naming a file the command never
+            # touches. The nested extraction above already reports truthful
+            # targets; nothing replaces this.
+            return
 
     # No execution-based deny. Invoking a lifecycle entrypoint, importing a
     # receipt writer, or running an uninspected inline runtime is not blocked
@@ -612,17 +594,11 @@ def _extract_mutation_targets(command, repo_root, execution_cwd=""):
         return targets
 
     _extract_redirect_targets(tokens, targets, repo_root, execution_cwd)
-    if ("$(" in command or "`" in command) and _gated_path_risk(
-        tokens, repo_root, execution_cwd,
-    ) and re.search(
-        r"(?:--junitxml|--output|-o(?:\S|\s))", command,
-    ):
-        targets.append({
-            "path": "doc/harness/goals/current.json",
-            "category": "protected-artifact",
-            "method": "unresolved dynamic output path",
-        })
-        return targets
+    # An execution heuristic used to fire here: command substitution anywhere +
+    # any gated-path mention + an `-o`-shaped token produced a synthetic
+    # `goals/current.json` deny. It matched `grep -o`, `mypy --output`,
+    # `pytest -o` and killed ordinary read-only work while naming a file the
+    # command never touched. Removed with the rest of execution gating.
 
     # `shlex(whitespace_split=True)` consumes newlines as whitespace and never
     # emits them, so the "\n" entry in BOUNDARY_TOKENS never matched and a

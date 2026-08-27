@@ -266,6 +266,44 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
+    def test_option_taking_prefix_wrappers_deny(self):
+        """`nice -n5` / `exec -a foo` must not become the command word.
+
+        COMMAND_PREFIX_WORDS advances only while the token *is* a prefix word,
+        so an option value stopped the scan and dispatch saw `-n5`/`foo`.
+        """
+        with scratch_task_in_real_repo("pr1-niceexec") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"nice -n5 cp /tmp/f {receipts}",
+                f"nice -n 5 tee -a {receipts}",
+                f"nice -n5 sed -i s/a/b/ {receipts}",
+                f"exec -a foo cp /tmp/f {receipts}",
+                f"nohup nice -n5 tee -a {receipts}",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_read_only_commands_naming_an_artifact_allow(self):
+        """Two execution heuristics denied reads and named the wrong file.
+
+        A nested-runtime keyword match and a command-substitution + `-o` match
+        both emitted a synthetic `goals/current.json` target for commands that
+        write nothing.
+        """
+        with scratch_task_in_real_repo("pr1-readonly") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f'bash -c "grep -n write {receipts}"',
+                f'bash -c "cat {receipts} | grep -c write"',
+                f"grep -o x {receipts} ; echo $(git rev-parse --short HEAD)",
+            ):
+                with self.subTest(command=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertIsNone(decision)
+
     def test_wrappers_do_not_over_block(self):
         for command in ("sudo ls /tmp", "timeout 5 pytest -q", "( echo hi ) > /tmp/o"):
             with self.subTest(command=command):
