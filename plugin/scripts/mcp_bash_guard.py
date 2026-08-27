@@ -1650,18 +1650,65 @@ def _quoted_operator_words(command, tokens):
         list(posix_lexer)
     except ValueError:
         return []
-    quoting_by_spelling: dict[str, list[bool]] = {}
-    for word in raw_words:
-        quoted = len(word) > 1 and word[0] == word[-1] and word[0] in "'\""
-        spelling = word[1:-1] if quoted else word
-        quoting_by_spelling.setdefault(spelling, []).append(quoted)
+    # Walk raw words and tokens together instead of bucketing by spelling.
+    # The k-th-word correspondence was false: the non-posix lex splits at a
+    # quote boundary while posix merges, so `'>'q` is two raw words and one
+    # token `>q`. The quoted word then consumed occurrence 0 of spelling `>`
+    # with no token behind it, and the *real* `>` later on the line inherited
+    # its True and was skipped — `echo '>'q > <receipt>` wrote the artifact.
+    #
+    # Concatenating until the accumulation equals the token reconciles the
+    # boundary directly. A token assembled from more than one raw word is never
+    # a quoted literal, and any walk that cannot be completed exactly gives up
+    # the skip entirely.
+    merged = []
+    index = 0
+    while index < len(raw_words):
+        word = raw_words[index]
+        if word == "\\" and index + 1 < len(raw_words):
+            merged.append("\\" + raw_words[index + 1])
+            index += 2
+            continue
+        merged.append(word)
+        index += 1
+
+    def _value(word):
+        """(text after quote removal, was this word a quoted literal)."""
+        if len(word) > 1 and word[0] == word[-1] and word[0] in "'\"":
+            return word[1:-1], True
+        if len(word) > 1 and word[0] == "\\":
+            return word[1:], True
+        # A trailing backslash escapes the character that followed, which the
+        # splitter consumed; it is not part of this word's text.
+        if len(word) > 1 and word.endswith("\\") and not word.endswith("\\\\"):
+            return word[:-1], False
+        return word, False
+
     flags = []
-    seen: collections.Counter = collections.Counter()
+    cursor = 0
     for token in tokens:
-        occurrences = quoting_by_spelling.get(token, ())
-        index = seen[token]
-        flags.append(index < len(occurrences) and occurrences[index])
-        seen[token] += 1
+        accumulated = ""
+        start = cursor
+        while cursor < len(merged) and accumulated != token:
+            word = merged[cursor]
+            accumulated += _value(word)[0]
+            cursor += 1
+            # A trailing backslash escaped whatever came next. When that was
+            # whitespace, `whitespace_split` consumed it and posix joined the
+            # two words around a space that survives in no raw word — so
+            # `/tmp/a\ b` is two raw words and one token `/tmp/a b`. Restore it
+            # when doing so is what completes the match; `a\>b` escapes a
+            # non-space and needs no filler.
+            if (word.endswith("\\") and not word.endswith("\\\\")
+                    and accumulated != token
+                    and token.startswith(accumulated + " ")):
+                accumulated += " "
+        if accumulated != token:
+            return []
+        if cursor - start == 1:
+            flags.append(_value(merged[start])[1])
+        else:
+            flags.append(False)
     return flags
 
 

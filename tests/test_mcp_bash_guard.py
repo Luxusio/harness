@@ -773,6 +773,37 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 with self.subTest(reader_with_redirect=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)
                     self.assertIsNone(decision)
+            # A quoted operator glued to a neighbour. The non-posix lex splits
+            # at the quote boundary while posix merges, so `'>'q` is two raw
+            # words and one token `>q` — the quoted word had no token behind
+            # it, and under a per-spelling mapping its flag was handed to the
+            # *real* `>` later on the line, which was then skipped. Every
+            # subtest above uses operators that are their own word in both
+            # lexes, so none of them probed the correspondence they relied on.
+            for command in (
+                f"echo '>'q > {receipts}",
+                f'echo ">"q > {receipts}',
+                f"echo '>>'q >> {receipts}",
+                f'echo ">"x ; echo y 2> {plan}',
+                f"echo '>|'x ; echo y >| {plan}",
+                "echo '>'m > doc/harness/goals/x.json",
+                f"( echo '>'x ); echo y > {plan}",
+                f"""bash -c "echo '>'x ; echo y > {plan}" """,
+            ):
+                with self.subTest(glued=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+            # Backslash-escaped characters are the mirror case: a trailing `\`
+            # escapes what the splitter consumed, so the posix token spans two
+            # raw words around a space present in neither. Reconciling that is
+            # what keeps these readers allowed.
+            for command in (
+                f'grep -n ">" {source} /tmp/a\\ b 2>/dev/null',
+                f'echo a\\>b ; grep -n ">" {plan}',
+            ):
+                with self.subTest(escaped=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertIsNone(decision)
             # A lex that degrades gives up the skip entirely. ANSI-C quoting
             # lexes clean non-posix and raises posix, so `tokens` arrive from
             # `command.split()` with quotes attached while raw words have
