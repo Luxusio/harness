@@ -708,7 +708,7 @@ def _append_directory_destination_targets(
 
 
 def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd="",
-                              quoted=None):
+                              quoted=None, quoted_words=frozenset()):
     for index, token in enumerate(tokens):
         # The last cost loop outside the fail-closed handoff. Each redirect
         # operator costs a path resolution, so ~16 KB of `> ` padding overran
@@ -721,6 +721,14 @@ def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd="",
         # as unquoted here — the opposite default from _strip_redirect_syntax,
         # because failing safe means still classifying the redirect target.
         if quoted is not None and index < len(quoted) and quoted[index]:
+            continue
+        # When alignment is unknown, fall back to the same evidence rule the
+        # segment path uses: the raw text showing this operator as a whole
+        # quote-delimited word. Without it `grep -n ">" "$PWD"/<source>` read
+        # the `>` as a real operator and denied a reader, naming a fabricated
+        # `$PWD/...` path. An unquoted operator still classifies its operand,
+        # so the laundering direction is untouched.
+        if quoted is None and token in quoted_words:
             continue
         if _PURE_REDIRECT_OP_RE.match(token) and index + 1 < len(tokens):
             _append_target(
@@ -1577,6 +1585,37 @@ def _quotable_operators(command):
     return found
 
 
+def _quoted_operator_words(command):
+    """Every whole quote-delimited word in the raw text, as a set of contents.
+
+    Same evidence rule as `_quotable_operators`, applied to redirect operators
+    rather than segment boundaries. `_extract_redirect_targets` skipped a
+    quoted token only when the quoting was *known*, so under unknown alignment
+    — which one adjacent-quote word anywhere on the line produces — every
+    redirect-shaped token was read as a real operator and the next token
+    classified as its target. `grep -n ">" "$PWD"/plugin/scripts/_lib.py`
+    therefore denied: a pure reader, blocked, naming a literal `$PWD/...` path
+    that appears nowhere on the line.
+
+    Unlike the segment path there is no both-readings union behind this call to
+    correct it, so the operator has to be recognised as a literal here or not
+    at all.
+    """
+    if not command:
+        return frozenset()
+    try:
+        lexer = shlex.shlex(command, posix=False, punctuation_chars=True)
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        raw_words = list(lexer)
+    except ValueError:
+        raw_words = command.split()
+    return frozenset(
+        word[1:-1] for word in raw_words
+        if len(word) > 1 and word[0] == word[-1] and word[0] in "'\""
+    )
+
+
 def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
                    quoted=None, depth=0, *, command):
     """Segment the line and classify each segment.
@@ -1627,6 +1666,9 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
     quotable = (
         _quotable_operators(command) if quoted is None
         else collections.Counter()
+    )
+    quoted_words = (
+        _quoted_operator_words(command) if quoted is None else frozenset()
     )
     boundaries = collections.Counter(
         token for token in tokens if token in BOUNDARY_TOKENS
@@ -1690,6 +1732,7 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
         # normalized against the repo root and `.py` read as source.
         _extract_redirect_targets(
             expanded, targets, repo_root, execution_cwd, segment_quoted,
+            quoted_words,
         )
         _process_segment(
             expanded, targets, repo_root, execution_cwd, segment_quoted, depth,

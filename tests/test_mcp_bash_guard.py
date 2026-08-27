@@ -729,6 +729,47 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     decision, _ = parse_decision(_run_bash(command).stdout)
                     self.assertIsNone(decision)
 
+    def test_quoted_redirect_operator_is_not_an_operator(self):
+        """Grepping for `>` must not be read as redirecting to the next word.
+
+        `_extract_redirect_targets` skipped a quoted token only when the
+        quoting was *known*. One adjacent-quote word anywhere on the line makes
+        it unknown, and then every redirect-shaped token was read as a real
+        operator — so `grep -n ">" "$PWD"/<source>` denied a pure reader and
+        named a literal `$PWD/...` path that appears nowhere on the line.
+
+        Unlike the segment path, this call has no both-readings union behind it
+        to correct the guess, so the operator has to be recognised as a literal
+        here or not at all.
+        """
+        with scratch_task_in_real_repo("pr1-quotedredir") as task_dir:
+            plan = os.path.join(task_dir, "PLAN.md")
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            source = "plugin/scripts/_lib.py"
+            for command in (
+                f'grep -n ">" "$PWD"/{source}',
+                f'grep -n "2>" "$PWD"/{source}',
+                f"grep -n '>' \"$PWD\"/{source}",
+                f'grep -c ">" "$PWD"/{source} ; echo done',
+                f'echo "a"b ; grep -n ">" {source}',
+                f'grep -rn ">" "$PWD"/{os.path.relpath(plan, REPO_ROOT)}',
+            ):
+                with self.subTest(allow=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertIsNone(decision)
+            # An unquoted operator still classifies its operand — the
+            # laundering direction is untouched.
+            for command in (
+                f'echo x > "$PWD"/{os.path.relpath(receipts, REPO_ROOT)}',
+                f'cp src "{os.path.relpath(task_dir, REPO_ROOT)}"/RECEIPTS.jsonl 2>/dev/null',
+                f'echo "a"b ; echo x > {receipts}',
+                f"echo x 2> {receipts}",
+                f"echo x >| {receipts}",
+            ):
+                with self.subTest(deny=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+
     def test_repeated_directory_sources_stay_within_the_budget(self):
         """Directory-shaped sources enumerate their directory, once per operand.
 
@@ -802,6 +843,9 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             for command in (
                 f"cp /tmp/a $';' ; cat {plan}",
                 f"install -m644 /tmp/a $';' ; head {plan}",
+                # Shape check, not a mutant discriminator: this one allows with
+                # or without the deleted branch. The two `$';'` rows above are
+                # what fail when it returns.
                 f"cp /tmp/a $'|' ; wc -l {plan}",
             ):
                 with self.subTest(command=command):
@@ -954,8 +998,14 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             for label, command in (
                 ("arith-openers",
                  "echo " + "$(( " * 8000 + f" ; cp /tmp/pd $(pwd)/{receipts}"),
+                # Repo-anchored, not `/proc`: this subtest previously used
+                # `/proc/*/*/*/*` x120 and ran 1.73s even with both the
+                # deadline and _GLOB_COMPONENT_CAP neutralized, so it could not
+                # fail. Cost here depends on the repository's own filesystem,
+                # which is the same lesson the directory-source and redirect
+                # cost tests each had to learn separately.
                 ("many-globs",
-                 " ; ".join(["rm /proc/*/*/*/*"] * 120) + f" ; {write}"),
+                 " ; ".join(["rm doc/*/*/*/*"] * 700) + f" ; {write}"),
                 ("ambiguous-pairs",
                  'echo "a"b ; ' + " ; ".join(["echo x"] * 6000) + f" ; {write}"),
                 # Segment count multiplies cost independently of operand count,
@@ -1556,6 +1606,19 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             # re-deny stdin execution with the suite still green.
             "printf '%s' 'pass' | python3 -",
             "python3 -c \"exec(__import__('base64').b64decode('cGFzcw=='))\"",
+            # An unrecognized executable carrying a gated path. The branch that
+            # denied these is the one this task exists to remove, and it had no
+            # test — so re-adding an "unknown executable with a gated operand"
+            # deny would leave the suite green and restore the original defect.
+            "ruff check plugin/scripts/mcp_bash_guard.py",
+            "ed plugin/scripts/mcp_bash_guard.py",
+            # Direct invocation of a lifecycle entrypoint. The only other
+            # occurrence of this path in the suite is `git add`, a different
+            # code path.
+            "python3 plugin/scripts/background_hook.py --event start",
+            # Other inline runtimes, with payloads that would write if run.
+            "perl -e 'open(F, qq{>}, q{/tmp/x}); print F 1'",
+            "ruby -e 'File.write(\"/tmp/x\", \"1\")'",
         ):
             with self.subTest(command=command):
                 decision, _ = parse_decision(_run_bash(command).stdout)

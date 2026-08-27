@@ -162,6 +162,16 @@ Other dynamic constructs remain:
   allows under every variant, including the buggy one, and proves nothing. A
   reproduction that does not reproduce is worse than no reproduction: it was
   cited in four places as the justification for this machinery.
+- **a quoted operator is evidence only where the guard looks for it.** Two
+  places consult the raw text for a whole quote-delimited word spelling an
+  operator: segment boundaries (`_quotable_operators`) and redirect operators
+  (`_quoted_operator_words`). Both were added after the *absence* of the check
+  produced a false deny — `echo "ok"; rm -f /tmp/x; wc -l "$PWD"/<plan>` for
+  the first, `grep -n ">" "$PWD"/<source>` for the second, each blocking a pure
+  reader and naming a path the line never writes. If a third consumer of token
+  text is added, assume it has the same hole until shown otherwise. Note the
+  redirect path has no both-readings union behind it, so a wrong guess there is
+  final.
 - **an operator spelled across quote runs is not recognised as quotable.**
   `touch '&''&' <artifact>` builds the token `&&` while the raw text contains
   no `&&` substring, so the merged reading is not offered and the write
