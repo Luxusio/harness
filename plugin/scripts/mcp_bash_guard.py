@@ -251,6 +251,26 @@ def _strip_command_prefix_words(argv):
     return argv[index:] if index < len(argv) else argv[:0]
 
 
+def _perl_cluster_switches(token):
+    """Single-letter perl switches in one option token.
+
+    Several perl switches swallow the rest of the token as their value, so a
+    substring test was wrong: `-Iinc` was read as containing `-i` and denied a
+    read-only `perl -Iinc -pe print <file>`. Stop at the first value-taking
+    switch.
+    """
+    if not token.startswith("-") or token.startswith("--"):
+        return ""
+    switches = []
+    for char in token[1:]:
+        if char in "IMmeEFxDS":
+            break
+        if not char.isalpha():
+            break  # e.g. the `.bak` suffix of `-pi.bak`
+        switches.append(char)
+    return "".join(switches)
+
+
 def _append_operands(
     targets, non_env, method, repo_root, execution_cwd="",
     skip_first=False, value_options=frozenset(),
@@ -282,22 +302,71 @@ def _nested_shell_script(non_env):
     puts `--` where the script was expected, and `dash`/`zsh`/`ksh` were not
     recognized as shells at all.
     """
+    tokens = list(non_env[1:])
+    # `busybox sh -c …`: the applet name is an ordinary operand, so recognizing
+    # `busybox` as a shell alone changed nothing.
+    if os.path.basename(non_env[0]) == "busybox" and tokens \
+            and tokens[0] in NESTED_SHELLS:
+        tokens = tokens[1:]
+    # Shell options that take a separate value. Returning at the first
+    # non-option token treated that value as the script, so
+    # `bash -o errexit -c '<write>'` classified nothing at all.
+    value_options = {"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}
     saw_command_flag = False
-    for token in non_env[1:]:
-        if not token.startswith("-") or token == "--":
-            if token == "--":
-                continue
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if not token.startswith("-"):
             return token if saw_command_flag else ""
+        if token == "--":
+            index += 1
+            continue
+        if token in value_options:
+            index += 2
+            continue
         if token == "--command" or token.startswith("--command="):
             if "=" in token:
                 return token.split("=", 1)[1]
             saw_command_flag = True
-            continue
-        if not token.startswith("--") and token.endswith("c"):
+        elif not token.startswith("--") and token.endswith("c"):
             # A short-option cluster runs the script only when `c` is last:
             # `-lc`, `-ec`, `-xc`. `-cl` would consume `l` as the script.
             saw_command_flag = True
+        index += 1
     return ""
+
+
+_INPUT_REDIRECT_OP_RE = re.compile(r"^\d*<{1,3}[&|]?$")
+
+
+def _strip_redirect_syntax(tokens):
+    """Remove redirect operators and their operands from a segment.
+
+    Redirect operands are not the verb's operands, but they stayed in the token
+    list, so `_last_non_option` returned the redirect target: a plain
+    `cp <src> <receipt> 2>/dev/null` picked `/dev/null` as the destination and
+    allowed, while the same command without the redirect denies. The fd digit is
+    its own token under `punctuation_chars=True`, so a bare trailing digit has
+    to go with it.
+
+    Redirect *targets* are still classified — `_extract_redirect_targets` runs
+    over the untrimmed segment.
+    """
+    kept = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if _PURE_REDIRECT_OP_RE.match(token) or _INPUT_REDIRECT_OP_RE.match(token):
+            if kept and re.fullmatch(r"\d+", kept[-1]):
+                kept.pop()
+            index += 2  # the operator and its operand
+            continue
+        if _INLINE_REDIRECT_RE.match(token) and not os.path.isabs(token):
+            index += 1
+            continue
+        kept.append(token)
+        index += 1
+    return kept
 
 
 def _last_non_option(tokens):
@@ -473,7 +542,7 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
         idx += 1
     if idx >= len(segment_tokens):
         return
-    raw_argv = segment_tokens[idx:]
+    raw_argv = _strip_redirect_syntax(segment_tokens[idx:])
     non_env = _strip_command_prefix_words(_unwrap_execution(raw_argv))
     if not non_env:
         return
@@ -522,20 +591,25 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
         # `_last_non_option` meant appending one harmless filename walked the
         # real target: `sed -i s/a/b/ <receipt> /tmp/pad` rewrote the receipt.
         # The script expression is the first non-option operand, so skip it.
+        # The first operand is the script expression *only* when the script was
+        # not supplied by an option. With `--expression=…`/`--file=…` the first
+        # operand is already the target file, and skipping it let
+        # `sed -i --expression=s/a/b/ <plan>` rewrite a protected artifact.
+        script_from_option = any(
+            token in {"-e", "-f"} or token.startswith(("--expression", "--file"))
+            for token in non_env[1:]
+        )
         _append_operands(
-            targets, non_env, "sed -i", repo_root, execution_cwd, skip_first=True,
+            targets, non_env, "sed -i", repo_root, execution_cwd,
+            skip_first=not script_from_option, value_options={"-e", "-f"},
         )
         return
     if cmd == "perl":
         options = [token for token in non_env[1:] if token.startswith("-")]
-        in_place = any(
-            token == "-i" or re.fullmatch(r"-i\S*", token) or "i" in token[1:]
-            and not token.startswith("--")
-            for token in options
-        )
+        switches = [_perl_cluster_switches(token) for token in options]
+        in_place = any("i" in cluster for cluster in switches)
         if in_place and any(
-            "p" in token[1:] or "n" in token[1:]
-            for token in options if not token.startswith("--")
+            "p" in cluster or "n" in cluster for cluster in switches
         ):
             # `-e <expr>` carries the program, so operands after it are files.
             _append_operands(
@@ -677,7 +751,8 @@ def _extract_mutation_targets(command, repo_root, execution_cwd=""):
     if not tokens:
         return targets
 
-    _extract_redirect_targets(tokens, targets, repo_root, execution_cwd)
+    # Redirect classification moved into `_walk_segments`, where tokens have
+    # been expanded; running it here saw only literal `$VAR` text.
     # An execution heuristic used to fire here: command substitution anywhere +
     # any gated-path mention + an `-o`-shaped token produced a synthetic
     # `goals/current.json` deny. It matched `grep -o`, `mypy --output`,
@@ -790,6 +865,12 @@ def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd=""):
                 token,
             )
             expanded.append(value)
+        # Classify redirects here, on the *expanded* tokens. Running this over
+        # raw whole-command tokens missed `V=<plan>; echo hi > $V` (the literal
+        # `$V` classified as nothing) and also produced a false deny for
+        # `D=/outside; cat f > "$D/x.py"`, since the unexpanded token was
+        # normalized against the repo root and `.py` read as source.
+        _extract_redirect_targets(expanded, targets, repo_root, execution_cwd)
         _process_segment(expanded, targets, repo_root, execution_cwd)
         idx = j + 1
 def _deny(target, command):

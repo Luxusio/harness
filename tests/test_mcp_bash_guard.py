@@ -354,6 +354,80 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
+    def test_trailing_redirect_does_not_move_the_destination(self):
+        """Redirect operands are not the verb's operands.
+
+        They stayed in the token list, so `_last_non_option` picked the redirect
+        target: `cp SRC <receipt> 2>/dev/null` allowed while the same command
+        without the redirect denies. `2>/dev/null` is the natural spelling for a
+        caller who wants no noise.
+        """
+        with scratch_task_in_real_repo("pr1-redirop") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"cp /tmp/f {receipts} 2>/dev/null",
+                f"cp /tmp/f {receipts} >/dev/null 2>&1",
+                f"install -m 644 /tmp/f {receipts} 2>/dev/null",
+                f"rsync /tmp/f {receipts} 2>/dev/null",
+                f"cp /tmp/f {receipts} < /dev/null",
+                f"cp /tmp/RECEIPTS.jsonl {task_dir}/ 2>/dev/null",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_shell_value_options_do_not_hide_the_script(self):
+        """An option's value was mistaken for the `-c` script."""
+        with scratch_task_in_real_repo("pr1-shellopt") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"bash -o errexit -c 'cp /tmp/f {receipts}'",
+                f"bash -O extglob -c 'cp /tmp/f {receipts}'",
+                f"bash --rcfile /dev/null -c 'cp /tmp/f {receipts}'",
+                f"busybox sh -c 'cp /tmp/f {receipts}'",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_sed_script_from_option_denies(self):
+        """With `--expression=`/`--file=` the first operand is already the file."""
+        with scratch_task_in_real_repo("pr1-sedopt") as task_dir:
+            plan = os.path.join(task_dir, "PLAN.md")
+            for command in (
+                f"sed -i --expression=s/a/b/ {plan}",
+                f"sed -i --file=/tmp/s.sed {plan}",
+                f"sed --in-place --file=/tmp/x {plan}",
+                f"sed -i -e s/a/b/ {plan}",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_redirect_target_is_classified_after_expansion(self):
+        """`V=<plan>; echo hi > $V` writes the artifact."""
+        with scratch_task_in_real_repo("pr1-redirvar") as task_dir:
+            plan = os.path.join(task_dir, "PLAN.md")
+            decision, reason = parse_decision(
+                _run_bash(f"V={plan}; echo hi > $V").stdout
+            )
+            self.assertEqual(decision, "deny")
+            self.assertIn("rule=protected-artifact", reason)
+
+    def test_perl_value_taking_switches_are_not_in_place(self):
+        """`-Iinc` contains an `i` but is a library path, not in-place."""
+        for command in (
+            "perl -Iinc -pe print plugin/scripts/_lib.py",
+            "perl -MList::Util -pe print plugin/scripts/_lib.py",
+            "perl -ne print plugin/scripts/_lib.py",
+        ):
+            with self.subTest(command=command):
+                decision, _ = parse_decision(_run_bash(command).stdout)
+                self.assertIsNone(decision)
+
     def test_multi_operand_verbs_do_not_over_block(self):
         for command in ("touch /tmp/ok", "truncate -s0 /tmp/ok",
                         "sed -i s/a/b/ /tmp/ok", "git restore --staged plugin/scripts/_lib.py",

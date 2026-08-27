@@ -35,7 +35,7 @@ categories. Paths outside all three are silent allow.
 
 The guard splits the command at newlines **outside quotes**, shlex-tokenises
 each line (respecting quotes + shell operators), splits those at
-`BOUNDARY_TOKENS` (`&&`, `||`, `|`, `;`, `&`, `(`, `)`), then inspects each command
+`BOUNDARY_TOKENS` (`&&`, `||`, `|`, `;`, `&`, `(`, `)`, `|&`, `;;`, `;&`, `;;&`), then inspects each command
 segment. The line split is separate and necessary:
 `shlex(whitespace_split=True)` consumes newlines as whitespace and never emits
 them, so a `"\n"` boundary token could never match and a multi-line command
@@ -52,9 +52,8 @@ before the command basename is examined (fixes a legacy bypass).
 | `sort` / `diff` with `-o` / `--output[=]` | the option's value — these are readers until given an output file |
 | `sed -i`/`--in-place`, `perl -i` with `-p`/`-n`, `touch`, `truncate` | **every** non-option operand: they rewrite all of them, so one extra filename must not walk the real target |
 | `tee` / `tee -a` | every non-option argument |
-| `sed -i` (and `sed -iBACKUP`) | last non-option argument |
-| `perl -pi` (and `perl -pi.bak`) | last non-option argument |
-| `cp`, `mv`, `install`, `rsync`, `touch`, `truncate` | last non-option argument, or `-t <dir>` / `--target-directory=<dir>` when present |
+| any verb, when the segment carries a redirect | redirect operators and their operands are removed before the verb's own operands are read, so a trailing `2>/dev/null` cannot become "the last operand" |
+| `cp`, `mv`, `install`, `rsync` | last non-option argument, or `-t <dir>` / `--target-directory=<dir>` when present |
 | `cp`/`mv`/`install`/`rsync` into a **directory** | the reconstructed `<dest>/<name>` for each source, since that path is never a token. `dir/.` and `dir/*` sources are enumerated rather than basenamed |
 | glob token (`*`, `?`, `[`) anywhere a path is classified | every existing path the pattern expands to, plus the literal token. `_GLOB_EXPANSION_CAP` bounds the walk itself (`islice` over `iglob`). A match identical to the pattern — a file literally named `x*y` — is dropped, since re-classifying it is what made expansion non-terminating |
 | `ln`, `link`, `cp -l` / `cp --link` | every source/destination operand (hard-link export protection) |
@@ -130,7 +129,11 @@ subcommands from index-only ones.
 
 ## Known gaps
 
-The current guard descends through direct `bash -c` / `sh -c` command strings.
+The current guard descends into a nested shell's script: `bash`, `sh`, `dash`,
+`zsh`, `ksh`, `ash`, and `busybox <shell>`, with the script found as `-c`,
+inside a short-option cluster ending in `c` (`-lc`, `-xc`), or as
+`--command[=]`, skipping `--` and value-taking shell options (`-o`, `-O`,
+`--rcfile`, `--init-file`).
 Inline `python -c` code is not inspected in any form, so every spelling of an
 inline write allows. That is the settled decision, not a gap to close.
 
