@@ -176,6 +176,22 @@ Other dynamic constructs remain:
   `HARNESS_SKIP_MCP_GUARD=1` is documented — so completeness here buys less
   than it costs. Add a spelling when it is reported; do not treat the option
   model as exhaustive.
+- **quoting forms the guard does not model.** Token text is read as shell
+  syntax, so the guard must know how each token was quoted. It models quotes and
+  backslash escapes; if the posix and non-posix lexes cannot be reconciled it
+  falls back to treating every token as unquoted. That fallback is a gap, not a
+  safe default — under it a fake operator eats the following token, which is the
+  real target.
+
+## Escape hatch
+
+`HARNESS_SKIP_MCP_GUARD=1` bypasses the gate for one Bash call and logs a
+`gate-bypass` entry to `learnings.jsonl`. It must be set in the hook process's
+environment; an inline `VAR=1 cmd` prefix does not reach it, because the hook
+runs before the command.
+
+## Fail-safe behaviour
+
 - Top-level import failure → module `sys.exit(0)` (fail-open).
 - Exception inside `main()` → `_log_gate_error` to `learnings.jsonl`; exit 0.
 - Malformed / empty stdin → silent allow.

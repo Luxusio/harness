@@ -400,6 +400,52 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
+    def test_backslash_escaped_fake_operator_denies(self):
+        r"""The all-False fallback was itself the bypass.
+
+        Non-posix shlex emits a lone `\` as its own token, so `sed -i s/a/b/ \<
+        F` made the two lexers disagree on count; the fallback then treated `<`
+        as a real operator and ate the following token — the target.
+        """
+        with scratch_task_in_real_repo("pr1-bslash") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"sed -i s/a/b/ \\< {receipts}",
+                f"touch \\< {receipts}",
+                f"tee \\< {receipts}",
+                f"rm \\< {receipts}",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_quoted_control_operator_does_not_split(self):
+        """A quoted `|` is an argument, not a boundary.
+
+        Splitting there left the artifact as the next segment's command word,
+        where no verb branch matches, so the write was never classified.
+        """
+        with scratch_task_in_real_repo("pr1-quotedsep") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"sed -i s/a/b/ '|' {receipts}",
+                f"sed -i s/a/b/ ';' {receipts}",
+                f"tee '|' {receipts}",
+                f"rm ';' {receipts}",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_real_boundaries_still_split(self):
+        """Consulting the quote flags must not suppress a true split."""
+        for command in ("true && pytest -q", "echo a | grep b", "true; ls"):
+            with self.subTest(command=command):
+                decision, _ = parse_decision(_run_bash(command).stdout)
+                self.assertIsNone(decision)
+
     def test_redirect_shaped_search_pattern_allows(self):
         """The same defect in the other direction: `grep -n '2>'` is a read.
 

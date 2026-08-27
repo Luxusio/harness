@@ -141,7 +141,7 @@ def _tokenize(command: str):
 
 
 def _quoted_flags(command: str, token_count: int):
-    """Which tokens were quoted in the source text.
+    r"""Which tokens were quoted in the source text.
 
     posix mode discards quoting, so a *literal argument* `'<'` arrives as the
     token `<`, indistinguishable from a real operator. That cut both ways:
@@ -149,8 +149,14 @@ def _quoted_flags(command: str, token_count: int):
     operand, and `grep -n '2>' <file>` was denied as a source mutation. A
     non-posix pass keeps the quote characters, so the two can be told apart.
 
-    Returns all-False if the two lexers disagree on token count — better to
-    behave as before than to mis-align the flags.
+    A backslash escape counts as quoting too, and non-posix mode emits a lone
+    `\` as its own token. Left unmerged the two lexers disagree on count, the
+    all-False fallback fires, and `sed -i s/a/b/ \< <receipt>` gets its target
+    eaten exactly as the quoted form did — so the fallback was itself the
+    bypass, not a safe degrade.
+
+    Still returns all-False if the counts cannot be reconciled; that path is a
+    real (documented) gap, not a safe default.
     """
     try:
         lexer = shlex.shlex(command, posix=False, punctuation_chars=True)
@@ -158,9 +164,19 @@ def _quoted_flags(command: str, token_count: int):
         raw = [t for t in lexer if t]
     except ValueError:
         return [False] * token_count
-    if len(raw) != token_count:
+    merged = []
+    index = 0
+    while index < len(raw):
+        token = raw[index]
+        if token == "\\" and index + 1 < len(raw):
+            merged.append("\\" + raw[index + 1])
+            index += 2
+            continue
+        merged.append(token)
+        index += 1
+    if len(merged) != token_count:
         return [False] * token_count
-    return [token[:1] in ("'", '"') for token in raw]
+    return [token[:1] in ("'", '"', "\\") for token in merged]
 def _normalize_candidate_path(
     token: str, repo_root: str = "", execution_cwd: str = ""
 ) -> str:
@@ -911,7 +927,15 @@ def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
     idx = 0
     while idx < len(tokens):
         j = idx
-        while j < len(tokens) and tokens[j] not in BOUNDARY_TOKENS:
+        # A *quoted* control operator is a literal argument, not a boundary.
+        # `sed -i s/a/b/ '|' <receipt>` used to end the segment here, leaving
+        # the artifact as the next segment's command word where no verb branch
+        # matches — so the write was never classified. Real operators are never
+        # quoted, so consulting the flags cannot suppress a true split.
+        while j < len(tokens) and not (
+            tokens[j] in BOUNDARY_TOKENS
+            and not (j < len(quoted) and quoted[j])
+        ):
             j += 1
         segment = tokens[idx:j]
         segment_quoted = list(quoted[idx:j]) if quoted else []

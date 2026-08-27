@@ -81,9 +81,12 @@ and nothing re-checks it at exec time.
   `task_verify` ordering, not by the Bash gate. Treat the Bash gate as a
   guardrail against accident, not a control against a determined caller. No
   document may describe it as the only control preventing a forged verdict.
-- Known routes past it are documented rather than implied closed. The load-
-  bearing one is that the guard re-implements a partial getopt per verb, so an
-  unmodelled option spelling can still hide the destination. See
+- Known routes past it are documented rather than implied closed. Two classes
+  carry the weight. First, the guard re-implements a partial getopt per verb, so
+  an unmodelled option spelling can hide the destination. Second, it reads token
+  *text* as shell syntax, and knows only the quoting forms it models — quotes
+  and backslash escapes today; a form it cannot reconcile falls back to treating
+  every token as unquoted, which is a gap rather than a safe default. See
   `doc/harness/patterns/mcp-bash-guard.md` § Known gaps.
 
 ## Known remaining friction (not fixed here)
