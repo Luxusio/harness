@@ -49,6 +49,8 @@ before the command basename is examined (fixes a legacy bypass).
 | Verb / pattern | Target extracted from |
 |----------------|------------------------|
 | any token that is entirely redirect punctuation — optional fd digits, optional `&`, one or two `>`, optional `\|`/`&` | the token immediately following the operator. Matched by shape, never by an enumerated list |
+| `sort` / `diff` with `-o` / `--output[=]` | the option's value — these are readers until given an output file |
+| `sed -i`/`--in-place`, `perl -i` with `-p`/`-n`, `touch`, `truncate` | **every** non-option operand: they rewrite all of them, so one extra filename must not walk the real target |
 | `tee` / `tee -a` | every non-option argument |
 | `sed -i` (and `sed -iBACKUP`) | last non-option argument |
 | `perl -pi` (and `perl -pi.bak`) | last non-option argument |
@@ -105,9 +107,13 @@ Inline Python is not inspected, so a `python -c` write to one allows.
 
 ## Known-safe verbs (no classification attempt)
 
-`ls`, `cat`, `head`, `tail`, `grep` / `rg`, `find`, `wc`, `diff`, `git log`,
+`ls`, `cat`, `head`, `tail`, `grep` / `rg`, `find`, `wc`, `git log`,
 `git diff`, etc. The guard is silent on allow, so these produce no audit
 noise.
+
+`sort` and `diff` are **not** in this class: they are readers until given
+`-o`/`--output`, which names a file they overwrite, and that operand is
+classified. `sort -o <receipt> a` and `diff --output=<receipt> a b` deny.
 
 ## Historical: read-only inspection relief
 
@@ -140,9 +146,10 @@ Other dynamic constructs remain:
   -s0 {} \;`, `find … -delete`, `tar -C <dir> -xf`, and `unzip -d <dir>` all
   reach a protected artifact without it appearing as a token. A bare filename
   after `cd` is the same shape under an unrecognized executable (`ed`, `ex`,
-  `vim -es`, `sponge`, `patch`): `_embedded_path_candidates` requires a `/`, so
-  it yields no candidate — note `tee`, `cp` and `echo >` still deny on the
-  identical bare name, because those go through basename classification.
+  `vim -es`, `sponge`, `patch`): the operands of an executable with no verb
+  model are not classified at all, so no candidate is produced — note `tee`,
+  `cp` and `echo >` still deny on the identical bare name, because those go
+  through basename classification.
 - `python -m <module> <protected path>` is not inspected, like all python
   execution. A stdlib module used as a file-writing
   utility (`python3 -m json.tool in.json <protected path>`) overwrites the
@@ -155,6 +162,11 @@ Other dynamic constructs remain:
   `git checkout -- .`, `git restore .`, `git apply <patch>` and `git reset
   --hard` reach protected artifacts and gated source without the artifact ever
   appearing as a token. The git model classifies file operands only.
+- **unexpanded redirect targets cut both ways.** Redirect targets are read
+  before the shell-value expansion loop, so besides the false allow below there
+  is a symmetric false *deny*: `S=/tmp/x; cat /etc/hosts > $S/probe.py` denies
+  with `rule=source path=$S/probe.py`, because the literal token is normalized
+  against the repo root and `.py` classifies as source.
 - **variable indirection defeats redirect detection entirely.**
   `F=<protected path>; echo x >> $F` allows, and the write succeeds. Redirect
   targets are extracted from *unexpanded* tokens, before the shell-value

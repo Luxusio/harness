@@ -286,6 +286,82 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
+    def test_nested_shell_spellings_deny(self):
+        """`-c` is rarely written alone.
+
+        Matching a standalone `-c` token and taking the next one missed `-lc`
+        clusters, `-c --`, and every shell other than bash/sh.
+        """
+        with scratch_task_in_real_repo("pr1-nestedshell") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f'bash -lc "cp /tmp/f {receipts}"',
+                f'sh -ec "cp /tmp/f {receipts}"',
+                f'bash -xc "cp /tmp/f {receipts}"',
+                f'bash -c -- "cp /tmp/f {receipts}"',
+                f'dash -c "cp /tmp/f {receipts}"',
+                f'/bin/bash -lc "cp /tmp/f {receipts}"',
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_extra_boundary_tokens_split(self):
+        """`|&` and `;;` are boundaries.
+
+        Missing them laundered a following verb, and worse, moved
+        `_last_non_option` off the destination of a preceding one — a trailing
+        `|& cat` turned a denied `cp` into an allow.
+        """
+        with scratch_task_in_real_repo("pr1-boundary") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"grep x f |& cp /tmp/f {receipts}",
+                f"cp /tmp/f {receipts} |& cat",
+                f"case a in a) cp /tmp/f {receipts};; esac",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_escaped_quote_does_not_swallow_the_next_line(self):
+        """`echo it\\'s` must not leave the quote tracker inside a quote."""
+        with scratch_task_in_real_repo("pr1-escquote") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for first in ("echo it\\'s fine", 'echo it\\"s fine'):
+                with self.subTest(first=first):
+                    decision, reason = parse_decision(
+                        _run_bash(f"{first}\ncp /tmp/f {receipts}").stdout
+                    )
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_multi_operand_verbs_classify_every_operand(self):
+        """`sed -i`, `perl -i`, `touch`, `truncate` rewrite all their operands."""
+        with scratch_task_in_real_repo("pr1-multiop") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"sed -i s/a/b/ {receipts} /tmp/pad",
+                f"perl -i -pe s/a/b/ {receipts} /tmp/pad",
+                f"touch {receipts} /tmp/pad",
+                f"truncate -s0 {receipts} /tmp/pad",
+                f"coproc cp /tmp/f {receipts}",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_multi_operand_verbs_do_not_over_block(self):
+        for command in ("touch /tmp/ok", "truncate -s0 /tmp/ok",
+                        "sed -i s/a/b/ /tmp/ok", "git restore --staged plugin/scripts/_lib.py",
+                        "echo it\\'s fine"):
+            with self.subTest(command=command):
+                decision, _ = parse_decision(_run_bash(command).stdout)
+                self.assertIsNone(decision)
+
     def test_read_only_commands_naming_an_artifact_allow(self):
         """Two execution heuristics denied reads and named the wrong file.
 

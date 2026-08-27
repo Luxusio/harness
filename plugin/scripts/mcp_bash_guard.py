@@ -59,7 +59,9 @@ _OUTPUT_OPTION_COMMANDS = {"sort", "diff"}
 #
 # Deliberately excluded because they DO rewrite the working tree:
 # checkout, restore, rm, clean, mv, apply, stash, reset (--hard), revert,
-# merge, rebase, cherry-pick, pull.
+# merge, rebase, cherry-pick, pull. `restore` carries one exception handled in
+# the git branch: `--staged` without `--worktree` only unstages, so it belongs
+# with `add` rather than here.
 GIT_NON_MUTATING_SUBCOMMANDS = {
     "add", "commit", "diff", "show", "log", "status", "grep",
     "branch", "rev-parse", "ls-files", "check-ignore", "blame",
@@ -74,7 +76,7 @@ GIT_NON_MUTATING_SUBCOMMANDS = {
 # `select`, `function`) stay out: their first operand is a variable or word
 # list, not a command, and stripping them would classify it as one.
 COMMAND_PREFIX_WORDS = {"time", "!", "{", "then", "else", "elif", "do", "command",
-                        "builtin", "exec"}
+                        "builtin", "exec", "coproc"}
 # Wrappers whose tail is a whole command, mapped to their value-taking options.
 # `sudo cp /tmp/f <receipt>` and `xargs -I{} cp /tmp/f <receipt>` put both the
 # verb and the target in the token stream; without unwrapping, dispatch saw the
@@ -96,14 +98,29 @@ _COMMAND_CARRYING_WRAPPERS = {
     "nice": {"-n", "--adjustment"},
     "nohup": set(),
 }
-LAST_ARG_MUTATORS = {"cp", "mv", "install", "touch", "truncate", "rsync"}
+# Verbs whose destination is the last operand (the others are sources).
+LAST_ARG_MUTATORS = {"cp", "mv", "install", "rsync"}
+# Verbs that rewrite EVERY file operand. `touch <receipt> /tmp/pad` and
+# `truncate -s0 <receipt> /tmp/pad` both hit the receipt, so last-operand
+# classification let one extra filename walk the real target.
+ALL_OPERAND_MUTATORS = {"touch", "truncate"}
 TEE_COMMAND = "tee"
 # `(` and `)` are boundaries, not command words. `punctuation_chars=True` emits
 # `(` as its own token, so without this a subshell made the segment's command
 # word `"("`, dispatch fell through, and `( cp /tmp/f <receipt> )` wrote a
 # protected artifact with the guard silent. Splitting only ever adds segments,
 # so it cannot create an allow.
-BOUNDARY_TOKENS = {"&&", "||", "|", ";", "\n", "&", "(", ")"}
+# No `"\n"` member: `shlex(whitespace_split=True)` never emits one, which is why
+# `_unquoted_lines` splits the raw text first.
+BOUNDARY_TOKENS = {"&&", "||", "|", ";", "&", "(", ")",
+                   # `punctuation_chars=True` emits these as single tokens too.
+                   # Missing them was worse than a laundered follower: a
+                   # trailing `|& cat` moved `_last_non_option` off the real
+                   # destination, so a plain `cp <payload> <receipt> |& cat`
+                   # allowed where `cp <payload> <receipt>` denies.
+                   "|&", ";;", ";&", ";;&"}
+# Shells whose `-c` argument is another command line to inspect.
+NESTED_SHELLS = {"bash", "sh", "dash", "zsh", "ksh", "ash", "busybox"}
 _INLINE_REDIRECT_RE = re.compile(r"^(?:\d*)?(>>?)(.+)$")
 _ARTIFACT_TOOL_HINT = {
     "TASK.json": "harness task control MCP",
@@ -232,6 +249,55 @@ def _strip_command_prefix_words(argv):
     while index < len(argv) and argv[index] in COMMAND_PREFIX_WORDS:
         index += 1
     return argv[index:] if index < len(argv) else argv[:0]
+
+
+def _append_operands(
+    targets, non_env, method, repo_root, execution_cwd="",
+    skip_first=False, value_options=frozenset(),
+):
+    """Classify every non-option operand, not just the last one."""
+    skipped = not skip_first
+    index = 1
+    while index < len(non_env):
+        token = non_env[index]
+        if token == "--":
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 2 if token in value_options else 1
+            continue
+        if not skipped:
+            skipped = True
+            index += 1
+            continue
+        _append_target(targets, token, method, repo_root, execution_cwd)
+        index += 1
+
+
+def _nested_shell_script(non_env):
+    """The script string a nested shell would run, or "".
+
+    Matching a standalone `-c` token and taking the next one missed the most
+    ordinary spellings: `bash -lc "…"` clusters the flags, `bash -c -- "…"`
+    puts `--` where the script was expected, and `dash`/`zsh`/`ksh` were not
+    recognized as shells at all.
+    """
+    saw_command_flag = False
+    for token in non_env[1:]:
+        if not token.startswith("-") or token == "--":
+            if token == "--":
+                continue
+            return token if saw_command_flag else ""
+        if token == "--command" or token.startswith("--command="):
+            if "=" in token:
+                return token.split("=", 1)[1]
+            saw_command_flag = True
+            continue
+        if not token.startswith("--") and token.endswith("c"):
+            # A short-option cluster runs the script only when `c` is last:
+            # `-lc`, `-ec`, `-xc`. `-cl` would consume `l` as the script.
+            saw_command_flag = True
+    return ""
 
 
 def _last_non_option(tokens):
@@ -419,11 +485,8 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
             targets.extend(_extract_mutation_targets(nested, repo_root, execution_cwd))
         return
 
-    if cmd in {"bash", "sh"} and "-c" in non_env[1:]:
-        try:
-            nested = non_env[non_env.index("-c") + 1]
-        except IndexError:
-            nested = ""
+    if cmd in NESTED_SHELLS:
+        nested = _nested_shell_script(non_env)
         if nested:
             # Extract first. Reporting the synthetic goal path before trying the
             # real extraction named a file the command never touches, which the
@@ -455,9 +518,12 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
         token == "-i" or token.startswith(("-i", "--in-place"))
         for token in non_env[1:]
     ):
-        _append_target(
-            targets, _last_non_option(non_env), "sed -i",
-            repo_root, execution_cwd,
+        # Every file operand is rewritten, not just the last. Classifying only
+        # `_last_non_option` meant appending one harmless filename walked the
+        # real target: `sed -i s/a/b/ <receipt> /tmp/pad` rewrote the receipt.
+        # The script expression is the first non-option operand, so skip it.
+        _append_operands(
+            targets, non_env, "sed -i", repo_root, execution_cwd, skip_first=True,
         )
         return
     if cmd == "perl":
@@ -471,9 +537,10 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
             "p" in token[1:] or "n" in token[1:]
             for token in options if not token.startswith("--")
         ):
-            _append_target(
-                targets, _last_non_option(non_env), "perl -i",
-                repo_root, execution_cwd,
+            # `-e <expr>` carries the program, so operands after it are files.
+            _append_operands(
+                targets, non_env, "perl -i", repo_root, execution_cwd,
+                value_options={"-e", "-E"},
             )
             return
     # `sort`/`diff` are readers until given an output option, which names the
@@ -517,6 +584,13 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
                 cmd, non_env, _last_non_option(non_env), targets,
                 repo_root, execution_cwd,
             )
+        return
+    if cmd in ALL_OPERAND_MUTATORS:
+        _append_operands(
+            targets, non_env, cmd, repo_root, execution_cwd,
+            value_options={"-s", "--size", "-r", "--reference", "-d", "--date",
+                           "-t", "--time"},
+        )
         return
     if cmd in LAST_ARG_MUTATORS:
         destination = _last_non_option(non_env)
@@ -574,7 +648,17 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
         while index < len(non_env) and non_env[index].startswith("-"):
             index += 2 if non_env[index] in value_options else 1
         subcommand = non_env[index] if index < len(non_env) else ""
-        if subcommand and subcommand not in GIT_NON_MUTATING_SUBCOMMANDS:
+        tail = non_env[index + 1:]
+        # `git restore --staged <path>` unstages; it cannot change the file on
+        # disk, so it belongs with `git add` rather than with worktree rewrites.
+        # `--worktree` alongside it does write, so require its absence.
+        index_only_restore = (
+            subcommand == "restore"
+            and any(token in {"--staged", "-S"} for token in tail)
+            and not any(token in {"--worktree", "-W"} for token in tail)
+        )
+        if subcommand and subcommand not in GIT_NON_MUTATING_SUBCOMMANDS \
+                and not index_only_restore:
             for operand in non_env[index + 1:]:
                 if not operand.startswith("-") and operand != "--":
                     _append_target(
@@ -636,10 +720,26 @@ def _unquoted_lines(command):
     while index < len(command):
         char = command[index]
         if quote:
+            # Inside double quotes a backslash still escapes; inside single
+            # quotes it does not.
+            if quote == '"' and char == "\\" and index + 1 < len(command):
+                current.append(char)
+                current.append(command[index + 1])
+                index += 2
+                continue
             if char == quote:
                 quote = ""
             current.append(char)
             index += 1
+            continue
+        # An escaped character outside quotes is literal. Treating `\'` as a
+        # quote-opener desynchronized the tracker, so `echo it\'s` swallowed the
+        # following newline and a mutator on the next line was never classified
+        # — the laundering this function exists to prevent.
+        if char == "\\" and index + 1 < len(command) and command[index + 1] != "\n":
+            current.append(char)
+            current.append(command[index + 1])
+            index += 2
             continue
         if char in "'\"":
             quote = char
