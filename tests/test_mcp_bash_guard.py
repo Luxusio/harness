@@ -1265,37 +1265,60 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             guard._deadline = saved
         self.assertEqual(expired, [], "an exhausted budget must stop early")
 
-    def test_relative_write_after_cd_is_not_a_repo_write(self):
-        """`cd <dir>` moves where later relative operands resolve.
+    def test_cwd_is_not_inferred_from_cd(self):
+        """A relative operand always resolves against the hook's cwd.
 
-        Every relative operand used to be joined to the hook's cwd, so
-        `cd /tmp/work && echo hi > out.py` denied as a repo *source* mutation
-        and named `<repo-root>/out.py` — a file the command never touches.
+        This pins a deliberate NON-feature. Round 32 added `cd` tracking to
+        remove an over-block — `cd /tmp/work && echo hi > out.py` was denied as
+        a repo source mutation, naming a `<repo-root>/out.py` the command never
+        touches — and the feature turned out to be unsound in a way that took
+        three design iterations and fifteen shapes to establish.
+
+        A linear segment walk cannot know whether a `cd` executed, or in which
+        shell. Every command below runs a `cd` that does NOT move the caller,
+        so bash writes the artifact in the repo; any tracker that honours the
+        `cd` resolves the write outside the repo and allows it. Verified
+        against real bash — the artifact's content actually changes.
+
+        The last row is the one that killed the approach: declining to track an
+        unresolvable `cd` is NOT the safe direction, because a later `cd` can
+        move the shell back *toward* the repo, and a stale outside-repo cwd
+        converts a real write into an allow.
+
+        The cost of not tracking is the original over-block, recorded as known
+        residue in `doc/harness/patterns/mcp-bash-guard.md`. That is the
+        intended trade: an annoying deny beats a silent write to a protected
+        artifact. Do not re-add cwd tracking without a design that answers
+        every row here.
         """
-        with tempfile.TemporaryDirectory() as outside:
+        with scratch_task_in_real_repo("pr1-cdtrack") as task_dir:
+            art = os.path.relpath(
+                os.path.join(task_dir, "RECEIPTS.jsonl"), REPO_ROOT,
+            )
+            src = "install.py"
             for command in (
-                f"cd {outside} && echo hi > out.py",
-                f"cd {outside}; echo x > helper.py",
-                f"cd {outside} && cp a b.py",
-                # Outside the repo is outside the gate, consistently: the
-                # absolute spellings of these already allow.
-                f"cd {outside} && echo x > RECEIPTS.jsonl",
-                f"echo x > {os.path.join(outside, 'RECEIPTS.jsonl')}",
-            ):
-                with self.subTest(allow=command):
-                    decision, _ = parse_decision(_run_bash(command).stdout)
-                    self.assertIsNone(decision)
-            # Tracking must not become a bypass. Each of these still resolves
-            # into the repo, so each must still deny.
-            for command in (
-                "echo x > install.py",
-                "cd plugin && echo x > install.py",
-                # `cd` to a missing directory fails, and `;` does not
-                # short-circuit, so bash stays put and the write lands here.
-                "cd /nonexistent-dir ; echo x > install.py",
-                "cd - ; echo x > install.py",
-                "cd '*' ; echo x > install.py",
-                f"cd {outside} /tmp ; echo x > install.py",
+                # grouping: `( … )` is a subshell, the cd is discarded
+                f"( cd /tmp ) ; echo PWNED > {art}",
+                f"( cd /tmp ); echo PWNED > {art}",
+                f"(cd /tmp); echo PWNED > {art}",
+                f"( cd /tmp )&& echo PWNED > {art}",
+                f"((cd /tmp)); echo PWNED > {art}",
+                f"( cd /tmp ) | tee {art}",
+                # every pipeline element runs in its own subshell
+                f"cd /tmp | cat ; echo PWNED > {art}",
+                f"cd /tmp | tee /dev/null ; echo PWNED > {src}",
+                # bodies that never execute
+                f"while false; do cd /tmp; done ; echo PWNED > {art}",
+                f"if false; then cd /tmp; fi ; echo PWNED > {art}",
+                # a definition is not an invocation
+                f"f() {{ cd /tmp; }} ; echo PWNED > {art}",
+                # background job: subshell again
+                f"cd /tmp & echo PWNED > {art}",
+                # conditional on a command that fails / short-circuits
+                f"false && cd /tmp ; echo PWNED > {src}",
+                f"true || cd /tmp ; echo PWNED > {src}",
+                # the killer: an untrackable cd moving back toward the repo
+                f"cd /tmp ; cd $OLDPWD ; echo PWNED > {src}",
             ):
                 with self.subTest(deny=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)

@@ -1863,57 +1863,6 @@ def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
     )
 
 
-def _cd_destination(segment, current_cwd, repo_root):
-    """Where a literal `cd <dir>` segment moves the shell, or "" if unknown.
-
-    Without this, every relative operand resolved against the hook's cwd, so
-    `cd /tmp/work && echo hi > out.py` was denied as a repo *source* mutation
-    and the message named `<repo-root>/out.py` — a file the command never
-    touches. Scratch scripts in a temp directory are everyday work.
-
-    Deliberately narrow, because guessing wrong here is the allow-leaning
-    direction. Only a single literal operand counts; a glob, a variable that
-    survived expansion, a collapsed substitution placeholder, `cd -`, and bare
-    `cd` all return "" and leave the caller resolving against the previous
-    directory. That is the over-blocking answer, which is the safe one.
-
-    The destination must already be a directory. Accepting an unverified path
-    would open a fail-open on the `;` spelling: `cd /nonexistent ; echo x >
-    install.py` leaves bash in the original directory (the `cd` fails and `;`
-    does not short-circuit), so the write really does land in the repo.
-
-    One deny changes with this: `cd /tmp && echo x > RECEIPTS.jsonl` allowed
-    where it used to deny. That deny was not a basename policy, it was this same
-    misresolution landing on a protected name — `_normalize_candidate_path`
-    returns "" for anything outside the repo root, so the basename rule never
-    ran; the operand was simply being joined to the wrong directory. The guard
-    already allows `echo x > /tmp/RECEIPTS.jsonl`, `cp /tmp/a
-    /tmp/RECEIPTS.jsonl` and `echo x > /tmp/PLAN.md`, so keeping the `cd`
-    spelling denied would make two spellings of one command disagree. Outside
-    the repo is outside the gate's jurisdiction; the repo's own artifacts are
-    still classified against `repo_root`, which no `cd` moves.
-    """
-    argv = _strip_command_prefix_words([
-        token for token in segment if not _is_env_assignment(token)
-    ])
-    if len(argv) < 2 or os.path.basename(argv[0]) != "cd":
-        return ""
-    operands = [token for token in argv[1:] if token != "--"]
-    if len(operands) != 1:
-        return ""
-    target = operands[0]
-    if (not target or target == "-"
-            or _SUBSTITUTION_PLACEHOLDER in target
-            or any(char in target for char in "*?[")
-            or "$" in target):
-        return ""
-    target = os.path.expanduser(target)
-    if not os.path.isabs(target):
-        target = os.path.join(current_cwd or repo_root or os.getcwd(), target)
-    target = os.path.normpath(target)
-    return target if os.path.isdir(target) else ""
-
-
 def _walk_segments_once(tokens, shell_values, targets, repo_root,
                         execution_cwd="", quoted=None, depth=0, *, command,
                         literal=None):
@@ -1955,16 +1904,6 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
         if boundaries[operator] <= available
     }
     segments_walked = 0
-    # Tracks `cd` within this line. The two alternate readings below keep using
-    # the original `execution_cwd`: they exist to *add* denies under a different
-    # segmentation, and letting a `cd` rebase them could only remove one.
-    #
-    # Within-line only. A `cd` on its own line does not carry to the next,
-    # because the both-readings union has no single cwd to hand back. That
-    # leaves later relative operands resolving against the repo root — the
-    # over-blocking direction, and the same one this function had everywhere
-    # before.
-    segment_cwd = execution_cwd
     while idx < len(tokens):
         # Segment count is its own cost multiplier, independent of operand
         # count: 1000 two-operand segments took 3.06 s while the per-operand
@@ -2012,18 +1951,12 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
         # `D=/outside; cat f > "$D/x.py"`, since the unexpanded token was
         # normalized against the repo root and `.py` read as source.
         _extract_redirect_targets(
-            expanded, targets, repo_root, segment_cwd, segment_quoted,
+            expanded, targets, repo_root, execution_cwd, segment_quoted,
             quoted_literal[idx:j],
         )
         _process_segment(
-            expanded, targets, repo_root, segment_cwd, segment_quoted, depth,
+            expanded, targets, repo_root, execution_cwd, segment_quoted, depth,
         )
-        # After classifying this segment, not before: `cd <dir>` takes effect
-        # for what follows it, and a redirect in the `cd` segment itself still
-        # belongs to the directory the shell was in when it started.
-        moved = _cd_destination(expanded, segment_cwd, repo_root)
-        if moved:
-            segment_cwd = moved
         if quoted is None:
             # Unknown alignment means this split may be wrong: the operator at
             # `j` could be a quoted literal argument. Classify this segment

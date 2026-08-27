@@ -318,26 +318,42 @@ Other dynamic constructs remain:
   this is an *accident* shape, not a determined-caller one — a stray `rm -rf`
   on a task directory is a plausible slip. Closing it means classifying a
   directory operand that contains a gated artifact.
-- **`cd` is modelled within a line, not across lines.** Relative operands used
-  to resolve against the hook's cwd unconditionally, so `cd /tmp/work && echo hi
-  > out.py` denied as a repo *source* mutation and named `<repo-root>/out.py`, a
-  file the command never touches — it blocked writing a scratch script in a temp
-  directory. A literal single-operand `cd` to an existing directory now moves
-  where later operands on that line resolve. Deliberately narrow: a glob, a
-  surviving variable, a collapsed substitution, `cd -`, bare `cd`, and a missing
-  destination all leave the previous directory in force, which is the
-  over-blocking answer. A `cd` on its own line does not carry to the next,
-  because the both-readings union has no single cwd to hand back; that is again
-  the over-blocking direction. The two alternate readings (pairwise merge,
-  whole-line) keep the original cwd, since they exist only to *add* denies.
+- **the shell's cwd is never inferred; a relative operand always resolves
+  against the hook's cwd.** This costs a real over-block: `cd /tmp/work && echo
+  hi > out.py` denies as a repo *source* mutation and names
+  `<repo-root>/out.py`, a file the command never touches, so writing a scratch
+  script in a temp directory is refused. Tracking `cd` was implemented to remove
+  that, and reverted after measurement: **a linear segment walk cannot know
+  whether a `cd` executed, or in which shell.** Fifteen shapes run a `cd` that
+  does not move the caller, so bash writes the artifact in the repo while any
+  tracker honouring the `cd` resolves the write outside it and allows —
+  `( cd /tmp ) ; …` with its glued and nested spellings, `( cd /tmp ) | tee
+  <artifact>`, `cd /tmp | cat ; …`, `while false; do cd /tmp; done ; …`,
+  `if false; then cd /tmp; fi ; …`, `f() { cd /tmp; } ; …`, `cd /tmp & …`,
+  `false && cd /tmp ; …`, `true || cd /tmp ; …`.
 
-  One deny changed with this: `cd /tmp && echo x > RECEIPTS.jsonl` now allows.
-  It was never a basename policy — `_normalize_candidate_path` returns `""` for
-  anything outside the repo root, so the basename rule never ran; the operand
-  was simply being joined to the wrong directory, the same defect. The guard
-  already allowed `echo x > /tmp/RECEIPTS.jsonl`, `cp /tmp/a /tmp/RECEIPTS.jsonl`
-  and `echo x > /tmp/PLAN.md`, so keeping the `cd` spelling denied would make two
-  spellings of one command disagree. Outside the repo is outside the gate.
+  Two intermediate designs each looked complete and were not. Counting paren
+  depth closed six of the fifteen. A whitelist — refuse to track on any
+  grouping, pipeline, background or control-flow token, and refuse a `cd`
+  reached across `&&`/`||` — closed all fifteen and then lost to
+  `cd /tmp ; cd $OLDPWD ; echo PWNED > install.py`, because **declining to
+  track is not the safe direction.** Once a `cd` has been honoured, a later
+  unresolvable one can move the shell back *toward* the repo, and the stale
+  outside-repo cwd converts a real write into an allow. A sound design must
+  reset to the original cwd on every construct it cannot model, which is close
+  to not tracking at all.
+
+  The trade is deliberate: an annoying deny beats a silent write to a protected
+  artifact, in a gate this doc already calls an accident guardrail. Pinned by
+  `test_cwd_is_not_inferred_from_cd`, which asserts all fifteen deny. Do not
+  re-add cwd tracking without a design that answers every row there.
+
+  Residual asymmetry worth knowing: `cd /tmp && echo x > RECEIPTS.jsonl` denies
+  (the operand is rejoined to the repo root) while `echo x > /tmp/RECEIPTS.jsonl`
+  and `cp /tmp/a /tmp/RECEIPTS.jsonl` allow. Two spellings of one intent
+  disagree. That is a consequence of not modelling cwd, not a basename policy —
+  `_normalize_candidate_path` returns `""` for anything outside the repo root,
+  so the basename rule never runs on the absolute spellings.
 - **the guard re-implements a partial getopt, per verb.** This is the class
   that produced the last four review rounds, and it is not closed. For each
   modelled verb the guard has to know which options take values, and which
