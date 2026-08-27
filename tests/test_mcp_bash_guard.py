@@ -1209,19 +1209,28 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 ("many-redirects", ("> " * 15000) + write),
                 # Six verb loops (mv/rm/unlink/chmod/chown/chgrp, cp --link,
                 # ln/link, tee, dd, git) had no stride of their own, so padding
-                # their operand lists overran the 3s timeout — measured 3.5-4.0s
-                # for these two shapes, and 7.9s at the 64 KB cap. A killed hook
-                # emits no decision, which allows. The budget is consulted in
-                # `_append_target` now, so one guard covers all of them and any
-                # loop added later.
-                # 16000, not 8000: at 8000 the guarded and unguarded builds are
-                # indistinguishable (0.94-0.96s vs 0.94-0.98s), so these rows
-                # guarded nothing. At 16000 the unguarded build takes 6.6s
-                # against the guarded 1.03s, so the 3.0s bound below kills it.
+                # their operand lists could overrun the 3s timeout, and a killed
+                # hook emits no decision, which allows. The budget is consulted
+                # in `_append_target` now, so one guard covers all of them and
+                # any loop added later. No timing figures here — see the note in
+                # `_append_target` for why every one quoted so far was wrong.
+                #
+                # These two rows do NOT pin that budget check, at 8000 operands
+                # or at 16000. Against a build with the check removed they still
+                # answer well inside the 3.0s bound below, and still deny naming
+                # the real path, so both assertions pass on the mutant. Raising
+                # the count bought nothing and is reverted.
+                #
+                # The budget check is pinned by
+                # `test_exhausted_budget_stops_classifying`, which expires the
+                # deadline in-process; running this file against that mutant
+                # fails there and nowhere else. These rows still earn their
+                # place by covering the operand-loop shapes at all, alongside
+                # the five above.
                 ("many-rm-operands",
-                 "rm " + "a*b " * 16000 + receipts),
+                 "rm " + "a*b " * 8000 + receipts),
                 ("many-tee-operands",
-                 "tee " + "a*b " * 16000 + receipts),
+                 "tee " + "a*b " * 8000 + receipts),
             ):
                 with self.subTest(shape=label):
                     self.assertLess(len(command), 64 * 1024)
@@ -1240,10 +1249,10 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     # The reason first recorded here for removing it — "the
                     # mutant takes 3.5-4.0s so the bound already kills it" — was
                     # itself measured wrong, against a *relative* receipts path
-                    # pointing at a directory that did not exist. Built the way
-                    # this test builds them, 8000 operands were 0.94-0.96s
-                    # guarded and 0.94-0.98s unguarded: indistinguishable, and
-                    # these rows guarded nothing at all. Hence 16000 above.
+                    # pointing at a directory that did not exist. No timing
+                    # figure for these rows has survived a second reader; see
+                    # the note above the operand counts for what is actually
+                    # pinned and by which test.
 
     def test_env_split_string_value_is_a_command_not_an_option_value(self):
         """`env -S` carries the command line, so it cannot be skipped.
@@ -1264,6 +1273,16 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 f'env -S "cp /tmp/pay.txt {receipts}"',
                 f'env --split-string="cp /tmp/pay.txt {receipts}"',
                 f'env -S"cp /tmp/pay.txt {receipts}"',
+                # `S` at the end of a bundle of valueless short options, with
+                # the value attached or separated. The first fix matched only
+                # `-S` at position 0, so these two executed and allowed.
+                f'env -iS "cp /tmp/pay.txt {receipts}"',
+                f'env -iS"cp /tmp/pay.txt {receipts}"',
+                f'env -v0S "cp /tmp/pay.txt {receipts}"',
+                # `env -S` splits its value like a shell, so leading
+                # assignments inside the value are not the command.
+                f'env -S "FOO=1 cp /tmp/pay.txt {receipts}"',
+                f'env -S "A=1 B=2 cp /tmp/pay.txt {receipts}"',
                 # the ordinary value-taking options must still be skipped
                 f"env -u FOO cp /tmp/pay.txt {receipts}",
                 f"env FOO=1 cp /tmp/pay.txt {receipts}",
@@ -1274,6 +1293,11 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             for command in (
                 'env -S "pytest -q"', 'env -S "echo hi"',
                 "env FOO=1 pytest -q", "env -u PATH ls",
+                'env -iS "pytest -q"', 'env -S "FOO=1 pytest -q"',
+                # `-u` takes a NAME, so `S "cp …"` here is that NAME and must
+                # NOT be re-lexed as a command — re-lexing it would invent a
+                # verb and deny an ordinary line.
+                f'env -uS "cp /tmp/pay.txt {receipts}"',
             ):
                 with self.subTest(allow=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)
@@ -1283,10 +1307,16 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
         """`_append_target` must append nothing once the budget is gone.
 
         Pinned in-process by expiring the deadline, so it does not race the
-        filesystem the way an operand-padding row does. The shared check in
-        `_append_target` is what covers all six operand loops; without it a
-        padded line runs 3.3-7.9s through the hook against a 3s timeout, and a
-        killed hook emits no decision, which allows.
+        filesystem the way an operand-padding row does — and so that it pins the
+        check at all, which no operand count in
+        `test_repetition_cannot_exhaust_the_hook_budget` manages. This is the
+        only test that fails when the `_append_target` budget check is removed.
+
+        The shared check covers all six operand loops; without it a padded line
+        can run past the hook's 3s timeout, and a killed hook emits no decision,
+        which allows. No timing figure here on purpose: every one quoted in this
+        file or in `_append_target` has been disproved by the next reader who
+        measured.
         """
         guard = _import_guard()
         receipts = os.path.join(

@@ -375,20 +375,21 @@ def _append_target(targets, token, method, repo_root, execution_cwd=""):
     # dd, and git's mutating subcommands — had no stride of their own.
     #
     # This is fail-closed, not a speed-up. Remove it and a line padded to just
-    # under the 64 KB cap can run well past the 3 s timeout in
+    # under the 64 KB cap can run past the 3 s timeout in
     # `plugin/hooks/hooks.json`; a killed hook writes no decision, and no
     # decision is an allow, so the padding disables every deny on the line.
-    # With the check, the same shapes answer in ~1 s with a budget deny.
     #
-    # Deliberately no single headline number. Three previous versions of this
-    # comment each gave one and each was disproved by the next reader: 37 s (an
-    # in-process run with no cap), then "only a tightened bound, 2.04 s", then
-    # "3.3-7.9 s". Measured through the hook the unguarded cost spans roughly
-    # 2.7-12.3 s and depends on operand *density* as much as size — 1-char
-    # tokens are ~12 s where 8-char tokens are ~2.7 s, i.e. below the timeout —
-    # plus the verb and whether the paths are realpath-hostile. Any figure
-    # quoted without its token width and verb will be wrong again. Do not drop
-    # this as a perf tweak. Cost lives here too: this is the realpath.
+    # **No timing figures here, deliberately.** Four successive versions of this
+    # comment each quoted one and each was disproved by the next reader who
+    # measured: 37 s, then 2.04 s, then 3.3-7.9 s, then 2.7-12.3 s. The last two
+    # were disproved on a machine whose *guarded* number matched this comment's
+    # own, so they were measurement errors rather than hardware differences.
+    # What survives re-measurement is an ordering, not a magnitude: cost tracks
+    # operand *density* more than command size, 1-char operands are the worst
+    # shape and the only one that crosses the timeout at the cap, and 8-char or
+    # realpath-hostile operands are cheaper. If you need a number, measure it
+    # for your shape and keep it out of this comment. Do not drop this check as
+    # a perf tweak. Cost lives here too: this is the realpath.
     if _budget_exhausted():
         return
     # Expand once, iteratively. Recursing here was a fail-open: a self-matching
@@ -783,6 +784,23 @@ def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd="",
                     targets, candidate, "shell redirection",
                     repo_root, execution_cwd,
                 )
+def _split_string_argv(value):
+    """Re-lex an `env -S` value into the argv it really runs.
+
+    Leading `VAR=value` words are stripped before unwrapping. `env -S` splits
+    its value the way a shell would, so `env -S "FOO=1 cp <payload> <receipt>"`
+    really runs `cp`; without the strip, `_unwrap_execution` saw `FOO=1` as
+    argv[0], matched no wrapper, and handed a non-verb to the caller, so the
+    write allowed. `_process_segment_once` strips assignments on the normal
+    path but cannot help at this recursion site.
+    """
+    argv = _tokenize(value)
+    index = 0
+    while index < len(argv) and _is_env_assignment(argv[index]):
+        index += 1
+    return _unwrap_execution(argv[index:])
+
+
 def _unwrap_execution(tokens):
     """Remove supported command wrappers and return the actual executable argv."""
     argv = list(tokens)
@@ -797,15 +815,23 @@ def _unwrap_execution(tokens):
                 # `-u`/`-C` meant `env -S "cp <payload> <receipt>"` consumed the
                 # verb along with the option and no branch ever ran — the write
                 # allowed. Re-lex the value and continue unwrapping into it.
-                if token in {"-S", "--split-string"} and index + 1 < len(argv):
-                    return _unwrap_execution(_tokenize(argv[index + 1]))
+                #
+                # `S` may sit at the end of a bundle of valueless short options,
+                # with the value attached or separated: `-S "cmd"`, `-S"cmd"`,
+                # `-iS "cmd"`, `-v0S"cmd"`. Only `-i`, `-0` and `-v` may
+                # precede — `-u` and `-C` take values, so in `-uS "cmd"` that
+                # `S` is the start of -u's NAME, not an option, and re-lexing
+                # would invent a verb.
+                separated = token == "--split-string" or re.fullmatch(
+                    r"-[i0v]*S", token,
+                )
+                if separated and index + 1 < len(argv):
+                    return _split_string_argv(argv[index + 1])
                 if token.startswith("--split-string="):
-                    return _unwrap_execution(
-                        _tokenize(token.split("=", 1)[1]),
-                    )
-                if token.startswith("-S") and len(token) > 2:
-                    # Attached value: `-S"cp … <receipt>"`.
-                    return _unwrap_execution(_tokenize(token[2:]))
+                    return _split_string_argv(token.split("=", 1)[1])
+                attached = re.fullmatch(r"-[i0v]*S(.+)", token)
+                if attached:
+                    return _split_string_argv(attached.group(1))
                 if token in {"-u", "--unset", "-C", "--chdir"}:
                     index += 2
                 elif token.startswith("-") or _is_env_assignment(token):

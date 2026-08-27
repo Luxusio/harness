@@ -390,12 +390,24 @@ Other dynamic constructs remain:
   accident, and the REQ scopes this gate as a guardrail against accident.
 
   Distinguish that from a wrapper the model *does* list getting its own option
-  semantics wrong, which is a plain bug and is fixed: `env -S` /
-  `--split-string` was treated as an option whose value could be stepped over,
-  but the value is the command line, so `env -S "cp <payload> <receipt>"`
-  allowed. Pinned by
-  `test_env_split_string_value_is_a_command_not_an_option_value`. `script -qec
-  "<command>"` is the same shape and is **not** fixed — still a documented gap.
+  semantics wrong. `env -S` / `--split-string` was treated as an option whose
+  value could be stepped over, but the value is the command line, so
+  `env -S "cp <payload> <receipt>"` allowed.
+
+  **Fixed for the spellings pinned by
+  `test_env_split_string_value_is_a_command_not_an_option_value`, not for the
+  whole option**: `-S "cmd"`, `-S"cmd"`, `--split-string=cmd`, `S` at the end of
+  a bundle of valueless short options (`-iS "cmd"`, `-v0S"cmd"`), and leading
+  `VAR=value` words inside the value. `-u`/`-C` deliberately do not bundle —
+  they take values, so `-uS "cmd"` is -u's NAME.
+
+  Still open, because `env`'s own splitting is not `shlex`'s: `env -S "cp …
+  <artifact> #x"` (env strips the `#` comment, so the real destination differs
+  from the one the guard reads) and `env -S "\_cp … <artifact>"` (`\_` is env's
+  space escape; shlex drops the backslash and yields the unknown verb `_cp`).
+  `script -qec "<command>"` is the same class and is untouched. An earlier
+  version of this paragraph said the option "is fixed", which claimed a control
+  the code does not perform — the boundary above is the real one.
 - **the guard re-implements a partial getopt, per verb.** This is the class
   that produced the last four review rounds, and it is not closed. For each
   modelled verb the guard has to know which options take values, and which
