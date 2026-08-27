@@ -50,8 +50,22 @@ attachment at all.
 So C-14 receipt provenance was anchored to an optional field of an unrelated
 plugin's output. Measured across all 47 subagent transcripts of the affected
 session: **40 carry both shapes, 7 carry only the matcher-qualified record.**
-Those 7 are the declined completions. Falling back to the hook-execution record
-removes the external dependency.
+Those 7 are the declined completions.
+
+Falling back to the hook-execution record removes the dependency on that
+**optional field** — not on the plugin. Both start attachments are still omc's:
+across every session of this project, 71 canonical `hook_additional_context`
+lines and 79 `hook_success` records, all from `subagent-tracker.mjs`. The
+harness's own `SubagentStart` hook (`background_hook.py --event start`) emits no
+attachment at all when it succeeds.
+
+**The harness therefore still owns no start attachment.** On an install without
+oh-my-claudecode a subagent transcript contains zero `SubagentStart`
+attachments, `_bind` rejects at `no-canonical-start-attachment`, and PASS is
+unreachable permanently rather than intermittently. This is a live gap for every
+downstream user of the plugin, and it is not closed by this task. Closing it
+means emitting a harness-owned identity banner from `background_hook.py --event
+start` — see the requirement below, which this document does not yet satisfy.
 
 Note the sampling error that produced the first version of this paragraph:
 three transcripts were probed, all three happened to be among the seven, and
@@ -72,6 +86,10 @@ this document asserted the opposite until a reviewer counted.
 - Receipt validity never depends on a field owned by another plugin. If a
   signal the harness relies on is produced by software the harness does not
   ship, the harness must degrade to something it does own.
+  **Not yet satisfied.** Both accepted start shapes are written by
+  oh-my-claudecode; the harness owns neither. Until
+  `background_hook.py --event start` emits its own identity banner, this
+  requirement is aspirational and the gap above is real.
 - A repeated signal is not a forgery signal. One start pair is written per
   registered `SubagentStart` hook, so identical repeats are expected; only
   *conflicting* claims (two agent types for one `agentId`) are a conflict.

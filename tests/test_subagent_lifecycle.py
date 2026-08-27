@@ -71,10 +71,11 @@ def _transcript(
 ) -> str:
     """Build a subagent transcript.
 
-    ``qualified_hook_name`` prepends an extra ``hookEvent: SubagentStart``
-    attachment carrying that ``hookName`` and no identity payload, reproducing
-    the matcher-qualified duplicate Claude 2.1.x writes ahead of the canonical
-    attachment.
+    ``qualified_hook_name`` prepends a ``hookEvent: SubagentStart`` attachment
+    carrying that ``hookName`` and no identity payload — the matcher-qualified
+    hook-execution record. With ``canonical_starts=0`` it is the *only* start
+    attachment, which is the shape 7 of 47 real transcripts had and the shape
+    that used to be declined.
     """
     claude = tmp_path / ".claude"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(claude))
@@ -89,18 +90,25 @@ def _transcript(
         qualified_item = {
             "timestamp": timestamp,
             "sessionId": session_id,
-            # Field set copied from a real Claude 2.1.220 transcript: the
-            # qualified duplicate is a hook_success record whose stdout embeds
-            # the same identity string the canonical attachment carries.
+            # Field set copied from a real Claude 2.1.220 transcript. Only the
+            # fields the validator reads are load-bearing; `stdout` and
+            # `command` are reproduced faithfully because the *absence* of an
+            # identity string in stdout is the defect this shape represents —
+            # and because the record comes from oh-my-claudecode's start hook,
+            # not the harness's, which is the misattribution that sent an
+            # earlier root-cause analysis to the wrong place.
             "attachment": {
                 "type": "hook_success",
                 "hookName": qualified_hook_name,
                 "hookEvent": "SubagentStart",
                 "content": "" if qualified_content is None else qualified_content,
-                "stdout": f"Agent {agent_type} started ({agent_id})",
+                "stdout": '{"continue":true}',
                 "stderr": "",
                 "exitCode": 0,
-                "command": "python3 background_hook.py --event start",
+                "command": (
+                    'node "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs '
+                    '"$CLAUDE_PLUGIN_ROOT"/scripts/subagent-tracker.mjs start'
+                ),
                 "durationMs": 12,
                 "toolUseID": f"hook_{agent_id}",
             },
@@ -354,6 +362,10 @@ def test_every_rejection_reason_stays_reachable(tmp_path, monkeypatch):
     cases = [
         ("unrecognized-start-hook-name",
          {}, lambda a: a.__setitem__("hookName", "SubagentStarted")),
+        # Suffix charset guard, on the qualified-only path where it is live.
+        ("unrecognized-start-hook-name",
+         dict(canonical_starts=0, qualified_hook_name="SubagentStart:bad suffix"),
+         None),
         ("start-content-shape", {}, lambda a: a.__setitem__("content", 5)),
         ("start-identity-mismatch", {}, lambda a: a.__setitem__("content", [""])),
         ("canonical-start-agent-id-mismatch",
@@ -361,7 +373,7 @@ def test_every_rejection_reason_stays_reachable(tmp_path, monkeypatch):
               qualified_agent_id=None), None),
     ]
     for expected, kwargs, mutate in cases:
-        root = tmp_path / expected.replace("-", "_")
+        root = tmp_path / (expected.replace("-", "_") + str(len(list(tmp_path.iterdir()))))
         root.mkdir(parents=True, exist_ok=True)
         repo, task_dir = _repo(root)
         _bind(repo, task_dir, "sess-r")
