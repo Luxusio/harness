@@ -209,9 +209,21 @@ Other dynamic constructs remain:
   writes, silently reverting the commit that had just removed them.
 
   The scan gives up — `[]`, skip nothing, classify everything — when it ends
-  mid-quote or a token cannot be matched against the text. That is the whole
-  fail-closed story now; the older two-lexer degrade rules are gone with the
-  second lexer.
+  mid-quote or a token cannot be matched against the text. The older two-lexer
+  degrade rules are gone with the second lexer.
+
+  **That degrade is only safe because the tokens are aligned by construction.**
+  "Classify everything" is not a neutral fallback: it reads a quoted `'>'`
+  literal as a real operator and denies the next word, so it *generates* false
+  denies. It was reached routinely, not exceptionally — every line carrying an
+  unquoted `$( … )` or backtick reached it, because the flags were recomputed
+  against the token stream `_collapse_substitutions` had already rewritten and a
+  rewritten stream can never match the raw text. Ordinary readers such as
+  `cd $(git rev-parse --show-toplevel) && grep -n '>' "$PWD"/<plan>` denied,
+  naming a mutation the line never performs. The flags are now computed once
+  against the tokens as the lexer produced them and carried through both
+  rewriting stages, with synthesized tokens taking `False`. **A token stream
+  produced by a rewriting stage must never be handed to this function.**
 
   **Within `_quoted_operator_words`, no glue spelling can make a real redirect
   operator be skipped.** That scoping matters — an earlier version of this
@@ -221,20 +233,34 @@ Other dynamic constructs remain:
 
   Known residue, each verified to reproduce:
 
-  - **fail-open.** `echo pwned ''\>> <artifact>` writes the artifact and
-    allows. `_quoted_flags` (not this helper) declares alignment on equal word
-    counts, and here the counts match while the correspondence is shifted by
-    one, so the real `>>` inherits a quoted flag. Equal counts are not
-    alignment; reconstruction would be. Closing it means changing
+  - **fail-open.** An escape adjacent to an empty quote run desynchronises
+    `_quoted_flags` by one. Two spellings, both verified to write and allow:
+    `echo pwned ''\>> <artifact>` and `echo pwned ""\ > <artifact>` (also
+    `''\ >` and `;""\ >`). `_quoted_flags` (not this helper) declares alignment
+    on equal word counts, and here the counts match while the correspondence is
+    shifted by one, so the real operator inherits a quoted flag. Equal counts
+    are not alignment; reconstruction would be. Closing it means changing
     `_quoted_flags`, a wider blast radius than this task accepted.
   - **fail-open.** `echo x ;> <path>` writes and allows. `_split_control_cluster`
     only decomposes tokens made entirely of `()&|;`, and `>` is outside that
     set, so `;>` is never split and the segment never ends. `echo x ; > <path>`
     — one space apart — denies. Pre-existing and out of scope here, but it is a
-    plausible compact spelling rather than obfuscation.
-  - **deny-leaning.** A line that both collapses a substitution and carries a
-    quoted operator (`grep -n '>' $(pwd)/<file> /tmp/a\ b`) denies, because the
-    scan is handed the *collapsed* tokens while it reads the uncollapsed text.
+    plausible compact spelling rather than obfuscation. Glue opens no hole on
+    the *boundary* path, which is what makes this specific to `;>`: a glued
+    operator such as `p'|'` produces the token `p|`, which is not in
+    `BOUNDARY_TOKENS`, and `_split_control_cluster` rejects any token not made
+    wholly of `()&|;`.
+  - **deny-leaning, six shapes.** An operator token whose first character is
+    unquoted but which carries a quote later — `2'>'<path>`, `2">"<path>`,
+    `2\><path>`, `1'>'<path>`, `1\><path>`, `2'>' <path>` — denies while bash
+    writes nothing: to bash these are literal words, not redirects. This is the
+    cost of deciding on the leading character alone. Measured against real bash,
+    `any(q for _, q in span)` allows all six with **zero** fail-opens across the
+    286 shapes tried, so it is a live candidate — but the leading rule is the
+    one validated over ~1300 cases by review, and swapping the security-critical
+    predicate on a 16-shape corpus is a change that needs its own adversarial
+    pass. Deliberately left as residue rather than pinned by a test: asserting
+    these denies would enshrine six behaviours bash contradicts.
 
   Four earlier entries were removed rather than kept: `x''` never reproduced at
   all; `echo q'>'` stopped once the lexer retry landed; `echo '>'<path>` is
@@ -285,6 +311,33 @@ Other dynamic constructs remain:
   `git checkout -- .`, `git restore .`, `git apply <patch>` and `git reset
   --hard` reach protected artifacts and gated source without the artifact ever
   appearing as a token. The git model classifies file operands only.
+  Classification is by exact basename, so a *directory* operand is never a gated
+  token: `rm -rf <taskdir>`, `mv <taskdir> /tmp/x`, `chmod -R 000 <taskdir>`,
+  `git clean -fd doc/harness` and `rm -rf doc/harness/tasks` all allow, each
+  destroying artifacts the file-operand spellings deny. Unlike most rows here
+  this is an *accident* shape, not a determined-caller one — a stray `rm -rf`
+  on a task directory is a plausible slip. Closing it means classifying a
+  directory operand that contains a gated artifact.
+- **`cd` is modelled within a line, not across lines.** Relative operands used
+  to resolve against the hook's cwd unconditionally, so `cd /tmp/work && echo hi
+  > out.py` denied as a repo *source* mutation and named `<repo-root>/out.py`, a
+  file the command never touches — it blocked writing a scratch script in a temp
+  directory. A literal single-operand `cd` to an existing directory now moves
+  where later operands on that line resolve. Deliberately narrow: a glob, a
+  surviving variable, a collapsed substitution, `cd -`, bare `cd`, and a missing
+  destination all leave the previous directory in force, which is the
+  over-blocking answer. A `cd` on its own line does not carry to the next,
+  because the both-readings union has no single cwd to hand back; that is again
+  the over-blocking direction. The two alternate readings (pairwise merge,
+  whole-line) keep the original cwd, since they exist only to *add* denies.
+
+  One deny changed with this: `cd /tmp && echo x > RECEIPTS.jsonl` now allows.
+  It was never a basename policy — `_normalize_candidate_path` returns `""` for
+  anything outside the repo root, so the basename rule never ran; the operand
+  was simply being joined to the wrong directory, the same defect. The guard
+  already allowed `echo x > /tmp/RECEIPTS.jsonl`, `cp /tmp/a /tmp/RECEIPTS.jsonl`
+  and `echo x > /tmp/PLAN.md`, so keeping the `cd` spelling denied would make two
+  spellings of one command disagree. Outside the repo is outside the gate.
 - **the guard re-implements a partial getopt, per verb.** This is the class
   that produced the last four review rounds, and it is not closed. For each
   modelled verb the guard has to know which options take values, and which

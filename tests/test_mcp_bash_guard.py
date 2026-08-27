@@ -787,6 +787,29 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 f'grep -c ">" "$PWD"/{source} ; echo done',
                 f'echo "a"b ; grep -n ">" {source}',
                 f'grep -rn ">" "$PWD"/{os.path.relpath(plan, REPO_ROOT)}',
+                # Escaped quotes inside a double-quoted span. `_unquoted_lines`
+                # had this rule 480 lines up; the raw scan was written without
+                # consulting it, so `\"` ended the span early, the rest of the
+                # line read as quoted, and this reader denied. bash writes
+                # nothing here.
+                f'python3 -c "print(\\"hi\\")" ; grep -n \'>\' '
+                f'{os.path.relpath(plan, REPO_ROOT)}',
+                # A quoted operator glued to a following word. The flag comes
+                # from the token's *leading* character: a real operator can
+                # never have a quoted first character, because shlex splits at
+                # the quote boundary. Under `all()` over the whole span these
+                # denied — verified against real bash, which writes nothing for
+                # any of them.
+                f"echo x '>'{os.path.relpath(receipts, REPO_ROOT)}",
+                f"echo y '>>'{os.path.relpath(receipts, REPO_ROOT)}",
+                # The flags are computed against raw tokens and carried through
+                # `_collapse_substitutions`. Recomputing them against the
+                # rewritten stream cannot match the raw text, degrades to `[]`,
+                # and reads this quoted `'>'` as a real operator — denying a
+                # reader over an everyday `$(pwd)` spelling.
+                f"grep -n '>' $(pwd)/{os.path.relpath(plan, REPO_ROOT)}",
+                f'ls "$PWD"/{os.path.relpath(task_dir, REPO_ROOT)} && '
+                f"grep -n '>' $(pwd)/{os.path.relpath(plan, REPO_ROOT)}",
             ):
                 with self.subTest(allow=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)
@@ -1186,9 +1209,11 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 ("many-redirects", ("> " * 15000) + write),
                 # Six verb loops (mv/rm/unlink/chmod/chown/chgrp, cp --link,
                 # ln/link, tee, dd, git) had no stride of their own, so padding
-                # their operand lists ran 37s of realpath walks against a 3s
-                # timeout. The budget is consulted in `_append_target` now, so
-                # one guard covers all of them and any loop added later.
+                # their operand lists overran the 3s timeout — measured 3.5-4.0s
+                # for these two shapes, and 7.9s at the 64 KB cap. A killed hook
+                # emits no decision, which allows. The budget is consulted in
+                # `_append_target` now, so one guard covers all of them and any
+                # loop added later.
                 ("many-rm-operands",
                  "rm " + "a*b " * 8000 + receipts),
                 ("many-tee-operands",
@@ -1200,15 +1225,81 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     decision, reason = parse_decision(_run_bash(command).stdout)
                     self.assertLess(time.monotonic() - started, 3.0)
                     self.assertEqual(decision, "deny")
-                    if label.endswith("-operands"):
-                        # Assert the *decision shape*, not the clock. Timing
-                        # cannot pin these: without the budget check the padded
-                        # shapes still answer in ~0.9 s, inside the 3 s bound,
-                        # so both rows passed on the mutant. What differs is
-                        # what the guard says — it stops early and reports an
-                        # exhausted budget, where the unguarded version walks
-                        # every operand and names a real target.
-                        self.assertIn("analysis budget exhausted", reason)
+                    # No `assertIn("analysis budget exhausted", reason)` here.
+                    # That assertion was added on the belief that the 3.0s bound
+                    # above could not kill the unguarded mutant; measured, the
+                    # mutant takes 3.5-4.0s and the bound kills it. Worse, the
+                    # assertion passed only while 8000 glob operands cost more
+                    # than `_ANALYSIS_BUDGET_SECONDS`: 1.03s here, 0.87s on a
+                    # checkout ~12% faster, where the walk completes and the
+                    # guard correctly denies naming the real path. It turned a
+                    # correct deny into a red build on faster hardware. Budget
+                    # exhaustion is pinned deterministically instead, in
+                    # `test_exhausted_budget_stops_classifying`.
+
+    def test_exhausted_budget_stops_classifying(self):
+        """`_append_target` must append nothing once the budget is gone.
+
+        Pinned in-process by expiring the deadline, so it does not race the
+        filesystem the way an operand-padding row does. The shared check in
+        `_append_target` is what covers all six operand loops; without it a
+        padded line runs 3.3-7.9s through the hook against a 3s timeout, and a
+        killed hook emits no decision, which allows.
+        """
+        guard = _import_guard()
+        receipts = os.path.join(
+            REPO_ROOT, "doc/harness/tasks/TASK__x/RECEIPTS.jsonl",
+        )
+        live: list[dict] = []
+        guard._append_target(live, receipts, "test", REPO_ROOT, REPO_ROOT)
+        self.assertTrue(live, "a live budget must still classify")
+
+        expired: list[dict] = []
+        saved = guard._deadline
+        guard._deadline = time.monotonic() - 1.0
+        try:
+            guard._append_target(
+                expired, receipts, "test", REPO_ROOT, REPO_ROOT,
+            )
+        finally:
+            guard._deadline = saved
+        self.assertEqual(expired, [], "an exhausted budget must stop early")
+
+    def test_relative_write_after_cd_is_not_a_repo_write(self):
+        """`cd <dir>` moves where later relative operands resolve.
+
+        Every relative operand used to be joined to the hook's cwd, so
+        `cd /tmp/work && echo hi > out.py` denied as a repo *source* mutation
+        and named `<repo-root>/out.py` — a file the command never touches.
+        """
+        with tempfile.TemporaryDirectory() as outside:
+            for command in (
+                f"cd {outside} && echo hi > out.py",
+                f"cd {outside}; echo x > helper.py",
+                f"cd {outside} && cp a b.py",
+                # Outside the repo is outside the gate, consistently: the
+                # absolute spellings of these already allow.
+                f"cd {outside} && echo x > RECEIPTS.jsonl",
+                f"echo x > {os.path.join(outside, 'RECEIPTS.jsonl')}",
+            ):
+                with self.subTest(allow=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertIsNone(decision)
+            # Tracking must not become a bypass. Each of these still resolves
+            # into the repo, so each must still deny.
+            for command in (
+                "echo x > install.py",
+                "cd plugin && echo x > install.py",
+                # `cd` to a missing directory fails, and `;` does not
+                # short-circuit, so bash stays put and the write lands here.
+                "cd /nonexistent-dir ; echo x > install.py",
+                "cd - ; echo x > install.py",
+                "cd '*' ; echo x > install.py",
+                f"cd {outside} /tmp ; echo x > install.py",
+            ):
+                with self.subTest(deny=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
 
     def test_subshell_boundary_split_does_not_over_block(self):
         """Splitting clusters adds boundaries; it must not add denies."""

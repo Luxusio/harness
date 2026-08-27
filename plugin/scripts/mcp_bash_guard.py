@@ -374,15 +374,19 @@ def _append_target(targets, token, method, repo_root, execution_cwd=""):
     # operand loops — mv/rm/unlink/chmod/chown/chgrp, cp --link, ln/link, tee,
     # dd, and git's mutating subcommands — had no stride of their own.
     #
-    # This is a bound tightened, not a fail-open closed: measured at the 64 KB
-    # command cap across plain, glob and realpath-hostile padding, the worst
-    # unguarded case was 2.04 s against the 3 s hook timeout, and this brings
-    # it to ~1.0 s. An earlier version of this comment claimed 37 s and a
-    # resulting allow; that figure came from an in-process run with no cap and
-    # does not reproduce through the hook. Worth keeping anyway, because the
-    # margin was thin and the same class has been reopened four times by a
-    # loop nobody remembered to guard — the shared call covers any loop added
-    # later. Cost lives here too: this is the realpath.
+    # This is fail-closed, not a speed-up. Remove it and a line padded to just
+    # under the 64 KB cap runs 3.3-7.9 s *through the hook* — 7.9 s for plain
+    # operands, 6.5 s for globs, 3.3 s for realpath-hostile `x/../y*z` — against
+    # the 3 s timeout in `plugin/hooks/hooks.json`. A killed hook writes no
+    # decision, and no decision is an allow, so the padding disables every deny
+    # on the line. With the check, all five shapes answer in ~1.0 s with a
+    # budget deny.
+    #
+    # Two earlier versions of this comment were wrong in opposite directions:
+    # one claimed 37 s (an in-process run with no cap), and the correction to
+    # that claimed the whole thing was only a tightened bound. The magnitude was
+    # wrong; the conclusion was not. Do not drop this as a perf tweak.
+    # Cost lives here too: this is the realpath.
     if _budget_exhausted():
         return
     # Expand once, iteratively. Recursing here was a fail-open: a self-matching
@@ -1140,13 +1144,21 @@ def _extract_mutation_targets(command, repo_root, execution_cwd="", depth=0):
         if not line_tokens:
             continue
         line_quoted = _quoted_flags(line, len(line_tokens))
+        # Computed once, here, against the tokens as the lexer produced them.
+        # Every rewriting stage below carries it rather than recomputing, since
+        # the helper reads the raw command text and cannot match a rewritten
+        # stream.
+        line_literal = _quoted_operator_words(line, line_tokens)
         if line_quoted is not None:
-            collapsed, collapsed_quoted = _collapse_substitutions(
-                line_tokens, line_quoted, line,
+            collapsed, collapsed_quoted, collapsed_literal = (
+                _collapse_substitutions(
+                    line_tokens, line_quoted, line, line_literal,
+                )
             )
             _walk_segments(
                 collapsed, shell_values, targets, repo_root, execution_cwd,
                 collapsed_quoted, depth, command=line,
+                literal=collapsed_literal,
             )
             continue
         # Alignment failed, so the collapse cannot know whether a `` ` `` or a
@@ -1156,14 +1168,15 @@ def _extract_mutation_targets(command, repo_root, execution_cwd="", depth=0):
         # segmentation. Union at this level instead: classify with the collapse
         # applied AND with it skipped, and keep every target either produces.
         for collapse in (True, False):
-            variant, variant_quoted = (
-                _collapse_substitutions(line_tokens, None, line) if collapse
-                else (line_tokens, None)
+            variant, variant_quoted, variant_literal = (
+                _collapse_substitutions(line_tokens, None, line, line_literal)
+                if collapse else (line_tokens, None, line_literal)
             )
             found: list[dict] = []
             _walk_segments(
                 variant, dict(shell_values), found, repo_root, execution_cwd,
                 variant_quoted, depth, command=line,
+                literal=variant_literal,
             )
             targets.extend(item for item in found if item not in targets)
 
@@ -1294,8 +1307,20 @@ def _glued_closer_ordinals(command, closer):
     return frozenset(ordinals)
 
 
-def _collapse_substitutions(tokens, quoted, command=""):
+def _collapse_substitutions(tokens, quoted, command="", literal=None):
     """Collapse `$( … )`, `<( … )`, `>( … )` and backtick spans to one token.
+
+    `literal` is the per-token "was this occurrence a quoted literal" list from
+    `_quoted_operator_words`, carried through rather than recomputed. That
+    helper scans the *raw* command and matches tokens against it character by
+    character, so handing it a token stream this function has already rewritten
+    guarantees a mismatch, and a mismatch degrades to `[]` — classify
+    everything. Under the everyday `$(pwd)` phrasing that turned a quoted `'>'`
+    literal back into a real operator and denied pure readers such as
+    `cd $(git rev-parse --show-toplevel) && grep -n '>' "$PWD"/<plan>`, naming a
+    mutation the line never performs. Synthesized tokens — the merge result, the
+    placeholder, a pushed-back tail — are never quoted literals, so they take
+    `False`.
 
     `punctuation_chars=True` emits `$`, `(`, `pwd`, `)` as four words where bash
     builds one (process substitution) or zero-or-more (command substitution).
@@ -1335,8 +1360,21 @@ def _collapse_substitutions(tokens, quoted, command=""):
     """
     collapsed = []
     flags = [] if quoted is not None else None
+    out_literal = [] if literal is not None else None
     pending = list(tokens)
     pending_quoted = list(quoted) if quoted is not None else None
+    # Kept index-aligned with `pending` across tail push-back. A short list is
+    # not an error: `_quoted_operator_words` returns `[]` when its scan fails,
+    # which means "classify everything", so an out-of-range read must be False.
+    pending_literal = list(literal) if literal is not None else None
+
+    def _is_literal(at):
+        return bool(
+            pending_literal is not None
+            and at < len(pending_literal)
+            and pending_literal[at]
+        )
+
     # Ordinals (1-based) of the `)` and backtick characters in the raw command
     # that are immediately followed by `/`. Closer characters survive
     # tokenization one-for-one and in order, so the k-th closer character of
@@ -1381,6 +1419,8 @@ def _collapse_substitutions(tokens, quoted, command=""):
             collapsed.append(token)
             if flags is not None:
                 flags.append(is_quoted)
+            if out_literal is not None:
+                out_literal.append(_is_literal(index))
             # Ordinals count closer characters wherever they appear, including
             # inside quoted words: `"a)/b"` contributes a `)` to the source, so
             # skipping it here would make every later span read one ordinal too
@@ -1450,6 +1490,8 @@ def _collapse_substitutions(tokens, quoted, command=""):
             collapsed.append(token)
             if flags is not None:
                 flags.append(is_quoted)
+            if out_literal is not None:
+                out_literal.append(_is_literal(index))
             seen_paren += token.count(")")
             parens_left -= token.count(")")
             backticks_left -= token.count("`")
@@ -1480,6 +1522,8 @@ def _collapse_substitutions(tokens, quoted, command=""):
             pending.insert(index, tail)
             if pending_quoted is not None:
                 pending_quoted.insert(index, False)
+            if pending_literal is not None and index <= len(pending_literal):
+                pending_literal.insert(index, False)
         # `$(pwd)/doc/…` is ONE word to bash, but shlex leaves `/doc/…` as a
         # separate token, and an absolute path resolves outside the repo so the
         # artifact stopped being classified. Merge only when the source text
@@ -1490,6 +1534,8 @@ def _collapse_substitutions(tokens, quoted, command=""):
             collapsed.append(prefix + pending[index].lstrip("/"))
             if flags is not None:
                 flags.append(False)
+            if out_literal is not None:
+                out_literal.append(False)
             index += 1
             continue
         # Keep the prefix here too. `> <dir>/$(echo RECEIPTS.jsonl)` had the
@@ -1502,7 +1548,9 @@ def _collapse_substitutions(tokens, quoted, command=""):
         collapsed.append(prefix + _SUBSTITUTION_PLACEHOLDER)
         if flags is not None:
             flags.append(False)
-    return collapsed, flags
+        if out_literal is not None:
+            out_literal.append(False)
+    return collapsed, flags, out_literal
 
 def _split_control_cluster(token):
     """Split a clustered control operator into the operators bash would see.
@@ -1536,7 +1584,7 @@ def _split_control_cluster(token):
     return parts if len(parts) > 1 else None
 
 
-def _expand_control_clusters(tokens, quoted):
+def _expand_control_clusters(tokens, quoted, literal=None):
     """Rewrite a token list so clustered operators are separate boundaries.
 
     Returns the inputs unchanged (by identity) when there is nothing to split,
@@ -1548,19 +1596,28 @@ def _expand_control_clusters(tokens, quoted):
         _split_control_cluster(token) for index, token in enumerate(tokens)
         if not (quoted is not None and index < len(quoted) and quoted[index])
     ):
-        return tokens, quoted
+        return tokens, quoted, literal
     out = []
     out_quoted = [] if quoted is not None else None
+    out_literal = [] if literal is not None else None
     for index, token in enumerate(tokens):
         is_quoted = (
             quoted is not None and index < len(quoted) and quoted[index]
+        )
+        # Splitting one token into several: each piece inherits the source
+        # token's flag, the same way `out_quoted` works. A short `literal`
+        # reads as False — see `_collapse_substitutions`.
+        is_literal = bool(
+            literal is not None and index < len(literal) and literal[index]
         )
         parts = None if is_quoted else _split_control_cluster(token)
         for piece in (parts or [token]):
             out.append(piece)
             if out_quoted is not None:
                 out_quoted.append(is_quoted)
-    return out, out_quoted
+            if out_literal is not None:
+                out_literal.append(is_literal)
+    return out, out_quoted, out_literal
 
 
 def _quotable_operators(command):
@@ -1762,7 +1819,7 @@ def _quoted_operator_words(command, tokens):
 
 
 def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
-                   quoted=None, depth=0, *, command):
+                   quoted=None, depth=0, *, command, literal=None):
     """Segment the line and classify each segment.
 
     `command` is keyword-only and required on purpose: without it
@@ -1785,27 +1842,81 @@ def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
     phrasing, and the exact route the expansion was added to close. Neither
     reading is safe alone; a deny from either denies.
     """
-    expanded, expanded_quoted = _expand_control_clusters(tokens, quoted)
+    expanded, expanded_quoted, expanded_literal = _expand_control_clusters(
+        tokens, quoted, literal,
+    )
     if quoted is None and expanded is not tokens:
         both: list[dict] = []
         _walk_segments_once(
             tokens, dict(shell_values), both, repo_root, execution_cwd,
-            quoted, depth, command=command,
+            quoted, depth, command=command, literal=literal,
         )
         _walk_segments_once(
             expanded, dict(shell_values), both, repo_root, execution_cwd,
-            expanded_quoted, depth, command=command,
+            expanded_quoted, depth, command=command, literal=expanded_literal,
         )
         targets.extend(item for item in both if item not in targets)
         return
     _walk_segments_once(
         expanded, shell_values, targets, repo_root, execution_cwd,
-        expanded_quoted, depth, command=command,
+        expanded_quoted, depth, command=command, literal=expanded_literal,
     )
 
 
+def _cd_destination(segment, current_cwd, repo_root):
+    """Where a literal `cd <dir>` segment moves the shell, or "" if unknown.
+
+    Without this, every relative operand resolved against the hook's cwd, so
+    `cd /tmp/work && echo hi > out.py` was denied as a repo *source* mutation
+    and the message named `<repo-root>/out.py` — a file the command never
+    touches. Scratch scripts in a temp directory are everyday work.
+
+    Deliberately narrow, because guessing wrong here is the allow-leaning
+    direction. Only a single literal operand counts; a glob, a variable that
+    survived expansion, a collapsed substitution placeholder, `cd -`, and bare
+    `cd` all return "" and leave the caller resolving against the previous
+    directory. That is the over-blocking answer, which is the safe one.
+
+    The destination must already be a directory. Accepting an unverified path
+    would open a fail-open on the `;` spelling: `cd /nonexistent ; echo x >
+    install.py` leaves bash in the original directory (the `cd` fails and `;`
+    does not short-circuit), so the write really does land in the repo.
+
+    One deny changes with this: `cd /tmp && echo x > RECEIPTS.jsonl` allowed
+    where it used to deny. That deny was not a basename policy, it was this same
+    misresolution landing on a protected name — `_normalize_candidate_path`
+    returns "" for anything outside the repo root, so the basename rule never
+    ran; the operand was simply being joined to the wrong directory. The guard
+    already allows `echo x > /tmp/RECEIPTS.jsonl`, `cp /tmp/a
+    /tmp/RECEIPTS.jsonl` and `echo x > /tmp/PLAN.md`, so keeping the `cd`
+    spelling denied would make two spellings of one command disagree. Outside
+    the repo is outside the gate's jurisdiction; the repo's own artifacts are
+    still classified against `repo_root`, which no `cd` moves.
+    """
+    argv = _strip_command_prefix_words([
+        token for token in segment if not _is_env_assignment(token)
+    ])
+    if len(argv) < 2 or os.path.basename(argv[0]) != "cd":
+        return ""
+    operands = [token for token in argv[1:] if token != "--"]
+    if len(operands) != 1:
+        return ""
+    target = operands[0]
+    if (not target or target == "-"
+            or _SUBSTITUTION_PLACEHOLDER in target
+            or any(char in target for char in "*?[")
+            or "$" in target):
+        return ""
+    target = os.path.expanduser(target)
+    if not os.path.isabs(target):
+        target = os.path.join(current_cwd or repo_root or os.getcwd(), target)
+    target = os.path.normpath(target)
+    return target if os.path.isdir(target) else ""
+
+
 def _walk_segments_once(tokens, shell_values, targets, repo_root,
-                        execution_cwd="", quoted=None, depth=0, *, command):
+                        execution_cwd="", quoted=None, depth=0, *, command,
+                        literal=None):
     idx = 0
     ambiguous_previous = None
     quotable = (
@@ -1816,9 +1927,20 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
     # Skipping on presence let one quoted `>` suppress every real `>` on the
     # line — the same laundering the count rule already prevents for segment
     # boundaries just below.
-    quoted_literal = (
-        _quoted_operator_words(command, tokens) if quoted is None else []
-    )
+    # Computed against the *raw* tokens by the caller and carried down, because
+    # `_quoted_operator_words` matches tokens against the raw command text: any
+    # stage that rewrites tokens (`_collapse_substitutions`,
+    # `_expand_control_clusters`) makes them stop matching, and the mismatch
+    # degrades to `[]` — which classifies a quoted `'>'` literal as a real
+    # operator and denies pure readers. Recomputing here is only correct when
+    # nothing has rewritten the stream, so a caller that has must pass its
+    # aligned list.
+    if literal is not None:
+        quoted_literal = literal
+    else:
+        quoted_literal = (
+            _quoted_operator_words(command, tokens) if quoted is None else []
+        )
     boundaries = collections.Counter(
         token for token in tokens if token in BOUNDARY_TOKENS
     )
@@ -1833,6 +1955,16 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
         if boundaries[operator] <= available
     }
     segments_walked = 0
+    # Tracks `cd` within this line. The two alternate readings below keep using
+    # the original `execution_cwd`: they exist to *add* denies under a different
+    # segmentation, and letting a `cd` rebase them could only remove one.
+    #
+    # Within-line only. A `cd` on its own line does not carry to the next,
+    # because the both-readings union has no single cwd to hand back. That
+    # leaves later relative operands resolving against the repo root — the
+    # over-blocking direction, and the same one this function had everywhere
+    # before.
+    segment_cwd = execution_cwd
     while idx < len(tokens):
         # Segment count is its own cost multiplier, independent of operand
         # count: 1000 two-operand segments took 3.06 s while the per-operand
@@ -1880,12 +2012,18 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
         # `D=/outside; cat f > "$D/x.py"`, since the unexpanded token was
         # normalized against the repo root and `.py` read as source.
         _extract_redirect_targets(
-            expanded, targets, repo_root, execution_cwd, segment_quoted,
+            expanded, targets, repo_root, segment_cwd, segment_quoted,
             quoted_literal[idx:j],
         )
         _process_segment(
-            expanded, targets, repo_root, execution_cwd, segment_quoted, depth,
+            expanded, targets, repo_root, segment_cwd, segment_quoted, depth,
         )
+        # After classifying this segment, not before: `cd <dir>` takes effect
+        # for what follows it, and a redirect in the `cd` segment itself still
+        # belongs to the directory the shell was in when it started.
+        moved = _cd_destination(expanded, segment_cwd, repo_root)
+        if moved:
+            segment_cwd = moved
         if quoted is None:
             # Unknown alignment means this split may be wrong: the operator at
             # `j` could be a quoted literal argument. Classify this segment
