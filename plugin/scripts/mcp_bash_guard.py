@@ -8,6 +8,7 @@ import re
 import shlex
 import stat
 import sys
+import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
     from _lib import (
@@ -44,6 +45,21 @@ _GLOB_EXPANSION_CAP = 256
 # costs a missed classification for that one operand; timing out costs the
 # whole line.
 _GLOB_COMPONENT_CAP = 4
+# Wall-clock budget for one guard invocation, well under the 3 s hook timeout.
+# Per-item caps keep being defeated by repetition: capping one glob's depth
+# left 250 shallow globs on one line at 4 s, and bounding the substitution scan
+# by "closers remaining" left an opener that can never close (`$((` consumes no
+# `)`) rescanning to end of line, so 24 KB of padding took 4.4 s. Both convert
+# every deny on the line into an allow, because a killed hook emits no
+# decision. A deadline bounds the whole invocation regardless of which
+# repetition is used; exhausting it degrades to "not extracted", never to
+# deleting a token.
+_ANALYSIS_BUDGET_SECONDS = 1.5
+_deadline = None
+
+
+def _budget_exhausted():
+    return _deadline is not None and time.monotonic() > _deadline
 # How far `eval` / `bash -c` nesting is followed. `eval eval eval … cp <src>
 # <receipt>` recursed until RecursionError, and RecursionError reaches
 # main()'s catch-all, which exits 0 — a silent allow for the whole line. The
@@ -276,8 +292,22 @@ def _is_goal_control_inode_alias(token: str, repo_root: str, execution_cwd="") -
     except (OSError, ValueError):
         return False
     return False
-def _glob_is_too_broad(pattern):
-    """True when expanding `pattern` could walk an unbounded number of dirs."""
+def _glob_is_too_broad(pattern, base=""):
+    """True when expanding `pattern` could walk an unbounded number of dirs.
+
+    Cost comes from the *tree* the pattern is anchored to, not from how it is
+    spelled, and the first version of this check ignored that. Measured:
+    `<repo>/*/*/*/*/RECEIPT?.jsonl` is 0.06 s and names live artifacts, while
+    `/*/*/*/*/*/*/*/*/*zzzznomatch` is 50 s — yet a plain component count
+    refused both. That re-opened the glob-in-basename route AC-003 covers:
+    `cp <payload> */*/*/*/RECEIPT?.jsonl` stopped being classified.
+
+    A pattern rooted inside the repository is bounded by the repository, so it
+    is always expanded. Only patterns reaching outside are capped, and a
+    deadline covers whatever the cap lets through.
+    """
+    if base and (pattern == base or pattern.startswith(base.rstrip(os.sep) + os.sep)):
+        return False
     wildcard_components = sum(
         1 for component in pattern.split(os.sep)
         if any(ch in component for ch in "*?[")
@@ -300,7 +330,7 @@ def _glob_expansions(token, repo_root, execution_cwd=""):
     # match of `/*/*/*/*/*/*/*/*/*` means walking every directory the earlier
     # components matched. Laziness is not a cost bound here; the component cap
     # is.
-    if _glob_is_too_broad(pattern):
+    if _glob_is_too_broad(pattern, base) or _budget_exhausted():
         return ()
     try:
         matches = tuple(itertools.islice(glob.iglob(pattern), _GLOB_EXPANSION_CAP))
@@ -535,7 +565,7 @@ def _expanded_sources(source, execution_cwd, repo_root):
     stripped = source.rstrip("/")
     if any(ch in source for ch in "*?["):
         pattern = source if os.path.isabs(source) else os.path.join(base, source)
-        if _glob_is_too_broad(pattern):
+        if _glob_is_too_broad(pattern, base) or _budget_exhausted():
             return []
         try:
             # islice over iglob: the cap has to bound the directory walk, not
@@ -1147,7 +1177,12 @@ def _glued_closer_ordinals(command, closer):
         if character != closer:
             continue
         count += 1
-        if command[position + 1:position + 2] == "/":
+        # A quote counts as glue too: bash concatenates adjacent quoted parts
+        # into one word, so `$(pwd)'/'<artifact>` is a single operand. Reading
+        # only a literal `/` left the following token as a standalone absolute
+        # path, which resolves outside the repo root and gets dropped — the
+        # artifact was written with the gate silent.
+        if command[position + 1:position + 2] in ("/", "'", '"'):
             ordinals.add(count)
     return frozenset(ordinals)
 
@@ -1265,6 +1300,10 @@ def _collapse_substitutions(tokens, quoted, command=""):
         span_backticks = 0
         upto_closer = 0
         while reachable and scan < len(pending):
+            # time.monotonic() per token would cost more than the scan; the
+            # stride keeps the check off the hot path.
+            if not scan % 512 and _budget_exhausted():
+                break
             current = pending[scan]
             if backtick:
                 # A backtick span still consumes whatever parens sit inside it.
@@ -1278,6 +1317,12 @@ def _collapse_substitutions(tokens, quoted, command=""):
                     break
                 span_backticks += current.count("`")
             else:
+                # A paren span swallows backticks the same way a backtick span
+                # swallows parens; counting only one direction let
+                # `backticks_left` drift upward. Harmless today — an
+                # over-estimate only runs a scan that then fails anyway — but
+                # the invariant is what the next reader will rely on.
+                span_backticks += current.count("`")
                 depth += current.count("(")
                 closers = current.count(")")
                 if closers:
@@ -1385,7 +1430,20 @@ def _split_control_cluster(token):
 
 
 def _expand_control_clusters(tokens, quoted):
-    """Rewrite a token list so clustered operators are separate boundaries."""
+    """Rewrite a token list so clustered operators are separate boundaries.
+
+    Only when the quoting is actually known. With `quoted is None` every token
+    reads as unquoted, so a *quoted operator literal* — `tee ');' <artifact>`,
+    where `');'` is an ordinary filename argument — was decomposed into real
+    boundaries and truncated the segment before the artifact. One adjacent-quote
+    word anywhere on the line (`echo "a"b`) is enough to reach that state, so
+    the write allowed. Declining to expand costs only the clustered-boundary
+    fix, whose motivating case (`( echo hi ); cp …`) has no quotes and so still
+    aligns; resolving unknown alignment as "this token *is* an operator" costs
+    an artifact.
+    """
+    if quoted is None:
+        return tokens, quoted
     if not any(
         _split_control_cluster(token) for index, token in enumerate(tokens)
         if not (quoted is not None and index < len(quoted) and quoted[index])
@@ -1409,6 +1467,7 @@ def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
                    quoted=None, depth=0):
     tokens, quoted = _expand_control_clusters(tokens, quoted)
     idx = 0
+    ambiguous_previous = None
     while idx < len(tokens):
         j = idx
         # A *quoted* control operator is a literal argument, not a boundary.
@@ -1453,6 +1512,24 @@ def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
         _process_segment(
             expanded, targets, repo_root, execution_cwd, segment_quoted, depth,
         )
+        if quoted is None:
+            # Unknown alignment means this split may be wrong: the operator at
+            # `j` could be a quoted literal argument. Classify this segment
+            # joined to the previous one under that reading too.
+            #
+            # The whole-line union below cannot cover it — that reading
+            # dispatches on the line's *first* command word, so
+            # `echo "a"b ; touch '|' <artifact>` was still dispatched on
+            # `echo` and the write allowed. Pairwise merging is linear: every
+            # token appears in at most two merged pairs.
+            if ambiguous_previous is not None:
+                merged: list[dict] = []
+                _process_segment(
+                    ambiguous_previous + [tokens[idx - 1]] + expanded,
+                    merged, repo_root, execution_cwd, None, depth,
+                )
+                targets.extend(item for item in merged if item not in targets)
+            ambiguous_previous = expanded
         idx = j + 1
     if quoted is None:
         # The split itself may be wrong: a quoted `|` is an argument, not a
@@ -1509,6 +1586,8 @@ def _deny(target, command):
         docs=docs,
     )
 def main():
+    global _deadline
+    _deadline = time.monotonic() + _ANALYSIS_BUDGET_SECONDS
     try:
         raw_input = sys.stdin.read(_GUARD_STDIN_CAP + 1)
     except Exception:

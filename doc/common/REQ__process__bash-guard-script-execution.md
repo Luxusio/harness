@@ -98,7 +98,12 @@ and nothing re-checks it at exec time.
      operand (`cp /*/*/*/*/*/*/*/*/* <dir>/`) took 66 s. Bound the walk, and
      test the bound with a pattern that matches *nothing* — a deep pattern
      with many matches short-circuits and looks fast while the real cost
-     hides in the sparse case.
+     hides in the sparse case. Two further rules, each learned by getting it
+     wrong: bound the *whole invocation*, because per-item caps are defeated
+     by repeating the item (250 shallow globs, thousands of `$((` openers);
+     and never let a cost bound silently stop classifying something it can
+     afford — anchoring matters more than spelling, so a repo-rooted deep glob
+     must still expand.
   2. **Fail-open by exception.** Anything reaching `main()`'s catch-all exits 0,
      so one unrepresentable token can suppress every deny on the line. Keep path
      handling exception-safe inside `_normalize_candidate_path`, and keep

@@ -633,6 +633,86 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
+    def test_quoted_operator_literal_is_not_a_boundary(self):
+        """Unknown quote alignment must not be resolved as "this is an operator".
+
+        One adjacent-quote word anywhere on the line (`echo "a"b`) makes
+        `_quoted_flags` return None, and every token then reads as unquoted. The
+        cluster expander duly decomposed a *quoted literal argument* — `');'` as
+        a filename — into real boundaries, truncating the segment before the
+        artifact. The whole-line union could not compensate: that reading
+        dispatches on the line's first command word, so `echo "a"b ; touch '|'
+        <artifact>` was still dispatched on `echo`.
+
+        Expansion is now skipped when alignment is unknown, and adjacent
+        segments are additionally classified merged across the ambiguous
+        boundary — which is linear, since each token joins at most two pairs.
+        """
+        with scratch_task_in_real_repo("pr1-quotedop") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"""echo "a"b ; touch '|' {receipts}""",
+                f"""echo "a"b ; tee '&&' {receipts}""",
+                f"""echo "a"b ; echo F | tee ')&&' {receipts} >/dev/null""",
+                f"""echo 'a'b ; touch ');' {receipts}""",
+                f"""echo "a"b ; sed -i s/x/y/ ');' {receipts}""",
+                f"""echo /tmp/a\\ b ; tee ')&&' {receipts}""",
+                f"""echo "a"b ; cp /tmp/f ';' {receipts}""",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_quote_glued_substitution_is_one_word(self):
+        """bash concatenates adjacent quoted parts, so `$(pwd)'/'x` is one word.
+
+        Reading only a literal `/` after the closer left the following token as
+        a standalone absolute path, which resolves outside the repo root and is
+        dropped — the artifact was written with the gate silent.
+        """
+        with scratch_task_in_real_repo("pr1-quoteglue") as task_dir:
+            rel = os.path.relpath(
+                os.path.join(task_dir, "RECEIPTS.jsonl"), REPO_ROOT,
+            )
+            for command in (
+                f"cp /tmp/pd $(pwd)'/'{rel}",
+                f'cp /tmp/pd $(pwd)"/"{rel}',
+                f"echo z > $(pwd)'/'{rel}",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_repetition_cannot_exhaust_the_hook_budget(self):
+        """Per-item caps keep being defeated by repeating the item.
+
+        Capping one glob's depth left 250 shallow globs on one line at 4 s;
+        bounding the substitution scan by "closers remaining" left an opener
+        that can never close (`$((` consumes no `)`) rescanning to end of line,
+        so 24 KB of padding took 4.4 s. Both exceed the 3 s hook timeout, and a
+        killed hook emits no decision — every deny on the line becomes an
+        allow. A whole-invocation deadline bounds all of these at once.
+        """
+        with scratch_task_in_real_repo("pr1-budget") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            write = f"cp /tmp/pd {receipts}"
+            for label, command in (
+                ("arith-openers",
+                 "echo " + "$(( " * 16000 + f" ; cp /tmp/pd $(pwd)/{receipts}"),
+                ("many-globs",
+                 " ; ".join(["rm /proc/*/*/*/*"] * 250) + f" ; {write}"),
+                ("ambiguous-pairs",
+                 'echo "a"b ; ' + " ; ".join(["echo x"] * 6000) + f" ; {write}"),
+            ):
+                with self.subTest(shape=label):
+                    self.assertLess(len(command), 64 * 1024)
+                    started = time.monotonic()
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertLess(time.monotonic() - started, 2.6)
+                    self.assertEqual(decision, "deny")
+
     def test_subshell_boundary_split_does_not_over_block(self):
         """Splitting clusters adds boundaries; it must not add denies."""
         for command in (
@@ -677,6 +757,19 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     decision, _ = parse_decision(_run_bash(command).stdout)
                     self.assertLess(time.monotonic() - started, 2.0)
                     # The real write on the same line still has to deny.
+                    self.assertEqual(decision, "deny")
+            # A cost bound must not be a spelling bound. Cost comes from the
+            # tree the pattern is anchored to: `<repo>/*/*/*/*/RECEIPT?.jsonl`
+            # is 0.06 s and names live artifacts, while the absolute
+            # `/*/*/*/*/*/*/*/*/*zzzznomatch` is 50 s. A plain component count
+            # refused both, which re-opened the glob-in-basename route.
+            Path(receipts).write_text("{}\n", encoding="utf-8")
+            for command in (
+                "cp /tmp/f */*/*/*/RECEIPT?.jsonl",
+                "cp /tmp/f doc/*/*/*/RECEIPT?.jsonl",
+            ):
+                with self.subTest(command=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
                     self.assertEqual(decision, "deny")
             # A glob shallow enough to expand must still be classified. The
             # pattern only resolves against a file that exists, which is the

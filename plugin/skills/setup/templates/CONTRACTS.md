@@ -98,8 +98,12 @@ edits and source-scope discipline remain the developer's responsibility.
 
 **Title:** Protected artifact ownership.
 **When:** Any `Write`/`Edit` to PLAN.md, TASK.json, RECEIPTS.jsonl, or `doc/harness/goals/*.json` — and any
-`Bash` mutation (sed -i,
-redirect, cp, mv, tee, python -c open(…,'w'), …) targeting the same basenames.
+`Bash` *file-mutation verb* (sed -i,
+redirect, cp, mv, tee, install, truncate, touch, …) targeting the same
+basenames. Script and interpreter execution is deliberately not gated:
+`python -c`, `node -e`, and `-m` all pass, so a caller who wants past this
+layer has an open door. Treat the Bash surface as a guardrail against
+accident, not a control against a determined caller.
 **Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`
 (Write/Edit/MultiEdit surface) + `plugin/scripts/mcp_bash_guard.py`
 (Bash surface; same helper classifiers).

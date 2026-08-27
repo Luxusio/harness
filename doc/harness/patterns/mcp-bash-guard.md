@@ -199,12 +199,27 @@ Other dynamic constructs remain:
   filesystem, and `glob` cost is multiplicative in the number of
   wildcard-bearing path components, so `cp /*/*/*/*/*/*/*/*/* <dir>/` took
   66 s from a 30-character operand — enough that prefixing any line with one
-  cheap-looking `cp` converted its deny into an allow. `_GLOB_COMPONENT_CAP`
-  bounds this. Note that `islice` over `iglob` is *necessary but not
-  sufficient*, and the difference is easy to miss: a deep pattern matching
-  many files short-circuits after the cap and looks fast, while the same
-  depth matching few or none still walks everything (48 s and beyond). Test a
-  cost bound with a pattern that matches nothing.
+  cheap-looking `cp` converted its deny into an allow. Note that `islice` over
+  `iglob` is *necessary but not sufficient*, and the difference is easy to
+  miss: a deep pattern matching many files short-circuits after the cap and
+  looks fast, while the same depth matching few or none still walks everything
+  (48 s and beyond). Test a cost bound with a pattern that matches nothing.
+
+  `_GLOB_COMPONENT_CAP` bounds this, but only for patterns reaching *outside*
+  the repository, and that distinction was learned the hard way. Cost comes
+  from the tree a pattern is anchored to, not from how it is spelled:
+  `<repo>/*/*/*/*/RECEIPT?.jsonl` is 0.06 s and names live artifacts, while the
+  absolute `/*/*/*/*/*/*/*/*/*zzzznomatch` is 50 s. A plain component count
+  refused both, which re-opened the glob-in-basename route — a cost bound that
+  silently stops classifying is a bypass wearing a performance fix's clothes.
+
+  The wider lesson, after three rounds of it: **per-item caps get defeated by
+  repeating the item.** Capping one glob's depth left 250 shallow globs on one
+  line at 4 s; bounding the substitution scan by "closers remaining" left an
+  opener that can never close (`$((` consumes no `)`) rescanning to end of line
+  at 4.4 s. `_ANALYSIS_BUDGET_SECONDS` bounds the whole invocation instead, so
+  a new repetition trick cannot reopen the class. Exhausting it degrades to
+  "not extracted", never to deleting a token.
 - **an exception is an allow.** `main()` has a catch-all that exits 0, so any
   input that makes a path call raise suppresses every deny on the line — a
   NUL in one token was enough. `_normalize_candidate_path` swallows
@@ -237,7 +252,19 @@ Other dynamic constructs remain:
   phrasing nobody would think of as evasion. `_split_control_cluster`
   decomposes a token made only of control punctuation by longest match, so
   `&&` never becomes two `&`. Splitting only ever adds boundaries, so it
-  cannot turn a deny into an allow.
+  cannot turn a deny into an allow — *provided the quoting is known*. It is
+  not always: one adjacent-quote word anywhere on the line makes `_quoted_flags`
+  return `None`, every token then reads as unquoted, and a quoted operator
+  literal (`tee ');' <artifact>`, where `');'` is a filename) was decomposed
+  into real boundaries that truncated the segment before the artifact. Under
+  unknown alignment the expansion is skipped entirely.
+
+  The whole-line union cannot compensate for a wrong split, which is worth
+  stating because it looks like it should: that reading dispatches on the
+  line's *first* command word, so `echo "a"b ; touch '|' <artifact>` was still
+  dispatched on `echo`. What covers it is classifying each pair of adjacent
+  segments *merged* across the ambiguous boundary — linear, since every token
+  joins at most two pairs.
 
   Positional identity is necessary but not sufficient — a stage may also
   *delete* words, and deletion is invisible to a shift check. Substitution
