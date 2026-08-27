@@ -1600,9 +1600,16 @@ def _quoted_operator_words(command):
     Unlike the segment path there is no both-readings union behind this call to
     correct it, so the operator has to be recognised as a literal here or not
     at all.
+
+    Returns a `Counter`, and the caller must compare it against occurrences —
+    presence alone launders. The first version of this returned a set, so one
+    quoted `>` anywhere suppressed *every* real `>` on the line, and
+    `grep -n ">" "$PWD"/f ; echo x > <receipt>` wrote the artifact with the gate
+    silent. That is the borrowed-quote-mark bug again, one consumer over: the
+    count rule was applied to segment boundaries and not to redirects.
     """
     if not command:
-        return frozenset()
+        return collections.Counter()
     try:
         lexer = shlex.shlex(command, posix=False, punctuation_chars=True)
         lexer.whitespace_split = True
@@ -1610,7 +1617,7 @@ def _quoted_operator_words(command):
         raw_words = list(lexer)
     except ValueError:
         raw_words = command.split()
-    return frozenset(
+    return collections.Counter(
         word[1:-1] for word in raw_words
         if len(word) > 1 and word[0] == word[-1] and word[0] in "'\""
     )
@@ -1667,9 +1674,19 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
         _quotable_operators(command) if quoted is None
         else collections.Counter()
     )
-    quoted_words = (
-        _quoted_operator_words(command) if quoted is None else frozenset()
-    )
+    # A quoted spelling only explains as many occurrences as there are of it.
+    # Skipping on presence let one quoted `>` suppress every real `>` on the
+    # line — the same laundering the count rule already prevents for segment
+    # boundaries just below.
+    if quoted is None:
+        quoted_spellings = _quoted_operator_words(command)
+        line_occurrences = collections.Counter(tokens)
+        quoted_words = frozenset(
+            word for word, available in quoted_spellings.items()
+            if line_occurrences[word] <= available
+        )
+    else:
+        quoted_words = frozenset()
     boundaries = collections.Counter(
         token for token in tokens if token in BOUNDARY_TOKENS
     )

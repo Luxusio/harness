@@ -172,6 +172,14 @@ Other dynamic constructs remain:
   text is added, assume it has the same hole until shown otherwise. Note the
   redirect path has no both-readings union behind it, so a wrong guess there is
   final.
+
+  **Both must count, not merely detect**, and the redirect one shipped without
+  counting for exactly one commit. Keyed on presence, a single quoted `>`
+  suppressed *every* real `>` on the line, so
+  `grep -n ">" "$PWD"/<file> ; echo x > <receipt>` wrote the artifact —
+  a laundering route created by the fix for a false deny, out of the same two
+  phrasings that motivated it. A quoted spelling explains only as many
+  occurrences as there are of it.
 - **an operator spelled across quote runs is not recognised as quotable.**
   `touch '&''&' <artifact>` builds the token `&&` while the raw text contains
   no `&&` substring, so the merged reading is not offered and the write

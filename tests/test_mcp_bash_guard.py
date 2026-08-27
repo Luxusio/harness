@@ -757,6 +757,23 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 with self.subTest(allow=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)
                     self.assertIsNone(decision)
+            # A quoted spelling explains only as many occurrences as there are
+            # of it. Skipping on presence let one quoted `>` suppress every
+            # real `>` on the line: these lines differ from the plain deny by
+            # one word and allowed when this test was first written, which is
+            # the borrowed-quote-mark bug one consumer over.
+            source = "plugin/scripts/_lib.py"
+            for command in (
+                f"""echo "a"b ; echo '>' ; echo x > {receipts}""",
+                f'grep -n ">" "$PWD"/{source} ; echo x > {receipts}',
+                f'echo ">" ; cat /tmp/f > "$PWD"/{os.path.relpath(receipts, REPO_ROOT)}',
+                f'grep -n ">" "$PWD"/f ; echo x > {source}',
+                f'grep -n ">|" "$PWD"/f ; echo x >| {receipts}',
+                f"""bash -c 'grep -n ">" "$PWD"/f ; echo x > {receipts}'""",
+            ):
+                with self.subTest(launder=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
             # An unquoted operator still classifies its operand — the
             # laundering direction is untouched.
             for command in (
