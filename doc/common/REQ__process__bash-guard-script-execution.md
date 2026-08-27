@@ -92,7 +92,13 @@ and nothing re-checks it at exec time.
      reintroduce: "never delete an unbounded span" was implemented by advancing
      one token and rescanning, which is quadratic, and 40 KB of `'$('` padding
      restored the fail-open the rule was written to close. A guard change that
-     adds a nested loop over tokens is a security change.
+     adds a nested loop over tokens is a security change. Cost is not only
+     about command length: glob expansion walks the filesystem and is
+     multiplicative in wildcard-bearing path components, so a 30-character
+     operand (`cp /*/*/*/*/*/*/*/*/* <dir>/`) took 66 s. Bound the walk, and
+     test the bound with a pattern that matches *nothing* — a deep pattern
+     with many matches short-circuits and looks fast while the real cost
+     hides in the sparse case.
   2. **Fail-open by exception.** Anything reaching `main()`'s catch-all exits 0,
      so one unrepresentable token can suppress every deny on the line. Keep path
      handling exception-safe inside `_normalize_candidate_path`, and keep
@@ -100,7 +106,11 @@ and nothing re-checks it at exec time.
      lands in the same catch-all.
   3. **Tokenizer divergence.** The guard's word list must be positionally
      identical to bash's — empty words preserved, comments removed only at word
-     start, substitution spans collapsed to one word.
+     start, substitution spans collapsed to one word. Control operators arrive
+     *clustered*: a subshell emits `');'`, `')&&'`, `')|'`, `')&'` as one
+     token, so matching `BOUNDARY_TOKENS` by exact string let the segment run
+     on and dispatched a whole line on the subshell's first command word.
+     Decompose punctuation-only tokens before segmenting.
   4. **Token deletion.** Positional identity does not cover words that a stage
      *removes*. Substitution collapse dropped everything after a punctuation-
      clustered closer (`);`, `)&&`, `))`), deleting a following command outright,

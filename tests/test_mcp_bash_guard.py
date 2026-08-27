@@ -590,12 +590,151 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             # `"a"b` desynchronises the two lexes, which is what forces the
             # all-unquoted reading where every `'$('` counts as an opener.
             padding = " ".join(['echo "a"b'] + ["'$('"] * 8000)
-            command = f"cp /tmp/payload {receipts}; " + padding
-            self.assertLess(len(command), 64 * 1024)  # under _COMMAND_LENGTH_CAP
-            started = time.monotonic()
-            decision, _ = parse_decision(_run_bash(command).stdout)
-            self.assertLess(time.monotonic() - started, 2.0)
+            write = f"cp /tmp/payload {receipts}"
+            # Both orders. Padding only *after* the write cannot see a skip
+            # that suppresses collapse for the rest of the line, which is how
+            # the first version of this test missed exactly that bug.
+            for command in (f"{write}; {padding}", f"{padding}; {write}"):
+                with self.subTest(order=command[:20]):
+                    self.assertLess(len(command), 64 * 1024)  # _COMMAND_LENGTH_CAP
+                    started = time.monotonic()
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertLess(time.monotonic() - started, 2.0)
+                    self.assertEqual(decision, "deny")
+
+    def test_subshell_glued_to_its_operator_still_ends_the_segment(self):
+        """A clustered `);` is a boundary; matching operators as strings missed it.
+
+        `punctuation_chars=True` glues a closing paren to whatever follows, so
+        a plain subshell emits `');'`, `')&&'`, `')|'`, `')&'` as ONE token.
+        `BOUNDARY_TOKENS` matches exactly, so none of them ended the segment and
+        the whole rest of the line was dispatched on the subshell's first
+        command word. One space before the `;` was the only difference between
+        an allow and a deny, and every one of these is ordinary bash.
+        """
+        with scratch_task_in_real_repo("pr1-subshell") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            plan = os.path.join(task_dir, "PLAN.md")
+            for command in (
+                f"( echo hi ); cp /tmp/f {receipts}",
+                f"(echo hi); cp /tmp/f {receipts}",
+                f"( echo hi ); tee {receipts}",
+                f"( echo hi ); sed -i s/a/b/ {plan}",
+                f"( cd /tmp && ls ); mv {receipts} /tmp/x",
+                f"(git status); truncate -s0 {receipts}",
+                f"( echo hi )&& cp /tmp/f {receipts}",
+                f"( echo hi )|| cp /tmp/f {receipts}",
+                f"( echo hi )| cp /tmp/f {receipts}",
+                f"( echo hi )& cp /tmp/f {receipts}",
+                f"( echo hi ) ; cp /tmp/f {receipts}",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_subshell_boundary_split_does_not_over_block(self):
+        """Splitting clusters adds boundaries; it must not add denies."""
+        for command in (
+            "( echo hi ); ls",
+            "(cd /tmp && ls); pwd",
+            "( pytest -q ); echo done",
+            "echo $(( 1 + 2 ))",
+        ):
+            with self.subTest(command=command):
+                decision, _ = parse_decision(_run_bash(command).stdout)
+                self.assertIsNone(decision)
+
+    def test_deep_glob_does_not_blow_the_hook_budget(self):
+        """Laziness is not a cost bound — the component count is.
+
+        `glob` walks every directory a wildcard component matches, so cost is
+        multiplicative in the number of such components. `cp /*/*/*/*/*/*/*/*/*
+        <dir>/` took 66 s against a 3 s budget, and a killed hook emits no
+        decision, so prefixing one cheap-looking `cp` with a deep glob turned
+        every deny on the line into an allow.
+
+        `islice` over `iglob` is necessary but nowhere near sufficient, and the
+        difference is easy to test by accident: a deep pattern matching *many*
+        files short-circuits after 256 hits and looks fast, while the same
+        depth matching *few* still walks everything. The non-matching variants
+        below are the ones that pin the component cap — they took 48 s and
+        >120 s with it removed, against 0.07 s for the matching one.
+        """
+        with scratch_task_in_real_repo("pr1-deepglob") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"cp /*/*/*/*/*/*/*/*/* /tmp/ ; cp /tmp/f {receipts}",
+                f"cp /*/*/*/*/*/*/* /tmp/ ; cp /tmp/f {receipts}",
+                f"cp /tmp/f /*/*/*/*/*/*/*/* / ; cp /tmp/f {receipts}",
+                # Few or no matches: islice cannot short-circuit these.
+                f"cp /*/*/*/*/*/*/*/*/*zzzznomatch /tmp/ ; cp /tmp/f {receipts}",
+                f"cp /*/*/*/*/*/*/*/*/*/*/*/zzzznomatch /tmp/ ; cp /tmp/f {receipts}",
+                f"cp /tmp/f /*/*/*/*/*/*/*/*/*/*zzz/ ; cp /tmp/f {receipts}",
+            ):
+                with self.subTest(command=command):
+                    started = time.monotonic()
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertLess(time.monotonic() - started, 2.0)
+                    # The real write on the same line still has to deny.
+                    self.assertEqual(decision, "deny")
+            # A glob shallow enough to expand must still be classified. The
+            # pattern only resolves against a file that exists, which is the
+            # whole reason expansion happens at all.
+            Path(receipts).write_text("{}\n", encoding="utf-8")
+            decision, _ = parse_decision(
+                _run_bash(f"cp /tmp/payload {task_dir}/RECEIPT?.jsonl").stdout
+            )
             self.assertEqual(decision, "deny")
+
+    def test_unclosable_span_does_not_disable_later_spans(self):
+        """Skipping a scan needs "nothing left to find", not "this one failed".
+
+        The first attempt latched a boolean: one failed scan meant no later
+        opener even tried. That invariant is false — a scan also fails when no
+        closer brings *this* opener's depth to zero, and `$((` leaves depth 2
+        forever — so a single such token anywhere ahead suppressed collapse for
+        the whole rest of the line. `echo $(( ; cp /tmp/x $(pwd)/<artifact>`
+        then allowed: a fail-open costing one token, cheaper to trigger than
+        the 40 KB timeout it was introduced to fix.
+        """
+        with scratch_task_in_real_repo("pr1-unclosable") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            write = f"cp /tmp/x $(pwd)/{os.path.relpath(receipts, REPO_ROOT)}"
+            for noise in ("echo $((", "echo \"a\"b '$('", "echo '$(('",
+                          "echo `", "echo $( "):
+                with self.subTest(noise=noise):
+                    decision, reason = parse_decision(
+                        _run_bash(f"{noise} ; {write}").stdout
+                    )
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_backtick_span_counts_the_parens_it_swallows(self):
+        """Closer ordinals must stay aligned across span kinds.
+
+        A backtick span consumes its inner tokens, so the `)` characters inside
+        it are consumed too. Counting only backticks there left every later
+        span reading a too-low paren ordinal and inheriting some other paren's
+        adjacency — in both directions: a real `$(pwd)/<artifact>` merge was
+        lost, and an unrelated operand was falsely glued and rebased into the
+        repo, which is an over-block.
+        """
+        with scratch_task_in_real_repo("pr1-btparen") as task_dir:
+            rel = os.path.relpath(
+                os.path.join(task_dir, "RECEIPTS.jsonl"), REPO_ROOT,
+            )
+            decision, reason = parse_decision(
+                _run_bash(f"echo ` echo ) ` ; cp /tmp/x $(pwd)/{rel}").stdout
+            )
+            self.assertEqual(decision, "deny")
+            self.assertIn("rule=protected-artifact", reason)
+            # ...and the mirror: an out-of-repo destination must not be glued
+            # into the repo by an ordinal borrowed from the backtick span.
+            decision, _ = parse_decision(
+                _run_bash("echo ` echo )/ ` ; cp $(echo a) /tmp/PLAN.md").stdout
+            )
+            self.assertIsNone(decision)
 
     def test_stray_glued_paren_does_not_re_enable_the_merge(self):
         """Merge adjacency is a property of the span, not of the line.

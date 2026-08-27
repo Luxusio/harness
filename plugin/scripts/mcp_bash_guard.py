@@ -35,6 +35,15 @@ _GUARD_STDIN_CAP = 128 * 1024
 # result list — a pathological pattern must not turn a PreToolUse hook into a
 # full filesystem traversal.
 _GLOB_EXPANSION_CAP = 256
+# Wildcard-bearing path components a pattern may have before the guard refuses
+# to expand it. `glob` walks every directory a wildcard component matches, so
+# cost is multiplicative in this count, not in the pattern's length:
+# `cp /*/*/*/*/*/*/*/*/* <dir>/` took 66 s against a 3 s hook budget, and a
+# killed hook emits no decision — so prefixing one cheap-looking `cp` with a
+# deep glob converted every deny on the line into an allow. Refusing to expand
+# costs a missed classification for that one operand; timing out costs the
+# whole line.
+_GLOB_COMPONENT_CAP = 4
 # How far `eval` / `bash -c` nesting is followed. `eval eval eval … cp <src>
 # <receipt>` recursed until RecursionError, and RecursionError reaches
 # main()'s catch-all, which exits 0 — a silent allow for the whole line. The
@@ -123,6 +132,9 @@ BOUNDARY_TOKENS = {"&&", "||", "|", ";", "&", "(", ")",
                    # destination, so a plain `cp <payload> <receipt> |& cat`
                    # allowed where `cp <payload> <receipt>` denies.
                    "|&", ";;", ";&", ";;&"}
+# Characters a control operator can be built from. A token made only of these
+# is punctuation, never a word, so it can be decomposed safely.
+_CONTROL_PUNCTUATION = set("()&|;")
 # Shells whose `-c` argument is another command line to inspect.
 NESTED_SHELLS = {"bash", "sh", "dash", "zsh", "ksh", "ash", "busybox"}
 _INLINE_REDIRECT_RE = re.compile(r"^(?:\d*)?(>>?)(.+)$")
@@ -264,6 +276,15 @@ def _is_goal_control_inode_alias(token: str, repo_root: str, execution_cwd="") -
     except (OSError, ValueError):
         return False
     return False
+def _glob_is_too_broad(pattern):
+    """True when expanding `pattern` could walk an unbounded number of dirs."""
+    wildcard_components = sum(
+        1 for component in pattern.split(os.sep)
+        if any(ch in component for ch in "*?[")
+    )
+    return wildcard_components > _GLOB_COMPONENT_CAP
+
+
 def _glob_expansions(token, repo_root, execution_cwd=""):
     """Paths a glob token would resolve to at exec time.
 
@@ -275,9 +296,13 @@ def _glob_expansions(token, repo_root, execution_cwd=""):
         return ()
     base = execution_cwd or repo_root or os.getcwd()
     pattern = token if os.path.isabs(token) else os.path.join(base, token)
+    # islice bounds how many matches are *taken*, but reaching even the first
+    # match of `/*/*/*/*/*/*/*/*/*` means walking every directory the earlier
+    # components matched. Laziness is not a cost bound here; the component cap
+    # is.
+    if _glob_is_too_broad(pattern):
+        return ()
     try:
-        # islice over iglob: the cap must bound the directory walk, not just
-        # trim its result.
         matches = tuple(itertools.islice(glob.iglob(pattern), _GLOB_EXPANSION_CAP))
     except (OSError, ValueError):
         return ()
@@ -510,9 +535,17 @@ def _expanded_sources(source, execution_cwd, repo_root):
     stripped = source.rstrip("/")
     if any(ch in source for ch in "*?["):
         pattern = source if os.path.isabs(source) else os.path.join(base, source)
+        if _glob_is_too_broad(pattern):
+            return []
         try:
-            return [os.path.basename(m) for m in glob.glob(pattern)][
-                :_GLOB_EXPANSION_CAP
+            # islice over iglob: the cap has to bound the directory walk, not
+            # just the result list. `glob.glob(...)[:cap]` completed the whole
+            # walk first, which is the timeout fail-open.
+            return [
+                os.path.basename(match)
+                for match in itertools.islice(
+                    glob.iglob(pattern), _GLOB_EXPANSION_CAP,
+                )
             ]
         except (OSError, ValueError):
             return []
@@ -1168,12 +1201,17 @@ def _collapse_substitutions(tokens, quoted, command=""):
     # the token stream is the k-th in the source; a span can then ask about its
     # own closer instead of about the whole line.
     glued_parens = _glued_closer_ordinals(command, ")")
-    glued_backticks = _glued_closer_ordinals(command, "`")
     seen_paren = 0
-    seen_backtick = 0
-    # Latched once a scan has proven the remainder holds no closer of that kind.
-    paren_exhausted = False
-    backtick_exhausted = False
+    # Closer characters still ahead in `pending`, so a scan can be skipped when
+    # there is provably nothing to find. A boolean "this scan failed, so every
+    # later one will too" latch was wrong: a scan also fails when no closer
+    # brings *this* opener's depth to zero (`echo $((` leaves depth 2), and a
+    # later opener with smaller depth would still have found one. That latch
+    # suppressed collapse for the rest of the line, so a single `$((` token
+    # ahead of `cp /tmp/x $(pwd)/<artifact>` stopped the merge and allowed the
+    # write — a cheaper fail-open than the timeout it replaced.
+    parens_left = sum(token.count(")") for token in pending)
+    backticks_left = sum(token.count("`") for token in pending)
     index = 0
     while index < len(pending):
         token = pending[index]
@@ -1206,11 +1244,17 @@ def _collapse_substitutions(tokens, quoted, command=""):
             # skipping it here would make every later span read one ordinal too
             # low and inherit some other paren's adjacency.
             seen_paren += token.count(")")
-            seen_backtick += token.count("`")
+            parens_left -= token.count(")")
+            backticks_left -= token.count("`")
             index += 1
             continue
 
-        exhausted = backtick_exhausted if backtick else paren_exhausted
+        # Nothing left to find means the scan cannot succeed; skipping it is
+        # what keeps the walk linear.
+        if backtick:
+            reachable = backticks_left - token.count("`") > 0
+        else:
+            reachable = parens_left - token.count(")") > 0
         depth = token.count("(")
         scan = index + 1
         tail = ""
@@ -1220,13 +1264,17 @@ def _collapse_substitutions(tokens, quoted, command=""):
         span_parens = 0
         span_backticks = 0
         upto_closer = 0
-        while not exhausted and scan < len(pending):
+        while reachable and scan < len(pending):
             current = pending[scan]
             if backtick:
+                # A backtick span still consumes whatever parens sit inside it.
+                # Counting only backticks here left every later span reading a
+                # too-low paren ordinal, so it inherited some other paren's
+                # adjacency — both a missed merge and a false one.
+                span_parens += current.count(")")
                 if current == "`":
                     found = True
-                    upto_closer = span_backticks + 1
-                    span_backticks = upto_closer
+                    span_backticks += 1
                     break
                 span_backticks += current.count("`")
             else:
@@ -1246,17 +1294,13 @@ def _collapse_substitutions(tokens, quoted, command=""):
             scan += 1
         if not found:
             # Unbounded span: keep the token as-is rather than deleting the
-            # remainder of the line. Latch the result — rescanning the same
-            # closerless suffix once per opener is the quadratic path.
-            if backtick:
-                backtick_exhausted = True
-            else:
-                paren_exhausted = True
+            # remainder of the line.
             collapsed.append(token)
             if flags is not None:
                 flags.append(is_quoted)
             seen_paren += token.count(")")
-            seen_backtick += token.count("`")
+            parens_left -= token.count(")")
+            backticks_left -= token.count("`")
             index += 1
             continue
 
@@ -1266,14 +1310,19 @@ def _collapse_substitutions(tokens, quoted, command=""):
         prefix = token[:token.index("(")] if "(" in token else token
         prefix = prefix.rstrip("$<>`")
         if backtick:
-            closer_ordinal = seen_backtick + token.count("`") + upto_closer
-            glued_suffix = closer_ordinal in glued_backticks
+            # A backtick span can never be glued to a following `/` token: `/`
+            # is a word character, so `` `pwd`/doc `` lexes as a single token
+            # and this branch is never reached with a `/`-leading successor.
+            # Tracking backtick ordinals for a decision that cannot fire was
+            # dead machinery that still cost a full-line scan per call.
+            glued_suffix = False
         else:
             closer_ordinal = seen_paren + token.count(")") + upto_closer
             glued_suffix = closer_ordinal in glued_parens
         # Every closer character between index and scan is consumed here.
         seen_paren += token.count(")") + span_parens
-        seen_backtick += token.count("`") + span_backticks
+        parens_left -= token.count(")") + span_parens
+        backticks_left -= token.count("`") + span_backticks
         index = scan + 1
         if tail:
             pending.insert(index, tail)
@@ -1303,8 +1352,62 @@ def _collapse_substitutions(tokens, quoted, command=""):
             flags.append(False)
     return collapsed, flags
 
+def _split_control_cluster(token):
+    """Split a clustered control operator into the operators bash would see.
+
+    `punctuation_chars=True` glues a closing paren to whatever follows it, so a
+    plain subshell emits `');'`, `')&&'`, `')|'`, `')&'` as ONE token. None of
+    those strings is in `BOUNDARY_TOKENS`, which matches exactly — so the
+    segment never ended, and `_process_segment_once` dispatched the whole rest
+    of the line on the subshell's first command word. `( echo hi ); cp
+    <payload> <receipt>` allowed, while the identical line with a space before
+    the `;` denied. That is ordinary phrasing, not evasion.
+
+    `_collapse_substitutions` already had to learn that punctuation arrives
+    clustered; this is the same lesson applied to segmentation. Splitting only
+    ever adds boundaries, so it cannot turn a deny into an allow.
+    """
+    if len(token) < 2 or not set(token) <= _CONTROL_PUNCTUATION:
+        return None
+    parts = []
+    position = 0
+    while position < len(token):
+        # Longest match first, so `&&` never decomposes into two `&`.
+        for size in (3, 2, 1):
+            piece = token[position:position + size]
+            if piece in BOUNDARY_TOKENS:
+                parts.append(piece)
+                position += size
+                break
+        else:
+            return None
+    return parts if len(parts) > 1 else None
+
+
+def _expand_control_clusters(tokens, quoted):
+    """Rewrite a token list so clustered operators are separate boundaries."""
+    if not any(
+        _split_control_cluster(token) for index, token in enumerate(tokens)
+        if not (quoted is not None and index < len(quoted) and quoted[index])
+    ):
+        return tokens, quoted
+    out = []
+    out_quoted = [] if quoted is not None else None
+    for index, token in enumerate(tokens):
+        is_quoted = (
+            quoted is not None and index < len(quoted) and quoted[index]
+        )
+        parts = None if is_quoted else _split_control_cluster(token)
+        for piece in (parts or [token]):
+            out.append(piece)
+            if out_quoted is not None:
+                out_quoted.append(is_quoted)
+    return out, out_quoted
+
+
 def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
                    quoted=None, depth=0):
+    tokens, quoted = _expand_control_clusters(tokens, quoted)
     idx = 0
     while idx < len(tokens):
         j = idx

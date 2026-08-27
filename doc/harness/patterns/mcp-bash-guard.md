@@ -194,6 +194,17 @@ Other dynamic constructs remain:
   over tokens as a security change, not a performance one. Note
   `_COMMAND_LENGTH_CAP` fails *closed* above 64 KB, so the exposed window is
   the one below it.
+
+  Cost is not only about command *length*. Glob expansion walks the
+  filesystem, and `glob` cost is multiplicative in the number of
+  wildcard-bearing path components, so `cp /*/*/*/*/*/*/*/*/* <dir>/` took
+  66 s from a 30-character operand — enough that prefixing any line with one
+  cheap-looking `cp` converted its deny into an allow. `_GLOB_COMPONENT_CAP`
+  bounds this. Note that `islice` over `iglob` is *necessary but not
+  sufficient*, and the difference is easy to miss: a deep pattern matching
+  many files short-circuits after the cap and looks fast, while the same
+  depth matching few or none still walks everything (48 s and beyond). Test a
+  cost bound with a pattern that matches nothing.
 - **an exception is an allow.** `main()` has a catch-all that exits 0, so any
   input that makes a path call raise suppresses every deny on the line — a
   NUL in one token was enough. `_normalize_candidate_path` swallows
@@ -216,6 +227,18 @@ Other dynamic constructs remain:
   the quote state. Any further place where `shlex` and bash disagree on *which
   word is where* is a bypass, not a cosmetic difference.
 
+  The clustering that complicates collapse also broke *segmentation*, and for
+  longer: `BOUNDARY_TOKENS` matched operators as exact strings, but a plain
+  subshell emits `');'`, `')&&'`, `')|'`, `')&'` as a single token. None of
+  those is in the set, so the segment never ended and `_process_segment_once`
+  dispatched the entire rest of the line on the subshell's first command word.
+  `( echo hi ); cp <payload> <receipt>` allowed while the same line with a
+  space before the `;` denied — one character between a deny and an allow, on
+  phrasing nobody would think of as evasion. `_split_control_cluster`
+  decomposes a token made only of control punctuation by longest match, so
+  `&&` never becomes two `&`. Splitting only ever adds boundaries, so it
+  cannot turn a deny into an allow.
+
   Positional identity is necessary but not sufficient — a stage may also
   *delete* words, and deletion is invisible to a shift check. Substitution
   collapse did: `punctuation_chars=True` clusters trailing punctuation, so the
@@ -235,9 +258,17 @@ Other dynamic constructs remain:
   - *Not deleting cost time.* "Keep the token and move on" was written as a
     plain `index += 1`, so n unclosed openers each rescanned to end of line.
     40 KB of `'$('` padding took 3.2 s, the hook budget is 3 s, and a timeout
-    emits no decision — the padding disabled every deny on the line. A failed
-    scan is now latched: it proves no closer exists in the remaining suffix,
-    and `index` only advances, so no later opener can find one either.
+    emits no decision — the padding disabled every deny on the line.
+
+    The first repair latched the failure — "this scan found nothing, so no
+    later one will either" — which is false, and was itself a worse fail-open.
+    A scan also fails when no closer brings *this* opener's depth to zero, and
+    `$((` leaves depth 2 forever; a later opener with smaller depth would still
+    have found one. So a single `$((` anywhere ahead suppressed collapse for
+    the rest of the line, and `echo $(( ; cp /tmp/x $(pwd)/<artifact>` allowed
+    — one token instead of 40 KB. The skip is now conditioned on the thing
+    that is actually provable: a running count of closer characters still
+    ahead. Zero left means no scan can succeed; anything else, scan.
   - *Gluing is also deletion.* `$(pwd)/doc` is one word to bash and two to
     shlex, so the two get merged. Deciding that with `")/" in command` asked
     about the whole line, so a stray `)/` anywhere — `cd $(dirname .)/.` is an
@@ -246,6 +277,15 @@ Other dynamic constructs remain:
     as sed's script expression. Adjacency is now read from the character after
     *that span's own* closer, located by counting closer characters, which
     survive tokenization one-for-one and in order.
+
+    That counting has to be exhaustive to be meaningful. Two omissions have
+    already desynchronised it: quoted words (`"a)/b"` contributes a real `)` to
+    the source) and the tokens a *backtick* span swallows, whose parens are
+    consumed just the same. Either omission makes every later span read a
+    too-low ordinal and inherit some other paren's adjacency — losing a real
+    merge in one direction and fabricating one in the other, which rebases an
+    out-of-repo operand into the repo and over-blocks. Count closers wherever
+    they occur, not only where they are syntactically interesting.
 - **quoting forms the guard does not model.** Token text is read as shell
   syntax, so the guard must know how each token was quoted. `_quoted_flags`
   establishes that by lexing twice — posix for values, non-posix for quoting —
