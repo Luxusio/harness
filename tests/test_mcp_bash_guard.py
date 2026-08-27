@@ -264,6 +264,100 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                             self.assertEqual(decision, "deny")
                             self.assertIn("rule=protected-artifact", reason)
 
+    def test_newline_does_not_launder_a_mutator(self):
+        """A newline must split segments.
+
+        `shlex(whitespace_split=True)` consumes newlines, so the "\\n" entry in
+        the boundary set never matched and a multi-line command collapsed into
+        one segment. Dispatch is on the first command word, so a leading
+        `echo start` walked `cp`, `tee`, `sed -i` or `dd` onto a protected
+        artifact with the guard silent.
+        """
+        with scratch_task_in_real_repo("pr1-newline") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for second in (
+                f"tee {receipts}",
+                f"sed -i s/a/b/ {receipts}",
+                f"truncate -s0 {receipts}",
+                f"echo forged > {receipts}",
+            ):
+                with self.subTest(second=second):
+                    decision, reason = parse_decision(
+                        _run_bash(f"echo start\n{second}").stdout
+                    )
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_glob_in_artifact_basename_denies(self):
+        """The shell expands the glob after the gate decided.
+
+        The artifact must exist for the pattern to resolve — with no match the
+        shell leaves the pattern literal and creates a file named
+        `RECEIPT?.jsonl`, which is not a protected artifact and needs no deny.
+        """
+        with scratch_task_in_real_repo("pr1-glob") as task_dir:
+            Path(task_dir, "RECEIPTS.jsonl").write_text("{}\n", encoding="utf-8")
+            for pattern in ("RECEIPT?.jsonl", "RECEIPTS.js*", "RECEIP[T]S.jsonl"):
+                with self.subTest(pattern=pattern):
+                    decision, reason = parse_decision(
+                        _run_bash(f"echo forged >> {task_dir}/{pattern}").stdout
+                    )
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_target_directory_option_denies(self):
+        """`-t <dir>` names the destination; last-operand logic saw the source."""
+        with scratch_task_in_real_repo("pr1-tflag") as task_dir:
+            with tempfile.TemporaryDirectory() as tmp:
+                source = Path(tmp) / "RECEIPTS.jsonl"
+                source.write_text("forged\n", encoding="utf-8")
+                for form in (
+                    f"cp -t {task_dir} {source}",
+                    f"cp --target-directory={task_dir} {source}",
+                    f"mv -t {task_dir} {source}",
+                    f"install -t {task_dir} {source}",
+                ):
+                    with self.subTest(form=form):
+                        decision, reason = parse_decision(_run_bash(form).stdout)
+                        self.assertEqual(decision, "deny")
+                        self.assertIn("rule=protected-artifact", reason)
+
+    def test_directory_content_copy_denies(self):
+        """`dir/.` and `dir/*` copy contents; the basename is not the filename."""
+        with scratch_task_in_real_repo("pr1-contents") as task_dir:
+            with tempfile.TemporaryDirectory() as tmp:
+                src = Path(tmp) / "srcdir"
+                src.mkdir()
+                (src / "RECEIPTS.jsonl").write_text("forged\n", encoding="utf-8")
+                for form in (
+                    f"cp -r {src}/. {task_dir}",
+                    f"cp -a {src}/* {task_dir}/",
+                ):
+                    with self.subTest(form=form):
+                        decision, reason = parse_decision(_run_bash(form).stdout)
+                        self.assertEqual(decision, "deny")
+                        self.assertIn("rule=protected-artifact", reason)
+
+    def test_python_c_shelling_out_denies(self):
+        """`os.system`/`subprocess` carried the path past the inline AST parse."""
+        with scratch_task_in_real_repo("pr1-shellout") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for form in (
+                f"""python3 -c "import os;os.system('cp /tmp/x {receipts}')" """,
+                f"""python3 -c "import subprocess as s;s.call(['cp','/tmp/x','{receipts}'])" """,
+            ):
+                with self.subTest(form=form.strip()):
+                    decision, reason = parse_decision(_run_bash(form.strip()).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_python_c_benign_subprocess_allows(self):
+        """Only paths reachable from a shell-out are classified."""
+        decision, _ = parse_decision(
+            _run_bash("""python3 -c "import subprocess;subprocess.run(['pytest','-q'])" """.strip()).stdout
+        )
+        self.assertIsNone(decision)
+
     def test_copy_into_unprotected_directory_allows(self):
         """The reconstruction must not deny ordinary copies."""
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 import os
 import ast
+import glob
 import json
 import re
 import shlex
@@ -32,17 +33,20 @@ except Exception:
 GATE_NAME = "mcp_bash_guard"
 _COMMAND_LENGTH_CAP = 64 * 1024
 _GUARD_STDIN_CAP = 128 * 1024
-REDIRECT_TOKENS = {">", ">>", "1>", "1>>", ">|", "&>", "&>>", ">&"}
-# Enumerating spellings is what made this leak. `punctuation_chars=True` emits a
-# whole redirect operator as one token, and `_INLINE_REDIRECT_RE` then captured
-# the operator's own trailing punctuation as the "path": `>|` matched with
-# group(2) == "|", so the real target — the next token — was never inspected and
-# `echo x >| PLAN.md` truncated a protected artifact through the gate. Any
-# spelling absent from the set above leaked the same way, `>>|` included.
+# Bound on how many matches a glob token is expanded to before classification.
+# A pathological pattern must not turn a PreToolUse hook into a directory walk.
+_GLOB_EXPANSION_CAP = 256
+# Redirect operators are matched by shape, never by enumeration. An earlier
+# `REDIRECT_TOKENS` set listed spellings, and `punctuation_chars=True` emits a
+# whole operator as one token, so `_INLINE_REDIRECT_RE` captured the operator's
+# own trailing punctuation as the "path" (`>|` matched with group(2) == "|") and
+# the real target — the next token — was never inspected. `echo x >| PLAN.md`
+# truncated a protected artifact through the gate, and enumerating the four
+# spellings then known still missed `>>|`.
 #
-# So match the shape instead: optional fd digits, an optional leading `&`, one
-# or two `>`, and an optional `|`/`&` suffix. A token that is entirely redirect
-# punctuation carries no path, so its target is the following token.
+# Shape: optional fd digits, an optional leading `&`, one or two `>`, and an
+# optional `|`/`&` suffix. A token that is entirely redirect punctuation carries
+# no path, so its target is the following token. Do not reintroduce a set.
 _PURE_REDIRECT_OP_RE = re.compile(r"^\d*&?>{1,2}[|&]?$")
 # Commands that cannot themselves write a file. Naming a protected artifact or
 # lifecycle symbol in their arguments (a grep pattern, an `echo` banner) is
@@ -205,7 +209,26 @@ def _is_goal_control_inode_alias(token: str, repo_root: str, execution_cwd="") -
     except OSError:
         return False
     return False
+def _glob_expansions(token, repo_root, execution_cwd=""):
+    """Paths a glob token would resolve to at exec time.
+
+    Classification is an exact basename match, but the shell expands the pattern
+    *after* the gate has decided. `cp payload <task>/RECEIPT?.jsonl` therefore
+    wrote a protected artifact while the gate saw an unremarkable basename.
+    """
+    if not isinstance(token, str) or not any(ch in token for ch in "*?["):
+        return ()
+    base = execution_cwd or repo_root or os.getcwd()
+    pattern = token if os.path.isabs(token) else os.path.join(base, token)
+    try:
+        return tuple(glob.glob(pattern))[:_GLOB_EXPANSION_CAP]
+    except (OSError, ValueError):
+        return ()
+
+
 def _append_target(targets, token, method, repo_root, execution_cwd=""):
+    for expansion in _glob_expansions(token, repo_root, execution_cwd):
+        _append_target(targets, expansion, method, repo_root, execution_cwd)
     path_value = _normalize_candidate_path(token, repo_root, execution_cwd)
     category = _classify_gated_path(path_value, repo_root)
     if not category and _is_goal_control_inode_alias(
@@ -235,15 +258,66 @@ def _embedded_path_candidates(tokens):
         visible,
     ))
     return candidates
+def _target_directory_option(non_env):
+    """Destination named by `-t <dir>` / `--target-directory[=<dir>]`.
+
+    Returns (destination, consumed_tokens). `_last_non_option` has no
+    option-value model, so `cp -t <taskdir> <src>` made it return `<src>` as the
+    destination — the real destination was never classified and the copy landed
+    on a protected artifact with the gate silent.
+    """
+    tokens = list(non_env[1:])
+    for index, token in enumerate(tokens):
+        if token in {"-t", "--target-directory"}:
+            if index + 1 < len(tokens):
+                return tokens[index + 1], {token, tokens[index + 1]}
+            return "", {token}
+        if token.startswith("--target-directory="):
+            return token.split("=", 1)[1], {token}
+    return "", set()
+
+
+def _expanded_sources(source, execution_cwd, repo_root):
+    """Names a source contributes to the destination directory.
+
+    `cp -r dir/. dest` and `cp -a dir/* dest` copy the directory's *contents*,
+    so `<dest>/<source basename>` is wrong for them — the basename is `.` or a
+    glob. Enumerate what would actually land.
+    """
+    base = execution_cwd or repo_root or os.getcwd()
+    stripped = source.rstrip("/")
+    if any(ch in source for ch in "*?["):
+        pattern = source if os.path.isabs(source) else os.path.join(base, source)
+        try:
+            return [os.path.basename(m) for m in glob.glob(pattern)][
+                :_GLOB_EXPANSION_CAP
+            ]
+        except (OSError, ValueError):
+            return []
+    if stripped.endswith("/.") or source.endswith("/"):
+        directory = stripped[:-2] if stripped.endswith("/.") else stripped
+        resolved = directory if os.path.isabs(directory) else os.path.join(
+            base, directory,
+        )
+        try:
+            return sorted(os.listdir(resolved))[:_GLOB_EXPANSION_CAP]
+        except OSError:
+            return []
+    basename = os.path.basename(stripped)
+    return [basename] if basename else []
+
+
 def _append_directory_destination_targets(
     cmd, non_env, destination, targets, repo_root, execution_cwd="",
 ):
-    """Classify `<destination>/<source basename>` when the destination is a dir.
+    """Classify what a copy into a directory would actually produce.
 
-    `cp`, `mv`, `install` and `rsync` accept a directory as the final operand and
-    derive the real filename from each source. That derived path is not a token,
-    so last-operand classification saw only the directory and allowed the write.
+    `cp`, `mv`, `install` and `rsync` accept a directory destination and derive
+    each filename from its source. That derived path is never a token, so
+    last-operand classification saw only the directory and allowed the write.
     """
+    option_destination, consumed = _target_directory_option(non_env)
+    destination = option_destination or destination
     if not destination:
         return
     resolved = destination if os.path.isabs(destination) else os.path.join(
@@ -257,15 +331,47 @@ def _append_directory_destination_targets(
     sources = [
         token for token in non_env[1:]
         if not token.startswith("-") and token != destination
+        and token not in consumed
     ]
     for source in sources:
-        basename = os.path.basename(source.rstrip("/"))
-        if not basename:
+        for name in _expanded_sources(source, execution_cwd, repo_root):
+            _append_target(
+                targets, os.path.join(destination, name),
+                f"{cmd} into directory", repo_root, execution_cwd,
+            )
+
+
+_PYTHON_SHELL_OUT_CALLS = {"system", "popen", "run", "call", "check_call",
+                           "check_output", "Popen", "spawnl", "spawnv",
+                           "execv", "execvp", "posix_spawn"}
+
+
+def _append_python_shell_out_targets(tree, targets, repo_root, execution_cwd=""):
+    """Classify paths inside a shell-out from inline `python -c` code.
+
+    The gate descends into `bash -c "cp … RECEIPTS.jsonl"`, but
+    `python3 -c "import os;os.system('cp … RECEIPTS.jsonl')"` produced no target
+    at all: `os.system`/`subprocess` are not filesystem mutators, so the path
+    sat in a string constant nobody classified. That asymmetry made a plain,
+    unobfuscated one-liner the cheapest forgery route on this surface, while the
+    docs named the inline AST parse as what blocks exactly that.
+
+    Only string constants reachable from such a call are classified, so
+    `subprocess.run(['pytest'])` stays allowed.
+    """
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
             continue
-        _append_target(
-            targets, os.path.join(destination, basename),
-            f"{cmd} into directory", repo_root, execution_cwd,
-        )
+        name = getattr(node.func, "attr", "") or getattr(node.func, "id", "")
+        if name not in _PYTHON_SHELL_OUT_CALLS:
+            continue
+        for argument in ast.walk(node):
+            if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+                for token in _tokenize(argument.value) or [argument.value]:
+                    _append_target(
+                        targets, token, "python -c shelling out",
+                        repo_root, execution_cwd,
+                    )
 
 
 def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd=""):
@@ -332,6 +438,7 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
         tree = ast.parse(code)
     except (SyntaxError, ValueError):
         return
+    _append_python_shell_out_targets(tree, targets, repo_root, execution_cwd)
     strings = {}
     string_history = set()
     call_environments = {}
@@ -984,7 +1091,28 @@ def _extract_mutation_targets(command, repo_root, execution_cwd=""):
         })
         return targets
 
-    shell_values = {}
+    # `shlex(whitespace_split=True)` consumes newlines as whitespace and never
+    # emits them, so the "\n" entry in BOUNDARY_TOKENS never matched and a
+    # multi-line command collapsed into ONE segment. `_process_segment`
+    # dispatches on the first command word, so any mutator on a later line was
+    # never classified: a leading `echo start` was enough to walk `cp`, `tee`,
+    # `sed -i` or `dd` straight onto a protected artifact. It cut the other way
+    # too — a heredoc whose later line named a lifecycle symbol denied the whole
+    # call. Walk each line separately; splitting only ever adds segments, so it
+    # cannot create a new allow. Assignments carry forward across lines, as in a
+    # real shell.
+    shell_values: dict[str, str] = {}
+    for line in command.splitlines():
+        line_tokens = _tokenize(line) if line.strip() else []
+        if line_tokens:
+            _walk_segments(
+                line_tokens, shell_values, targets, repo_root, execution_cwd,
+            )
+
+    return targets
+
+
+def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd=""):
     idx = 0
     while idx < len(tokens):
         j = idx
@@ -1012,8 +1140,6 @@ def _extract_mutation_targets(command, repo_root, execution_cwd=""):
             expanded.append(value)
         _process_segment(expanded, targets, repo_root, execution_cwd)
         idx = j + 1
-
-    return targets
 def _deny(target, command):
     rel = target.get("path", "")
     category = target.get("category", "file")

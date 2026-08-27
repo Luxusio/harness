@@ -85,11 +85,15 @@ and nothing re-checks it at exec time.
   `git checkout` of the guard itself, so reverting it requires the
   `HARNESS_SKIP_MCP_GUARD` escape or a non-Bash edit path. The relevant
   classifier is `_is_workflow_control_surface`, not `_embedded_path_candidates`.
-- Inline `python -c` code is still AST-parsed for filesystem writes. Removing
-  *script* inspection did not remove that, and it is what denies a one-line
-  `open('…/RECEIPTS.jsonl','a').write(…)`. Command substitution around `-c`
-  defeats that parse, so it denies; this deny was dropped by accident when
-  script inspection was removed and restored once review caught it.
+- Inline `python -c` code is still AST-parsed, for filesystem writes and for
+  shell-outs (`os.system`, `os.popen`, `subprocess.*`). Removing *script*
+  inspection did not remove that. It denies the direct spellings — a one-line
+  `open('…/RECEIPTS.jsonl','a').write(…)` and a shell-out carrying a protected
+  path — but it is pattern-based, not a proof of impossibility: `python -c
+  "$VAR"`, base64/`exec`, and computed names all pass. Command substitution
+  around `-c` defeats the parse entirely, so it denies; that deny was dropped by
+  accident when script inspection was removed and restored once review caught
+  it.
 
 ## Verification
 

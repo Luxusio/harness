@@ -33,18 +33,25 @@ categories. Paths outside all three are silent allow.
 
 ## Mutation verbs detected
 
-The guard shlex-tokenises the command (respecting quotes + shell operators),
-splits at `BOUNDARY_TOKENS` (`&&`, `||`, `|`, `;`, `&`, `\n`), then inspects
-each command segment. Leading env assignments (`FOO=bar sed ...`) are skipped
+The guard splits the command into lines, shlex-tokenises each (respecting quotes
++ shell operators), splits those at `BOUNDARY_TOKENS` (`&&`, `||`, `|`, `;`,
+`&`), then inspects each command segment. The line split is separate and
+necessary: `shlex(whitespace_split=True)` consumes newlines as whitespace and
+never emits them, so a `"\n"` boundary token could never match and a multi-line
+command collapsed into a single segment — dispatch is on the first command word,
+so `echo start` on line 1 laundered any mutator on line 2. Leading env assignments (`FOO=bar sed ...`) are skipped
 before the command basename is examined (fixes a legacy bypass).
 
 | Verb / pattern | Target extracted from |
 |----------------|------------------------|
-| `>`, `>>`, `>\|`, `&>`, `&>>`, `>&` (+ inline `N>`, `N>>`) | the token immediately following the redirect operator |
+| any token that is entirely redirect punctuation — optional fd digits, optional `&`, one or two `>`, optional `\|`/`&` | the token immediately following the operator. Matched by shape, never by an enumerated list |
 | `tee` / `tee -a` | every non-option argument |
 | `sed -i` (and `sed -iBACKUP`) | last non-option argument |
 | `perl -pi` (and `perl -pi.bak`) | last non-option argument |
-| `cp`, `install`, `touch`, `truncate` | last non-option argument |
+| `cp`, `mv`, `install`, `rsync`, `touch`, `truncate` | last non-option argument, or `-t <dir>` / `--target-directory=<dir>` when present |
+| `cp`/`mv`/`install`/`rsync` into a **directory** | the reconstructed `<dest>/<name>` for each source, since that path is never a token. `dir/.` and `dir/*` sources are enumerated rather than basenamed |
+| glob token (`*`, `?`, `[`) anywhere a path is classified | every existing path the pattern expands to, capped at `_GLOB_EXPANSION_CAP`, plus the literal token |
+| `python -c` calling `os.system` / `os.popen` / `subprocess.*` | every string constant reachable from that call, re-tokenised |
 | `ln`, `link`, `cp -l` / `cp --link` | every source/destination operand (hard-link export protection) |
 | `mv`, `rm`, `unlink`, `chmod`, `chown`, `chgrp` | every non-option operand |
 | `python[3] -c "open('x','w')"` | first argument of `open()` |
@@ -82,8 +89,12 @@ commands that mention protected lifecycle modules fail closed. Concatenated or
 qualified references (`'subagent_'+'lifecycle'`, `_lib.record_subagent_receipt`)
 are caught by the alphanumeric-flattening text match, not by AST inspection.
 The guard no longer reads or parses *script files*; inline `python -c` code is
-still AST-parsed for filesystem writes (see the verb table above), and that
-parse is what blocks a forged `VERDICT: PASS` one-liner.
+still AST-parsed for filesystem writes and for shell-outs (see the verb table
+above). That parse catches the direct one-liner forms — `open(…,'a').write(…)`,
+`Path(…).write_text`, `shutil.copy`, and `os.system`/`subprocess` carrying a
+path — but it is pattern-based and does not make a forged `VERDICT: PASS`
+impossible; `python -c "$VAR"`, base64/`exec`, and computed names all pass. It
+raises the cost of the obvious spellings, nothing stronger.
 **Script execution is not gated** (see
 `doc/common/REQ__process__bash-guard-script-execution.md` for the settled
 decision and evidence). The guard does not read, AST-scan, or deny a script it
@@ -139,8 +150,9 @@ Two sets in `mcp_bash_guard.py` express the relief:
 
 **Why this is safe, and the invariant to preserve:** these sets suppress only
 the *name-mention* heuristics. Redirections are detected independently by
-`_extract_redirect_targets()`, which walks the token stream for
-`REDIRECT_TOKENS` and inline redirect forms regardless of the command word, so
+`_extract_redirect_targets()`, which walks the token stream for tokens matching
+the redirect *shape* (`_PURE_REDIRECT_OP_RE`) and inline redirect forms
+regardless of the command word, so
 `echo x > RECEIPTS.jsonl` is still denied — via its redirect target, not via
 the command name. The relief is also per segment: a `for` wrapper does not
 launder a redirect inside its body.
@@ -240,11 +252,16 @@ they cannot hold durable knowledge). The expected-behavior matrix in
 `doc/common/REQ__process__bash-guard-script-execution.md` is the normative
 statement. `HARNESS_SKIP_MCP_GUARD=1` is the manual override.
 
-None of these gaps is closed by adding another special case. They share one
-cause: the gate classifies *tokens*, and a caller who keeps the artifact path
-out of the token stream is not classified. That is why the accepted position is
-guardrail-not-control, and why receipt integrity rests on hook ownership and
-`task_verify` ordering instead.
+The gaps above are the ones where the artifact path never becomes a classifiable
+token. That is not the only way a route slips through — several rounds of review
+found paths that *were* in the token stream and still went unclassified (a glob
+basename, a reconstructed directory destination, a `-t` option value, a string
+constant inside `os.system`). Each of those was a fixable oversight and was
+fixed; do not read the list above as a complete theory of the gate's limits.
+
+What is durable: this surface is a guardrail, not a control. Receipt integrity
+rests on hook ownership of `RECEIPTS.jsonl` and on `task_verify` ordering. If a
+claim here and the code disagree, the code is right and this file is a defect.
 
 ## Performance
 
