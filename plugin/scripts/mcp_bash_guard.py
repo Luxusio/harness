@@ -1064,7 +1064,7 @@ def _extract_mutation_targets(command, repo_root, execution_cwd="", depth=0):
             )
             _walk_segments(
                 collapsed, shell_values, targets, repo_root, execution_cwd,
-                collapsed_quoted, depth, line,
+                collapsed_quoted, depth, command=line,
             )
             continue
         # Alignment failed, so the collapse cannot know whether a `` ` `` or a
@@ -1081,7 +1081,7 @@ def _extract_mutation_targets(command, repo_root, execution_cwd="", depth=0):
             found: list[dict] = []
             _walk_segments(
                 variant, dict(shell_values), found, repo_root, execution_cwd,
-                variant_quoted, depth, line,
+                variant_quoted, depth, command=line,
             )
             targets.extend(item for item in found if item not in targets)
 
@@ -1514,8 +1514,14 @@ def _quotable_operators(command):
 
 
 def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
-                   quoted=None, depth=0, command=""):
+                   quoted=None, depth=0, *, command):
     """Segment the line and classify each segment.
+
+    `command` is keyword-only and required on purpose: without it
+    `_quotable_operators` returns an empty set, which disables both alternate
+    readings — the allow-leaning direction, in a helper whose job is
+    conservative unioning. A default would let a future call site opt out of
+    classification by omission.
 
     When the quoting is known, clustered operators are decomposed and there is
     one reading. When it is not — `_quoted_flags` returns None for ordinary
@@ -1536,26 +1542,35 @@ def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
         both: list[dict] = []
         _walk_segments_once(
             tokens, dict(shell_values), both, repo_root, execution_cwd,
-            quoted, depth, command,
+            quoted, depth, command=command,
         )
         _walk_segments_once(
             expanded, dict(shell_values), both, repo_root, execution_cwd,
-            expanded_quoted, depth, command,
+            expanded_quoted, depth, command=command,
         )
         targets.extend(item for item in both if item not in targets)
         return
     _walk_segments_once(
         expanded, shell_values, targets, repo_root, execution_cwd,
-        expanded_quoted, depth, command,
+        expanded_quoted, depth, command=command,
     )
 
 
 def _walk_segments_once(tokens, shell_values, targets, repo_root,
-                        execution_cwd="", quoted=None, depth=0, command=""):
+                        execution_cwd="", quoted=None, depth=0, *, command):
     idx = 0
     ambiguous_previous = None
     quotable = _quotable_operators(command) if quoted is None else frozenset()
+    segments_walked = 0
     while idx < len(tokens):
+        # Segment count is its own cost multiplier, independent of operand
+        # count: 1000 two-operand segments took 3.06 s while the per-operand
+        # check above could never fire, because `index % 256` never comes round
+        # for a two-operand segment. main() turns an exhausted budget into a
+        # deny, so stopping here fails closed.
+        segments_walked += 1
+        if not segments_walked % 64 and _budget_exhausted():
+            return
         j = idx
         # A *quoted* control operator is a literal argument, not a boundary.
         # `sed -i s/a/b/ '|' <receipt>` used to end the segment here, leaving
@@ -1748,12 +1763,16 @@ def main():
         _deny(targets[0], command)
         return 0
     # Overrunning the budget is not a quiet "classified nothing" — a killed
-    # hook emits no decision, which allows the whole line, so any line that
-    # cannot be analysed in time must fail *closed* like the oversize path
-    # above. The dominant cost is operand classification (one realpath per
-    # operand), which no per-item cap bounds: ~35 KB of short operands under a
-    # single verb spent 2.2 s of CPU before reaching the real write at the end
-    # of the line. Degrading to "not extracted" here would be the allow itself.
+    # hook emits no decision, which allows the whole line, so a line that runs
+    # out of budget fails *closed* like the oversize path above. Degrading to
+    # "not extracted" would be the allow itself.
+    #
+    # This can only fire if some inner loop noticed the budget and returned;
+    # the two that do are operand classification (one realpath per operand:
+    # ~35 KB of short operands spent 2.2 s of CPU before reaching the real
+    # write) and the segment walk (segment count multiplies cost independently
+    # of operand count). A cost path that consults neither still overruns
+    # without ever reaching this line.
     if _budget_exhausted():
         _deny({
             "path": "RECEIPTS.jsonl",

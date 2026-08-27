@@ -74,7 +74,13 @@ and nothing re-checks it at exec time.
 ## Requirements
 
 - A deny reason must name the actual cause and must not claim a
-  `RECEIPTS.jsonl` mutation for a command that performs none.
+  `RECEIPTS.jsonl` mutation for a command that performs none. The one carve-out
+  is the *uninspectable* class — an oversized payload, an oversized command, or
+  an analysis budget exhausted before the line could be classified. Those denies
+  legitimately cannot name a cause, because the whole point is that the command
+  was never analysed; they say so in the method field rather than asserting a
+  mutation. This exists because refusing to decide is the only fail-closed
+  option on a path where returning "found nothing" would be the allow.
 - The gate's scope is *file mutation of protected artifacts*. It must not be
   extended back into execution inspection without a design that survives the
   bypass table above.

@@ -756,6 +756,18 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 with self.subTest(command=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)
                     self.assertIsNone(decision)
+            # One quoted operator must not drag the rest of the line into the
+            # whole-line reading. Here `'|'` is a genuine quoted literal, but
+            # the `;` separating the reader is a real boundary — relaxing the
+            # gate to "any quotable operator exists" makes both of these deny,
+            # and leaves the rest of the suite green.
+            for command in (
+                f"""touch '|' "$PWD"/a ; cat {plan}""",
+                f"""rm -f '|' "$PWD"/a ; wc -l {plan}""",
+            ):
+                with self.subTest(command=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertIsNone(decision)
             # The true positives the gating exists for must survive it.
             for command in (
                 f"touch '|' {receipts}",
