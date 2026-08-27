@@ -1329,6 +1329,15 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 f'env -S "-S -S cp /tmp/pay.txt {receipts}"',
                 f'env -S "-S -S -S cp /tmp/pay.txt {receipts}"',
                 f'env -S "-S -S -S -S cp /tmp/pay.txt {receipts}"',
+                # A value-taking short option as the TRAILING member of a
+                # bundle takes the following word. Matching only the unbundled
+                # `-u`/`-C` left the value at argv[0], where it is neither
+                # option nor assignment, so the loop broke on a non-verb.
+                # Ground-truthed: real env executes both of these.
+                f"env -iu FOO cp /tmp/pay.txt {receipts}",
+                f"env -vu FOO cp /tmp/pay.txt {receipts}",
+                f"env -0C /tmp cp /tmp/pay.txt {receipts}",
+                f'env -S "-iu FOO cp /tmp/pay.txt {receipts}"',
                 # the ordinary value-taking options must still be skipped
                 f"env -u FOO cp /tmp/pay.txt {receipts}",
                 f"env FOO=1 cp /tmp/pay.txt {receipts}",

@@ -418,6 +418,15 @@ Other dynamic constructs remain:
   `argv[0]`. Each of these is the only `env` long option starting with its
   first letter, which is what makes the prefix rule safe.
 
+  A value-taking short option may also be the **trailing member of a bundle**,
+  where it takes the following word: `env -iu FOO cp <payload> <artifact>` and
+  `env -0C /tmp cp …` both execute, and both allowed while only the unbundled
+  `-u`/`-C` were matched. An earlier version of this paragraph said `-u`/`-C`
+  "deliberately do not bundle", which was a false statement about the boundary
+  rather than a hedged gap. The true distinction is narrower: `-uS "cmd"` is
+  not a bundle — there the `S` begins -u's NAME — which is why the split-string
+  branches are tested before the value options.
+
   And the split words are *prepended* to the argv that follows rather than
   replacing it, so `env -S "cp" <payload> <artifact>` is a write.
 

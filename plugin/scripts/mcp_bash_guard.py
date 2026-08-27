@@ -380,25 +380,16 @@ def _append_target(targets, token, method, repo_root, execution_cwd=""):
     # decision is an allow, so the padding disables every deny on the line.
     #
     # **No timing figures here, deliberately, and no ordering either.** Five
-    # successive versions of this comment quoted one, plus a sixth borrowed from
-    # the test file's note, and every one was disproved by the next reader who
-    # measured: 37 s, 2.04 s, 3.3-7.9 s, 2.7-12.3 s, a borrowed 6.6 s, and
-    # finally an ordering claim ("1-char operands are the worst shape and the
-    # only one crossing the timeout") which two independent runs contradicted in
-    # different directions.
+    # successive versions of this comment quoted one and each was overturned by
+    # the next reader: 37 s, 2.04 s, 3.3-7.9 s, 2.7-12.3 s, and an ordering
+    # claim ("1-char operands are the worst shape and the only one crossing the
+    # timeout") that two independent runs contradicted in different directions.
     #
-    # They failed for more than one reason. Some were measured under a different
-    # *method* — the 37 s was in-process with no command cap, and one test-file
-    # figure used a relative path to a directory that did not exist, so both
-    # timed a different shape than the one they described. The rest varied with
-    # concurrent CPU load: the guarded figure is stable near
-    # `_ANALYSIS_BUDGET_SECONDS` because the budget bounds it, while the
-    # unguarded figure is bounded by nothing and moves several-fold with what
-    # else is running. (This analysis is single-threaded; contention moves wall
-    # clock, it does not parallelize.) So any measurement of this block must
-    # state both its method and its concurrent load, and a comparison between
-    # shapes measured under different conditions says nothing. If you need a
-    # number, measure it for your shape and keep it out of this comment.
+    # State your method and your concurrent load, or keep the number out of
+    # this comment. Both matter: this analysis is single-threaded, so
+    # contention moves wall clock without parallelizing anything, and a figure
+    # measured in-process or against a different target path is timing a
+    # different shape than the one it describes.
     #
     # Do not drop this check as a perf tweak. Cost lives here too: this is the
     # realpath.
@@ -840,11 +831,17 @@ def _env_argv_after_options(argv):
     `env -S "-i cp <payload> <artifact>"` and its `-v`, `-i -v`, `-u FOO`,
     `--`, `-S` and `--split-string=` variants.
 
-    `-u`/`-C` consume a value; `-i`, `-0`, `-v` do not and may bundle before a
-    trailing `S`. `--` is skipped like any other leading dash word — this loop
-    does *not* stop parsing options there, unlike real `env`. That divergence
-    can only over-deny: it keeps consuming option-looking words afterwards, and
-    a verb never starts with `-`, so no verb can be skipped by it.
+    `-u`/`-C` consume a value; `-i`, `-0`, `-v` do not. Either kind may be the
+    trailing member of a bundle of valueless shorts — `-iS "cmd"` and
+    `-iu FOO cmd` are both legal and both execute — so the bundle forms are
+    matched for `S`, `u` and `C` alike. `-uS "cmd"` is *not* a bundle: there
+    the `S` begins -u's NAME, which is why the value options are tested after
+    the split-string branches.
+
+    `--` is skipped like any other leading dash word — this loop does *not*
+    stop parsing options there, unlike real `env`. That divergence can only
+    over-deny: it keeps consuming option-looking words afterwards, and a verb
+    never starts with `-`, so no verb can be skipped by it.
     """
     index = 0
     while index < len(argv):
@@ -877,12 +874,25 @@ def _env_argv_after_options(argv):
             if attached:
                 split = _split_string_argv(attached.group(1)) + argv[index + 1:]
         if split is not None:
+            # Insurance, not a live case: each pass drops the option token and
+            # substitutes words no longer than the value it consumed, so total
+            # character length strictly decreases and `split` cannot equal
+            # `argv`. A fuzz over 300k argvs never reached this branch. Kept
+            # because this hook's death is an allow, and a future `_tokenize`
+            # that expands rather than contracts would make it reachable.
             if split == argv:
                 return split
             argv = split
             index = 0
             continue
-        if _is_env_value_option(token):
+        # A value-taking short option is legal as the *trailing* member of a
+        # bundle of valueless ones, and then takes the following word:
+        # `env -iu FOO cp <payload> <artifact>` really writes. Matching only
+        # the unbundled `-u`/`-C` left `FOO` at argv[0], where it is neither
+        # option nor assignment, so the loop broke and handed a non-verb to
+        # `_unwrap_execution`. Cannot collide with the `-S` branches above:
+        # those are tested first, and `-[i0v]*[uC]` cannot end in `S`.
+        if _is_env_value_option(token) or re.fullmatch(r"-[i0v]*[uC]", token):
             index += 2
         elif token.startswith("-") or _is_env_assignment(token):
             index += 1
