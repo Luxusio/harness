@@ -619,7 +619,17 @@ def _expanded_sources(source, execution_cwd, repo_root):
         if _budget_exhausted():
             return []
         try:
-            return sorted(os.listdir(resolved))[:_GLOB_EXPANSION_CAP]
+            # islice over scandir, not `sorted(listdir(...))[:cap]`: the cap has
+            # to bound the walk, not trim its result. The budget is checked
+            # before the call but cannot preempt one syscall, so a single
+            # enormous directory would otherwise spend its whole enumeration
+            # uninterruptibly — the same distinction already applied to the glob
+            # branch above.
+            with os.scandir(resolved) as entries:
+                return sorted(
+                    entry.name
+                    for entry in itertools.islice(entries, _GLOB_EXPANSION_CAP)
+                )
         except (OSError, ValueError):
             return []
     basename = os.path.basename(stripped)

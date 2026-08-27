@@ -135,9 +135,20 @@ and nothing re-checks it at exec time.
      the artifact into sed's script slot. Adjacency must be decided at the span.
   5. **Quoting reconciliation.** Token text is read as shell syntax, so the
      guard must know how each token was quoted. It lexes twice and requires
-     agreement; when the two cannot be reconciled it classifies under *both*
-     readings and denies if either would, because picking a side is a laundering
+     agreement; when the two cannot be reconciled it may classify under *both*
+     readings and deny if either would, because picking a side is a laundering
      direction in one direction or the other.
+
+     "May", not "does" — and the difference is a live gap, not a quibble. The
+     alternate readings are offered only when `_quotable_operators` finds a
+     whole *quote-delimited* word spelling a control operator (`'|'`, `"&&"`).
+     A backslash escape never produces one, so `tee \&\& <artifact>` writes the
+     artifact: the escape desynchronises the two lexes, the posix `&&` is then
+     treated as a real boundary, and nothing licenses re-reading it as a
+     filename. Requiring a quoted word is deliberate — inferring quotability
+     more loosely is what produced fabricated denies on ordinary readers three
+     rounds running — so this is accepted determined-caller residue, but the
+     class is not closed and this document should not read as though it were.
   6. **Per-verb option model.** The guard re-implements a partial getopt for each
      modelled verb, so an unmodelled option spelling can still hide the
      destination. Assume more exist.
