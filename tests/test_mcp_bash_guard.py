@@ -212,6 +212,87 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
+    def test_subshell_does_not_launder_a_verb(self):
+        """`(` is a boundary, not a command word.
+
+        `punctuation_chars=True` emits it as its own token, so the segment's
+        command word became `"("`, dispatch fell through, and `( cp … )` wrote a
+        protected artifact with the guard silent.
+        """
+        with scratch_task_in_real_repo("pr1-subshell") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"( cp /tmp/f {receipts} )",
+                f"(cp /tmp/f {receipts})",
+                f"true && ( sed -i s/a/b/ {receipts} )",
+                f"( ( tee {receipts} ) )",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_long_and_split_in_place_spellings_deny(self):
+        """`--in-place`, separated `perl -i -pe`, and `sort`/`diff -o` all write."""
+        with scratch_task_in_real_repo("pr1-inplace") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"sed --in-place 's/a/b/' {receipts}",
+                f"sed --in-place=.bak 's/a/b/' {receipts}",
+                f"perl -i -pe 's/a/b/' {receipts}",
+                f"perl -i.bak -pe 's/a/b/' {receipts}",
+                f"sort -o {receipts} /tmp/f",
+                f"diff -o {receipts} /tmp/a /tmp/b",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_command_carrying_wrappers_deny(self):
+        """A one-word wrapper must not hide the verb behind it."""
+        with scratch_task_in_real_repo("pr1-wrappers") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"sudo cp /tmp/f {receipts}",
+                f"doas cp /tmp/f {receipts}",
+                f"timeout 5 cp /tmp/f {receipts}",
+                f"stdbuf -o0 cp /tmp/f {receipts}",
+                f"setsid cp /tmp/f {receipts}",
+                f"echo a | xargs -I{{}} cp /tmp/f {receipts}",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_wrappers_do_not_over_block(self):
+        for command in ("sudo ls /tmp", "timeout 5 pytest -q", "( echo hi ) > /tmp/o"):
+            with self.subTest(command=command):
+                decision, _ = parse_decision(_run_bash(command).stdout)
+                self.assertIsNone(decision)
+
+    def test_line_continuation_keeps_verb_and_target_together(self):
+        """`\\` + newline is a join, not a split."""
+        with scratch_task_in_real_repo("pr1-continuation") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            decision, reason = parse_decision(
+                _run_bash(f"cp /tmp/f \\\n  {receipts}").stdout
+            )
+            self.assertEqual(decision, "deny")
+            self.assertIn("rule=protected-artifact", reason)
+
+    def test_nested_deny_names_the_real_path(self):
+        """A deny reason must name the file the command actually touches."""
+        with scratch_task_in_real_repo("pr1-nestedpath") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            decision, reason = parse_decision(
+                _run_bash(f'bash -c "echo x > {receipts}"').stdout
+            )
+            self.assertEqual(decision, "deny")
+            self.assertIn("RECEIPTS.jsonl", reason)
+            self.assertNotIn("goals/current.json", reason)
+
     def test_glob_named_decoy_does_not_fail_the_guard_open(self):
         """A self-matching glob name must not crash the guard into an allow.
 

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import os
-import ast
 import glob
 import itertools
 import json
@@ -51,22 +50,6 @@ _GLOB_EXPANSION_CAP = 256
 # optional `|`/`&` suffix. A token that is entirely redirect punctuation carries
 # no path, so its target is the following token. Do not reintroduce a set.
 _PURE_REDIRECT_OP_RE = re.compile(r"^\d*&?>{1,2}[|&]?$")
-# Commands that cannot themselves write a file. Naming a protected artifact or
-# lifecycle symbol in their arguments (a grep pattern, an `echo` banner) is
-# inspection, not mutation, so it must not deny the segment.
-#
-# Safety: this list only suppresses the *name-mention* heuristics. Redirections
-# are detected independently by _extract_redirect_targets() over the token
-# stream, so `echo x > RECEIPTS.jsonl` stays denied via its redirect target.
-# Deliberately excluded because they can write: tee, dd, cp, mv, install,
-# truncate, touch, ln, sed -i, perl -pi, awk (`print > "file"`), env (runs an
-# arbitrary command), and sort/diff when given an output option.
-NON_MUTATING_COMMANDS = {
-    "echo", "printf", "true", "false", ":", "test", "[", "[[",
-    "pwd", "date", "seq", "basename", "dirname", "realpath", "readlink",
-    "file", "stat", "ls", "nl", "od", "strings", "cut", "comm", "uniq",
-    "tr", "jq", "column",
-}
 _OUTPUT_OPTION_COMMANDS = {"sort", "diff"}
 # Git subcommands that never rewrite a working-tree file. `add` and `commit`
 # move content into the index and object store; they cannot change what a
@@ -81,32 +64,6 @@ GIT_NON_MUTATING_SUBCOMMANDS = {
     "add", "commit", "diff", "show", "log", "status", "grep",
     "branch", "rev-parse", "ls-files", "check-ignore", "blame",
 }
-# Shell keywords and non-mutating builtins. These are not executables, so
-# shutil.which() cannot resolve them and they were falling through to the
-# "unrecognized executable with gated path" branch, denying every compound
-# command that merely mentioned a gated path.
-SHELL_CONTROL_WORDS = {
-    "for", "while", "until", "if", "then", "else", "elif", "fi",
-    "do", "done", "case", "esac", "select", "function", "time",
-    "{", "}", "!", "cd", "pushd", "popd", "shift", "return",
-    "local", "export", "set", "unset", "read", "declare", "typeset",
-}
-
-
-def _has_output_option(args):
-    return any(
-        arg in {"-o", "--output"} or arg.startswith(("-o", "--output="))
-        for arg in args
-    )
-
-
-def _is_non_mutating_command(cmd, args):
-    """Return True when this command word cannot write a file on its own."""
-    if cmd in NON_MUTATING_COMMANDS or cmd in SHELL_CONTROL_WORDS:
-        return True
-    if cmd in _OUTPUT_OPTION_COMMANDS:
-        return not _has_output_option(args)
-    return False
 # Words that may precede a real command without changing what it does. Dispatch
 # is on the first token, and `_is_non_mutating_command` treats any
 # SHELL_CONTROL_WORDS head as relief, so `time cp <payload> <receipt>` and
@@ -119,32 +76,29 @@ def _is_non_mutating_command(cmd, args):
 # list, not a command, and stripping them would classify it as one.
 COMMAND_PREFIX_WORDS = {"time", "!", "{", "then", "else", "elif", "do", "command",
                         "builtin", "exec", "nohup", "nice"}
+# Wrappers whose tail is a whole command, mapped to their value-taking options.
+# `sudo cp /tmp/f <receipt>` and `xargs -I{} cp /tmp/f <receipt>` put both the
+# verb and the target in the token stream; without unwrapping, dispatch saw the
+# wrapper as the command word and classified nothing.
+_COMMAND_CARRYING_WRAPPERS = {
+    "sudo": {"-u", "--user", "-g", "--group", "-C", "--close-from", "-p", "--prompt"},
+    "doas": {"-u", "-C"},
+    "timeout": {"-s", "--signal", "-k", "--kill-after"},
+    "stdbuf": {"-i", "-o", "-e", "--input", "--output", "--error"},
+    "setsid": set(),
+    "xargs": {"-I", "-i", "--replace", "-n", "--max-args", "-P", "--max-procs",
+              "-d", "--delimiter", "-E", "-s", "--max-chars", "-a", "--arg-file"},
+    "ionice": {"-c", "-n", "-p"},
+    "chroot": set(),
+}
 LAST_ARG_MUTATORS = {"cp", "mv", "install", "touch", "truncate", "rsync"}
 TEE_COMMAND = "tee"
-LIFECYCLE_RECEIPT_ENTRYPOINTS = {
-    "background_hook.py", "subagent_lifecycle.py", "codex_lifecycle_watcher.py",
-}
-RECEIPT_MUTATION_SYMBOLS = {
-    "record_subagent_receipt", "reset_receipt_streams_for_new_run",
-    "restore_receipt_streams", "release_receipt_stream_reset",
-    "receipt_stream_savepoint", "_bind_runtime_receipt_adapter",
-    "write_task_control", "begin_task_run", "restore_task_control",
-    "publish_task_close", "write_active_marker", "clear_active_marker",
-    "restore_active_marker_snapshot",
-}
-GOAL_MUTATION_SYMBOLS = {
-    "write_goal_state", "start_harness_goal", "add_goal_task",
-    "finish_harness_goal", "handle_goal_start", "handle_goal_add_task",
-    "handle_goal_finish", "goal_start", "goal_add_task", "goal_finish",
-}
-PROTECTED_MUTATION_SYMBOLS = RECEIPT_MUTATION_SYMBOLS | GOAL_MUTATION_SYMBOLS
-UNINSPECTED_INLINE_RUNTIMES = dict(
-    bun={"-e", "--eval"}, deno={"eval"}, lua={"-e"},
-    node={"-e", "--eval", "-p", "--print"},
-    nodejs={"-e", "--eval", "-p", "--print"}, perl={"-e", "-E"},
-    php={"-r"}, ruby={"-e"}, awk={""}, gawk={""}, mawk={""},
-)
-BOUNDARY_TOKENS = {"&&", "||", "|", ";", "\n", "&"}
+# `(` and `)` are boundaries, not command words. `punctuation_chars=True` emits
+# `(` as its own token, so without this a subshell made the segment's command
+# word `"("`, dispatch fell through, and `( cp /tmp/f <receipt> )` wrote a
+# protected artifact with the guard silent. Splitting only ever adds segments,
+# so it cannot create an allow.
+BOUNDARY_TOKENS = {"&&", "||", "|", ";", "\n", "&", "(", ")"}
 _INLINE_REDIRECT_RE = re.compile(r"^(?:\d*)?(>>?)(.+)$")
 _ARTIFACT_TOOL_HINT = {
     "TASK.json": "harness task control MCP",
@@ -430,79 +384,25 @@ def _unwrap_execution(tokens):
             while argv and argv[0].startswith("-"):
                 argv = argv[1:]
             continue
+        # Wrappers that carry a complete command as their tail. Both the verb
+        # and the protected target are ordinary tokens here — this is the kept
+        # verb class wearing a one-word decoration, not an execution route.
+        if wrapper in _COMMAND_CARRYING_WRAPPERS:
+            value_options = _COMMAND_CARRYING_WRAPPERS[wrapper]
+            index = 1
+            while index < len(argv) and argv[index].startswith("-"):
+                option = argv[index].split("=", 1)[0]
+                if option in value_options and "=" not in argv[index]:
+                    index += 2
+                else:
+                    index += 1
+            if wrapper == "timeout" and index < len(argv):
+                # `timeout <duration> <command>`: the duration is not an option.
+                index += 1
+            argv = argv[index:]
+            continue
         break
     return argv
-def _safe_lifecycle_source_inspection(argv):
-    if not argv:
-        return False
-    cmd = os.path.basename(argv[0])
-    args = argv[1:]
-    if cmd in {"pytest", "py.test"}:
-        return True
-    if cmd == "git" and args and args[0] in GIT_NON_MUTATING_SUBCOMMANDS:
-        return True
-    if cmd in {"cat", "head", "tail", "rg", "grep", "less", "more", "wc"}:
-        return True
-    if cmd == "sed" and not any(arg == "-i" or arg.startswith("-i") for arg in args):
-        return True
-    return _is_non_mutating_command(cmd, args)
-def _safe_gated_path_inspection(argv, raw_argv=()):
-    if not argv:
-        return False
-    cmd, args = os.path.basename(argv[0]), argv[1:]
-    # Shell keywords/builtins never resolve via which(); check them before the
-    # executable-identity test so compound commands are not misread as an
-    # unrecognized executable holding a gated path.
-    if _is_non_mutating_command(cmd, args):
-        return True
-    resolved = shutil.which(cmd)
-    if not resolved or os.sep in argv[0] and os.path.realpath(argv[0]) != os.path.realpath(resolved):
-        return False
-    if any(
-        _is_env_assignment(arg) and arg.split("=", 1)[0] in {
-            "PATH", "LESSOPEN", "LESSCLOSE", "GIT_EXTERNAL_DIFF", "GIT_PAGER",
-        }
-        for arg in raw_argv
-    ):
-        return False
-    readers = {"cat", "file", "head", "ls", "more", "readlink", "realpath", "grep", "stat", "tail", "wc"}
-    if cmd in readers:
-        return True
-    output_option = any(arg in {"-o", "--output"} or arg.startswith(("-o", "--output=")) for arg in args)
-    if cmd == "less": return not any(arg.startswith(("-o", "-O")) for arg in args)
-    if cmd == "rg": return not any(arg == "--pre" or arg.startswith("--pre=") for arg in args)
-    if cmd == "git":
-        index = 0
-        while index < len(args) and (args[index].startswith("--") or args[index] == "-C"):
-            index += 2 if args[index] == "-C" else 1
-        return index < len(args) and args[index] in GIT_NON_MUTATING_SUBCOMMANDS and not output_option and not any("open-files-in-pager" in arg or arg in {"--ext-diff", "--textconv"} for arg in args)
-    if cmd == "sed": return not any(arg in {"-i", "--in-place"} or arg.startswith(("-i", "--in-place=")) or re.search(r"(?:^|[;/0-9,$ ])(?:w|W|e)(?:\s|[A-Za-z0-9_.-]+/|$)", arg) for arg in args)
-    if cmd == "diff": return not output_option
-    if cmd == "find": return not any(arg.startswith(("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fls", "-fprint")) for arg in args)
-    return False
-def _uninspected_inline(argv):
-    flags = UNINSPECTED_INLINE_RUNTIMES.get(os.path.basename(argv[0]), set())
-    if "" in flags and len(argv) > 1:
-        return True
-    return any(
-        arg in flags
-        or any(arg.startswith(flag + "=") for flag in flags if flag.startswith("--"))
-        or any(
-            arg.startswith("-") and not arg.startswith("--") and flag[1:] in arg[1:]
-            for flag in flags if len(flag) == 2
-        )
-        for arg in argv[1:]
-    )
-def _inline_mutation_risk(argv):
-    code = " ".join(argv[1:]).lower()
-    if os.path.basename(argv[0]) in {"awk", "gawk", "mawk"}:
-        return bool(re.search(r"\b(?:print|printf)\b[^;]*>{1,2}", code))
-    return bool(re.search(
-        r"(?:writefilesync|appendfilesync|copyfilesync|rename|replace|unlink|"
-        r"remove|delete|truncate|chmod|hardlink|file\.write|file\.open|"
-        r"\bopen\s*\([^)]*['\"](?:[wax]|r\+|>))",
-        code,
-    ))
 def _gated_path_risk(tokens, repo_root, execution_cwd):
     candidates = _embedded_path_candidates(tokens)
     if any(_classify_gated_path(
@@ -541,6 +441,14 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
         except IndexError:
             nested = ""
         if nested:
+            # Extract first. Reporting the synthetic goal path before trying the
+            # real extraction named a file the command never touches, which the
+            # REQ forbids: a deny reason must name the actual cause.
+            targets.extend(_extract_mutation_targets(
+                nested, repo_root, execution_cwd,
+            ))
+            if targets:
+                return
             if _gated_path_risk(raw_argv, repo_root, execution_cwd) and re.search(
                 r"(?:write|append|unlink|rename|replace|remove|delete|truncate|chmod|>)",
                 nested, re.I,
@@ -551,11 +459,6 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
                     "method": "nested runtime with gated environment",
                 })
                 return
-            targets.extend(_extract_mutation_targets(
-                nested, repo_root, execution_cwd,
-            ))
-            if targets:
-                return
 
     # No execution-based deny. Invoking a lifecycle entrypoint, importing a
     # receipt writer, or running an uninspected inline runtime is not blocked
@@ -563,17 +466,51 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
     # only thing this layer can actually decide: a command whose *verb* writes a
     # file, and whose target resolves to a protected path.
 
-    if cmd == "sed" and any(t == "-i" or t.startswith("-i") for t in non_env[1:]):
+    # `-i` has a long spelling and perl separates `-i` from `-p`/`-n`. Matching
+    # only `-i…`/`-pi…` let `sed --in-place <receipt>` and `perl -i -pe … <receipt>`
+    # through — both really rewrite the named file.
+    if cmd == "sed" and any(
+        token == "-i" or token.startswith(("-i", "--in-place"))
+        for token in non_env[1:]
+    ):
         _append_target(
             targets, _last_non_option(non_env), "sed -i",
             repo_root, execution_cwd,
         )
         return
-    if cmd == "perl" and any(t == "-pi" or t.startswith("-pi") for t in non_env[1:]):
-        _append_target(
-            targets, _last_non_option(non_env), "perl -pi",
-            repo_root, execution_cwd,
+    if cmd == "perl":
+        options = [token for token in non_env[1:] if token.startswith("-")]
+        in_place = any(
+            token == "-i" or re.fullmatch(r"-i\S*", token) or "i" in token[1:]
+            and not token.startswith("--")
+            for token in options
         )
+        if in_place and any(
+            "p" in token[1:] or "n" in token[1:]
+            for token in options if not token.startswith("--")
+        ):
+            _append_target(
+                targets, _last_non_option(non_env), "perl -i",
+                repo_root, execution_cwd,
+            )
+            return
+    # `sort`/`diff` are readers until given an output option, which names the
+    # file they overwrite. The rule existed but lost its only caller when the
+    # execution branches were removed.
+    if cmd in _OUTPUT_OPTION_COMMANDS:
+        for index, token in enumerate(non_env[1:], start=1):
+            target = ""
+            if token in {"-o", "--output"} and index + 1 < len(non_env):
+                target = non_env[index + 1]
+            elif token.startswith("--output="):
+                target = token.split("=", 1)[1]
+            elif token.startswith("-o") and len(token) > 2:
+                target = token[2:]
+            if target:
+                _append_target(
+                    targets, target, f"{cmd} output option",
+                    repo_root, execution_cwd,
+                )
         return
     if cmd == "cp" and any(
         option == "--link" or re.fullmatch(r"-[^-]*l[^-]*", option)
@@ -719,21 +656,34 @@ def _unquoted_lines(command):
     lines = []
     current = []
     quote = ""
-    for char in command:
+    index = 0
+    while index < len(command):
+        char = command[index]
         if quote:
             if char == quote:
                 quote = ""
             current.append(char)
+            index += 1
             continue
         if char in "'\"":
             quote = char
             current.append(char)
+            index += 1
+            continue
+        # `\` + newline is a line continuation: bash joins the lines, so the
+        # verb and its target stay one command. Splitting there separated
+        # `cp /tmp/f` from its destination and classified neither.
+        if char == "\\" and index + 1 < len(command) and command[index + 1] == "\n":
+            current.append(" ")
+            index += 2
             continue
         if char == "\n":
             lines.append("".join(current))
             current = []
+            index += 1
             continue
         current.append(char)
+        index += 1
     lines.append("".join(current))
     return lines
 
