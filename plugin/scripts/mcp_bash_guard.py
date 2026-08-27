@@ -708,15 +708,14 @@ def _append_directory_destination_targets(
 
 
 def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd="",
-                              quoted=None, quoted_words=frozenset()):
+                              quoted=None, quoted_literal=()):
     """Classify redirect targets in one segment.
 
-    `quoted_words` must already be filtered to spellings whose quoted count
-    covers every occurrence of that token in the line — **presence alone
-    launders**. Passing a raw `_quoted_operator_words(command)` reads as the
-    obvious call and silently restores a bypass: one quoted `>` then suppresses
-    every real `>` on the line. That filtering lives at the caller, far from
-    here, which is exactly how it shipped wrong once.
+    `quoted_literal` is one flag per token: was *this* occurrence quoted in the
+    source. It must be sliced to the same span as `tokens`. A set of spellings
+    is not a substitute and was tried twice — presence let one quoted `>`
+    suppress every real one, and counting refused to skip whenever a line held
+    both a quoted and a real occurrence.
     """
     for index, token in enumerate(tokens):
         # The last cost loop outside the fail-closed handoff. Each redirect
@@ -732,13 +731,13 @@ def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd="",
         if quoted is not None and index < len(quoted) and quoted[index]:
             continue
         # When alignment is unknown, apply the same evidence rule the segment
-        # path uses: the raw text showing this operator as a whole
-        # quote-delimited word, *and* enough of them to cover every occurrence
-        # (the caller filters; see the docstring). Without the skip,
-        # `grep -n ">" "$PWD"/<source>` read the `>` as a real operator and
-        # denied a reader, naming a fabricated `$PWD/...` path. Without the
-        # count, one quoted `>` suppressed every real one on the line.
-        if quoted is None and token in quoted_words:
+        # path uses, but per occurrence: was *this* token quoted in the source.
+        # Without the skip, `grep -n ">" "$PWD"/<source>` read the `>` as a
+        # real operator and denied a reader, naming a fabricated `$PWD/...`
+        # path. With a spelling-level answer instead of a positional one it was
+        # wrong in both directions — presence let one quoted `>` suppress every
+        # real one, counting refused to skip whenever a line held both.
+        if quoted is None and index < len(quoted_literal) and quoted_literal[index]:
             continue
         if _PURE_REDIRECT_OP_RE.match(token) and index + 1 < len(tokens):
             _append_target(
@@ -1595,7 +1594,7 @@ def _quotable_operators(command):
     return found
 
 
-def _quoted_operator_words(command):
+def _quoted_operator_words(command, tokens):
     """Every whole quote-delimited word in the raw text, as a set of contents.
 
     Same evidence rule as `_quotable_operators`, applied to redirect operators
@@ -1611,26 +1610,59 @@ def _quoted_operator_words(command):
     correct it, so the operator has to be recognised as a literal here or not
     at all.
 
-    Returns a `Counter`, and the caller must compare it against occurrences —
-    presence alone launders. The first version of this returned a set, so one
-    quoted `>` anywhere suppressed *every* real `>` on the line, and
-    `grep -n ">" "$PWD"/f ; echo x > <receipt>` wrote the artifact with the gate
-    silent. That is the borrowed-quote-mark bug again, one consumer over: the
-    count rule was applied to segment boundaries and not to redirects.
+    Returns one flag per token: was *this* occurrence quoted in the source.
+
+    Two weaker rules were tried and both were wrong, in opposite directions.
+    Presence ("some quoted `>` exists") let one quoted `>` suppress every real
+    one, so `grep -n ">" "$PWD"/f ; echo x > <receipt>` wrote the artifact.
+    Counting ("as many quoted as occurrences") then refused to skip whenever a
+    line held both, so `grep -c ">" <file> > /tmp/out` — a reader with an
+    ordinary redirect — denied again.
+
+    The question was never how many; it is *which one*. Raw words carry that:
+    the k-th raw word reducing to a spelling is the k-th token of that
+    spelling, so the quoting of each occurrence is recoverable even when the
+    two lexes disagree about some other word. When either lex degrades the
+    correspondence is gone and every flag is False — no skip, classify
+    everything, fail closed.
     """
     if not command:
-        return collections.Counter()
+        return []
     try:
         lexer = shlex.shlex(command, posix=False, punctuation_chars=True)
         lexer.whitespace_split = True
         lexer.commenters = ""
         raw_words = list(lexer)
     except ValueError:
-        raw_words = command.split()
-    return collections.Counter(
-        word[1:-1] for word in raw_words
-        if len(word) > 1 and word[0] == word[-1] and word[0] in "'\""
-    )
+        return []
+    try:
+        # `_tokenize` degrades independently: ANSI-C quoting (`$'a\'b'`) lexes
+        # fine non-posix and raises posix, so `tokens` arrive from
+        # `command.split()` with their quotes still attached while raw words
+        # have theirs stripped. The two lists then speak different alphabets,
+        # and the quoted flag lands on the wrong occurrence — that is how the
+        # real `>` in `$'a\'b' ; grep '>' f ; echo x > <receipt>` got skipped
+        # and the artifact was written. Mirror `_tokenize`'s own condition
+        # rather than guessing which lex failed.
+        posix_lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        posix_lexer.whitespace_split = True
+        posix_lexer.commenters = ""
+        list(posix_lexer)
+    except ValueError:
+        return []
+    quoting_by_spelling: dict[str, list[bool]] = {}
+    for word in raw_words:
+        quoted = len(word) > 1 and word[0] == word[-1] and word[0] in "'\""
+        spelling = word[1:-1] if quoted else word
+        quoting_by_spelling.setdefault(spelling, []).append(quoted)
+    flags = []
+    seen: collections.Counter = collections.Counter()
+    for token in tokens:
+        occurrences = quoting_by_spelling.get(token, ())
+        index = seen[token]
+        flags.append(index < len(occurrences) and occurrences[index])
+        seen[token] += 1
+    return flags
 
 
 def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
@@ -1688,15 +1720,9 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
     # Skipping on presence let one quoted `>` suppress every real `>` on the
     # line — the same laundering the count rule already prevents for segment
     # boundaries just below.
-    if quoted is None:
-        quoted_spellings = _quoted_operator_words(command)
-        line_occurrences = collections.Counter(tokens)
-        quoted_words = frozenset(
-            word for word, available in quoted_spellings.items()
-            if line_occurrences[word] <= available
-        )
-    else:
-        quoted_words = frozenset()
+    quoted_literal = (
+        _quoted_operator_words(command, tokens) if quoted is None else []
+    )
     boundaries = collections.Counter(
         token for token in tokens if token in BOUNDARY_TOKENS
     )
@@ -1759,7 +1785,7 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
         # normalized against the repo root and `.py` read as source.
         _extract_redirect_targets(
             expanded, targets, repo_root, execution_cwd, segment_quoted,
-            quoted_words,
+            quoted_literal[idx:j],
         )
         _process_segment(
             expanded, targets, repo_root, execution_cwd, segment_quoted, depth,

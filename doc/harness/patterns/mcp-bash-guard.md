@@ -173,13 +173,24 @@ Other dynamic constructs remain:
   redirect path has no both-readings union behind it, so a wrong guess there is
   final.
 
-  **Both must count, not merely detect**, and the redirect one shipped without
-  counting for exactly one commit. Keyed on presence, a single quoted `>`
-  suppressed *every* real `>` on the line, so
-  `grep -n ">" "$PWD"/<file> ; echo x > <receipt>` wrote the artifact —
-  a laundering route created by the fix for a false deny, out of the same two
-  phrasings that motivated it. A quoted spelling explains only as many
-  occurrences as there are of it.
+  **The answer has to be per occurrence, and two weaker rules shipped first.**
+  Keyed on presence, a single quoted `>` suppressed *every* real `>` on the
+  line, so `grep -n ">" "$PWD"/<file> ; echo x > <receipt>` wrote the artifact.
+  Keyed on counts — "as many quoted spellings as occurrences" — it then refused
+  to skip whenever a line held both, so `grep -c ">" <file> > /tmp/out`, a
+  reader with an ordinary redirect, denied again. Each rule was wrong in the
+  opposite direction, and each was written as the fix for the other.
+
+  The question was never *how many*; it is *which one*. Raw words answer it
+  directly: the k-th raw word reducing to a spelling is the k-th token of that
+  spelling, so each occurrence carries its own quoting even when the two lexes
+  disagree elsewhere. **When either lex degrades, give up the skip entirely** —
+  `_tokenize` falls back to `command.split()`, which leaves quotes attached
+  while raw words have theirs stripped, and the two lists then speak different
+  alphabets. ANSI-C quoting (`$'a\'b'`) lexes clean non-posix and raises posix,
+  so guarding only the non-posix lex left the quoted flag landing on the *real*
+  operator; that is a fail-open, and it survived one commit past the fix that
+  introduced it.
 - **an operator spelled across quote runs is not recognised as quotable.**
   `touch '&''&' <artifact>` builds the token `&&` while the raw text contains
   no `&&` substring, so the merged reading is not offered and the write

@@ -757,6 +757,34 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 with self.subTest(allow=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)
                     self.assertIsNone(decision)
+            # A reader may carry a real redirect of the same spelling. Both
+            # spelling-level answers were wrong here: presence skipped the real
+            # one, and counting refused to skip the quoted one whenever a line
+            # held both — so these ordinary commands denied, naming a
+            # fabricated `$PWD/...` path.
+            for command in (
+                f'grep -n ">" "$PWD"/{source} 2>/dev/null',
+                f'grep -c ">" "$PWD"/{source} > /tmp/count.txt',
+                f'grep -n ">" "$PWD"/{source} > /dev/null && echo found',
+                'grep -n ">" "$PWD"/f 1> /tmp/o 2> /tmp/e',
+                f'echo "a"b ; grep -n ">" {source} > /tmp/o',
+                f'grep -n ">" {source} /tmp/a\\ b 2>/dev/null',
+            ):
+                with self.subTest(reader_with_redirect=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertIsNone(decision)
+            # A lex that degrades gives up the skip entirely. ANSI-C quoting
+            # lexes clean non-posix and raises posix, so `tokens` arrive from
+            # `command.split()` with quotes attached while raw words have
+            # theirs stripped; comparing the two put the quoted flag on the
+            # real `>` and the artifact was written.
+            for command in (
+                f"""echo $'a\\'b' ; grep '>' "$PWD"/a ; echo FORGED > {receipts}""",
+                f"""echo $'x\\'y' ; echo FORGED > {receipts}""",
+            ):
+                with self.subTest(degraded=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
             # A quoted spelling explains only as many occurrences as there are
             # of it. Skipping on presence let one quoted `>` suppress every
             # real `>` on the line: these lines differ from the plain deny by
