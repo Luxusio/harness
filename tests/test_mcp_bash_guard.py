@@ -1214,10 +1214,14 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 # emits no decision, which allows. The budget is consulted in
                 # `_append_target` now, so one guard covers all of them and any
                 # loop added later.
+                # 16000, not 8000: at 8000 the guarded and unguarded builds are
+                # indistinguishable (0.94-0.96s vs 0.94-0.98s), so these rows
+                # guarded nothing. At 16000 the unguarded build takes 6.6s
+                # against the guarded 1.03s, so the 3.0s bound below kills it.
                 ("many-rm-operands",
-                 "rm " + "a*b " * 8000 + receipts),
+                 "rm " + "a*b " * 16000 + receipts),
                 ("many-tee-operands",
-                 "tee " + "a*b " * 8000 + receipts),
+                 "tee " + "a*b " * 16000 + receipts),
             ):
                 with self.subTest(shape=label):
                     self.assertLess(len(command), 64 * 1024)
@@ -1226,16 +1230,54 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertLess(time.monotonic() - started, 3.0)
                     self.assertEqual(decision, "deny")
                     # No `assertIn("analysis budget exhausted", reason)` here.
-                    # That assertion was added on the belief that the 3.0s bound
-                    # above could not kill the unguarded mutant; measured, the
-                    # mutant takes 3.5-4.0s and the bound kills it. Worse, the
-                    # assertion passed only while 8000 glob operands cost more
-                    # than `_ANALYSIS_BUDGET_SECONDS`: 1.03s here, 0.87s on a
-                    # checkout ~12% faster, where the walk completes and the
-                    # guard correctly denies naming the real path. It turned a
-                    # correct deny into a red build on faster hardware. Budget
-                    # exhaustion is pinned deterministically instead, in
-                    # `test_exhausted_budget_stops_classifying`.
+                    # It raced the filesystem: it passed only while the operands
+                    # cost more than `_ANALYSIS_BUDGET_SECONDS`, so on a ~12%
+                    # faster checkout the walk completed, the guard denied
+                    # naming the real path, and a correct deny became a red
+                    # build. Budget exhaustion is pinned deterministically in
+                    # `test_exhausted_budget_stops_classifying` instead.
+                    #
+                    # The reason first recorded here for removing it — "the
+                    # mutant takes 3.5-4.0s so the bound already kills it" — was
+                    # itself measured wrong, against a *relative* receipts path
+                    # pointing at a directory that did not exist. Built the way
+                    # this test builds them, 8000 operands were 0.94-0.96s
+                    # guarded and 0.94-0.98s unguarded: indistinguishable, and
+                    # these rows guarded nothing at all. Hence 16000 above.
+
+    def test_env_split_string_value_is_a_command_not_an_option_value(self):
+        """`env -S` carries the command line, so it cannot be skipped.
+
+        `-S`/`--split-string` was listed beside `-u`/`--chdir` as an option
+        whose value the unwrapper steps over. But its value *is* the command, so
+        `env -S "cp <payload> <receipt>"` consumed the verb along with the
+        option, no verb branch ran, and the write allowed. Found by review, not
+        by this suite — the wrapper class it belongs to is unbounded
+        (`flock`, `taskset`, `chrt`, `setarch` are documented gaps), but this
+        one is a bug in already-modelled code rather than a missing member.
+        """
+        with scratch_task_in_real_repo("pr1-envsplit") as task_dir:
+            receipts = os.path.relpath(
+                os.path.join(task_dir, "RECEIPTS.jsonl"), REPO_ROOT,
+            )
+            for command in (
+                f'env -S "cp /tmp/pay.txt {receipts}"',
+                f'env --split-string="cp /tmp/pay.txt {receipts}"',
+                f'env -S"cp /tmp/pay.txt {receipts}"',
+                # the ordinary value-taking options must still be skipped
+                f"env -u FOO cp /tmp/pay.txt {receipts}",
+                f"env FOO=1 cp /tmp/pay.txt {receipts}",
+            ):
+                with self.subTest(deny=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+            for command in (
+                'env -S "pytest -q"', 'env -S "echo hi"',
+                "env FOO=1 pytest -q", "env -u PATH ls",
+            ):
+                with self.subTest(allow=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertIsNone(decision)
 
     def test_exhausted_budget_stops_classifying(self):
         """`_append_target` must append nothing once the budget is gone.

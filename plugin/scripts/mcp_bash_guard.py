@@ -375,18 +375,20 @@ def _append_target(targets, token, method, repo_root, execution_cwd=""):
     # dd, and git's mutating subcommands — had no stride of their own.
     #
     # This is fail-closed, not a speed-up. Remove it and a line padded to just
-    # under the 64 KB cap runs 3.3-7.9 s *through the hook* — 7.9 s for plain
-    # operands, 6.5 s for globs, 3.3 s for realpath-hostile `x/../y*z` — against
-    # the 3 s timeout in `plugin/hooks/hooks.json`. A killed hook writes no
-    # decision, and no decision is an allow, so the padding disables every deny
-    # on the line. With the check, all five shapes answer in ~1.0 s with a
-    # budget deny.
+    # under the 64 KB cap can run well past the 3 s timeout in
+    # `plugin/hooks/hooks.json`; a killed hook writes no decision, and no
+    # decision is an allow, so the padding disables every deny on the line.
+    # With the check, the same shapes answer in ~1 s with a budget deny.
     #
-    # Two earlier versions of this comment were wrong in opposite directions:
-    # one claimed 37 s (an in-process run with no cap), and the correction to
-    # that claimed the whole thing was only a tightened bound. The magnitude was
-    # wrong; the conclusion was not. Do not drop this as a perf tweak.
-    # Cost lives here too: this is the realpath.
+    # Deliberately no single headline number. Three previous versions of this
+    # comment each gave one and each was disproved by the next reader: 37 s (an
+    # in-process run with no cap), then "only a tightened bound, 2.04 s", then
+    # "3.3-7.9 s". Measured through the hook the unguarded cost spans roughly
+    # 2.7-12.3 s and depends on operand *density* as much as size — 1-char
+    # tokens are ~12 s where 8-char tokens are ~2.7 s, i.e. below the timeout —
+    # plus the verb and whether the paths are realpath-hostile. Any figure
+    # quoted without its token width and verb will be wrong again. Do not drop
+    # this as a perf tweak. Cost lives here too: this is the realpath.
     if _budget_exhausted():
         return
     # Expand once, iteratively. Recursing here was a fail-open: a self-matching
@@ -790,7 +792,21 @@ def _unwrap_execution(tokens):
             index = 1
             while index < len(argv):
                 token = argv[index]
-                if token in {"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}:
+                # `-S`/`--split-string` is NOT an option whose value can be
+                # skipped: its value *is* the command line. Listing it beside
+                # `-u`/`-C` meant `env -S "cp <payload> <receipt>"` consumed the
+                # verb along with the option and no branch ever ran — the write
+                # allowed. Re-lex the value and continue unwrapping into it.
+                if token in {"-S", "--split-string"} and index + 1 < len(argv):
+                    return _unwrap_execution(_tokenize(argv[index + 1]))
+                if token.startswith("--split-string="):
+                    return _unwrap_execution(
+                        _tokenize(token.split("=", 1)[1]),
+                    )
+                if token.startswith("-S") and len(token) > 2:
+                    # Attached value: `-S"cp … <receipt>"`.
+                    return _unwrap_execution(_tokenize(token[2:]))
+                if token in {"-u", "--unset", "-C", "--chdir"}:
                     index += 2
                 elif token.startswith("-") or _is_env_assignment(token):
                     index += 1
@@ -1144,23 +1160,30 @@ def _extract_mutation_targets(command, repo_root, execution_cwd="", depth=0):
         if not line_tokens:
             continue
         line_quoted = _quoted_flags(line, len(line_tokens))
-        # Computed once, here, against the tokens as the lexer produced them.
-        # Every rewriting stage below carries it rather than recomputing, since
-        # the helper reads the raw command text and cannot match a rewritten
-        # stream.
-        line_literal = _quoted_operator_words(line, line_tokens)
         if line_quoted is not None:
-            collapsed, collapsed_quoted, collapsed_literal = (
-                _collapse_substitutions(
-                    line_tokens, line_quoted, line, line_literal,
-                )
+            # No `literal` on this path. When alignment is known,
+            # `_extract_redirect_targets` decides quoting from `quoted` and
+            # never consults the per-occurrence flags, so computing and
+            # threading them here produced a list that was sliced per segment
+            # and then dropped. Confirmed dead four ways: passing None here,
+            # passing None in the un-expanded alternate reading, forcing
+            # `is_literal` False in `_expand_control_clusters`, and deleting
+            # the tail insert all leave the suite green.
+            collapsed, collapsed_quoted, _ = _collapse_substitutions(
+                line_tokens, line_quoted, line,
             )
             _walk_segments(
                 collapsed, shell_values, targets, repo_root, execution_cwd,
                 collapsed_quoted, depth, command=line,
-                literal=collapsed_literal,
             )
             continue
+        # Computed once, against the tokens as the lexer produced them, and
+        # carried through every rewriting stage below rather than recomputed:
+        # `_quoted_operator_words` matches tokens against the raw command text,
+        # so a rewritten stream can never match and the mismatch degrades to
+        # `[]` — which reads a quoted `'>'` literal as a real operator and
+        # denies pure readers. This is the only path that consumes it.
+        line_literal = _quoted_operator_words(line, line_tokens)
         # Alignment failed, so the collapse cannot know whether a `` ` `` or a
         # `$(` is an operator or a literal. Guessing "operator" made it delete
         # tokens — including a following `; cp <payload> <receipt>` — and no

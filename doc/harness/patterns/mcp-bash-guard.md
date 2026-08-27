@@ -233,14 +233,21 @@ Other dynamic constructs remain:
 
   Known residue, each verified to reproduce:
 
-  - **fail-open.** An escape adjacent to an empty quote run desynchronises
-    `_quoted_flags` by one. Two spellings, both verified to write and allow:
-    `echo pwned ''\>> <artifact>` and `echo pwned ""\ > <artifact>` (also
-    `''\ >` and `;""\ >`). `_quoted_flags` (not this helper) declares alignment
-    on equal word counts, and here the counts match while the correspondence is
-    shifted by one, so the real operator inherits a quoted flag. Equal counts
-    are not alignment; reconstruction would be. Closing it means changing
-    `_quoted_flags`, a wider blast radius than this task accepted.
+  - **fail-open.** A backslash escape desynchronises `_quoted_flags` by one.
+    **Two preconditions, both required** — a bare `\>`-style escape *and*
+    something else on the line that defeats `_quoted_flags` alignment. Test the
+    escape alone and you get a DENY and will wrongly mark this entry stale:
+
+        DENY   echo \>; cp /tmp/pay.txt <task>/TASK.json
+        ALLOW  echo \>; cat /tmp/pay.txt > "$PWD"/<source>     ← bash writes it
+
+    Spellings verified to write and allow: `echo pwned ''\>> <artifact>`,
+    `echo pwned ""\ > <artifact>`, `''\ >`, `;""\ >`. `_quoted_flags` (not
+    `_quoted_operator_words`) declares alignment on equal word counts; the
+    counts match while the correspondence is shifted by one, so the real
+    operator inherits a quoted flag. Equal counts are not alignment;
+    reconstruction would be. Closing it means changing `_quoted_flags`, a wider
+    blast radius than this task accepted.
   - **fail-open.** `echo x ;> <path>` writes and allows. `_split_control_cluster`
     only decomposes tokens made entirely of `()&|;`, and `>` is outside that
     set, so `;>` is never split and the segment never ends. `echo x ; > <path>`
@@ -343,10 +350,29 @@ Other dynamic constructs remain:
   reset to the original cwd on every construct it cannot model, which is close
   to not tracking at all.
 
+  Fourteen of the fifteen leave the payload in the caller's directory;
+  `( cd /tmp ) | tee <artifact>` *truncates* the artifact instead, because
+  `tee` receives the subshell's empty stdout. Still a write the gate must
+  refuse, but a reviewer probing for the payload string will score that row
+  bogus unless the difference is stated.
+
+  Soundness is not merely hard, it is not statically closable: the predicate
+  depends on mutable filesystem state, so `chmod 000 /tmp/d ; cd /tmp/d ; echo
+  x > <src>` fails open on any design that resolves the destination before the
+  line runs — an earlier segment invalidates the answer the hook already gave.
+  If the annoyance needs softening, soften the deny *message* ("resolved
+  against `<cwd>`; a `cd` on this line is not modelled"), not the model.
+
   The trade is deliberate: an annoying deny beats a silent write to a protected
   artifact, in a gate this doc already calls an accident guardrail. Pinned by
   `test_cwd_is_not_inferred_from_cd`, which asserts all fifteen deny. Do not
   re-add cwd tracking without a design that answers every row there.
+
+  The cost row, and the one construct where not tracking is provably wrong
+  rather than merely conservative: `{ cd /tmp; } ; echo x > <source>` denies.
+  A brace group is not a subshell, so bash really does move and the write
+  really does land outside the repo. Every other shape here is a case where
+  declining is correct; this one is a true over-block.
 
   Residual asymmetry worth knowing: `cd /tmp && echo x > RECEIPTS.jsonl` denies
   (the operand is rejoined to the repo root) while `echo x > /tmp/RECEIPTS.jsonl`
@@ -354,6 +380,22 @@ Other dynamic constructs remain:
   disagree. That is a consequence of not modelling cwd, not a basename policy —
   `_normalize_candidate_path` returns `""` for anything outside the repo root,
   so the basename rule never runs on the absolute spellings.
+- **a command-carrying wrapper the model does not list hides every verb on the
+  line.** One unrecognised prefix word and no verb branch runs, so every deny
+  disappears. Verified to write and allow: `flock /tmp/lockf cp …`,
+  `taskset -c 0 cp …`, `chrt -o 0 cp …`, `setarch -R cp …`. `stdbuf`, `nice`,
+  `setsid` and `xargs -a` are modelled and deny, so this is an unbounded
+  membership problem, not a broken mechanism — the same shape as `find -exec`.
+  Documented rather than enumerated: nobody types `flock /tmp/x cp` by
+  accident, and the REQ scopes this gate as a guardrail against accident.
+
+  Distinguish that from a wrapper the model *does* list getting its own option
+  semantics wrong, which is a plain bug and is fixed: `env -S` /
+  `--split-string` was treated as an option whose value could be stepped over,
+  but the value is the command line, so `env -S "cp <payload> <receipt>"`
+  allowed. Pinned by
+  `test_env_split_string_value_is_a_command_not_an_option_value`. `script -qec
+  "<command>"` is the same shape and is **not** fixed — still a documented gap.
 - **the guard re-implements a partial getopt, per verb.** This is the class
   that produced the last four review rounds, and it is not closed. For each
   modelled verb the guard has to know which options take values, and which
