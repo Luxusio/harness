@@ -271,6 +271,18 @@ Other dynamic constructs remain:
   both readings are classified and their targets unioned, the same policy the
   quoting reconciliation already uses.
 
+  An alternate reading needs *evidence*, though, not merely unknown alignment.
+  The merged-pair and unsplit-line readings exist for one shape — a quoted
+  operator that is really a filename (`touch '|' <artifact>`) — but they were
+  taken whenever `_quoted_flags` returned `None`, which is almost always, since
+  `"$PWD"/x`, `"$(pwd)"/x` and `/tmp/a\ b` all defeat alignment. So
+  `ls "$PWD"/doc ; rm /tmp/x ; wc -l <task>/PLAN.md` was read as a single
+  command and denied: a reader blocked, with the deny naming a PLAN.md that the
+  line's `rm` operand never was. A quoted operator leaves a mark in the source —
+  a quote character touching it — and `_quotable_operators` looks for exactly
+  that. Without the mark there is no reading in which the segments join, so
+  there is nothing to union.
+
   The whole-line union cannot compensate for a wrong split, which is worth
   stating because it looks like it should: that reading dispatches on the
   line's *first* command word, so `echo "a"b ; touch '|' <artifact>` was still

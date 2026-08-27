@@ -55,6 +55,11 @@ _GLOB_COMPONENT_CAP = 4
 # repetition is used; exhausting it degrades to "not extracted", never to
 # deleting a token.
 _ANALYSIS_BUDGET_SECONDS = 1.0
+# Set in main(), so it is None for in-process callers — importing the module and
+# calling _extract_mutation_targets directly runs unbounded. That is deliberate:
+# a shared clock across many calls in one process would exhaust and silently
+# stop classifying. It does mean an in-process test cannot observe the budget;
+# assert cost through the hook entry point (see the cost tests).
 _deadline = None
 
 
@@ -1053,7 +1058,7 @@ def _extract_mutation_targets(command, repo_root, execution_cwd="", depth=0):
             )
             _walk_segments(
                 collapsed, shell_values, targets, repo_root, execution_cwd,
-                collapsed_quoted, depth,
+                collapsed_quoted, depth, line,
             )
             continue
         # Alignment failed, so the collapse cannot know whether a `` ` `` or a
@@ -1070,7 +1075,7 @@ def _extract_mutation_targets(command, repo_root, execution_cwd="", depth=0):
             found: list[dict] = []
             _walk_segments(
                 variant, dict(shell_values), found, repo_root, execution_cwd,
-                variant_quoted, depth,
+                variant_quoted, depth, line,
             )
             targets.extend(item for item in found if item not in targets)
 
@@ -1470,8 +1475,42 @@ def _expand_control_clusters(tokens, quoted):
     return out, out_quoted
 
 
+def _quotable_operators(command):
+    """Operators the raw text shows adjacent to a quote character.
+
+    The alternate readings — merging a pair of segments across a boundary, and
+    classifying the unsplit line — exist for one shape: a *quoted* operator that
+    is really a filename (`touch '|' <artifact>`). They were applied whenever
+    quote alignment was unknown, which is the everyday case (`"$PWD"/x`,
+    `"$(pwd)"/x`, `/tmp/a\\ b` all defeat `_quoted_flags`), so an ordinary line
+    like `ls "$PWD"/doc ; rm /tmp/x ; wc -l <task>/PLAN.md` was read as one
+    command and denied — a reader, blocked, with the deny naming an `rm` operand
+    it never had.
+
+    A quoted operator leaves a mark in the source: a quote character touching
+    it. Nothing else distinguishes the two cases, and without the mark there is
+    no reading in which the segments join.
+    """
+    if not command:
+        return frozenset()
+    found = set()
+    for operator in BOUNDARY_TOKENS:
+        start = 0
+        while True:
+            at = command.find(operator, start)
+            if at < 0:
+                break
+            before = command[at - 1:at]
+            after = command[at + len(operator):at + len(operator) + 1]
+            if before in ("'", '"') or after in ("'", '"'):
+                found.add(operator)
+                break
+            start = at + 1
+    return frozenset(found)
+
+
 def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
-                   quoted=None, depth=0):
+                   quoted=None, depth=0, command=""):
     """Segment the line and classify each segment.
 
     When the quoting is known, clustered operators are decomposed and there is
@@ -1493,24 +1532,25 @@ def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
         both: list[dict] = []
         _walk_segments_once(
             tokens, dict(shell_values), both, repo_root, execution_cwd,
-            quoted, depth,
+            quoted, depth, command,
         )
         _walk_segments_once(
             expanded, dict(shell_values), both, repo_root, execution_cwd,
-            expanded_quoted, depth,
+            expanded_quoted, depth, command,
         )
         targets.extend(item for item in both if item not in targets)
         return
     _walk_segments_once(
         expanded, shell_values, targets, repo_root, execution_cwd,
-        expanded_quoted, depth,
+        expanded_quoted, depth, command,
     )
 
 
 def _walk_segments_once(tokens, shell_values, targets, repo_root,
-                        execution_cwd="", quoted=None, depth=0):
+                        execution_cwd="", quoted=None, depth=0, command=""):
     idx = 0
     ambiguous_previous = None
+    quotable = _quotable_operators(command) if quoted is None else frozenset()
     while idx < len(tokens):
         j = idx
         # A *quoted* control operator is a literal argument, not a boundary.
@@ -1565,7 +1605,8 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
             # `echo "a"b ; touch '|' <artifact>` was still dispatched on
             # `echo` and the write allowed. Pairwise merging is linear: every
             # token appears in at most two merged pairs.
-            if ambiguous_previous is not None:
+            if (ambiguous_previous is not None
+                    and tokens[idx - 1] in quotable):
                 merged: list[dict] = []
                 _process_segment(
                     ambiguous_previous + [tokens[idx - 1]] + expanded,
@@ -1574,9 +1615,12 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
                 targets.extend(item for item in merged if item not in targets)
             ambiguous_previous = expanded
         idx = j + 1
-    if quoted is None:
+    if quoted is None and quotable:
         # The split itself may be wrong: a quoted `|` is an argument, not a
-        # boundary, so classify the unsplit line too and union.
+        # boundary, so classify the unsplit line too and union. Gated on the
+        # raw text actually showing a quoted operator — without one there is no
+        # reading in which the line is a single command, and taking it anyway
+        # denied ordinary readers (`rm -rf "$PWD"/build ; git diff -- <plan>`).
         #
         # Once per line, NOT once per segment. Inside the loop this was
         # O(segments x tokens), and `quoted is None` is the ordinary

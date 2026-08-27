@@ -696,6 +696,35 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
+    def test_reader_sharing_a_line_with_a_mutation_verb_is_allowed(self):
+        """An alternate reading needs evidence, not just unknown alignment.
+
+        The merged and unsplit readings exist for a *quoted* operator that is
+        really a filename (`touch '|' <artifact>`). Applying them whenever
+        `_quoted_flags` returned None applied them almost always — `"$PWD"/x`,
+        `"$(pwd)"/x` and `/tmp/a\\ b` all defeat alignment — so an ordinary line
+        was read as one command and denied. AC-004 names `git diff`, `grep` and
+        `cat` as must-allow, and the deny even misreported its cause, naming a
+        PLAN.md that the line's `rm` operand never was.
+
+        No test covered a reader on a gated path sharing a line with an
+        unrelated mutation verb, which is why several rounds missed it.
+        """
+        with scratch_task_in_real_repo("pr1-readerline") as task_dir:
+            plan = os.path.join(task_dir, "PLAN.md")
+            for command in (
+                f'rm -rf "$PWD"/build ; git diff -- {plan}',
+                f"rm -f /tmp/a\\ b ; cat {plan}",
+                f'cat "$HOME"/.bashrc ; touch /tmp/x ; grep -n Objective {plan}',
+                'mkdir -p /tmp/o && cp "$(pwd)"/README.md /tmp/o'
+                ' && head -3 plugin/scripts/health.py',
+                f'ls "$PWD"/doc ; rm /tmp/x ; wc -l {plan}',
+                f"grep -rn Objective {plan} ; rm /tmp/z",
+            ):
+                with self.subTest(command=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertIsNone(decision)
+
     def test_glob_containment_is_physical_not_textual(self):
         """`os.path.join(base, "../../*")` starts with base but leaves it.
 
@@ -821,9 +850,11 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             # `/*/*/*/*/*/*/*/*/*zzzznomatch` is 50 s. A plain component count
             # refused both, which re-opened the glob-in-basename route.
             Path(receipts).write_text("{}\n", encoding="utf-8")
+            # Both must exceed _GLOB_COMPONENT_CAP to pin the exemption; a
+            # 3-component pattern denies either way and pins nothing.
             for command in (
                 "cp /tmp/f */*/*/*/RECEIPT?.jsonl",
-                "cp /tmp/f doc/*/*/*/RECEIPT?.jsonl",
+                "cp /tmp/f */*/*/*/RECEIPTS.jsonl",
             ):
                 with self.subTest(command=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)
