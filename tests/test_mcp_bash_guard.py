@@ -789,6 +789,13 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 "echo '>'m > doc/harness/goals/x.json",
                 f"( echo '>'x ); echo y > {plan}",
                 f"""bash -c "echo '>'x ; echo y > {plan}" """,
+                # The multi-word guard specifically: here the quoted operator
+                # merges *into* a multi-word token, so without
+                # `cursor - start == 1` the merge donates its True to the real
+                # `>` two tokens later. Every other row above places the quoted
+                # operator where no merge happens, so none of them exercise it
+                # — the guard was load-bearing and untested.
+                f"echo a\\>b '>>' '' > {receipts}",
             ):
                 with self.subTest(glued=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)
@@ -798,8 +805,17 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             # raw words around a space present in neither. Reconciling that is
             # what keeps these readers allowed.
             for command in (
-                f'grep -n ">" {source} /tmp/a\\ b 2>/dev/null',
                 f'echo a\\>b ; grep -n ">" {plan}',
+                f'grep -n ">" {source} /tmp/a\\ b 2>/dev/null',
+                # A quote span that opens mid-word and contains whitespace.
+                # The non-posix lexer splits inside the span, so `-m'fix a b'`
+                # is three raw words and one token; resetting the quote state
+                # per word lost the spaces, the walk failed, and every quoted
+                # redirect literal on the line was re-read as a real operator.
+                f"grep -n '>' {source} ; git commit -m'fix a b'",
+                f"grep -n '>' {source} ; ls /tmp/'a b'",
+                f"grep -n '>' {source} ; curl -sS --data='a b' http://x",
+                f"grep -n '>' {plan} ; ls /tmp/'a b'",
             ):
                 with self.subTest(escaped=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)

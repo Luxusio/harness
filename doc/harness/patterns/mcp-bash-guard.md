@@ -181,16 +181,44 @@ Other dynamic constructs remain:
   reader with an ordinary redirect, denied again. Each rule was wrong in the
   opposite direction, and each was written as the fix for the other.
 
-  The question was never *how many*; it is *which one*. Raw words answer it
-  directly: the k-th raw word reducing to a spelling is the k-th token of that
-  spelling, so each occurrence carries its own quoting even when the two lexes
-  disagree elsewhere. **When either lex degrades, give up the skip entirely** —
+  The question was never *how many*; it is *which one* — but "the k-th raw word
+  reducing to a spelling is the k-th token of that spelling" was a third wrong
+  answer, and the most convincing of them. The two lexes disagree about **word
+  boundaries**, not just about quoting: `'>'q` is two raw words and one token
+  `>q`, so the quoted word had no token behind it and donated its flag to the
+  next real `>`. Twelve shapes wrote protected artifacts that way.
+
+  What actually answers it is a **joint walk**: accumulate the posix value of
+  raw words until the accumulation equals the token. A token assembled from
+  more than one raw word is never a quoted literal. Computing that posix value
+  needs a character scan, not a whole-word pattern — a quote span can open
+  mid-word and swallow whitespace (`-m'fix a b'` is three raw words and one
+  token), and a trailing backslash escapes a character the splitter consumed
+  (`/tmp/a\ b`). Both restore a space; both were learned by denying ordinary
+  readers. **When either lex degrades, give up the skip entirely** —
   `_tokenize` falls back to `command.split()`, which leaves quotes attached
   while raw words have theirs stripped, and the two lists then speak different
   alphabets. ANSI-C quoting (`$'a\'b'`) lexes clean non-posix and raises posix,
   so guarding only the non-posix lex left the quoted flag landing on the *real*
   operator; that is a fail-open, and it survived one commit past the fix that
   introduced it.
+
+  **Closed in one direction, narrowed in the other.** No glue spelling can now
+  make a real redirect operator be skipped: a skip requires exact
+  token-for-token reconciliation, so the fail-open direction is shut. The
+  over-block direction is only narrowed — any divergence the walk cannot
+  reconcile falls back to "skip nothing", which re-reads quoted operators as
+  real ones. Known residue: a line that both collapses a substitution and
+  carries a quoted operator (`grep -n '>' $(pwd)/<file> /tmp/a\ b`) denies,
+  because the walk is handed the *collapsed* tokens while raw words come from
+  the uncollapsed line; a word mixing quote runs the scan cannot reduce
+  (`x''`) does the same; and a line that breaks the non-posix lexer outright
+  (`echo q'>'`) does the same. All are deny-leaning, so they cost a work path
+  rather than integrity.
+
+  Glue opens no hole on the *boundary* path, for a reason worth recording: a
+  glued operator (`p'|'`) produces the token `p|`, which is not in
+  `BOUNDARY_TOKENS` and so never splits a segment to begin with.
 - **an operator spelled across quote runs is not recognised as quotable.**
   `touch '&''&' <artifact>` builds the token `&&` while the raw text contains
   no `&&` substring, so the merged reading is not offered and the write

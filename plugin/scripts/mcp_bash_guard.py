@@ -1672,42 +1672,79 @@ def _quoted_operator_words(command, tokens):
         merged.append(word)
         index += 1
 
-    def _value(word):
-        """(text after quote removal, was this word a quoted literal)."""
-        if len(word) > 1 and word[0] == word[-1] and word[0] in "'\"":
-            return word[1:-1], True
-        if len(word) > 1 and word[0] == "\\":
-            return word[1:], True
-        # A trailing backslash escapes the character that followed, which the
-        # splitter consumed; it is not part of this word's text.
-        if len(word) > 1 and word.endswith("\\") and not word.endswith("\\\\"):
-            return word[:-1], False
-        return word, False
+    def _value(word, quote=""):
+        """(posix text of this raw word, was all of it quoted, open span).
+
+        Computing this by pattern — "is the whole word quote-delimited?" —
+        was wrong twice. `'>'q` needed the *concatenation* to reconcile, and
+        `-m'fix a b'` or `/tmp/'a b'` open a quote span mid-word that the
+        non-posix lexer then splits on whitespace, so no whole-word rule can
+        reproduce the posix token. Walking characters gives the real value;
+        anything less made the walk fail and every quoted redirect literal on
+        the line get re-read as a real operator, denying pure readers.
+        """
+        text = []
+        quoted_chars = 0
+        trailing_escape = False
+        index = 0
+        while index < len(word):
+            char = word[index]
+            if quote:
+                if char == quote:
+                    quote = ""
+                else:
+                    text.append(char)
+                    quoted_chars += 1
+            elif char in "'\"":
+                quote = char
+            elif char == "\\" and index + 1 < len(word):
+                text.append(word[index + 1])
+                quoted_chars += 1
+                index += 1
+            elif char == "\\":
+                # Trailing backslash: it escaped the character the splitter
+                # consumed, so it contributes nothing to this word's text and
+                # leaves the same "posix joined across the split" state an open
+                # quote span does.
+                trailing_escape = True
+            else:
+                text.append(char)
+            index += 1
+        value = "".join(text)
+        # Returns the still-open quote character (truthy) rather than a bool:
+        # a span can cross the non-posix lexer's word split, and the words
+        # inside it are wholly quoted even though they carry no quote
+        # character of their own. `-m'fix a b'` is three raw words and one
+        # token, and resetting the state per word lost the spaces.
+        return (value, bool(value) and quoted_chars == len(value),
+                quote or ("\\" if trailing_escape else ""))
 
     flags = []
     cursor = 0
     for token in tokens:
         accumulated = ""
         start = cursor
+        carried_quote = ""
         while cursor < len(merged) and accumulated != token:
             word = merged[cursor]
-            accumulated += _value(word)[0]
+            value, _, open_span = _value(word, carried_quote)
+            carried_quote = open_span if isinstance(open_span, str) else ""
+            accumulated += value
             cursor += 1
-            # A trailing backslash escaped whatever came next. When that was
-            # whitespace, `whitespace_split` consumed it and posix joined the
-            # two words around a space that survives in no raw word — so
-            # `/tmp/a\ b` is two raw words and one token `/tmp/a b`. Restore it
-            # when doing so is what completes the match; `a\>b` escapes a
-            # non-space and needs no filler.
-            if (word.endswith("\\") and not word.endswith("\\\\")
+            # Whitespace the splitter consumed but posix kept: either escaped
+            # by a trailing backslash (`/tmp/a\ b`) or sitting inside a quote
+            # span the word left open (`-m'fix a b'`). Restore it only when
+            # that is what keeps the match alive.
+            if (open_span
                     and accumulated != token
                     and token.startswith(accumulated + " ")):
                 accumulated += " "
         if accumulated != token:
             return []
         if cursor - start == 1:
-            flags.append(_value(merged[start])[1])
+            flags.append(_value(merged[start])[1])  # noqa: E501
         else:
+            # Assembled from more than one raw word, so not a quoted literal.
             flags.append(False)
     return flags
 
