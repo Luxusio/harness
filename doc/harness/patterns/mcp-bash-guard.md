@@ -64,9 +64,11 @@ deny comes from the shape rule in `_extract_redirect_targets` — `2` and `>`
 tokenize separately under `punctuation_chars=True`, so the operator is matched
 and the following token is classified. (`_INLINE_REDIRECT_RE` also tolerates a
 leading fd number. It is reachable on the ordinary path, not only through the
-unclosed-quote `command.split()` fallback as this note used to claim: a glued
+unclosed-quote `command.split()` fallback as this note once claimed: a glued
 quote such as `echo '>'<path>` yields the single token `>path`, which the regex
-matches — that is what produces the `echo '>'<path>` deny in § Known gaps.)
+matches. That shape allows today — the leading-character rule in
+`_quoted_operator_words` marks it a literal — but the regex reaching it at all
+is what made it a deny for several revisions.)
 This is an over-block relative to the original
 "logs are common" intent, kept because a stderr redirect onto a receipt file is
 not a logging pattern worth preserving.
@@ -191,54 +193,56 @@ Other dynamic constructs remain:
   `>q`, so the quoted word had no token behind it and donated its flag to the
   next real `>`. Twelve shapes wrote protected artifacts that way.
 
-  What actually answers it is a **joint walk**: accumulate the posix value of
-  raw words until the accumulation equals the token. A token assembled from
-  more than one raw word is never a quoted literal. Computing that posix value
-  needs a character scan, not a whole-word pattern — a quote span can open
-  mid-word and swallow whitespace (`-m'fix a b'` is three raw words and one
-  token), and a trailing backslash escapes a character the splitter consumed
-  (`/tmp/a\ b`). Both restore a space; both were learned by denying ordinary
-  readers. **When either lex degrades, give up the skip entirely** —
-  `_tokenize` falls back to `command.split()`, which leaves quotes attached
-  while raw words have theirs stripped, and the two lists then speak different
-  alphabets. ANSI-C quoting (`$'a\'b'`) lexes clean non-posix and raises posix,
-  so guarding only the non-posix lex left the quoted flag landing on the *real*
-  operator; that is a fail-open, and it survived one commit past the fix that
-  introduced it.
+  A fourth answer reconciled two shlex passes word-for-word, and it failed the
+  same way once more: the lexers disagree about boundaries in ways no pairing
+  survives. `punctuation_chars=False` does not split `2>/dev/null` into three
+  tokens; `punctuation_chars=True` does not raise on `-F'|'`, it silently
+  mangles the boundaries, so a retry keyed on the exception never fires.
+
+  **So there is no second lexer.** The raw command is scanned once, tracking
+  quote and escape state, recording for every character whether it came from
+  inside a quote — the only fact this ever needed. Tokens then consume
+  *characters*, so one scanned word can satisfy a run of tokens. The flag is
+  decided by the token's **leading** character: a real operator can never have
+  a quoted first one, because if it is quoted it is a literal. Requiring the
+  whole span to be quoted instead reinstated three over-blocks bash never
+  writes, silently reverting the commit that had just removed them.
+
+  The scan gives up — `[]`, skip nothing, classify everything — when it ends
+  mid-quote or a token cannot be matched against the text. That is the whole
+  fail-closed story now; the older two-lexer degrade rules are gone with the
+  second lexer.
 
   **Within `_quoted_operator_words`, no glue spelling can make a real redirect
-  operator be skipped**: a skip requires exact token-for-token reconciliation.
-  That scoping matters — an earlier version of this paragraph said "the
-  fail-open direction is shut" without it, and that is false for the redirect
-  path as a whole, because `_quoted_flags` can hand out a wrong flag before
-  this helper is ever consulted. See the fail-open residue below.
+  operator be skipped.** That scoping matters — an earlier version of this
+  paragraph claimed "the fail-open direction is shut" without it, and that is
+  false for the redirect path as a whole, because `_quoted_flags` can hand out
+  a wrong flag before this helper is consulted. See the fail-open residue.
 
   Known residue, each verified to reproduce:
 
   - **fail-open.** `echo pwned ''\>> <artifact>` writes the artifact and
-    allows. `_quoted_flags` (not this helper) declares alignment established on
-    equal word counts, and here the counts match while the correspondence is
-    shifted by one, so the real `>>` inherits a quoted flag and is skipped.
-    Equal counts are not alignment; reconstruction would be. Closing it means
-    changing `_quoted_flags`, which is a wider blast radius than this task
-    accepted, so it is recorded rather than fixed.
+    allows. `_quoted_flags` (not this helper) declares alignment on equal word
+    counts, and here the counts match while the correspondence is shifted by
+    one, so the real `>>` inherits a quoted flag. Equal counts are not
+    alignment; reconstruction would be. Closing it means changing
+    `_quoted_flags`, a wider blast radius than this task accepted.
+  - **fail-open.** `echo x ;> <path>` writes and allows. `_split_control_cluster`
+    only decomposes tokens made entirely of `()&|;`, and `>` is outside that
+    set, so `;>` is never split and the segment never ends. `echo x ; > <path>`
+    — one space apart — denies. Pre-existing and out of scope here, but it is a
+    plausible compact spelling rather than obfuscation.
   - **deny-leaning.** A line that both collapses a substitution and carries a
     quoted operator (`grep -n '>' $(pwd)/<file> /tmp/a\ b`) denies, because the
-    walk is handed the *collapsed* tokens while raw words come from the
-    uncollapsed line. So does a backslash-escaped space followed by an empty
-    quote run (`ls /tmp/a\ b''`).
+    scan is handed the *collapsed* tokens while it reads the uncollapsed text.
 
-  Three earlier entries were removed rather than kept. `x''` never reproduced
-  at all; `echo q'>'` stopped once the lexer retry landed; and `echo '>'<path>`
-  stopped when the multi-word branch was deleted — a differential against real
-  bash showed that branch's only observable effect was over-blocking three
-  shapes bash does not write. A residue list is a claim like any other, and
-  this one has now carried two reproductions that did not reproduce while the
-  doc two screens up says that is worse than none.
+  Four earlier entries were removed rather than kept: `x''` never reproduced at
+  all; `echo q'>'` stopped once the lexer retry landed; `echo '>'<path>` is
+  allowed again under the leading-character rule; and `ls /tmp/a\ b''` was
+  listed as deny-leaning while it simply allows — `/tmp/a b` is not a gated
+  path, so nothing there could ever deny. A residue list is a claim like any
+  other, and this one has now carried three that did not hold.
 
-  Glue opens no hole on the *boundary* path, for a reason worth recording: a
-  glued operator (`p'|'`) produces the token `p|`, which is not in
-  `BOUNDARY_TOKENS` and so never splits a segment to begin with.
 - **an operator spelled across quote runs is not recognised as quotable.**
   `touch '&''&' <artifact>` builds the token `&&` while the raw text contains
   no `&&` substring, so the merged reading is not offered and the write

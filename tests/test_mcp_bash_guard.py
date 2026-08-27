@@ -1197,9 +1197,18 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 with self.subTest(shape=label):
                     self.assertLess(len(command), 64 * 1024)
                     started = time.monotonic()
-                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    decision, reason = parse_decision(_run_bash(command).stdout)
                     self.assertLess(time.monotonic() - started, 3.0)
                     self.assertEqual(decision, "deny")
+                    if label.endswith("-operands"):
+                        # Assert the *decision shape*, not the clock. Timing
+                        # cannot pin these: without the budget check the padded
+                        # shapes still answer in ~0.9 s, inside the 3 s bound,
+                        # so both rows passed on the mutant. What differs is
+                        # what the guard says — it stops early and reports an
+                        # exhausted budget, where the unguarded version walks
+                        # every operand and names a real target.
+                        self.assertIn("analysis budget exhausted", reason)
 
     def test_subshell_boundary_split_does_not_over_block(self):
         """Splitting clusters adds boundaries; it must not add denies."""

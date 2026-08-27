@@ -372,11 +372,17 @@ def _glob_expansions(token, repo_root, execution_cwd=""):
 def _append_target(targets, token, method, repo_root, execution_cwd=""):
     # The budget is consulted here rather than in each caller's loop. Six
     # operand loops — mv/rm/unlink/chmod/chown/chgrp, cp --link, ln/link, tee,
-    # dd, and git's mutating subcommands — had no stride of their own, so
-    # ~8000 padding operands ran 37s of realpath walks against a 3s hook
-    # timeout and every deny on the line became an allow. Guarding the shared
-    # call bounds all of them, and any loop added later, instead of relying on
-    # each author to remember. Cost lives here too: this is the realpath.
+    # dd, and git's mutating subcommands — had no stride of their own.
+    #
+    # This is a bound tightened, not a fail-open closed: measured at the 64 KB
+    # command cap across plain, glob and realpath-hostile padding, the worst
+    # unguarded case was 2.04 s against the 3 s hook timeout, and this brings
+    # it to ~1.0 s. An earlier version of this comment claimed 37 s and a
+    # resulting allow; that figure came from an in-process run with no cap and
+    # does not reproduce through the hook. Worth keeping anyway, because the
+    # margin was thin and the same class has been reopened four times by a
+    # loop nobody remembered to guard — the shared call covers any loop added
+    # later. Cost lives here too: this is the realpath.
     if _budget_exhausted():
         return
     # Expand once, iteratively. Recursing here was a fail-open: a self-matching
@@ -1652,16 +1658,24 @@ def _quoted_operator_words(command, tokens):
     about quoting, so `'>'q` is two raw words against one token `>q` and the
     quoted word donated its flag to the next real `>`.
 
-    What answers it is the joint walk below: accumulate the posix text of raw
-    words until it equals the token. A token assembled from more than one raw
-    word is never a quoted literal. Computing that posix text needs a character
-    scan, because a quote span can open mid-word and swallow whitespace
-    (`-m'fix  a b'` is three raw words and one token) and a trailing backslash
-    escapes a character the splitter consumed (`/tmp/a\\ b`).
+    A fourth answer reconciled two shlex passes word-for-word, and it failed
+    the same way once more: the lexers disagree about boundaries in ways no
+    pairing survives — `punctuation_chars=False` does not split `2>/dev/null`,
+    and `punctuation_chars=True` silently mangles `-F'|'` rather than raising.
 
-    Returns `[]` — not a list of False — when the walk cannot complete or a lex
-    degrades. The caller reads it positionally, so an empty list skips nothing
-    and classifies every redirect-shaped token: fail closed.
+    So there is no second lexer here at all. This scans the raw command once,
+    tracking quote and escape state, and records for every character whether it
+    came from inside a quote. Tokens then consume *characters*, so one scanned
+    word can satisfy a run of tokens — which is exactly what `2>/dev/null`
+    needs. The flag is decided by the token's **leading** character: a real
+    operator can never have a quoted first character, because if it is quoted
+    it is a literal. Requiring the whole span to be quoted instead reinstated
+    three over-blocks (`echo '>'<path>` and friends) that bash never writes.
+
+    Returns `[]` — not a list of False — when the scan ends mid-quote or a
+    token cannot be matched against the text. The caller reads it positionally,
+    so an empty list skips nothing and classifies every redirect-shaped token:
+    fail closed.
     """
     if not command:
         return []
@@ -1684,6 +1698,16 @@ def _quoted_operator_words(command, tokens):
         if quote:
             if char == quote:
                 quote = ""
+            elif quote == '"' and char == "\\" and index + 1 < len(command):
+                # `\"` inside a double-quoted span. Omitting this closed the
+                # span early and reopened it at the next quote, so the scan
+                # ended mid-quote and gave up — and one `python3 -c
+                # "print(\"hi\")"` anywhere on the line then turned every
+                # quoted redirect literal on it into a real operator.
+                # `_unquoted_lines` already knew this rule 480 lines up; a
+                # second raw scanner was written without consulting the first.
+                current.append((command[index + 1], True))
+                index += 1
             else:
                 current.append((char, True))
         elif char in "'\"":
@@ -1723,7 +1747,16 @@ def _quoted_operator_words(command, tokens):
         span = words[word_index][offset:offset + len(token)]
         if "".join(char for char, _ in span) != token:
             return []
-        flags.append(bool(token) and all(quoted for _, quoted in span))
+        # The *leading* character decides, not every character. Requiring the
+        # whole span to be quoted silently reinstated three over-blocks that
+        # the previous commit had deleted after a bash differential proved
+        # they were its only observable effect: `echo '>'<path>`,
+        # `echo y '>>'<path>`, `echo \><path>` all print and write nothing,
+        # yet a glued token like `>path` mixes a quoted char with unquoted
+        # ones and so failed `all()`. A real operator can never have a quoted
+        # first character — if it is quoted it is a literal — so the leading
+        # run is the whole question.
+        flags.append(bool(span) and span[0][1])
         offset += len(token)
     return flags
 
