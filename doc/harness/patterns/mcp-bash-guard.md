@@ -176,6 +176,19 @@ Other dynamic constructs remain:
   `HARNESS_SKIP_MCP_GUARD=1` is documented — so completeness here buys less
   than it costs. Add a spelling when it is reported; do not treat the option
   model as exhaustive.
+- **analysis cost is bounded by a timeout that fails open.** The hook gets
+  3 s (`plugin/hooks/hooks.json`); exceeding it emits no decision, which is
+  an allow. So any super-linear path is a bypass: re-classifying the unsplit
+  line once per segment made a 22 KB command of ordinary `echo "a"b;`
+  padding time out, converting every deny on that line into an allow.
+  Keep classification linear in command length, and treat a new nested loop
+  over tokens as a security change, not a performance one. Note
+  `_COMMAND_LENGTH_CAP` fails *closed* above 64 KB, so the exposed window is
+  the one below it.
+- **an exception is an allow.** `main()` has a catch-all that exits 0, so any
+  input that makes a path call raise suppresses every deny on the line — a
+  NUL in one token was enough. `_normalize_candidate_path` swallows
+  ValueError/OSError for that reason; keep new path handling inside it.
 - **the tokenizer is not bash's, and the divergence moves the operand.** This
   is the invariant to hold: *the token list handed to classification must be
   positionally identical to the word list bash would build.* Two divergences

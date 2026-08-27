@@ -81,8 +81,11 @@ and nothing re-checks it at exec time.
   `task_verify` ordering, not by the Bash gate. Treat the Bash gate as a
   guardrail against accident, not a control against a determined caller. No
   document may describe it as the only control preventing a forged verdict.
-- Known routes past it are documented rather than implied closed. Three classes
-  carry the weight. Zeroth, and the one to check first when a bypass is
+- Known routes past it are documented rather than implied closed. Five classes
+  carry the weight, and two of them are about the guard failing open rather
+  than mis-reading: analysis that exceeds the 3 s hook budget emits no
+  decision (an allow), and any exception reaching `main()` exits 0 (also an
+  allow). Keep classification linear and keep path handling exception-safe. Zeroth, and the one to check first when a bypass is
   reported: the guard's tokenizer is not bash's, and any divergence in *which
   word lands where* moves the operand — empty words must be preserved, comments
   removed only at word start. First, the guard re-implements a partial getopt
