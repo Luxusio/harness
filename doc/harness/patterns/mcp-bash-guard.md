@@ -189,6 +189,12 @@ Other dynamic constructs remain:
   input that makes a path call raise suppresses every deny on the line — a
   NUL in one token was enough. `_normalize_candidate_path` swallows
   ValueError/OSError for that reason; keep new path handling inside it.
+  RecursionError is the same class from the other direction: unbounded descent
+  into `eval`/`bash -c` nesting raised it, and the cost was super-linear, so
+  `eval eval … cp <src> <receipt>` hit both fail-open paths at once.
+  `_NESTED_DESCENT_CAP` bounds it. Past the cap the guard stops descending
+  and the deep case allows — the same allow as any unextracted nested content,
+  chosen over an exception that suppresses the *whole line*.
 - **the tokenizer is not bash's, and the divergence moves the operand.** This
   is the invariant to hold: *the token list handed to classification must be
   positionally identical to the word list bash would build.* Two divergences
@@ -200,6 +206,19 @@ Other dynamic constructs remain:
   comments are removed in `_unquoted_lines`, which is the only stage that knows
   the quote state. Any further place where `shlex` and bash disagree on *which
   word is where* is a bypass, not a cosmetic difference.
+
+  Positional identity is necessary but not sufficient — a stage may also
+  *delete* words, and deletion is invisible to a shift check. Substitution
+  collapse did: `punctuation_chars=True` clusters trailing punctuation, so the
+  closer of `$(date)` arrives as `);`, `)&&`, `)|` or `))` and never equals
+  `")"`. The scan ran off the end and discarded every remaining token, so
+  `echo $(date);cp /tmp/payload <receipt>` had its second command deleted
+  before classification. Collapse now matches a closer inside a cluster and
+  re-emits the remainder. The mirror case is the opener: a substitution glued
+  to a preceding word (`--target-directory=$(pwd)/x`, `-t$(pwd)/x`) must keep
+  that prefix, or the option name is dropped and its value stops being read as
+  a destination. Treat "which words survive" as part of the same invariant as
+  "which word is where".
 - **quoting forms the guard does not model.** Token text is read as shell
   syntax, so the guard must know how each token was quoted. `_quoted_flags`
   establishes that by lexing twice — posix for values, non-posix for quoting —

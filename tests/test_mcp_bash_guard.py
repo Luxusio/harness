@@ -474,6 +474,62 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
+    def test_substitution_collapse_never_deletes_tokens(self):
+        """An unbounded or glued span must not swallow the rest of the line.
+
+        `punctuation_chars=True` clusters punctuation, so `);`, `)&&`, `)|` and
+        `))` never equalled `")"`; the scan ran off the end and `index = scan+1`
+        discarded every remaining token — including a following command. That is
+        a laundering direction the positional-identity invariant does not cover,
+        because it removes words rather than moving them.
+        """
+        with scratch_task_in_real_repo("pr1-collapsedel") as task_dir:
+            rel = os.path.relpath(task_dir, REPO_ROOT)
+            receipts = f"{rel}/RECEIPTS.jsonl"
+            for command in (
+                f"echo $(date);cp /tmp/payload {receipts}",
+                f"echo $(date)&&cp /tmp/payload {receipts}",
+                f"echo $(date)|cat ; cp /tmp/payload {receipts}",
+                f"( echo $(date)) ; cp /tmp/payload {receipts}",
+                f"cp /tmp/payload $(echo $(pwd))/{receipts}",
+                f"echo $(date)>>{receipts}",
+                "echo \"a\"b '`' ; cp /tmp/payload " + receipts,
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_glued_substitution_opener_keeps_the_option(self):
+        """`--target-directory=$(pwd)/x` must stay an option, not become a path."""
+        with scratch_task_in_real_repo("pr1-gluedopen") as task_dir:
+            rel = os.path.relpath(task_dir, REPO_ROOT)
+            for command in (
+                f"cp --target-directory=$(pwd)/{rel} /tmp/RECEIPTS.jsonl",
+                f"cp -t$(pwd)/{rel} /tmp/RECEIPTS.jsonl",
+                f"V=$(pwd); cp /tmp/payload $V/{rel}/RECEIPTS.jsonl",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_nested_descent_is_bounded(self):
+        """Unbounded `eval` nesting raised RecursionError, which allows.
+
+        RecursionError reaches main()'s catch-all and exits 0 — a silent allow
+        for the whole line — and the cost was super-linear as well. Descent is
+        now capped; the deep case degrades to the documented "nested content not
+        extracted" allow, but must not raise or exceed the hook budget.
+        """
+        with scratch_task_in_real_repo("pr1-evaldepth") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for reps in (500, 5000):
+                with self.subTest(reps=reps):
+                    result = _run_bash(("eval " * reps) + f"cp /tmp/p {receipts}")
+                    self.assertEqual(result.returncode, 0)
+                    self.assertNotIn("Traceback", result.stderr)
+
     def test_substitution_span_does_not_over_block(self):
         for command in (
             "cp /tmp/a $(pwd)/tmp/b", "echo $(pwd)", "cat <(echo hi)",

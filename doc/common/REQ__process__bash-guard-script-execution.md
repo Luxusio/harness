@@ -81,7 +81,7 @@ and nothing re-checks it at exec time.
   `task_verify` ordering, not by the Bash gate. Treat the Bash gate as a
   guardrail against accident, not a control against a determined caller. No
   document may describe it as the only control preventing a forged verdict.
-- Known routes past it are documented rather than implied closed. Five classes
+- Known routes past it are documented rather than implied closed. Six classes
   carry the weight. Check them in this order when a bypass is reported:
 
   1. **Fail-open by timeout.** Analysis that exceeds the hook's 3 s budget emits
@@ -90,16 +90,23 @@ and nothing re-checks it at exec time.
      linear in command length.
   2. **Fail-open by exception.** Anything reaching `main()`'s catch-all exits 0,
      so one unrepresentable token can suppress every deny on the line. Keep path
-     handling exception-safe inside `_normalize_candidate_path`.
+     handling exception-safe inside `_normalize_candidate_path`, and keep
+     recursion bounded — unbounded `eval` descent raised RecursionError, which
+     lands in the same catch-all.
   3. **Tokenizer divergence.** The guard's word list must be positionally
      identical to bash's — empty words preserved, comments removed only at word
      start, substitution spans collapsed to one word.
-  4. **Quoting reconciliation.** Token text is read as shell syntax, so the
+  4. **Token deletion.** Positional identity does not cover words that a stage
+     *removes*. Substitution collapse dropped everything after a punctuation-
+     clustered closer (`);`, `)&&`, `))`), deleting a following command outright,
+     and dropped a glued opener's prefix (`--target-directory=$(…)`), deleting
+     the option name. Check what survives collapse, not only where it sits.
+  5. **Quoting reconciliation.** Token text is read as shell syntax, so the
      guard must know how each token was quoted. It lexes twice and requires
      agreement; when the two cannot be reconciled it classifies under *both*
      readings and denies if either would, because picking a side is a laundering
      direction in one direction or the other.
-  5. **Per-verb option model.** The guard re-implements a partial getopt for each
+  6. **Per-verb option model.** The guard re-implements a partial getopt for each
      modelled verb, so an unmodelled option spelling can still hide the
      destination. Assume more exist.
 

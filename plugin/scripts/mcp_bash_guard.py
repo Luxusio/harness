@@ -35,6 +35,13 @@ _GUARD_STDIN_CAP = 128 * 1024
 # result list — a pathological pattern must not turn a PreToolUse hook into a
 # full filesystem traversal.
 _GLOB_EXPANSION_CAP = 256
+# How far `eval` / `bash -c` nesting is followed. `eval eval eval … cp <src>
+# <receipt>` recursed until RecursionError, and RecursionError reaches
+# main()'s catch-all, which exits 0 — a silent allow for the whole line. The
+# cost was super-linear too, so it hit both fail-open classes at once. Not
+# descending past the cap degrades to the existing 'nested content not
+# extracted' allow and adds no over-block.
+_NESTED_DESCENT_CAP = 8
 # Redirect operators are matched by shape, never by enumeration. An earlier
 # `REDIRECT_TOKENS` set listed spellings, and `punctuation_chars=True` emits a
 # whole operator as one token, so `_INLINE_REDIRECT_RE` captured the operator's
@@ -254,7 +261,7 @@ def _is_goal_control_inode_alias(token: str, repo_root: str, execution_cwd="") -
                 info = entry.stat(follow_symlinks=False)
                 if (info.st_dev, info.st_ino) == (candidate_info.st_dev, candidate_info.st_ino):
                     return True
-    except OSError:
+    except (OSError, ValueError):
         return False
     return False
 def _glob_expansions(token, repo_root, execution_cwd=""):
@@ -516,7 +523,7 @@ def _expanded_sources(source, execution_cwd, repo_root):
         )
         try:
             return sorted(os.listdir(resolved))[:_GLOB_EXPANSION_CAP]
-        except OSError:
+        except (OSError, ValueError):
             return []
     basename = os.path.basename(stripped)
     return [basename] if basename else []
@@ -541,7 +548,7 @@ def _append_directory_destination_targets(
     try:
         if not os.path.isdir(resolved):
             return
-    except OSError:
+    except (OSError, ValueError):
         return
     sources = [
         token for token in non_env[1:]
@@ -640,7 +647,7 @@ def _unwrap_execution(tokens):
         break
     return argv
 def _process_segment(segment_tokens, targets, repo_root, execution_cwd="",
-                     quoted=None):
+                     quoted=None, depth=0):
     """Dispatch one segment, unioning both readings when quoting is unknown.
 
     `quoted is None` is not rare: adjacent-quote concatenation (`"a"b`,
@@ -656,20 +663,20 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd="",
     """
     if quoted is not None:
         _process_segment_once(
-            segment_tokens, targets, repo_root, execution_cwd, quoted,
+            segment_tokens, targets, repo_root, execution_cwd, quoted, depth,
         )
         return
     for reading in (True, False):
         found: list[dict] = []
         _process_segment_once(
             segment_tokens, found, repo_root, execution_cwd,
-            [reading] * len(segment_tokens),
+            [reading] * len(segment_tokens), depth,
         )
         targets.extend(item for item in found if item not in targets)
 
 
 def _process_segment_once(segment_tokens, targets, repo_root, execution_cwd="",
-                          quoted=None):
+                          quoted=None, depth=0):
     if not segment_tokens:
         return
     idx = 0
@@ -688,7 +695,10 @@ def _process_segment_once(segment_tokens, targets, repo_root, execution_cwd="",
     if cmd == "eval":
         nested = " ".join(non_env[1:])
         if nested:
-            targets.extend(_extract_mutation_targets(nested, repo_root, execution_cwd))
+            if depth < _NESTED_DESCENT_CAP:
+                targets.extend(_extract_mutation_targets(
+                    nested, repo_root, execution_cwd, depth + 1,
+                ))
         return
 
     if cmd in NESTED_SHELLS:
@@ -697,9 +707,10 @@ def _process_segment_once(segment_tokens, targets, repo_root, execution_cwd="",
             # Extract first. Reporting the synthetic goal path before trying the
             # real extraction named a file the command never touches, which the
             # REQ forbids: a deny reason must name the actual cause.
-            targets.extend(_extract_mutation_targets(
-                nested, repo_root, execution_cwd,
-            ))
+            if depth < _NESTED_DESCENT_CAP:
+                targets.extend(_extract_mutation_targets(
+                    nested, repo_root, execution_cwd, depth + 1,
+                ))
             if targets:
                 return
             # A keyword heuristic used to fire when extraction found nothing:
@@ -891,7 +902,7 @@ def _process_segment_once(segment_tokens, targets, repo_root, execution_cwd="",
     # merely *carries* a gated path is not denied: that branch could not tell
     # `ruff check <guard>` or `git checkout <guard>` from a write, so it blocked
     # read-only tooling and even reverting this file.
-def _extract_mutation_targets(command, repo_root, execution_cwd=""):
+def _extract_mutation_targets(command, repo_root, execution_cwd="", depth=0):
     targets: list[dict] = []
     tokens = _tokenize(command)
     if not tokens:
@@ -918,15 +929,35 @@ def _extract_mutation_targets(command, repo_root, execution_cwd=""):
     shell_values: dict[str, str] = {}
     for line in _unquoted_lines(command):
         line_tokens = _tokenize(line) if line.strip() else []
-        if line_tokens:
-            line_quoted = _quoted_flags(line, len(line_tokens))
-            line_tokens, line_quoted = _collapse_substitutions(
-                line_tokens, line_quoted,
+        if not line_tokens:
+            continue
+        line_quoted = _quoted_flags(line, len(line_tokens))
+        if line_quoted is not None:
+            collapsed, collapsed_quoted = _collapse_substitutions(
+                line_tokens, line_quoted, line,
             )
             _walk_segments(
-                line_tokens, shell_values, targets, repo_root, execution_cwd,
-                line_quoted,
+                collapsed, shell_values, targets, repo_root, execution_cwd,
+                collapsed_quoted, depth,
             )
+            continue
+        # Alignment failed, so the collapse cannot know whether a `` ` `` or a
+        # `$(` is an operator or a literal. Guessing "operator" made it delete
+        # tokens — including a following `; cp <payload> <receipt>` — and no
+        # downstream union could recover them, because they were gone before
+        # segmentation. Union at this level instead: classify with the collapse
+        # applied AND with it skipped, and keep every target either produces.
+        for collapse in (True, False):
+            variant, variant_quoted = (
+                _collapse_substitutions(line_tokens, None, line) if collapse
+                else (line_tokens, None)
+            )
+            found: list[dict] = []
+            _walk_segments(
+                variant, dict(shell_values), found, repo_root, execution_cwd,
+                variant_quoted, depth,
+            )
+            targets.extend(item for item in found if item not in targets)
 
     return targets
 
@@ -1023,74 +1054,123 @@ def _unquoted_lines(command):
 _SUBSTITUTION_PLACEHOLDER = "$()"
 
 
-def _collapse_substitutions(tokens, quoted):
-    """Collapse `$( ... )`, `<( ... )`, `>( ... )` and backtick spans to one token.
+def _collapse_substitutions(tokens, quoted, command=""):
+    """Collapse `$( … )`, `<( … )`, `>( … )` and backtick spans to one token.
 
     `punctuation_chars=True` emits `$`, `(`, `pwd`, `)` as four words where bash
     builds one (process substitution) or zero-or-more (command substitution).
     Because `(` and `)` are boundaries, the segment ended mid-command and the
     destination landed alone in the next segment as its own "command word",
-    where no verb branch matches -- so `cp payload $(pwd)/<receipt>` and
-    `cp <(echo hi) <receipt>` wrote the artifact with the gate silent. The
-    unquoted `$(pwd)/...` spelling is everyday phrasing, not an evasion.
+    where no verb branch matched — `cp payload $(pwd)/<receipt>` wrote the
+    artifact with the gate silent, and the unquoted `$(pwd)/…` spelling is
+    everyday phrasing.
 
-    The span becomes one opaque placeholder, so parentheses inside it can never
-    split a segment and the operand positions on either side are preserved.
+    Two rules keep this from becoming a bypass of its own:
+
+    * **Never delete a token the scan could not bound.** An unterminated span
+      used to consume the rest of the line — including a following
+      `; cp <payload> <receipt>` — which is a laundering direction the
+      positional-identity invariant does not cover, because it removes words
+      rather than moving them. If no closer is found, nothing is collapsed.
+    * **Punctuation arrives clustered.** shlex emits `))`, `);`, `)&&`, `)|`
+      and `)>>` as single tokens, so a closer is detected by *counting* parens
+      inside each token, and whatever follows the closing paren in that same
+      token is pushed back so the boundary it carries still splits.
     """
     collapsed = []
     flags = [] if quoted is not None else None
+    pending = list(tokens)
+    pending_quoted = list(quoted) if quoted is not None else None
     index = 0
-    while index < len(tokens):
-        token = tokens[index]
-        is_quoted = quoted is not None and index < len(quoted) and quoted[index]
-        # `<(` and `>(` arrive as one token; `$` + `(` as two.
-        opens_span = not is_quoted and (
-            (token in ("$", "<", ">") and index + 1 < len(tokens)
-             and tokens[index + 1] == "(")
-            or token in ("<(", ">(", "$(")
-            or token == "`"
+    while index < len(pending):
+        token = pending[index]
+        is_quoted = (
+            pending_quoted is not None
+            and index < len(pending_quoted)
+            and pending_quoted[index]
         )
-        if opens_span:
-            closer = ")" if token != "`" else "`"
-            depth = 1 if token in ("<(", ">(", "$(") else 0
-            scan = index + 1
-            while scan < len(tokens):
-                if tokens[scan] == "(":
-                    depth += 1
-                elif tokens[scan] == closer:
-                    if closer == "`" or depth <= 1:
+        opener_len = 0
+        backtick = False
+        if not is_quoted:
+            if token == "`":
+                backtick = True
+                opener_len = 1
+            elif token in ("$", "<", ">") and index + 1 < len(pending) \
+                    and pending[index + 1].startswith("("):
+                opener_len = 1
+            elif token.endswith("$") and index + 1 < len(pending) \
+                    and pending[index + 1].startswith("("):
+                # Glued opener: `-t$(`, `--target-directory=$(`, `V=$(`.
+                opener_len = 1
+            elif "(" in token and token.rstrip("(").endswith(("$", "<", ">")):
+                opener_len = 1
+        if not opener_len:
+            collapsed.append(token)
+            if flags is not None:
+                flags.append(is_quoted)
+            index += 1
+            continue
+
+        depth = token.count("(")
+        scan = index + 1
+        tail = ""
+        found = False
+        while scan < len(pending):
+            current = pending[scan]
+            if backtick:
+                if current == "`":
+                    found = True
+                    break
+            else:
+                depth += current.count("(")
+                closers = current.count(")")
+                if closers:
+                    depth -= closers
+                    if depth <= 0:
+                        found = True
+                        # `);` and `)&&` carry a boundary after the closer.
+                        tail = current[current.rindex(")") + 1:]
                         break
-                    depth -= 1
-                scan += 1
-            index = scan + 1
-            # `$(pwd)/doc/...` is ONE word to bash, but shlex leaves `/doc/...`
-            # as a separate token, and an absolute path resolves outside the
-            # repo so the artifact stopped being classified. Emit the suffix
-            # alone, repo-relative: one token, matching bash's word count, and
-            # classifiable. `$(pwd)/`, `$(git rev-parse --show-toplevel)/` and
-            # friends all expand to a repo root.
-            if index < len(tokens) and tokens[index].startswith("/"):
-                collapsed.append(tokens[index].lstrip("/"))
-                if flags is not None:
-                    flags.append(
-                        quoted is not None and index < len(quoted)
-                        and quoted[index]
-                    )
-                index += 1
-                continue
-            collapsed.append(_SUBSTITUTION_PLACEHOLDER)
+            scan += 1
+        if not found:
+            # Unbounded span: keep the token as-is rather than deleting the
+            # remainder of the line.
+            collapsed.append(token)
+            if flags is not None:
+                flags.append(is_quoted)
+            index += 1
+            continue
+
+        # Keep whatever the opener was glued to: `--target-directory=$(pwd)/x`
+        # must stay `--target-directory=x`, or the option name is lost and the
+        # destination stops being read as one.
+        prefix = token[:token.index("(")] if "(" in token else token
+        prefix = prefix.rstrip("$<>`")
+        index = scan + 1
+        if tail:
+            pending.insert(index, tail)
+            if pending_quoted is not None:
+                pending_quoted.insert(index, False)
+        # `$(pwd)/doc/…` is ONE word to bash, but shlex leaves `/doc/…` as a
+        # separate token, and an absolute path resolves outside the repo so the
+        # artifact stopped being classified. Merge only when the source text
+        # really has `)` immediately followed by `/` — otherwise a genuinely
+        # separate operand would be rebased into the repo.
+        glued_suffix = ")/" in command if command else True
+        if (not tail and glued_suffix and index < len(pending)
+                and pending[index].startswith("/")):
+            collapsed.append(prefix + pending[index].lstrip("/"))
             if flags is not None:
                 flags.append(False)
+            index += 1
             continue
-        collapsed.append(token)
+        collapsed.append(_SUBSTITUTION_PLACEHOLDER)
         if flags is not None:
-            flags.append(is_quoted)
-        index += 1
+            flags.append(False)
     return collapsed, flags
 
-
 def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
-                   quoted=None):
+                   quoted=None, depth=0):
     idx = 0
     while idx < len(tokens):
         j = idx
@@ -1134,7 +1214,7 @@ def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
             expanded, targets, repo_root, execution_cwd, segment_quoted,
         )
         _process_segment(
-            expanded, targets, repo_root, execution_cwd, segment_quoted,
+            expanded, targets, repo_root, execution_cwd, segment_quoted, depth,
         )
         idx = j + 1
     if quoted is None:
@@ -1149,7 +1229,7 @@ def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
         # command. The target set is identical either way; the call does not
         # depend on `idx`.
         unsplit: list[dict] = []
-        _process_segment(tokens, unsplit, repo_root, execution_cwd, None)
+        _process_segment(tokens, unsplit, repo_root, execution_cwd, None, depth)
         targets.extend(item for item in unsplit if item not in targets)
 def _deny(target, command):
     rel = target.get("path", "")
