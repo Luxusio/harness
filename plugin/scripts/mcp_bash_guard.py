@@ -32,13 +32,18 @@ except Exception:
 GATE_NAME = "mcp_bash_guard"
 _COMMAND_LENGTH_CAP = 64 * 1024
 _GUARD_STDIN_CAP = 128 * 1024
-# `punctuation_chars=True` emits `>|`, `&>`, `&>>` and `>&` as single tokens.
-# None of them start with `>` or a digit, so `_INLINE_REDIRECT_RE` misses them
-# too, and the path token that follows was never inspected: `echo x >| PLAN.md`
-# truncated a protected artifact through the gate. `>&` is included for the same
-# reason; the fd-duplication spelling (`2>&1`) is harmless here because the
-# following token is `1`, which is not a protected path.
 REDIRECT_TOKENS = {">", ">>", "1>", "1>>", ">|", "&>", "&>>", ">&"}
+# Enumerating spellings is what made this leak. `punctuation_chars=True` emits a
+# whole redirect operator as one token, and `_INLINE_REDIRECT_RE` then captured
+# the operator's own trailing punctuation as the "path": `>|` matched with
+# group(2) == "|", so the real target — the next token — was never inspected and
+# `echo x >| PLAN.md` truncated a protected artifact through the gate. Any
+# spelling absent from the set above leaked the same way, `>>|` included.
+#
+# So match the shape instead: optional fd digits, an optional leading `&`, one
+# or two `>`, and an optional `|`/`&` suffix. A token that is entirely redirect
+# punctuation carries no path, so its target is the following token.
+_PURE_REDIRECT_OP_RE = re.compile(r"^\d*&?>{1,2}[|&]?$")
 # Commands that cannot themselves write a file. Naming a protected artifact or
 # lifecycle symbol in their arguments (a grep pattern, an `echo` banner) is
 # inspection, not mutation, so it must not deny the segment.
@@ -95,7 +100,7 @@ def _is_non_mutating_command(cmd, args):
     if cmd in _OUTPUT_OPTION_COMMANDS:
         return not _has_output_option(args)
     return False
-LAST_ARG_MUTATORS = {"cp", "mv", "install", "touch", "truncate"}
+LAST_ARG_MUTATORS = {"cp", "mv", "install", "touch", "truncate", "rsync"}
 TEE_COMMAND = "tee"
 LIFECYCLE_RECEIPT_ENTRYPOINTS = {
     "background_hook.py", "subagent_lifecycle.py", "codex_lifecycle_watcher.py",
@@ -230,9 +235,42 @@ def _embedded_path_candidates(tokens):
         visible,
     ))
     return candidates
+def _append_directory_destination_targets(
+    cmd, non_env, destination, targets, repo_root, execution_cwd="",
+):
+    """Classify `<destination>/<source basename>` when the destination is a dir.
+
+    `cp`, `mv`, `install` and `rsync` accept a directory as the final operand and
+    derive the real filename from each source. That derived path is not a token,
+    so last-operand classification saw only the directory and allowed the write.
+    """
+    if not destination:
+        return
+    resolved = destination if os.path.isabs(destination) else os.path.join(
+        execution_cwd or repo_root or os.getcwd(), destination,
+    )
+    try:
+        if not os.path.isdir(resolved):
+            return
+    except OSError:
+        return
+    sources = [
+        token for token in non_env[1:]
+        if not token.startswith("-") and token != destination
+    ]
+    for source in sources:
+        basename = os.path.basename(source.rstrip("/"))
+        if not basename:
+            continue
+        _append_target(
+            targets, os.path.join(destination, basename),
+            f"{cmd} into directory", repo_root, execution_cwd,
+        )
+
+
 def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd=""):
     for index, token in enumerate(tokens):
-        if token in REDIRECT_TOKENS and index + 1 < len(tokens):
+        if _PURE_REDIRECT_OP_RE.match(token) and index + 1 < len(tokens):
             _append_target(
                 targets, tokens[index + 1], "shell redirection",
                 repo_root, execution_cwd,
@@ -241,7 +279,9 @@ def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd=""):
         inline = _INLINE_REDIRECT_RE.match(token)
         if inline:
             candidate = inline.group(2).strip()
-            if candidate and candidate not in ("&1", "&2"):
+            # `&1`/`&2` are fd duplications, and a candidate made only of redirect
+            # punctuation is the operator's own tail, not a path.
+            if candidate and candidate not in ("&1", "&2") and candidate.strip("|&"):
                 _append_target(
                     targets, candidate, "shell redirection",
                     repo_root, execution_cwd,
@@ -260,9 +300,7 @@ def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd="")
     # miss it, then `unicode_escape('')` and `ast.parse('')` both succeed and the
     # command allows. Bash word-splitting makes the route practical for exactly
     # the whitespace-free payloads a forgery one-liner uses.
-    unquoted_substitution = code in {"$", "`"} or (
-        code == "$" and tokens[operand_index + 1:operand_index + 2] == ["("]
-    )
+    unquoted_substitution = code in {"$", "`"}
     if unquoted_substitution or "$(" in code or "`" in code:
         # Command substitution resolves at exec time, so the string parsed below
         # is not the program that runs. The AST parse is the control that catches
@@ -864,10 +902,22 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
                     targets, operand, f"{cmd} protected operand",
                     repo_root, execution_cwd,
                 )
+        if cmd == "mv":
+            _append_directory_destination_targets(
+                cmd, non_env, _last_non_option(non_env), targets,
+                repo_root, execution_cwd,
+            )
         return
     if cmd in LAST_ARG_MUTATORS:
-        _append_target(
-            targets, _last_non_option(non_env), cmd, repo_root, execution_cwd
+        destination = _last_non_option(non_env)
+        _append_target(targets, destination, cmd, repo_root, execution_cwd)
+        # A directory destination hides the effective target: `cp forged
+        # doc/harness/tasks/T/` writes `<dir>/<source basename>`, a path that
+        # never appears as a token, so classifying only the last operand let a
+        # one-call receipt forgery through. Reconstruct what each source would
+        # land on.
+        _append_directory_destination_targets(
+            cmd, non_env, destination, targets, repo_root, execution_cwd,
         )
         return
     if cmd in {"ln", "link"}:

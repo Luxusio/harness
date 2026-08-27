@@ -212,16 +212,18 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             self.assertIsNone(decision)
 
     def test_alternate_redirect_operators_deny(self):
-        """`>|`, `&>`, `&>>`, `>&` are redirects too.
+        """Every redirect spelling routes its target, not just the enumerated ones.
 
-        They tokenize as single punctuation tokens that start with neither `>`
-        nor a digit, so both REDIRECT_TOKENS and _INLINE_REDIRECT_RE missed them
-        and the following path was never inspected. `echo x >| PLAN.md`
-        truncated a protected artifact straight through the gate.
+        `punctuation_chars=True` emits the operator as one token, and
+        `_INLINE_REDIRECT_RE` then captured the operator's own trailing
+        punctuation as the path (`>|` matched with group(2) == "|"), so the real
+        target — the next token — was never inspected. `echo x >| PLAN.md`
+        truncated a protected artifact through the gate. `>>|` leaked the same
+        way and was missed by the first fix, which enumerated spellings.
         """
         with scratch_task_in_real_repo("pr1-altredir") as task_dir:
             receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
-            for op in (">|", "&>", "&>>", ">&"):
+            for op in (">|", "&>", "&>>", ">&", ">>|", "&>|", "2>", "1>>"):
                 with self.subTest(op=op):
                     decision, reason = parse_decision(
                         _run_bash(f"echo x {op} {receipts}").stdout
@@ -229,10 +231,48 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
-    def test_fd_duplication_still_allows(self):
-        """`2>&1` must not be read as a redirect onto a protected path."""
-        decision, _ = parse_decision(_run_bash("echo hello 2>&1").stdout)
-        self.assertIsNone(decision)
+    def test_fd_duplication_and_devnull_still_allow(self):
+        """The shape rule must not turn ordinary redirects into denies."""
+        for command in (
+            "echo hello 2>&1",
+            "pytest -q 2>&1 | tail -5",
+            "echo hi > /tmp/out.txt",
+            "echo hi &> /dev/null",
+            "echo hi >| /tmp/out.txt",
+        ):
+            with self.subTest(command=command):
+                decision, _ = parse_decision(_run_bash(command).stdout)
+                self.assertIsNone(decision)
+
+    def test_copy_into_task_directory_denies(self):
+        """A directory destination hides the effective target.
+
+        `cp forged doc/harness/tasks/T/` writes `<dir>/<source basename>`, a path
+        that never appears as a token. Classifying only the last operand let a
+        one-call receipt forgery through with the guard silent.
+        """
+        with scratch_task_in_real_repo("pr1-dirdest") as task_dir:
+            with tempfile.TemporaryDirectory() as tmp:
+                for artifact in ("RECEIPTS.jsonl", "PLAN.md", "TASK.json"):
+                    source = Path(tmp) / artifact
+                    source.write_text("forged\n", encoding="utf-8")
+                    for verb in ("cp", "mv", "install", "rsync"):
+                        with self.subTest(verb=verb, artifact=artifact):
+                            decision, reason = parse_decision(
+                                _run_bash(f"{verb} {source} {task_dir}/").stdout
+                            )
+                            self.assertEqual(decision, "deny")
+                            self.assertIn("rule=protected-artifact", reason)
+
+    def test_copy_into_unprotected_directory_allows(self):
+        """The reconstruction must not deny ordinary copies."""
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "notes.txt"
+            source.write_text("x\n", encoding="utf-8")
+            dest = Path(tmp) / "sub"
+            dest.mkdir()
+            decision, _ = parse_decision(_run_bash(f"cp {source} {dest}/").stdout)
+            self.assertIsNone(decision)
 
     def test_python_c_command_substitution_denies(self):
         """Command substitution defeats the inline `-c` AST parse.

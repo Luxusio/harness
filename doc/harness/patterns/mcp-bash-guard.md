@@ -54,10 +54,14 @@ before the command basename is examined (fixes a legacy bypass).
 | static `os.link` / `os.rename` / `os.replace` / `os.remove` / `os.unlink` and `Path` mutation calls | protected source and destination arguments |
 | Direct lifecycle receipt entrypoint invocation/import | synthetic `RECEIPTS.jsonl` target |
 
-`2>` stderr redirect **is** blocked when it targets a protected artifact:
-`_INLINE_REDIRECT_RE` matches any file-descriptor number, not just `1`. This is
-an over-block relative to the original "logs are common" intent, kept because a
-stderr redirect onto a receipt file is not a logging pattern worth preserving.
+`2>` stderr redirect **is** blocked when it targets a protected artifact. The
+deny comes from the shape rule in `_extract_redirect_targets` — `2` and `>`
+tokenize separately under `punctuation_chars=True`, so the operator is matched
+and the following token is classified. (`_INLINE_REDIRECT_RE` also tolerates a
+leading fd number, but it is only reachable through the unclosed-quote
+`command.split()` fallback.) This is an over-block relative to the original
+"logs are common" intent, kept because a stderr redirect onto a receipt file is
+not a logging pattern worth preserving.
 
 `background_hook.py`, `subagent_lifecycle.py`, `codex_lifecycle_watcher.py`,
 and direct imports of `record_subagent_receipt` are runtime-owned receipt
@@ -141,13 +145,19 @@ the *name-mention* heuristics. Redirections are detected independently by
 the command name. The relief is also per segment: a `for` wrapper does not
 launder a redirect inside its body.
 
-This invariant only holds for operators actually in `REDIRECT_TOKENS`. Until
-2026-08-26 it silently did not: `>|`, `&>`, `&>>` and `>&` tokenize as single
-punctuation tokens starting with neither `>` nor a digit, so they matched
-neither the set nor `_INLINE_REDIRECT_RE`, and `echo x >| RECEIPTS.jsonl`
-truncated a protected artifact through the gate. Before admitting a new command
-word to the relief sets, confirm the operator inventory here is still complete —
-this argument is what makes that relief safe.
+Until 2026-08-26 that invariant silently did not hold. `punctuation_chars=True`
+emits a whole redirect operator as one token, and `_INLINE_REDIRECT_RE` then
+captured the operator's *own trailing punctuation* as the path — `>|` matched
+with `group(2) == "|"`, a non-path — so the real target, the next token, was
+never inspected and `echo x >| RECEIPTS.jsonl` truncated a protected artifact
+through the gate.
+
+The first fix enumerated the four spellings then known and was wrong for the
+same reason: `>>|` leaked identically. Detection is now shape-based
+(`_PURE_REDIRECT_OP_RE`): a token that is *entirely* redirect punctuation
+carries no path, so its target is the following token. No spelling needs to be
+enumerated, and adding a command word to the relief sets does not require
+re-auditing an operator list.
 
 `GIT_NON_MUTATING_SUBCOMMANDS` covers the same idea for git. `add` and `commit`
 move content into the index and object store and cannot change what a protected
@@ -191,6 +201,21 @@ accepted over-block, since shell quoting is not recoverable after tokenization.
 Other dynamic constructs remain:
 
 - command substitution or backticks around non-Python mutators — not extracted.
+- **hard-link aliases of task-directory artifacts are not caught.** Only native
+  Goal JSON is inode-checked (`_is_goal_control_inode_alias`); `RECEIPTS.jsonl`,
+  `PLAN.md` and `TASK.json` are matched by path and basename, so writing through
+  a pre-existing hard link to one of them allows. Creating the alias in-band
+  still denies, so this needs an alias planted by some other route.
+- **a path the command never names is not classified.** `find … -exec truncate
+  -s0 {} \;`, `find … -delete`, `tar -C <dir> -xf`, and `unzip -d <dir>` all
+  reach a protected artifact without it appearing as a token. A bare filename
+  after `cd` is the same shape under an unrecognized executable (`ed`, `ex`,
+  `vim -es`, `sponge`, `patch`): `_embedded_path_candidates` requires a `/`, so
+  it yields no candidate — note `tee`, `cp` and `echo >` still deny on the
+  identical bare name, because those go through basename classification.
+- `python -c "$VAR"` — variable indirection defeats the inline `-c` AST parse
+  the same way it defeats redirect detection. `read -r CODE < forge.py;
+  python3 -c "$CODE"` allows, while `python3 -c "$(< forge.py)"` denies.
 - `python -m <module> <protected path>` is not inspected. The python branch
   returns after the inline `-c` check, so a stdlib module used as a file-writing
   utility (`python3 -m json.tool in.json <protected path>`) overwrites the
@@ -208,9 +233,18 @@ Other dynamic constructs remain:
   why this gate is a guardrail rather than a control.
 - `python -c` with base64 / `exec(...)` obfuscation — regex patterns miss
   dynamically-constructed writes.
-Gaps are tracked in `doc/harness/tasks/TASK__gate-reliability-pr1/deferred-scope.md`
-and will be revisited in later PRs. `HARNESS_SKIP_MCP_GUARD=1` is the current
-manual override if you need to work around one.
+This list is the tracking surface — the former pointer to
+`doc/harness/tasks/TASK__gate-reliability-pr1/deferred-scope.md` was dangling
+(that task directory does not exist, and task directories are gitignored, so
+they cannot hold durable knowledge). The expected-behavior matrix in
+`doc/common/REQ__process__bash-guard-script-execution.md` is the normative
+statement. `HARNESS_SKIP_MCP_GUARD=1` is the manual override.
+
+None of these gaps is closed by adding another special case. They share one
+cause: the gate classifies *tokens*, and a caller who keeps the artifact path
+out of the token stream is not classified. That is why the accepted position is
+guardrail-not-control, and why receipt integrity rests on hook ownership and
+`task_verify` ordering instead.
 
 ## Performance
 

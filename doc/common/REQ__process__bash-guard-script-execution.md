@@ -54,8 +54,10 @@ and nothing re-checks it at exec time.
 | `python -c` with command substitution or backticks (`$(…)`, `` `…` ``), quoted **or** unquoted | deny | The executed code is not the string the gate can parse, and the inline AST parse is what catches a one-line receipt write. The unquoted form leaves a bare `$` as the operand and needs its own check |
 | `python -c` whose code contains a literal backtick | deny | Accepted over-block: quoting is not recoverable after tokenization, so a backtick cannot be told apart from a substitution |
 | Obfuscated reference (`base64`, computed `__import__`) | allow | Not detectable without inspection this gate no longer performs |
-| `tee`, `sed -i`, `>`/`>>`, `cp`, `mv`, `truncate` targeting a protected artifact | deny | Direct file mutation — this is what the gate actually enforces |
-| Hardlink or inode-alias route to a protected artifact | deny | Identity evasion on the mutation surface |
+| `tee`, `sed -i`, any redirect spelling, `cp`, `mv`, `install`, `rsync`, `truncate` **naming** a protected artifact, or copying into a directory that would produce one | deny | Direct file mutation — this is what the gate actually enforces |
+| The same verbs reaching an artifact without naming it — `find … -exec`, `find … -delete`, `tar -C`/`unzip -d` unpacking over one, a bare filename after `cd` under an unrecognized executable | allow | The path is never a classifiable token. Recorded as a known gap, not a boundary |
+| Hardlink or inode-alias route to **native Goal JSON** | deny | Identity evasion, inode-checked |
+| Hardlink alias of a task-directory artifact (`RECEIPTS.jsonl`, `PLAN.md`, `TASK.json`) | allow once the alias exists | Only Goal JSON is inode-checked; task artifacts are matched by path and basename. Creating the alias in-band still denies |
 
 ## Requirements
 
