@@ -1521,7 +1521,11 @@ def _quotable_operators(command):
     quotes.
     """
     if not command:
-        return frozenset()
+        # Counter, not frozenset: the caller reaches `.items()`, and an
+        # AttributeError here would land in main()'s catch-all and allow the
+        # whole line. Unreachable today (empty lines are skipped upstream), but
+        # this function is one refactor away from being called with "".
+        return collections.Counter()
     try:
         lexer = shlex.shlex(command, posix=False, punctuation_chars=True)
         lexer.whitespace_split = True

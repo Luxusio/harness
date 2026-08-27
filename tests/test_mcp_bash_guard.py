@@ -772,6 +772,30 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 with self.subTest(command=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)
                     self.assertIsNone(decision)
+            # Delimiter idioms. A quoted operator glued to other characters
+            # (`-d';'`) is an ordinary argument, not evidence that a boundary
+            # is a filename — and a *substring* test could not tell the two
+            # apart, so these denied. This is the third recurrence of the
+            # borrowed-quote class, and the first two shipped because nothing
+            # here covered the allow side.
+            for command in (
+                f"rm -f /tmp/t.csv ; cut -d';' -f2 /tmp/d.csv ; wc -l {receipts}",
+                f"rm -f /tmp/a ; sort -t';' -k2 /tmp/d.csv ; head {plan}",
+                f"rm -f /tmp/x ; awk -F';' '{{print $2}}' /tmp/d.csv ; wc -l {receipts}",
+                f"touch /tmp/a ; paste -d';' /tmp/x /tmp/y ; cat {plan}",
+                f"cp /tmp/a /tmp/b ; join -t';' /tmp/x /tmp/y ; cat {receipts}",
+                f"rm -f /tmp/x ; IFS=';' read -r a b < /tmp/f ; cat {plan}",
+                # A genuine standalone quoted `;` — find's -exec terminator —
+                # must not license reinterpreting the *other* two `;`. It did:
+                # the merge glued `rm -rf /tmp/build` to the `find` and
+                # glob-expanded `'*.py'` into a deny on `install.py`, a file
+                # appearing nowhere on the line.
+                f"rm -rf /tmp/build ; find . -name '*.py' -exec grep -l foo {{}} ';'"
+                f" ; wc -l {plan}",
+            ):
+                with self.subTest(command=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertIsNone(decision)
             # The true positives the gating exists for must survive it.
             for command in (
                 f"touch '|' {receipts}",
@@ -873,6 +897,13 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                  " ; ".join(["rm /proc/*/*/*/*"] * 120) + f" ; {write}"),
                 ("ambiguous-pairs",
                  'echo "a"b ; ' + " ; ".join(["echo x"] * 6000) + f" ; {write}"),
+                # Segment count multiplies cost independently of operand count,
+                # so the per-operand check can never fire for short segments.
+                ("many-segments",
+                 ("touch '|' \"$PWD\"/a ; " * 1900) + write),
+                # Each redirect operator costs a path resolution; this was the
+                # last cost loop outside the fail-closed handoff.
+                ("many-redirects", ("> " * 15000) + write),
             ):
                 with self.subTest(shape=label):
                     self.assertLess(len(command), 64 * 1024)

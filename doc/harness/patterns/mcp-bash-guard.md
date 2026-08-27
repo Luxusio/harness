@@ -247,8 +247,17 @@ Other dynamic constructs remain:
   line at 4 s; bounding the substitution scan by "closers remaining" left an
   opener that can never close (`$((` consumes no `)`) rescanning to end of line
   at 4.4 s. `_ANALYSIS_BUDGET_SECONDS` bounds the whole invocation instead, so
-  a new repetition trick cannot reopen the class. Exhausting it degrades to
-  "not extracted", never to deleting a token.
+  a new repetition trick cannot reopen the class.
+
+  Exhausting it **denies**, with `method="uninspectable command (analysis
+  budget exhausted)"`. It does not degrade to "not extracted": on this path
+  "classified nothing" *is* the allow, so refusing to decide is the only
+  fail-closed option, and it joins the oversize-payload and oversize-command
+  denies as a case where the reason legitimately cannot name a cause. That
+  only holds for loops that actually consult the budget — operand
+  classification, the segment walk, redirect extraction, glob expansion and
+  the substitution scan all do. A new cost loop that does not will overrun
+  without ever reaching the deny, so adding one is a security change.
 - **an exception is an allow.** `main()` has a catch-all that exits 0, so any
   input that makes a path call raise suppresses every deny on the line — a
   NUL in one token was enough. `_normalize_candidate_path` swallows
