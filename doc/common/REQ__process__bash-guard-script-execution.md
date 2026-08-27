@@ -82,20 +82,28 @@ and nothing re-checks it at exec time.
   guardrail against accident, not a control against a determined caller. No
   document may describe it as the only control preventing a forged verdict.
 - Known routes past it are documented rather than implied closed. Five classes
-  carry the weight, and two of them are about the guard failing open rather
-  than mis-reading: analysis that exceeds the 3 s hook budget emits no
-  decision (an allow), and any exception reaching `main()` exits 0 (also an
-  allow). Keep classification linear and keep path handling exception-safe. Zeroth, and the one to check first when a bypass is
-  reported: the guard's tokenizer is not bash's, and any divergence in *which
-  word lands where* moves the operand — empty words must be preserved, comments
-  removed only at word start. First, the guard re-implements a partial getopt
-  per verb, so
-  an unmodelled option spelling can hide the destination. Second, it reads token
-  *text* as shell syntax, so it must know how each token was quoted; it
-  establishes that by lexing twice and requiring the two lexes to agree. When
-  they cannot be reconciled it does **not** pick a reading — picking either one
-  is a laundering direction — it classifies under both and denies if either
-  would. See `doc/harness/patterns/mcp-bash-guard.md` § Known gaps.
+  carry the weight. Check them in this order when a bypass is reported:
+
+  1. **Fail-open by timeout.** Analysis that exceeds the hook's 3 s budget emits
+     no decision, which is an allow. Any super-linear path converts every deny
+     on the line into an allow by padding the command. Keep classification
+     linear in command length.
+  2. **Fail-open by exception.** Anything reaching `main()`'s catch-all exits 0,
+     so one unrepresentable token can suppress every deny on the line. Keep path
+     handling exception-safe inside `_normalize_candidate_path`.
+  3. **Tokenizer divergence.** The guard's word list must be positionally
+     identical to bash's — empty words preserved, comments removed only at word
+     start, substitution spans collapsed to one word.
+  4. **Quoting reconciliation.** Token text is read as shell syntax, so the
+     guard must know how each token was quoted. It lexes twice and requires
+     agreement; when the two cannot be reconciled it classifies under *both*
+     readings and denies if either would, because picking a side is a laundering
+     direction in one direction or the other.
+  5. **Per-verb option model.** The guard re-implements a partial getopt for each
+     modelled verb, so an unmodelled option spelling can still hide the
+     destination. Assume more exist.
+
+  See `doc/harness/patterns/mcp-bash-guard.md` § Known gaps for the reproductions.
 
 ## Known remaining friction (not fixed here)
 
