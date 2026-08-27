@@ -422,6 +422,12 @@ def _append_operands(
     skipped = not skip_first
     index = 1
     while index < len(non_env):
+        # Each operand costs a realpath, so a long operand list is the
+        # dominant cost path and the one that overran the hook timeout. Stop
+        # here once the budget is gone; main() turns an exhausted budget into
+        # a deny, so abandoning the walk fails closed rather than allowing.
+        if not index % 256 and _budget_exhausted():
+            return
         token = non_env[index]
         if token == "--":
             index += 1
@@ -1487,26 +1493,24 @@ def _quotable_operators(command):
     command and denied — a reader, blocked, with the deny naming an `rm` operand
     it never had.
 
-    A quoted operator leaves a mark in the source: a quote character touching
-    it. Nothing else distinguishes the two cases, and without the mark there is
-    no reading in which the segments join.
+    A quoted operator appears in the source as a *quoted word* — `'|'`, `"&&"`.
+    The first version of this looked for a quote character merely touching the
+    operator anywhere on the line, which let one occurrence lend its mark to
+    every other occurrence of the same operator: `echo "ok"; rm -rf /tmp/build;
+    cat "$PWD"/<task>/RECEIPTS.jsonl` denied, because the `"` closing `"ok"`
+    sits against a `;` that has nothing to do with the `;` before `cat`. Adding
+    one space before that first `;` made it allow. Requiring the operator to be
+    quoted *as a whole word* removes the borrowing without alignment
+    bookkeeping, which cannot be done here anyway — a `;` inside `"a;b"` is in
+    the text but is not a token, and the reason we are in this branch at all is
+    that quoting is unknown.
     """
     if not command:
         return frozenset()
-    found = set()
-    for operator in BOUNDARY_TOKENS:
-        start = 0
-        while True:
-            at = command.find(operator, start)
-            if at < 0:
-                break
-            before = command[at - 1:at]
-            after = command[at + len(operator):at + len(operator) + 1]
-            if before in ("'", '"') or after in ("'", '"'):
-                found.add(operator)
-                break
-            start = at + 1
-    return frozenset(found)
+    return frozenset(
+        operator for operator in BOUNDARY_TOKENS
+        if f"'{operator}'" in command or f'"{operator}"' in command
+    )
 
 
 def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
@@ -1615,12 +1619,19 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
                 targets.extend(item for item in merged if item not in targets)
             ambiguous_previous = expanded
         idx = j + 1
-    if quoted is None and quotable:
+    unsplit_is_possible = quotable and all(
+        token in quotable for token in tokens if token in BOUNDARY_TOKENS
+    )
+    if quoted is None and unsplit_is_possible:
         # The split itself may be wrong: a quoted `|` is an argument, not a
         # boundary, so classify the unsplit line too and union. Gated on the
         # raw text actually showing a quoted operator — without one there is no
         # reading in which the line is a single command, and taking it anyway
         # denied ordinary readers (`rm -rf "$PWD"/build ; git diff -- <plan>`).
+        #
+        # *Every* boundary must be quotable, not just one: a single unquoted
+        # operator disproves the whole-line reading outright, so one quoted
+        # operator elsewhere must not drag the rest of the line into it.
         #
         # Once per line, NOT once per segment. Inside the loop this was
         # O(segments x tokens), and `quoted is None` is the ordinary
@@ -1735,6 +1746,20 @@ def main():
     targets = _extract_mutation_targets(command, repo_root, hook_cwd)
     if targets:
         _deny(targets[0], command)
+        return 0
+    # Overrunning the budget is not a quiet "classified nothing" — a killed
+    # hook emits no decision, which allows the whole line, so any line that
+    # cannot be analysed in time must fail *closed* like the oversize path
+    # above. The dominant cost is operand classification (one realpath per
+    # operand), which no per-item cap bounds: ~35 KB of short operands under a
+    # single verb spent 2.2 s of CPU before reaching the real write at the end
+    # of the line. Degrading to "not extracted" here would be the allow itself.
+    if _budget_exhausted():
+        _deny({
+            "path": "RECEIPTS.jsonl",
+            "category": "protected-artifact",
+            "method": "uninspectable command (analysis budget exhausted)",
+        }, command[:200])
     return 0
 if __name__ == "__main__":
     try:

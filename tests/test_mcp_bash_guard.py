@@ -725,6 +725,72 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     decision, _ = parse_decision(_run_bash(command).stdout)
                     self.assertIsNone(decision)
 
+    def test_quote_mark_is_not_borrowed_across_occurrences(self):
+        """Quotability belongs to an operator occurrence, not to the line.
+
+        Looking for a quote character merely *touching* an operator anywhere on
+        the line let one occurrence lend its mark to every other occurrence of
+        the same operator: the `"` closing `"ok"` sits against a `;` that has
+        nothing to do with the `;` before `cat`, so ordinary readers denied —
+        with a reason naming a RECEIPTS.jsonl mutation the line never performs.
+        Adding one space before the first `;` made the same line allow.
+
+        Requiring the operator to be quoted as a whole word removes the
+        borrowing without occurrence bookkeeping, which is not possible here:
+        a `;` inside `"a;b"` is in the text but is not a token, and this branch
+        exists precisely because the quoting is unknown.
+        """
+        with scratch_task_in_real_repo("pr1-borrowmark") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            plan = os.path.join(task_dir, "PLAN.md")
+            rel_r = os.path.relpath(receipts, REPO_ROOT)
+            rel_p = os.path.relpath(plan, REPO_ROOT)
+            for command in (
+                f'echo "cleaning"; rm -rf /tmp/build; cat "$PWD"/{rel_r}',
+                f'echo "ok"; rm -f /tmp/x; wc -l "$PWD"/{rel_p}',
+                f'rm -rf /tmp/build; echo "ok"; wc -l "$PWD"/{rel_p}',
+                f'echo "ok"; cp /tmp/a /tmp/b; diff /tmp/b "$PWD"/{rel_p}',
+                f'python3 -c "print(1)"; rm -f /tmp/x; wc -l "$PWD"/{rel_p}',
+                f'echo "ok"&& rm -rf /tmp/build && wc -l "$PWD"/{rel_p}',
+            ):
+                with self.subTest(command=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertIsNone(decision)
+            # The true positives the gating exists for must survive it.
+            for command in (
+                f"touch '|' {receipts}",
+                f"tee '&&' {receipts}",
+                f"touch ');' {receipts}",
+                f"""echo "a"b ; touch '|' {receipts}""",
+            ):
+                with self.subTest(command=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+
+    def test_operand_padding_fails_closed(self):
+        """Overrunning the budget must deny, not silently classify nothing.
+
+        Operand classification costs one realpath each and no per-item cap
+        bounds it, so ~35 KB of short operands under a single verb burned 2.2 s
+        of CPU — 75% of the hook's 3 s budget — before reaching the real write
+        at the end of the line. A killed hook emits no decision, which allows.
+        Unlike the substitution and glob paths, degrading to "not extracted"
+        here *is* the allow, so this path fails closed instead.
+        """
+        with scratch_task_in_real_repo("pr1-padclosed") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            write = f"cp /tmp/x {receipts}"
+            for label, padding in (("quoted-pipe", "touch '|' "),
+                                   ("backslash", "touch \\| "),
+                                   ("quoted-semi", "touch ';' ")):
+                command = (padding * 5700) + write
+                with self.subTest(shape=label):
+                    self.assertLess(len(command), 64 * 1024)
+                    started = time.monotonic()
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertLess(time.monotonic() - started, 3.0)
+                    self.assertEqual(decision, "deny")
+
     def test_glob_containment_is_physical_not_textual(self):
         """`os.path.join(base, "../../*")` starts with base but leaves it.
 

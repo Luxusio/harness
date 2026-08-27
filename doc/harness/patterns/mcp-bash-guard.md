@@ -145,6 +145,19 @@ Other dynamic constructs remain:
   `PLAN.md` and `TASK.json` are matched by path and basename, so writing through
   a pre-existing hard link to one of them allows. Creating the alias in-band
   still denies, so this needs an alias planted by some other route.
+- **an operator spelled across quote runs is not recognised as quotable.**
+  `touch '&''&' <artifact>` builds the token `&&` while the raw text contains
+  no `&&` substring, so the merged reading is not offered and the write
+  allows. The same holds for a backslash-escaped operator (`tee \; <artifact>`)
+  once anything else on the line defeats quote alignment. Both are deliberate
+  obfuscation rather than phrasing anyone reaches by accident, and the
+  alternative — inferring quotability without knowing the quoting — is what
+  produced fabricated denies on ordinary readers. Recorded rather than closed.
+
+  Worth knowing if you touch this: `'&''&'` *used* to deny, but only as a
+  side effect of the borrowed-quote-mark bug. A deny that exists by accident
+  is not coverage, and trading it for correct behaviour on ordinary readers
+  is the right direction under this gate's stated bar.
 - **a substitution in the basename slot is not resolved.** `echo z >
   <task>/$(echo RECEIPTS.jsonl)` allows, as do the `tee`, `sed -i`, `perl -pi`,
   `truncate`, `dd of=`, `cp`, `mv` and `install` spellings of the same
