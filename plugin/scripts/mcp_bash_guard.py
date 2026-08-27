@@ -709,6 +709,15 @@ def _append_directory_destination_targets(
 
 def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd="",
                               quoted=None, quoted_words=frozenset()):
+    """Classify redirect targets in one segment.
+
+    `quoted_words` must already be filtered to spellings whose quoted count
+    covers every occurrence of that token in the line — **presence alone
+    launders**. Passing a raw `_quoted_operator_words(command)` reads as the
+    obvious call and silently restores a bypass: one quoted `>` then suppresses
+    every real `>` on the line. That filtering lives at the caller, far from
+    here, which is exactly how it shipped wrong once.
+    """
     for index, token in enumerate(tokens):
         # The last cost loop outside the fail-closed handoff. Each redirect
         # operator costs a path resolution, so ~16 KB of `> ` padding overran
@@ -722,12 +731,13 @@ def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd="",
         # because failing safe means still classifying the redirect target.
         if quoted is not None and index < len(quoted) and quoted[index]:
             continue
-        # When alignment is unknown, fall back to the same evidence rule the
-        # segment path uses: the raw text showing this operator as a whole
-        # quote-delimited word. Without it `grep -n ">" "$PWD"/<source>` read
-        # the `>` as a real operator and denied a reader, naming a fabricated
-        # `$PWD/...` path. An unquoted operator still classifies its operand,
-        # so the laundering direction is untouched.
+        # When alignment is unknown, apply the same evidence rule the segment
+        # path uses: the raw text showing this operator as a whole
+        # quote-delimited word, *and* enough of them to cover every occurrence
+        # (the caller filters; see the docstring). Without the skip,
+        # `grep -n ">" "$PWD"/<source>` read the `>` as a real operator and
+        # denied a reader, naming a fabricated `$PWD/...` path. Without the
+        # count, one quoted `>` suppressed every real one on the line.
         if quoted is None and token in quoted_words:
             continue
         if _PURE_REDIRECT_OP_RE.match(token) and index + 1 < len(tokens):

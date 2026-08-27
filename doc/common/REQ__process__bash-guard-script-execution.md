@@ -157,6 +157,14 @@ and nothing re-checks it at exec time.
 
 ## Known remaining friction (not fixed here)
 
+- **`CONTRACTS.md` C-05 still lists `python -c open(…,'w')` as a Bash-surface
+  deny. It is unenforced** — verified by execution — and must be dropped when
+  the managed block is next regenerated. Recorded here rather than only in the
+  resolving task's PLAN.md: that file stops being read at close, and the owner
+  it named (`plugin/skills/maintain/SKILL.md`) does not exist, which
+  `contract_lint.py` already reports as a standing C-10 SOFT warning. Meanwhile
+  `CONTRACTS.md` is `@`-imported by `CLAUDE.md`, so every session loads a claim
+  that this guard enforces something it does not.
 - Non-python interpreters (`node`, `ruby`, …) were never inspected; that
   asymmetry is now moot since python is not inspected either.
 - A read-only linter with a gated path argument (`ruff check

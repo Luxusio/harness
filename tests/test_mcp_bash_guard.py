@@ -1008,10 +1008,18 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
             receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
             write = f"cp /tmp/pd {receipts}"
             # The bound asserted is the real contract: `hooks.json` gives the
-            # hook 3 s and a kill emits no decision. Paddings are sized so a
-            # healthy run lands near 0.5 s, leaving room for load on a parallel
-            # test runner while still catching the regressions this pins — the
-            # ones it replaced ran 4.0 s, 4.4 s and 49 s.
+            # hook 3 s and a kill emits no decision.
+            #
+            # Healthy runtime for the rows that actually trip the deadline is
+            # ~1.1 s, not the ~0.5 s an earlier version of this comment
+            # claimed: they run until `_ANALYSIS_BUDGET_SECONDS` (1.0 s) stops
+            # them, plus interpreter start, so raising or lowering the
+            # repetition count does not move it. That leaves ~1.9 s of headroom
+            # under the assertion, which is thinner than it reads on a cold
+            # cache under `-n auto`. The regressions being pinned ran 4.0 s,
+            # 4.4 s, 30 s and 49 s, so the gap is real in the direction that
+            # matters; if this row ever goes flaky, raise the assertion toward
+            # the true 3 s contract rather than shrinking the padding.
             for label, command in (
                 ("arith-openers",
                  "echo " + "$(( " * 8000 + f" ; cp /tmp/pd $(pwd)/{receipts}"),
