@@ -149,12 +149,19 @@ Other dynamic constructs remain:
   line is not reinterpreted.** `cp /tmp/f ';' <artifact>` denies on its own,
   but `echo "a"b ; cp /tmp/f ';' <artifact>` allows: two `;` boundaries, one
   quoted `;`, and no way to tell which is which without the positional
-  alignment this branch by definition lacks. Preferring the merge is worse —
-  it denied `find . -name '*.py' -exec grep -l foo {} ';' ; wc -l <plan>`,
-  reporting an `install.py` that appears nowhere on the line, because the merge
-  glued `rm -rf /tmp/build` to the `find` and glob-expanded `'*.py'`. A file
-  literally named `;` is obfuscation; `find -exec … ';'` is an everyday idiom.
-  The count rule takes the idiom.
+  alignment this branch by definition lacks. Preferring the merge is worse — it
+  denied `rm -rf "$PWD"/build ; find . -name '*.py' -exec grep -l foo {} ';' ;
+  wc -l <plan>`, reporting an `install.py` that appears nowhere on the line,
+  because the merge glued the `rm` to the `find` and glob-expanded `'*.py'`. A
+  file literally named `;` is obfuscation; `find -exec … ';'` is an everyday
+  idiom. The count rule takes the idiom.
+
+  The `"$PWD"` in that reproduction is load-bearing and was missing from the
+  first three versions of this note. Without it `_quoted_flags` aligns,
+  `quotable` is empty, and neither gate is consulted — so the plain spelling
+  allows under every variant, including the buggy one, and proves nothing. A
+  reproduction that does not reproduce is worse than no reproduction: it was
+  cited in four places as the justification for this machinery.
 - **an operator spelled across quote runs is not recognised as quotable.**
   `touch '&''&' <artifact>` builds the token `&&` while the raw text contains
   no `&&` substring, so the merged reading is not offered and the write

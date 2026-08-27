@@ -729,6 +729,37 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     decision, _ = parse_decision(_run_bash(command).stdout)
                     self.assertIsNone(decision)
 
+    def test_repeated_directory_sources_stay_within_the_budget(self):
+        """Directory-shaped sources enumerate their directory, once per operand.
+
+        `_expanded_sources` consults the budget on its glob branch but did not
+        on its `listdir` branch, and neither did the loop calling it — so cost
+        was (repeated directory operands) x (entries in each), a per-item cap
+        defeated by repeating the item. That is the invariant the
+        whole-invocation deadline exists to hold, and this was the last loop
+        outside it.
+
+        The source directory has to be both large and on the repository's own
+        filesystem. 400 entries under /tmp resolve fast enough on tmpfs that
+        the mutant survives; the same directory inside the repo does not. Two
+        earlier cost tests in this file were weak for the same reason, so the
+        placement here is deliberate rather than incidental.
+        """
+        with scratch_task_in_real_repo("pr1-dirsrc") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            source_dir = Path(task_dir) / "manyfiles"
+            source_dir.mkdir()
+            for index in range(400):
+                (source_dir / f"f{index}").write_text("x", encoding="utf-8")
+            command = (
+                f"cp -r {source_dir}/. " * 40
+            ) + f"doc ; cp /tmp/x {receipts}"
+            self.assertLess(len(command), 64 * 1024)
+            started = time.monotonic()
+            decision, _ = parse_decision(_run_bash(command).stdout)
+            self.assertLess(time.monotonic() - started, 3.0)
+            self.assertEqual(decision, "deny")
+
     def test_quote_mark_is_not_borrowed_across_occurrences(self):
         """Quotability belongs to an operator occurrence, not to the line.
 
@@ -760,6 +791,30 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 with self.subTest(command=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)
                     self.assertIsNone(decision)
+            # `$'…'` is not a quoted operator word, however much it looks like
+            # one. posix shlex turns `$';'` into the token `$;`, which is not a
+            # boundary, so counting it raised `quotable[op]` without raising
+            # `boundaries[op]` and the comparison ran between mismatched
+            # populations — blocking a reader and naming a PLAN.md mutation the
+            # line never performs. It bought nothing: a `$'…'` word is a
+            # literal string in bash and can never be the separator the merge
+            # is reinterpreting, so `touch $'|' <receipt>` denies either way.
+            for command in (
+                f"cp /tmp/a $';' ; cat {plan}",
+                f"install -m644 /tmp/a $';' ; head {plan}",
+                f"cp /tmp/a $'|' ; wc -l {plan}",
+            ):
+                with self.subTest(command=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertIsNone(decision)
+            # ...while the operator-as-filename writes still deny.
+            for command in (
+                f"touch $'|' {receipts}",
+                f"tee $'&&' {receipts}",
+            ):
+                with self.subTest(command=command):
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
             # One quoted operator must not drag the rest of the line into the
             # whole-line reading. Here `'|'` is a genuine quoted literal, but
             # the `;` separating the reader is a real boundary — relaxing the
@@ -786,12 +841,18 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 f"cp /tmp/a /tmp/b ; join -t';' /tmp/x /tmp/y ; cat {receipts}",
                 f"rm -f /tmp/x ; IFS=';' read -r a b < /tmp/f ; cat {plan}",
                 # A genuine standalone quoted `;` — find's -exec terminator —
-                # must not license reinterpreting the *other* two `;`. It did:
-                # the merge glued `rm -rf /tmp/build` to the `find` and
-                # glob-expanded `'*.py'` into a deny on `install.py`, a file
-                # appearing nowhere on the line.
-                f"rm -rf /tmp/build ; find . -name '*.py' -exec grep -l foo {{}} ';'"
-                f" ; wc -l {plan}",
+                # must not license reinterpreting the *other* two `;`. Without
+                # the count rule the merge glues `rm -rf "$PWD"/build` to the
+                # `find` and glob-expands `'*.py'` into a deny on `install.py`,
+                # a file appearing nowhere on the line.
+                #
+                # The `"$PWD"` is load-bearing, not decoration: without it
+                # `_quoted_flags` aligns, `quotable` is empty, and neither gate
+                # is consulted — so the plain spelling passes with the rule
+                # reverted and pins nothing. It was the only recorded
+                # reproduction for three commits.
+                f'rm -rf "$PWD"/build ; find . -name \'*.py\''
+                f" -exec grep -l foo {{}} ';' ; wc -l {plan}",
             ):
                 with self.subTest(command=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)

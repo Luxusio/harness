@@ -610,6 +610,14 @@ def _expanded_sources(source, execution_cwd, repo_root):
         resolved = directory if os.path.isabs(directory) else os.path.join(
             base, directory,
         )
+        # The glob branch above consults the budget; this one enumerates a
+        # directory and did not, so repeating a directory-shaped source operand
+        # multiplied `listdir` cost without ever being observed. Either this
+        # check or the one in the calling loop is sufficient on its own —
+        # measured — but both are kept, because which one runs first depends on
+        # operand shape and neither is on a hot path.
+        if _budget_exhausted():
+            return []
         try:
             return sorted(os.listdir(resolved))[:_GLOB_EXPANSION_CAP]
         except (OSError, ValueError):
@@ -675,6 +683,13 @@ def _append_directory_destination_targets(
         and token not in consumed
     ]
     for source in sources:
+        # Cost here is (repeated directory-source operands) x (entries in each,
+        # capped at _GLOB_EXPANSION_CAP), which is a per-item cap defeated by
+        # repeating the item — the exact shape the whole-invocation deadline
+        # exists to bound. 30 repetitions of `cp -r <400-entry dir>/.` ran past
+        # the 3s hook timeout, and a killed hook allows the line.
+        if _budget_exhausted():
+            return
         for name in _expanded_sources(source, execution_cwd, repo_root):
             _append_target(
                 targets, os.path.join(destination, name),
@@ -1489,7 +1504,9 @@ def _expand_control_clusters(tokens, quoted):
 
 
 def _quotable_operators(command):
-    """Operators the raw text shows adjacent to a quote character.
+    """Count the whole quoted words that spell a control operator.
+
+    Returns a `Counter`, because presence is not enough — see the caller.
 
     The alternate readings — merging a pair of segments across a boundary, and
     classifying the unsplit line — exist for one shape: a *quoted* operator that
@@ -1500,8 +1517,8 @@ def _quotable_operators(command):
     command and denied — a reader, blocked, with the deny naming an `rm` operand
     it never had.
 
-    A quoted operator appears in the source as a *quoted word* — `'|'`, `"&&"`,
-    `$'|'` — so the test is against the lexer's raw words, not the raw text.
+    A quoted operator appears in the source as a *quoted word* — `'|'`, `"&&"` —
+    so the test is against the lexer's raw words, not the raw text.
 
     Two earlier spellings of this both leaked, in the same direction, and the
     difference between them is the lesson. First it looked for a quote merely
@@ -1520,12 +1537,9 @@ def _quotable_operators(command):
     glued to other characters is a normal argument that happens to contain
     quotes.
     """
-    if not command:
-        # Counter, not frozenset: the caller reaches `.items()`, and an
-        # AttributeError here would land in main()'s catch-all and allow the
-        # whole line. Unreachable today (empty lines are skipped upstream), but
-        # this function is one refactor away from being called with "".
-        return collections.Counter()
+    # No empty-command guard: `_unquoted_lines` skips blank lines, and
+    # `command` is keyword-only and required, so omission is a TypeError rather
+    # than a silent empty result. `shlex` on "" yields no words anyway.
     try:
         lexer = shlex.shlex(command, posix=False, punctuation_chars=True)
         lexer.whitespace_split = True
@@ -1535,9 +1549,16 @@ def _quotable_operators(command):
         raw_words = command.split()
     found = collections.Counter()
     for word in raw_words:
-        if word.startswith("$'") and word.endswith("'") and len(word) > 2:
-            inner = word[2:-1]
-        elif len(word) > 1 and word[0] == word[-1] and word[0] in "'\"":
+        # No `$'…'` branch. It looks like the same shape but is not: posix
+        # `shlex` turns `$';'` into the token `$;`, which is not a boundary, so
+        # counting it raised `quotable[op]` without raising `boundaries[op]` and
+        # the comparison ran between mismatched populations. The result was
+        # false denies only — `cp /tmp/a $';' ; cat <plan>` blocked a reader and
+        # named a PLAN.md mutation the line never performs. It bought nothing
+        # either: `touch $'|' <receipt>` denies without it, because a `$'…'`
+        # word is a literal string in bash and can never be the separator the
+        # merge is reinterpreting.
+        if len(word) > 1 and word[0] == word[-1] and word[0] in "'\"":
             inner = word[1:-1]
         else:
             continue
@@ -1551,8 +1572,8 @@ def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
     """Segment the line and classify each segment.
 
     `command` is keyword-only and required on purpose: without it
-    `_quotable_operators` returns an empty set, which disables both alternate
-    readings — the allow-leaning direction, in a helper whose job is
+    `_quotable_operators` finds no quoted operators, which disables both
+    alternate readings — the allow-leaning direction, in a helper whose job is
     conservative unioning. A default would let a future call site opt out of
     classification by omission.
 
@@ -1603,7 +1624,7 @@ def _walk_segments_once(tokens, shell_values, targets, repo_root,
     # An operator is only reinterpretable when there are at least as many
     # quoted spellings of it as there are boundaries of it. This gates the
     # pairwise merge as well as the whole-line reading: one quoted `;` was
-    # licensing a merge across a *real* `;`, which joined `rm -rf /tmp/build`
+    # licensing a merge across a *real* `;`, which joined `rm -rf "$PWD"/build`
     # to `find . -name '*.py' …` and glob-expanded into a deny on `install.py`,
     # a file appearing nowhere on the line.
     mergeable = {
