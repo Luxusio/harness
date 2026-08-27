@@ -288,6 +288,50 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
+    def test_glob_named_decoy_does_not_fail_the_guard_open(self):
+        """A self-matching glob name must not crash the guard into an allow.
+
+        `glob("/tmp/x*y")` returns `["/tmp/x*y"]` when a file is literally named
+        that, so expanding recursively re-entered with an identical token until
+        RecursionError — which main()'s catch-all swallowed into sys.exit(0),
+        allowing the *entire* command. One `touch` disabled every deny.
+        """
+        with scratch_task_in_real_repo("pr1-globhaz") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            with tempfile.TemporaryDirectory() as tmp:
+                decoy = os.path.join(tmp, "x*y")
+                Path(decoy).write_text("", encoding="utf-8")
+                for command in (
+                    f"cat /tmp/f | tee {decoy} {receipts}",
+                    f"echo x > {receipts}; echo y > {decoy}",
+                ):
+                    with self.subTest(command=command):
+                        decision, reason = parse_decision(_run_bash(command).stdout)
+                        self.assertEqual(decision, "deny")
+                        self.assertIn("rule=protected-artifact", reason)
+
+    def test_leading_shell_control_word_does_not_launder(self):
+        """`time cp …` and `{ cp …; }` dispatched on the prefix, not the verb."""
+        with scratch_task_in_real_repo("pr1-prefix") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for prefix in ("time", "!", "command", "nohup"):
+                with self.subTest(prefix=prefix):
+                    decision, reason = parse_decision(
+                        _run_bash(f"{prefix} cp /tmp/x {receipts}").stdout
+                    )
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_multiline_quoted_argument_is_not_a_command(self):
+        """Line splitting must not turn a quoted message body into segments."""
+        for command in (
+            'git commit -m "line one\nmentions subagent_lifecycle.py"',
+            "git commit -m 'first\nrecord_subagent_receipt in the body'",
+        ):
+            with self.subTest(command=command.splitlines()[0]):
+                decision, _ = parse_decision(_run_bash(command).stdout)
+                self.assertIsNone(decision)
+
     def test_glob_in_artifact_basename_denies(self):
         """The shell expands the glob after the gate decided.
 

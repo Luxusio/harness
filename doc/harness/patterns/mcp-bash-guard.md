@@ -33,13 +33,17 @@ categories. Paths outside all three are silent allow.
 
 ## Mutation verbs detected
 
-The guard splits the command into lines, shlex-tokenises each (respecting quotes
-+ shell operators), splits those at `BOUNDARY_TOKENS` (`&&`, `||`, `|`, `;`,
-`&`), then inspects each command segment. The line split is separate and
-necessary: `shlex(whitespace_split=True)` consumes newlines as whitespace and
-never emits them, so a `"\n"` boundary token could never match and a multi-line
-command collapsed into a single segment — dispatch is on the first command word,
-so `echo start` on line 1 laundered any mutator on line 2. Leading env assignments (`FOO=bar sed ...`) are skipped
+The guard splits the command at newlines **outside quotes**, shlex-tokenises
+each line (respecting quotes + shell operators), splits those at
+`BOUNDARY_TOKENS` (`&&`, `||`, `|`, `;`, `&`), then inspects each command
+segment. The line split is separate and necessary:
+`shlex(whitespace_split=True)` consumes newlines as whitespace and never emits
+them, so a `"\n"` boundary token could never match and a multi-line command
+collapsed into a single segment — dispatch is on the first command word, so
+`echo start` on line 1 laundered any mutator on line 2. The quote-awareness is
+equally necessary in the other direction: splitting raw text made the body of a
+`git commit -m "…"` message into command segments, so a message naming a
+lifecycle symbol was denied as a receipt mutation. Leading env assignments (`FOO=bar sed ...`) are skipped
 before the command basename is examined (fixes a legacy bypass).
 
 | Verb / pattern | Target extracted from |
@@ -50,8 +54,8 @@ before the command basename is examined (fixes a legacy bypass).
 | `perl -pi` (and `perl -pi.bak`) | last non-option argument |
 | `cp`, `mv`, `install`, `rsync`, `touch`, `truncate` | last non-option argument, or `-t <dir>` / `--target-directory=<dir>` when present |
 | `cp`/`mv`/`install`/`rsync` into a **directory** | the reconstructed `<dest>/<name>` for each source, since that path is never a token. `dir/.` and `dir/*` sources are enumerated rather than basenamed |
-| glob token (`*`, `?`, `[`) anywhere a path is classified | every existing path the pattern expands to, capped at `_GLOB_EXPANSION_CAP`, plus the literal token |
-| `python -c` calling `os.system` / `os.popen` / `subprocess.*` | every string constant reachable from that call, re-tokenised |
+| glob token (`*`, `?`, `[`) anywhere a path is classified | every existing path the pattern expands to, plus the literal token. `_GLOB_EXPANSION_CAP` bounds the walk itself (`islice` over `iglob`). A match identical to the pattern — a file literally named `x*y` — is dropped, since re-classifying it is what made expansion non-terminating |
+| `python -c` calling `os.system` / `os.popen` / `subprocess.*` | the reconstructed command line (argv lists are joined first), routed back through this same verb table — so the shelled-out *verb* decides, and `subprocess.run(['pytest', path])` stays allowed |
 | `ln`, `link`, `cp -l` / `cp --link` | every source/destination operand (hard-link export protection) |
 | `mv`, `rm`, `unlink`, `chmod`, `chown`, `chgrp` | every non-option operand |
 | `python[3] -c "open('x','w')"` | first argument of `open()` |
@@ -149,7 +153,16 @@ Two sets in `mcp_bash_guard.py` express the relief:
 `_safe_lifecycle_source_inspection()` and `_safe_gated_path_inspection()`.
 
 **Why this is safe, and the invariant to preserve:** these sets suppress only
-the *name-mention* heuristics. Redirections are detected independently by
+the *name-mention* heuristics — but only because the head word is stripped
+first. Dispatch is on the first token, so a decorating prefix used to select the
+relief and suppress everything: `time cp <payload> <receipt>`, `{ cp …; }` and
+`! cp …` laundered the mutation-verb dispatch, the lifecycle-entrypoint deny and
+the uninspected-inline-runtime deny in one call. `COMMAND_PREFIX_WORDS` is
+stripped in `_process_segment` before dispatch. Loop and conditional *headers*
+(`for`, `while`, `if`, `case`) are deliberately not stripped — their first
+operand is a variable or word list, not a command.
+
+Redirections are detected independently by
 `_extract_redirect_targets()`, which walks the token stream for tokens matching
 the redirect *shape* (`_PURE_REDIRECT_OP_RE`) and inline redirect forms
 regardless of the command word, so

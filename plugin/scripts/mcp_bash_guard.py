@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import ast
 import glob
+import itertools
 import json
 import re
 import shlex
@@ -33,8 +34,10 @@ except Exception:
 GATE_NAME = "mcp_bash_guard"
 _COMMAND_LENGTH_CAP = 64 * 1024
 _GUARD_STDIN_CAP = 128 * 1024
-# Bound on how many matches a glob token is expanded to before classification.
-# A pathological pattern must not turn a PreToolUse hook into a directory walk.
+# Bound on how many matches a glob token is expanded to. Applied through
+# islice over iglob, so it bounds the directory walk itself and not merely the
+# result list — a pathological pattern must not turn a PreToolUse hook into a
+# full filesystem traversal.
 _GLOB_EXPANSION_CAP = 256
 # Redirect operators are matched by shape, never by enumeration. An earlier
 # `REDIRECT_TOKENS` set listed spellings, and `punctuation_chars=True` emits a
@@ -104,6 +107,18 @@ def _is_non_mutating_command(cmd, args):
     if cmd in _OUTPUT_OPTION_COMMANDS:
         return not _has_output_option(args)
     return False
+# Words that may precede a real command without changing what it does. Dispatch
+# is on the first token, and `_is_non_mutating_command` treats any
+# SHELL_CONTROL_WORDS head as relief, so `time cp <payload> <receipt>` and
+# `{ cp …; }` suppressed the entire mutation-verb dispatch, the
+# lifecycle-entrypoint deny and the uninspected-inline-runtime deny in one call.
+# Strip them and dispatch on what actually runs.
+#
+# Loop and conditional *headers* (`for`, `while`, `until`, `if`, `case`,
+# `select`, `function`) stay out: their first operand is a variable or word
+# list, not a command, and stripping them would classify it as one.
+COMMAND_PREFIX_WORDS = {"time", "!", "{", "then", "else", "elif", "do", "command",
+                        "builtin", "exec", "nohup", "nice"}
 LAST_ARG_MUTATORS = {"cp", "mv", "install", "touch", "truncate", "rsync"}
 TEE_COMMAND = "tee"
 LIFECYCLE_RECEIPT_ENTRYPOINTS = {
@@ -221,14 +236,30 @@ def _glob_expansions(token, repo_root, execution_cwd=""):
     base = execution_cwd or repo_root or os.getcwd()
     pattern = token if os.path.isabs(token) else os.path.join(base, token)
     try:
-        return tuple(glob.glob(pattern))[:_GLOB_EXPANSION_CAP]
+        # islice over iglob: the cap must bound the directory walk, not just
+        # trim its result.
+        matches = tuple(itertools.islice(glob.iglob(pattern), _GLOB_EXPANSION_CAP))
     except (OSError, ValueError):
         return ()
+    # A real file whose *name* contains a metacharacter matches its own pattern
+    # (`glob("/tmp/x*y")` -> `["/tmp/x*y"]`). Returning it would re-enter with an
+    # identical token; dropping it here keeps expansion finite.
+    return tuple(match for match in matches if match != token)
 
 
 def _append_target(targets, token, method, repo_root, execution_cwd=""):
+    # Expand once, iteratively. Recursing here was a fail-open: a self-matching
+    # glob name recursed until RecursionError, which main()'s catch-all swallowed
+    # into sys.exit(0) — a silent allow for the *entire* command, not just the
+    # decoy token. One `touch '/tmp/x*y'` disabled every deny the guard has.
     for expansion in _glob_expansions(token, repo_root, execution_cwd):
-        _append_target(targets, expansion, method, repo_root, execution_cwd)
+        _classify_and_append(
+            targets, expansion, method, repo_root, execution_cwd,
+        )
+    _classify_and_append(targets, token, method, repo_root, execution_cwd)
+
+
+def _classify_and_append(targets, token, method, repo_root, execution_cwd=""):
     path_value = _normalize_candidate_path(token, repo_root, execution_cwd)
     category = _classify_gated_path(path_value, repo_root)
     if not category and _is_goal_control_inode_alias(
@@ -241,6 +272,14 @@ def _append_target(targets, token, method, repo_root, execution_cwd=""):
     item = {"path": path_value, "category": category, "method": method}
     if item not in targets:
         targets.append(item)
+def _strip_command_prefix_words(argv):
+    """Drop leading words that only decorate the command that follows."""
+    index = 0
+    while index < len(argv) and argv[index] in COMMAND_PREFIX_WORDS:
+        index += 1
+    return argv[index:] if index < len(argv) else argv[:0]
+
+
 def _last_non_option(tokens):
     for token in reversed(tokens[1:]):
         if token.startswith("-"):
@@ -365,13 +404,39 @@ def _append_python_shell_out_targets(tree, targets, repo_root, execution_cwd="")
         name = getattr(node.func, "attr", "") or getattr(node.func, "id", "")
         if name not in _PYTHON_SHELL_OUT_CALLS:
             continue
-        for argument in ast.walk(node):
-            if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
-                for token in _tokenize(argument.value) or [argument.value]:
-                    _append_target(
-                        targets, token, "python -c shelling out",
-                        repo_root, execution_cwd,
-                    )
+        for command in _shell_out_command_lines(node):
+            targets.extend(
+                item for item in _extract_mutation_targets(
+                    command, repo_root, execution_cwd,
+                ) if item not in targets
+            )
+
+
+def _shell_out_command_lines(node):
+    """Command lines a shell-out call would run, as strings.
+
+    Classifying every string constant reachable from the call denied ordinary
+    read-only work — `subprocess.run(['pytest', 'tests/x.py'])` came back as a
+    mutation of `tests/x.py`. Reconstruct the command line instead and route it
+    through the same verb model `bash -c` uses, so the verb decides.
+
+    An argv list is joined first: splitting it token-by-token separates a verb
+    from its operand, which would let `subprocess.run(['cp', src, '<receipt>'])`
+    through.
+    """
+    lines = []
+    for argument in list(node.args) + [kw.value for kw in node.keywords]:
+        if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+            lines.append(argument.value)
+        elif isinstance(argument, (ast.List, ast.Tuple)):
+            parts = [
+                element.value for element in argument.elts
+                if isinstance(element, ast.Constant)
+                and isinstance(element.value, str)
+            ]
+            if len(parts) == len(argument.elts) and parts:
+                lines.append(" ".join(parts))
+    return lines
 
 
 def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd=""):
@@ -922,7 +987,7 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
     if idx >= len(segment_tokens):
         return
     raw_argv = segment_tokens[idx:]
-    non_env = _unwrap_execution(raw_argv)
+    non_env = _strip_command_prefix_words(_unwrap_execution(raw_argv))
     if not non_env:
         return
     cmd = os.path.basename(non_env[0])
@@ -1102,7 +1167,7 @@ def _extract_mutation_targets(command, repo_root, execution_cwd=""):
     # cannot create a new allow. Assignments carry forward across lines, as in a
     # real shell.
     shell_values: dict[str, str] = {}
-    for line in command.splitlines():
+    for line in _unquoted_lines(command):
         line_tokens = _tokenize(line) if line.strip() else []
         if line_tokens:
             _walk_segments(
@@ -1110,6 +1175,36 @@ def _extract_mutation_targets(command, repo_root, execution_cwd=""):
             )
 
     return targets
+
+
+def _unquoted_lines(command):
+    """Split on newlines that are outside quotes.
+
+    Splitting the raw text turned the body of a quoted multi-line argument into
+    command segments: a `git commit -m` whose message named a lifecycle symbol
+    was denied as a RECEIPTS.jsonl mutation — a command that mutates nothing,
+    and this repo's own commit convention.
+    """
+    lines = []
+    current = []
+    quote = ""
+    for char in command:
+        if quote:
+            if char == quote:
+                quote = ""
+            current.append(char)
+            continue
+        if char in "'\"":
+            quote = char
+            current.append(char)
+            continue
+        if char == "\n":
+            lines.append("".join(current))
+            current = []
+            continue
+        current.append(char)
+    lines.append("".join(current))
+    return lines
 
 
 def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd=""):
