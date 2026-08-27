@@ -30,6 +30,20 @@ appears":
 no `completed` rows means validation rejected the completion. These point at
 opposite halves of the system.
 
+**Partial has a subtler form than "no completions at all": an intermittent
+loss.** 2026-08-27 saw 41 starts against 32 completions on one task — receipts
+were plainly working, so the outage read as flaky rather than broken, and it
+went unnoticed across seven review rounds. Pair starts to completions **by
+`agent_id`** and count unpaired starts; a raw total that looks healthy hides
+this. Zero orphan completions alongside unpaired starts is the signature of
+rejection rather than loss.
+
+**Grep the breadcrumbs by `source`, not `key`.** `background_hook:binding-miss`
+records in `doc/harness/learnings.jsonl` carry the `provenance_reason` and set
+`transcript_exists`. A query keyed on `key` returns nothing and looks like
+confirmation that no rejection occurred — see
+[[REQ__process__subagent-receipt-binding]].
+
 ## hook_tree_health.py answers a narrower question than it appears to
 
 It reads one thing: the `installPath` recorded for `harness@harness` in

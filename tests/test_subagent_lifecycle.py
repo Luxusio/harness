@@ -279,6 +279,56 @@ def test_qualified_start_attachment_cannot_spoof_the_agent_type(tmp_path, monkey
     assert stopped["agent_type"] == agent_type
 
 
+def test_qualified_start_is_the_only_start_and_still_binds(tmp_path, monkeypatch):
+    """Some builds emit ONLY the matcher-qualified attachment.
+
+    The validator treated `SubagentStart:<type>` as a duplicate written
+    *alongside* a canonical attachment and skipped it. On a build that emits no
+    canonical companion it skipped the sole start line and rejected at
+    `no-canonical-start-attachment`, declining roughly one in five completion
+    receipts on transcripts that existed and were valid — and because
+    `task_verify` derives PASS from ordered start/completion pairs, that made
+    PASS unreachable for every task, not just the one being reviewed.
+
+    Shape taken from real transcripts (agent-a97c6fcf98183fabf.jsonl and
+    siblings): one attachment, hookName `SubagentStart:harness:code-reviewer`,
+    content `''`, carrying agentId/sessionId/timestamp.
+    """
+    agent_type = "harness:code-reviewer"
+    stopped, task_dir = _run_stop(
+        tmp_path, monkeypatch, "sess-only", "agent-only", agent_type,
+        final_message="VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nclean",
+        qualified_hook_name=f"SubagentStart:{agent_type}",
+        canonical_starts=0,
+    )
+    assert stopped["status"] == "done"
+    assert stopped["agent_type"] == agent_type
+    assert [(item["event"], item["verdict"]) for item in _receipts(task_dir)] == [
+        ("started", ""), ("completed", "PASS"),
+    ]
+
+
+def test_qualified_only_start_must_prove_identity(tmp_path, monkeypatch):
+    """Falling back to the qualified line raises its identity bar.
+
+    When it is the binding line it must carry this agentId; the tolerance that
+    lets it omit one applies only while a canonical attachment supplies
+    identity. Otherwise the new acceptance would bind a stop to a line that
+    names no agent at all.
+    """
+    agent_type = "harness:qa-cli"
+    stopped, task_dir = _run_stop(
+        tmp_path, monkeypatch, "sess-noid", "agent-noid", agent_type,
+        qualified_hook_name=f"SubagentStart:{agent_type}",
+        qualified_agent_id=None,
+        canonical_starts=0,
+    )
+    assert stopped.get("status") != "done"
+    # No completion receipt: the stop is declined, exactly as an unbindable
+    # stop was before this shape was accepted at all.
+    assert [item["event"] for item in _receipts(task_dir)] == ["started"]
+
+
 def test_qualified_start_attachment_without_agent_id_still_completes(tmp_path, monkeypatch):
     """The duplicate's own agentId is not load-bearing.
 

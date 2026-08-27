@@ -207,8 +207,42 @@ def _trusted_stop_provenance(
             ):
                 return _reject(diagnostics, "transcript-path-swapped-during-read")
         run_time = datetime.fromisoformat(task_run_started_at({"run_id": run_id}).replace("Z", "+00:00"))
+
+        def _start_is_within_run(entry, started_at):
+            """True when the entry carries a tz-aware time at/after the run start."""
+            raw = str(entry.get("timestamp") or "").replace("Z", "+00:00")
+            try:
+                event_time = datetime.fromisoformat(raw)
+            except ValueError:
+                return False
+            if not event_time.tzinfo:
+                return False
+            return event_time.astimezone(timezone.utc) >= started_at
+
         items = [json.loads(line) for line in lines if line.strip()]
-        transcript_agent_type = ""
+        # Two start shapes bind, because two runtimes emit different ones.
+        #
+        # The canonical shape is an identity banner: hookName "SubagentStart",
+        # content ["Agent <type> started (<agentId>)"]. The matcher-qualified
+        # shape is a hook-*execution* record: hookName "SubagentStart:<type>",
+        # content "" (an empty string, not a list), alongside command/stdout/
+        # exitCode/durationMs. This code previously skipped the second as a
+        # "duplicate alongside the canonical attachment" — but on builds that
+        # emit it, it is the ONLY start attachment in the transcript. The scan
+        # skipped the sole start line and rejected at
+        # `no-canonical-start-attachment`, declining ~1 in 5 completion
+        # receipts on transcripts that existed and were valid. Because
+        # `task_verify` derives PASS from ordered start/completion pairs, that
+        # silently made PASS unreachable for every task.
+        #
+        # Accepting the second shape does not weaken identity. The line still
+        # has to carry this exact agentId, sit in this session, and post-date
+        # the task run; the agent type comes from the hookName suffix, which is
+        # what the runtime dispatched on. What it does not carry is a *restated*
+        # identity banner, and requiring a restatement was never the check doing
+        # the work.
+        canonical_types: list[str] = []
+        qualified: list[tuple[str, dict]] = []
         for item in items:
             if not isinstance(item, dict):
                 continue
@@ -219,29 +253,27 @@ def _trusted_stop_provenance(
                 continue
             hook_name = attachment.get("hookName")
             if hook_name != "SubagentStart":
-                # Claude 2.1.x emits a matcher-qualified duplicate alongside the
-                # canonical attachment ("SubagentStart:<matcher>") and writes it
-                # first. It carries no identity payload, so skip it rather than
-                # treating it as a forgery; the canonical attachment below stays
-                # the sole source of transcript_agent_type. Any other hookName
-                # under this hookEvent is still untrusted.
-                #
-                # Deliberately no agentId check here: the loop-wide guard above
-                # already rejects a foreign agentId, and demanding the key be
-                # present would re-couple completion receipts to an undocumented
-                # field of a duplicate line we do not otherwise read — the exact
-                # shape of the outage this tolerance fixes.
-                if isinstance(hook_name, str) and hook_name.startswith("SubagentStart:"):
-                    continue
-                return _reject(diagnostics, "unrecognized-start-hook-name")
+                if not (isinstance(hook_name, str)
+                        and hook_name.startswith("SubagentStart:")):
+                    return _reject(diagnostics, "unrecognized-start-hook-name")
+                suffix = hook_name[len("SubagentStart:"):]
+                if not re.fullmatch(r"[A-Za-z0-9_.:-]+", suffix):
+                    return _reject(diagnostics, "unrecognized-start-hook-name")
+                # Identity is demanded only if this line ends up being the
+                # binding one. When a canonical attachment is present the
+                # qualified line is ignored exactly as before — requiring its
+                # agentId there would re-couple receipts to an undocumented
+                # field of a line the validator otherwise never reads, which is
+                # a previously-fixed outage shape.
+                qualified.append((suffix, item))
+                continue
             if item.get("agentId") != aid:
                 return _reject(diagnostics, "canonical-start-agent-id-mismatch")
-            event_time = datetime.fromisoformat(
-                str(item.get("timestamp") or "").replace("Z", "+00:00")
-            )
-            if not event_time.tzinfo or event_time.astimezone(timezone.utc) < run_time:
+            if not _start_is_within_run(item, run_time):
                 return _reject(diagnostics, "start-precedes-task-run")
             content = attachment.get("content")
+            if isinstance(content, str):
+                content = [content]
             if not isinstance(content, list) or len(content) != 1 or not isinstance(content[0], str):
                 return _reject(diagnostics, "start-content-shape")
             match = re.fullmatch(
@@ -249,10 +281,27 @@ def _trusted_stop_provenance(
             )
             if not match:
                 return _reject(diagnostics, "start-identity-mismatch")
-            if transcript_agent_type:
+            canonical_types.append(match.group(1))
+        if len(canonical_types) > 1:
+            return _reject(diagnostics, "duplicate-canonical-start")
+        if canonical_types:
+            transcript_agent_type = canonical_types[0]
+        elif qualified:
+            # Falling back to the qualified line, so now it must prove identity.
+            if not any(entry.get("agentId") == aid for _, entry in qualified):
+                return _reject(diagnostics, "canonical-start-agent-id-mismatch")
+            bound = [
+                suffix for suffix, entry in qualified
+                if entry.get("agentId") == aid and _start_is_within_run(entry, run_time)
+            ]
+            if not bound:
+                return _reject(diagnostics, "start-precedes-task-run")
+            if len(set(bound)) > 1:
+                # Two different agent types claiming one agentId is a conflict,
+                # not a duplicate of a single start.
                 return _reject(diagnostics, "duplicate-canonical-start")
-            transcript_agent_type = match.group(1)
-        if not transcript_agent_type:
+            transcript_agent_type = bound[0]
+        else:
             return _reject(diagnostics, "no-canonical-start-attachment")
         # The transcript proves a real subagent of this type started in this run.
         # It deliberately does NOT cross-check the final assistant text against
