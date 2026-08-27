@@ -329,6 +329,144 @@ def test_qualified_only_start_must_prove_identity(tmp_path, monkeypatch):
     assert [item["event"] for item in _receipts(task_dir)] == ["started"]
 
 
+def test_every_rejection_reason_stays_reachable(tmp_path, monkeypatch):
+    """Pin the reason codes, not just the fact that something was refused.
+
+    Asserting only "no completion receipt" cannot tell one rejection from
+    another, so widening acceptance can silently retire a check while the suite
+    stays green — the `content` widening moved the empty-canonical case from
+    `start-content-shape` to `start-identity-mismatch` and nothing noticed.
+    """
+    agent_type = "harness:qa-cli"
+
+    def _mutate_canonical(transcript, mutate):
+        lines = Path(transcript).read_text(encoding="utf-8").splitlines()
+        for index, raw in enumerate(lines):
+            item = json.loads(raw)
+            attachment = item.get("attachment")
+            if isinstance(attachment, dict) and attachment.get("hookName") == "SubagentStart":
+                item["attachment"] = dict(attachment)
+                mutate(item["attachment"])
+                lines[index] = json.dumps(item)
+                break
+        Path(transcript).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    cases = [
+        ("unrecognized-start-hook-name",
+         {}, lambda a: a.__setitem__("hookName", "SubagentStarted")),
+        ("start-content-shape", {}, lambda a: a.__setitem__("content", 5)),
+        ("start-identity-mismatch", {}, lambda a: a.__setitem__("content", [""])),
+        ("canonical-start-agent-id-mismatch",
+         dict(canonical_starts=0, qualified_hook_name=f"SubagentStart:{agent_type}",
+              qualified_agent_id=None), None),
+    ]
+    for expected, kwargs, mutate in cases:
+        root = tmp_path / expected.replace("-", "_")
+        root.mkdir(parents=True, exist_ok=True)
+        repo, task_dir = _repo(root)
+        _bind(repo, task_dir, "sess-r")
+        subagent_lifecycle.register_subagent_start(repo, {
+            "session_id": "sess-r", "agent_id": "agent-r", "agent_type": agent_type,
+        })
+        transcript = _transcript(
+            root, monkeypatch, task_dir, "sess-r", "agent-r",
+            "VERDICT: PASS", agent_type=agent_type, **kwargs,
+        )
+        if mutate is not None:
+            _mutate_canonical(transcript, mutate)
+        diagnostics: dict = {}
+        stopped = subagent_lifecycle.mark_subagent_stop(
+            repo,
+            _stop_payload("sess-r", "agent-r", agent_type, transcript, "VERDICT: PASS"),
+            diagnostics=diagnostics,
+        )
+        assert stopped == {}, expected
+        assert diagnostics.get("provenance_reason") == expected
+
+
+def test_repeated_identical_start_pair_still_completes(tmp_path, monkeypatch):
+    """One start pair per registered SubagentStart hook, so repeats are normal.
+
+    Rejecting on *count* declined honest stops: two transcripts in the observed
+    session carried two identical start pairs for the same agentId and the same
+    agent type, and both were refused as `duplicate-canonical-start`. Only two
+    *different* types claiming one agentId is a real conflict.
+    """
+    agent_type = "harness:code-reviewer"
+    stopped, task_dir = _run_stop(
+        tmp_path, monkeypatch, "sess-dup2", "agent-dup2", agent_type,
+        final_message="VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0\nclean",
+        qualified_hook_name=f"SubagentStart:{agent_type}",
+        canonical_starts=2,
+    )
+    assert stopped["status"] == "done"
+    assert stopped["agent_type"] == agent_type
+    assert [(item["event"], item["verdict"]) for item in _receipts(task_dir)] == [
+        ("started", ""), ("completed", "PASS"),
+    ]
+
+
+def test_qualified_only_start_from_a_prior_run_is_rejected(tmp_path, monkeypatch):
+    """The run-window guard must hold on the path that actually binds.
+
+    Prior-run rejection was only covered through a canonical start, but when the
+    canonical banner is absent the qualified line is the binding one — so the
+    freshness check on the live path was unpinned.
+    """
+    agent_type = "harness:code-reviewer"
+    repo, task_dir = _repo(tmp_path)
+    _bind(repo, task_dir, "sess-stale")
+    subagent_lifecycle.register_subagent_start(repo, {
+        "session_id": "sess-stale", "agent_id": "agent-stale", "agent_type": agent_type,
+    })
+    transcript = _transcript(
+        tmp_path, monkeypatch, task_dir, "sess-stale", "agent-stale",
+        "VERDICT: PASS", agent_type=agent_type,
+        qualified_hook_name=f"SubagentStart:{agent_type}",
+        canonical_starts=0,
+    )
+    # Move the run start past the transcript's start attachment.
+    prior_ms = _lib.uuid7_timestamp_ms(_lib.read_task_control(task_dir)["run_id"])
+    with _lib.receipt_stream_transaction(task_dir):
+        _rotate(task_dir, prior_ms + 2_000)
+        _bind(repo, task_dir, "sess-stale")
+    assert subagent_lifecycle.mark_subagent_stop(
+        repo, _stop_payload("sess-stale", "agent-stale", agent_type, transcript, "VERDICT: PASS"),
+    ) == {}
+
+
+def test_conflicting_qualified_suffixes_are_rejected(tmp_path, monkeypatch):
+    """Two agent types claiming one agentId is a conflict, not a repeat."""
+    agent_type = "harness:code-reviewer"
+    repo, task_dir = _repo(tmp_path)
+    _bind(repo, task_dir, "sess-conflict")
+    subagent_lifecycle.register_subagent_start(repo, {
+        "session_id": "sess-conflict", "agent_id": "agent-conflict",
+        "agent_type": agent_type,
+    })
+    transcript = _transcript(
+        tmp_path, monkeypatch, task_dir, "sess-conflict", "agent-conflict",
+        "VERDICT: PASS", agent_type=agent_type,
+        qualified_hook_name=f"SubagentStart:{agent_type}",
+        canonical_starts=0,
+    )
+    # Splice a second qualified attachment naming a different agent type.
+    lines = Path(transcript).read_text(encoding="utf-8").splitlines()
+    first = json.loads(lines[0])
+    forged = json.loads(lines[0])
+    forged["attachment"] = dict(first["attachment"])
+    forged["attachment"]["hookName"] = "SubagentStart:harness:qa-cli"
+    Path(transcript).write_text(
+        "\n".join([lines[0], json.dumps(forged)] + lines[1:]) + "\n", encoding="utf-8",
+    )
+    stopped = subagent_lifecycle.mark_subagent_stop(
+        repo, _stop_payload("sess-conflict", "agent-conflict", agent_type,
+                            transcript, "VERDICT: PASS"),
+    )
+    assert stopped.get("status") != "done"
+    assert [item["event"] for item in _receipts(task_dir)] == ["started"]
+
+
 def test_qualified_start_attachment_without_agent_id_still_completes(tmp_path, monkeypatch):
     """The duplicate's own agentId is not load-bearing.
 
@@ -354,10 +492,36 @@ def test_unrecognized_start_hook_name_is_still_rejected(tmp_path, monkeypatch):
         assert stopped == {}, hook_name
 
 
-def test_two_canonical_start_attachments_are_still_rejected(tmp_path, monkeypatch):
-    stopped, task_dir = _run_stop(
-        tmp_path, monkeypatch, "sess-d", "agent-d", "harness:qa-cli",
-        canonical_starts=2,
+def test_conflicting_canonical_start_attachments_are_still_rejected(tmp_path, monkeypatch):
+    """Two canonical banners naming *different* agent types is the conflict.
+
+    This test previously used two identical banners, which is not a forgery
+    signal: the runtime writes one start pair per registered SubagentStart
+    hook, so a second hook repeats the banner verbatim. Rejecting on count
+    declined real completions — two transcripts in the observed session were
+    refused for repeating themselves. The security property being pinned is
+    that one agentId cannot claim two agent types, and that is unchanged.
+    """
+    repo, task_dir = _repo(tmp_path)
+    _bind(repo, task_dir, "sess-d")
+    subagent_lifecycle.register_subagent_start(repo, {
+        "session_id": "sess-d", "agent_id": "agent-d", "agent_type": "harness:qa-cli",
+    })
+    transcript = _transcript(
+        tmp_path, monkeypatch, task_dir, "sess-d", "agent-d", "VERDICT: PASS",
+        agent_type="harness:qa-cli", canonical_starts=1,
+    )
+    lines = Path(transcript).read_text(encoding="utf-8").splitlines()
+    forged = json.loads(lines[0])
+    forged["attachment"] = dict(forged["attachment"])
+    forged["attachment"]["content"] = [
+        "Agent harness:code-reviewer started (agent-d)"
+    ]
+    Path(transcript).write_text(
+        "\n".join([lines[0], json.dumps(forged)] + lines[1:]) + "\n", encoding="utf-8",
+    )
+    stopped = subagent_lifecycle.mark_subagent_stop(
+        repo, _stop_payload("sess-d", "agent-d", "harness:qa-cli", transcript, "VERDICT: PASS"),
     )
     assert stopped == {}
     assert [item["event"] for item in _receipts(task_dir)] == ["started"]

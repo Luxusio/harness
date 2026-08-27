@@ -36,11 +36,29 @@ Root cause: `subagent_lifecycle.py` scanned the subagent transcript for a start
 attachment with `hookName == "SubagentStart"` carrying
 `content == ["Agent <type> started (<agentId>)"]`, and skipped
 `SubagentStart:<matcher>` attachments as duplicates "written alongside the
-canonical attachment". The runtime in use emits **only** the matcher-qualified
-form — a hook-execution record with `content: ''` plus
-`command`/`stdout`/`stderr`/`exitCode`/`durationMs` — and no canonical
-companion. The scan skipped the sole start line and rejected at
-`no-canonical-start-attachment`.
+canonical attachment".
+
+**That banner is not the harness's.** Both start attachments come from a
+third-party plugin — `oh-my-claudecode`'s `subagent-tracker.mjs`, registered on
+`SubagentStart` (`node "$CLAUDE_PLUGIN_ROOT"/scripts/run.cjs …
+subagent-tracker.mjs start`). The canonical banner is that hook's
+`hookSpecificOutput.additionalContext`, and the plugin **intermittently omits
+it**, returning a bare `{"continue":true}` while still exiting 0. The harness's
+own `SubagentStart` hook (`background_hook.py --event start`) writes no
+attachment at all.
+
+So C-14 receipt provenance was anchored to an optional field of an unrelated
+plugin's output. Measured across all 47 subagent transcripts of the affected
+session: **40 carry both shapes, 7 carry only the matcher-qualified record.**
+Those 7 are the declined completions. Falling back to the hook-execution record
+removes the external dependency.
+
+Note the sampling error that produced the first version of this paragraph:
+three transcripts were probed, all three happened to be among the seven, and
+"the runtime emits only the qualified form" was written as though it were the
+rule. It is the exception — which is why the outage looked intermittent rather
+than total. Counting the whole population is what distinguishes the two, and
+this document asserted the opposite until a reviewer counted.
 
 ## Requirements
 
@@ -48,6 +66,16 @@ companion. The scan skipped the sole start line and rejected at
   **actually emits**, verified against a captured transcript. An assumed schema
   is not evidence, and a comment asserting what a runtime emits is a claim that
   needs checking like any other.
+- Verify such a claim against the **whole population**, not a sample. An
+  intermittent shape looks like the only shape if every transcript you open is
+  one of the failing minority, and the resulting rule is confidently wrong.
+- Receipt validity never depends on a field owned by another plugin. If a
+  signal the harness relies on is produced by software the harness does not
+  ship, the harness must degrade to something it does own.
+- A repeated signal is not a forgery signal. One start pair is written per
+  registered `SubagentStart` hook, so identical repeats are expected; only
+  *conflicting* claims (two agent types for one `agentId`) are a conflict.
+  Rejecting on count declined honest stops.
 - Both start shapes bind: the canonical identity banner, and a matcher-qualified
   `SubagentStart:<agent-type>` hook record. Accepting an additional *shape* is
   not accepting an unverified one — the binding line must still carry this
@@ -62,6 +90,22 @@ companion. The scan skipped the sole start line and rejected at
 - A declined stop is logged with its reason. `background_hook:binding-miss`
   records in `doc/harness/learnings.jsonl` are the diagnostic surface —
   note the field is `source`, not `key`.
+
+## The three observed rejection reasons
+
+- **`no-canonical-start-attachment` (5 of 8)** — fixed. The qualified
+  hook-execution record now binds when the omc banner is absent.
+- **`duplicate-canonical-start` (2 of 8)** — fixed. Both transcripts carried
+  *two identical* start pairs for one `agentId` and one agent type, and the
+  check rejected on count. It now rejects only on conflicting agent types, so
+  a repeat is accepted and a contradiction is not.
+- **`transcript-changed-during-read` (1 of 8)** — correct as designed, not
+  fixed. The runtime appends the final assistant message around the instant
+  `SubagentStop` fires, so a read that starts mid-append sees the file change
+  under it. Failing closed on a torn read is right; the alternative is binding
+  against a transcript whose contents are indeterminate. The cost is one lost
+  receipt per race, which is rare and recoverable by re-running the agent. Do
+  not "fix" this by relaxing the check.
 
 ## Diagnosis notes
 

@@ -78,10 +78,24 @@ Claude runtimes that emit `SubagentStop` without a preceding `SubagentStart`
 use the stop hook as the authoritative lifecycle observation only under the
 full provenance boundary: exact top-level official `agent_id` and `session_id`,
 the matching session marker and current `run_id`, and a stable owner-controlled
-Claude transcript whose path matches that session/agent, whose recorded
-`SubagentStart` attachment supplies the agent type after the UUIDv7 run cutoff,
-and whose final assistant text exactly matches `last_assistant_message`. Payload
-claims cannot override the transcript-derived agent type. The completion identity is single-use. Under
+Claude transcript whose path matches that session/agent and whose recorded
+`SubagentStart` attachment supplies the agent type after the UUIDv7 run cutoff.
+Payload claims cannot override the transcript-derived agent type.
+
+Two attachment shapes supply that agent type: the canonical identity banner
+(`hookName: "SubagentStart"`, `content: ["Agent <type> started (<id>)"]`) and
+the matcher-qualified hook-execution record (`hookName:
+"SubagentStart:<type>"`), whichever is present, with the identity requirement
+attaching to whichever line binds. The banner originates in a third-party
+plugin's optional output and is intermittently absent; anchoring provenance to
+it made PASS unreachable. See
+`doc/common/REQ__process__subagent-receipt-binding.md`.
+
+The boundary deliberately does **not** require the transcript's final assistant
+text to match `last_assistant_message`. The runtime appends that text around the
+instant `SubagentStop` fires, so the check rejected genuine stops about as often
+as it passed them; it is pinned absent by
+`test_stop_completes_when_the_final_text_has_not_been_flushed`. The completion identity is single-use. Under
 those conditions the hook appends a correlated inferred `started` entry
 immediately followed by the explicit `completed` entry in one task transaction.
 The verdict still comes only from the unique canonical first line; missing,

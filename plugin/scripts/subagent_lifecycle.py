@@ -272,8 +272,6 @@ def _trusted_stop_provenance(
             if not _start_is_within_run(item, run_time):
                 return _reject(diagnostics, "start-precedes-task-run")
             content = attachment.get("content")
-            if isinstance(content, str):
-                content = [content]
             if not isinstance(content, list) or len(content) != 1 or not isinstance(content[0], str):
                 return _reject(diagnostics, "start-content-shape")
             match = re.fullmatch(
@@ -282,7 +280,14 @@ def _trusted_stop_provenance(
             if not match:
                 return _reject(diagnostics, "start-identity-mismatch")
             canonical_types.append(match.group(1))
-        if len(canonical_types) > 1:
+        if len(set(canonical_types)) > 1:
+            # Two *different* agent types claiming one agentId is the conflict.
+            # Counting instead of de-duplicating declined honest stops: the
+            # runtime writes one start pair per registered SubagentStart hook,
+            # so a second hook produces a second identical banner, and two
+            # transcripts in the observed session were rejected for repeating
+            # themselves. The qualified branch below already used this rule;
+            # the two are now consistent.
             return _reject(diagnostics, "duplicate-canonical-start")
         if canonical_types:
             transcript_agent_type = canonical_types[0]
