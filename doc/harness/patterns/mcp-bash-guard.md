@@ -129,8 +129,13 @@ not denied for merely naming a file.
 
 All of that is gone with execution gating. Nothing is denied for naming a
 path, so nothing needs relief for naming one. `GIT_NON_MUTATING_SUBCOMMANDS`
-survives for a different reason: it separates working-tree-rewriting git
-subcommands from index-only ones.
+survives for a different reason: it names the git subcommands that are never
+classified. It separates them by subcommand *name*, not by whether a given
+invocation rewrites the working tree — an earlier version of this sentence
+claimed the latter and was wrong in both directions. `git reset HEAD <path>`
+and `git rm --cached <path>` are index-only, change nothing on disk, and still
+deny; `git reset --hard`, which does rewrite the tree, is not classified at
+all. Runtime QA verified all three.
 
 ## Known gaps
 
@@ -314,6 +319,36 @@ Other dynamic constructs remain:
   deliberately: gating non-option operands of `-m` would re-deny read-only tools
   such as `python3 -m mypy plugin/scripts/mcp_bash_guard.py`, which is the false
   deny this whole change removed.
+- **index-only git spellings over-block.** `git reset HEAD <path>` and
+  `git rm --cached <path>` write nothing on disk and are denied as source
+  mutations, naming a file they never touch. `git restore --staged <path>` is
+  the allowed equivalent. Found by runtime QA, not by review — a code reviewer
+  reads these as correct denies, because they *look* like the mutating forms.
+- **heredoc bodies are lexed as shell.** Each physical line is walked as its
+  own segment, which is what closes the newline-before-mutator bypass in
+  AC-003. The cost is that a heredoc body containing a shell example is
+  classified as a command:
+
+      cat <<'EOF' > build/out.txt
+      echo hi > src/app.py
+      EOF
+
+  denies naming `src/app.py`, which the command never writes (ground-truthed:
+  only `build/out.txt` changes). AC-003's line-splitting requirement and this
+  over-block are in direct tension — closing one reopens the other. Recorded as
+  a decision, not an oversight.
+- **fail-closed denies name a stub path.** An oversized command or payload is
+  refused without analysis (correct), but the message is built from a hardcoded
+  `RECEIPTS.jsonl` target and tells the reader to spawn a QA agent, when the
+  real remedy is "shorten the command". The true cause survives only inside the
+  `method` clause. Rarely reachable, actively misdirecting when it fires.
+- **the `escape:` hint is not actionable as printed.** Every deny ends with
+  `escape: HARNESS_SKIP_MCP_GUARD=1 <retry>`, but neither reading a developer
+  will try works — an inline prefix and an `export` in the same command both
+  still deny, because the hook inspects the command text before any shell runs.
+  Only the hook *process* environment is honoured, and only the exact string
+  `"1"`. `plugin/CLAUDE.md` describes it as one-shot per invocation, which no
+  reachable mechanism delivers.
 - **a directory operand is not a classifiable artifact.** `git clean -fd <dir>`,
   `git checkout -- .`, `git restore .`, `git apply <patch>` and `git reset
   --hard` reach protected artifacts and gated source without the artifact ever

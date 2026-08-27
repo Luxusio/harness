@@ -92,8 +92,14 @@ _OUTPUT_OPTION_COMMANDS = {"sort", "diff"}
 # could not even be staged: `git add plugin/scripts/background_hook.py` tripped
 # the name-mention heuristic and was denied.
 #
-# Deliberately excluded because they DO rewrite the working tree:
-# checkout, restore, rm, clean, mv, apply, stash, reset (--hard), revert,
+# Excluded because they can rewrite the working tree. The exclusion is by
+# subcommand *name*, so it also catches index-only spellings of the same verb:
+# `git reset HEAD <path>` and `git rm --cached <path>` change nothing on disk
+# (verified) and still deny, naming a file they do not touch. `git restore
+# --staged <path>` is the allowed equivalent. Conversely `git reset --hard`,
+# named here as the dangerous form, is not classified at all — see the
+# under-block already recorded in the pattern doc.
+# checkout, restore, rm, clean, mv, apply, stash, reset, revert,
 # merge, rebase, cherry-pick, pull. `restore` carries one exception handled in
 # the git branch: `--staged` without `--worktree` only unstages, so it belongs
 # with `add` rather than here.
