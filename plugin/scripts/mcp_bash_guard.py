@@ -6,7 +6,6 @@ import itertools
 import json
 import re
 import shlex
-import shutil
 import stat
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -17,7 +16,6 @@ try:
         _escape_hint,
         log_gate_bypass,
         find_repo_root,
-        find_harness_root,
         harness_root_resolution,
         is_harness_enabled_repo,
     )
@@ -26,7 +24,6 @@ try:
         _is_runtime_provenance,
         _is_source_file,
         _is_workflow_control_surface,
-        PROTECTED_ARTIFACTS,
     )
 except Exception:
     sys.exit(0)
@@ -141,6 +138,29 @@ def _tokenize(command: str):
         return [t for t in lexer if t]
     except ValueError:
         return command.split()
+
+
+def _quoted_flags(command: str, token_count: int):
+    """Which tokens were quoted in the source text.
+
+    posix mode discards quoting, so a *literal argument* `'<'` arrives as the
+    token `<`, indistinguishable from a real operator. That cut both ways:
+    `sed -i s/a/b/ '<' <receipt>` had its real target eaten as a redirect
+    operand, and `grep -n '2>' <file>` was denied as a source mutation. A
+    non-posix pass keeps the quote characters, so the two can be told apart.
+
+    Returns all-False if the two lexers disagree on token count — better to
+    behave as before than to mis-align the flags.
+    """
+    try:
+        lexer = shlex.shlex(command, posix=False, punctuation_chars=True)
+        lexer.whitespace_split = True
+        raw = [t for t in lexer if t]
+    except ValueError:
+        return [False] * token_count
+    if len(raw) != token_count:
+        return [False] * token_count
+    return [token[:1] in ("'", '"') for token in raw]
 def _normalize_candidate_path(
     token: str, repo_root: str = "", execution_cwd: str = ""
 ) -> str:
@@ -328,9 +348,11 @@ def _nested_shell_script(non_env):
             if "=" in token:
                 return token.split("=", 1)[1]
             saw_command_flag = True
-        elif not token.startswith("--") and token.endswith("c"):
-            # A short-option cluster runs the script only when `c` is last:
-            # `-lc`, `-ec`, `-xc`. `-cl` would consume `l` as the script.
+        elif not token.startswith("--") and "c" in token[1:]:
+            # `c` anywhere in the cluster runs the script: `bash -cl '<cmd>'`
+            # and `-cvx` execute it just as `-lc` does. Requiring `c` last was
+            # justified by a false claim (that `-cl` consumes `l` as the
+            # script) and let `bash -cx '<write>'` through.
             saw_command_flag = True
         index += 1
     return ""
@@ -339,7 +361,7 @@ def _nested_shell_script(non_env):
 _INPUT_REDIRECT_OP_RE = re.compile(r"^\d*<{1,3}[&|]?$")
 
 
-def _strip_redirect_syntax(tokens):
+def _strip_redirect_syntax(tokens, quoted=()):
     """Remove redirect operators and their operands from a segment.
 
     Redirect operands are not the verb's operands, but they stayed in the token
@@ -356,12 +378,15 @@ def _strip_redirect_syntax(tokens):
     index = 0
     while index < len(tokens):
         token = tokens[index]
-        if _PURE_REDIRECT_OP_RE.match(token) or _INPUT_REDIRECT_OP_RE.match(token):
+        is_quoted = index < len(quoted) and quoted[index]
+        if not is_quoted and (
+            _PURE_REDIRECT_OP_RE.match(token) or _INPUT_REDIRECT_OP_RE.match(token)
+        ):
             if kept and re.fullmatch(r"\d+", kept[-1]):
                 kept.pop()
             index += 2  # the operator and its operand
             continue
-        if _INLINE_REDIRECT_RE.match(token) and not os.path.isabs(token):
+        if not is_quoted and _INLINE_REDIRECT_RE.match(token):
             index += 1
             continue
         kept.append(token)
@@ -369,12 +394,34 @@ def _strip_redirect_syntax(tokens):
     return kept
 
 
-def _last_non_option(tokens):
-    for token in reversed(tokens[1:]):
-        if token.startswith("-"):
+# Options whose *value* is a separate token. GNU getopt permutes, so these can
+# trail the operands: `install <src> <receipt> -m 644` really writes the
+# receipt, but the value `644` was read as the destination.
+_VERB_VALUE_OPTIONS = {
+    "cp": {"-S", "--suffix", "-t", "--target-directory", "-Z", "--context"},
+    "mv": {"-S", "--suffix", "-t", "--target-directory"},
+    "install": {"-m", "--mode", "-o", "--owner", "-g", "--group", "-S",
+                "--suffix", "-t", "--target-directory", "-Z", "--context"},
+    "rsync": {"--log-file", "--exclude", "--include", "--files-from",
+              "--rsh", "-e", "--chmod", "--out-format"},
+    "truncate": {"-s", "--size", "-r", "--reference"},
+    "touch": {"-r", "--reference", "-d", "--date", "-t"},
+}
+
+
+def _last_non_option(tokens, value_options=frozenset()):
+    skip_next = False
+    last = ""
+    for token in tokens[1:]:
+        if skip_next:
+            skip_next = False
             continue
-        return token
-    return ""
+        if token.startswith("-"):
+            if token in value_options:
+                skip_next = True
+            continue
+        last = token
+    return last
 def _target_directory_option(non_env):
     """Destination named by `-t <dir>` / `--target-directory[=<dir>]`.
 
@@ -391,6 +438,9 @@ def _target_directory_option(non_env):
             return "", {token}
         if token.startswith("--target-directory="):
             return token.split("=", 1)[1], {token}
+        # Attached short form: `cp -t<dir> <src>`.
+        if token.startswith("-t") and len(token) > 2 and not token.startswith("--"):
+            return token[2:], {token}
     return "", set()
 
 
@@ -458,8 +508,12 @@ def _append_directory_destination_targets(
             )
 
 
-def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd=""):
+def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd="", quoted=()):
     for index, token in enumerate(tokens):
+        # A quoted token is a literal argument, not an operator: `grep -n '2>'`
+        # was being denied as a source mutation.
+        if index < len(quoted) and quoted[index]:
+            continue
         if _PURE_REDIRECT_OP_RE.match(token) and index + 1 < len(tokens):
             _append_target(
                 targets, tokens[index + 1], "shell redirection",
@@ -534,7 +588,8 @@ def _unwrap_execution(tokens):
             continue
         break
     return argv
-def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
+def _process_segment(segment_tokens, targets, repo_root, execution_cwd="",
+                     quoted=()):
     if not segment_tokens:
         return
     idx = 0
@@ -542,7 +597,9 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
         idx += 1
     if idx >= len(segment_tokens):
         return
-    raw_argv = _strip_redirect_syntax(segment_tokens[idx:])
+    raw_argv = _strip_redirect_syntax(
+        segment_tokens[idx:], list(quoted[idx:]) if quoted else (),
+    )
     non_env = _strip_command_prefix_words(_unwrap_execution(raw_argv))
     if not non_env:
         return
@@ -595,8 +652,13 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
         # not supplied by an option. With `--expression=…`/`--file=…` the first
         # operand is already the target file, and skipping it let
         # `sed -i --expression=s/a/b/ <plan>` rewrite a protected artifact.
+        # Attached forms count too: `-es/a/b/` and `-f/tmp/s` are neither equal
+        # to `-e`/`-f` nor prefixed `--expression`, so the sole operand — the
+        # artifact — was being skipped.
         script_from_option = any(
-            token in {"-e", "-f"} or token.startswith(("--expression", "--file"))
+            token in {"-e", "-f"}
+            or token.startswith(("--expression", "--file"))
+            or (token.startswith(("-e", "-f")) and not token.startswith("--"))
             for token in non_env[1:]
         )
         _append_operands(
@@ -655,7 +717,9 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
                 )
         if cmd == "mv":
             _append_directory_destination_targets(
-                cmd, non_env, _last_non_option(non_env), targets,
+                cmd, non_env,
+                _last_non_option(non_env, _VERB_VALUE_OPTIONS.get(cmd, ())),
+                targets,
                 repo_root, execution_cwd,
             )
         return
@@ -667,7 +731,9 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
         )
         return
     if cmd in LAST_ARG_MUTATORS:
-        destination = _last_non_option(non_env)
+        destination = _last_non_option(
+            non_env, _VERB_VALUE_OPTIONS.get(cmd, ()),
+        )
         _append_target(targets, destination, cmd, repo_root, execution_cwd)
         # A directory destination hides the effective target: `cp forged
         # doc/harness/tasks/T/` writes `<dir>/<source basename>`, a path that
@@ -775,6 +841,7 @@ def _extract_mutation_targets(command, repo_root, execution_cwd=""):
         if line_tokens:
             _walk_segments(
                 line_tokens, shell_values, targets, repo_root, execution_cwd,
+                _quoted_flags(line, len(line_tokens)),
             )
 
     return targets
@@ -839,13 +906,15 @@ def _unquoted_lines(command):
     return lines
 
 
-def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd=""):
+def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
+                   quoted=()):
     idx = 0
     while idx < len(tokens):
         j = idx
         while j < len(tokens) and tokens[j] not in BOUNDARY_TOKENS:
             j += 1
         segment = tokens[idx:j]
+        segment_quoted = list(quoted[idx:j]) if quoted else []
         assignments = [token for token in segment if _is_env_assignment(token)]
         if assignments and len(assignments) == len(segment):
             for token in assignments:
@@ -870,8 +939,12 @@ def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd=""):
         # `$V` classified as nothing) and also produced a false deny for
         # `D=/outside; cat f > "$D/x.py"`, since the unexpanded token was
         # normalized against the repo root and `.py` read as source.
-        _extract_redirect_targets(expanded, targets, repo_root, execution_cwd)
-        _process_segment(expanded, targets, repo_root, execution_cwd)
+        _extract_redirect_targets(
+            expanded, targets, repo_root, execution_cwd, segment_quoted,
+        )
+        _process_segment(
+            expanded, targets, repo_root, execution_cwd, segment_quoted,
+        )
         idx = j + 1
 def _deny(target, command):
     rel = target.get("path", "")

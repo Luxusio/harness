@@ -377,6 +377,87 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
+    def test_quoted_operator_literal_is_not_a_redirect(self):
+        """`shlex(posix=True)` discards quoting, so `'<'` looked like an operator.
+
+        Stripping it consumed the *next* token — the real target — so
+        `sed -i s/a/b/ '<' <receipt>` allowed while the write still landed
+        (GNU sed continues past the unreadable operand).
+        """
+        with scratch_task_in_real_repo("pr1-quoteop") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"sed -i s/a/b/ '<' {receipts}",
+                f"touch '<' {receipts}",
+                f"truncate -s0 '<' {receipts}",
+                f"tee '<' {receipts}",
+                f"rm '<' {receipts}",
+                f"perl -pi -e s/a/b/ '<' {receipts}",
+                f"sed -i s/a/b/ '<<' {receipts}",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_redirect_shaped_search_pattern_allows(self):
+        """The same defect in the other direction: `grep -n '2>'` is a read.
+
+        This is the first command a contributor working on the guard runs, and
+        it was denied with a false `rule=source` mutation claim.
+        """
+        for command in (
+            "grep -n '2>' plugin/scripts/mcp_bash_guard.py",
+            "grep -n '>>' plugin/scripts/health.py",
+            "rg '>' plugin/scripts/health.py",
+        ):
+            with self.subTest(command=command):
+                decision, _ = parse_decision(_run_bash(command).stdout)
+                self.assertIsNone(decision)
+
+    def test_attached_sed_script_option_denies(self):
+        """`-es/a/b/` and `-f/tmp/s` supply the script without a separate token."""
+        with scratch_task_in_real_repo("pr1-attachedsed") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"sed -i -es/a/b/ {receipts}",
+                f"sed -i -f/tmp/s.sed {receipts}",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_trailing_value_options_do_not_move_the_destination(self):
+        """GNU getopt permutes, so value options can trail the operands."""
+        with scratch_task_in_real_repo("pr1-trailopt") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"cp /tmp/f {receipts} -S bak",
+                f"cp /tmp/f {receipts} --suffix bak",
+                f"install /tmp/f {receipts} -m 644",
+                f"rsync /tmp/f {receipts} --log-file /tmp/l",
+                f"cp -t{task_dir} /tmp/RECEIPTS.jsonl",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_bash_cluster_with_c_not_last_denies(self):
+        """`bash -cl '<cmd>'` runs the script; requiring `c` last was wrong."""
+        with scratch_task_in_real_repo("pr1-cluster") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"bash -cx 'cp /tmp/f {receipts}'",
+                f"bash -cl 'cp /tmp/f {receipts}'",
+                f"bash -cvx 'cp /tmp/f {receipts}'",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
     def test_shell_value_options_do_not_hide_the_script(self):
         """An option's value was mistaken for the `-c` script."""
         with scratch_task_in_real_repo("pr1-shellopt") as task_dir:

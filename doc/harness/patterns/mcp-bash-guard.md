@@ -165,64 +165,17 @@ Other dynamic constructs remain:
   `git checkout -- .`, `git restore .`, `git apply <patch>` and `git reset
   --hard` reach protected artifacts and gated source without the artifact ever
   appearing as a token. The git model classifies file operands only.
-- **unexpanded redirect targets cut both ways.** Redirect targets are read
-  before the shell-value expansion loop, so besides the false allow below there
-  is a symmetric false *deny*: `S=/tmp/x; cat /etc/hosts > $S/probe.py` denies
-  with `rule=source path=$S/probe.py`, because the literal token is normalized
-  against the repo root and `.py` classifies as source.
-- **variable indirection defeats redirect detection entirely.**
-  `F=<protected path>; echo x >> $F` allows, and the write succeeds. Redirect
-  targets are extracted from *unexpanded* tokens, before the shell-value
-  expansion loop runs, so an expansion never reaches them. The `${F}` brace form
-  and `xargs -I{} sh -c '... >> {}'` behave the same. This is pre-existing, not
-  a consequence of the 2026-08-26 change, and it is the clearest illustration of
-  why this gate is a guardrail rather than a control.
-This list is the tracking surface — the former pointer to
-`doc/harness/tasks/TASK__gate-reliability-pr1/deferred-scope.md` was dangling
-(that task directory does not exist, and task directories are gitignored, so
-they cannot hold durable knowledge). The expected-behavior matrix in
-`doc/common/REQ__process__bash-guard-script-execution.md` is the normative
-statement. `HARNESS_SKIP_MCP_GUARD=1` is the manual override.
-
-The gaps above are the ones where the artifact path never becomes a classifiable
-token. That is not the only way a route slips through — several rounds of review
-found paths that *were* in the token stream and still went unclassified (a glob
-basename, a reconstructed directory destination, a `-t` option value, a string
-constant inside `os.system`). Each of those was a fixable oversight and was
-fixed; do not read the list above as a complete theory of the gate's limits.
-
-What is durable: this surface is a guardrail, not a control. Receipt integrity
-rests on hook ownership of `RECEIPTS.jsonl` and on `task_verify` ordering. If a
-claim here and the code disagree, the code is right and this file is a defect.
-
-## Performance
-
-Hook timeout is 3 s. The guard short-circuits any command longer than 64 KiB
-and precompiles its regex set at module load (one import per hook spawn).
-Typical commands (≤ 8 KiB) complete well under 50 ms.
-
-## Deny-reason structure
-
-Identical schema to `prewrite_gate`:
-
-```
-[gate=mcp_bash_guard rule=<category> path=<repo-relpath> owner=<role> docs=<pattern-doc>] <human text>
-escape: HARNESS_SKIP_MCP_GUARD=1 <retry>
-```
-
-## Escape hatches
-
-| Env var | Effect | Audit |
-|---------|--------|-------|
-| `HARNESS_SKIP_MCP_GUARD=1` | one-shot silent allow | `gate-bypass` in `doc/harness/learnings.jsonl` |
-
-Use when you know a bash mutation is legitimate — e.g. during a maintenance
-rollout. Recurring activations against the same path signal that the path
-should either move under the MAINTENANCE task or get a proper tool (plan skill
-/ MCP write) rather than shell-level mutation.
-
-## Fail-safe behaviour
-
+- **the guard re-implements a partial getopt, per verb.** This is the class
+  that produced the last four review rounds, and it is not closed. For each
+  modelled verb the guard has to know which options take values, and which
+  operand is the destination. Every gap found so far was one of: an attached
+  value (`-es/a/b/`, `-t<dir>`), a separated value trailing the operands
+  (`cp SRC DST -S bak`), or a spelling of the same switch the model did not
+  list. Assume more exist. A caller who wants past this layer has far cheaper
+  routes anyway — `python3 -c` is ungated by design, and
+  `HARNESS_SKIP_MCP_GUARD=1` is documented — so completeness here buys less
+  than it costs. Add a spelling when it is reported; do not treat the option
+  model as exhaustive.
 - Top-level import failure → module `sys.exit(0)` (fail-open).
 - Exception inside `main()` → `_log_gate_error` to `learnings.jsonl`; exit 0.
 - Malformed / empty stdin → silent allow.

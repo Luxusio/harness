@@ -65,7 +65,7 @@ and nothing re-checks it at exec time.
 | `python -c <any code>`, `node -e`, `perl -e`, `ruby -e` | allow | Inline code is not inspected |
 | An unrecognized executable carrying a gated path as an argument (`ruff check <path>`, `ed <path>`) | allow | The branch that denied these could not tell a reader from a writer, and blocked repairing the guard itself |
 | Obfuscated reference (`base64`, computed `__import__`) | allow | Not detectable without inspection this gate no longer performs |
-| `tee`, `sed -i`, any redirect spelling, `cp`, `mv`, `install`, `rsync`, `truncate` **naming** a protected artifact, or copying into a directory that would produce one | deny | Direct file mutation — this is what the gate actually enforces |
+| `tee`, `sed -i`, any redirect spelling, `cp`, `mv`, `install`, `rsync`, `truncate`, `touch` **naming** a protected artifact, or copying into a directory that would produce one | deny | Direct file mutation — this is what the gate actually enforces, subject to the per-verb option model being complete for the spelling used |
 | The same verbs reaching an artifact without naming it — `find … -exec`, `find … -delete`, `tar -C`/`unzip -d` unpacking over one, a bare filename after `cd` under an unrecognized executable | allow | The path is never a classifiable token. Recorded as a known gap, not a boundary |
 | Hardlink or inode-alias route to **native Goal JSON** | deny | Identity evasion, inode-checked |
 | Hardlink alias of a task-directory artifact (`RECEIPTS.jsonl`, `PLAN.md`, `TASK.json`) | allow once the alias exists | Only Goal JSON is inode-checked; task artifacts are matched by path and basename. Creating the alias in-band still denies |
@@ -81,9 +81,9 @@ and nothing re-checks it at exec time.
   `task_verify` ordering, not by the Bash gate. Treat the Bash gate as a
   guardrail against accident, not a control against a determined caller. No
   document may describe it as the only control preventing a forged verdict.
-- Known routes past it are documented rather than implied closed. The clearest
-  is variable indirection (`F=<protected path>; echo x >> $F`), which allows
-  because redirect targets are read from unexpanded tokens. See
+- Known routes past it are documented rather than implied closed. The load-
+  bearing one is that the guard re-implements a partial getopt per verb, so an
+  unmodelled option spelling can still hide the destination. See
   `doc/harness/patterns/mcp-bash-guard.md` § Known gaps.
 
 ## Known remaining friction (not fixed here)
