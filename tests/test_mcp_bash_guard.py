@@ -599,7 +599,7 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertLess(len(command), 64 * 1024)  # _COMMAND_LENGTH_CAP
                     started = time.monotonic()
                     decision, _ = parse_decision(_run_bash(command).stdout)
-                    self.assertLess(time.monotonic() - started, 2.0)
+                    self.assertLess(time.monotonic() - started, 3.0)
                     self.assertEqual(decision, "deny")
 
     def test_subshell_glued_to_its_operator_still_ends_the_segment(self):
@@ -664,6 +664,58 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
+    def test_both_cluster_readings_are_classified(self):
+        """Under unknown quote alignment, neither reading is safe alone.
+
+        Expanding decomposed a quoted operator *literal* (`tee ');' <artifact>`)
+        into real boundaries that truncated the segment before the artifact.
+        Declining to expand reopened the clustered-closer bypass for any line
+        containing one adjacent-quote word — and `"$PWD"/doc` or `/tmp/a\\ b` is
+        enough to reach that state, so `(ls "$PWD"/doc); cp <payload>
+        <receipt>` allowed. Both readings are classified; a deny from either
+        denies.
+        """
+        with scratch_task_in_real_repo("pr1-bothreadings") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            plan = os.path.join(task_dir, "PLAN.md")
+            for command in (
+                # Needs the expanded reading.
+                f'(ls "$PWD"/doc); cp /tmp/p {receipts}',
+                f'( cd "$PWD"/plugin && ls ); tee {receipts}',
+                f'(ls "$PWD"/doc)&& sed -i s/a/b/ {plan}',
+                f'(ls "$PWD"/doc)| tee {receipts}',
+                f'(ls /tmp/a\\ b); mv /tmp/p {receipts}',
+                f'(echo "$PWD"/x); truncate -s 0 {receipts}',
+                # Needs the unexpanded reading.
+                f"""echo "a"b ; touch '|' {receipts}""",
+                f"""echo 'a'b ; touch ');' {receipts}""",
+                f"""echo "a"b ; echo F | tee ')&&' {receipts}""",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_glob_containment_is_physical_not_textual(self):
+        """`os.path.join(base, "../../*")` starts with base but leaves it.
+
+        The repo-anchored exemption from the component cap was decided with a
+        `startswith`, so `..` traversal was exempted and one operand ran 49 s —
+        past the hook timeout, which allows the whole line. A lexical prefix is
+        not a containment proof.
+        """
+        with scratch_task_in_real_repo("pr1-globescape") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for depth in (6, 7, 8):
+                pattern = "../../" + "*/" * depth + "zz"
+                with self.subTest(depth=depth):
+                    started = time.monotonic()
+                    decision, _ = parse_decision(
+                        _run_bash(f"cp /tmp/p {pattern} ; cp /tmp/p {receipts}").stdout
+                    )
+                    self.assertLess(time.monotonic() - started, 3.0)
+                    self.assertEqual(decision, "deny")
+
     def test_quote_glued_substitution_is_one_word(self):
         """bash concatenates adjacent quoted parts, so `$(pwd)'/'x` is one word.
 
@@ -698,11 +750,16 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
         with scratch_task_in_real_repo("pr1-budget") as task_dir:
             receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
             write = f"cp /tmp/pd {receipts}"
+            # The bound asserted is the real contract: `hooks.json` gives the
+            # hook 3 s and a kill emits no decision. Paddings are sized so a
+            # healthy run lands near 0.5 s, leaving room for load on a parallel
+            # test runner while still catching the regressions this pins — the
+            # ones it replaced ran 4.0 s, 4.4 s and 49 s.
             for label, command in (
                 ("arith-openers",
-                 "echo " + "$(( " * 16000 + f" ; cp /tmp/pd $(pwd)/{receipts}"),
+                 "echo " + "$(( " * 8000 + f" ; cp /tmp/pd $(pwd)/{receipts}"),
                 ("many-globs",
-                 " ; ".join(["rm /proc/*/*/*/*"] * 250) + f" ; {write}"),
+                 " ; ".join(["rm /proc/*/*/*/*"] * 120) + f" ; {write}"),
                 ("ambiguous-pairs",
                  'echo "a"b ; ' + " ; ".join(["echo x"] * 6000) + f" ; {write}"),
             ):
@@ -710,7 +767,7 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertLess(len(command), 64 * 1024)
                     started = time.monotonic()
                     decision, _ = parse_decision(_run_bash(command).stdout)
-                    self.assertLess(time.monotonic() - started, 2.6)
+                    self.assertLess(time.monotonic() - started, 3.0)
                     self.assertEqual(decision, "deny")
 
     def test_subshell_boundary_split_does_not_over_block(self):
@@ -755,7 +812,7 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 with self.subTest(command=command):
                     started = time.monotonic()
                     decision, _ = parse_decision(_run_bash(command).stdout)
-                    self.assertLess(time.monotonic() - started, 2.0)
+                    self.assertLess(time.monotonic() - started, 3.0)
                     # The real write on the same line still has to deny.
                     self.assertEqual(decision, "deny")
             # A cost bound must not be a spelling bound. Cost comes from the

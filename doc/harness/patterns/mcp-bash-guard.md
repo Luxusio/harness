@@ -213,6 +213,12 @@ Other dynamic constructs remain:
   refused both, which re-opened the glob-in-basename route — a cost bound that
   silently stops classifying is a bypass wearing a performance fix's clothes.
 
+  Containment is decided on the normalized literal prefix before the first
+  wildcard, not by a `startswith` on the joined pattern. The textual version
+  looked equivalent and was not: `os.path.join(base, "../../*/*/…")` starts
+  with `base`, so `..` traversal was exempted from the cap and one operand ran
+  49 s. A lexical prefix is not a containment proof.
+
   The wider lesson, after three rounds of it: **per-item caps get defeated by
   repeating the item.** Capping one glob's depth left 250 shallow globs on one
   line at 4 s; bounding the substitution scan by "closers remaining" left an
@@ -254,10 +260,16 @@ Other dynamic constructs remain:
   `&&` never becomes two `&`. Splitting only ever adds boundaries, so it
   cannot turn a deny into an allow — *provided the quoting is known*. It is
   not always: one adjacent-quote word anywhere on the line makes `_quoted_flags`
-  return `None`, every token then reads as unquoted, and a quoted operator
-  literal (`tee ');' <artifact>`, where `');'` is a filename) was decomposed
-  into real boundaries that truncated the segment before the artifact. Under
-  unknown alignment the expansion is skipped entirely.
+  return `None`, and every token then reads as unquoted.
+
+  Both single-reading answers were tried and both were wrong. Expanding under
+  unknown alignment decomposed a quoted operator literal (`tee ');' <artifact>`,
+  where `');'` is a filename) into real boundaries that truncated the segment
+  before the artifact. Declining to expand reopened the clustered-closer bypass
+  for any line containing one adjacent-quote word — and `"$PWD"/doc` is enough,
+  so `(ls "$PWD"/doc); cp <payload> <receipt>` allowed. Under unknown alignment
+  both readings are classified and their targets unioned, the same policy the
+  quoting reconciliation already uses.
 
   The whole-line union cannot compensate for a wrong split, which is worth
   stating because it looks like it should: that reading dispatches on the

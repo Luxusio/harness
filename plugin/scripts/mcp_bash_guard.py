@@ -54,7 +54,7 @@ _GLOB_COMPONENT_CAP = 4
 # decision. A deadline bounds the whole invocation regardless of which
 # repetition is used; exhausting it degrades to "not extracted", never to
 # deleting a token.
-_ANALYSIS_BUDGET_SECONDS = 1.5
+_ANALYSIS_BUDGET_SECONDS = 1.0
 _deadline = None
 
 
@@ -305,9 +305,23 @@ def _glob_is_too_broad(pattern, base=""):
     A pattern rooted inside the repository is bounded by the repository, so it
     is always expanded. Only patterns reaching outside are capped, and a
     deadline covers whatever the cap lets through.
+
+    Containment is decided *physically*, on the literal prefix before the first
+    wildcard, normalized. A textual `startswith` looked equivalent and was not:
+    `os.path.join(base, "../../*/*/…")` starts with `base`, so `..` traversal
+    was exempted from the cap and one operand ran 49 s — past the hook timeout,
+    which allows the whole line. A lexical prefix is not a containment proof.
     """
-    if base and (pattern == base or pattern.startswith(base.rstrip(os.sep) + os.sep)):
-        return False
+    if base:
+        literal = pattern
+        for index, character in enumerate(pattern):
+            if character in "*?[":
+                literal = pattern[:index]
+                break
+        anchor = os.path.normpath(os.path.dirname(literal) or literal)
+        root = os.path.normpath(base)
+        if anchor == root or anchor.startswith(root.rstrip(os.sep) + os.sep):
+            return False
     wildcard_components = sum(
         1 for component in pattern.split(os.sep)
         if any(ch in component for ch in "*?[")
@@ -1432,18 +1446,11 @@ def _split_control_cluster(token):
 def _expand_control_clusters(tokens, quoted):
     """Rewrite a token list so clustered operators are separate boundaries.
 
-    Only when the quoting is actually known. With `quoted is None` every token
-    reads as unquoted, so a *quoted operator literal* — `tee ');' <artifact>`,
-    where `');'` is an ordinary filename argument — was decomposed into real
-    boundaries and truncated the segment before the artifact. One adjacent-quote
-    word anywhere on the line (`echo "a"b`) is enough to reach that state, so
-    the write allowed. Declining to expand costs only the clustered-boundary
-    fix, whose motivating case (`( echo hi ); cp …`) has no quotes and so still
-    aligns; resolving unknown alignment as "this token *is* an operator" costs
-    an artifact.
+    Returns the inputs unchanged (by identity) when there is nothing to split,
+    which is how the caller detects that the two readings coincide. Under
+    unknown quote alignment the caller classifies both readings rather than
+    choosing one — see `_walk_segments`.
     """
-    if quoted is None:
-        return tokens, quoted
     if not any(
         _split_control_cluster(token) for index, token in enumerate(tokens)
         if not (quoted is not None and index < len(quoted) and quoted[index])
@@ -1465,7 +1472,43 @@ def _expand_control_clusters(tokens, quoted):
 
 def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
                    quoted=None, depth=0):
-    tokens, quoted = _expand_control_clusters(tokens, quoted)
+    """Segment the line and classify each segment.
+
+    When the quoting is known, clustered operators are decomposed and there is
+    one reading. When it is not — `_quoted_flags` returns None for ordinary
+    adjacent-quote concatenation such as `"$PWD"/doc` or `/tmp/a\\ b` — both
+    readings are classified and their targets unioned.
+
+    Picking one was tried and was wrong in both directions. Expanding under
+    unknown alignment decomposed a quoted operator *literal* (`tee ');'
+    <artifact>`, where `');'` is a filename) into real boundaries that
+    truncated the segment before the artifact. Declining to expand reopened the
+    clustered-closer bypass for any line that also contains one adjacent-quote
+    word, so `(ls "$PWD"/doc); cp <payload> <receipt>` allowed — ordinary
+    phrasing, and the exact route the expansion was added to close. Neither
+    reading is safe alone; a deny from either denies.
+    """
+    expanded, expanded_quoted = _expand_control_clusters(tokens, quoted)
+    if quoted is None and expanded is not tokens:
+        both: list[dict] = []
+        _walk_segments_once(
+            tokens, dict(shell_values), both, repo_root, execution_cwd,
+            quoted, depth,
+        )
+        _walk_segments_once(
+            expanded, dict(shell_values), both, repo_root, execution_cwd,
+            expanded_quoted, depth,
+        )
+        targets.extend(item for item in both if item not in targets)
+        return
+    _walk_segments_once(
+        expanded, shell_values, targets, repo_root, execution_cwd,
+        expanded_quoted, depth,
+    )
+
+
+def _walk_segments_once(tokens, shell_values, targets, repo_root,
+                        execution_cwd="", quoted=None, depth=0):
     idx = 0
     ambiguous_previous = None
     while idx < len(tokens):

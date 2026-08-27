@@ -103,7 +103,9 @@ and nothing re-checks it at exec time.
      by repeating the item (250 shallow globs, thousands of `$((` openers);
      and never let a cost bound silently stop classifying something it can
      afford — anchoring matters more than spelling, so a repo-rooted deep glob
-     must still expand.
+     must still expand. Decide that anchoring *physically*, on the normalized
+     literal prefix: a joined `<base>/../../*` passes a `startswith` test while
+     leaving the tree entirely.
   2. **Fail-open by exception.** Anything reaching `main()`'s catch-all exits 0,
      so one unrepresentable token can suppress every deny on the line. Keep path
      handling exception-safe inside `_normalize_candidate_path`, and keep
