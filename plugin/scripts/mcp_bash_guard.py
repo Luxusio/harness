@@ -529,6 +529,39 @@ def _expanded_sources(source, execution_cwd, repo_root):
     return [basename] if basename else []
 
 
+_CWD_IDIOM_RE = re.compile(r"\$\{PWD\}|\$PWD|\$\(pwd\)|`pwd`")
+
+
+def _resolve_directory_destination(destination, execution_cwd, repo_root):
+    """Resolve a copy destination to an existing directory, or None.
+
+    The destination used to be tested verbatim, so only the literal and
+    `$(pwd)/…` spellings resolved — `$PWD/<dir>`, `` `pwd`/<dir> `` and a
+    trailing glob all missed, and each of those is ordinary phrasing rather
+    than evasion. Every spelling reaches the same directory, so the gap was
+    purely which one had been modelled.
+
+    Returns the first expansion that is a directory; the caller only needs one,
+    because the derived filenames are identical for all of them.
+    """
+    base = execution_cwd or repo_root or os.getcwd()
+    candidate = _CWD_IDIOM_RE.sub(lambda _: base, destination)
+    # _glob_expansions returns nothing for a token with no wildcard, so the
+    # literal candidate has to be tried in its own right.
+    for expansion in (candidate,) + tuple(
+        _glob_expansions(candidate, repo_root, execution_cwd)
+    ):
+        resolved = expansion if os.path.isabs(expansion) else os.path.join(
+            base, expansion,
+        )
+        try:
+            if os.path.isdir(resolved):
+                return resolved
+        except (OSError, ValueError):
+            continue
+    return None
+
+
 def _append_directory_destination_targets(
     cmd, non_env, destination, targets, repo_root, execution_cwd="",
 ):
@@ -542,13 +575,10 @@ def _append_directory_destination_targets(
     destination = option_destination or destination
     if not destination:
         return
-    resolved = destination if os.path.isabs(destination) else os.path.join(
-        execution_cwd or repo_root or os.getcwd(), destination,
+    resolved = _resolve_directory_destination(
+        destination, execution_cwd, repo_root,
     )
-    try:
-        if not os.path.isdir(resolved):
-            return
-    except (OSError, ValueError):
+    if resolved is None:
         return
     sources = [
         token for token in non_env[1:]
@@ -693,7 +723,17 @@ def _process_segment_once(segment_tokens, targets, repo_root, execution_cwd="",
     cmd = os.path.basename(non_env[0])
 
     if cmd == "eval":
-        nested = " ".join(non_env[1:])
+        # Fold `eval eval eval … X` into one descent. The depth cap exists to
+        # stop RecursionError (which main()'s catch-all turns into a silent
+        # allow for the whole line), but charging a level per repeated `eval`
+        # made the cap itself a bypass: nine of them walked past it and wrote
+        # the artifact with the gate silent. Repetition adds no nesting to
+        # analyse, and folding it costs nothing, so only genuinely alternating
+        # nesting can reach the cap now.
+        rest = non_env[1:]
+        while rest and os.path.basename(rest[0]) == "eval":
+            rest = rest[1:]
+        nested = " ".join(rest)
         if nested:
             if depth < _NESTED_DESCENT_CAP:
                 targets.extend(_extract_mutation_targets(
@@ -711,8 +751,6 @@ def _process_segment_once(segment_tokens, targets, repo_root, execution_cwd="",
                 targets.extend(_extract_mutation_targets(
                     nested, repo_root, execution_cwd, depth + 1,
                 ))
-            if targets:
-                return
             # A keyword heuristic used to fire when extraction found nothing:
             # any gated-path mention plus a word like "write"/"append"/">"
             # anywhere in the nested string denied with a synthetic
@@ -1054,6 +1092,33 @@ def _unquoted_lines(command):
 _SUBSTITUTION_PLACEHOLDER = "$()"
 
 
+def _glued_closer_ordinals(command, closer):
+    """1-based ordinals of `closer` characters in `command` followed by `/`.
+
+    Used to decide whether a collapsed substitution was written glued to the
+    path that follows it (`$(pwd)/doc`) or merely near one (`cd $(dirname .)/.
+    ; sed -i $(echo s/a/b/) <artifact>`). Deciding that with a substring test
+    over the whole command conflated the two and glued unrelated words
+    together, which deletes a word — the same failure class as an unbounded
+    span consuming the rest of the line.
+
+    When there is no raw command to consult the caller gets an empty set, so
+    the merge is simply skipped; splitting a path is a missed classification,
+    while gluing two operands destroys one.
+    """
+    if not command:
+        return frozenset()
+    ordinals = set()
+    count = 0
+    for position, character in enumerate(command):
+        if character != closer:
+            continue
+        count += 1
+        if command[position + 1:position + 2] == "/":
+            ordinals.add(count)
+    return frozenset(ordinals)
+
+
 def _collapse_substitutions(tokens, quoted, command=""):
     """Collapse `$( … )`, `<( … )`, `>( … )` and backtick spans to one token.
 
@@ -1076,11 +1141,39 @@ def _collapse_substitutions(tokens, quoted, command=""):
       and `)>>` as single tokens, so a closer is detected by *counting* parens
       inside each token, and whatever follows the closing paren in that same
       token is pushed back so the boundary it carries still splits.
+    * **A failed scan must not be repeated.** "Never delete" was first written
+      as a plain `index += 1`, which made this function quadratic: n unclosed
+      openers each rescanning to end of line. 40 KB of `'$('` padding then blew
+      the 3 s hook budget, and a timeout emits no decision — so the padding
+      disabled every deny on the line, which is the fail-open the rule was
+      meant to avoid. A scan finding no closer in `pending[index+1:]` proves
+      none exists for any later opener either, because `index` only advances,
+      so the result is latched instead of recomputed.
+    * **Adjacency belongs to the span, not to the line.** `$(pwd)/doc` is one
+      word to bash while shlex yields `)` then `/doc`, so the two are merged.
+      Deciding that with `")/" in command` tested the whole command: a stray
+      `)/` anywhere — including the ordinary idiom `cd $(dirname .)/.` — turned
+      the merge back on for an unrelated span and glued two real words into
+      one, so `sed -i $(echo s/O/X/) <artifact>` swallowed the artifact as
+      sed's script expression and classified nothing. The merge now asks about
+      the character following *this* span's own closer.
     """
     collapsed = []
     flags = [] if quoted is not None else None
     pending = list(tokens)
     pending_quoted = list(quoted) if quoted is not None else None
+    # Ordinals (1-based) of the `)` and backtick characters in the raw command
+    # that are immediately followed by `/`. Closer characters survive
+    # tokenization one-for-one and in order, so the k-th closer character of
+    # the token stream is the k-th in the source; a span can then ask about its
+    # own closer instead of about the whole line.
+    glued_parens = _glued_closer_ordinals(command, ")")
+    glued_backticks = _glued_closer_ordinals(command, "`")
+    seen_paren = 0
+    seen_backtick = 0
+    # Latched once a scan has proven the remainder holds no closer of that kind.
+    paren_exhausted = False
+    backtick_exhausted = False
     index = 0
     while index < len(pending):
         token = pending[index]
@@ -1108,19 +1201,34 @@ def _collapse_substitutions(tokens, quoted, command=""):
             collapsed.append(token)
             if flags is not None:
                 flags.append(is_quoted)
+            # Ordinals count closer characters wherever they appear, including
+            # inside quoted words: `"a)/b"` contributes a `)` to the source, so
+            # skipping it here would make every later span read one ordinal too
+            # low and inherit some other paren's adjacency.
+            seen_paren += token.count(")")
+            seen_backtick += token.count("`")
             index += 1
             continue
 
+        exhausted = backtick_exhausted if backtick else paren_exhausted
         depth = token.count("(")
         scan = index + 1
         tail = ""
         found = False
-        while scan < len(pending):
+        # Closer characters passed while scanning, and how many of those fall
+        # at or before the one that actually closes this span.
+        span_parens = 0
+        span_backticks = 0
+        upto_closer = 0
+        while not exhausted and scan < len(pending):
             current = pending[scan]
             if backtick:
                 if current == "`":
                     found = True
+                    upto_closer = span_backticks + 1
+                    span_backticks = upto_closer
                     break
+                span_backticks += current.count("`")
             else:
                 depth += current.count("(")
                 closers = current.count(")")
@@ -1129,15 +1237,26 @@ def _collapse_substitutions(tokens, quoted, command=""):
                     if depth <= 0:
                         found = True
                         # `);` and `)&&` carry a boundary after the closer.
-                        tail = current[current.rindex(")") + 1:]
+                        cut = current.rindex(")")
+                        tail = current[cut + 1:]
+                        upto_closer = span_parens + current[:cut + 1].count(")")
+                        span_parens += closers
                         break
+                    span_parens += closers
             scan += 1
         if not found:
             # Unbounded span: keep the token as-is rather than deleting the
-            # remainder of the line.
+            # remainder of the line. Latch the result — rescanning the same
+            # closerless suffix once per opener is the quadratic path.
+            if backtick:
+                backtick_exhausted = True
+            else:
+                paren_exhausted = True
             collapsed.append(token)
             if flags is not None:
                 flags.append(is_quoted)
+            seen_paren += token.count(")")
+            seen_backtick += token.count("`")
             index += 1
             continue
 
@@ -1146,6 +1265,15 @@ def _collapse_substitutions(tokens, quoted, command=""):
         # destination stops being read as one.
         prefix = token[:token.index("(")] if "(" in token else token
         prefix = prefix.rstrip("$<>`")
+        if backtick:
+            closer_ordinal = seen_backtick + token.count("`") + upto_closer
+            glued_suffix = closer_ordinal in glued_backticks
+        else:
+            closer_ordinal = seen_paren + token.count(")") + upto_closer
+            glued_suffix = closer_ordinal in glued_parens
+        # Every closer character between index and scan is consumed here.
+        seen_paren += token.count(")") + span_parens
+        seen_backtick += token.count("`") + span_backticks
         index = scan + 1
         if tail:
             pending.insert(index, tail)
@@ -1156,7 +1284,6 @@ def _collapse_substitutions(tokens, quoted, command=""):
         # artifact stopped being classified. Merge only when the source text
         # really has `)` immediately followed by `/` — otherwise a genuinely
         # separate operand would be rebased into the repo.
-        glued_suffix = ")/" in command if command else True
         if (not tail and glued_suffix and index < len(pending)
                 and pending[index].startswith("/")):
             collapsed.append(prefix + pending[index].lstrip("/"))
@@ -1164,7 +1291,14 @@ def _collapse_substitutions(tokens, quoted, command=""):
                 flags.append(False)
             index += 1
             continue
-        collapsed.append(_SUBSTITUTION_PLACEHOLDER)
+        # Keep the prefix here too. `> <dir>/$(echo RECEIPTS.jsonl)` had the
+        # directory dropped along with the substitution, leaving a bare
+        # placeholder as the whole operand — the same deletion the merge path
+        # already guards against. Preserving it does not by itself deny (the
+        # basename is still unknown, so the write allows; see the REQ's
+        # bypass-class list), but it keeps the word count honest and leaves the
+        # directory visible to any later rule that wants it.
+        collapsed.append(prefix + _SUBSTITUTION_PLACEHOLDER)
         if flags is not None:
             flags.append(False)
     return collapsed, flags

@@ -2,7 +2,7 @@
 
 summary: mcp_bash_guard gates protected-artifact file mutation only; execution is never gated
 status: accepted
-updated: 2026-08-26
+updated: 2026-08-27
 freshness: current
 confidence: high
 kind: process
@@ -67,6 +67,7 @@ and nothing re-checks it at exec time.
 | Obfuscated reference (`base64`, computed `__import__`) | allow | Not detectable without inspection this gate no longer performs |
 | `tee`, `sed -i`, any redirect spelling, `cp`, `mv`, `install`, `rsync`, `truncate`, `touch` **naming** a protected artifact, or copying into a directory that would produce one | deny | Direct file mutation — this is what the gate actually enforces, subject to the per-verb option model being complete for the spelling used |
 | The same verbs reaching an artifact without naming it — `find … -exec`, `find … -delete`, `tar -C`/`unzip -d` unpacking over one, a bare filename after `cd` under an unrecognized executable | allow | The path is never a classifiable token. Recorded as a known gap, not a boundary |
+| The same verbs with a substitution in the **basename** slot — `> <task>/$(echo RECEIPTS.jsonl)` | allow | The directory survives collapse but the basename exists only after the shell runs. Denying every unknown basename under a protected directory is a policy change with its own over-block risk; recorded as a known gap |
 | Hardlink or inode-alias route to **native Goal JSON** | deny | Identity evasion, inode-checked |
 | Hardlink alias of a task-directory artifact (`RECEIPTS.jsonl`, `PLAN.md`, `TASK.json`) | allow once the alias exists | Only Goal JSON is inode-checked; task artifacts are matched by path and basename. Creating the alias in-band still denies |
 
@@ -87,7 +88,11 @@ and nothing re-checks it at exec time.
   1. **Fail-open by timeout.** Analysis that exceeds the hook's 3 s budget emits
      no decision, which is an allow. Any super-linear path converts every deny
      on the line into an allow by padding the command. Keep classification
-     linear in command length.
+     linear in command length. This is the class a *fix* is most likely to
+     reintroduce: "never delete an unbounded span" was implemented by advancing
+     one token and rescanning, which is quadratic, and 40 KB of `'$('` padding
+     restored the fail-open the rule was written to close. A guard change that
+     adds a nested loop over tokens is a security change.
   2. **Fail-open by exception.** Anything reaching `main()`'s catch-all exits 0,
      so one unrepresentable token can suppress every deny on the line. Keep path
      handling exception-safe inside `_normalize_candidate_path`, and keep
@@ -100,7 +105,11 @@ and nothing re-checks it at exec time.
      *removes*. Substitution collapse dropped everything after a punctuation-
      clustered closer (`);`, `)&&`, `))`), deleting a following command outright,
      and dropped a glued opener's prefix (`--target-directory=$(…)`), deleting
-     the option name. Check what survives collapse, not only where it sits.
+     the option name. Check what survives collapse, not only where it sits —
+     and note that *merging* two words deletes one just as surely: gating the
+     `$(pwd)/path` merge on a whole-line `")/"` substring fused unrelated
+     operands, so `cd $(dirname .)/. ; sed -i $(echo s/a/b/) <artifact>` lost
+     the artifact into sed's script slot. Adjacency must be decided at the span.
   5. **Quoting reconciliation.** Token text is read as shell syntax, so the
      guard must know how each token was quoted. It lexes twice and requires
      agreement; when the two cannot be reconciled it classifies under *both*

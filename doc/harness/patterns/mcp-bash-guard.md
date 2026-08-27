@@ -7,7 +7,7 @@ invalidated_by_paths:
   - plugin/scripts/_lib.py
   - plugin/hooks/hooks.json
 tier: 2
-freshness_updated: 2026-08-26T00:00:00Z
+freshness_updated: 2026-08-27T00:00:00Z
 ---
 
 # mcp_bash_guard
@@ -145,6 +145,15 @@ Other dynamic constructs remain:
   `PLAN.md` and `TASK.json` are matched by path and basename, so writing through
   a pre-existing hard link to one of them allows. Creating the alias in-band
   still denies, so this needs an alias planted by some other route.
+- **a substitution in the basename slot is not resolved.** `echo z >
+  <task>/$(echo RECEIPTS.jsonl)` allows, as do the `tee`, `sed -i`, `perl -pi`,
+  `truncate`, `dd of=`, `cp`, `mv` and `install` spellings of the same
+  destination. The collapse keeps the directory prefix — dropping it was a
+  token deletion — but the basename is only known after the shell runs it, and
+  denying every unknown basename inside a protected directory is a policy
+  change with its own over-block risk. Unlike the gaps above this one is
+  deliberate obfuscation rather than phrasing anyone reaches by accident, which
+  is why it is recorded here instead of closed.
 - **a path the command never names is not classified.** `find … -exec truncate
   -s0 {} \;`, `find … -delete`, `tar -C <dir> -xf`, and `unzip -d <dir>` all
   reach a protected artifact without it appearing as a token. A bare filename
@@ -219,6 +228,24 @@ Other dynamic constructs remain:
   that prefix, or the option name is dropped and its value stops being read as
   a destination. Treat "which words survive" as part of the same invariant as
   "which word is where".
+
+  The first repair of that deletion introduced two more, both worth naming
+  because they are the shapes a fix naturally takes:
+
+  - *Not deleting cost time.* "Keep the token and move on" was written as a
+    plain `index += 1`, so n unclosed openers each rescanned to end of line.
+    40 KB of `'$('` padding took 3.2 s, the hook budget is 3 s, and a timeout
+    emits no decision — the padding disabled every deny on the line. A failed
+    scan is now latched: it proves no closer exists in the remaining suffix,
+    and `index` only advances, so no later opener can find one either.
+  - *Gluing is also deletion.* `$(pwd)/doc` is one word to bash and two to
+    shlex, so the two get merged. Deciding that with `")/" in command` asked
+    about the whole line, so a stray `)/` anywhere — `cd $(dirname .)/.` is an
+    ordinary idiom — re-enabled the merge for an unrelated span and fused two
+    real operands, so `sed -i $(echo s/O/X/) <artifact>` swallowed the artifact
+    as sed's script expression. Adjacency is now read from the character after
+    *that span's own* closer, located by counting closer characters, which
+    survive tokenization one-for-one and in order.
 - **quoting forms the guard does not model.** Token text is read as shell
   syntax, so the guard must know how each token was quoted. `_quoted_flags`
   establishes that by lexing twice — posix for values, non-posix for quoting —

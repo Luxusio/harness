@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -22,6 +23,22 @@ from conftest import (  # type: ignore
 )
 
 GUARD = os.path.join(SCRIPTS_DIR, "mcp_bash_guard.py")
+
+
+def _import_guard():
+    """Load the guard in-process.
+
+    Most tests drive the real hook contract through a subprocess, which is the
+    right default. But a fail-open is invisible from out there — an exception
+    swallowed by main()'s catch-all looks exactly like a clean allow — so a few
+    tests have to assert below that boundary.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("_guard_under_test", GUARD)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 TAIL_RE = re.compile(
     r"\[gate=mcp_bash_guard rule=\S+ path=\S+ owner=\S+ docs=\S+\]"
@@ -514,21 +531,119 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
-    def test_nested_descent_is_bounded(self):
-        """Unbounded `eval` nesting raised RecursionError, which allows.
+    def test_repeated_eval_still_denies(self):
+        """The depth cap must not become a bypass of its own.
 
-        RecursionError reaches main()'s catch-all and exits 0 — a silent allow
-        for the whole line — and the cost was super-linear as well. Descent is
-        now capped; the deep case degrades to the documented "nested content not
-        extracted" allow, but must not raise or exceed the hook budget.
+        Unbounded `eval` descent raised RecursionError, which reaches main()'s
+        catch-all and exits 0 — a silent allow for the whole line. Capping the
+        descent fixed that, but charging one level per repeated `eval` meant
+        nine of them walked past the cap and wrote the artifact with the gate
+        silent: a one-token-repeat bypass. Repetition adds no nesting to
+        analyse, so it is folded before the cap applies.
         """
         with scratch_task_in_real_repo("pr1-evaldepth") as task_dir:
             receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
-            for reps in (500, 5000):
+            for reps in (1, 8, 9, 40, 500):
                 with self.subTest(reps=reps):
-                    result = _run_bash(("eval " * reps) + f"cp /tmp/p {receipts}")
-                    self.assertEqual(result.returncode, 0)
-                    self.assertNotIn("Traceback", result.stderr)
+                    command = ("eval " * reps) + f"cp /tmp/p {receipts}"
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_nested_descent_is_bounded(self):
+        """Genuinely alternating nesting must stop, not raise.
+
+        RecursionError is a fail-open, so the bound has to hold below the
+        subprocess boundary — from outside, the uncapped build also exits 0
+        with empty stderr, so a returncode assertion cannot tell the fix from
+        its absence.
+        """
+        with scratch_task_in_real_repo("pr1-evaldepth2") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            guard = _import_guard()
+            # Alternating wrappers cannot be folded the way repeated `eval`
+            # can, so this is what the cap actually exists for.
+            deep = "eval " + "bash -c 'eval bash -c '" * 400 + f"cp /tmp/p {receipts}"
+            started = time.monotonic()
+            guard._extract_mutation_targets(deep, REPO_ROOT)
+            self.assertLess(time.monotonic() - started, 1.0)
+            # The cap must not be so low that ordinary nesting stops
+            # classifying: one level below it still finds the target.
+            shallow = "eval " * (guard._NESTED_DESCENT_CAP - 1)
+            self.assertTrue(
+                guard._extract_mutation_targets(
+                    shallow + f"cp /tmp/p {receipts}", REPO_ROOT,
+                ),
+            )
+
+    def test_collapse_cost_stays_within_the_hook_budget(self):
+        """A quadratic collapse is a bypass, not a slow path.
+
+        The hook gets 3 s and a timeout emits no decision, so padding that
+        makes analysis super-linear disables every deny on the line. "Never
+        delete an unbounded span" was first written as a plain `index += 1`,
+        which rescanned to end of line once per unclosed opener; 40 KB of
+        `'$('` padding then took 3.2 s and let the real write through.
+        """
+        with scratch_task_in_real_repo("pr1-collapsecost") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            # `"a"b` desynchronises the two lexes, which is what forces the
+            # all-unquoted reading where every `'$('` counts as an opener.
+            padding = " ".join(['echo "a"b'] + ["'$('"] * 8000)
+            command = f"cp /tmp/payload {receipts}; " + padding
+            self.assertLess(len(command), 64 * 1024)  # under _COMMAND_LENGTH_CAP
+            started = time.monotonic()
+            decision, _ = parse_decision(_run_bash(command).stdout)
+            self.assertLess(time.monotonic() - started, 2.0)
+            self.assertEqual(decision, "deny")
+
+    def test_stray_glued_paren_does_not_re_enable_the_merge(self):
+        """Merge adjacency is a property of the span, not of the line.
+
+        `$(pwd)/doc` is one word to bash but two tokens to shlex, so the two
+        are merged. Gating that on `")/" in command` tested the whole line, so
+        any stray `)/` — including the everyday idiom `cd $(dirname .)/.` —
+        turned the merge on for an unrelated span and glued two real operands
+        into one, deleting a word: `sed -i $(echo s/O/X/) <artifact>` then
+        consumed the artifact as sed's script expression.
+        """
+        with scratch_task_in_real_repo("pr1-strayglue") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f'echo "a)/b"; sed -i $(echo s/O/X/) {receipts}',
+                f'cd $(dirname .)/. ; sed -i $(echo s/O/X/) {receipts}',
+                f'echo "a)/b"; perl -pi -e $(echo s/O/X/) {receipts}',
+                f'sed -i $(echo s/O/X/) {receipts}',
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_directory_destination_spellings_of_the_cwd(self):
+        """Every spelling of "here" reaches the same directory.
+
+        The destination was resolved from the literal token, so only the plain
+        and `$(pwd)/…` forms were caught; `$PWD/<dir>`, `` `pwd`/<dir> `` and a
+        trailing glob all allowed. None of those is evasion — they are ordinary
+        phrasing — so the gap was purely which spelling had been modelled.
+        """
+        with scratch_task_in_real_repo("pr1-cwdspelling") as task_dir:
+            rel = os.path.relpath(task_dir, REPO_ROOT)
+            for command in (
+                f"cp /tmp/RECEIPTS.jsonl $PWD/{rel}",
+                f"cp /tmp/RECEIPTS.jsonl ${{PWD}}/{rel}",
+                f"cp /tmp/RECEIPTS.jsonl `pwd`/{rel}",
+                f"cp -t `pwd`/{rel} /tmp/RECEIPTS.jsonl",
+                f"mv /tmp/RECEIPTS.jsonl $PWD/{rel}",
+                f"install /tmp/RECEIPTS.jsonl $PWD/{rel}",
+                f"cp /tmp/RECEIPTS.jsonl {rel[:-1]}?",
+                f"cp /tmp/RECEIPTS.jsonl doc/*/tasks/{os.path.basename(rel)}",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
 
     def test_substitution_span_does_not_over_block(self):
         for command in (

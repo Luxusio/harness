@@ -1,15 +1,23 @@
 """mcp_bash_guard: read-only inspection must not be denied, mutation must be.
 
-The guard flattens the whole command to alphanumerics and denies the segment
-when any protected artifact or lifecycle symbol name appears in it. That made
-ordinary diagnosis impossible: an `echo` banner naming a symbol, or a compound
-`for`/`if` command mentioning a gated path, was denied even though neither can
-write anything.
+The guard gates file-mutation verbs that target a protected artifact. Script and
+interpreter execution is not gated at all: `python -c`, `node -e`, a lifecycle
+entrypoint, a shell-out from inside inspected code — all allow.
 
-These tests pin both directions at once — the false positives stay allowed and
-every real mutation stays denied. The guard is the only control preventing a
-forged PASS receipt (receipt entries carry no signature), so the negative cases
-below are the load-bearing half of this file.
+It used to be otherwise. The guard flattened the whole command to alphanumerics
+and denied the segment when any protected artifact or lifecycle symbol name
+appeared in it, which made ordinary diagnosis impossible: an `echo` banner
+naming a symbol, or a compound `for`/`if` command mentioning a gated path, was
+denied even though neither can write anything. That layer was removed as
+bypassable — see `doc/common/REQ__process__bash-guard-script-execution.md`.
+
+These tests pin both directions at once: the false positives stay allowed and
+every mutation-verb route stays denied. Note what that does *not* claim — this
+gate is not what makes a PASS receipt trustworthy. Receipt integrity comes from
+hook ownership of `RECEIPTS.jsonl` and `task_verify` ordering; the REQ forbids
+describing the Bash gate as the only control preventing a forged verdict,
+because a caller who wants past it has `python3 -c` and a documented escape
+hatch two lines away.
 """
 from __future__ import annotations
 
