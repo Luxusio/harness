@@ -446,6 +446,58 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
+    def test_substitution_span_does_not_split_the_segment(self):
+        """`$(…)`, `<(…)`, `>(…)` and backticks are one word to bash.
+
+        shlex emits `$`, `(`, `pwd`, `)` as four, and `(`/`)` are boundaries, so
+        the segment ended mid-command and the destination landed alone in the
+        next segment as its own command word. `cp payload $(pwd)/<receipt>` is
+        everyday phrasing, not an evasion.
+        """
+        with scratch_task_in_real_repo("pr1-subst") as task_dir:
+            rel = os.path.relpath(task_dir, REPO_ROOT)
+            receipts = f"{rel}/RECEIPTS.jsonl"
+            for command in (
+                f"cp /tmp/payload $(pwd)/{receipts}",
+                f"echo x > $(pwd)/{receipts}",
+                f"tee $(pwd)/{receipts} < /tmp/payload",
+                f"sed -i s/a/b/ $(pwd)/{rel}/PLAN.md",
+                f"rm -f $(pwd)/{receipts}",
+                f"cp <(echo hi) {receipts}",
+                f"echo x | tee >(cat) {receipts}",
+                f"cp /tmp/payload $(echo) {receipts}",
+                f"touch $(echo) {receipts}",
+                f"cp /tmp/payload `pwd`/{receipts}",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_substitution_span_does_not_over_block(self):
+        for command in (
+            "cp /tmp/a $(pwd)/tmp/b", "echo $(pwd)", "cat <(echo hi)",
+            "echo x | tee >(cat) /tmp/out", "( echo hi ) > /tmp/out",
+        ):
+            with self.subTest(command=command):
+                decision, _ = parse_decision(_run_bash(command).stdout)
+                self.assertIsNone(decision)
+
+    def test_unrepresentable_path_token_does_not_fail_the_guard_open(self):
+        """A token that makes a path call raise must not allow the whole line.
+
+        The substitution placeholder briefly contained a NUL; `os.path.realpath`
+        raised ValueError, which main()'s catch-all turned into exit 0 — a
+        silent allow for every other target on the same line.
+        """
+        with scratch_task_in_real_repo("pr1-nulpath") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            decision, reason = parse_decision(
+                _run_bash(f"cp $'\\x00' {receipts}").stdout
+            )
+            self.assertEqual(decision, "deny")
+            self.assertIn("rule=protected-artifact", reason)
+
     def test_empty_heredoc_delimiter_does_not_eat_the_target(self):
         '''An empty quoted word must stay in the stream.
 

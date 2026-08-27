@@ -206,9 +206,15 @@ def _normalize_candidate_path(
     value = value.rstrip(",)")
     cwd = os.path.realpath(execution_cwd or repo_root or os.getcwd())
     root = os.path.realpath(repo_root or cwd)
-    candidate = os.path.realpath(
-        value if os.path.isabs(value) else os.path.join(cwd, value)
-    )
+    try:
+        candidate = os.path.realpath(
+            value if os.path.isabs(value) else os.path.join(cwd, value)
+        )
+    except (ValueError, OSError):
+        # An unrepresentable path (embedded NUL, bad surrogate) is not a target,
+        # but it must not raise: the exception would reach main()'s catch-all
+        # and exit 0, allowing every other target on the same command line.
+        return ""
     if _is_runtime_provenance(candidate):
         return candidate
     try:
@@ -913,9 +919,13 @@ def _extract_mutation_targets(command, repo_root, execution_cwd=""):
     for line in _unquoted_lines(command):
         line_tokens = _tokenize(line) if line.strip() else []
         if line_tokens:
+            line_quoted = _quoted_flags(line, len(line_tokens))
+            line_tokens, line_quoted = _collapse_substitutions(
+                line_tokens, line_quoted,
+            )
             _walk_segments(
                 line_tokens, shell_values, targets, repo_root, execution_cwd,
-                _quoted_flags(line, len(line_tokens)),
+                line_quoted,
             )
 
     return targets
@@ -939,12 +949,14 @@ def _unquoted_lines(command):
     current = []
     quote = ""
     index = 0
+    # True only where bash would start a new word. Testing `current[-1]` for
+    # whitespace was not the same thing: escaped whitespace (`/tmp/a\ `) is part
+    # of the preceding word, so `cp /tmp/a\ #x ; cp payload <receipt>` had the
+    # rest of the line — including a real second command — treated as a comment
+    # and dropped. Only the plain-character branch below sets this.
+    at_word_start = True
     while index < len(command):
-        if (
-            not quote
-            and command[index] == "#"
-            and (not current or current[-1] in (" ", "\t"))
-        ):
+        if not quote and command[index] == "#" and at_word_start:
             while index < len(command) and command[index] != "\n":
                 index += 1
             continue
@@ -956,11 +968,13 @@ def _unquoted_lines(command):
                 current.append(char)
                 current.append(command[index + 1])
                 index += 2
+                at_word_start = False
                 continue
             if char == quote:
                 quote = ""
             current.append(char)
             index += 1
+            at_word_start = False
             continue
         # An escaped character outside quotes is literal. Treating `\'` as a
         # quote-opener desynchronized the tracker, so `echo it\'s` swallowed the
@@ -970,11 +984,13 @@ def _unquoted_lines(command):
             current.append(char)
             current.append(command[index + 1])
             index += 2
+            at_word_start = False
             continue
         if char in "'\"":
             quote = char
             current.append(char)
             index += 1
+            at_word_start = False
             continue
         # `\` + newline is a line continuation: bash joins the lines, so the
         # verb and its target stay one command. Splitting there separated
@@ -982,16 +998,95 @@ def _unquoted_lines(command):
         if char == "\\" and index + 1 < len(command) and command[index + 1] == "\n":
             current.append(" ")
             index += 2
+            at_word_start = True
             continue
         if char == "\n":
             lines.append("".join(current))
             current = []
             index += 1
+            at_word_start = True
             continue
         current.append(char)
         index += 1
+        at_word_start = char in " \t"
     lines.append("".join(current))
     return lines
+
+
+
+# Stands in for a command-substitution span. Not a path, not an option, not a
+# boundary, so it holds one operand slot without being classified.
+#
+# Deliberately free of NUL and other characters `os.path.realpath` rejects: a
+# `ValueError` from the normalizer reaches `main()`'s catch-all and exits 0,
+# which is a silent allow for the whole command.
+_SUBSTITUTION_PLACEHOLDER = "$()"
+
+
+def _collapse_substitutions(tokens, quoted):
+    """Collapse `$( ... )`, `<( ... )`, `>( ... )` and backtick spans to one token.
+
+    `punctuation_chars=True` emits `$`, `(`, `pwd`, `)` as four words where bash
+    builds one (process substitution) or zero-or-more (command substitution).
+    Because `(` and `)` are boundaries, the segment ended mid-command and the
+    destination landed alone in the next segment as its own "command word",
+    where no verb branch matches -- so `cp payload $(pwd)/<receipt>` and
+    `cp <(echo hi) <receipt>` wrote the artifact with the gate silent. The
+    unquoted `$(pwd)/...` spelling is everyday phrasing, not an evasion.
+
+    The span becomes one opaque placeholder, so parentheses inside it can never
+    split a segment and the operand positions on either side are preserved.
+    """
+    collapsed = []
+    flags = [] if quoted is not None else None
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        is_quoted = quoted is not None and index < len(quoted) and quoted[index]
+        # `<(` and `>(` arrive as one token; `$` + `(` as two.
+        opens_span = not is_quoted and (
+            (token in ("$", "<", ">") and index + 1 < len(tokens)
+             and tokens[index + 1] == "(")
+            or token in ("<(", ">(", "$(")
+            or token == "`"
+        )
+        if opens_span:
+            closer = ")" if token != "`" else "`"
+            depth = 1 if token in ("<(", ">(", "$(") else 0
+            scan = index + 1
+            while scan < len(tokens):
+                if tokens[scan] == "(":
+                    depth += 1
+                elif tokens[scan] == closer:
+                    if closer == "`" or depth <= 1:
+                        break
+                    depth -= 1
+                scan += 1
+            index = scan + 1
+            # `$(pwd)/doc/...` is ONE word to bash, but shlex leaves `/doc/...`
+            # as a separate token, and an absolute path resolves outside the
+            # repo so the artifact stopped being classified. Emit the suffix
+            # alone, repo-relative: one token, matching bash's word count, and
+            # classifiable. `$(pwd)/`, `$(git rev-parse --show-toplevel)/` and
+            # friends all expand to a repo root.
+            if index < len(tokens) and tokens[index].startswith("/"):
+                collapsed.append(tokens[index].lstrip("/"))
+                if flags is not None:
+                    flags.append(
+                        quoted is not None and index < len(quoted)
+                        and quoted[index]
+                    )
+                index += 1
+                continue
+            collapsed.append(_SUBSTITUTION_PLACEHOLDER)
+            if flags is not None:
+                flags.append(False)
+            continue
+        collapsed.append(token)
+        if flags is not None:
+            flags.append(is_quoted)
+        index += 1
+    return collapsed, flags
 
 
 def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
@@ -1041,15 +1136,21 @@ def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
         _process_segment(
             expanded, targets, repo_root, execution_cwd, segment_quoted,
         )
-        if quoted is None:
-            # The split itself may be wrong: a quoted `|` is an argument, not
-            # a boundary. Classify the unsplit line too and union.
-            unsplit: list[dict] = []
-            _process_segment(
-                tokens, unsplit, repo_root, execution_cwd, None,
-            )
-            targets.extend(item for item in unsplit if item not in targets)
         idx = j + 1
+    if quoted is None:
+        # The split itself may be wrong: a quoted `|` is an argument, not a
+        # boundary, so classify the unsplit line too and union.
+        #
+        # Once per line, NOT once per segment. Inside the loop this was
+        # O(segments x tokens), and `quoted is None` is the ordinary
+        # adjacent-quote case — a 22 KB line of `echo "a"b;` padding took longer
+        # than the hook's 3s budget, which emits no decision and therefore
+        # allows. That made any deny convertible to an allow by padding the
+        # command. The target set is identical either way; the call does not
+        # depend on `idx`.
+        unsplit: list[dict] = []
+        _process_segment(tokens, unsplit, repo_root, execution_cwd, None)
+        targets.extend(item for item in unsplit if item not in targets)
 def _deny(target, command):
     rel = target.get("path", "")
     category = target.get("category", "file")
