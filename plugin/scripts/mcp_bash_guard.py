@@ -370,6 +370,15 @@ def _glob_expansions(token, repo_root, execution_cwd=""):
 
 
 def _append_target(targets, token, method, repo_root, execution_cwd=""):
+    # The budget is consulted here rather than in each caller's loop. Six
+    # operand loops — mv/rm/unlink/chmod/chown/chgrp, cp --link, ln/link, tee,
+    # dd, and git's mutating subcommands — had no stride of their own, so
+    # ~8000 padding operands ran 37s of realpath walks against a 3s hook
+    # timeout and every deny on the line became an allow. Guarding the shared
+    # call bounds all of them, and any loop added later, instead of relying on
+    # each author to remember. Cost lives here too: this is the realpath.
+    if _budget_exhausted():
+        return
     # Expand once, iteratively. Recursing here was a fail-open: a self-matching
     # glob name recursed until RecursionError, which main()'s catch-all swallowed
     # into sys.exit(0) — a silent allow for the *entire* command, not just the

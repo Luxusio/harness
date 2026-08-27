@@ -1184,6 +1184,15 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 # Each redirect operator costs a path resolution; this was the
                 # last cost loop outside the fail-closed handoff.
                 ("many-redirects", ("> " * 15000) + write),
+                # Six verb loops (mv/rm/unlink/chmod/chown/chgrp, cp --link,
+                # ln/link, tee, dd, git) had no stride of their own, so padding
+                # their operand lists ran 37s of realpath walks against a 3s
+                # timeout. The budget is consulted in `_append_target` now, so
+                # one guard covers all of them and any loop added later.
+                ("many-rm-operands",
+                 "rm " + "a*b " * 8000 + receipts),
+                ("many-tee-operands",
+                 "tee " + "a*b " * 8000 + receipts),
             ):
                 with self.subTest(shape=label):
                     self.assertLess(len(command), 64 * 1024)
