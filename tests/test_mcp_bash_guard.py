@@ -446,6 +446,56 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
+    def test_empty_heredoc_delimiter_does_not_eat_the_target(self):
+        '''An empty quoted word must stay in the stream.
+
+        Dropping it shifted every positional consumption one place left, so
+        `<<` ate the real target as its heredoc delimiter. The invariant: the
+        token list must be positionally identical to bash's word list.
+        '''
+        with scratch_task_in_real_repo("pr1-heredoc") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f'cp payload <<"" {receipts}',
+                f'install payload <<"" {receipts}',
+                f'cp payload <<<"" {receipts}',
+                f'mv payload <<"" {receipts}',
+                f'tee <<"" {receipts}',
+                f'truncate -s0 <<"" {receipts}',
+                f'sed -i s/a/b/ <<"" {receipts}',
+                f'rm <<"" {receipts}',
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_trailing_comment_is_not_the_destination(self):
+        """`cp a b # note` is ordinary phrasing, and the comment is not a path."""
+        with scratch_task_in_real_repo("pr1-comment") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"cp payload {receipts} #",
+                f"cp payload {receipts} # keep backup",
+                f"install payload {receipts} #",
+                f"bash -c 'cp payload {receipts} #'",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_comment_handling_does_not_over_block(self):
+        """A `#` mid-word is a path character, not a comment start."""
+        for command in (
+            "cp /tmp/a /tmp/b #", "cp /tmp/a /tmp/b # note",
+            "cat /tmp/x#y", "cp /tmp/x#y /tmp/z",
+            "grep -n '#' plugin/scripts/health.py",
+        ):
+            with self.subTest(command=command):
+                decision, _ = parse_decision(_run_bash(command).stdout)
+                self.assertIsNone(decision)
+
     def test_unresolvable_quoting_unions_both_readings(self):
         r"""When the lexes disagree, classify both ways rather than pick a side.
 

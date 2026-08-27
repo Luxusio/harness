@@ -137,9 +137,14 @@ def _tokenize(command: str):
         lexer.whitespace_split = True
         # bash treats `#` as a comment only at word start; shlex's default
         # truncated `cp /tmp/x#y <artifact>` to `['cp', '/tmp/x']`, dropping
-        # the write target entirely.
+        # the write target entirely. Word-start comments are removed earlier,
+        # by `_unquoted_lines`, which knows the quote state.
         lexer.commenters = ""
-        return [t for t in lexer if t]
+        # Empty quoted words are KEPT. Dropping them shifted every positional
+        # consumption one place left, so `cp payload <<"" <receipt>` had the
+        # receipt eaten as the heredoc delimiter. The invariant this restores:
+        # the token list must be positionally identical to bash's word list.
+        return list(lexer)
     except ValueError:
         return command.split()
 
@@ -176,7 +181,7 @@ def _quoted_flags(command: str, token_count: int):
         lexer = shlex.shlex(command, posix=False, punctuation_chars=True)
         lexer.whitespace_split = True
         lexer.commenters = ""
-        raw = [t for t in lexer if t]
+        raw = list(lexer)
     except ValueError:
         return None
     merged = []
@@ -189,19 +194,9 @@ def _quoted_flags(command: str, token_count: int):
             continue
         merged.append(token)
         index += 1
-    aligned = [token for token in merged if _unquoted_value(token) != ""]
-    if len(aligned) != token_count:
+    if len(merged) != token_count:
         return None
-    return [token[:1] in ("'", '"', "\\") for token in aligned]
-
-
-def _unquoted_value(token):
-    """The posix value of one raw token, for emptiness comparison only."""
-    try:
-        parts = shlex.split(token)
-    except ValueError:
-        return token
-    return parts[0] if parts else ""
+    return [token[:1] in ("'", '"', "\\") for token in merged]
 def _normalize_candidate_path(
     token: str, repo_root: str = "", execution_cwd: str = ""
 ) -> str:
@@ -933,12 +928,26 @@ def _unquoted_lines(command):
     command segments: a `git commit -m` whose message named a lifecycle symbol
     was denied as a RECEIPTS.jsonl mutation — a command that mutates nothing,
     and this repo's own commit convention.
+
+    Word-start `#` comments are removed here too, because this is the only place
+    that knows the quote state. bash starts a comment only at a word boundary,
+    so `/tmp/x#y` is a path while `cp a b # note` ends at the `#`. Leaving the
+    comment words in the stream put one of them in the destination slot, and
+    `cp payload <receipt> #` overwrote the artifact with the gate silent.
     """
     lines = []
     current = []
     quote = ""
     index = 0
     while index < len(command):
+        if (
+            not quote
+            and command[index] == "#"
+            and (not current or current[-1] in (" ", "\t"))
+        ):
+            while index < len(command) and command[index] != "\n":
+                index += 1
+            continue
         char = command[index]
         if quote:
             # Inside double quotes a backslash still escapes; inside single

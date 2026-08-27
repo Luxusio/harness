@@ -176,6 +176,17 @@ Other dynamic constructs remain:
   `HARNESS_SKIP_MCP_GUARD=1` is documented — so completeness here buys less
   than it costs. Add a spelling when it is reported; do not treat the option
   model as exhaustive.
+- **the tokenizer is not bash's, and the divergence moves the operand.** This
+  is the invariant to hold: *the token list handed to classification must be
+  positionally identical to the word list bash would build.* Two divergences
+  have already cost a live bypass each — dropping empty quoted words shifted
+  every positional consumption one place left, so `cp payload <<"" <receipt>`
+  had the receipt eaten as a heredoc delimiter; and leaving word-start comments
+  in the stream put a comment word in the destination slot, so
+  `cp payload <receipt> #` overwrote the artifact. Empty words are now kept and
+  comments are removed in `_unquoted_lines`, which is the only stage that knows
+  the quote state. Any further place where `shlex` and bash disagree on *which
+  word is where* is a bypass, not a cosmetic difference.
 - **quoting forms the guard does not model.** Token text is read as shell
   syntax, so the guard must know how each token was quoted. `_quoted_flags`
   establishes that by lexing twice — posix for values, non-posix for quoting —
