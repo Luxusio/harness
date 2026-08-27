@@ -404,12 +404,22 @@ Other dynamic constructs remain:
   The option loop is shared between the outer `env` argv and the `-S`
   recursion, because real `env` re-parses the split words as its own arguments.
   Handling only assignments at the recursion site left seven spellings
-  executing — `env -S "-i cp …"` and its `-v`, `-u FOO`, `--`, nested `-S` and
-  `--split-string=` variants. `getopt_long` abbreviations (`--spl`, `--s`,
-  `--split-str=`) are matched by prefix, since `split-string` is env's only
-  long option beginning with `s`. And the split words are *prepended* to the
-  argv that follows rather than replacing it, so `env -S "cp" <payload>
-  <artifact>` is a write.
+  executing — `env -S "-i cp …"` and its `-v`, `-i -v`, `-u FOO`, `--`, `-S`
+  and `--split-string=` variants. The loop *continues* after consuming a
+  split-string rather than returning: returning made repeated leading `-S`
+  parity-dependent, since a value of the bare word `-S` recurses to nothing and
+  leaves another `-S` at the head, so one and two denied while three and four
+  allowed.
+
+  `getopt_long` abbreviations are matched by prefix, for the value-taking
+  options as well as `--split-string`: `--spl`, `--s`, `--split-str=`, and also
+  `--uns`, `--u`, `--chd`. Missing an abbreviation of `--unset`/`--chdir` loses
+  the *verb*, not merely the value, because the option's value lands at
+  `argv[0]`. Each of these is the only `env` long option starting with its
+  first letter, which is what makes the prefix rule safe.
+
+  And the split words are *prepended* to the argv that follows rather than
+  replacing it, so `env -S "cp" <payload> <artifact>` is a write.
 
   Still open, because `env`'s own splitting is not `shlex`'s:
   `env -S "cp … <artifact> #x"` (env strips the `#` comment, so the real

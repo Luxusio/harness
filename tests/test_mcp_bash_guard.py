@@ -1314,6 +1314,21 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 # substituted for it: `env -S "cp" a b` runs `cp a b`.
                 f'env -S "cp" /tmp/pay.txt {receipts}',
                 f'env -iS"cp" /tmp/pay.txt {receipts}',
+                # `getopt_long` abbreviations of the VALUE-taking options too.
+                # Missing these loses the verb, not just the value: the option's
+                # value lands at argv[0] and no verb branch runs.
+                f"env --uns FOO cp /tmp/pay.txt {receipts}",
+                f"env --u FOO cp /tmp/pay.txt {receipts}",
+                f"env --chd /tmp cp /tmp/pay.txt {receipts}",
+                f'env -S "--uns FOO cp /tmp/pay.txt {receipts}"',
+                # Repeated leading `-S` inside a value. Returning instead of
+                # continuing the option loop made this parity-dependent: one and
+                # two denied, three and four allowed, because a value of the
+                # bare word `-S` recurses to [] and leaves another `-S` at the
+                # head of the result.
+                f'env -S "-S -S cp /tmp/pay.txt {receipts}"',
+                f'env -S "-S -S -S cp /tmp/pay.txt {receipts}"',
+                f'env -S "-S -S -S -S cp /tmp/pay.txt {receipts}"',
                 # the ordinary value-taking options must still be skipped
                 f"env -u FOO cp /tmp/pay.txt {receipts}",
                 f"env FOO=1 cp /tmp/pay.txt {receipts}",
@@ -1329,6 +1344,8 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 'env -S "cp" /tmp/a /tmp/b',
                 # an all-assignment or empty value runs nothing
                 'env -S ""', 'env -S "FOO=1"',
+                # value-taking options, abbreviated, on an ordinary line
+                "env --unset FOO ls", "env --chdir /tmp ls", "env -C /tmp ls",
                 # `-u` takes a NAME, so `S "cp …"` here is that NAME and must
                 # NOT be re-lexed as a command — re-lexing it would invent a
                 # verb and deny an ordinary line.
