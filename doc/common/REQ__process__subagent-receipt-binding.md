@@ -59,13 +59,40 @@ lines and 79 `hook_success` records, all from `subagent-tracker.mjs`. The
 harness's own `SubagentStart` hook (`background_hook.py --event start`) emits no
 attachment at all when it succeeds.
 
-**The harness therefore still owns no start attachment.** On an install without
-oh-my-claudecode a subagent transcript contains zero `SubagentStart`
-attachments, `_bind` rejects at `no-canonical-start-attachment`, and PASS is
-unreachable permanently rather than intermittently. This is a live gap for every
-downstream user of the plugin, and it is not closed by this task. Closing it
-means emitting a harness-owned identity banner from `background_hook.py --event
-start` — see the requirement below, which this document does not yet satisfy.
+**The harness therefore still owns no start attachment** — with one perverse
+exception. When the harness's own 3 s start hook *times out*, the runtime
+records a `hook_cancelled` attachment for it, and `_bind` accepts that as a
+binding line because attachment `type` is never inspected. So the only
+self-owned start attachment the harness has today is the one it writes when it
+fails. Semantically that is still sound — the record proves the runtime
+dispatched `SubagentStart` for this agentId — but it is load-bearing for the
+follow-up below and should not be mistaken for coverage.
+
+On an install without oh-my-claudecode a subagent transcript contains zero
+`SubagentStart` attachments, `_bind` rejects at `no-canonical-start-attachment`,
+and PASS is unreachable permanently rather than intermittently. This is a live
+gap for every downstream user of the plugin, and it is not closed by this task.
+Closing it means emitting a harness-owned identity banner from
+`background_hook.py --event start` — see the requirement below, which this
+document does not yet satisfy.
+
+### Why the accepted shape is trustworthy
+
+"Matcher-qualified" is a misleading name, and the distinction carries the whole
+trust argument for the widening. oh-my-claudecode registers `SubagentStart`
+with `"matcher": "*"`, yet the runtime writes `SubagentStart:<agent-type>` —
+608 records with ~30 distinct suffixes for that one command. **The suffix is
+resolved by the runtime, not chosen by the plugin.**
+
+That makes the newly accepted line *less* plugin-controlled than the one already
+accepted. Its `agentId`, `sessionId`, `timestamp` and agent type are all
+runtime-authored; the canonical banner's `content` is entirely omc-authored. A
+malicious plugin therefore has less leverage over the shape this change adds
+than over the shape that was accepted before it, and any agent type it did forge
+is caught downstream by the started/completed identity match, which yields no
+receipt at all rather than a mistyped one.
+
+The residual risk from the omc dependency is **availability, not integrity**.
 
 Note the sampling error that produced the first version of this paragraph:
 three transcripts were probed, all three happened to be among the seven, and
@@ -121,9 +148,14 @@ this document asserted the opposite until a reviewer counted.
   fixed. The runtime appends the final assistant message around the instant
   `SubagentStop` fires, so a read that starts mid-append sees the file change
   under it. Failing closed on a torn read is right; the alternative is binding
-  against a transcript whose contents are indeterminate. The cost is one lost
-  receipt per race, which is rare and recoverable by re-running the agent. Do
-  not "fix" this by relaxing the check.
+  against a transcript whose contents are indeterminate.
+
+  The prohibition is **never accept a changed transcript** — which is narrower
+  than "leave this code alone". A bounded re-read (re-`fstat`, re-read from the
+  same fd up to N times, then fail closed) closes the race without accepting
+  anything indeterminate, and stays open to the follow-up. Worth doing: the cost
+  is not one lost receipt but an entire reviewer or QA agent that must be re-run
+  before PASS is reachable, and it fired twice in one session.
 
 ## Diagnosis notes
 
