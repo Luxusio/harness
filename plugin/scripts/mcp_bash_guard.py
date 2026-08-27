@@ -379,17 +379,24 @@ def _append_target(targets, token, method, repo_root, execution_cwd=""):
     # `plugin/hooks/hooks.json`; a killed hook writes no decision, and no
     # decision is an allow, so the padding disables every deny on the line.
     #
-    # **No timing figures here, deliberately.** Four successive versions of this
-    # comment each quoted one and each was disproved by the next reader who
-    # measured: 37 s, then 2.04 s, then 3.3-7.9 s, then 2.7-12.3 s. The last two
-    # were disproved on a machine whose *guarded* number matched this comment's
-    # own, so they were measurement errors rather than hardware differences.
-    # What survives re-measurement is an ordering, not a magnitude: cost tracks
-    # operand *density* more than command size, 1-char operands are the worst
-    # shape and the only one that crosses the timeout at the cap, and 8-char or
-    # realpath-hostile operands are cheaper. If you need a number, measure it
-    # for your shape and keep it out of this comment. Do not drop this check as
-    # a perf tweak. Cost lives here too: this is the realpath.
+    # **No timing figures here, deliberately, and no ordering either.** Six
+    # successive versions of this comment quoted one and every one was disproved
+    # by the next reader who measured: 37 s, 2.04 s, 3.3-7.9 s, 2.7-12.3 s,
+    # a borrowed 6.6 s, and finally an ordering claim ("1-char operands are the
+    # worst shape and the only one crossing the timeout") which two independent
+    # runs contradicted in different directions.
+    #
+    # The reason none of them reproduced is **CPU load**, not carelessness.
+    # Unbounded analysis scales with available cores; the bounded path does not.
+    # Across every reader the *guarded* figure agreed at ~1.0 s, while the
+    # unguarded figure varied several-fold with what else was running. Any
+    # measurement of this block must state its concurrent load or it will not
+    # reproduce, and a comparison between shapes measured under different load
+    # is meaningless. If you need a number, measure it for your shape and your
+    # load, and keep it out of this comment.
+    #
+    # Do not drop this check as a perf tweak. Cost lives here too: this is the
+    # realpath.
     if _budget_exhausted():
         return
     # Expand once, iteratively. Recursing here was a fail-open: a self-matching
@@ -784,21 +791,78 @@ def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd="",
                     targets, candidate, "shell redirection",
                     repo_root, execution_cwd,
                 )
+def _is_split_string_option(token):
+    """True for any spelling `env` accepts for `--split-string`, minus a value.
+
+    `getopt_long` takes any unambiguous abbreviation, and `split-string` is the
+    only long option of `env` beginning with `s`, so `--s`, `--spl`,
+    `--split-str` all reach it. Matching the two literal spellings meant
+    `env --spl "cp <payload> <receipt>"` ran the copy with the gate silent.
+    """
+    if not token.startswith("--") or len(token) <= 2:
+        return False
+    name = token[2:]
+    return bool(name) and "split-string".startswith(name)
+
+
+def _env_argv_after_options(argv):
+    """Skip `env`'s own options, recursing into a `--split-string` value.
+
+    Real `env` re-parses the words produced by `-S` as its *own* arguments, so
+    the option loop has to run on both the outer argv and the split value.
+    Handling only assignments at the recursion site left seven spellings
+    executing with the gate silent — `env -S "-i cp <payload> <artifact>"` and
+    its `-v`, `-u FOO`, `--`, nested `-S` and `--split-string=` variants — each
+    because `_unwrap_execution` received `-i` as argv[0], matched no wrapper,
+    and handed back a non-verb.
+
+    `-u`/`-C` consume a value; `-i`, `-0`, `-v` do not and may bundle before a
+    trailing `S`. `--` ends option parsing for `env` the same way it does for a
+    shell, and is simply skipped here because the words after it are the
+    command.
+    """
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        # A split-string value is not an option value to be stepped over: it
+        # *is* the command line. Separated, attached, or `=`-joined.
+        #
+        # The split words are *prepended* to whatever argv follows, not
+        # substituted for it — `env -S "cp" a b` runs `cp a b`. Returning only
+        # the split result dropped the trailing operands, which mattered as
+        # soon as a value carried its own `-S`: `env -S "-S cp <payload>
+        # <artifact>"` reduced to `cp` with no operands and allowed.
+        if _is_split_string_option(token) or re.fullmatch(r"-[i0v]*S", token):
+            if index + 1 >= len(argv):
+                return []
+            return _split_string_argv(argv[index + 1]) + argv[index + 2:]
+        if "=" in token and _is_split_string_option(token.split("=", 1)[0]):
+            return (_split_string_argv(token.split("=", 1)[1])
+                    + argv[index + 1:])
+        attached = re.fullmatch(r"-[i0v]*S(.+)", token)
+        if attached:
+            return _split_string_argv(attached.group(1)) + argv[index + 1:]
+        if token in {"-u", "--unset", "-C", "--chdir"}:
+            index += 2
+        elif token.startswith("-") or _is_env_assignment(token):
+            index += 1
+        else:
+            break
+    return argv[index:]
+
+
 def _split_string_argv(value):
     """Re-lex an `env -S` value into the argv it really runs.
 
-    Leading `VAR=value` words are stripped before unwrapping. `env -S` splits
-    its value the way a shell would, so `env -S "FOO=1 cp <payload> <receipt>"`
-    really runs `cp`; without the strip, `_unwrap_execution` saw `FOO=1` as
-    argv[0], matched no wrapper, and handed a non-verb to the caller, so the
-    write allowed. `_process_segment_once` strips assignments on the normal
-    path but cannot help at this recursion site.
+    `env -S` splits its value the way a shell would and then re-parses the
+    result as env's own arguments, so both leading `VAR=value` words and
+    leading option words have to be consumed before the verb appears. Without
+    that, `_unwrap_execution` saw `FOO=1` or `-i` as argv[0], matched no
+    wrapper, and handed a non-verb to the caller, so the write allowed.
+    `_process_segment_once` strips assignments on the normal path but cannot
+    help at this recursion site.
     """
-    argv = _tokenize(value)
-    index = 0
-    while index < len(argv) and _is_env_assignment(argv[index]):
-        index += 1
-    return _unwrap_execution(argv[index:])
+    return _unwrap_execution(_env_argv_after_options(_tokenize(value)))
 
 
 def _unwrap_execution(tokens):
@@ -807,38 +871,10 @@ def _unwrap_execution(tokens):
     while argv:
         wrapper = os.path.basename(argv[0])
         if wrapper == "env":
-            index = 1
-            while index < len(argv):
-                token = argv[index]
-                # `-S`/`--split-string` is NOT an option whose value can be
-                # skipped: its value *is* the command line. Listing it beside
-                # `-u`/`-C` meant `env -S "cp <payload> <receipt>"` consumed the
-                # verb along with the option and no branch ever ran — the write
-                # allowed. Re-lex the value and continue unwrapping into it.
-                #
-                # `S` may sit at the end of a bundle of valueless short options,
-                # with the value attached or separated: `-S "cmd"`, `-S"cmd"`,
-                # `-iS "cmd"`, `-v0S"cmd"`. Only `-i`, `-0` and `-v` may
-                # precede — `-u` and `-C` take values, so in `-uS "cmd"` that
-                # `S` is the start of -u's NAME, not an option, and re-lexing
-                # would invent a verb.
-                separated = token == "--split-string" or re.fullmatch(
-                    r"-[i0v]*S", token,
-                )
-                if separated and index + 1 < len(argv):
-                    return _split_string_argv(argv[index + 1])
-                if token.startswith("--split-string="):
-                    return _split_string_argv(token.split("=", 1)[1])
-                attached = re.fullmatch(r"-[i0v]*S(.+)", token)
-                if attached:
-                    return _split_string_argv(attached.group(1))
-                if token in {"-u", "--unset", "-C", "--chdir"}:
-                    index += 2
-                elif token.startswith("-") or _is_env_assignment(token):
-                    index += 1
-                else:
-                    break
-            argv = argv[index:]
+            # One option loop, shared with the `-S` recursion site: real `env`
+            # applies its own option parsing to the words `-S` produces, so
+            # anything handled here must be handled there too.
+            argv = _env_argv_after_options(argv[1:])
             continue
         if wrapper == "uv":
             try:

@@ -1215,11 +1215,25 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 # any loop added later. No timing figures here — see the note in
                 # `_append_target` for why every one quoted so far was wrong.
                 #
-                # These two rows do NOT pin that budget check, at 8000 operands
-                # or at 16000. Against a build with the check removed they still
-                # answer well inside the 3.0s bound below, and still deny naming
-                # the real path, so both assertions pass on the mutant. Raising
-                # the count bought nothing and is reverted.
+                # These two rows pin that budget check only under CPU
+                # contention. Against a build with the check removed, measured
+                # with two concurrent Opus lanes running: ~3.5s at 8000 and
+                # ~6.5s at 16000, both past the 3.0s bound below, so the rows
+                # DO fire. On an idle box the same mutant answers inside the
+                # bound and they do not. Guarded, every one of those shapes is
+                # ~1.0s regardless — the bounded path does not scale with load,
+                # which is why the guarded numbers agree across readers and the
+                # unguarded ones never have.
+                #
+                # So treat these as coverage of the operand-loop path, not as a
+                # reliable pin; `test_exhausted_budget_stops_classifying` is the
+                # deterministic one. An earlier version of this comment claimed
+                # the mutant passes both assertions at either count, which is
+                # false under load and in the direction that invites deleting
+                # the rows. Raising the count to 16000 still bought nothing a
+                # deterministic test does not already give, so that is reverted.
+                # Do not add an absolute number here without its concurrent
+                # load.
                 #
                 # The budget check is pinned by
                 # `test_exhausted_budget_stops_classifying`, which expires the
@@ -1283,6 +1297,23 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 # assignments inside the value are not the command.
                 f'env -S "FOO=1 cp /tmp/pay.txt {receipts}"',
                 f'env -S "A=1 B=2 cp /tmp/pay.txt {receipts}"',
+                # env re-parses the split words as its OWN arguments, so
+                # leading option words inside the value are options too.
+                f'env -S "-i cp /tmp/pay.txt {receipts}"',
+                f'env -S "-i -v cp /tmp/pay.txt {receipts}"',
+                f'env -S "-u FOO cp /tmp/pay.txt {receipts}"',
+                f'env -S "-- cp /tmp/pay.txt {receipts}"',
+                f'env -S "-S cp /tmp/pay.txt {receipts}"',
+                f'env -S "--split-string=cp /tmp/pay.txt {receipts}"',
+                # `getopt_long` accepts any unambiguous abbreviation, and
+                # `split-string` is env's only long option beginning with `s`.
+                f'env --spl "cp /tmp/pay.txt {receipts}"',
+                f'env --s "cp /tmp/pay.txt {receipts}"',
+                f'env --split-str="cp /tmp/pay.txt {receipts}"',
+                # The split words are PREPENDED to the argv that follows, not
+                # substituted for it: `env -S "cp" a b` runs `cp a b`.
+                f'env -S "cp" /tmp/pay.txt {receipts}',
+                f'env -iS"cp" /tmp/pay.txt {receipts}',
                 # the ordinary value-taking options must still be skipped
                 f"env -u FOO cp /tmp/pay.txt {receipts}",
                 f"env FOO=1 cp /tmp/pay.txt {receipts}",
@@ -1294,6 +1325,10 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 'env -S "pytest -q"', 'env -S "echo hi"',
                 "env FOO=1 pytest -q", "env -u PATH ls",
                 'env -iS "pytest -q"', 'env -S "FOO=1 pytest -q"',
+                'env -S "-i pytest -q"', 'env --spl "pytest -q"',
+                'env -S "cp" /tmp/a /tmp/b',
+                # an all-assignment or empty value runs nothing
+                'env -S ""', 'env -S "FOO=1"',
                 # `-u` takes a NAME, so `S "cp …"` here is that NAME and must
                 # NOT be re-lexed as a command — re-lexing it would invent a
                 # verb and deny an ordinary line.

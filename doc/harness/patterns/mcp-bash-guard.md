@@ -401,11 +401,23 @@ Other dynamic constructs remain:
   `VAR=value` words inside the value. `-u`/`-C` deliberately do not bundle —
   they take values, so `-uS "cmd"` is -u's NAME.
 
-  Still open, because `env`'s own splitting is not `shlex`'s: `env -S "cp …
-  <artifact> #x"` (env strips the `#` comment, so the real destination differs
-  from the one the guard reads) and `env -S "\_cp … <artifact>"` (`\_` is env's
-  space escape; shlex drops the backslash and yields the unknown verb `_cp`).
-  `script -qec "<command>"` is the same class and is untouched. An earlier
+  The option loop is shared between the outer `env` argv and the `-S`
+  recursion, because real `env` re-parses the split words as its own arguments.
+  Handling only assignments at the recursion site left seven spellings
+  executing — `env -S "-i cp …"` and its `-v`, `-u FOO`, `--`, nested `-S` and
+  `--split-string=` variants. `getopt_long` abbreviations (`--spl`, `--s`,
+  `--split-str=`) are matched by prefix, since `split-string` is env's only
+  long option beginning with `s`. And the split words are *prepended* to the
+  argv that follows rather than replacing it, so `env -S "cp" <payload>
+  <artifact>` is a write.
+
+  Still open, because `env`'s own splitting is not `shlex`'s:
+  `env -S "cp … <artifact> #x"` (env strips the `#` comment, so the real
+  destination differs from the one the guard reads) and
+  `env -S "\_cp … <artifact>"` (`\_` is env's space escape; shlex drops the
+  backslash and yields the unknown verb `_cp`). `script -qec "<command>"` is
+  untouched as well. Treat this list as the remainder *found so far*, not as
+  exhaustive — it has grown twice under review. An earlier
   version of this paragraph said the option "is fixed", which claimed a control
   the code does not perform — the boundary above is the real one.
 - **the guard re-implements a partial getopt, per verb.** This is the class
