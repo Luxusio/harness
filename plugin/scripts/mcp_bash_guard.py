@@ -211,8 +211,15 @@ def _quoted_flags(command: str, token_count: int):
     anywhere on the line desynchronised the two lexes by exactly one, and the
     old all-False fallback then turned quote-awareness off for the whole line —
     `sed -i s/a/b/ '' '<' <receipt>` walked straight through. The bypass
-    precondition was two characters supplied by the very string being inspected,
-    so this filters the raw list with the same emptiness semantics instead.
+    precondition was two characters supplied by the very string being inspected.
+
+    Alignment here is declared on **equal word counts**, and that is weaker than
+    it reads: counts can match while the correspondence is shifted, which hands
+    a real operator a quoted flag. `echo pwned ''\\>> <artifact>` writes the
+    artifact and allows for exactly that reason. Reconstruction — walking raw
+    words against tokens the way `_quoted_operator_words` does — would settle
+    it; equal counts do not. Recorded in the pattern doc's known gaps as a
+    fail-open.
 
     Returns None when alignment still cannot be established. Callers must pick
     their own conservative default for that case; there is no single safe one,
@@ -1778,11 +1785,14 @@ def _quoted_operator_words(command, tokens):
                 accumulated += token[len(accumulated)]
         if accumulated != token:
             return []
-        if cursor - start == 1:
-            flags.append(_value(merged[start])[1])  # noqa: E501
-        else:
-            # Assembled from more than one raw word, so not a quoted literal.
-            flags.append(False)
+        # No multi-word branch. It was defence in depth against a token
+        # assembled from several raw words being read as a quoted literal, and
+        # a differential against real bash showed its only observable effect
+        # was over-blocking three shapes bash does not write at all
+        # (`echo '>'<path>`, `echo y '>>'<path>`, `echo \><path>`). Every shape
+        # where bash truly writes decides identically without it. Dropping it
+        # is strictly more bash-correct and removes that over-block family.
+        flags.append(_value(merged[start])[1])
     return flags
 
 
@@ -2070,12 +2080,15 @@ def main():
     # out of budget fails *closed* like the oversize path above. Degrading to
     # "not extracted" would be the allow itself.
     #
-    # This can only fire if some inner loop noticed the budget and returned;
-    # the two that do are operand classification (one realpath per operand:
-    # ~35 KB of short operands spent 2.2 s of CPU before reaching the real
-    # write) and the segment walk (segment count multiplies cost independently
-    # of operand count). A cost path that consults neither still overruns
-    # without ever reaching this line.
+    # This can only fire if some path noticed the budget and returned. Four do:
+    # operand classification (one realpath per operand — ~35 KB of short
+    # operands spent 2.2 s of CPU before reaching the real write), the segment
+    # walk (segment count multiplies cost independently of operand count),
+    # redirect extraction, and the recursion entry itself (nesting alone, with
+    # no padding, ran 6.3 s at depth 8). A cost path that consults none of them
+    # still overruns without ever reaching this line — that is how the
+    # recursion case stayed open while this comment claimed the budget bounded
+    # the whole invocation.
     if _budget_exhausted():
         _deny({
             "path": "RECEIPTS.jsonl",

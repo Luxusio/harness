@@ -206,29 +206,35 @@ Other dynamic constructs remain:
   operator; that is a fail-open, and it survived one commit past the fix that
   introduced it.
 
-  **Closed in one direction, narrowed in the other.** No glue spelling can now
-  make a real redirect operator be skipped: a skip requires exact
-  token-for-token reconciliation, so the fail-open direction is shut. The
-  over-block direction is only narrowed — any divergence the walk cannot
-  reconcile falls back to "skip nothing", which re-reads quoted operators as
-  real ones. Known residue, each verified to reproduce:
+  **Within `_quoted_operator_words`, no glue spelling can make a real redirect
+  operator be skipped**: a skip requires exact token-for-token reconciliation.
+  That scoping matters — an earlier version of this paragraph said "the
+  fail-open direction is shut" without it, and that is false for the redirect
+  path as a whole, because `_quoted_flags` can hand out a wrong flag before
+  this helper is ever consulted. See the fail-open residue below.
 
-  - a line that both collapses a substitution and carries a quoted operator
-    (`grep -n '>' $(pwd)/<file> /tmp/a\ b`) denies, because the walk is handed
-    the *collapsed* tokens while raw words come from the uncollapsed line;
-  - `echo '>'<path>` denies although bash writes nothing: the glue makes one
-    token `>path` from two raw words, so the flag is False by the multi-word
-    rule and `_INLINE_REDIRECT_RE` then classifies `path`. This is the one case
-    where dropping that rule would be *more* bash-correct.
+  Known residue, each verified to reproduce:
 
-  Both are deny-leaning, so they cost a work path rather than integrity.
+  - **fail-open.** `echo pwned ''\>> <artifact>` writes the artifact and
+    allows. `_quoted_flags` (not this helper) declares alignment established on
+    equal word counts, and here the counts match while the correspondence is
+    shifted by one, so the real `>>` inherits a quoted flag and is skipped.
+    Equal counts are not alignment; reconstruction would be. Closing it means
+    changing `_quoted_flags`, which is a wider blast radius than this task
+    accepted, so it is recorded rather than fixed.
+  - **deny-leaning.** A line that both collapses a substitution and carries a
+    quoted operator (`grep -n '>' $(pwd)/<file> /tmp/a\ b`) denies, because the
+    walk is handed the *collapsed* tokens while raw words come from the
+    uncollapsed line. So does a backslash-escaped space followed by an empty
+    quote run (`ls /tmp/a\ b''`).
 
-  Two earlier entries here were removed rather than kept: `x''` and
-  `echo q'>'`. The first never reproduced at all — twelve mixed-quote-run
-  shapes all allow, and the walk completes on every one — and the second stopped
-  reproducing once the lexer retry landed. A residue list is a claim like any
-  other; this one carried a reproduction that did not reproduce while the doc
-  two screens up says that is worse than none.
+  Three earlier entries were removed rather than kept. `x''` never reproduced
+  at all; `echo q'>'` stopped once the lexer retry landed; and `echo '>'<path>`
+  stopped when the multi-word branch was deleted — a differential against real
+  bash showed that branch's only observable effect was over-blocking three
+  shapes bash does not write. A residue list is a claim like any other, and
+  this one has now carried two reproductions that did not reproduce while the
+  doc two screens up says that is worse than none.
 
   Glue opens no hole on the *boundary* path, for a reason worth recording: a
   glued operator (`p'|'`) produces the token `p|`, which is not in
