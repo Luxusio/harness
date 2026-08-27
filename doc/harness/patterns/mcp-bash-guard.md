@@ -310,8 +310,17 @@ Other dynamic constructs remain:
   repeating the item.** Capping one glob's depth left 250 shallow globs on one
   line at 4 s; bounding the substitution scan by "closers remaining" left an
   opener that can never close (`$((` consumes no `)`) rescanning to end of line
-  at 4.4 s. `_ANALYSIS_BUDGET_SECONDS` bounds the whole invocation instead, so
-  a new repetition trick cannot reopen the class.
+  at 4.4 s. `_ANALYSIS_BUDGET_SECONDS` bounds the invocation instead — but only
+  through the loops that consult it, and "so a new repetition trick cannot
+  reopen the class" was an overstatement this doc carried while one was open.
+
+  **The recursion is itself a repetition.** `eval`/`bash -c` descent re-enters
+  `_extract_mutation_targets`, and each level pays both readings, so cost is
+  roughly 4^depth: eight wrappers around a plain `cp <src> <receipt>` — no
+  padding at all — took 6.3 s against the 3 s hook timeout, and the write
+  allowed. The strided checks deeper in could not substitute, because each
+  nested segment is too small to reach its stride. The budget is consulted at
+  the recursion entry now, which takes that shape to 1.0 s and a deny.
 
   Exhausting it **denies**, with `method="uninspectable command (analysis
   budget exhausted)"`. It does not degrade to "not extracted": on this path

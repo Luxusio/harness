@@ -1079,6 +1079,17 @@ def _process_segment_once(segment_tokens, targets, repo_root, execution_cwd="",
     # read-only tooling and even reverting this file.
 def _extract_mutation_targets(command, repo_root, execution_cwd="", depth=0):
     targets: list[dict] = []
+    # The recursion itself is a repetition, and it was the one repetition the
+    # deadline never saw. `eval`/`bash -c` descent re-enters here up to
+    # _NESTED_DESCENT_CAP, and each level pays the two both-readings unions, so
+    # cost is roughly 4^depth. Eight `bash -c` wrappers around a plain
+    # `cp /tmp/f <receipt>` — no padding at all — took 6.3 s against a 3 s hook
+    # timeout, and a killed hook emits no decision. Wrapping alone converted
+    # every deny on the line into an allow. The strided checks further in
+    # cannot help: each nested segment is tiny, so no inner loop runs long
+    # enough to reach its stride.
+    if _budget_exhausted():
+        return targets
     tokens = _tokenize(command)
     if not tokens:
         return targets
@@ -1634,7 +1645,21 @@ def _quoted_operator_words(command, tokens):
         lexer.commenters = ""
         raw_words = list(lexer)
     except ValueError:
-        return []
+        # `punctuation_chars=True` raises on a quote run glued to a word when
+        # the run holds shell punctuation — `-d';'`, `-F'|'`, `sort -t'|'`,
+        # `IFS=';'`, the very idioms this module's own docstrings call
+        # everyday. Giving up there cost the whole line its quote awareness, so
+        # `grep -n '>' <plan> | cut -d'|' -f1` read the quoted `>` as a real
+        # operator and denied a pure reader. The character walk below already
+        # reconciles the different word boundaries this lex produces, and a
+        # walk that cannot complete exactly still returns [].
+        try:
+            lexer = shlex.shlex(command, posix=False, punctuation_chars=False)
+            lexer.whitespace_split = True
+            lexer.commenters = ""
+            raw_words = list(lexer)
+        except ValueError:
+            return []
     try:
         # `_tokenize` degrades independently: ANSI-C quoting (`$'a\'b'`) lexes
         # fine non-posix and raises posix, so `tokens` arrive from

@@ -729,6 +729,40 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     decision, _ = parse_decision(_run_bash(command).stdout)
                     self.assertIsNone(decision)
 
+    def test_nesting_alone_cannot_outrun_the_budget(self):
+        """The recursion is a repetition, and it never consulted the budget.
+
+        `eval`/`bash -c` descent re-enters `_extract_mutation_targets` up to
+        `_NESTED_DESCENT_CAP`, and each level pays both readings, so cost is
+        roughly 4^depth. Eight wrappers around a plain `cp` — no padding at all
+        — took 6.3s against a 3s hook timeout, and a killed hook emits no
+        decision. Wrapping alone converted every deny on the line into an
+        allow, while the doc claimed the deadline "bounds the whole invocation
+        so a new repetition trick cannot reopen the class".
+
+        The strided checks deeper in cannot substitute: each nested segment is
+        tiny, so no inner loop runs long enough to reach its stride.
+        """
+        def wrap(command, times):
+            for _ in range(times):
+                command = "bash -c " + json.dumps(command)
+            return command
+
+        with scratch_task_in_real_repo("pr1-nestbudget") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for label, command in (
+                ("depth-8-unpadded", wrap(f"cp /tmp/f {receipts}", 8)),
+                ("depth-7-unpadded", wrap(f"cp /tmp/f {receipts}", 7)),
+                ("depth-7-padded",
+                 wrap('echo "a"b ; ' * 200 + f"cp /tmp/f {receipts}", 7)),
+            ):
+                with self.subTest(shape=label):
+                    self.assertLess(len(command), 64 * 1024)
+                    started = time.monotonic()
+                    decision, _ = parse_decision(_run_bash(command).stdout)
+                    self.assertLess(time.monotonic() - started, 3.0)
+                    self.assertEqual(decision, "deny")
+
     def test_quoted_redirect_operator_is_not_an_operator(self):
         """Grepping for `>` must not be read as redirecting to the next word.
 
@@ -796,6 +830,11 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 # operator where no merge happens, so none of them exercise it
                 # — the guard was load-bearing and untested.
                 f"echo a\\>b '>>' '' > {receipts}",
+                # The punctuation-in-quote retry must not cost a deny: these
+                # carry the same trigger word as the readers above but end in a
+                # real write.
+                f"cut -d';' -f1 /tmp/x ; echo y > {receipts}",
+                f"cut -d'|' -f1 /tmp/x ; echo y >| {receipts}",
             ):
                 with self.subTest(glued=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)
@@ -816,6 +855,16 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 f"grep -n '>' {source} ; ls /tmp/'a b'",
                 f"grep -n '>' {source} ; curl -sS --data='a b' http://x",
                 f"grep -n '>' {plan} ; ls /tmp/'a b'",
+                # `punctuation_chars=True` raises on a quote run glued to a
+                # word when the run holds shell punctuation, and giving up
+                # there cost the whole line its quote awareness. These are the
+                # idioms this module's own docstrings call everyday, and in a
+                # repo of markdown tables `grep '>' <plan> | cut -d'|'` is
+                # ordinary phrasing.
+                f"grep -n '>' {plan} | cut -d'|' -f1",
+                f"grep -n '>>' {plan} | sort -t'|' -k1",
+                f"grep -n '2>' {plan} | cut -d'|' -f1",
+                f"cut -d';' -f1 /tmp/x ; grep -n '>' {plan}",
             ):
                 with self.subTest(escaped=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)
