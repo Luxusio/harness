@@ -177,11 +177,25 @@ Other dynamic constructs remain:
   than it costs. Add a spelling when it is reported; do not treat the option
   model as exhaustive.
 - **quoting forms the guard does not model.** Token text is read as shell
-  syntax, so the guard must know how each token was quoted. It models quotes and
-  backslash escapes; if the posix and non-posix lexes cannot be reconciled it
-  falls back to treating every token as unquoted. That fallback is a gap, not a
-  safe default — under it a fake operator eats the following token, which is the
-  real target.
+  syntax, so the guard must know how each token was quoted. `_quoted_flags`
+  establishes that by lexing twice — posix for values, non-posix for quoting —
+  and the two lists must agree token-for-token.
+
+  Agreement is established *by construction*, not merely checked: backslash
+  tokens are merged and empty quoted words are filtered with posix emptiness
+  semantics, because each of those desynchronised the lexes by one. That
+  mattered more than it sounds. The earlier fallback for a mismatch was "treat
+  every token as unquoted", which handed the caller an off switch for
+  quote-awareness costing two characters (`''`) inside the very string being
+  inspected — `sed -i s/a/b/ '' '<' <receipt>` walked through.
+
+  When alignment still cannot be established the flags are `None`, and each
+  consumer picks its own conservative default: `_strip_redirect_syntax` treats
+  unknown as *quoted* (never consume the following token, which is the
+  laundering direction), while `_extract_redirect_targets` and the segment
+  splitter treat it as *unquoted* (still classify, still split). There is no
+  single safe default; the two directions fail safe opposite ways. A quoting
+  construct that defeats both lexes consistently would still be a gap.
 
 ## Escape hatch
 

@@ -155,15 +155,25 @@ def _quoted_flags(command: str, token_count: int):
     eaten exactly as the quoted form did — so the fallback was itself the
     bypass, not a safe degrade.
 
-    Still returns all-False if the counts cannot be reconciled; that path is a
-    real (documented) gap, not a safe default.
+    Alignment is established by construction, not merely checked. `_tokenize`
+    drops falsy tokens, so a posix lex discards an empty quoted word `''`; the
+    non-posix lex keeps it as the truthy two-character token `''`. One such word
+    anywhere on the line desynchronised the two lexes by exactly one, and the
+    old all-False fallback then turned quote-awareness off for the whole line —
+    `sed -i s/a/b/ '' '<' <receipt>` walked straight through. The bypass
+    precondition was two characters supplied by the very string being inspected,
+    so this filters the raw list with the same emptiness semantics instead.
+
+    Returns None when alignment still cannot be established. Callers must pick
+    their own conservative default for that case; there is no single safe one,
+    because the two consumers fail safe in opposite directions.
     """
     try:
         lexer = shlex.shlex(command, posix=False, punctuation_chars=True)
         lexer.whitespace_split = True
         raw = [t for t in lexer if t]
     except ValueError:
-        return [False] * token_count
+        return None
     merged = []
     index = 0
     while index < len(raw):
@@ -174,9 +184,19 @@ def _quoted_flags(command: str, token_count: int):
             continue
         merged.append(token)
         index += 1
-    if len(merged) != token_count:
-        return [False] * token_count
-    return [token[:1] in ("'", '"', "\\") for token in merged]
+    aligned = [token for token in merged if _unquoted_value(token) != ""]
+    if len(aligned) != token_count:
+        return None
+    return [token[:1] in ("'", '"', "\\") for token in aligned]
+
+
+def _unquoted_value(token):
+    """The posix value of one raw token, for emptiness comparison only."""
+    try:
+        parts = shlex.split(token)
+    except ValueError:
+        return token
+    return parts[0] if parts else ""
 def _normalize_candidate_path(
     token: str, repo_root: str = "", execution_cwd: str = ""
 ) -> str:
@@ -377,7 +397,7 @@ def _nested_shell_script(non_env):
 _INPUT_REDIRECT_OP_RE = re.compile(r"^\d*<{1,3}[&|]?$")
 
 
-def _strip_redirect_syntax(tokens, quoted=()):
+def _strip_redirect_syntax(tokens, quoted=None):
     """Remove redirect operators and their operands from a segment.
 
     Redirect operands are not the verb's operands, but they stayed in the token
@@ -394,7 +414,13 @@ def _strip_redirect_syntax(tokens, quoted=()):
     index = 0
     while index < len(tokens):
         token = tokens[index]
-        is_quoted = index < len(quoted) and quoted[index]
+        # Unknown alignment (`quoted is None`) is treated as quoted here:
+        # consuming the following token is the laundering direction, so the
+        # conservative choice is to leave the operand in place.
+        is_quoted = (
+            True if quoted is None
+            else index < len(quoted) and quoted[index]
+        )
         if not is_quoted and (
             _PURE_REDIRECT_OP_RE.match(token) or _INPUT_REDIRECT_OP_RE.match(token)
         ):
@@ -524,11 +550,14 @@ def _append_directory_destination_targets(
             )
 
 
-def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd="", quoted=()):
+def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd="",
+                              quoted=None):
     for index, token in enumerate(tokens):
         # A quoted token is a literal argument, not an operator: `grep -n '2>'`
-        # was being denied as a source mutation.
-        if index < len(quoted) and quoted[index]:
+        # was being denied as a source mutation. Unknown alignment is treated
+        # as unquoted here — the opposite default from _strip_redirect_syntax,
+        # because failing safe means still classifying the redirect target.
+        if quoted is not None and index < len(quoted) and quoted[index]:
             continue
         if _PURE_REDIRECT_OP_RE.match(token) and index + 1 < len(tokens):
             _append_target(
@@ -605,7 +634,7 @@ def _unwrap_execution(tokens):
         break
     return argv
 def _process_segment(segment_tokens, targets, repo_root, execution_cwd="",
-                     quoted=()):
+                     quoted=None):
     if not segment_tokens:
         return
     idx = 0
@@ -614,7 +643,7 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd="",
     if idx >= len(segment_tokens):
         return
     raw_argv = _strip_redirect_syntax(
-        segment_tokens[idx:], list(quoted[idx:]) if quoted else (),
+        segment_tokens[idx:], None if quoted is None else list(quoted[idx:]),
     )
     non_env = _strip_command_prefix_words(_unwrap_execution(raw_argv))
     if not non_env:
@@ -923,7 +952,7 @@ def _unquoted_lines(command):
 
 
 def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
-                   quoted=()):
+                   quoted=None):
     idx = 0
     while idx < len(tokens):
         j = idx
@@ -934,11 +963,11 @@ def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
         # quoted, so consulting the flags cannot suppress a true split.
         while j < len(tokens) and not (
             tokens[j] in BOUNDARY_TOKENS
-            and not (j < len(quoted) and quoted[j])
+            and not (quoted is not None and j < len(quoted) and quoted[j])
         ):
             j += 1
         segment = tokens[idx:j]
-        segment_quoted = list(quoted[idx:j]) if quoted else []
+        segment_quoted = None if quoted is None else list(quoted[idx:j])
         assignments = [token for token in segment if _is_env_assignment(token)]
         if assignments and len(assignments) == len(segment):
             for token in assignments:

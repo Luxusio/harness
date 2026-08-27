@@ -420,6 +420,39 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
+    def test_lexer_desync_generators_do_not_disable_quote_awareness(self):
+        r"""Quote-awareness must not have an attacker-supplied off switch.
+
+        `_tokenize` drops falsy tokens, so a posix lex discards `''` while the
+        non-posix lex keeps it. One empty quoted word desynchronised the two by
+        one, the old all-False fallback turned quote-awareness off for the whole
+        line, and `sed -i s/a/b/ '' '<' <receipt>` walked through — the bypass
+        precondition was two characters inside the string being inspected.
+        """
+        with scratch_task_in_real_repo("pr1-desync") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            for command in (
+                f"sed -i s/a/b/ '' '<' {receipts}",
+                f'sed -i s/a/b/ "" "<" {receipts}',
+                f"tee '' '<' {receipts}",
+                f"perl -i -pe 1 '' '<' {receipts}",
+                f"truncate -s0 '' '<' {receipts}",
+                f"touch '' '<' {receipts}",
+                f"cp /tmp/f '' '<' {receipts}",
+                f"touch '' \\< {receipts}",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_empty_quoted_word_does_not_over_block(self):
+        """An empty quoted word is ordinary; it must not deny by itself."""
+        for command in ("echo ''", "echo '' > /tmp/out", "grep -n '' /tmp/a"):
+            with self.subTest(command=command):
+                decision, _ = parse_decision(_run_bash(command).stdout)
+                self.assertIsNone(decision)
+
     def test_quoted_control_operator_does_not_split(self):
         """A quoted `|` is an argument, not a boundary.
 
