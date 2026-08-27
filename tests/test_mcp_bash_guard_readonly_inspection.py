@@ -133,12 +133,17 @@ class MutationStillDeniedTests(unittest.TestCase):
                 with self.subTest(command=command):
                     self.assertEqual(_decision(command), "deny", command)
 
-    def test_python_inline_receipt_write_denied(self):
+    def test_python_inline_receipt_write_allowed(self):
+        """Inline `python -c` code is not inspected — deliberately.
+
+        Reading program semantics off a command line lost to every new spelling
+        and produced fixes worse than the gap. Receipt integrity rests on hook
+        ownership of RECEIPTS.jsonl and `task_verify` ordering, not here.
+        """
         with scratch_task_in_real_repo("guard-ro-python") as task_dir:
             receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
-            self.assertEqual(
-                _decision(f"python3 -c \"open('{receipts}','a').write('x')\""),
-                "deny",
+            self.assertIsNone(
+                _decision(f"python3 -c \"open('{receipts}','a').write('x')\"")
             )
 
     def test_control_surface_mutation_still_denied(self):

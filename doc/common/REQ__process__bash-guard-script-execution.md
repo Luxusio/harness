@@ -1,6 +1,6 @@
 # REQ process bash guard script execution
 
-summary: mcp_bash_guard gates protected-artifact file mutation, not script execution
+summary: mcp_bash_guard gates protected-artifact file mutation only; execution is never gated
 status: accepted
 updated: 2026-08-26
 freshness: current
@@ -14,10 +14,21 @@ artifacts. Denying a command that cannot reach a protected artifact costs the
 agent a work path and reports a false reason, which teaches contributors to
 distrust or bypass the gate.
 
-## Settled decision — script execution is not gated
+## Settled decision — code execution is not gated, at all
 
-The guard does **not** inspect or deny running a script. Deciding what a program
-will do once it starts is left to agent discipline.
+The guard does **not** inspect or deny running a script, and does **not** inspect
+inline `python -c` code. Deciding what a program will do once it starts is left
+to agent discipline.
+
+The inline-code half was removed on 2026-08-27 after six review rounds. Each
+round found another spelling that reached the same write — command substitution
+quoted then unquoted, `$VAR` indirection, base64/`exec`, computed imports,
+`os.system`, argv-list `subprocess` — and two of the attempted fixes were worse
+than the gap they closed: one denied ordinary
+`subprocess.run(['pytest', <path>])`, and one recursed on a self-matching glob
+name until the entire guard failed open. Chasing program semantics off a command
+line is not winnable at this layer, and each attempt added surface that had to
+be reviewed again.
 
 This is a deliberate narrowing, not an oversight. The guard previously read the
 target script off disk and AST-scanned it for receipt writers. A security review
@@ -50,9 +61,9 @@ and nothing re-checks it at exec time.
 | `python3 <any path>`, resolvable or not, any size | allow | Execution is not gated |
 | `python3 <path>` whose source imports a receipt writer | allow | Content of an executed file is not inspected |
 | `python3 -` or piped/heredoc stdin | allow | Uninspectable, and denying it stopped nobody |
-| Command text literally naming a lifecycle entrypoint or receipt symbol | deny | Cheap, reliable text match on the obvious case |
-| `python -c` with command substitution or backticks (`$(…)`, `` `…` ``), quoted **or** unquoted | deny | The executed code is not the string the gate can parse, and the inline AST parse is what catches a one-line receipt write. The unquoted form leaves a bare `$` as the operand and needs its own check |
-| `python -c` whose code contains a literal backtick | deny | Accepted over-block: quoting is not recoverable after tokenization, so a backtick cannot be told apart from a substitution |
+| Command text literally naming a lifecycle entrypoint or receipt symbol | allow | Execution is not gated. `python3 plugin/scripts/background_hook.py` runs |
+| `python -c <any code>`, `node -e`, `perl -e`, `ruby -e` | allow | Inline code is not inspected |
+| An unrecognized executable carrying a gated path as an argument (`ruff check <path>`, `ed <path>`) | allow | The branch that denied these could not tell a reader from a writer, and blocked repairing the guard itself |
 | Obfuscated reference (`base64`, computed `__import__`) | allow | Not detectable without inspection this gate no longer performs |
 | `tee`, `sed -i`, any redirect spelling, `cp`, `mv`, `install`, `rsync`, `truncate` **naming** a protected artifact, or copying into a directory that would produce one | deny | Direct file mutation — this is what the gate actually enforces |
 | The same verbs reaching an artifact without naming it — `find … -exec`, `find … -delete`, `tar -C`/`unzip -d` unpacking over one, a bare filename after `cd` under an unrecognized executable | allow | The path is never a classifiable token. Recorded as a known gap, not a boundary |
@@ -79,28 +90,33 @@ and nothing re-checks it at exec time.
 
 - Non-python interpreters (`node`, `ruby`, …) were never inspected; that
   asymmetry is now moot since python is not inspected either.
-- A read-only linter invoked with a gated path argument (`ruff check
-  plugin/scripts/mcp_bash_guard.py`) is denied by `rule=workflow-control-surface`,
-  and a task `MAINTENANCE` marker does not relax it. This also blocks
-  `git checkout` of the guard itself, so reverting it requires the
-  `HARNESS_SKIP_MCP_GUARD` escape or a non-Bash edit path. The relevant
-  classifier is `_is_workflow_control_surface`, not `_embedded_path_candidates`.
-- Inline `python -c` code is still AST-parsed, for filesystem writes and for
-  shell-outs (`os.system`, `os.popen`, `subprocess.*`). Removing *script*
-  inspection did not remove that. It denies the direct spellings — a one-line
-  `open('…/RECEIPTS.jsonl','a').write(…)` and a shell-out carrying a protected
-  path — but it is pattern-based, not a proof of impossibility: `python -c
-  "$VAR"`, base64/`exec`, and computed names all pass. Command substitution
-  around `-c` defeats the parse entirely, so it denies; that deny was dropped by
-  accident when script inspection was removed and restored once review caught
-  it.
+- A read-only linter with a gated path argument (`ruff check
+  plugin/scripts/mcp_bash_guard.py`) now **allows**: the branch that denied it
+  could not tell a reader from a writer.
+- `git checkout HEAD -- <gated path>` still denies, including for the guard
+  itself, so reverting this file over Bash needs the `HARNESS_SKIP_MCP_GUARD`
+  escape or a non-Bash edit path. That deny is correct — `git checkout` really
+  does rewrite the working tree — but be aware of it before relying on Bash to
+  repair the gate.
+- Inline `python -c` code is **not** parsed. A one-line
+  `open('…/RECEIPTS.jsonl','a').write(…)` allows. This is the settled decision
+  above, not an oversight: the AST parse that used to catch it was removed after
+  six review rounds showed the deny could not be made to hold without adding
+  more surface than it protected.
+- Do not reintroduce inline-code inspection to close a newly-found spelling.
+  The next spelling always exists. If receipt integrity needs strengthening,
+  strengthen hook ownership or `task_verify`, which are the actual controls.
 
 ## Verification
 
-- `tests/test_mcp_bash_guard.py::TestMutationsAgainstProtectedArtifact::test_script_execution_is_not_inspected`
-  and `::test_ordinary_script_execution_allows` cover the settled allow rows.
-- `test_direct_lifecycle_hook_invocation_is_denied` remains the regression gate
-  for literal-text denial.
+- `tests/test_mcp_bash_guard.py::TestMutationsAgainstProtectedArtifact::test_ordinary_script_execution_allows`
+  and `tests/test_mcp_bash_guard_readonly_inspection.py::test_python_inline_receipt_write_allowed`
+  cover the settled allow rows.
+- The deny rows are covered by `test_each_verb_denies_source`,
+  `test_alternate_redirect_operators_deny`, `test_copy_into_task_directory_denies`,
+  `test_target_directory_option_denies`, `test_newline_does_not_launder_a_mutator`,
+  `test_leading_shell_control_word_does_not_launder`, and
+  `test_working_tree_rewriting_git_subcommands_still_denied`.
 - `test_existing_external_goal_hardlink_alias_denies` covers the inode-alias
   mutation route. It silently failed in setup until 2026-08-26 (it created
   `doc/harness/goals/` but not the `doc/harness/checkpoints/` directory it links

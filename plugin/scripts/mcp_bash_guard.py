@@ -146,11 +146,6 @@ UNINSPECTED_INLINE_RUNTIMES = dict(
 )
 BOUNDARY_TOKENS = {"&&", "||", "|", ";", "\n", "&"}
 _INLINE_REDIRECT_RE = re.compile(r"^(?:\d*)?(>>?)(.+)$")
-_PY_PATTERNS = [
-    re.compile(r"(?:pathlib\.)?Path\(\s*['\"]([^'\"]+)['\"]\s*\)\.(?:write_text|write_bytes)"),
-    re.compile(r"os\.replace\([^,]+,\s*['\"]([^'\"]+)['\"]\)"),
-    re.compile(r"shutil\.copy(?:2)?\([^,]+,\s*['\"]([^'\"]+)['\"]\)"),
-]
 _ARTIFACT_TOOL_HINT = {
     "TASK.json": "harness task control MCP",
     "RECEIPTS.jsonl": "runtime review and QA lifecycle hook",
@@ -380,65 +375,6 @@ def _append_directory_destination_targets(
             )
 
 
-_PYTHON_SHELL_OUT_CALLS = {"system", "popen", "run", "call", "check_call",
-                           "check_output", "Popen", "spawnl", "spawnv",
-                           "execv", "execvp", "posix_spawn"}
-
-
-def _append_python_shell_out_targets(tree, targets, repo_root, execution_cwd=""):
-    """Classify paths inside a shell-out from inline `python -c` code.
-
-    The gate descends into `bash -c "cp … RECEIPTS.jsonl"`, but
-    `python3 -c "import os;os.system('cp … RECEIPTS.jsonl')"` produced no target
-    at all: `os.system`/`subprocess` are not filesystem mutators, so the path
-    sat in a string constant nobody classified. That asymmetry made a plain,
-    unobfuscated one-liner the cheapest forgery route on this surface, while the
-    docs named the inline AST parse as what blocks exactly that.
-
-    Only string constants reachable from such a call are classified, so
-    `subprocess.run(['pytest'])` stays allowed.
-    """
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        name = getattr(node.func, "attr", "") or getattr(node.func, "id", "")
-        if name not in _PYTHON_SHELL_OUT_CALLS:
-            continue
-        for command in _shell_out_command_lines(node):
-            targets.extend(
-                item for item in _extract_mutation_targets(
-                    command, repo_root, execution_cwd,
-                ) if item not in targets
-            )
-
-
-def _shell_out_command_lines(node):
-    """Command lines a shell-out call would run, as strings.
-
-    Classifying every string constant reachable from the call denied ordinary
-    read-only work — `subprocess.run(['pytest', 'tests/x.py'])` came back as a
-    mutation of `tests/x.py`. Reconstruct the command line instead and route it
-    through the same verb model `bash -c` uses, so the verb decides.
-
-    An argv list is joined first: splitting it token-by-token separates a verb
-    from its operand, which would let `subprocess.run(['cp', src, '<receipt>'])`
-    through.
-    """
-    lines = []
-    for argument in list(node.args) + [kw.value for kw in node.keywords]:
-        if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
-            lines.append(argument.value)
-        elif isinstance(argument, (ast.List, ast.Tuple)):
-            parts = [
-                element.value for element in argument.elts
-                if isinstance(element, ast.Constant)
-                and isinstance(element.value, str)
-            ]
-            if len(parts) == len(argument.elts) and parts:
-                lines.append(" ".join(parts))
-    return lines
-
-
 def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd=""):
     for index, token in enumerate(tokens):
         if _PURE_REDIRECT_OP_RE.match(token) and index + 1 < len(tokens):
@@ -455,405 +391,6 @@ def _extract_redirect_targets(tokens, targets, repo_root, execution_cwd=""):
             if candidate and candidate not in ("&1", "&2") and candidate.strip("|&"):
                 _append_target(
                     targets, candidate, "shell redirection",
-                    repo_root, execution_cwd,
-                )
-def _extract_python_inline_targets(tokens, targets, repo_root, execution_cwd=""):
-    if "-c" not in tokens:
-        return
-    operand_index = tokens.index("-c") + 1
-    try:
-        code = tokens[operand_index]
-    except IndexError:
-        return
-    # An *unquoted* substitution does not survive tokenization as one token:
-    # `python3 -c $(cat f.py)` splits to [..., '-c', '$', '(', 'cat', 'f.py', ')'],
-    # leaving a bare `$` as the operand. Checking only the operand text would
-    # miss it, then `unicode_escape('')` and `ast.parse('')` both succeed and the
-    # command allows. Bash word-splitting makes the route practical for exactly
-    # the whitespace-free payloads a forgery one-liner uses.
-    unquoted_substitution = code in {"$", "`"}
-    if unquoted_substitution or "$(" in code or "`" in code:
-        # Command substitution resolves at exec time, so the string parsed below
-        # is not the program that runs. The AST parse is the control that catches
-        # an inline receipt write, and this defeats it. Removing *script*
-        # inspection on 2026-08-26 dropped this deny as a side effect; it belongs
-        # to the inline `-c` control that was deliberately kept, so it is
-        # restored here rather than left to the caller's discretion.
-        _append_target(
-            targets, "doc/harness/goals/current.json",
-            "python -c with command substitution, so the executed code cannot "
-            "be inspected", repo_root, execution_cwd,
-        )
-        return
-    if code.startswith("$"):
-        try:
-            code = bytes(code[1:], "utf-8").decode("unicode_escape")
-        except (UnicodeDecodeError, UnicodeEncodeError):
-            _append_target(
-                targets, "doc/harness/goals/current.json",
-                "unresolved ANSI-C Python command", repo_root, execution_cwd,
-            )
-            return
-    for pat in _PY_PATTERNS:
-        for match in pat.findall(code):
-            _append_target(
-                targets, match, "python inline write", repo_root, execution_cwd
-            )
-    try:
-        tree = ast.parse(code)
-    except (SyntaxError, ValueError):
-        return
-    _append_python_shell_out_targets(tree, targets, repo_root, execution_cwd)
-    strings = {}
-    string_history = set()
-    call_environments = {}
-    def string_value(node, environment=None):
-        environment = strings if environment is None else environment
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            return node.value
-        if isinstance(node, ast.Name):
-            return environment.get(node.id)
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-            left = string_value(node.left, environment)
-            right = string_value(node.right, environment)
-            return left + right if left is not None and right is not None else None
-        if isinstance(node, ast.JoinedStr):
-            parts = []
-            for item in node.values:
-                value = string_value(item.value, environment) if isinstance(item, ast.FormattedValue) else string_value(item, environment)
-                if value is None: return None
-                parts.append(value)
-            return "".join(parts)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "join":
-            separator = string_value(node.func.value, environment)
-            if separator is not None and node.args and isinstance(node.args[0], (ast.List, ast.Tuple)):
-                values = [string_value(item, environment) for item in node.args[0].elts]
-                if all(value is not None for value in values): return separator.join(values)
-        return None
-    def bound_names(target):
-        if isinstance(target, ast.Name):
-            return {target.id}
-        if isinstance(target, (ast.Tuple, ast.List)):
-            return set().union(*(bound_names(item) for item in target.elts))
-        return set()
-
-    def argument_names(arguments):
-        names = {
-            arg.arg for arg in (
-                list(arguments.posonlyargs) + list(arguments.args)
-                + list(arguments.kwonlyargs)
-            )
-        }
-        if arguments.vararg:
-            names.add(arguments.vararg.arg)
-        if arguments.kwarg:
-            names.add(arguments.kwarg.arg)
-        return names
-    def merge_environments(environment, candidates):
-        if not candidates:
-            return
-        common = set.intersection(*(set(item) for item in candidates))
-        merged = {
-            name: candidates[0][name]
-            for name in common
-            if all(item[name] == candidates[0][name] for item in candidates[1:])
-        }
-        environment.clear()
-        environment.update(merged)
-    def stamp_expression_calls(node, environment):
-        if isinstance(node, ast.Lambda):
-            for default in (
-                list(node.args.defaults)
-                + [item for item in node.args.kw_defaults if item is not None]
-            ):
-                stamp_expression_calls(default, environment)
-            child = dict(environment)
-            for name in argument_names(node.args):
-                child.pop(name, None)
-            stamp_expression_calls(node.body, child)
-            return
-        if isinstance(node, ast.NamedExpr):
-            stamp_expression_calls(node.value, environment)
-            value = string_value(node.value, environment)
-            for name in bound_names(node.target):
-                if value is None:
-                    environment.pop(name, None)
-                else:
-                    environment[name] = value
-                    string_history.add(value)
-            return
-        if isinstance(node, ast.IfExp):
-            stamp_expression_calls(node.test, environment)
-            branches = []
-            for expression in (node.body, node.orelse):
-                child = dict(environment)
-                stamp_expression_calls(expression, child)
-                branches.append(child)
-            merge_environments(environment, branches)
-            return
-        if isinstance(node, ast.BoolOp):
-            continuation = dict(environment)
-            outcomes = []
-            for value in node.values:
-                stamp_expression_calls(value, continuation)
-                outcomes.append(dict(continuation))
-            merge_environments(environment, outcomes)
-            return
-        if isinstance(node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
-            child = dict(environment)
-            for generator in node.generators:
-                stamp_expression_calls(generator.iter, child)
-                for name in bound_names(generator.target):
-                    child.pop(name, None)
-                for condition in generator.ifs:
-                    stamp_expression_calls(condition, child)
-            values = (
-                (node.key, node.value) if isinstance(node, ast.DictComp)
-                else (node.elt,)
-            )
-            for value in values:
-                stamp_expression_calls(value, child)
-            return
-        if isinstance(node, ast.Call):
-            stamp_expression_calls(node.func, environment)
-            for argument in node.args:
-                stamp_expression_calls(argument, environment)
-            for keyword in node.keywords:
-                stamp_expression_calls(keyword.value, environment)
-            call_environments[id(node)] = dict(environment)
-            return
-        for child in ast.iter_child_nodes(node):
-            if not isinstance(child, ast.stmt):
-                stamp_expression_calls(child, environment)
-    def body_environment(node, environment):
-        child = dict(environment)
-        names = set()
-        if isinstance(node, (ast.For, ast.AsyncFor)):
-            names.update(bound_names(node.target))
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
-            names.update(argument_names(node.args))
-        for item in getattr(node, "items", ()):
-            if item.optional_vars is not None:
-                names.update(bound_names(item.optional_vars))
-        for name in names:
-            child.pop(name, None)
-        return child
-    def process_statements(statements, environment):
-        for node in statements:
-            stamp_expression_calls(node, environment)
-            if isinstance(node, (ast.Assign, ast.AnnAssign)):
-                value = string_value(node.value, environment)
-                targets_nodes = node.targets if isinstance(node, ast.Assign) else [node.target]
-                for target in targets_nodes:
-                    names = bound_names(target)
-                    for name in names:
-                        if value is not None and isinstance(target, ast.Name):
-                            environment[name] = value
-                            string_history.add(value)
-                        else:
-                            environment.pop(name, None)
-                continue
-            if isinstance(node, ast.AugAssign):
-                for name in bound_names(node.target):
-                    environment.pop(name, None)
-                continue
-            if isinstance(node, ast.If):
-                test = node.test.value if isinstance(node.test, ast.Constant) else None
-                if test is True or test is False:
-                    selected = node.body if test else node.orelse
-                    process_statements(selected, environment)
-                else:
-                    outcomes = [dict(environment)] if not node.orelse else []
-                    for block in (node.body, node.orelse):
-                        child = dict(environment)
-                        process_statements(block, child)
-                        outcomes.append(child)
-                    merge_environments(environment, outcomes)
-                continue
-            child_blocks = []
-            for field in ("body", "orelse", "finalbody"):
-                block = getattr(node, field, None)
-                if isinstance(block, list):
-                    child_blocks.append(block)
-            outcomes = [dict(environment)]
-            for handler in getattr(node, "handlers", ()):
-                handler_environment = dict(environment)
-                if handler.name:
-                    handler_environment.pop(handler.name, None)
-                process_statements(getattr(handler, "body", []), handler_environment)
-                outcomes.append(handler_environment)
-            for case in getattr(node, "cases", ()):
-                child_blocks.append(getattr(case, "body", []))
-            for block in child_blocks:
-                child = body_environment(node, environment)
-                process_statements(block, child)
-                outcomes.append(child)
-            if child_blocks:
-                merge_environments(environment, outcomes)
-    process_statements(tree.body, strings)
-    filesystem_mutators = {
-        "link", "rename", "replace", "remove", "unlink", "truncate", "chown",
-        "utime", "move", "copy", "copy2", "copyfile", "touch", "mkdir",
-        "makedirs", "rmdir", "removedirs", "rmtree", "copytree", "symlink",
-        "symlink_to", "mknod", "mkfifo", "write_text", "write_bytes",
-        "hardlink_to", "link_to", "chmod", "lchmod", "lchown", "fchmod",
-        "fchown", "ftruncate",
-    }
-    open_aliases = {"open"}
-    os_open_aliases = set()
-    io_modules = {"io", "builtins"}
-    os_modules = {"os"}
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module in {"io", "builtins"}:
-            open_aliases.update(
-                alias.asname or alias.name
-                for alias in node.names if alias.name == "open"
-            )
-        elif isinstance(node, ast.ImportFrom) and node.module == "os":
-            os_open_aliases.update(
-                alias.asname or alias.name
-                for alias in node.names if alias.name == "open"
-            )
-        elif isinstance(node, ast.Import):
-            io_modules.update(
-                alias.asname or alias.name
-                for alias in node.names if alias.name in {"io", "builtins"}
-            )
-            os_modules.update(
-                alias.asname or alias.name
-                for alias in node.names if alias.name == "os"
-            )
-    changed = True
-    while changed:
-        changed = False
-        for node in ast.walk(tree):
-            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-                continue
-            value = node.value
-            aliases_open = (
-                isinstance(value, ast.Name) and value.id in open_aliases
-            ) or (
-                isinstance(value, ast.Attribute)
-                and value.attr == "open"
-                and isinstance(value.value, ast.Name)
-                and value.value.id in io_modules
-            )
-            aliases_os_open = (
-                isinstance(value, ast.Name) and value.id in os_open_aliases
-            ) or (
-                isinstance(value, ast.Attribute)
-                and value.attr == "open"
-                and isinstance(value.value, ast.Name)
-                and value.value.id in os_modules
-            )
-            if aliases_os_open:
-                targets_nodes = node.targets if isinstance(node, ast.Assign) else [node.target]
-                for target in targets_nodes:
-                    if isinstance(target, ast.Name) and target.id not in os_open_aliases:
-                        os_open_aliases.add(target.id)
-                        changed = True
-            if not aliases_open:
-                continue
-            targets_nodes = node.targets if isinstance(node, ast.Assign) else [node.target]
-            for target in targets_nodes:
-                if isinstance(target, ast.Name) and target.id not in open_aliases:
-                    open_aliases.add(target.id)
-                    changed = True
-    open_mutation = False
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        direct_open = isinstance(node.func, ast.Name) and node.func.id in open_aliases
-        module_open = (
-            isinstance(node.func, ast.Attribute)
-            and node.func.attr == "open"
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in io_modules
-        )
-        path_open = getattr(node.func, "attr", "") == "open" and not module_open
-        getattr_open = (
-            isinstance(node.func, ast.Call)
-            and isinstance(node.func.func, ast.Name)
-            and node.func.func.id == "getattr"
-            and len(node.func.args) > 1
-            and string_value(node.func.args[1]) == "open"
-        )
-        os_open = (
-            isinstance(node.func, ast.Attribute)
-            and node.func.attr == "open"
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in os_modules
-        ) or (isinstance(node.func, ast.Name) and node.func.id in os_open_aliases)
-        if not direct_open and not module_open and not path_open and not getattr_open and not os_open:
-            continue
-        if os_open:
-            flags = node.args[1] if len(node.args) > 1 else None
-            readonly_flag = (
-                isinstance(flags, ast.Constant) and flags.value == os.O_RDONLY
-            ) or (
-                isinstance(flags, ast.Attribute)
-                and flags.attr == "O_RDONLY"
-            and isinstance(flags.value, ast.Name)
-            and flags.value.id in os_modules
-            ) or (
-                isinstance(flags, ast.Call)
-                and isinstance(flags.func, ast.Name)
-                and flags.func.id == "getattr"
-                and len(flags.args) > 1
-                and isinstance(flags.args[0], ast.Name)
-                and flags.args[0].id in os_modules
-                and string_value(
-                    flags.args[1], call_environments.get(id(node), strings)
-                ) == "O_RDONLY"
-            )
-            open_mutation = not (
-                readonly_flag
-            )
-            if open_mutation:
-                break
-            continue
-        mode_index = 1 if direct_open or module_open or getattr_open else 0
-        mode_node = node.args[mode_index] if len(node.args) > mode_index else next(
-            (item.value for item in node.keywords if item.arg == "mode"), None,
-        )
-        if mode_node is None:
-            continue
-        mode_value = string_value(
-            mode_node, call_environments.get(id(node), strings),
-        )
-        if mode_value is not None:
-            open_mutation = bool(set(mode_value) & set("wax+"))
-        else:
-            open_mutation = True
-        if open_mutation:
-            break
-    filesystem_mutation = open_mutation or any(
-        isinstance(node, ast.Call)
-        and (getattr(node.func, "id", "") or getattr(node.func, "attr", ""))
-        in filesystem_mutators
-        for node in ast.walk(tree)
-    )
-    if filesystem_mutation:
-        for node in ast.walk(tree):
-            value = string_value(node, call_environments.get(id(node), strings))
-            if value is not None:
-                _append_target(targets, value, "python filesystem mutation", repo_root, execution_cwd)
-        fragments = [
-            node.value for node in ast.walk(tree)
-            if isinstance(node, ast.Constant) and isinstance(node.value, str)
-        ]
-        joined = "/".join(part.strip("/") for part in fragments if part)
-        if joined:
-            _append_target(targets, joined, "python filesystem mutation", repo_root, execution_cwd)
-        for value in string_history:
-            _append_target(
-                targets, value, "python filesystem mutation",
-                repo_root, execution_cwd,
-            )
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                _append_target(
-                    targets, node.value, "python filesystem mutation",
                     repo_root, execution_cwd,
                 )
 def _unwrap_execution(tokens):
@@ -1020,29 +557,11 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
             if targets:
                 return
 
-    visible = " ".join(raw_argv)
-    compact = re.sub(r"[^A-Za-z0-9]", "", visible).lower()
-    protected_marker = (
-        any(name.replace("_", "").replace(".py", "") in compact
-            for name in LIFECYCLE_RECEIPT_ENTRYPOINTS)
-        or any(name.replace("_", "") in compact for name in PROTECTED_MUTATION_SYMBOLS)
-    )
-    if protected_marker and not _safe_lifecycle_source_inspection(non_env):
-        goal_control = any(
-            name.replace("_", "") in compact for name in GOAL_MUTATION_SYMBOLS
-        )
-        targets.append({
-            "path": (
-                "doc/harness/goals/current.json" if goal_control
-                else "RECEIPTS.jsonl"
-            ),
-            "category": "protected-artifact",
-            "method": (
-                "direct native Goal control entrypoint invocation" if goal_control
-                else "direct lifecycle receipt entrypoint invocation"
-            ),
-        })
-        return
+    # No execution-based deny. Invoking a lifecycle entrypoint, importing a
+    # receipt writer, or running an uninspected inline runtime is not blocked
+    # here — that is agent discipline, not a gate. What remains below is the
+    # only thing this layer can actually decide: a command whose *verb* writes a
+    # file, and whose target resolves to a protected path.
 
     if cmd == "sed" and any(t == "-i" or t.startswith("-i") for t in non_env[1:]):
         _append_target(
@@ -1113,30 +632,42 @@ def _process_segment(segment_tokens, targets, repo_root, execution_cwd=""):
                 )
         return
     if cmd.startswith(("python", "python3", "pypy")):
-        _extract_python_inline_targets(
-            non_env, targets, repo_root, execution_cwd
-        )
+        # Inline `python -c` code is not inspected. Reading program semantics
+        # off a command line was a losing game: every round of review found
+        # another spelling (command substitution quoted and unquoted, `$VAR`,
+        # base64/`exec`, computed imports, `os.system`, argv-list subprocess),
+        # and two of the attempted fixes were themselves worse than the gap —
+        # one denied ordinary `subprocess.run(['pytest', path])`, another
+        # recursed until the whole guard failed open. What a program does once
+        # it starts is left to agent discipline, exactly as script execution is.
         return
-    if _uninspected_inline(non_env):
-        if _gated_path_risk(
-            segment_tokens, repo_root, execution_cwd,
-        ):
-            targets.append({
-                "path": "doc/harness/goals/current.json",
-                "category": "protected-artifact",
-                "method": "uninspected inline runtime",
-            })
+    if cmd == "git":
+        # git is not a mutation verb in general, but `checkout`, `restore` and
+        # `rm` rewrite the working tree, which is file mutation rather than
+        # execution. Everything in GIT_NON_MUTATING_SUBCOMMANDS moves content
+        # into the index or object store and cannot change a protected file on
+        # disk, so `git add plugin/scripts/background_hook.py` stays allowed.
+        # `-C <dir>` and `-c <k=v>` take a value, so the first non-option token
+        # is not necessarily the subcommand: `git -C <root> diff` would read
+        # `<root>` as the subcommand and deny a read-only diff.
+        value_options = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
+        index = 1
+        while index < len(non_env) and non_env[index].startswith("-"):
+            index += 2 if non_env[index] in value_options else 1
+        subcommand = non_env[index] if index < len(non_env) else ""
+        if subcommand and subcommand not in GIT_NON_MUTATING_SUBCOMMANDS:
+            for operand in non_env[index + 1:]:
+                if not operand.startswith("-") and operand != "--":
+                    _append_target(
+                        targets, operand, f"git {subcommand}",
+                        repo_root, execution_cwd,
+                    )
         return
-    if _safe_gated_path_inspection(non_env, segment_tokens):
-        return
-    for candidate in _embedded_path_candidates(non_env[1:]):
-        before = len(targets)
-        _append_target(
-            targets, candidate, "unrecognized executable with gated path",
-            repo_root, execution_cwd,
-        )
-        if len(targets) > before and targets[-1]["category"] == "source":
-            targets.pop()
+    # `node -e`, `perl -e`, `ruby -e` and friends are not inspected either, for
+    # the same reason inline python is not. And an unrecognized executable that
+    # merely *carries* a gated path is not denied: that branch could not tell
+    # `ruff check <guard>` or `git checkout <guard>` from a write, so it blocked
+    # read-only tooling and even reverting this file.
 def _extract_mutation_targets(command, repo_root, execution_cwd=""):
     targets: list[dict] = []
     tokens = _tokenize(command)

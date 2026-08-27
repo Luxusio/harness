@@ -55,14 +55,8 @@ before the command basename is examined (fixes a legacy bypass).
 | `cp`, `mv`, `install`, `rsync`, `touch`, `truncate` | last non-option argument, or `-t <dir>` / `--target-directory=<dir>` when present |
 | `cp`/`mv`/`install`/`rsync` into a **directory** | the reconstructed `<dest>/<name>` for each source, since that path is never a token. `dir/.` and `dir/*` sources are enumerated rather than basenamed |
 | glob token (`*`, `?`, `[`) anywhere a path is classified | every existing path the pattern expands to, plus the literal token. `_GLOB_EXPANSION_CAP` bounds the walk itself (`islice` over `iglob`). A match identical to the pattern — a file literally named `x*y` — is dropped, since re-classifying it is what made expansion non-terminating |
-| `python -c` calling `os.system` / `os.popen` / `subprocess.*` | the reconstructed command line (argv lists are joined first), routed back through this same verb table — so the shelled-out *verb* decides, and `subprocess.run(['pytest', path])` stays allowed |
 | `ln`, `link`, `cp -l` / `cp --link` | every source/destination operand (hard-link export protection) |
 | `mv`, `rm`, `unlink`, `chmod`, `chown`, `chgrp` | every non-option operand |
-| `python[3] -c "open('x','w')"` | first argument of `open()` |
-| `python[3] -c "Path('x').write_text(...)"` | first argument of `Path()` |
-| `python[3] -c "os.replace(src, 'x')"` | second argument of `os.replace()` |
-| `python[3] -c "shutil.copy(src, 'x')"` | second argument of `shutil.copy(...)` |
-| static `os.link` / `os.rename` / `os.replace` / `os.remove` / `os.unlink` and `Path` mutation calls | protected source and destination arguments |
 | Direct lifecycle receipt entrypoint invocation/import | synthetic `RECEIPTS.jsonl` target |
 
 `2>` stderr redirect **is** blocked when it targets a protected artifact. The
@@ -74,48 +68,32 @@ leading fd number, but it is only reachable through the unclosed-quote
 "logs are common" intent, kept because a stderr redirect onto a receipt file is
 not a logging pattern worth preserving.
 
-`background_hook.py`, `subagent_lifecycle.py`, `codex_lifecycle_watcher.py`,
-and direct imports of `record_subagent_receipt` are runtime-owned receipt
-capabilities. A model-issued Bash command may not invoke them directly; only
-the configured runtime lifecycle hooks/watchers may author those events.
-Detection normalizes common `env`/`command`/`uv run` wrappers, and catches
-Python `-m` and import forms whose module or symbol name appears *literally* in
-the command text. Computed forms no longer resolve: the AST walker that
-normalized `__import__`/`import_module`/`getattr` over concatenated names was
-deleted with script inspection on 2026-08-26, so
-`python3 -c "n=chr(115)+'ubagent_lifecycle'; __import__(n)"` now allows. That
-allow is recorded in `doc/common/REQ__process__bash-guard-script-execution.md`.
-Detection is
-independent of the outer wrapper executable once a protected lifecycle target
-is visible. A small explicit read-only allowlist preserves pytest, git
-inspection, and non-mutating text inspection of those source files; other
-commands that mention protected lifecycle modules fail closed. Concatenated or
-qualified references (`'subagent_'+'lifecycle'`, `_lib.record_subagent_receipt`)
-are caught by the alphanumeric-flattening text match, not by AST inspection.
-The guard no longer reads or parses *script files*; inline `python -c` code is
-still AST-parsed for filesystem writes and for shell-outs (see the verb table
-above). That parse catches the direct one-liner forms — `open(…,'a').write(…)`,
-`Path(…).write_text`, `shutil.copy`, and `os.system`/`subprocess` carrying a
-path — but it is pattern-based and does not make a forged `VERDICT: PASS`
-impossible; `python -c "$VAR"`, base64/`exec`, and computed names all pass. It
-raises the cost of the obvious spellings, nothing stronger.
-**Script execution is not gated** (see
-`doc/common/REQ__process__bash-guard-script-execution.md` for the settled
-decision and evidence). The guard does not read, AST-scan, or deny a script it
-is asked to run; what a program does once started is left to agent discipline.
+## What is deliberately NOT gated
 
-An earlier design did inspect script files for receipt-writer imports. It was
-removed on 2026-08-26 after a security review demonstrated four bypasses —
-heredoc/herestring (`<<`, `<<<`, `<(…)` parsed as the script path),
-`PYTHONPATH` + `sitecustomize.py` (runs before the script is opened), plant-and-run
-outside `repo_root`, and a trailing `-m` short-circuiting inspection — each
-proven by writing a forged PASS receipt. An inspection that ordinary commands
-trip over but a determined caller walks through is false assurance, and it
-trained agents to reach for `HARNESS_SKIP_MCP_GUARD`.
+**Execution is not gated, in any form.** Running a script, running inline
+`python -c` / `node -e` / `perl -e` code, invoking `background_hook.py` or
+`subagent_lifecycle.py` directly, importing `record_subagent_receipt` — none
+of it is denied here. Nor is an unrecognized executable that merely carries a
+gated path as an argument.
 
-What remains on this surface is a cheap literal-text match: a command naming a
-lifecycle entrypoint or receipt-writer symbol outright still denies. Obfuscated
-forms are not caught and are not claimed to be.
+This is the settled decision of 2026-08-27, reached after six review rounds.
+Each round found another spelling that reached the same write; the fixes grew
+faster than the coverage, and two of them were worse than the gap they
+closed — one denied ordinary `subprocess.run(['pytest', <path>])`, another
+recursed on a self-matching glob name until the whole guard failed open. The
+same branch also denied `ruff check <this file>` and `git checkout <this
+file>`, which made the guard an obstacle to repairing itself.
+
+What the gate keeps is the one judgement this layer can actually make: a
+command whose **verb writes a file**, whose target resolves to a protected
+path. Redirects, `tee`, `sed -i`, `perl -pi`, `cp`/`mv`/`install`/`rsync`
+(including directory destinations and `-t`), `truncate`, `touch`, `ln`,
+`rm`/`chmod`/`chown`, and working-tree-rewriting `git` subcommands.
+
+Receipt integrity does not rest here and never did. It rests on hook
+ownership of `RECEIPTS.jsonl` and on `task_verify` ordering. Treat this gate
+as a guardrail against accident. Do not reintroduce execution inspection to
+close a newly-found spelling — the next spelling always exists.
 
 Existing hard-link aliases of native Goal JSON are recognized by inode even
 outside the repository. Goal readers independently require owner-controlled,
@@ -209,19 +187,8 @@ passing before touching either set.
 ## Known gaps
 
 The current guard descends through direct `bash -c` / `sh -c` command strings.
-For Python `-c`, command substitution and backticks fail closed in both the
-quoted and unquoted forms: the resolved code cannot be inspected statically, and
-it is the inline AST parse that catches a one-line receipt write. That deny
-lived inside the script-inspection function until 2026-08-26 and was dropped
-with it by accident; it was restored separately because it belongs to the inline
-`-c` control, which was deliberately kept.
-
-The unquoted form needs its own check. `python3 -c $(cat f.py)` tokenizes to
-`[…, '-c', '$', '(', 'cat', 'f.py', ')']`, so the operand is a bare `$`;
-inspecting only the operand text misses it, and the resulting empty string then
-parses cleanly. The pre-2026-08-26 guard had the same hole. Note the deny also
-fires on a literal backtick inside otherwise legitimate inline code — an
-accepted over-block, since shell quoting is not recoverable after tokenization.
+Inline `python -c` code is not inspected in any form, so every spelling of an
+inline write allows. That is the settled decision, not a gap to close.
 
 Other dynamic constructs remain:
 
@@ -238,11 +205,8 @@ Other dynamic constructs remain:
   `vim -es`, `sponge`, `patch`): `_embedded_path_candidates` requires a `/`, so
   it yields no candidate — note `tee`, `cp` and `echo >` still deny on the
   identical bare name, because those go through basename classification.
-- `python -c "$VAR"` — variable indirection defeats the inline `-c` AST parse
-  the same way it defeats redirect detection. `read -r CODE < forge.py;
-  python3 -c "$CODE"` allows, while `python3 -c "$(< forge.py)"` denies.
-- `python -m <module> <protected path>` is not inspected. The python branch
-  returns after the inline `-c` check, so a stdlib module used as a file-writing
+- `python -m <module> <protected path>` is not inspected, like all python
+  execution. A stdlib module used as a file-writing
   utility (`python3 -m json.tool in.json <protected path>`) overwrites the
   target. This sits on the seam between "script execution is not gated" (which
   covers `-m`) and the mutation-verb class the gate does enforce. Left open
@@ -256,8 +220,6 @@ Other dynamic constructs remain:
   and `xargs -I{} sh -c '... >> {}'` behave the same. This is pre-existing, not
   a consequence of the 2026-08-26 change, and it is the clearest illustration of
   why this gate is a guardrail rather than a control.
-- `python -c` with base64 / `exec(...)` obfuscation — regex patterns miss
-  dynamically-constructed writes.
 This list is the tracking surface — the former pointer to
 `doc/harness/tasks/TASK__gate-reliability-pr1/deferred-scope.md` was dangling
 (that task directory does not exist, and task directories are gitignored, so
