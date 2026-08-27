@@ -893,6 +893,15 @@ def _env_argv_after_options(argv):
         # `_unwrap_execution`. Cannot collide with the `-S` branches above:
         # those are tested first, and `-[i0v]*[uC]` cannot end in `S`.
         if _is_env_value_option(token) or re.fullmatch(r"-[i0v]*[uC]", token):
+            if index + 1 >= len(argv):
+                # Dangling: this option's value is not in `argv` at all — it
+                # comes from whatever argv the split words are prepended to.
+                # Stepping over two positions overran the list and returned
+                # `[]`, so the next outer word landed at argv[0] and the verb
+                # was lost: `env -S "-S -u FOO cp <payload> <artifact>"` wrote
+                # the artifact with the gate silent. Hand the option word back
+                # so the outer loop pairs it with the following value.
+                return argv[index:]
             index += 2
         elif token.startswith("-") or _is_env_assignment(token):
             index += 1

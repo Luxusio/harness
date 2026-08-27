@@ -1338,6 +1338,15 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 f"env -vu FOO cp /tmp/pay.txt {receipts}",
                 f"env -0C /tmp cp /tmp/pay.txt {receipts}",
                 f'env -S "-iu FOO cp /tmp/pay.txt {receipts}"',
+                # A value-taking option DANGLING at the end of a split value
+                # takes its value from the argv the split words are prepended
+                # to. Stepping over two positions overran the list and yielded
+                # [], so the next outer word landed at argv[0] and the verb was
+                # lost. Ground-truthed: real env executes these.
+                f'env -S "-S -u FOO cp /tmp/pay.txt {receipts}"',
+                f'env -S "-S -C . cp /tmp/pay.txt {receipts}"',
+                f'env -S "-S --unset FOO cp /tmp/pay.txt {receipts}"',
+                f'env -S "-S -u FOO -S -C . cp /tmp/pay.txt {receipts}"',
                 # the ordinary value-taking options must still be skipped
                 f"env -u FOO cp /tmp/pay.txt {receipts}",
                 f"env FOO=1 cp /tmp/pay.txt {receipts}",
