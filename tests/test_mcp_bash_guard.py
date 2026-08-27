@@ -867,6 +867,17 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 f"grep -n '>>' {plan} | sort -t'|' -k1",
                 f"grep -n '2>' {plan} | cut -d'|' -f1",
                 f"cut -d';' -f1 /tmp/x ; grep -n '>' {plan}",
+                # An operator glued to its operand, on a line that also carries
+                # a quoted-punctuation option. The lexer-pair reconciliation
+                # this replaced could not see these: `punctuation_chars=False`
+                # does not split `2>/dev/null` into three tokens, and
+                # `punctuation_chars=True` does not raise on `-F'|'` — it
+                # silently mangles the boundaries — so the retry meant to
+                # rescue the first never fired for the second.
+                f"grep -n '>' {plan} 2>/dev/null | cut -d'|' -f1",
+                f"awk -F'|' '{{print $1}}' /tmp/x ; grep -n '>' {plan}",
+                f"cut -d';' -f1 /tmp/x ; grep -n '>' {plan} 2>/dev/null",
+                f"grep -n '>>' {plan} 2>/dev/null ; cut -d'|' -f1 /tmp/x",
                 # Whitespace runs, not a single space: a span holding two
                 # spaces or a tab never reconciled, so the walk gave up and the
                 # quoted `>` was re-read as a real operator. A typo'd double

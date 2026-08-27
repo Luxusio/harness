@@ -1656,143 +1656,66 @@ def _quoted_operator_words(command, tokens):
     """
     if not command:
         return []
-    try:
-        lexer = shlex.shlex(command, posix=False, punctuation_chars=True)
-        lexer.whitespace_split = True
-        lexer.commenters = ""
-        raw_words = list(lexer)
-    except ValueError:
-        # `punctuation_chars=True` raises on a quote run glued to a word when
-        # the run holds shell punctuation — `-d';'`, `-F'|'`, `sort -t'|'`,
-        # `IFS=';'`, the very idioms this module's own docstrings call
-        # everyday. Giving up there cost the whole line its quote awareness, so
-        # `grep -n '>' <plan> | cut -d'|' -f1` read the quoted `>` as a real
-        # operator and denied a pure reader. The character walk below already
-        # reconciles the different word boundaries this lex produces, and a
-        # walk that cannot complete exactly still returns [].
-        try:
-            lexer = shlex.shlex(command, posix=False, punctuation_chars=False)
-            lexer.whitespace_split = True
-            lexer.commenters = ""
-            raw_words = list(lexer)
-        except ValueError:
-            return []
-    try:
-        # `_tokenize` degrades independently: ANSI-C quoting (`$'a\'b'`) lexes
-        # fine non-posix and raises posix, so `tokens` arrive from
-        # `command.split()` with their quotes still attached while raw words
-        # have theirs stripped. The two lists then speak different alphabets,
-        # and the quoted flag lands on the wrong occurrence — that is how the
-        # real `>` in `$'a\'b' ; grep '>' f ; echo x > <receipt>` got skipped
-        # and the artifact was written. Mirror `_tokenize`'s own condition
-        # rather than guessing which lex failed.
-        posix_lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
-        posix_lexer.whitespace_split = True
-        posix_lexer.commenters = ""
-        list(posix_lexer)
-    except ValueError:
-        return []
-    # Walk raw words and tokens together instead of bucketing by spelling.
-    # The k-th-word correspondence was false: the non-posix lex splits at a
-    # quote boundary while posix merges, so `'>'q` is two raw words and one
-    # token `>q`. The quoted word then consumed occurrence 0 of spelling `>`
-    # with no token behind it, and the *real* `>` later on the line inherited
-    # its True and was skipped — `echo '>'q > <receipt>` wrote the artifact.
-    #
-    # Concatenating until the accumulation equals the token reconciles the
-    # boundary directly. A token assembled from more than one raw word is never
-    # a quoted literal, and any walk that cannot be completed exactly gives up
-    # the skip entirely.
-    merged = []
+    # Scan the raw text once for posix semantics, rather than reconciling two
+    # shlex passes. Pairing the lexes kept failing in ways that denied ordinary
+    # readers: `punctuation_chars=False` does not split operators, so
+    # `2>/dev/null` is one raw word against three tokens, and
+    # `punctuation_chars=True` does not always *raise* on a glued quote run —
+    # for `-F'|'` it silently mangles the boundaries, so the retry meant to
+    # rescue that case never fired. One scan sidesteps both: it knows exactly
+    # which characters came from inside a quote or an escape, which is the only
+    # thing this function was ever trying to learn.
+    words: list[list[tuple[str, bool]]] = []
+    current: list[tuple[str, bool]] = []
+    started = False
+    quote = ""
     index = 0
-    while index < len(raw_words):
-        word = raw_words[index]
-        if word == "\\" and index + 1 < len(raw_words):
-            merged.append("\\" + raw_words[index + 1])
-            index += 2
-            continue
-        merged.append(word)
-        index += 1
-
-    def _value(word, quote=""):
-        """(posix text of this raw word, was all of it quoted, open span).
-
-        Computing this by pattern — "is the whole word quote-delimited?" —
-        was wrong twice. `'>'q` needed the *concatenation* to reconcile, and
-        `-m'fix a b'` or `/tmp/'a b'` open a quote span mid-word that the
-        non-posix lexer then splits on whitespace, so no whole-word rule can
-        reproduce the posix token. Walking characters gives the real value;
-        anything less made the walk fail and every quoted redirect literal on
-        the line get re-read as a real operator, denying pure readers.
-        """
-        text = []
-        quoted_chars = 0
-        trailing_escape = False
-        index = 0
-        while index < len(word):
-            char = word[index]
-            if quote:
-                if char == quote:
-                    quote = ""
-                else:
-                    text.append(char)
-                    quoted_chars += 1
-            elif char in "'\"":
-                quote = char
-            elif char == "\\" and index + 1 < len(word):
-                text.append(word[index + 1])
-                quoted_chars += 1
-                index += 1
-            elif char == "\\":
-                # Trailing backslash: it escaped the character the splitter
-                # consumed, so it contributes nothing to this word's text and
-                # leaves the same "posix joined across the split" state an open
-                # quote span does.
-                trailing_escape = True
+    while index < len(command):
+        char = command[index]
+        if quote:
+            if char == quote:
+                quote = ""
             else:
-                text.append(char)
+                current.append((char, True))
+        elif char in "'\"":
+            quote = char
+            started = True
+        elif char == "\\" and index + 1 < len(command):
+            current.append((command[index + 1], True))
+            started = True
             index += 1
-        value = "".join(text)
-        # Returns the still-open quote character (truthy) rather than a bool:
-        # a span can cross the non-posix lexer's word split, and the words
-        # inside it are wholly quoted even though they carry no quote
-        # character of their own. `-m'fix a b'` is three raw words and one
-        # token, and resetting the state per word lost the spaces.
-        return (value, bool(value) and quoted_chars == len(value),
-                quote or ("\\" if trailing_escape else ""))
+        elif char.isspace():
+            if current or started:
+                words.append(current)
+            current, started = [], False
+        else:
+            current.append((char, False))
+            started = True
+        index += 1
+    if quote:
+        # Unterminated span: the text is not something bash would run, and the
+        # scan cannot say what is quoted. Skip nothing, classify everything.
+        return []
+    if current or started:
+        words.append(current)
 
+    # Consume characters, not whole words: `punctuation_chars=True` splits one
+    # word into several tokens (`2>/dev/null`), so a word must be able to
+    # satisfy a run of them.
     flags = []
-    cursor = 0
+    word_index = 0
+    offset = 0
     for token in tokens:
-        accumulated = ""
-        start = cursor
-        carried_quote = ""
-        while cursor < len(merged) and accumulated != token:
-            word = merged[cursor]
-            value, _, open_span = _value(word, carried_quote)
-            carried_quote = open_span if isinstance(open_span, str) else ""
-            accumulated += value
-            cursor += 1
-            # Whitespace the splitter consumed but posix kept: either escaped
-            # by a trailing backslash (`/tmp/a\ b`) or sitting inside a quote
-            # span the word left open (`-m'fix a b'`). Consume the run the
-            # token actually shows, not a single space — a span holding two
-            # spaces or a tab (`-m'fix  a b'`, a typo anyone makes) never
-            # reconciled, the walk gave up, and the quoted `>` on the line was
-            # re-read as a real operator, denying a reader.
-            while (open_span and accumulated != token
-                   and token[len(accumulated):len(accumulated) + 1].isspace()):
-                accumulated += token[len(accumulated)]
-        if accumulated != token:
+        while word_index < len(words) and offset >= len(words[word_index]):
+            word_index += 1
+            offset = 0
+        if word_index >= len(words):
             return []
-        # No multi-word branch. It was defence in depth against a token
-        # assembled from several raw words being read as a quoted literal, and
-        # a differential against real bash showed its only observable effect
-        # was over-blocking three shapes bash does not write at all
-        # (`echo '>'<path>`, `echo y '>>'<path>`, `echo \><path>`). Every shape
-        # where bash truly writes decides identically without it. Dropping it
-        # is strictly more bash-correct and removes that over-block family.
-        flags.append(_value(merged[start])[1])
+        span = words[word_index][offset:offset + len(token)]
+        if "".join(char for char, _ in span) != token:
+            return []
+        flags.append(bool(token) and all(quoted for _, quoted in span))
+        offset += len(token)
     return flags
 
 
