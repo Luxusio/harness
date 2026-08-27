@@ -63,8 +63,11 @@ before the command basename is examined (fixes a legacy bypass).
 deny comes from the shape rule in `_extract_redirect_targets` — `2` and `>`
 tokenize separately under `punctuation_chars=True`, so the operator is matched
 and the following token is classified. (`_INLINE_REDIRECT_RE` also tolerates a
-leading fd number, but it is only reachable through the unclosed-quote
-`command.split()` fallback.) This is an over-block relative to the original
+leading fd number. It is reachable on the ordinary path, not only through the
+unclosed-quote `command.split()` fallback as this note used to claim: a glued
+quote such as `echo '>'<path>` yields the single token `>path`, which the regex
+matches — that is what produces the `echo '>'<path>` deny in § Known gaps.)
+This is an over-block relative to the original
 "logs are common" intent, kept because a stderr redirect onto a receipt file is
 not a logging pattern worth preserving.
 
@@ -208,13 +211,24 @@ Other dynamic constructs remain:
   token-for-token reconciliation, so the fail-open direction is shut. The
   over-block direction is only narrowed — any divergence the walk cannot
   reconcile falls back to "skip nothing", which re-reads quoted operators as
-  real ones. Known residue: a line that both collapses a substitution and
-  carries a quoted operator (`grep -n '>' $(pwd)/<file> /tmp/a\ b`) denies,
-  because the walk is handed the *collapsed* tokens while raw words come from
-  the uncollapsed line; a word mixing quote runs the scan cannot reduce
-  (`x''`) does the same; and a line that breaks the non-posix lexer outright
-  (`echo q'>'`) does the same. All are deny-leaning, so they cost a work path
-  rather than integrity.
+  real ones. Known residue, each verified to reproduce:
+
+  - a line that both collapses a substitution and carries a quoted operator
+    (`grep -n '>' $(pwd)/<file> /tmp/a\ b`) denies, because the walk is handed
+    the *collapsed* tokens while raw words come from the uncollapsed line;
+  - `echo '>'<path>` denies although bash writes nothing: the glue makes one
+    token `>path` from two raw words, so the flag is False by the multi-word
+    rule and `_INLINE_REDIRECT_RE` then classifies `path`. This is the one case
+    where dropping that rule would be *more* bash-correct.
+
+  Both are deny-leaning, so they cost a work path rather than integrity.
+
+  Two earlier entries here were removed rather than kept: `x''` and
+  `echo q'>'`. The first never reproduced at all — twelve mixed-quote-run
+  shapes all allow, and the walk completes on every one — and the second stopped
+  reproducing once the lexer retry landed. A residue list is a claim like any
+  other; this one carried a reproduction that did not reproduce while the doc
+  two screens up says that is worse than none.
 
   Glue opens no hole on the *boundary* path, for a reason worth recording: a
   glued operator (`p'|'`) produces the token `p|`, which is not in

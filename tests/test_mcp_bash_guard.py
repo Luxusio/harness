@@ -823,12 +823,14 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 "echo '>'m > doc/harness/goals/x.json",
                 f"( echo '>'x ); echo y > {plan}",
                 f"""bash -c "echo '>'x ; echo y > {plan}" """,
-                # The multi-word guard specifically: here the quoted operator
-                # merges *into* a multi-word token, so without
-                # `cursor - start == 1` the merge donates its True to the real
-                # `>` two tokens later. Every other row above places the quoted
-                # operator where no merge happens, so none of them exercise it
-                # — the guard was load-bearing and untested.
+                # NB: this row does *not* pin the `cursor - start == 1` guard,
+                # though an earlier comment here claimed it did. Deleting that
+                # guard changes no decision on any shape two reviewers and I
+                # could construct: a token assembled from several raw words is
+                # never itself a redirect operator (`'>'q` yields `>q`), so its
+                # flag is inert. The guard is defence in depth, not covered
+                # behaviour — do not treat its survival under mutation as a
+                # coverage gap to be papered over with a row like this one.
                 f"echo a\\>b '>>' '' > {receipts}",
                 # The punctuation-in-quote retry must not cost a deny: these
                 # carry the same trigger word as the readers above but end in a
@@ -865,6 +867,13 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                 f"grep -n '>>' {plan} | sort -t'|' -k1",
                 f"grep -n '2>' {plan} | cut -d'|' -f1",
                 f"cut -d';' -f1 /tmp/x ; grep -n '>' {plan}",
+                # Whitespace runs, not a single space: a span holding two
+                # spaces or a tab never reconciled, so the walk gave up and the
+                # quoted `>` was re-read as a real operator. A typo'd double
+                # space in a commit message is ordinary phrasing.
+                f"grep -n '>' {source} ; git commit -m'fix  a b'",
+                f"grep -n '>' {source} ; git commit -m'fix\ta b'",
+                f"grep -n '>' {plan} ; ls /tmp/'a  b'",
             ):
                 with self.subTest(escaped=command):
                     decision, _ = parse_decision(_run_bash(command).stdout)

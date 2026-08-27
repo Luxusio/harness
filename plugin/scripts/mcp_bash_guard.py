@@ -1606,7 +1606,7 @@ def _quotable_operators(command):
 
 
 def _quoted_operator_words(command, tokens):
-    """Every whole quote-delimited word in the raw text, as a set of contents.
+    """One flag per token: was *this* occurrence a quoted literal in the source.
 
     Same evidence rule as `_quotable_operators`, applied to redirect operators
     rather than segment boundaries. `_extract_redirect_targets` skipped a
@@ -1630,12 +1630,22 @@ def _quoted_operator_words(command, tokens):
     line held both, so `grep -c ">" <file> > /tmp/out` — a reader with an
     ordinary redirect — denied again.
 
-    The question was never how many; it is *which one*. Raw words carry that:
-    the k-th raw word reducing to a spelling is the k-th token of that
-    spelling, so the quoting of each occurrence is recoverable even when the
-    two lexes disagree about some other word. When either lex degrades the
-    correspondence is gone and every flag is False — no skip, classify
-    everything, fail closed.
+    The question was never how many; it is *which one*. "The k-th raw word
+    reducing to a spelling is the k-th token of that spelling" was a third
+    wrong answer — the two lexes disagree about **word boundaries**, not only
+    about quoting, so `'>'q` is two raw words against one token `>q` and the
+    quoted word donated its flag to the next real `>`.
+
+    What answers it is the joint walk below: accumulate the posix text of raw
+    words until it equals the token. A token assembled from more than one raw
+    word is never a quoted literal. Computing that posix text needs a character
+    scan, because a quote span can open mid-word and swallow whitespace
+    (`-m'fix  a b'` is three raw words and one token) and a trailing backslash
+    escapes a character the splitter consumed (`/tmp/a\\ b`).
+
+    Returns `[]` — not a list of False — when the walk cannot complete or a lex
+    degrades. The caller reads it positionally, so an empty list skips nothing
+    and classifies every redirect-shaped token: fail closed.
     """
     if not command:
         return []
@@ -1758,12 +1768,14 @@ def _quoted_operator_words(command, tokens):
             cursor += 1
             # Whitespace the splitter consumed but posix kept: either escaped
             # by a trailing backslash (`/tmp/a\ b`) or sitting inside a quote
-            # span the word left open (`-m'fix a b'`). Restore it only when
-            # that is what keeps the match alive.
-            if (open_span
-                    and accumulated != token
-                    and token.startswith(accumulated + " ")):
-                accumulated += " "
+            # span the word left open (`-m'fix a b'`). Consume the run the
+            # token actually shows, not a single space — a span holding two
+            # spaces or a tab (`-m'fix  a b'`, a typo anyone makes) never
+            # reconciled, the walk gave up, and the quoted `>` on the line was
+            # re-read as a real operator, denying a reader.
+            while (open_span and accumulated != token
+                   and token[len(accumulated):len(accumulated) + 1].isspace()):
+                accumulated += token[len(accumulated)]
         if accumulated != token:
             return []
         if cursor - start == 1:
