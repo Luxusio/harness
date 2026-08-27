@@ -84,10 +84,11 @@ and nothing re-checks it at exec time.
 - Known routes past it are documented rather than implied closed. Two classes
   carry the weight. First, the guard re-implements a partial getopt per verb, so
   an unmodelled option spelling can hide the destination. Second, it reads token
-  *text* as shell syntax, and knows only the quoting forms it models — quotes
-  and backslash escapes today; a form it cannot reconcile falls back to treating
-  every token as unquoted, which is a gap rather than a safe default. See
-  `doc/harness/patterns/mcp-bash-guard.md` § Known gaps.
+  *text* as shell syntax, so it must know how each token was quoted; it
+  establishes that by lexing twice and requiring the two lexes to agree. When
+  they cannot be reconciled it does **not** pick a reading — picking either one
+  is a laundering direction — it classifies under both and denies if either
+  would. See `doc/harness/patterns/mcp-bash-guard.md` § Known gaps.
 
 ## Known remaining friction (not fixed here)
 

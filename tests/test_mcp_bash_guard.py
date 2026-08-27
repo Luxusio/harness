@@ -446,6 +446,39 @@ class TestMutationsAgainstProtectedArtifact(unittest.TestCase):
                     self.assertEqual(decision, "deny")
                     self.assertIn("rule=protected-artifact", reason)
 
+    def test_unresolvable_quoting_unions_both_readings(self):
+        r"""When the lexes disagree, classify both ways rather than pick a side.
+
+        `quoted is None` is produced by ordinary adjacent-quote concatenation,
+        not just exotic input. Treating unknown as quoted left the redirect
+        operand in the argv, where it became the last operand — so an everyday
+        `cp src "<dir>"/RECEIPTS.jsonl 2>/dev/null` stopped denying.
+        """
+        with scratch_task_in_real_repo("pr1-union") as task_dir:
+            receipts = os.path.join(task_dir, "RECEIPTS.jsonl")
+            rel = os.path.relpath(task_dir, REPO_ROOT)
+            for command in (
+                f'cp /tmp/backup.jsonl "{rel}"/RECEIPTS.jsonl 2>/dev/null',
+                f"cp /tmp/a\\ b {receipts} > /dev/null",
+                f"install /tmp/a\\ b {receipts} >/dev/null",
+                f"tee 'x'y '|' {receipts}",
+                f"cp /tmp/x#y {receipts}",
+            ):
+                with self.subTest(command=command):
+                    decision, reason = parse_decision(_run_bash(command).stdout)
+                    self.assertEqual(decision, "deny")
+                    self.assertIn("rule=protected-artifact", reason)
+
+    def test_union_reading_does_not_over_block(self):
+        """Unioning both readings must not deny ordinary quoted commands."""
+        for command in (
+            'cp /tmp/a\\ b /tmp/c', 'echo "a"b > /tmp/out',
+            'grep -n "x"y plugin/scripts/health.py', "cat /tmp/x#y",
+        ):
+            with self.subTest(command=command):
+                decision, _ = parse_decision(_run_bash(command).stdout)
+                self.assertIsNone(decision)
+
     def test_empty_quoted_word_does_not_over_block(self):
         """An empty quoted word is ordinary; it must not deny by itself."""
         for command in ("echo ''", "echo '' > /tmp/out", "grep -n '' /tmp/a"):

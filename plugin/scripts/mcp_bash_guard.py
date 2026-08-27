@@ -135,6 +135,10 @@ def _tokenize(command: str):
     try:
         lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
         lexer.whitespace_split = True
+        # bash treats `#` as a comment only at word start; shlex's default
+        # truncated `cp /tmp/x#y <artifact>` to `['cp', '/tmp/x']`, dropping
+        # the write target entirely.
+        lexer.commenters = ""
         return [t for t in lexer if t]
     except ValueError:
         return command.split()
@@ -171,6 +175,7 @@ def _quoted_flags(command: str, token_count: int):
     try:
         lexer = shlex.shlex(command, posix=False, punctuation_chars=True)
         lexer.whitespace_split = True
+        lexer.commenters = ""
         raw = [t for t in lexer if t]
     except ValueError:
         return None
@@ -635,6 +640,35 @@ def _unwrap_execution(tokens):
     return argv
 def _process_segment(segment_tokens, targets, repo_root, execution_cwd="",
                      quoted=None):
+    """Dispatch one segment, unioning both readings when quoting is unknown.
+
+    `quoted is None` is not rare: adjacent-quote concatenation (`"a"b`,
+    `/tmp/a\\ b`) desynchronises the two lexes just as an empty quoted word
+    did. Picking a side was wrong in both directions — treating unknown as
+    quoted leaves the redirect operand in argv, where `_last_non_option`
+    then reads it as the destination, so an everyday
+    `cp src "<dir>"/RECEIPTS.jsonl 2>/dev/null` stopped denying.
+
+    The safe default is not a side but the union: classify under both
+    readings and keep every target either produces. A deny from either
+    interpretation denies.
+    """
+    if quoted is not None:
+        _process_segment_once(
+            segment_tokens, targets, repo_root, execution_cwd, quoted,
+        )
+        return
+    for reading in (True, False):
+        found: list[dict] = []
+        _process_segment_once(
+            segment_tokens, found, repo_root, execution_cwd,
+            [reading] * len(segment_tokens),
+        )
+        targets.extend(item for item in found if item not in targets)
+
+
+def _process_segment_once(segment_tokens, targets, repo_root, execution_cwd="",
+                          quoted=None):
     if not segment_tokens:
         return
     idx = 0
@@ -998,6 +1032,14 @@ def _walk_segments(tokens, shell_values, targets, repo_root, execution_cwd="",
         _process_segment(
             expanded, targets, repo_root, execution_cwd, segment_quoted,
         )
+        if quoted is None:
+            # The split itself may be wrong: a quoted `|` is an argument, not
+            # a boundary. Classify the unsplit line too and union.
+            unsplit: list[dict] = []
+            _process_segment(
+                tokens, unsplit, repo_root, execution_cwd, None,
+            )
+            targets.extend(item for item in unsplit if item not in targets)
         idx = j + 1
 def _deny(target, command):
     rel = target.get("path", "")

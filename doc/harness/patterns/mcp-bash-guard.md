@@ -189,13 +189,19 @@ Other dynamic constructs remain:
   quote-awareness costing two characters (`''`) inside the very string being
   inspected — `sed -i s/a/b/ '' '<' <receipt>` walked through.
 
-  When alignment still cannot be established the flags are `None`, and each
-  consumer picks its own conservative default: `_strip_redirect_syntax` treats
-  unknown as *quoted* (never consume the following token, which is the
-  laundering direction), while `_extract_redirect_targets` and the segment
-  splitter treat it as *unquoted* (still classify, still split). There is no
-  single safe default; the two directions fail safe opposite ways. A quoting
-  construct that defeats both lexes consistently would still be a gap.
+  When alignment still cannot be established the flags are `None`, and the
+  segment is classified under **both** readings, keeping every target either
+  produces. A deny from either interpretation denies.
+
+  An earlier attempt gave each consumer its own "conservative" default —
+  unknown-as-quoted when stripping redirects, unknown-as-unquoted when
+  classifying them. That was wrong, and it was a regression: leaving a redirect
+  operand in the argv is also a laundering direction, because it becomes the
+  last operand, so an everyday `cp src "<dir>"/RECEIPTS.jsonl 2>/dev/null`
+  stopped denying. `None` is not rare either — adjacent-quote concatenation
+  (`"a"b`, `/tmp/a\ b`) produces it. There is no safe *side*; the safe answer is
+  the union. A quoting construct that defeats both lexes consistently, in the
+  same direction, would still be a gap.
 
 ## Escape hatch
 
