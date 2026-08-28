@@ -139,7 +139,9 @@ All under `plugin/scripts/`. Stdlib only.
 | `drift_warn.py` | SessionStart drift detector: compares source against the scripts dir it is executing from, so a session loading a different tree is visible (silent in non-dev / non-harness repos) | — |
 | `hook_tree_health.py` | Reports when the registered hook tree lacks the `SubagentStart`/`SubagentStop` receipt subsystem, so `task_start` can warn that receipts cannot be recorded | — |
 
-Activated via optional manifest keys: `health_components`, `benchmark_components`, `audit_categories`. These scripts print their results; durable follow-up belongs in REQ/GUIDE/ADR/POLICY, skills, patterns, or tests.
+`health.py` is activated through the optional `health_components` manifest key.
+It prints its result; durable follow-up belongs in REQ/GUIDE/ADR/POLICY,
+skills, patterns, or tests.
 
 ## Tiered learning
 
