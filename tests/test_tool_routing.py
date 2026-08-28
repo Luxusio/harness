@@ -90,7 +90,7 @@ class TestToolRoutingHints(unittest.TestCase):
         self.assertTrue(
             any(s in r.stdout for s in (
                 "note_freshness.py", "prompt_memory.py", "prewrite_gate.py",
-                "golden_replay.py", "_lib.py", "audit.py",
+                "golden_replay.py", "_lib.py",
             )),
             f"no neighbor suggested: {r.stdout!r}",
         )

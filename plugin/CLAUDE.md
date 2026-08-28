@@ -199,7 +199,7 @@ or promote its own PASS.
 
 ## 10. Quality scripts
 
-All scripts under `plugin/scripts/`. Stdlib only (PIL optional for canary).
+All scripts under `plugin/scripts/`. Stdlib only.
 
 **Invoked by the loop** — a skill phase calls these:
 
@@ -210,20 +210,8 @@ All scripts under `plugin/scripts/`. Stdlib only (PIL optional for canary).
 | `health.py --dry-run` | Weighted composite 0–10 score | stdout | run Phase 4.5 |
 | `retro.py` | Weekly retrospective (git + tasks + learnings) | stdout; `--save` writes `doc/harness/retros/<date>.md` | run self-improvement auto-trigger |
 
-**Manual diagnostics** — no phase calls these; run them yourself when you want
-the answer. Their absence from the loop is intentional, not rot:
-
-| Script | Purpose | Output |
-|--------|---------|--------|
-| `canary.py` | Visual regression baseline + sha/pixel diff | `doc/harness/visual-baselines/<task-id>/` |
-| `search_learnings.py` | Keyword/type/skill/since search over Tier 3 | reads `doc/harness/learnings.jsonl` |
-| `inject_checkpoint.py` | Surface the latest checkpoint for a manual resume | reads `doc/harness/checkpoints/` |
-| `audit.py` | Categorized audit from manifest `audit_categories` | stdout |
-| `benchmark.py` | Numeric metric snapshot from manifest `benchmark_components` | stdout |
-
 Health is activated via the manifest optional key `health_components` and falls
-back to `test_command` when no components are declared. The manual diagnostics
-are stdout-only except `canary.py`; none of them write history files.
+back to `test_command` when no components are declared.
 
 ## 11. Tiered Learning
 

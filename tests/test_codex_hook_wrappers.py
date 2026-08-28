@@ -188,7 +188,6 @@ class TestCodexHookWrappers(unittest.TestCase):
         )
         self.assertNotIn("codex_lifecycle_watcher.py", child_names)
         self.assertNotIn("hygiene_scan.py", child_names)
-        self.assertNotIn("inject_checkpoint.py", child_names)
         self.assertNotIn("contract_lint.py", child_names)
 
     def test_session_start_rejects_mismatched_payload_and_environment_identity(self):

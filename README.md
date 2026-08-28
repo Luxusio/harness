@@ -119,13 +119,8 @@ All under `plugin/scripts/`. Stdlib only.
 | Script | Purpose | Output |
 |--------|---------|--------|
 | `health.py` | Weighted composite 0-10 score | stdout |
-| `benchmark.py` | Numeric metric snapshot | stdout |
-| `audit.py` | Generic categorized audit (CSO-style) | stdout |
-| `canary.py` | Visual regression baseline + sha/pixel diff | `doc/harness/visual-baselines/` |
-| `search_learnings.py` | Keyword/filter search over Tier 3 learnings | reads `learnings.jsonl` |
 | `promote_learnings.py` | Tier 3 → Tier 2 promotion + stale pruning | `doc/harness/patterns/` |
 | `write_checkpoint.py` | Mid-task resume snapshot | `doc/harness/checkpoints/` |
-| `inject_checkpoint.py` | Manual resume helper for latest checkpoint context | `doc/harness/checkpoints/` |
 | `retro.py` | Weekly retrospective (git + tasks + learnings) | stdout; `--save` writes `doc/harness/retros/` |
 | `qa_codifier.py` | Parses QA transcripts → regression tests under `tests/regression/` | — |
 | `golden_replay.py` | Record/replay runtime smoke runs for deterministic regression | `doc/harness/replays/` |
@@ -241,7 +236,6 @@ python3 -m pytest tests/ -x --tb=short
 # Smoke test a script
 python3 plugin/scripts/health.py --dry-run
 python3 plugin/scripts/retro.py --days 7
-python3 plugin/scripts/search_learnings.py "test"
 ```
 
 ## Self-dogfooding
