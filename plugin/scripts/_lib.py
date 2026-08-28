@@ -440,6 +440,125 @@ def _atomic_text_write(path: str, text: str) -> None:
         raise
 
 
+DIAGNOSTICS_MAX_BYTES = 64 * 1024
+
+
+def read_json_diagnostics(path: str) -> dict:
+    """Read a small advisory JSON dict without following a symlink.
+
+    Diagnostics files sit beside protected artifacts but are not themselves
+    protected, so their content is untrusted input. Reading through a planted
+    symlink would let an unrelated file's contents be presented as harness
+    state.
+    """
+    # O_NONBLOCK because O_NOFOLLOW does not reject a FIFO, and opening one with
+    # no writer blocks forever — the S_ISREG check below never gets to run. The
+    # MCP server has no timeout around this call.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return {}
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > DIAGNOSTICS_MAX_BYTES:
+            return {}
+        raw = os.read(fd, DIAGNOSTICS_MAX_BYTES).decode("utf-8")
+    except Exception:
+        return {}
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+    try:
+        loaded = json.loads(raw or "{}")
+    except Exception:
+        # Deliberately broad. `json.loads` on deeply nested input raises
+        # RecursionError, which is not a ValueError, and letting it escape made
+        # the Codex PreToolUse hook exit non-zero on a 19KB file any local
+        # writer can plant — a C-12 fail-safe regression. This helper promises
+        # never to break its caller, so it catches everything.
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def write_json_diagnostics(path: str, data: dict, confine_to: str = "") -> bool:
+    """Atomically write a small advisory JSON file, refusing symlinked paths.
+
+    A fixed ``<path>.tmp`` opened with plain ``open(..., "w")`` follows a
+    symlink planted at that name, so an actor who may not touch RECEIPTS.jsonl
+    or TASK.json could still redirect this write anywhere on the filesystem and
+    clobber the target with attacker-chosen JSON keys. ``O_EXCL|O_NOFOLLOW`` on
+    a random temp name closes the temp side; refusing a non-regular destination
+    closes the replace side. Returns False rather than raising — diagnostics
+    must never break the caller.
+    """
+    parent = os.path.abspath(os.path.dirname(path) or ".")
+    leaf = os.path.basename(path)
+    if not leaf:
+        return False
+    if confine_to:
+        root = os.path.realpath(confine_to)
+        resolved = os.path.realpath(parent)
+        if resolved != root and not resolved.startswith(root + os.sep):
+            return False
+    try:
+        os.makedirs(parent, exist_ok=True)
+        info = os.lstat(os.path.join(parent, leaf))
+    except FileNotFoundError:
+        info = None
+    except OSError:
+        return False
+    if info is not None and not stat.S_ISREG(info.st_mode):
+        return False
+    try:
+        payload = (
+            json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+    except Exception:
+        # The mirror of the read-side guard, and it must be here too: a planted
+        # record that *parses* but nests deeply raises RecursionError inside the
+        # encoder. Left unguarded that escaped the hook (exit 1) and escaped
+        # `_start_codex_watchers` on the healthy path, killing the MCP server
+        # during initialize. Also covers non-serializable values.
+        return False
+    if len(payload) > DIAGNOSTICS_MAX_BYTES:
+        return False
+    tmp = f".diag.{secrets.token_hex(8)}.tmp"
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    dir_fd = None
+    try:
+        dir_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        fd = os.open(tmp, flags, 0o600, dir_fd=dir_fd)
+        try:
+            view = memoryview(payload)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("diagnostics write made no progress")
+                view = view[written:]
+        finally:
+            os.close(fd)
+        os.replace(tmp, leaf, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        return True
+    except OSError:
+        if dir_fd is not None:
+            try:
+                os.unlink(tmp, dir_fd=dir_fd)
+            except OSError:
+                pass
+        return False
+    finally:
+        if dir_fd is not None:
+            try:
+                os.close(dir_fd)
+            except OSError:
+                pass
+
+
 def read_current_goal(repo_root: str | None = None) -> dict:
     root = repo_root or find_repo_root()
     current = _read_json_file(_current_goal_path(root))

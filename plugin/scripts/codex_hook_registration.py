@@ -136,6 +136,11 @@ def _registration_identity(payload: bytes) -> tuple[str, str]:
     return (cwd, env_id) if THREAD_RE.fullmatch(env_id) else ("", "")
 
 
+REGISTERED = "registered"
+NOT_APPLICABLE = "not_applicable"
+REGISTRATION_FAILED = "failed"
+
+
 def _bind_active_task_to_root_session(control_root: str, thread_id: str) -> bool:
     """Bind the live default task to the trusted root rollout identity.
 
@@ -161,12 +166,29 @@ def restore_watcher_registration(
     budget_seconds: float = 0.5,
     ensure_fn: Callable[[str, str], bool] = ensure,
     bind_fn: Callable[[str, str], bool] | None = None,
+    status_out: dict | None = None,
 ) -> bool:
     """Restore registration without changing an existing immutable offset.
 
     A late recovery starts at the then-current rollout offset, so it can attest
     only future subagent starts. It never reconstructs already-finished work.
+
+    The bool return is unchanged for existing callers, but False conflates two
+    very different situations. Registration is *not applicable* when this is not
+    a Codex rollout, when no thread identity is present, or when there is no
+    open task to bind — none of which is a failure, and none of which should be
+    reported to the user as one. It has genuinely *failed* only when an attempt
+    was made and did not succeed. Callers that report the result pass
+    ``status_out`` and receive ``{"status": ..., "reason": ...}``; reporting
+    every False as a timeout sends the user to repair a timeout that never
+    happened.
     """
+    def _record(status: str, reason: str) -> None:
+        if status_out is not None:
+            status_out["status"] = status
+            status_out["reason"] = reason
+
+    _record(NOT_APPLICABLE, "registration was not attempted")
     started = time.monotonic()
     deadline = started + max(0.0, float(budget_seconds))
     cwd, thread_id = _registration_identity(payload)
@@ -175,6 +197,21 @@ def restore_watcher_registration(
         if cwd else ""
     )
     if not cwd or not thread_id or not control_root:
+        # Report against the payload, not the collapsed identity tuple:
+        # `_registration_identity` returns ("", "") when the thread id is
+        # missing, discarding a perfectly good cwd. Blaming the cwd sends
+        # someone to debug a field that was correct.
+        payload_cwd = ""
+        try:
+            payload_cwd = str((json.loads(payload.decode("utf-8")) or {}).get("cwd") or "")
+        except Exception:
+            payload_cwd = ""
+        missing = (
+            "no working directory in the payload" if not payload_cwd
+            else "no Codex thread identity for this session" if not thread_id
+            else "no harness root above the session directory"
+        )
+        _record(NOT_APPLICABLE, missing)
         return False
     if bind_fn is None:
         bind_fn = (
@@ -188,6 +225,9 @@ def restore_watcher_registration(
     if not bool(_call_with_deadline(
         lambda: bind_fn(control_root, thread_id), deadline, False
     )):
+        # No open task to bind to. Spawning a subagent before task_start is
+        # ordinary, not broken, so this is not a registration failure.
+        _record(NOT_APPLICABLE, "no open task is bound to this session")
         return False
     retry_deadline = started + min(
         max(0.0, float(retry_seconds)), max(0.0, float(budget_seconds))
@@ -203,8 +243,16 @@ def restore_watcher_registration(
             except Exception:
                 restored = False
         if restored:
+            _record(REGISTERED, "")
             return True
         if time.monotonic() >= retry_deadline:
+            # An attempt was made against a real identity and a real root and
+            # did not succeed. This one is a genuine failure.
+            _record(
+                REGISTRATION_FAILED,
+                "watcher registration did not complete within "
+                f"{max(0.0, float(budget_seconds))}s",
+            )
             return False
         time.sleep(min(0.05, max(0.0, retry_deadline - time.monotonic())))
 

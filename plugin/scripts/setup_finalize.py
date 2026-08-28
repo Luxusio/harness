@@ -64,6 +64,7 @@ OPERATIONAL_IGNORES = (
     "doc/harness/maintenance/",
     "doc/harness/archive/",
     "doc/harness/.routing-state.json",
+    "doc/harness/.watcher-diagnostics.json",
     "doc/harness/timeline.jsonl",
     "doc/harness/health-history.jsonl",
     "doc/harness/benchmark/",

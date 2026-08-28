@@ -629,7 +629,13 @@ class TestCodexHookWrappers(unittest.TestCase):
                  mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
                  contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(mod.main(), 0)
-            restore.assert_called_once_with(raw.encode(), budget_seconds=0.5)
+            restore.assert_called_once_with(
+                raw.encode(), budget_seconds=0.5, status_out=mock.ANY,
+            )
+            # The hook must ask for the tri-state outcome, not just the bool:
+            # reporting a not-applicable registration as a failure fabricates a
+            # timeout that never happened.
+            self.assertIsInstance(restore.call_args.kwargs["status_out"], dict)
             run_child.assert_not_called()
 
             for tool_name in ("multi_agent_v1__spawn_agent", "functions.spawn_agent"):

@@ -149,12 +149,21 @@ def receipt_capability_warning(config_dir: str | None = None) -> str:
             return ""
         if _has_receipt_modules(root) and _registers_receipt_events(root):
             return ""
+        # Hedged on purpose. This inspects the *registered* plugin path, not
+        # whether receipts are actually being written, and the two come apart:
+        # a session whose loaded hooks demonstrably write receipts still trips
+        # this when the registry entry points at a stale cached tree. Stating
+        # "no entry will be written" as fact was measurably false in exactly
+        # that case, and sent the user to repair a problem they did not have.
         return (
-            "harness hook tree cannot record receipts: "
+            "harness hook tree may not be able to record receipts: "
             f"{root} is missing the SubagentStart/SubagentStop receipt subsystem. "
-            "Subagents will run and return verdicts, but no RECEIPTS.jsonl entry "
-            "will be written, so task_verify cannot reach PASS and task_close "
-            "will refuse. Fix: update the harness plugin so it resolves against "
+            "This checks which plugin path is registered, not whether receipts "
+            "are being written, so it can fire in a session that is in fact "
+            "recording — check RECEIPTS.jsonl for the current run before acting. "
+            "If receipts really are missing, subagents will run and return "
+            "verdicts that are never recorded, and task_close will refuse. "
+            "Fix: update the harness plugin so it resolves against "
             "your marketplace tree (e.g. `/plugin update harness@harness`), then "
             "restart the session — hook registration is only read at session "
             "start. Planning and implementation still work in this session."

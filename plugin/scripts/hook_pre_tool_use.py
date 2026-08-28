@@ -11,14 +11,37 @@ SCRIPTS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPTS_DIR)
 
 try:
-    from codex_hook_registration import restore_watcher_registration  # type: ignore
+    from codex_hook_registration import (  # type: ignore
+        NOT_APPLICABLE,
+        REGISTRATION_FAILED,
+        restore_watcher_registration,
+    )
 except Exception:  # pragma: no cover - registration recovery is best effort
     restore_watcher_registration = None
+    NOT_APPLICABLE = "not_applicable"
+    REGISTRATION_FAILED = "failed"
+
+try:
+    from _lib import (  # type: ignore
+        find_harness_root,
+        now_iso,
+        read_json_diagnostics,
+        write_json_diagnostics,
+    )
+except Exception:  # pragma: no cover - diagnostics must never break the hook
+    find_harness_root = None
+    now_iso = None
+    read_json_diagnostics = None
+    write_json_diagnostics = None
+
 
 def _payload_cwd(payload: bytes) -> str | None:
     try:
         data = json.loads(payload.decode("utf-8") or "{}")
     except Exception:
+        return None
+    if not isinstance(data, dict):
+        # See _payload_session_id: independent parse, independent shape check.
         return None
     cwd = data.get("cwd")
     return cwd if isinstance(cwd, str) and os.path.isdir(cwd) else None
@@ -28,6 +51,10 @@ def _tool_name(payload: bytes) -> str:
     try:
         data = json.loads(payload.decode("utf-8") or "{}")
     except Exception:
+        return ""
+    if not isinstance(data, dict):
+        # A payload of `null` or `[1,2,3]` parses fine and then raises
+        # AttributeError on `.get`, taking the hook's exit code with it.
         return ""
     return str(data.get("tool_name") or data.get("tool") or "")
 
@@ -41,19 +68,48 @@ REGISTRATION_BUDGET_SECONDS = 0.5
 
 WATCHER_DIAGNOSTICS_RELPATH = "doc/harness/.watcher-diagnostics.json"
 
+# Bound the error text carried across a size-cap retry, so the value that made
+# the record oversize cannot make the retry oversize too.
+_REASON_CARRY_CHARS = 500
 
-def _diagnostics_path(payload: bytes) -> str:
+
+def _harness_root(payload: bytes) -> str:
+    """Resolve the harness root the same way the rest of the runtime does.
+
+    An earlier version walked ancestors looking for any `doc/harness` directory.
+    That selects a parent repository when the session runs in a nested project
+    that never ran setup, and writes this session's state into someone else's
+    tree — the stale-install pollution class. `find_harness_root` applies the
+    real marker check.
+    """
     cwd = _payload_cwd(payload)
-    if not cwd:
+    if not cwd or find_harness_root is None:
         return ""
-    root = cwd
-    while True:
-        if os.path.isdir(os.path.join(root, "doc", "harness")):
-            return os.path.join(root, WATCHER_DIAGNOSTICS_RELPATH)
-        parent = os.path.dirname(root)
-        if parent == root:
-            return ""
-        root = parent
+    try:
+        return find_harness_root(cwd) or ""
+    except Exception:
+        return ""
+
+
+def _payload_session_id(payload: bytes) -> str:
+    try:
+        data = json.loads(payload.decode("utf-8") or "{}")
+    except Exception:
+        return ""
+    if not isinstance(data, dict):
+        # Defense in depth. `_tool_name` is the guard that actually fires on a
+        # scalar payload — main() returns before reaching here — but each of
+        # these parses stdin independently, so none of them should assume a
+        # caller already checked the shape.
+        return ""
+    for key in ("session_id", "thread_id"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            return value
+    # Same fallback `_registration_identity` uses. Without it the documented
+    # env-only configuration writes an unattributable record that degrades to
+    # age-only scoping.
+    return str(os.environ.get("CODEX_THREAD_ID") or "")
 
 
 def _update_diagnostics(payload: bytes, updates: dict) -> None:
@@ -61,27 +117,46 @@ def _update_diagnostics(payload: bytes, updates: dict) -> None:
 
     Diagnostic only. Nothing written here can authorize a PASS; the close gate
     still reads only hook-owned RECEIPTS.jsonl entries.
+
+    Every record is stamped with the session it describes and when it was
+    written. Without that stamp the record is sticky and unscoped: one benign
+    pre-task spawn writes `registration_present: false`, and every later session
+    in the repo — including Claude sessions that never run this hook and so can
+    never clear it — reads that stale record as the live state.
     """
-    path = _diagnostics_path(payload)
-    if not path:
+    root = _harness_root(payload)
+    if not root or write_json_diagnostics is None:
         return
-    data = {}
-    try:
-        with open(path, "r", encoding="utf-8") as handle:
-            loaded = json.load(handle)
-        if isinstance(loaded, dict):
-            data = loaded
-    except Exception:
-        data = {}
+    path = os.path.join(root, WATCHER_DIAGNOSTICS_RELPATH)
+    session_id = _payload_session_id(payload)
+    existing = read_json_diagnostics(path) if read_json_diagnostics else {}
+    # Carry forward only a record this session already owns. Merging a foreign
+    # or unattributable one and then stamping the result as current would
+    # relaunder it as live state.
+    data = existing if str(existing.get("session_id") or "") == session_id else {}
     data.update(updates)
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = f"{path}.tmp"
-        with open(tmp, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, ensure_ascii=False, indent=2, sort_keys=True)
-        os.replace(tmp, path)
-    except Exception:
-        pass
+    data["session_id"] = session_id
+    data["updated"] = now_iso() if now_iso is not None else ""
+    if write_json_diagnostics(path, data, confine_to=root):
+        return
+    # A carried-forward record can push the payload past the size cap, and a
+    # planted oversize record would then suppress persistence of a genuinely
+    # observed failure. The update itself is small; keep it, drop the rest —
+    # but carry an observed failure across, or this fallback becomes the very
+    # thing `_observed_registration_failure` exists to prevent: a later benign
+    # spawn clearing a failure an earlier spawn really saw.
+    fresh = {}
+    if str(existing.get("session_id") or "") == session_id and (
+        existing.get("registration_present") is False
+    ):
+        fresh["registration_present"] = False
+        fresh["last_registration_error"] = str(
+            existing.get("last_registration_error") or ""
+        )[:_REASON_CARRY_CHARS]
+    fresh.update(updates)
+    fresh["session_id"] = session_id
+    fresh["updated"] = now_iso() if now_iso is not None else ""
+    write_json_diagnostics(path, fresh, confine_to=root)
 
 
 def _report_registration_failure(payload: bytes, reason: str) -> None:
@@ -97,10 +172,38 @@ def _report_registration_failure(payload: bytes, reason: str) -> None:
     )
 
 
+def _report_registration_not_applicable(payload: bytes, reason: str) -> None:
+    """Record 'unknown', not 'failed'.
+
+    Nothing was attempted, so asserting a failure here would fabricate the
+    confident-but-unfounded value AC-002 exists to prevent. Equally, nothing
+    was attempted means nothing was *disproved*: a later benign spawn must not
+    clear a failure an earlier spawn actually observed. Only a successful
+    registration clears one.
+    """
+    updates = {"last_registration_note": reason}
+    if not _observed_registration_failure(payload):
+        updates["registration_present"] = None
+        updates["last_registration_error"] = ""
+    _update_diagnostics(payload, updates)
+
+
+def _observed_registration_failure(payload: bytes) -> bool:
+    """Does this session already hold a positively observed failure?"""
+    root = _harness_root(payload)
+    if not root or read_json_diagnostics is None:
+        return False
+    record = read_json_diagnostics(os.path.join(root, WATCHER_DIAGNOSTICS_RELPATH))
+    if str(record.get("session_id") or "") != _payload_session_id(payload):
+        return False
+    return record.get("registration_present") is False
+
+
 def _clear_registration_failure(payload: bytes) -> None:
     _update_diagnostics(payload, {
         "registration_present": True,
         "last_registration_error": "",
+        "last_registration_note": "",
     })
 CHILD_TIMEOUT_SECONDS = 1.5
 
@@ -133,21 +236,28 @@ def main() -> int:
                 payload, "codex_hook_registration is unavailable in this hook tree",
             )
             return 0
+        status: dict = {}
         try:
             registered = restore_watcher_registration(
-                payload, budget_seconds=REGISTRATION_BUDGET_SECONDS,
+                payload,
+                budget_seconds=REGISTRATION_BUDGET_SECONDS,
+                status_out=status,
             )
         except Exception as exc:
             _report_registration_failure(payload, f"{type(exc).__name__}: {exc}")
             return 0
+        reason = str(status.get("reason") or "")
         if registered:
             _clear_registration_failure(payload)
-        else:
-            _report_registration_failure(
-                payload,
+        elif status.get("status") == REGISTRATION_FAILED:
+            _report_registration_failure(payload, reason or (
                 "watcher registration did not complete within "
-                f"{REGISTRATION_BUDGET_SECONDS}s",
-            )
+                f"{REGISTRATION_BUDGET_SECONDS}s"
+            ))
+        else:
+            # NOT_APPLICABLE: not a Codex rollout, no thread identity, or no
+            # open task yet. None of those is a fault to report or to gate on.
+            _report_registration_not_applicable(payload, reason)
         return 0
 
     script = ""
