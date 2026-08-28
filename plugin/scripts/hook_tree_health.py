@@ -48,6 +48,51 @@ RECEIPT_MODULES = ("background_hook.py", "subagent_lifecycle.py")
 RECEIPT_EVENTS = ("SubagentStart", "SubagentStop")
 
 
+def _runtime() -> str:
+    """Return the explicit runtime, or infer Codex from its thread identity."""
+    configured = str(os.environ.get("HARNESS_RUNTIME") or "").strip().lower()
+    if configured:
+        return configured
+    if str(os.environ.get("CODEX_THREAD_ID") or "").strip():
+        return "codex"
+    return "claude"
+
+
+def _codex_registration_present() -> bool:
+    """Return whether this exact Codex root thread has a live registration."""
+    try:
+        from _lib import find_harness_root, read_session_hint  # type: ignore
+        from codex_lifecycle_watcher import registrations  # type: ignore
+
+        repo_root = find_harness_root(os.getcwd())
+        if not repo_root:
+            return False
+        thread_id = str(
+            os.environ.get("CODEX_THREAD_ID")
+            or read_session_hint(repo_root)
+            or ""
+        ).strip()
+        if not thread_id:
+            return False
+        return any(
+            item.get("thread_id") == thread_id
+            for item in registrations(repo_root)
+        )
+    except Exception:
+        return False
+
+
+def _codex_capability_warning() -> str:
+    if _codex_registration_present():
+        return ""
+    return (
+        "Codex receipt watcher registration is not positively confirmed for "
+        "this root thread. Do not launch review or QA lenses: their verdicts "
+        "may not be recorded. Repair or refresh the Codex hook registration, "
+        "then rerun this check."
+    )
+
+
 def _config_dir() -> str:
     return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(
         os.path.expanduser("~"), ".claude"
@@ -142,6 +187,12 @@ def receipt_capability_warning(config_dir: str | None = None) -> str:
     resolved, or on any error. Never raises.
     """
     try:
+        # Codex receipts are recorded by the MCP-hosted lifecycle watcher, not
+        # Claude's registered SubagentStart/SubagentStop hook tree.  An explicit
+        # config_dir still means "inspect this Claude registration" and keeps
+        # the diagnostic helper useful from either runtime.
+        if config_dir is None and _runtime() == "codex":
+            return _codex_capability_warning()
         root = registered_hook_root(config_dir)
         if not root or not os.path.isdir(root):
             # Nothing registered, or a path we cannot see. Plenty of valid
@@ -176,6 +227,8 @@ if __name__ == "__main__":
     message = receipt_capability_warning()
     if message:
         print(message)
+    elif _runtime() == "codex":
+        print("receipt-capable runtime: Codex lifecycle watcher registration confirmed")
     else:
         root = registered_hook_root()
         print(f"receipt-capable hook tree: {root or '<unresolved>'}")

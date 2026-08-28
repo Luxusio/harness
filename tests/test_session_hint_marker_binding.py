@@ -125,7 +125,12 @@ class TaskStartMarkerBindingTests(unittest.TestCase):
     def test_without_hint_falls_back_to_default_marker(self):
         """No hint (Codex, hookless installs) keeps the legacy behavior."""
         with tempfile.TemporaryDirectory() as tmp:
-            result = self._call(tmp, "task_start", {"task_id": "TASK__unhinted"})
+            with mock.patch.dict(
+                os.environ,
+                {"CODEX_SESSION_ID": "", "CODEX_THREAD_ID": ""},
+                clear=False,
+            ):
+                result = self._call(tmp, "task_start", {"task_id": "TASK__unhinted"})
             self.assertNotIn("isError", result)
             self.assertEqual(self._marker_names(tmp), ["default.json"])
             # And the pre-fix failure mode is still reproduced, by design:

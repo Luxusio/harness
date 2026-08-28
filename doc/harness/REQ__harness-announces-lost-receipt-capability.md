@@ -11,7 +11,7 @@ invalidated_by_paths:
 
 tags: [harness, receipts, drift, verification]
 summary: When the loaded hook tree lacks the receipt subsystem, the harness must announce it at the first moment it can know, instead of presenting as healthy while receipts silently never record.
-updated: 2026-08-26
+updated: 2026-08-28
 
 ## Expected normal behavior
 
@@ -38,6 +38,13 @@ the remedy. Specifically:
 
 If a session cannot produce receipts and nothing reports it, the harness is
 defective — regardless of whether every other gate is behaving correctly.
+
+The diagnosis is runtime-scoped. Claude receipt capability is determined from
+Claude's registered hook tree. Codex receipt capability is determined by the
+MCP-hosted lifecycle watcher and its per-thread registration. A stale Claude
+cache must never be presented as evidence that the active Codex watcher is
+unavailable. Explicit inspection of a supplied Claude config directory remains
+supported for diagnostics and tests, regardless of the caller's runtime.
 
 ## Why gates deliberately keep firing
 
@@ -83,6 +90,20 @@ registered tree lacks `background_hook.py`/`subagent_lifecycle.py`, or when its
 `hooks.json` does not register both `SubagentStart` and `SubagentStop`. It
 accepts either directory layout (`scripts/` at tree root, or nested under
 `plugin/`), so a healthy tree of any vintage is never falsely indicted.
+
+With no explicit config directory, the helper first identifies the active
+runtime. Under Codex (`HARNESS_RUNTIME=codex` or a valid `CODEX_THREAD_ID`) it
+does not inspect `~/.claude/plugins/installed_plugins.json`; Codex readiness is
+clean only when the current root thread has a live, validated lifecycle-watcher
+registration. Missing, failed, or indeterminate registration is non-clean and
+must prevent review/QA lens launch. Under Claude, or when a Claude config
+directory is explicitly supplied, the original registered-tree inspection
+applies.
+
+The Codex MCP host may not receive `CODEX_THREAD_ID`. In that process the helper
+uses the repository's validated current-session hint, written by trusted Codex
+hooks, and requires an exact match in the watcher's validated registrations.
+It must not weaken the check to “some registration exists.”
 
 Every failure path returns **no finding**: absent, unreadable, or unexpectedly
 shaped config; an unresolvable registration; a registered path that does not
@@ -137,3 +158,6 @@ is not evidence this works.
   installed copy", which is the directory `install.py --force` faithfully
   updates. Source and that tree agreed byte for byte, so it reported no drift
   while the loaded tree was three months stale.
+- **2026-08-28** — a Codex session ran the no-argument health command and the
+  helper inspected the unrelated stale Claude cache. Runtime scoping was added
+  so cross-runtime state cannot create a false `RECEIPT_HOOKS_UNAVAILABLE`.

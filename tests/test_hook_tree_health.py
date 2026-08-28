@@ -9,6 +9,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import types
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -19,6 +20,8 @@ assert SPEC and SPEC.loader
 mod = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = mod
 SPEC.loader.exec_module(mod)
+
+WARNING_TEXT = "may not be able to record receipts"
 
 
 def _config(tmp_path: Path, install_path, *, key="harness@harness") -> Path:
@@ -70,7 +73,7 @@ def test_tree_missing_receipt_modules_warns(tmp_path):
     root = _tree(tmp_path / "tree", scripts=("prewrite_gate.py", "stop_gate.py"))
     cfg = _config(tmp_path / "cfg", root)
     message = mod.receipt_capability_warning(str(cfg))
-    assert "cannot record receipts" in message
+    assert WARNING_TEXT in message
     assert str(root) in message, "the warning must name the offending tree"
     assert "restart the session" in message
 
@@ -80,7 +83,7 @@ def test_tree_not_registering_both_subagent_events_warns(tmp_path):
     for index, events in enumerate([(), ("SubagentStart",), ("SubagentStop",)]):
         root = _tree(tmp_path / f"tree{index}", events=events)
         cfg = _config(tmp_path / f"cfg{index}", root)
-        assert "cannot record receipts" in mod.receipt_capability_warning(str(cfg)), events
+        assert WARNING_TEXT in mod.receipt_capability_warning(str(cfg)), events
 
 
 def test_unreadable_hooks_json_warns_even_with_all_modules_present(tmp_path):
@@ -94,20 +97,20 @@ def test_unreadable_hooks_json_warns_even_with_all_modules_present(tmp_path):
         root = _tree(tmp_path / f"tree{index}")
         (root / "plugin" / "hooks" / "hooks.json").write_text(payload, encoding="utf-8")
         cfg = _config(tmp_path / f"cfg{index}", root)
-        assert "cannot record receipts" in mod.receipt_capability_warning(str(cfg)), payload
+        assert WARNING_TEXT in mod.receipt_capability_warning(str(cfg)), payload
 
 
 def test_absent_hooks_json_warns_even_with_all_modules_present(tmp_path):
     root = _tree(tmp_path / "tree")
     (root / "plugin" / "hooks" / "hooks.json").unlink()
     cfg = _config(tmp_path / "cfg", root)
-    assert "cannot record receipts" in mod.receipt_capability_warning(str(cfg))
+    assert WARNING_TEXT in mod.receipt_capability_warning(str(cfg))
 
 
 def test_partial_receipt_modules_warn(tmp_path):
     root = _tree(tmp_path / "tree", scripts=("background_hook.py",))
     cfg = _config(tmp_path / "cfg", root)
-    assert "cannot record receipts" in mod.receipt_capability_warning(str(cfg))
+    assert WARNING_TEXT in mod.receipt_capability_warning(str(cfg))
 
 
 def test_unresolvable_registration_is_silent(tmp_path):
@@ -148,7 +151,7 @@ def test_dict_shaped_record_is_accepted(tmp_path):
         json.dumps({"plugins": {"harness@harness": {"installPath": str(root)}}}),
         encoding="utf-8",
     )
-    assert "cannot record receipts" in mod.receipt_capability_warning(
+    assert WARNING_TEXT in mod.receipt_capability_warning(
         str(tmp_path / "cfg")
     )
 
@@ -165,3 +168,63 @@ def test_warning_never_raises(tmp_path, monkeypatch):
 
     monkeypatch.setattr(mod, "registered_hook_root", boom)
     assert mod.receipt_capability_warning(str(tmp_path)) == ""
+
+
+def test_codex_runtime_does_not_indict_stale_claude_registration(tmp_path, monkeypatch):
+    """The active Codex watcher is unrelated to Claude's installed hook tree."""
+    root = _tree(tmp_path / "stale", scripts=("prewrite_gate.py",))
+    cfg = _config(tmp_path / "cfg", root)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    monkeypatch.setenv("HARNESS_RUNTIME", "codex")
+    monkeypatch.setattr(mod, "_codex_registration_present", lambda: True)
+
+    assert mod.receipt_capability_warning() == ""
+    assert WARNING_TEXT in mod.receipt_capability_warning(str(cfg))
+
+
+def test_codex_thread_identity_scopes_no_argument_check(tmp_path, monkeypatch):
+    root = _tree(tmp_path / "stale", scripts=("prewrite_gate.py",))
+    cfg = _config(tmp_path / "cfg", root)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    monkeypatch.delenv("HARNESS_RUNTIME", raising=False)
+    monkeypatch.setenv("CODEX_THREAD_ID", "01a04738-80e6-7851-833f-614d59ae3621")
+    monkeypatch.setattr(mod, "_codex_registration_present", lambda: True)
+
+    assert mod.receipt_capability_warning() == ""
+
+
+def test_codex_without_positive_registration_is_not_clean(monkeypatch):
+    monkeypatch.setenv("HARNESS_RUNTIME", "codex")
+    monkeypatch.setattr(mod, "_codex_registration_present", lambda: False)
+
+    message = mod.receipt_capability_warning()
+    assert "not positively confirmed" in message
+    assert "Do not launch review or QA lenses" in message
+
+
+def test_codex_mcp_uses_verified_session_hint_without_thread_env(tmp_path, monkeypatch):
+    """The MCP host has HARNESS_RUNTIME but no CODEX_THREAD_ID of its own."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    thread_id = "01a04738-80e6-7851-833f-614d59ae3621"
+    monkeypatch.setenv("HARNESS_RUNTIME", "codex")
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    monkeypatch.setitem(sys.modules, "_lib", types.SimpleNamespace(
+        find_harness_root=lambda _cwd: str(root),
+        read_session_hint=lambda _root: thread_id,
+    ))
+    monkeypatch.setitem(sys.modules, "codex_lifecycle_watcher", types.SimpleNamespace(
+        registrations=lambda _root: [{"thread_id": thread_id}],
+    ))
+
+    assert mod._codex_registration_present() is True
+    assert mod.receipt_capability_warning() == ""
+
+
+def test_explicit_claude_runtime_keeps_registered_tree_check(tmp_path, monkeypatch):
+    root = _tree(tmp_path / "stale", scripts=("prewrite_gate.py",))
+    cfg = _config(tmp_path / "cfg", root)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    monkeypatch.setenv("HARNESS_RUNTIME", "claude")
+
+    assert WARNING_TEXT in mod.receipt_capability_warning()

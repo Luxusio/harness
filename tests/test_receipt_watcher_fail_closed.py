@@ -1471,14 +1471,15 @@ class TestRegistrationOutcomeIsTriState(unittest.TestCase):
                 "thread_id": "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000",
             }).encode()
             status: dict = {}
-            registered = reg.restore_watcher_registration(
-                payload,
-                budget_seconds=0.05,
-                retry_seconds=0.0,
-                bind_fn=lambda *_a: True,
-                ensure_fn=lambda *_a: False,
-                status_out=status,
-            )
+            with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": ""}, clear=False):
+                registered = reg.restore_watcher_registration(
+                    payload,
+                    budget_seconds=0.05,
+                    retry_seconds=0.0,
+                    bind_fn=lambda *_a: True,
+                    ensure_fn=lambda *_a: False,
+                    status_out=status,
+                )
 
         self.assertFalse(registered)
         self.assertEqual(status["status"], reg.REGISTRATION_FAILED)
@@ -1500,12 +1501,13 @@ class TestRegistrationOutcomeIsTriState(unittest.TestCase):
                 "thread_id": "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000",
             }).encode()
             status: dict = {}
-            registered = reg.restore_watcher_registration(
-                payload,
-                bind_fn=lambda *_a: False,
-                ensure_fn=lambda *_a: True,
-                status_out=status,
-            )
+            with mock.patch.dict(os.environ, {"CODEX_THREAD_ID": ""}, clear=False):
+                registered = reg.restore_watcher_registration(
+                    payload,
+                    bind_fn=lambda *_a: False,
+                    ensure_fn=lambda *_a: True,
+                    status_out=status,
+                )
 
         self.assertFalse(registered)
         self.assertEqual(status["status"], reg.NOT_APPLICABLE)
