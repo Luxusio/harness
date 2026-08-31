@@ -36,7 +36,7 @@ Legend:
 | **`Skill(...)` chaining** | ✅ native | ❌ Claude-only in v1 | Codex skills invoked via `$<name>` or `/skills`; no programmatic chaining. Sync engine flags these call sites for human review on transform. |
 | **Setup skill** | ✅ | 🟡 partial | `setup` ports as one of the AC-003 3-skill spike. ~80% portable (mostly prose); AskUserQuestion sites lose interactivity on Codex. |
 | **Maintain skill** | ✅ | 🟡 partial | `maintain` ~70% portable; depends on AC-003 outcome. |
-| **Run skill (orchestrator)** | ✅ native (Skill chaining) | 🟡 sequential degraded | Codex lacks `Skill()` primitive; v1 ports a sequential variant that invokes plan→develop→verify→close via skill names. |
+| **Run skill (orchestrator)** | ✅ native (Skill chaining) | 🟡 sequential degraded | Codex lacks `Skill()` primitive; v1 ports the public task-start→plan→develop→QA→close lifecycle sequentially, with review and verification retained as internal close gates. |
 | **Develop skill** | ✅ native (Agent fan-out) | 🟡 sequential degraded | qa-* parallelization is Claude-only; Codex variant runs single QA lens at a time. |
 | **Plan skill (premise gate, scope confirmation)** | ✅ native (AskUserQuestion) | 🟡 sequential degraded | Premise gate uses AskUserQuestion; Codex variant prints premises and reads bare stdin OR uses Codex's `permissionDecision` plumbing. AC-003 spike validates. |
 | **Plan-* review skills (CEO/Eng/Design/DevEx, 4014L total)** | ✅ native (dual-voice Agent) | ❌ Claude-only in v1 | Each is structurally a dual-voice review. 72% of skill mass. Single-voice degraded variant is structurally different code, not a port. v2 decides whether to write Codex variants. |

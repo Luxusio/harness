@@ -25,7 +25,8 @@ truth. There is no separate orchestration runner, heartbeat, event log, or
 migration state.
 
 When no native Goal is active, task state is still valid for plain requests.
-Those tasks follow the same plan, develop, verify, and close gates, but are not
+Those tasks follow the same public start, plan, develop, QA, and close stages,
+with review and verification enforced as internal close gates, but are not
 attached to a Goal unless the user or agent later establishes one.
 
 ## Runtime Split
@@ -40,7 +41,8 @@ objective.
 
 ## Task Relationship
 
-Harness tasks remain the execution unit for plan, develop, verify, and close.
+Harness tasks remain the execution unit for the public start, plan, develop,
+QA, and close lifecycle.
 Goal tools attach those tasks as children. This keeps existing task artifacts
 and close gates intact while making Goal the public control surface.
 

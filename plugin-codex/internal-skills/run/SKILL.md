@@ -1,6 +1,6 @@
 ---
 name: run
-description: Orchestrate full development cycle — plan -> develop -> verify -> close.
+description: Orchestrate the public task_start -> plan -> develop -> QA -> close lifecycle.
 user-invocable: false
 ---
 
@@ -10,7 +10,7 @@ Orchestrate the full harness development cycle for a task.
 > `RECEIPTS.jsonl` owns review/QA evidence.
 
 > **Codex runtime notes** (delta from Claude):
-> - Claude's `Skill("harness:plan", task_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. Effect is identical (plan -> develop -> verify -> close), but the chain is sequential prose, not tool calls.
+> - Claude's `Skill("harness:plan", task_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. The public effect is identical (task start -> plan -> develop -> QA -> close), with review and verification retained as internal close gates, but the chain is sequential prose rather than tool calls.
 > - Claude's `Agent(subagent_type="oh-my-claudecode:executor", ...)` maps to Codex capability-first routing. Check the deferred tool catalog (for example `ALL_TOOLS`) before declaring `spawn_agent` unavailable. If the current Codex session exposes `spawn_agent`, use it for independent QA/review and bounded worker tasks; the user does not need to request delegation. For QA/review, `spawn_agent` is mandatory when available: the orchestrator must not self-author a PASS while skipping an available independent subagent. The Codex lifecycle watcher records starts and observed completions in `RECEIPTS.jsonl`; never self-author receipt evidence. If `spawn_agent` is unavailable after discovery, run the role methodology inline and state the fallback in task state or final response only when it affects verification.
 > - MCP tool names on Codex use bare form (`task_start`, `task_verify`, `task_close`) — not Claude-prefixed form. Where this skill mentions a prefixed name, read it as the bare form.
 > - `${CLAUDE_PLUGIN_ROOT}` is not injected on Codex. Use `${HARNESS_PLUGIN_ROOT}` (set by the Codex plugin install).
@@ -274,7 +274,7 @@ not complete at task close. Phase 7.8 must already have run the verified
 auto-install helper after the last source edit and fresh QA. After
 post-close self-improvement has run, commit the completed diff
 before the final response unless the user explicitly says not to. Include
-the commit hash and pre-close force-install result in the completion report.
+the commit hash and pre-close conditional verified-delivery result in the completion report.
 
 ## Completion Report
 
@@ -285,7 +285,7 @@ Before writing DONE, assert:
 - if this was a native Goal child task, the Goal is done/blocked/stopped/budgeted
   or the next slice is already active/queued
 - for this harness plugin source repo, the completed diff has been committed
-  and `python3 install.py --force` has run, unless the user explicitly opted out
+  and verified delivery has confirmed synchronized runtime payloads, unless the user explicitly opted out
 
 ```
 DONE
@@ -295,7 +295,7 @@ Status:  closed
 Dir:     <task_dir>
 Runtime: codex
 
-Phases completed: plan, develop, verify, close
+Phases completed: task_start, plan, develop, QA, close
 Runtime verdict:  PASS
 Health score:     <score>/10
 Files changed:    <count>

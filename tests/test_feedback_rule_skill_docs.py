@@ -138,10 +138,10 @@ def test_self_improvement_documents_readable_tier2_format():
     assert "safe_fix_direction" in body
 
 
-def test_harness_source_completion_requires_commit_and_force_install():
+def test_harness_source_completion_requires_commit_and_conditional_delivery():
     root = (REPO / "CLAUDE.md").read_text(encoding="utf-8")
     assert "commit the completed diff" in root
-    assert "python3 install.py --force" in root
+    assert "python3 install.py --if-stale" in root
     assert "before `task_close`" in root
     assert "must not introduce a second install phase" in root
 
@@ -149,9 +149,8 @@ def test_harness_source_completion_requires_commit_and_force_install():
         body = (REPO / rel).read_text(encoding="utf-8")
         assert "For this harness plugin source repo" in body
         assert "commit the completed diff" in body
-        assert "python3 install.py --force" in body
         assert "final response" in body
-        assert "force-install result" in body
+        assert "conditional verified-delivery result" in body
         assert "stateless root installer" in body
 
 
@@ -177,9 +176,9 @@ def test_develop_installs_harness_after_fresh_qa_before_close():
             else "plugin/scripts/install_verified.py"
         )
         assert expected_installer in section
-        assert "python3 install.py --force" in section
+        assert "python3 install.py --if-stale" in section
         assert "terminal ordered" in section
-        assert "failed install blocks completion" in section.lower()
+        assert "failed refreshes block completion" in " ".join(section.lower().split())
 
 
 def test_continuous_maintenance_doc_maps_former_maintain_work():
@@ -198,5 +197,3 @@ def test_continuous_maintenance_doc_maps_former_maintain_work():
     assert "proposed_artifact" in body
     assert "AskUserQuestion" in body
     assert "request_user_input" in body
-
-

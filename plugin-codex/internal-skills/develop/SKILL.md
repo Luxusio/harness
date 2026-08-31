@@ -255,7 +255,10 @@ status before waiting again.
 
 Use a valid structured `task_name` containing `code_review` or
 `security_review`; a matching first message line is readable context only. Do
-not use a generic worker name for a required reviewer. The MCP-hosted watcher
+not depend on word order for receipt safety: the runtime also accepts
+`review_code` and `review_security`, and preflight rejects review-looking names
+that cannot bind before spawning. Prefer the canonical examples above. Do not
+use a generic worker name for a required reviewer. The MCP-hosted watcher
 solely owns lifecycle evidence. Follow
 `doc/harness/patterns/ADR__single-direct-codex-receipt-protocol.md` for Codex
 acquisition/identity/completion and
@@ -348,12 +351,17 @@ prevent the task from reaching the close gate. Capture the installer exit code
 and runtime summaries. The trusted helper may inspect the concrete install
 payload and Git state because installation is an explicit operation; those
 checks are not lifecycle gates. It verifies canonical harness identity and
-ordered review+QA receipts before it invokes `python3 install.py --force`. A failed install blocks completion; never claim the
-source is deployed. Do not rerun installation for docs-only edits after this
-step. The current process may retain already-loaded MCP/hooks, so report when a
+ordered review+QA receipts before it invokes the snapshot's
+`python3 install.py --if-stale`. The installer builds each canonical runtime
+projection, leaves synchronized runtimes untouched, and refreshes only stale
+runtimes. Comparison errors or failed refreshes block completion; never claim
+the source is deployed. Payload synchronization does not diagnose external
+config/registry-only drift; `python3 install.py --force` remains the explicit
+repair path. Do not rerun installation for docs-only edits after this step. The
+current process may retain already-loaded MCP/hooks, so report when a
 new thread is required without forging receipts. The helper writes no install
-receipt or deduplication state; retrying after interruption reinstalls from a
-fresh verified snapshot. Skip only when the user explicitly opts out of installation.
+receipt or deduplication state; retrying after interruption recomputes payload
+equality from a fresh verified snapshot.
 
 ### Phase 8: Completion preparation
 

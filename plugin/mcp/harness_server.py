@@ -1425,7 +1425,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
          "additionalProperties": False},
      "handler": handle_goal_finish},
     {"name": "task_start", "title": "Create or resume a task",
-     "description": "Create exact TASK.json scaffolding and return fresh context. Use directly for plain repo-mutating requests when no native goal context is active. Pass execution_mode='micro' for explicit no-plan develop->verify->close mode; verification remains mandatory.",
+     "description": "Create exact TASK.json scaffolding and return fresh context. Use directly for plain repo-mutating requests when no native goal context is active. The public lifecycle is task start -> plan -> develop -> QA -> close; review and task_verify are internal close gates. Pass execution_mode='micro' for an explicitly shortened no-plan develop -> QA -> close path; internal verification remains mandatory.",
      "inputSchema": {"type": "object", "properties": {
          "task_dir": {"type": "string"}, "task_id": {"type": "string"},
          "slug": {"type": "string"}, "request_file": {"type": "string"},

@@ -306,6 +306,43 @@ def _acquire_registration_lease(repo_root: str, thread_id: str) -> Any | None:
         return None
 
 
+def registration_host_live(repo_root: str, thread_id: str) -> bool:
+    """Return true only while another process holds the watcher lease."""
+    if fcntl is None:
+        return False
+    runtime = _trusted_runtime_dir(repo_root)
+    if runtime is None:
+        return False
+    path = _lease_path(repo_root, thread_id)
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return False
+    try:
+        info = os.fstat(fd)
+        path_info = os.lstat(path)
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or info.st_nlink != 1
+            or info.st_mode & 0o022
+            or stat.S_ISLNK(path_info.st_mode)
+            or (path_info.st_dev, path_info.st_ino) != (info.st_dev, info.st_ino)
+        ):
+            return False
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
 def _trusted_runtime_dir(repo_root: str) -> Path | None:
     runtime = _runtime_dir(repo_root)
     anchor = (_codex_home().parent if os.environ.get("CODEX_HOME") else Path.home()).resolve()

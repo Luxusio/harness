@@ -80,7 +80,7 @@ def test_verification_state_uses_one_receipt_snapshot(tmp_path):
     assert runtime.call_args.args[-1] is snapshot
 
 
-def test_stateless_installer_reinstalls_every_verified_call_including_clean_source(tmp_path):
+def test_stateless_installer_rechecks_every_call_with_conditional_mode(tmp_path):
     repo, task = _repo(tmp_path)
     installer = subprocess.CompletedProcess([], 0)
     common = (
@@ -101,6 +101,10 @@ def test_stateless_installer_reinstalls_every_verified_call_including_clean_sour
         assert mod.install_verified(task) == 0
         assert mod.install_verified(task) == 0
         assert run.call_count == 2
+        assert all(
+            call.args[0][-1] == "--if-stale"
+            for call in run.call_args_list
+        )
     assert not (task / "INSTALL_RECEIPT.json").exists()
     with (
         mock.patch.object(mod, "find_repo_root", return_value=str(repo)),
@@ -118,6 +122,7 @@ def test_stateless_installer_reinstalls_every_verified_call_including_clean_sour
     ):
         assert mod.install_verified(task) == 0
         assert run.call_count == 1
+        assert run.call_args.args[0][-1] == "--if-stale"
 
 
 def test_task_authority_mutation_waits_for_install_transaction(tmp_path):

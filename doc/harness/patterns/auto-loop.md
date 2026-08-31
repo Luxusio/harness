@@ -8,7 +8,7 @@ updated: 2026-06-12
 # Auto-loop primitive — native `/goal`과 harness `stop_gate.py`
 
 ## 한 줄 요약
-**native `/goal`은 명시적 Goal 진입점이고, plain mutating request는 agent가 task로 열 수 있다.** Harness는 Goal을 durable state에 동기화하고, 각 Goal child task 또는 direct task의 plan → develop → verify → close 루프는 `plugin/scripts/stop_gate.py`가 close-gate를 감지해 자동 재개시킨다.
+**native `/goal`은 명시적 Goal 진입점이고, plain mutating request는 agent가 task로 열 수 있다.** Harness는 Goal을 durable state에 동기화하고, 각 Goal child task 또는 direct task의 task start → plan → develop → QA → close 공개 루프는 `plugin/scripts/stop_gate.py`가 close-gate를 감지해 자동 재개시킨다. 독립 리뷰와 `task_verify`는 close 전 내부 게이트다.
 
 ## 동작 메커니즘 비교
 
@@ -85,7 +85,7 @@ Anthropic 실제 `/goal`을 함께 켜고 싶다면 develop 진입 시점에 수
   ```python
   reason = (
       f"Active harness task {task_id} is open. Do not stop — finish the "
-      "plan -> develop -> verify -> close loop. ..."
+      "task start -> plan -> develop -> QA -> close loop. ..."
   )
   payload = gate_block(reason=reason, next_action_command=next_action, ...)
   json.dump(payload, sys.stdout)

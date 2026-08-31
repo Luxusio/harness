@@ -214,6 +214,7 @@ def test_codex_mcp_uses_verified_session_hint_without_thread_env(tmp_path, monke
         read_session_hint=lambda _root: thread_id,
     ))
     monkeypatch.setitem(sys.modules, "codex_lifecycle_watcher", types.SimpleNamespace(
+        registration_host_live=lambda _root, _thread_id: True,
         registrations=lambda _root: [{"thread_id": thread_id}],
     ))
 

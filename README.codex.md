@@ -39,7 +39,7 @@ This is partial parity. **What's NOT in v1 on Codex:**
 See [`doc/harness/runtime-matrix.md`](doc/harness/runtime-matrix.md) for the full row-by-row support table.
 
 **What DOES work on Codex:**
-- Core loop: `plan → develop → verify → close`
+- Public loop: `task_start → plan → develop → QA → close` (independent review and `task_verify` are internal close gates)
 - Shared MCP server (same `harness_server.py` as Claude)
 - Shared Python scripts via `HARNESS_PLUGIN_ROOT` env
 - `setup`, plain repo-mutating request routing, native `/goal` orchestration, Goal child-task queues, `plan` (degraded), `develop` (sequential), `qa-cli`, `qa-api` (after AC-003 ports land in your install)
@@ -56,7 +56,7 @@ codex exec 'fix the flaky test in tests/auth/' < /dev/null
 # Or start an explicit Goal. Codex reads native goal context, then syncs it through harness goal_start.
 codex exec '/goal fix the flaky test in tests/auth/' < /dev/null
 
-# Watch it walk plan -> develop -> verify -> close.
+# Watch it walk task start -> plan -> develop -> QA -> close.
 # Verify with:
 codex exec 'show the active harness goal and next child task' < /dev/null
 ```

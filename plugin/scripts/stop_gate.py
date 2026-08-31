@@ -253,7 +253,8 @@ def main():
         # BLOCKED_ENV via task_blocked.
         reason = (
             f"Active harness task {task_id} is open. Do not stop — finish the "
-            "plan -> develop -> review -> QA -> verify -> close loop. Legitimate exits: "
+            "task start -> plan -> develop -> QA -> close public loop. "
+            "Independent review and task_verify are internal close gates. Legitimate exits: "
             "(1) run task_verify until runtime_verdict=PASS, then call task_close; "
             "or (2) spawn Agent(subagent_type='harness:stop-judge') to assess "
             "whether the current state is a genuine pause-with-blocker. Stop-judge "

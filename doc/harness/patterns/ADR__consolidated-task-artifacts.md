@@ -149,10 +149,22 @@ paths; source drift after evidence remains developer-owned.
 
 Verified installation is stateless. `install_verified.py` holds only its
 transaction lock and in-memory source/receipt fingerprints while it runs. It
-writes no persistent install state. Every freshly verified invocation
-reinstalls the complete tracked payload, including when the source worktree is
-clean; dirty-path detection is not persistent installation truth. A retry after
-interruption simply installs again.
+writes no persistent install state. Every freshly verified invocation builds
+the canonical runtime payload from its isolated source snapshot and compares it
+directly with each selected installed payload. Synchronized runtimes are left
+untouched; stale runtimes are refreshed independently. Unsafe or indeterminate
+comparison fails closed. This comparison covers installer-owned payload trees,
+not external CLI/config/registry health; explicit `install.py --force` remains
+the repair path for that integration state. A retry after interruption simply
+recomputes current payload truth and skips or refreshes as needed.
+
+Codex receipt binding canonicalizes structured review task names rather than
+requiring agents to remember one word order. Both `code_review*` and
+`review_code*` bind to `review-code`; both `security_review*` and
+`review_security*` bind to `review-security`. Spawn preflight rejects a
+review-looking name that cannot bind and reports accepted forms before the
+agent starts. This is validation only: hooks and agents still never author or
+backfill receipts; the lifecycle watcher remains the sole publisher.
 
 Acceptance intent lives in `PLAN.md`. User corrections are promoted directly
 into the plan or durable documentation.

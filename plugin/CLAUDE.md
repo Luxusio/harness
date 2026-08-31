@@ -11,11 +11,12 @@ workflow; skills and MCP tools are the sole runtime surface.
 
 ## 1. Canonical Loop
 
-Every repo-mutating task:
+Every repo-mutating task exposes this public lifecycle:
 ```
-plan → minimum-sufficient develop → independent review → runtime QA → verify → close
+task start → plan → minimum-sufficient develop → runtime QA → close
 ```
-No step skipped. Smallest coherent diff per step.
+Independent review and `task_verify` are mandatory internal close gates. No
+step is skipped. Smallest coherent diff per step.
 
 ## 2. MCP tools
 

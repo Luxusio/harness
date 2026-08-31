@@ -12,7 +12,8 @@ resume a task.
 
 Hooks may provide reminders and context, but they do not create tasks
 automatically. The agent owns the routing decision and calls the MCP task tools
-when the request needs the canonical plan, develop, verify, and close loop.
+when the request needs the canonical task start, plan, develop, QA, and close
+public loop. Review and `task_verify` remain internal close gates.
 
 When the user explicitly invokes or approves a harness repo-mutating workflow,
 that approval includes authorization to use the subagents required by the

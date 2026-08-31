@@ -28,8 +28,9 @@ All notable changes to the harness Claude Code plugin.
 
 ### Fixed
 
-- Verified installation reinstalls the complete reviewed payload even from a
-  clean worktree and prunes removed runtime files from the active payload.
+- Verified delivery compares each canonical reviewed runtime payload against
+  its installed tree, skips synchronized runtimes, and refreshes only stale
+  payloads while pruning removed files.
 - Nested-worktree micro tasks read `execution_mode` from the canonical
   four-field `TASK.json` without requiring `PLAN.md`.
 

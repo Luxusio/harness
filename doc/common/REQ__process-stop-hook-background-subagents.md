@@ -7,7 +7,7 @@ Define the Stop hook behavior when Claude has active background subagents or mon
 - When the Stop hook receives a normal Stop payload and the active task has a current-run `started` receipt without a matching completion for the same Claude session and lifecycle identity, it waits briefly and then blocks with a background-work reason while that receipt remains active.
 - A recursive Stop payload with `stop_hook_active=true` returns silent success while the same receipt-backed work remains active, preventing repeated hook-block loops.
 - Valid starts older than the configured stale budget no longer block Stop; invalid or future timestamps remain active and fail closed. Old task runs and other sessions never block the current session.
-- Ordinary open tasks without recursive active background work continue to block with the standard plan -> develop -> verify -> close guidance.
+- Ordinary open tasks without recursive active background work continue to block with the standard task start -> plan -> develop -> QA -> close public guidance; review and `task_verify` remain internal close gates.
 - `RECEIPTS.jsonl` is the only lifecycle state. Stop handling never creates `doc/harness/runtime/background.json`, a registry lock, or diagnostic records.
 
 ## Acceptance Signals

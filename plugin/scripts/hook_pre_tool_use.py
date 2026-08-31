@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -22,8 +23,15 @@ except Exception:  # pragma: no cover - registration recovery is best effort
     REGISTRATION_FAILED = "failed"
 
 try:
+    from codex_lifecycle_watcher import registration_host_live  # type: ignore
+except Exception:  # pragma: no cover - live-host check is fail-safe below
+    registration_host_live = None
+
+try:
     from _lib import (  # type: ignore
         find_harness_root,
+        _infer_receipt_lens,
+        emit_permission_decision,
         now_iso,
         read_json_diagnostics,
         write_json_diagnostics,
@@ -33,6 +41,8 @@ except Exception:  # pragma: no cover - diagnostics must never break the hook
     now_iso = None
     read_json_diagnostics = None
     write_json_diagnostics = None
+    _infer_receipt_lens = None
+    emit_permission_decision = None
 
 
 def _payload_cwd(payload: bytes) -> str | None:
@@ -61,6 +71,56 @@ def _tool_name(payload: bytes) -> str:
 
 def _is_subagent_spawn_tool(tool_name: str) -> bool:
     return (tool_name or "").lower() == "collaboration.spawn_agent"
+
+
+def _spawn_task_name(payload: bytes) -> str:
+    try:
+        data = json.loads(payload.decode("utf-8") or "{}")
+    except Exception:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    for key in ("tool_input", "input", "arguments"):
+        value = data.get(key)
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except Exception:
+                continue
+        if isinstance(value, dict):
+            task_name = value.get("task_name")
+            if isinstance(task_name, str):
+                return task_name
+    return ""
+
+
+def _invalid_review_spawn_name(payload: bytes) -> str:
+    """Return guidance when a review-looking spawn cannot bind a receipt."""
+    task_name = _spawn_task_name(payload)
+    if not task_name or _infer_receipt_lens is None:
+        return ""
+    tokens = {
+        token for token in re.split(r"[:/_\-\s]+", task_name.lower()) if token
+    }
+    review_like = bool(tokens & {"review", "reviewer"})
+    if not review_like:
+        return ""
+    if _infer_receipt_lens(task_name) in {"review-code", "review-security"}:
+        return ""
+    return (
+        f"Harness cannot bind review spawn task_name={task_name!r} to a receipt lens. "
+        "Use code_review_<suffix> or review_code_<suffix> for review-code; "
+        "use security_review_<suffix> or review_security_<suffix> for "
+        "review-security. The agent was not started; rename and retry."
+    )
+
+
+def _receipt_lens_spawn(payload: bytes) -> bool:
+    """Return whether this spawn is expected to produce close-gate evidence."""
+    if _infer_receipt_lens is None:
+        return False
+    lens = _infer_receipt_lens(_spawn_task_name(payload))
+    return lens.startswith(("review-", "qa-", "ux-"))
 
 
 HOOK_TIMEOUT_SECONDS = 5.0
@@ -172,6 +232,17 @@ def _report_registration_failure(payload: bytes, reason: str) -> None:
     )
 
 
+def _deny_unrecordable_spawn(reason: str) -> None:
+    if emit_permission_decision is None:
+        return
+    emit_permission_decision(
+        "deny",
+        "Harness did not start this review/QA agent because its verdict could "
+        f"not be recorded: {reason}. Restart or repair the Harness MCP server, "
+        "run python3 plugin/scripts/hook_tree_health.py, then retry the lens.",
+    )
+
+
 def _report_registration_not_applicable(payload: bytes, reason: str) -> None:
     """Record 'unknown', not 'failed'.
 
@@ -197,6 +268,19 @@ def _observed_registration_failure(payload: bytes) -> bool:
     if str(record.get("session_id") or "") != _payload_session_id(payload):
         return False
     return record.get("registration_present") is False
+
+
+def _watcher_host_live(payload: bytes) -> bool:
+    if registration_host_live is None:
+        return False
+    root = _harness_root(payload)
+    thread_id = _payload_session_id(payload)
+    if not root or not thread_id:
+        return False
+    try:
+        return bool(registration_host_live(root, thread_id))
+    except Exception:
+        return False
 
 
 def _clear_registration_failure(payload: bytes) -> None:
@@ -227,14 +311,20 @@ def main() -> int:
     payload = sys.stdin.buffer.read()
     tool_name = _tool_name(payload)
     if _is_subagent_spawn_tool(tool_name):
+        invalid_name = _invalid_review_spawn_name(payload)
+        if invalid_name and emit_permission_decision is not None:
+            emit_permission_decision("deny", invalid_name)
+            return 0
+        receipt_lens = _receipt_lens_spawn(payload)
         # Registration stays best-effort — per C-12 this hook must never block
         # the session. What must not stay best-effort is the *result*: an
         # unregistered spawn produces no receipt, and discovering that after
         # review and QA have finished wastes the whole verification pass.
         if restore_watcher_registration is None:
-            _report_registration_failure(
-                payload, "codex_hook_registration is unavailable in this hook tree",
-            )
+            reason = "codex_hook_registration is unavailable in this hook tree"
+            _report_registration_failure(payload, reason)
+            if receipt_lens:
+                _deny_unrecordable_spawn(reason)
             return 0
         status: dict = {}
         try:
@@ -244,16 +334,31 @@ def main() -> int:
                 status_out=status,
             )
         except Exception as exc:
-            _report_registration_failure(payload, f"{type(exc).__name__}: {exc}")
+            reason = f"{type(exc).__name__}: {exc}"
+            _report_registration_failure(payload, reason)
+            if receipt_lens:
+                _deny_unrecordable_spawn(reason)
             return 0
         reason = str(status.get("reason") or "")
         if registered:
+            if not _watcher_host_live(payload):
+                reason = (
+                    "watcher registration exists but no live MCP-hosted watcher "
+                    "holds its lease"
+                )
+                _report_registration_failure(payload, reason)
+                if receipt_lens:
+                    _deny_unrecordable_spawn(reason)
+                return 0
             _clear_registration_failure(payload)
         elif status.get("status") == REGISTRATION_FAILED:
-            _report_registration_failure(payload, reason or (
+            reason = reason or (
                 "watcher registration did not complete within "
                 f"{REGISTRATION_BUDGET_SECONDS}s"
-            ))
+            )
+            _report_registration_failure(payload, reason)
+            if receipt_lens:
+                _deny_unrecordable_spawn(reason)
         else:
             # NOT_APPLICABLE: not a Codex rollout, no thread identity, or no
             # open task yet. None of those is a fault to report or to gate on.

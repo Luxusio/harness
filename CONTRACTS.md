@@ -60,13 +60,14 @@ contract — move it to design notes.
 
 ### C-01
 
-**Title:** Canonical loop — plan → develop → verify → close.
+**Title:** Canonical public loop — task start → plan → develop → QA → close.
 **When:** Any task that mutates repo state (non-maintenance).
 **Enforced by:** `plugin/scripts/prewrite_gate.py` (source write blocked
 without PLAN.md), MCP `task_close` (rejects pending `runtime_verdict`).
 **On violation:** hard-block.
-**Why:** Skipping steps loses evidence and provenance — unordered verdicts,
-missing regression tests, orphan artifacts.
+**Why:** Skipping stages loses evidence and provenance — unordered verdicts,
+missing regression tests, orphan artifacts. Independent review and
+`task_verify` remain internal close gates rather than public lifecycle stages.
 
 ### C-02
 

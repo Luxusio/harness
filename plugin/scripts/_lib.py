@@ -2705,10 +2705,13 @@ def _infer_receipt_lens(agent_type, explicit_lens=""):
     if match and ("qa" in kind or "ux" in kind):
         prefix = "ux" if "ux" in kind else "qa"
         return f"{prefix}-{match.group(1)}"
-    if re.search(r"(?:^|[:/_-])(?:code[-_ ]?reviewer|code[-_ ]?review)(?:$|[:/_-])", kind):
-        return "review-code"
-    if re.search(r"(?:^|[:/_-])(?:security[-_ ]?reviewer|security[-_ ]?review)(?:$|[:/_-])", kind):
-        return "review-security"
+    tokens = [token for token in re.split(r"[:/_\-\s]+", kind) if token]
+    for left, right in zip(tokens, tokens[1:]):
+        pair = {left.removesuffix("er"), right.removesuffix("er")}
+        if pair == {"code", "review"}:
+            return "review-code"
+        if pair == {"security", "review"}:
+            return "review-security"
     return ""
 
 

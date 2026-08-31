@@ -45,7 +45,7 @@ Record these values as if selected during every setup:
 
 - Q2 audience: `D` — public library/SaaS
 - Q3 status quo: `B` — standard plan, review, merge
-- Q4 wedge: `C` — full plan → develop → verify → close loop with automatic review
+- Q4 wedge: `C` — full task start → plan → develop → QA → close loop with automatic internal review and verification
 
 **Maps to:**
 - Q2 (Audience) → `doc/harness/manifest.yaml` `audience:` (신규 필드).

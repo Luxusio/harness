@@ -1,6 +1,6 @@
 {
   "name": "harness",
-  "version": "2.3.0+codex.20260831062018",
+  "version": "2.3.0+codex.20260831073351",
   "description": "Execution harness for AI-assisted repository work \u2014 Codex CLI runtime. Mirrors plugin/ for Claude Code; both consume the same MCP server and Python scripts.",
   "author": {
     "name": "Luxus",
@@ -12,7 +12,7 @@
   "keywords": [
     "execution-harness",
     "completion-gate",
-    "plan-develop-verify-close",
+    "start-plan-develop-qa-close",
     "mcp",
     "codex"
   ],
@@ -21,7 +21,7 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "harness",
-    "shortDescription": "plan -> develop -> verify -> close loop for AI-assisted repo work",
+    "shortDescription": "task start -> plan -> develop -> QA -> close for AI-assisted repo work",
     "longDescription": "Lightweight execution harness with exact four-field TASK.json control, compact unified lifecycle receipts, and receipt-provenance gates. It ships a shared MCP server and synchronized Codex skill ports.",
     "developerName": "Luxus",
     "category": "Productivity",

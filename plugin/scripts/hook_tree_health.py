@@ -61,7 +61,10 @@ def _codex_registration_present() -> bool:
     """Return whether this exact Codex root thread has a live registration."""
     try:
         from _lib import find_harness_root, read_session_hint  # type: ignore
-        from codex_lifecycle_watcher import registrations  # type: ignore
+        from codex_lifecycle_watcher import (  # type: ignore
+            registration_host_live,
+            registrations,
+        )
 
         repo_root = find_harness_root(os.getcwd())
         if not repo_root:
@@ -73,10 +76,11 @@ def _codex_registration_present() -> bool:
         ).strip()
         if not thread_id:
             return False
-        return any(
+        registered = any(
             item.get("thread_id") == thread_id
             for item in registrations(repo_root)
         )
+        return registered and registration_host_live(repo_root, thread_id)
     except Exception:
         return False
 
@@ -85,7 +89,7 @@ def _codex_capability_warning() -> str:
     if _codex_registration_present():
         return ""
     return (
-        "Codex receipt watcher registration is not positively confirmed for "
+        "Codex receipt watcher registration and live host are not positively confirmed for "
         "this root thread. Do not launch review or QA lenses: their verdicts "
         "may not be recorded. Repair or refresh the Codex hook registration, "
         "then rerun this check."

@@ -1,6 +1,6 @@
 ---
 name: run
-description: Orchestrate full development cycle — plan → develop → verify → close.
+description: Orchestrate the public task_start → plan → develop → QA → close lifecycle.
 argument-hint: <task-slug-or-description>
 user-invocable: false
 allowed-tools: Read, Glob, Grep, Bash, Agent, Skill, AskUserQuestion, mcp__plugin_harness_harness__task_start, mcp__plugin_harness_harness__task_context, mcp__plugin_harness_harness__task_verify, mcp__plugin_harness_harness__task_close
@@ -188,7 +188,7 @@ not complete at task close. Phase 7.8 must already have run the verified
 auto-install helper after the last source edit and fresh QA. After
 post-close self-improvement has run, commit the completed diff
 before the final response unless the user explicitly says not to. Include
-the commit hash and pre-close force-install result in the completion report.
+the commit hash and pre-close conditional verified-delivery result in the completion report.
 
 ## Completion Report
 
@@ -199,7 +199,7 @@ Before writing DONE, assert:
 - if this was a native Goal child task, the Goal is done/blocked/stopped/budgeted
   or the next slice is already active/queued
 - for this harness plugin source repo, the completed diff has been committed
-  and `python3 install.py --force` has run, unless the user explicitly opted out
+  and verified delivery has confirmed synchronized runtime payloads, unless the user explicitly opted out
 
 ```
 DONE
@@ -208,7 +208,7 @@ Task:    <task_id>
 Status:  closed
 Dir:     <task_dir>
 
-Phases completed: plan, develop, verify, close
+Phases completed: task_start, plan, develop, QA, close
 Runtime verdict:  PASS
 Health score:     <score>/10
 Files changed:    <count>

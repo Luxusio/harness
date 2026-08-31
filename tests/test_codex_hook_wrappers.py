@@ -653,6 +653,82 @@ class TestCodexHookWrappers(unittest.TestCase):
                 restore.assert_not_called()
                 run_child.assert_not_called()
 
+    def test_pre_tool_rejects_unbindable_review_name_before_spawn(self):
+        mod = _load("hook_pre_tool_use")
+        with tempfile.TemporaryDirectory() as repo:
+            for task_name in (
+                "review_architecture_code", "review_final", "reviewer_final",
+                "review_final_qa_cli", "review_code_qa_cli",
+            ):
+                raw = json.dumps({
+                    "cwd": repo,
+                    "tool_name": "collaboration.spawn_agent",
+                    "tool_input": {"task_name": task_name},
+                })
+                output = io.StringIO()
+                with mock.patch.object(mod, "restore_watcher_registration") as restore, \
+                     mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
+                     contextlib.redirect_stdout(output):
+                    self.assertEqual(mod.main(), 0)
+                restore.assert_not_called()
+                envelope = json.loads(output.getvalue())
+                decision = envelope["hookSpecificOutput"]
+                self.assertEqual(decision["permissionDecision"], "deny")
+                self.assertIn("agent was not started", decision["permissionDecisionReason"])
+                self.assertIn("review_code_<suffix>", decision["permissionDecisionReason"])
+
+    def test_pre_tool_allows_symmetric_review_name_aliases(self):
+        mod = _load("hook_pre_tool_use")
+        for task_name in (
+            "code_review_final", "review_code_final",
+            "security_review_final", "review_security_final",
+        ):
+            raw = json.dumps({
+                "tool_name": "collaboration.spawn_agent",
+                "tool_input": {"task_name": task_name},
+            }).encode()
+            self.assertEqual(mod._invalid_review_spawn_name(raw), "", task_name)
+
+    def test_pre_tool_registration_failure_denies_only_receipt_lenses(self):
+        mod = _load("hook_pre_tool_use")
+
+        def failing(_payload, **kwargs):
+            kwargs["status_out"].update({
+                "status": mod.REGISTRATION_FAILED,
+                "reason": "watcher unavailable",
+            })
+            return False
+
+        with tempfile.TemporaryDirectory() as repo:
+            (Path(repo) / "doc" / "harness").mkdir(parents=True)
+            (Path(repo) / "doc" / "harness" / "manifest.yaml").write_text(
+                "project: test\n", encoding="utf-8",
+            )
+            for task_name, denied in (
+                ("implementation_worker", False),
+                ("code_review_final", True),
+                ("qa_cli_final", True),
+            ):
+                raw = json.dumps({
+                    "cwd": repo,
+                    "session_id": "01a04738-80e6-7851-833f-614d59ae3621",
+                    "tool_name": "collaboration.spawn_agent",
+                    "tool_input": {"task_name": task_name},
+                })
+                output = io.StringIO()
+                with mock.patch.object(mod, "restore_watcher_registration", failing), \
+                     mock.patch.object(sys, "stdin", _BytesStdin(raw)), \
+                     contextlib.redirect_stdout(output), \
+                     contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(mod.main(), 0)
+                envelope = output.getvalue()
+                self.assertEqual("permissionDecision" in envelope, denied, task_name)
+                if denied:
+                    self.assertEqual(
+                        json.loads(envelope)["hookSpecificOutput"]["permissionDecision"],
+                        "deny",
+                    )
+
     def test_wrapper_constants_match_installed_outer_timeouts(self):
         spec = importlib.util.spec_from_file_location(
             "install_for_hook_budget_test", REPO_ROOT / "install.py"

@@ -1,6 +1,6 @@
 # harness
 
-Execution harness for AI-assisted repository work. Enforces a **plan → develop → verify → close** loop on every repo-mutating task. No step skipped.
+Execution harness for AI-assisted repository work. Enforces a **task_start → plan → develop → QA → close** loop on every repo-mutating task. Internal review and verification gates remain mandatory.
 
 ## Install
 
@@ -40,18 +40,19 @@ doc/harness/critics/             # plan.md, runtime.md, document.md playbooks
 
 ## The loop
 
-Every repo-mutating task follows this sequence:
+Every repo-mutating task follows this public sequence:
 
 ```
-plan → develop → verify → close
+task_start → plan → develop → QA → close
 ```
 
 | Step | What happens |
 |------|-------------|
-| **plan** | 7-phase dual-voice review pipeline writes PLAN.md and declares required lenses in TASK.json |
-| **develop** | Implement per-AC, checkpoint progress, run quality audit, dogfood |
-| **verify** | Ordered review/QA completions are hook-recorded and checked against TASK.json lens declarations |
-| **close** | Gate: PLAN.md exists + ordered review/QA receipts yield runtime_verdict = PASS |
+| **task_start** | Create or resume one exact task generation and bind it to the current runtime session |
+| **plan** | Review the request, write PLAN.md, and declare required lenses in TASK.json |
+| **develop** | Implement per-AC; independent review runs as an internal end-of-develop gate |
+| **QA** | Run the declared runtime QA lens and record its observed completion |
+| **close** | Internally run `task_verify`; for Harness source, conditionally refresh stale installed payloads; then publish close authority |
 
 After every child close, the Goal executor performs self-improvement before
 selecting the next child: it surfaces friction signals into `learnings.jsonl`,
@@ -130,7 +131,7 @@ All under `plugin/scripts/`. Stdlib only.
 | `verify_runner.py` | Deterministic manifest `verify_commands` runner with optional parallel execution | stdout |
 | `req_detector.py` | Detect observable behavior that needs a durable `REQ__*.md` | stdout |
 | `req_scaffold.py` | Create or update durable REQ scaffolds before observable source work | `doc/<area>/REQ__*.md` |
-| `install_verified.py` | Stateless trusted post-QA harness installer; every verified call reinstalls the complete payload from an isolated snapshot | stdout / exit status |
+| `install_verified.py` | Stateless trusted post-QA delivery wrapper; compares canonical payloads from an isolated verified snapshot and refreshes only stale runtimes | stdout / exit status |
 | `runbook_memory.py` | Capture approved runbooks and pending setup-command candidates | `doc/harness/runbooks.yaml` |
 | `subagent_lifecycle.py` | Receipt-backed Claude lifecycle handling, active-work queries, and trusted stop-only inference | task `RECEIPTS.jsonl` |
 | `background_hook.py` | SubagentStart/SubagentStop adapter for direct unified-receipt publication | task `RECEIPTS.jsonl` |

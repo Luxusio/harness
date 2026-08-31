@@ -19,6 +19,9 @@ import importlib.util
 import json
 import re
 from pathlib import Path
+from unittest import mock
+
+import pytest
 
 try:
     import tomllib
@@ -151,8 +154,385 @@ def test_dry_run_parallel_attempts_both_when_available():
 def test_help_lists_all_flags():
     r = _run(["--help"])
     assert r.returncode == 0
-    for flag in ["--codex-only", "--claude-only", "--dry-run", "--force", "--config-path"]:
+    for flag in [
+        "--codex-only", "--claude-only", "--dry-run", "--force",
+        "--if-stale", "--config-path",
+    ]:
         assert flag in r.stdout, f"missing flag in --help: {flag}"
+
+
+def test_force_and_if_stale_are_mutually_exclusive():
+    r = _run(["--force", "--if-stale"])
+    assert r.returncode == 2
+    assert "mutually exclusive" in r.stderr
+
+
+def test_tree_comparison_ignores_only_runtime_cache_artifacts(tmp_path):
+    module = _load_install_module()
+    expected = tmp_path / "expected"
+    actual = tmp_path / "actual"
+    for root in (expected, actual):
+        (root / "pkg").mkdir(parents=True)
+        (root / "pkg/tool.py").write_text("ok\n")
+        (root / "pkg/tool.py").chmod(0o644)
+    (actual / "pkg/__pycache__").mkdir()
+    (actual / "pkg/__pycache__/tool.pyc").write_bytes(b"cache")
+    (actual / "pkg/.pytest_cache").mkdir()
+    (actual / "pkg/.pytest_cache/state").write_text("runtime")
+    assert module._compare_payload_trees(expected, actual) == (
+        module.PAYLOAD_SYNCHRONIZED, "",
+    )
+
+    (actual / "pkg/stale.py").write_text("stale\n")
+    state, reason = module._compare_payload_trees(expected, actual)
+    assert state == module.PAYLOAD_STALE
+    assert "differs" in reason
+
+    (actual / "pkg/stale.py").unlink()
+    (actual / "pkg/__pycache__/unsafe").symlink_to(expected / "pkg/tool.py")
+    assert module._compare_payload_trees(expected, actual)[0] == module.PAYLOAD_ERROR
+
+
+def test_tree_comparison_detects_content_mode_and_unsafe_nodes(tmp_path):
+    module = _load_install_module()
+    expected = tmp_path / "expected"
+    actual = tmp_path / "actual"
+    expected.mkdir()
+    actual.mkdir()
+    (expected / "tool.py").write_text("one\n")
+    (actual / "tool.py").write_text("two\n")
+    assert module._compare_payload_trees(expected, actual)[0] == module.PAYLOAD_STALE
+
+    (actual / "tool.py").write_text("one\n")
+    (actual / "tool.py").chmod(0o755)
+    assert module._compare_payload_trees(expected, actual)[0] == module.PAYLOAD_STALE
+
+    (actual / "tool.py").unlink()
+    (actual / "tool.py").symlink_to(expected / "tool.py")
+    state, reason = module._compare_payload_trees(expected, actual)
+    assert state == module.PAYLOAD_ERROR
+    assert "unsupported file type" in reason or "open failed" in reason
+
+    (actual / "tool.py").unlink()
+    assert module._compare_payload_trees(expected, actual)[0] == module.PAYLOAD_STALE
+
+
+def test_tree_comparison_rejects_hardlinks_intermediate_symlinks_and_bounds(
+    tmp_path, monkeypatch,
+):
+    module = _load_install_module()
+    expected = tmp_path / "expected"
+    actual = tmp_path / "actual"
+    expected.mkdir()
+    actual.mkdir()
+    (expected / "one").write_text("1\n")
+    (actual / "one").write_text("1\n")
+
+    (actual / "two").hardlink_to(actual / "one")
+    assert module._compare_payload_trees(expected, actual)[0] == module.PAYLOAD_ERROR
+    (actual / "two").unlink()
+
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    real_actual = real_parent / "tree"
+    real_actual.mkdir()
+    (real_actual / "one").write_text("1\n")
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    assert module._compare_payload_trees(
+        expected, linked_parent / "tree",
+    )[0] == module.PAYLOAD_ERROR
+
+    missing_below_link = linked_parent / "missing-tree"
+    assert module._compare_payload_trees(
+        expected, missing_below_link,
+    )[0] == module.PAYLOAD_ERROR
+
+    sticky_leaf = Path(tempfile.gettempdir()) / f"harness-missing-{tmp_path.name}"
+    assert not os.path.lexists(sticky_leaf)
+    assert module._compare_payload_trees(
+        expected, sticky_leaf,
+    )[0] == module.PAYLOAD_STALE
+    assert module._compare_payload_trees(
+        expected, sticky_leaf / "nested",
+    )[0] == module.PAYLOAD_ERROR
+
+    monkeypatch.setattr(module, "PAYLOAD_MAX_ENTRIES", 0)
+    assert module._compare_payload_trees(expected, expected)[0] == module.PAYLOAD_ERROR
+
+
+def test_tree_comparison_rejects_byte_bounds_and_concurrent_directory_mutation(
+    tmp_path, monkeypatch,
+):
+    module = _load_install_module()
+    expected = tmp_path / "expected"
+    actual = tmp_path / "actual"
+    expected.mkdir()
+    actual.mkdir()
+    (expected / "tool").write_text("payload\n")
+    (actual / "tool").write_text("payload\n")
+
+    monkeypatch.setattr(module, "PAYLOAD_MAX_BYTES", 1)
+    assert module._compare_payload_trees(expected, actual)[0] == module.PAYLOAD_ERROR
+    monkeypatch.setattr(module, "PAYLOAD_MAX_BYTES", 256 * 1024 * 1024)
+
+    real_scandir = module.os.scandir
+    mutated = False
+    root_scan_count = 0
+
+    def racing_scandir(fd):
+        nonlocal mutated, root_scan_count
+        entries = real_scandir(fd)
+        root_scan_count += 1
+        if mutated or root_scan_count != 2:
+            return entries
+
+        def enumerate_then_mutate():
+            nonlocal mutated
+            try:
+                yield from entries
+            finally:
+                entries.close()
+            (actual / "late-extra").write_text("raced\n")
+            mutated = True
+
+        return enumerate_then_mutate()
+
+    monkeypatch.setattr(module.os, "scandir", racing_scandir)
+    state, reason = module._compare_payload_trees(expected, actual)
+    assert state == module.PAYLOAD_ERROR
+    assert "changed during comparison" in reason
+
+
+def test_codex_payload_state_covers_mirror_marketplace_and_current_cache(
+    tmp_path, monkeypatch,
+):
+    module = _load_install_module()
+    install_root = tmp_path / "codex" / "harness"
+    codex_home = tmp_path / "codex"
+    config_path = codex_home / "config.toml"
+    monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", install_root)
+    monkeypatch.setattr(module, "DEFAULT_CODEX_CONFIG_PATH", config_path)
+
+    mirror = module.sync_codex_payload(install_root)
+    cache = module.install_codex_plugin_cache(mirror, codex_home)
+    assert module._codex_payload_state(config_path) == (module.PAYLOAD_SYNCHRONIZED, "")
+
+    old_cache = cache.parent / "older-version"
+    old_cache.mkdir()
+    (old_cache / "left-for-live-session").write_text("old\n")
+    assert module._codex_payload_state(config_path) == (module.PAYLOAD_SYNCHRONIZED, "")
+
+    marketplace_extra = install_root / ".agents/plugins/unowned-extra"
+    marketplace_extra.write_text("stale\n")
+    assert module._codex_payload_state(config_path)[0] == module.PAYLOAD_STALE
+    module.sync_codex_payload(install_root)
+    assert not marketplace_extra.exists()
+    assert module._codex_payload_state(config_path) == (module.PAYLOAD_SYNCHRONIZED, "")
+
+    (cache / "scripts/hook_session_start.py").write_text("stale\n")
+    state, reason = module._codex_payload_state(config_path)
+    assert state == module.PAYLOAD_STALE
+    assert "current cache" in reason
+
+
+def test_codex_payload_state_error_overrides_earlier_stale_surface(
+    tmp_path, monkeypatch,
+):
+    module = _load_install_module()
+    install_root = tmp_path / "codex" / "harness"
+    codex_home = tmp_path / "codex"
+    config_path = codex_home / "config.toml"
+    monkeypatch.setattr(module, "CODEX_INSTALL_ROOT", install_root)
+    monkeypatch.setattr(module, "DEFAULT_CODEX_CONFIG_PATH", config_path)
+
+    unsafe_target = tmp_path / "unsafe-marketplace"
+    unsafe_target.mkdir()
+    (install_root / ".agents").mkdir(parents=True)
+    (install_root / ".agents/plugins").symlink_to(
+        unsafe_target, target_is_directory=True,
+    )
+    state, reason = module._codex_payload_state(config_path)
+    assert state == module.PAYLOAD_ERROR
+    assert "marketplace" in reason
+
+
+def test_force_sync_removes_broken_legacy_symlink(tmp_path):
+    module = _load_install_module()
+    install_root = tmp_path / "codex" / "harness"
+    install_root.mkdir(parents=True)
+    legacy = install_root / "plugin-codex"
+    legacy.symlink_to(tmp_path / "missing-target", target_is_directory=True)
+    assert os.path.lexists(legacy)
+    assert not legacy.exists()
+
+    module.sync_codex_payload(install_root)
+
+    assert not os.path.lexists(legacy)
+
+
+def test_codex_plugin_version_rejects_path_components(tmp_path):
+    module = _load_install_module()
+    source = tmp_path / "plugin"
+    (source / ".codex-plugin").mkdir(parents=True)
+    (source / ".codex-plugin/plugin.json").write_text(
+        json.dumps({"version": "../../escape"})
+    )
+    with pytest.raises(ValueError, match="unsafe Codex plugin version"):
+        module._codex_plugin_version(source)
+
+
+def test_claude_payload_state_compares_full_generated_mirror(tmp_path, monkeypatch):
+    module = _load_install_module()
+    destination = tmp_path / "claude" / "harness-dev"
+    monkeypatch.setenv("HARNESS_DEST", str(destination))
+    module.sync_claude_payload(destination)
+    assert module._claude_payload_state() == (module.PAYLOAD_SYNCHRONIZED, "")
+    (destination / "plugin/stale-extra.py").write_text("stale\n")
+    assert module._claude_payload_state()[0] == module.PAYLOAD_STALE
+
+
+def test_conditional_runtime_skips_payload_mutation_when_current(tmp_path):
+    module = _load_install_module()
+    with (
+        mock.patch.object(module.shutil, "which", return_value="/bin/codex"),
+        mock.patch.object(module, "_run", return_value=(0, "codex 0.130.0\n", "")),
+        mock.patch.object(
+            module, "_codex_payload_state",
+            return_value=(module.PAYLOAD_SYNCHRONIZED, ""),
+        ),
+        mock.patch.object(module, "sync_codex_payload") as sync,
+    ):
+        result = module.install_codex(
+            dry_run=False, force=False, config_path=str(tmp_path / "config.toml"),
+            if_stale=True,
+        )
+    assert result.ok
+    assert "install skipped" in result.summary
+    sync.assert_not_called()
+
+
+def test_conditional_runtime_refreshes_stale_payload_and_fails_closed_on_error(tmp_path):
+    module = _load_install_module()
+    config_path = tmp_path / "config.toml"
+    with (
+        mock.patch.object(module.shutil, "which", return_value="/bin/codex"),
+        mock.patch.object(module, "_run", return_value=(0, "codex 0.130.0\n", "")),
+        mock.patch.object(
+            module, "_codex_payload_state",
+            return_value=(module.PAYLOAD_STALE, "content differs"),
+        ),
+        mock.patch.object(module, "sync_codex_payload", return_value=module.PLUGIN_CODEX_ROOT) as sync,
+        mock.patch.object(
+            module, "install_codex_plugin_cache", return_value=module.PLUGIN_CODEX_ROOT,
+        ) as cache,
+        mock.patch.object(
+            module, "emit_and_install_codex_config",
+            return_value={"ok": True, "message": "merged", "backup_path": None},
+        ),
+        mock.patch.object(
+            module, "install_codex_hook_trust_state",
+            return_value={"ok": True, "message": "trusted"},
+        ),
+    ):
+        result = module.install_codex(
+            dry_run=False, force=False, config_path=str(config_path), if_stale=True,
+        )
+    assert result.ok
+    assert "STALE" in "\n".join(result.steps)
+    sync.assert_called_once()
+    cache.assert_called_once()
+
+    with (
+        mock.patch.object(module.shutil, "which", return_value="/bin/codex"),
+        mock.patch.object(module, "_run", return_value=(0, "codex 0.130.0\n", "")),
+        mock.patch.object(
+            module, "_codex_payload_state",
+            return_value=(module.PAYLOAD_ERROR, "unsafe symlink"),
+        ),
+        mock.patch.object(module, "sync_codex_payload") as sync_on_error,
+    ):
+        failed = module.install_codex(
+            dry_run=False, force=False, config_path=str(config_path), if_stale=True,
+        )
+    assert not failed.ok
+    assert "comparison failed" in failed.summary
+    sync_on_error.assert_not_called()
+
+
+def test_claude_conditional_runtime_handles_current_stale_and_error(tmp_path):
+    module = _load_install_module()
+    common = (
+        mock.patch.object(module.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(module, "_run", return_value=(0, "claude 2.1.0\n", "")),
+    )
+    with common[0], common[1], mock.patch.object(
+        module, "_claude_payload_state",
+        return_value=(module.PAYLOAD_SYNCHRONIZED, ""),
+    ), mock.patch.object(module, "sync_claude_payload") as sync:
+        current = module.install_claude(dry_run=False, force=False, if_stale=True)
+    assert current.ok
+    assert "SYNCHRONIZED" in current.summary
+    sync.assert_not_called()
+
+    with (
+        mock.patch.object(module.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(module, "_run", return_value=(0, "claude 2.1.0\n", "")),
+        mock.patch.object(
+            module, "_claude_payload_state",
+            return_value=(module.PAYLOAD_STALE, "content differs"),
+        ),
+    ):
+        stale = module.install_claude(dry_run=True, force=False, if_stale=True)
+    assert stale.ok
+    assert "STALE" in "\n".join(stale.steps)
+    assert "dry-run" in stale.summary
+
+    with (
+        mock.patch.object(module.shutil, "which", return_value="/bin/claude"),
+        mock.patch.object(module, "_run", return_value=(0, "claude 2.1.0\n", "")),
+        mock.patch.object(
+            module, "_claude_payload_state",
+            return_value=(module.PAYLOAD_ERROR, "unsafe path"),
+        ),
+        mock.patch.object(module, "sync_claude_payload") as sync_on_error,
+    ):
+        failed = module.install_claude(dry_run=False, force=False, if_stale=True)
+    assert not failed.ok
+    assert "comparison failed" in failed.summary
+    sync_on_error.assert_not_called()
+
+
+def test_conditional_main_reports_per_runtime_applied_skipped_and_repair(
+    monkeypatch, capsys,
+):
+    module = _load_install_module()
+    monkeypatch.setattr(sys, "argv", ["install.py", "--if-stale"])
+    monkeypatch.setattr(module.shutil, "which", lambda _: "/bin/runtime")
+    monkeypatch.setattr(
+        module, "install_codex",
+        lambda **_: module.InstallResult(
+            "codex", True, "Codex payload SYNCHRONIZED — install skipped",
+        ),
+    )
+    monkeypatch.setattr(
+        module, "install_claude",
+        lambda **_: module.InstallResult("claude", True, "Claude install complete"),
+    )
+    assert module.main() == 0
+    output = capsys.readouterr().out
+    assert "[codex] STATUS: SKIPPED" in output
+    assert "[claude] STATUS: APPLIED" in output
+    assert "config/registry health not checked" in output
+
+    monkeypatch.setattr(
+        module, "install_claude",
+        lambda **_: module.InstallResult("claude", False, "comparison failed"),
+    )
+    assert module.main() == 1
+    captured = capsys.readouterr()
+    assert "[claude] STATUS: ERROR" in captured.out
+    assert "python3 install.py --claude-only --force" in captured.out
 
 
 def test_sync_codex_payload_copies_runtime_under_codex_root(tmp_path):

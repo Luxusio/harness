@@ -47,14 +47,16 @@ Terminal Goals reject child mutation and repeat finish calls until that explicit
 
 ## Task Loop
 
-Every repo-mutating child task follows this loop:
+Every repo-mutating child task exposes this public loop:
 
 ```text
-plan when needed -> minimum-sufficient develop -> independent review -> runtime QA -> verify -> close
+task start -> plan -> minimum-sufficient develop -> runtime QA -> close
 ```
 
-No verification is skipped. If verification finds a gap, the task returns to
-develop or creates a follow-up child task when the gap is separable.
+Independent review and `task_verify` are internal close gates, not additional
+public stages. No verification is skipped. If an internal gate finds a gap, the
+task returns to develop or creates a follow-up child task when the gap is
+separable.
 
 For each Goal child, post-close continuation is ordered as:
 `task_close -> self-improvement/learning promotion -> goal_next_task`. Memory

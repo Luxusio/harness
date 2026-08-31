@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 -c \"import os; project=os.path.basename(os.getcwd()); print(f'harness \u2014 ready.\\nProject: {project}\\nLoop: goal \u2192 task \u2192 verify \u2192 close\\nAuto-routing on. Just describe what you want.\\nREQ: capture requirements as doc/<area>/REQ__<slug>.md when behavior changes.')\" || true",
+            "command": "python3 -c \"import os; project=os.path.basename(os.getcwd()); print(f'harness \u2014 ready.\\nProject: {project}\\nLoop: task start \u2192 plan \u2192 develop \u2192 QA \u2192 close\\nReview and task_verify run as internal close gates.\\nAuto-routing on. Just describe what you want.\\nREQ: capture requirements as doc/<area>/REQ__<slug>.md when behavior changes.')\" || true",
             "timeout": 5,
             "statusMessage": "harness ready"
           },

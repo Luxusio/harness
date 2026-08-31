@@ -59,8 +59,11 @@ use wait_agent only to coordinate completion; it does not author receipts
 use list_agents only for operator visibility when needed; it is not receipt evidence
 ```
 
-The structured `task_name` argument is mandatory lifecycle identity. A
-first-line marker in `message` may mirror it for readability but is not
+The structured `task_name` argument is mandatory lifecycle identity. Review
+names are order-tolerant (`code_review*`/`review_code*` and
+`security_review*`/`review_security*`); preflight rejects a review-looking name
+that cannot bind before the agent starts. Prefer the canonical examples above.
+A first-line marker in `message` may mirror it for readability but is not
 evidence. The MCP-hosted watcher owns `RECEIPTS.jsonl`; never write or repair it
 or infer authority from wait/list output. Codex acquisition and completion are
 defined only by

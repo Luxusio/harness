@@ -327,6 +327,25 @@ def test_spawn_output_accepts_collaboration_agent_name():
     )
 
 
+def test_spawn_call_accepts_symmetric_review_name_aliases():
+    mod = _load()
+    for task_name in (
+        "code_review_final", "review_code_final",
+        "security_review_final", "review_security_final",
+    ):
+        event = {
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "namespace": "collaboration",
+                "name": "spawn_agent",
+                "call_id": "call_runtime_123456",
+                "arguments": json.dumps({"task_name": task_name, "message": "review"}),
+            },
+        }
+        assert mod._spawn_call(event) == ("call_runtime_123456", task_name)
+
+
 def test_spawn_output_uses_agent_id_not_display_nickname():
     mod = _load()
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
@@ -376,7 +395,7 @@ def test_watcher_records_start_then_correlated_review_completion(tmp_path, monke
     task_dir.mkdir(parents=True)
     root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
     child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
-    agent_path = "/root/code_review"
+    agent_path = "/root/review_code_final"
     child = codex_home / "sessions/2026/07/21" / f"rollout-{child_id}.jsonl"
     _write_jsonl(child, _child_events(root_id, child_id, agent_path, str(repo)))
 
@@ -395,7 +414,7 @@ def test_watcher_records_start_then_correlated_review_completion(tmp_path, monke
     for patcher in patches:
         patcher.start()
     try:
-        for event in _spawn_events(root_id, child_id, "code_review", agent_path):
+        for event in _spawn_events(root_id, child_id, "review_code_final", agent_path):
             watcher.feed(event)
         assert [(item["event"], item["lens"]) for item in receipts] == [("started", "review-code")]
 
