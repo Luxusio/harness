@@ -765,7 +765,6 @@ def emit_permission_decision(decision, reason="", *, next_action_command="",
 
 _ESCAPE_KEYS = {
     "prewrite": "HARNESS_SKIP_PREWRITE",
-    "mcp_bash_guard": "HARNESS_SKIP_MCP_GUARD",
 }
 
 

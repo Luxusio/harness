@@ -23,29 +23,6 @@ TESTS_DIR = REPO_ROOT / "tests"
 sys.path.insert(0, str(SCRIPT_DIR))
 os.environ["HARNESS_SKIP_STDIN"] = "1"
 
-# Allowed top-level module names (stdlib + pytest conftest convention).
-# `conftest` is pytest's per-directory fixture module; shared test helpers live
-# there and top-level imports across tests/ are idiomatic.
-STDLIB_MODULES = {
-    "conftest",
-    "os", "sys", "re", "json", "ast", "tempfile", "textwrap",
-    "unittest", "pathlib", "subprocess", "io", "hashlib", "datetime",
-    "collections", "itertools", "functools", "contextlib", "shutil",
-    "copy", "types", "typing", "abc", "inspect", "time", "struct",
-    "threading", "socket", "http", "urllib", "email", "html", "xml",
-    "csv", "dataclasses", "enum", "warnings", "logging", "traceback",
-    "gc", "weakref", "importlib", "uuid", "random", "math", "string",
-    "operator", "numbers", "decimal", "fractions", "statistics",
-    "array", "queue", "heapq", "bisect", "pprint", "reprlib",
-    "difflib", "fnmatch", "glob", "stat", "zipfile",
-    "tarfile", "gzip", "bz2", "lzma", "zlib", "base64", "binascii",
-    "codecs", "unicodedata", "locale", "gettext", "argparse",
-    "configparser", "tomllib", "netrc", "plistlib",
-    "signal", "mmap", "ctypes", "platform", "builtins",
-    "__future__",
-}
-
-
 def _local_script_modules() -> set[str]:
     """Return set of module names available as .py files in plugin/scripts/.
 
@@ -56,6 +33,11 @@ def _local_script_modules() -> set[str]:
     for p in SCRIPT_DIR.glob("*.py"):
         local.add(p.stem)
     return local
+
+
+def _allowed_toplevel_modules() -> set[str]:
+    """Return stdlib, pytest convention, and project-local module names."""
+    return set(sys.stdlib_module_names) | {"conftest"} | _local_script_modules()
 
 
 def get_toplevel_imports(source: str) -> list[tuple[str, int]]:
@@ -74,7 +56,23 @@ def get_toplevel_imports(source: str) -> list[tuple[str, int]]:
     return results
 
 
+def get_disallowed_toplevel_imports(source: str) -> list[tuple[str, int]]:
+    """Return top-level imports outside stdlib and project-local modules."""
+    allowed = _allowed_toplevel_modules()
+    return [item for item in get_toplevel_imports(source) if item[0] not in allowed]
+
+
 class NoThirdPartyToplevelImportsTests(unittest.TestCase):
+
+    def test_stdlib_conftest_and_local_script_imports_are_allowed(self):
+        source = "import tomllib\nimport conftest\nimport _lib\n"
+        self.assertEqual([], get_disallowed_toplevel_imports(source))
+
+    def test_synthetic_third_party_import_is_rejected(self):
+        self.assertEqual(
+            [("synthetic_third_party", 1)],
+            get_disallowed_toplevel_imports("import synthetic_third_party\n"),
+        )
 
     def test_no_third_party_toplevel_imports_in_test_files(self):
         """All test_*.py files in tests/ must only use stdlib or project-local
@@ -88,9 +86,6 @@ class NoThirdPartyToplevelImportsTests(unittest.TestCase):
         # Exclude this file itself from its own scan
         test_files = [f for f in test_files if f.resolve() != this_file]
 
-        local_modules = _local_script_modules()
-        allowed = STDLIB_MODULES | local_modules
-
         violations: list[str] = []
         for test_file in test_files:
             try:
@@ -100,16 +95,15 @@ class NoThirdPartyToplevelImportsTests(unittest.TestCase):
                 continue
 
             try:
-                imports = get_toplevel_imports(source)
+                imports = get_disallowed_toplevel_imports(source)
             except SyntaxError as exc:
                 violations.append(f"{test_file.name}: syntax error: {exc}")
                 continue
 
             for module_name, lineno in imports:
-                if module_name not in allowed:
-                    violations.append(
-                        f"{test_file.name}:{lineno}: third-party import '{module_name}'"
-                    )
+                violations.append(
+                    f"{test_file.name}:{lineno}: third-party import '{module_name}'"
+                )
 
         if violations:
             self.fail(

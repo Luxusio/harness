@@ -165,8 +165,7 @@ eureka/calibration forever), and reports Tier 1 candidates. It completes before
 | SubagentStart | `background_hook.py` | Register active Claude subagent work for Stop hook auto-wait |
 | SubagentStop | `background_hook.py` | Mark Claude work complete; infer the correlated start when this runtime emitted no start event |
 | PreToolUse (direct writes) | `prewrite_gate.py` | Artifact ownership + plan-first rule |
-| PreToolUse (selected mutation/lifecycle tools) | `hook_pre_tool_use.py` | Codex wrapper for direct-write/Bash gates and spawn registration recovery |
-| PreToolUse (Bash) | `mcp_bash_guard.py` | Block Bash-layer mutations of source / protected / workflow-control paths |
+| PreToolUse (selected mutation/lifecycle tools) | `hook_pre_tool_use.py` | Codex wrapper for direct-write gates and spawn registration recovery |
 | UserPromptSubmit | `prompt_memory.py` | Inject stored `[harness-context]` state without Git |
 | UserPromptSubmit | `hook_user_prompt_submit.py` | Codex wrapper that injects `$harness:run` routing plus prompt memory |
 | PostToolUse (Bash) | `tool_routing.py` | Emit `[harness-hint]` on known failures (wrong test command, missing script) |
@@ -177,6 +176,10 @@ eureka/calibration forever), and reports Tier 1 candidates. It completes before
 | Stop | `hook_stop.py` | Codex plugin wrapper for stop gating |
 
 All hooks are fail-safe (C-12): `|| true` tail, `timeout ≤ 10`. A broken hook degrades gracefully; it never blocks the session. Gates signal decisions via stdout JSON (`hookSpecificOutput.permissionDecision`), so blocking survives the `|| true` wrapper while a script crash still exits 0.
+
+Harness does not install a Bash/shell PreToolUse mutation guard. Direct
+Write/Edit operations remain gated; Bash failures may still receive nonblocking
+PostToolUse routing hints.
 
 ## MCP tools
 

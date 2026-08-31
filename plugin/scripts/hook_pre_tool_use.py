@@ -263,8 +263,6 @@ def main() -> int:
     script = ""
     if tool_name in {"Write", "Edit", "MultiEdit", "apply_patch"}:
         script = "prewrite_gate.py"
-    elif tool_name in {"Bash", "shell"}:
-        script = "mcp_bash_guard.py"
     if not script:
         return 0
 

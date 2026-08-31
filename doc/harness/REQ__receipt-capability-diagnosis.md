@@ -66,10 +66,10 @@ Two reliable discriminators that do not depend on plugin metadata:
 1. **SessionStart banner text.** Each tree's `hooks.json` prints a distinguishable
    banner. Compare the session's actual banner against each candidate's inline
    command.
-2. **A string unique to one tree's gate scripts.** Trigger a deny and match its
-   wording against each candidate copy of `mcp_bash_guard.py`. This identifies
-   what `${CLAUDE_PLUGIN_ROOT}` resolved to, which the banner alone does not
-   prove.
+2. **A string unique to one tree's installed hooks or wrappers.** Compare the
+   loaded banner and registered command paths with each candidate `hooks.json`,
+   then use `drift_warn.py` or installed/source hashes for the referenced
+   wrapper. Harness no longer installs a Bash PreToolUse mutation guard.
 
 ## Completion validation depends on an attachment harness does not emit
 

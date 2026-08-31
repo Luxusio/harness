@@ -100,12 +100,10 @@ edits and source-scope discipline remain the developer's responsibility.
 ### C-05
 
 **Title:** Protected artifact ownership.
-**When:** Any `Write`/`Edit` to PLAN.md, TASK.json, RECEIPTS.jsonl, or
-`doc/harness/goals/*.json` — and any `Bash` mutation (sed -i,
-redirect, cp, mv, tee, python -c open(…,'w'), …) targeting the same basenames.
-**Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`
-(Write/Edit/MultiEdit surface) + `plugin/scripts/mcp_bash_guard.py`
-(Bash surface; same helper classifiers).
+**When:** Any direct `Write`/`Edit`/`MultiEdit`/`apply_patch` to PLAN.md,
+TASK.json, RECEIPTS.jsonl, or `doc/harness/goals/*.json`.
+**Enforced by:** `plugin/scripts/prewrite_gate.py` `PROTECTED_ARTIFACTS`.
+Harness does not intercept Bash/shell file mutation.
 **On violation:** hard-block. Agent must route through the owning task MCP tool
 or hook-owned receipt path.
 **Why:** Wrong-writer mutation breaks task authority or lifecycle provenance.
@@ -148,10 +146,10 @@ unwanted changes.
 
 ### C-10
 
-**Title:** CLAUDE.md is self-managed via the `maintain` skill.
+**Title:** CLAUDE.md is self-managed via continuous maintenance.
 **When:** Structural changes to rules, contracts, or the operating mode.
-**Enforced by:** `plugin/skills/maintain/SKILL.md` — the only skill that
-edits CLAUDE.md's harness-managed section.
+**Enforced by:** active harness tasks with a `MAINTENANCE` marker and close-time
+Self-Healing Candidates.
 **On violation:** soft-warn from `contract_lint.py`.
 **Why:** Ad-hoc edits to CLAUDE.md drift away from enforcement points.
 

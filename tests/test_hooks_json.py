@@ -23,10 +23,13 @@ class TestHooksJson(unittest.TestCase):
             for h in entry.get("hooks", []):
                 commands.append((entry.get("matcher"), h["command"]))
         prewrite = [(m, c) for m, c in commands if "prewrite_gate.py" in c]
-        bash_guard = [(m, c) for m, c in commands if "mcp_bash_guard.py" in c]
         self.assertEqual(prewrite, [("Write|Edit|MultiEdit", prewrite[0][1])])
-        self.assertEqual(bash_guard, [("Bash", bash_guard[0][1])])
+        self.assertFalse(any(m == "Bash" for m, _ in commands))
+        self.assertFalse(any("mcp_bash_guard.py" in c for _, c in commands))
         self.assertFalse(any("qa_delegation_gate.py" in c for _, c in commands))
+        self.assertFalse(
+            os.path.exists(os.path.join(REPO_ROOT, "plugin", "scripts", "mcp_bash_guard.py"))
+        )
 
     def test_user_prompt_submit_registers_prompt_memory(self):
         """AC-007: UserPromptSubmit entry for prompt_memory with fail-safe."""
@@ -66,13 +69,6 @@ class TestHooksJson(unittest.TestCase):
             self.assertEqual(len(matches), 1, f"expected one {event} background hook, got {commands}")
             self.assertTrue(matches[0].rstrip().endswith("|| true"),
                             f"{event} background hook must fail-safe: {matches[0]!r}")
-
-    def test_bash_guard_matcher_is_bash(self):
-        entries = self.data["hooks"]["PreToolUse"]
-        bash_entries = [e for e in entries
-                        if any("mcp_bash_guard.py" in h["command"] for h in e.get("hooks", []))]
-        self.assertEqual(len(bash_entries), 1)
-        self.assertEqual(bash_entries[0].get("matcher"), "Bash")
 
     def test_hook_commands_have_fail_safe(self):
         """C-12: every hook must end with `|| true` (fail-safe)."""

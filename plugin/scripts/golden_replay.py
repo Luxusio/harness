@@ -10,10 +10,9 @@ Covered today:
    2. note_freshness.py — current → suspect flip on path match.
    3. contract_lint.py --check-weight — flags over-budget SKILL.md files.
    4. prewrite_gate.py — emits JSON permissionDecision=deny on protected artifact.
-   5. mcp_bash_guard.py — emits JSON permissionDecision=deny on `sed -i` into workflow-control-surface.
-   6. harness_server.task_close — blocks when runtime verification is missing.
-   7. prompt_memory.py — emits compact current task/verdict context.
-   8. tool_routing.py — emits [harness-hint] on `command not found: pytest`.
+   5. harness_server.task_close — blocks when runtime verification is missing.
+   6. prompt_memory.py — emits compact current task/verdict context.
+   7. tool_routing.py — emits [harness-hint] on `command not found: pytest`.
 
 Invoke:
   python3 plugin/scripts/golden_replay.py           # all tests
@@ -197,26 +196,6 @@ def test_prewrite_json_deny_on_protected_artifact() -> TestResult:
     return TestResult("prewrite_json_deny", True)
 
 
-def test_bash_guard_deny_on_sed_into_workflow_control() -> TestResult:
-    """mcp_bash_guard emits JSON deny on `sed -i` targeting a workflow-control-surface file."""
-    guard = os.path.join(SCRIPTS, "mcp_bash_guard.py")
-    cmd = "sed -i 's/a/b/' plugin/hooks/hooks.json"
-    r = _invoke_hook(guard, {"tool_name": "Bash", "tool_input": {"command": cmd}})
-    if r.returncode != 0:
-        return TestResult("bash_guard_deny", False,
-                          f"expected exit 0, got {r.returncode}")
-    decision, reason = _parse_decision(r.stdout)
-    if decision != "deny":
-        return TestResult("bash_guard_deny", False,
-                          f"decision={decision!r}; stdout={r.stdout[:200]!r}")
-    if reason is None or "rule=workflow-control-surface" not in reason:
-        return TestResult("bash_guard_deny", False,
-                          f"reason missing rule=workflow-control-surface; reason={reason!r}")
-    if "HARNESS_SKIP_MCP_GUARD" not in reason:
-        return TestResult("bash_guard_deny", False, "reason missing escape hint")
-    return TestResult("bash_guard_deny", True)
-
-
 def _load_mcp_server():
     import importlib.util
     spec = importlib.util.spec_from_file_location(
@@ -326,7 +305,6 @@ TESTS = [
     test_note_freshness_flip,
     test_check_weight_flags_oversized,
     test_prewrite_json_deny_on_protected_artifact,
-    test_bash_guard_deny_on_sed_into_workflow_control,
     test_prompt_memory_emits_context_block,
     test_tool_routing_suggests_test_command,
 ]

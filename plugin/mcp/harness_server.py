@@ -84,8 +84,9 @@ from _lib import (  # type: ignore
     artifact_exists, canonical_task_dir, canonical_task_id,
     find_harness_root, harness_root_resolution, find_repo_root,
     write_active_marker, clear_active_marker, read_session_hint,
+    active_task_binding_matches,
     resolve_active_task_dir, active_marker_snapshot, restore_active_marker_snapshot,
-    receipt_runtime_verdict, record_subagent_receipt,
+    receipt_runtime_verdict,
     receipt_review_verdict, required_review_lenses,
     receipt_snapshot, receipt_stream_fingerprint,
     read_json_diagnostics, write_json_diagnostics,
@@ -106,6 +107,15 @@ try:
 except Exception:  # pragma: no cover - advisory check must never block startup
     def receipt_capability_warning(config_dir=None):  # type: ignore[misc]
         return ""
+
+try:
+    from codex_hook_registration import (  # type: ignore
+        REGISTERED as _REGISTRATION_REGISTERED,
+        restore_watcher_registration as _restore_watcher_registration,
+    )
+except Exception:  # pragma: no cover - reported as a positive Codex failure
+    _REGISTRATION_REGISTERED = "registered"
+    _restore_watcher_registration = None
 
 
 def _control_root() -> str:
@@ -316,6 +326,104 @@ def _server_runtime() -> str:
     if runtime:
         return runtime
     return str(os.environ.get("HARNESS_RUNTIME") or "").strip().lower()
+
+
+TASK_START_REGISTRATION_BUDGET_SECONDS = 0.5
+
+
+def _register_task_start_watcher(repo_root: str, task_dir: str, control: dict):
+    """Register the exact new Codex run before returning lens guidance.
+
+    ``restore_watcher_registration`` remains future-only: this call can attest
+    only subagents started after ``task_start``.  The exact-bind callback turns
+    the marker just published by ``task_start`` into a required precondition;
+    it never repairs, rewrites, or reconstructs receipt evidence.
+    """
+    if _server_runtime() != "codex":
+        return None
+
+    payload_data = {"cwd": repo_root}
+    session_hint = read_session_hint(repo_root) or ""
+    if session_hint:
+        payload_data["session_id"] = session_hint
+    payload = json.dumps(payload_data, ensure_ascii=False).encode("utf-8")
+    outcome: dict = {}
+
+    def exact_bind(control_root: str, thread_id: str) -> bool:
+        return bool(
+            os.path.realpath(control_root) == os.path.realpath(repo_root)
+            and active_task_binding_matches(
+                repo_root,
+                task_dir,
+                control=control,
+                session_id=thread_id,
+            )
+        )
+
+    reason = ""
+    registered = False
+    if _restore_watcher_registration is None:
+        reason = "codex_hook_registration is unavailable in this plugin tree"
+    else:
+        try:
+            registered = bool(_restore_watcher_registration(
+                payload,
+                budget_seconds=TASK_START_REGISTRATION_BUDGET_SECONDS,
+                bind_fn=exact_bind,
+                status_out=outcome,
+            ))
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+
+    if registered and outcome.get("status") in (None, _REGISTRATION_REGISTERED):
+        _write_watcher_diagnostics({
+            "registration_present": True,
+            "last_registration_error": "",
+            "last_registration_note": "",
+            "root_thread_id": outcome.get("thread_id") or session_hint or None,
+        }, repo_root)
+        return {"registered": True, "reason": ""}
+
+    reason = reason or str(outcome.get("reason") or "")
+    if not reason:
+        reason = "watcher registration returned no successful Codex outcome"
+    elif outcome.get("status") != "failed":
+        # A valid Codex task_start must have an exact identity and binding.
+        # NOT_APPLICABLE is ordinary before a task exists, but is a positive
+        # failure here because the task and its marker were just published.
+        reason = f"watcher registration was not applicable after task_start: {reason}"
+    reason = _safe_reason(reason)
+    _write_watcher_diagnostics({
+        "registration_present": False,
+        "last_registration_error": reason,
+        "last_registration_note": "",
+        "root_thread_id": outcome.get("thread_id") or session_hint or None,
+    }, repo_root)
+    return {"registered": False, "reason": reason}
+
+
+def _apply_task_start_registration_status(
+    status: dict, registration, task_dir: str, run_id: str,
+) -> dict:
+    """Keep the current response fail-closed if diagnostics persistence fails."""
+    if (
+        registration is None
+        or registration["registered"]
+        or _run_has_receipts(task_dir, run_id)
+    ):
+        return status
+    status = dict(status)
+    reason = _safe_reason(registration.get("reason") or "")
+    status.update({
+        "registration_present": False,
+        "receipts_recordable": False,
+        "receipts_unrecordable_summary": (
+            "The receipt watcher is not registered for this session."
+        ),
+        "receipts_unrecordable_reason": reason,
+        "last_registration_error": reason,
+    })
+    return status
 
 
 def _run_has_receipts(task_dir: str, run_id: str, snapshot=None) -> bool:
@@ -816,6 +924,21 @@ def handle_task_start(args: dict) -> dict:
             transaction_stack.close()
         raise
 
+    registration = _register_task_start_watcher(repo_root, task_dir, resumed)
+    if registration is not None and not registration["registered"]:
+        warnings.append({
+            "code": "RECEIPT_WATCHER_REGISTRATION_FAILED",
+            "stage": "watcher_registration",
+            "message": (
+                "Codex receipt watcher registration failed for this exact task run."
+            ),
+            "detail": registration["reason"],
+            "retry_action": (
+                "Repair or refresh the Codex watcher registration, then call "
+                "task_start again before launching review or QA lenses."
+            ),
+        })
+
     transaction_stack.close()
     if terminal_receipt_snapshot:
         release_receipt_stream_reset(terminal_receipt_snapshot)
@@ -852,6 +975,9 @@ def handle_task_start(args: dict) -> dict:
 
     status = _watcher_status(
         task_dir=task_dir, task_id=tid, run_id=str(resumed.get("run_id") or ""),
+    )
+    status = _apply_task_start_registration_status(
+        status, registration, task_dir, str(resumed.get("run_id") or ""),
     )
     ctx = _gate_next_action(ctx, status)
 

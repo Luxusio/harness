@@ -41,10 +41,8 @@ def test_codex_routing_surfaces_all_point_to_public_run_entry():
 
 def test_write_gate_recovery_points_to_public_run_entry():
     prewrite = (REPO / "plugin/scripts/prewrite_gate.py").read_text(encoding="utf-8")
-    bash_guard = (REPO / "plugin/scripts/mcp_bash_guard.py").read_text(encoding="utf-8")
 
     assert prewrite.count("$harness:run") >= 3
-    assert "Invoke $harness:run" in bash_guard
 
 
 def test_setup_verifies_public_run_install_and_implicit_routing():

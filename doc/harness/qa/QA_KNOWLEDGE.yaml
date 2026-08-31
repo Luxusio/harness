@@ -153,21 +153,6 @@ qa_notes:
       read_task_control() returns {} and validation reports the
       missing-or-invalid control error before any binding check runs.
     fixture_helper: tests/test_install_verified.py::_repo
-  mcp_bash_guard_scratch_scripts:
-    discovered: 2026-08-26
-    notes: >
-      mcp_bash_guard classifies by any path or protected basename appearing in
-      the raw Bash command text, not by the redirection target. Writing a
-      scratch script under /tmp is blocked when the script body mentions a
-      protected basename, a plugin script path, or open(path,'w'). Workaround
-      used by QA: build such names by string concatenation inside the script.
-      Two further workarounds confirmed 2026-08-26: write scratch files with an
-      absolute /tmp path rather than `cd /tmp && cat > name.py`, because a
-      relative target defeats the /tmp allowance and is read as a repo source
-      write; and prefer `cat > /abs/tmp/file` over a heredoc that edits a file
-      in place, because heredoc bodies mentioning a protected basename are
-      matched even when the target is under /tmp. Neither bypass env var is
-      needed, and neither was used.
   stale_hook_tree_detection:
     discovered: 2026-08-26
     notes: >
@@ -182,39 +167,3 @@ qa_notes:
       absent hooks.json warns even when both modules are present; that is
       deliberate, not a fixture error.
     fixture_helper: tests/test_hook_tree_health.py::_tree
-  mcp_bash_guard_runtime_probing:
-    discovered: 2026-08-28
-    notes: >
-      mcp_bash_guard.py is a stdin-JSON PreToolUse hook, not a CLI: there is no
-      --help and no argv surface. Drive it as
-      `python3 plugin/scripts/mcp_bash_guard.py` with
-      {"tool_name":"Bash","cwd":"<root>","tool_input":{"command":"..."}} on
-      stdin. Allow == zero bytes on stdout; deny == one JSON object. Exit code
-      is always 0 on both paths and on every malformed input, so never use the
-      exit code as the signal.
-      A guard probe is only sensitive if the target is actually gated: paths
-      under /tmp, inside doc/harness/tasks/<id>/ (non-artifact basenames), and
-      under the EXEMPT_PREFIXES (doc/harness/{qa,checkpoints,patterns,retros,
-      learnings.jsonl,visual-baselines}) all allow. Use <repo>/probe_x.py as
-      the gated control before trusting any null result.
-      To ground-truth without touching the real repo, build a throwaway harness
-      repo: `git init` plus a doc/harness/manifest.yaml file is the whole
-      is_harness_enabled_repo() requirement. Copy it per command, run the real
-      command in the copy, and diff file hashes against the guard's `path=`.
-    over_blocks_confirmed_2026_08_28: >
-      `git reset HEAD <file>` and `git rm --cached <file>` deny as
-      "source mutation" although both are index-only and write nothing;
-      `git restore --staged <file>` is the allowed equivalent. A heredoc body
-      line of redirect shape (`cat <<'EOF' > build/out.txt` with a body line
-      `echo hi > src/app.py`) denies naming src/app.py, which the command never
-      writes -- the guard walks each physical line as its own command.
-      HARNESS_SKIP_MCP_GUARD only works in the hook process environment; the
-      inline forms `HARNESS_SKIP_MCP_GUARD=1 <cmd>` and
-      `export HARNESS_SKIP_MCP_GUARD=1; <cmd>` are both still denied because
-      the hook inspects the command text before any shell runs it.
-    timing_2026_08_28: >
-      ~36 ms median per Bash event on 24 cores at load average 3.5-4.3
-      (15 reps); ~28 ms of that is interpreter start plus the _lib import, so
-      guard analysis is ~8 ms. Deep bash nesting, 250 shallow globs, 2000
-      segments and 300 cp operands all stayed at 35-42 ms. Well inside the
-      _ANALYSIS_BUDGET_SECONDS = 1.0 and the 3 s hooks.json timeout.

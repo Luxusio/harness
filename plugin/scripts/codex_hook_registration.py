@@ -192,6 +192,8 @@ def restore_watcher_registration(
     started = time.monotonic()
     deadline = started + max(0.0, float(budget_seconds))
     cwd, thread_id = _registration_identity(payload)
+    if status_out is not None and thread_id:
+        status_out["thread_id"] = thread_id
     control_root = (
         _call_with_deadline(lambda: find_harness_root(cwd), deadline, "")
         if cwd else ""

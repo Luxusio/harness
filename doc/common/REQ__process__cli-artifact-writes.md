@@ -40,5 +40,6 @@ provenance.
   removed writer tools are not callable.
 - `plugin/scripts/prewrite_gate.py` blocks direct writes to protected task
   artifacts.
-- `plugin/scripts/mcp_bash_guard.py` blocks shell mutation bypasses for the same
-  protected task artifacts.
+- Bash/shell mutation is outside Harness PreToolUse enforcement. Receipt and
+  close validation remain normal-workflow controls, not a hostile-shell
+  filesystem integrity boundary.

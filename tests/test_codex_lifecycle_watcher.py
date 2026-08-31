@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 from unittest import mock
 
@@ -1381,6 +1382,58 @@ def test_watch_inherits_rollout_idle_age_instead_of_resetting_lifetime(tmp_path,
             str(repo), root_id, str(rollout), rollout.stat().st_size,
             stop_event=mod.threading.Event(), idle_seconds=10,
         ) == 0
+
+
+def test_watch_drains_oversized_non_evidence_record_and_reads_next_line(
+    tmp_path, monkeypatch,
+):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    rollout = _rollout_path(codex_home, root_id)
+    session_meta = json.dumps({"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo),
+        "thread_source": "user",
+    }}).encode()
+    oversized = json.dumps({
+        "type": "event_msg",
+        "payload": {"type": "item_completed", "stdout": "x" * (mod.MAX_LINE_BYTES + 1)},
+    }).encode()
+    rollout.parent.mkdir(parents=True, exist_ok=True)
+    rollout.write_bytes(session_meta + b"\n" + oversized + b"\n" + b"not-json\n")
+
+    # Reaching the malformed sentinel proves the oversized record did not pin
+    # the watcher at its original offset. Invalid evidence still fails closed.
+    assert mod.watch(
+        str(repo), root_id, str(rollout), len(session_meta) + 1,
+        stop_event=mod.threading.Event(), idle_seconds=0.05,
+    ) == 3
+
+
+def test_watch_bounds_incomplete_oversized_tail_by_idle_deadline(tmp_path, monkeypatch):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    rollout = _rollout_path(codex_home, root_id)
+    session_meta = json.dumps({"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo),
+        "thread_source": "user",
+    }}).encode()
+    rollout.parent.mkdir(parents=True, exist_ok=True)
+    rollout.write_bytes(session_meta + b"\n" + b"x" * (mod.MAX_LINE_BYTES + 1))
+
+    started = time.monotonic()
+    assert mod.watch(
+        str(repo), root_id, str(rollout), len(session_meta) + 1,
+        stop_event=mod.threading.Event(), idle_seconds=0.05,
+    ) == 3
+    assert time.monotonic() - started < 0.5
 
 
 def test_main_retries_bounded_rollout_creation_race():

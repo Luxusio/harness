@@ -101,7 +101,6 @@ WORKFLOW_CONTROL_SURFACE = {
     "plugin/hooks/hooks.json",
     "plugin/mcp/harness_server.py",
     "plugin/scripts/prewrite_gate.py",
-    "plugin/scripts/mcp_bash_guard.py",
     "plugin/scripts/stop_gate.py",
     "plugin/scripts/_lib.py",
     "doc/harness/manifest.yaml",
@@ -120,7 +119,7 @@ RULE_DOCS = {
 GATE_NAME = "prewrite"
 
 
-# ── Path classification helpers (module-level; imported by mcp_bash_guard) ──
+# ── Path classification helpers ──────────────────────────────────────────
 
 
 def _rel(path, repo_root):

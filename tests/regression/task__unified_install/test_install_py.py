@@ -157,11 +157,16 @@ def test_help_lists_all_flags():
 
 def test_sync_codex_payload_copies_runtime_under_codex_root(tmp_path):
     module = _load_install_module()
-    plugin_root = module.sync_codex_payload(tmp_path / "codex" / "harness")
+    install_root = tmp_path / "codex" / "harness"
+    stale_guard = install_root / "plugins" / "harness" / "scripts" / "mcp_bash_guard.py"
+    stale_guard.parent.mkdir(parents=True)
+    stale_guard.write_text("stale guard")
+    plugin_root = module.sync_codex_payload(install_root)
 
     assert plugin_root == tmp_path / "codex" / "harness" / "plugins" / "harness"
     assert (plugin_root / "mcp" / "harness_server.py").is_file()
     assert (plugin_root / "scripts" / "stop_gate.py").is_file()
+    assert not stale_guard.exists()
     assert not (plugin_root / ".claude-plugin").exists()
     assert not (tmp_path / "codex" / "harness" / "plugin").exists()
     manifest_path = plugin_root / ".codex-plugin" / "plugin.json"
@@ -772,11 +777,16 @@ def test_codex_plugin_cache_preserves_prior_versions_for_running_sessions(tmp_pa
 
 def test_sync_claude_payload_copies_runtime_under_claude_root_without_git(tmp_path):
     module = _load_install_module()
-    plugin_root = module.sync_claude_payload(tmp_path / "claude" / "harness-dev")
+    install_root = tmp_path / "claude" / "harness-dev"
+    stale_guard = install_root / "plugin" / "scripts" / "mcp_bash_guard.py"
+    stale_guard.parent.mkdir(parents=True)
+    stale_guard.write_text("stale guard")
+    plugin_root = module.sync_claude_payload(install_root)
 
     assert plugin_root == tmp_path / "claude" / "harness-dev" / "plugin"
     assert (plugin_root / ".claude-plugin" / "plugin.json").is_file()
     assert (plugin_root / "mcp" / "harness_server.py").is_file()
+    assert not stale_guard.exists()
     assert not (tmp_path / "claude" / "harness-dev" / ".git").exists()
     marketplace = tmp_path / "claude" / "harness-dev" / ".claude-plugin" / "marketplace.json"
     assert marketplace.is_file()

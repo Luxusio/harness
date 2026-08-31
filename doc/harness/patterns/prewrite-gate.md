@@ -55,7 +55,7 @@ the repository because stop-only receipt provenance depends on them.
 
 Files that define harness runtime behaviour. Writes require a task with a
 `MAINTENANCE` marker. The set currently includes `plugin/CLAUDE.md`,
-`plugin/hooks/hooks.json`, `plugin/scripts/{prewrite_gate,mcp_bash_guard,stop_gate,_lib}.py`,
+`plugin/hooks/hooks.json`, `plugin/scripts/{prewrite_gate,stop_gate,_lib}.py`,
 `plugin/mcp/harness_server.py`, `doc/harness/manifest.yaml`.
 
 Touch `doc/harness/tasks/<task>/MAINTENANCE` to enable writes, and record the
@@ -96,6 +96,6 @@ exit-code blocking is not used.
 
 ## Related
 
-- Tier 2: [`mcp-bash-guard.md`](./mcp-bash-guard.md) — same signalling contract on the Bash surface
+- Bash/shell file mutation is outside this direct-write enforcement surface.
 - Tier 2: [`scope-lock.md`](./scope-lock.md) — PROGRESS.md scope lock details
 - Contract: C-02 (plan-first), C-05 (protected artifact), C-12 (hooks fail-safe)

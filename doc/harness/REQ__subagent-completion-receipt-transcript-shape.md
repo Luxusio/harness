@@ -81,8 +81,9 @@ A sharper form of the same gap: a crafted stop delivered against a genuine,
 still-running lens agent would write `completed` before the real stop arrives,
 and the real stop then degrades to `receipt_pending` — so a real reviewer's FAIL
 would never land. Both variants require hand-crafted input to
-`background_hook.py`, which `plugin/scripts/mcp_bash_guard.py` blocks as a
-lifecycle entrypoint. That block is what bounds the residual risk.
+`background_hook.py`. Bash/shell mutation and direct lifecycle-script
+invocation are outside Harness PreToolUse enforcement, so this is an explicitly
+accepted hostile-shell exposure rather than a receipt-model boundary.
 
 Restoring it would require either a retry loop inside the stop hook or a
 deferred-reconciliation state machine, plus a raised hook timeout. That is a

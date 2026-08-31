@@ -100,8 +100,10 @@ those conditions the hook appends a correlated inferred `started` entry
 immediately followed by the explicit `completed` entry in one task transaction.
 The verdict still comes only from the unique canonical first line; missing,
 foreign, stale, replayed, aliased, untrusted, or unbound stops cannot yield
-PASS. Direct model invocation of lifecycle receipt-authoring scripts is denied.
-There is no module-visible raw-byte append primitive. Each reviewed
+PASS. Generic or indirect adapter invocation remains denied by the bound
+writer, but hostile-shell execution of canonical shipped lifecycle scripts is
+an accepted exposure outside Harness's integrity boundary. There is no
+module-visible raw-byte append primitive. Each reviewed
 Claude/Codex adapter binds its original code object, globals identity, and
 provenance-dependency identities once during module import; the closure-backed
 writer rejects clones, replacements, dependency mutation, and later rebinding
@@ -109,12 +111,10 @@ without depending on interpreter-specific bytecode hashes. Generic or indirect
 callers fail before append. Receipt reset returns only an opaque one-shot
 capability whose captured bytes remain inside the rollback closure; restoration
 cannot accept caller-supplied text.
-Bash inspection also denies lifecycle imports, dynamic interpreter loading,
-stdin execution, unsafe helper files, and oversized commands that cannot be
-inspected within the hook budget.
 The transcript namespace and every path component/leaf are descriptor-bound,
-non-symlink, owner-only provenance; Write/Edit/apply_patch and Bash mutation
-gates deny model-authored changes to Claude subagent transcript leaves.
+non-symlink, owner-only provenance; direct Write/Edit/apply_patch gates deny
+model-authored changes to Claude subagent transcript leaves. Shell-capable
+callers are outside that enforcement boundary.
 The inferred started/completed pair publishes under a receipt savepoint. An
 append failure restores the prior stream and leaves the same stop retryable.
 Concurrent/retried stops reuse one exact already-durable lifecycle identity

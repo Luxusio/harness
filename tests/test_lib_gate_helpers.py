@@ -61,10 +61,6 @@ class TestEscapeHint(unittest.TestCase):
         self.assertEqual(_lib._escape_hint("prewrite"),
                          "escape: HARNESS_SKIP_PREWRITE=1 <retry>")
 
-    def test_mcp_bash_guard(self):
-        self.assertEqual(_lib._escape_hint("mcp_bash_guard"),
-                         "escape: HARNESS_SKIP_MCP_GUARD=1 <retry>")
-
     def test_unknown_fallback(self):
         # Still renders something grep-stable
         hint = _lib._escape_hint("weird-gate")

@@ -1145,6 +1145,42 @@ class Watcher:
         return item
 
 
+def _drain_oversized_line(
+    handle: Any,
+    path: Path,
+    trust_root: Path,
+    stop_event: threading.Event,
+    initial_size: int,
+    deadline: float,
+) -> bool:
+    """Skip one oversized rollout record without accepting it as evidence."""
+    total = initial_size
+    while (
+        total <= MAX_CHILD_BYTES
+        and not stop_event.is_set()
+        and time.monotonic() < deadline
+    ):
+        remaining = MAX_CHILD_BYTES - total
+        raw = handle.readline(min(MAX_LINE_BYTES + 1, remaining + 1))
+        if raw:
+            total += len(raw)
+            if total > MAX_CHILD_BYTES:
+                return False
+            if raw.endswith(b"\n"):
+                return True
+            continue
+        try:
+            current = os.fstat(handle.fileno())
+            if current.st_size < handle.tell() or not _path_matches_handle(
+                path, trust_root, handle
+            ):
+                return False
+        except OSError:
+            return False
+        stop_event.wait(min(POLL_SECONDS, max(0.0, deadline - time.monotonic())))
+    return False
+
+
 def watch(
     repo_root: str,
     thread_id: str,
@@ -1197,14 +1233,24 @@ def watch(
                 watcher.retry()
                 stop_event.wait(POLL_SECONDS)
                 continue
-            if len(raw) > MAX_LINE_BYTES or not raw.endswith(b"\n"):
-                # Partial tails are retried. Oversized complete records stop the
-                # watcher rather than skipping evidence in the candidate chain.
-                if not raw.endswith(b"\n"):
-                    handle.seek(position)
-                    stop_event.wait(POLL_SECONDS)
-                    continue
-                return 3
+            if len(raw) > MAX_LINE_BYTES:
+                # Oversized records are never lifecycle evidence, but a bounded
+                # drain lets later independent records continue through the tail.
+                if not raw.endswith(b"\n") and not _drain_oversized_line(
+                    handle,
+                    path,
+                    trust_root,
+                    stop_event,
+                    len(raw),
+                    last_data + idle_seconds,
+                ):
+                    return 3
+                last_data = time.monotonic()
+                continue
+            if not raw.endswith(b"\n"):
+                handle.seek(position)
+                stop_event.wait(POLL_SECONDS)
+                continue
             event = _load_json_line(raw)
             if event is None:
                 return 3

@@ -21,7 +21,6 @@ PreToolUse dispatch follows the tool surface it protects:
 
 ```text
 direct write tools (`Write|Edit|MultiEdit|apply_patch`) -> prewrite_gate.py
-shell tools (`Bash|shell`)                              -> mcp_bash_guard.py
 all other tools    -> no repository-mutation PreToolUse process
 ```
 
@@ -33,21 +32,21 @@ not inspect every tool call to enforce that preference.
 
 Review and QA freshness, receipt ownership, and `task_verify`/`task_close`
 requirements are unchanged. New direct-write tool names must be added to the
-selective matcher when a supported runtime introduces them; Bash mutations
-remain covered independently by the Bash guard.
+selective matcher when a supported runtime introduces them. Bash/shell
+mutation is deliberately outside Harness PreToolUse enforcement.
 
 ## Consequences
 
 - Read-only, browser, and unrelated tool calls no longer fork Python gate
   processes that immediately self-filter.
-- Direct writes and Bash mutation attempts retain their existing plan-first and
-  protected-artifact enforcement.
+- Direct writes retain plan-first and protected-artifact enforcement. Bash
+  commands run without a Harness mutation parser or deny decision.
 - Inline browser output can consume substantial orchestrator context. This is
   an accepted developer-owned availability and throughput risk, not an
   integrity guarantee supplied by Harness.
 - A newly introduced write-capable tool can escape the direct-write gate until
   the matcher is updated. Runtime integration tests must enumerate supported
-  write tool names, while repository mutation through Bash remains guarded.
+  direct-write tool names.
 
 ## Alternatives rejected
 

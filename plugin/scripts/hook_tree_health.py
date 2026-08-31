@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """Report whether the registered harness hook tree can record receipts.
 
-Receipts are hook-owned by contract (C-14): `SubagentStart`/`SubagentStop` run
-`background_hook.py`, which is the only authorized writer of `RECEIPTS.jsonl`.
-If the tree the session loaded its hooks from does not contain that machinery,
-no receipt can ever be written, `task_verify` can never reach PASS, and no
-standard task can close.
+Receipts are lifecycle-owned by contract (C-14). In Claude,
+`SubagentStart`/`SubagentStop` run `background_hook.py`, the authorized writer
+for that runtime; Codex instead uses `codex_lifecycle_watcher.py`. If a Claude
+session's loaded hook tree does not contain its lifecycle machinery, no Claude
+receipt can be written, `task_verify` can never reach PASS, and no standard
+task can close.
 
 That failure is silent by construction. On 2026-08-26 the session loaded hooks
 from `~/.claude/plugins/cache/harness/harness/2.3.0` — registered in
 `installed_plugins.json` on 2026-05-21 and never re-resolved after the
 marketplace was repointed at `~/.claude/harness-dev`. That tree predates the
 receipt subsystem entirely: no `background_hook.py`, no `subagent_lifecycle.py`,
-and no `SubagentStart`/`SubagentStop` registration. Every *other* gate
-(`prewrite_gate.py`, `mcp_bash_guard.py`, `stop_gate.py`, `prompt_memory.py`)
+and no `SubagentStart`/`SubagentStop` registration. Every *other* hook
+(`prewrite_gate.py`, `stop_gate.py`, `prompt_memory.py`)
 does exist there and fired normally all session, so the harness presented as
 fully healthy. The only symptom was an absence: no receipts, and — because
 `background_hook.py` was never on disk to run — not even a `binding-miss`
@@ -28,11 +29,9 @@ from the same stale tree it needs to indict, so in the failure mode it does not
 exist and cannot run. The MCP server is the surface proven to execute current
 code here, so `task_start` is the caller.
 
-This module only reports. It does not disable gates and does not mutate
-`~/.claude` state. Silencing the gates when receipts are unavailable would strip
-protected-artifact enforcement exactly when the harness is least trustworthy;
-the defect was never that the gates run, only that their running was read as
-evidence of health.
+This module only reports. It does not disable hooks and does not mutate
+`~/.claude` state. The defect was never that other hooks run, only that their
+running was read as evidence that receipt lifecycle hooks were present.
 
 Every failure path returns "no finding". A missed warning is a regression; an
 exception raised into `task_start` would be an outage.

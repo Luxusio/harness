@@ -250,15 +250,14 @@ mutation that should break it does.
 the hook stamps the payload's `session_id`/`thread_id`, then `CODEX_THREAD_ID`.
 These are assumed to be the same value on Codex, which `_registration_identity`
 supports by rejecting a payload whose `session_id` and `thread_id` disagree.
-There is no live Codex session here to confirm it. If they did diverge, the
-Codex gate becomes inert rather than wrong — a record that cannot be attributed
-is dropped, so readiness reads unknown and the spawn instruction survives. That
-fails toward spending an unattested verification pass, never toward a PASS.
+If they diverge, bounded task-start registration reports a positive current-run
+failure and withholds lens guidance; a record that cannot be attributed is
+dropped and never authorizes PASS.
 
-Two fields, `root_thread_id` and `rollout_offset`, are declared but no writer
-populates them yet; they always report `null`. They stay listed because
-requirement 2 names them, and an always-null field is honest where a guess would
-not be.
+`root_thread_id` is populated from the validated task-start registration
+identity. `rollout_offset` remains nullable because the control plane does not
+publish that watcher-internal cursor; an unknown field stays `null` rather than
+being guessed.
 
 ## Settled decisions
 

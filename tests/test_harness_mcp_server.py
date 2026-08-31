@@ -89,15 +89,6 @@ def _record_receipt_fixture(task_dir, receipt):
 
 
 class HarnessMcpServerTests(unittest.TestCase):
-    def setUp(self):
-        self._receipt_auth = mock.patch.object(
-            harness_server, "record_subagent_receipt", side_effect=_record_receipt_fixture,
-        )
-        self._receipt_auth.start()
-
-    def tearDown(self):
-        self._receipt_auth.stop()
-
     def _run_git(self, cwd: str, *args: str) -> None:
         subprocess.run(
             ["git", *args],
@@ -175,7 +166,7 @@ class HarnessMcpServerTests(unittest.TestCase):
                 "runtime_id": f"claude:test-session:{agent_id}",
             },
         ):
-            harness_server.record_subagent_receipt(task_dir, payload)
+            _record_receipt_fixture(task_dir, payload)
 
     def test_server_info_is_harness(self):
         self.assertEqual(harness_server.SERVER_INFO["name"], "harness")
@@ -312,7 +303,7 @@ class HarnessMcpServerTests(unittest.TestCase):
             self.assertNotIn("isError", closed)
             self.assertFalse((task_dir / "TASK_BASELINE.json").exists())
             with self.assertRaisesRegex(RuntimeError, "receipt stream is terminal"):
-                harness_server.record_subagent_receipt(
+                _record_receipt_fixture(
                     str(task_dir),
                     {
                         "agent_id": "late-agent", "agent_type": "harness:qa-cli",
@@ -366,7 +357,7 @@ class HarnessMcpServerTests(unittest.TestCase):
     def test_start_only_receipt_does_not_produce_runtime_pass(self):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__start-only")
-            harness_server.record_subagent_receipt(task_dir, {
+            _record_receipt_fixture(task_dir, {
                 "agent_id": "qa-1", "agent_type": "harness:qa-cli",
                 "lens": "qa-cli", "event": "started",
                 "source": "claude_hook", "runtime_id": "claude:test-session:qa-1",
@@ -395,8 +386,8 @@ class HarnessMcpServerTests(unittest.TestCase):
                     "source": "claude_hook", "runtime_id": "claude:test-session:qa-1",
                 },
             ):
-                harness_server.record_subagent_receipt(task_dir, payload)
-            harness_server.record_subagent_receipt(
+                _record_receipt_fixture(task_dir, payload)
+            _record_receipt_fixture(
                 task_dir,
                 {
                     "agent_id": "qa-1",
@@ -415,7 +406,7 @@ class HarnessMcpServerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             task_dir = self._make_task(tmp, "TASK__qa-restarted")
             self._write_subagent_receipt(task_dir, agent_id="qa-old")
-            harness_server.record_subagent_receipt(
+            _record_receipt_fixture(
                 task_dir,
                 {
                     "agent_id": "qa-new",
@@ -2119,15 +2110,6 @@ class HarnessMcpServerTests(unittest.TestCase):
 class HarnessMcpServerPR2CloseGate(unittest.TestCase):
     """Receipt and runtime-stale gates in task_close / task_verify."""
 
-    def setUp(self):
-        self._receipt_auth = mock.patch.object(
-            harness_server, "record_subagent_receipt", side_effect=_record_receipt_fixture,
-        )
-        self._receipt_auth.start()
-
-    def tearDown(self):
-        self._receipt_auth.stop()
-
     def _call_in_repo(self, repo_root: str, name: str, args: dict) -> dict:
         with mock.patch.object(harness_server, "find_repo_root", return_value=repo_root):
             return harness_server.call_tool(name, args)
@@ -2191,7 +2173,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
             }
             for lens in harness_server.required_review_lenses(task_dir):
                 for status, verdict in (("started", ""), ("completed", "PASS")):
-                    harness_server.record_subagent_receipt(task_dir, {
+                    _record_receipt_fixture(task_dir, {
                         "source": "claude_hook",
                         "runtime_id": f"claude:test-session:{lens}-{task_id}",
                         "event": status,
@@ -2205,7 +2187,7 @@ class HarnessMcpServerPR2CloseGate(unittest.TestCase):
                         ),
                     })
             for status, verdict in (("started", ""), ("completed", "PASS")):
-                harness_server.record_subagent_receipt(task_dir, {
+                _record_receipt_fixture(task_dir, {
                     "source": "claude_hook",
                     "runtime_id": f"claude:test-session:agent-{task_id}",
                     "event": status,

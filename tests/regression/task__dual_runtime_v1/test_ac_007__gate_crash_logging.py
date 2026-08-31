@@ -7,9 +7,8 @@ Verifies that the structured gate-crash log captures:
 - tool_name (when hook_input has it)
 - payload_keys (sorted top-level keys of hook_input)
 
-Plus integration smoke: invoking each of the 4 gate scripts (prewrite,
-mcp_bash_guard, qa_delegation, stop) with a malformed payload writes a
-type=gate-crash row instead of failing silently.
+Plus integration smoke: importing each remaining gate script succeeds with
+the shared crash logger available.
 """
 from __future__ import annotations
 
@@ -91,8 +90,8 @@ def test_log_gate_crash_skips_non_harness_repo(tmp_path):
 
 
 def test_gate_script_imports_resolve():
-    """All 4 gate scripts must import log_gate_crash + last_hook_input cleanly."""
-    for script in ["prewrite_gate", "mcp_bash_guard", "stop_gate"]:
+    """Remaining gate scripts import log_gate_crash + last_hook_input cleanly."""
+    for script in ["prewrite_gate", "stop_gate"]:
         r = subprocess.run(
             [sys.executable, "-c",
              f"import sys; sys.path.insert(0, '{SCRIPTS}'); import {script}; "

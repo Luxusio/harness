@@ -146,8 +146,9 @@ single-use inferred-start/completed pair in one task
 transaction. Missing, foreign, stale, replayed, aliased, untrusted, or unbound
 stops create no authority. The hook and Stop gate derive lifecycle state from
 the current task's unified receipts and never maintain a background registry
-or registry lock. Bash cannot directly invoke or import lifecycle
-receipt-authoring entrypoints.
+or registry lock. The official adapter does not expose a generic receipt-append
+tool, but a hostile shell can invoke shipped lifecycle scripts directly; that
+accepted exposure is outside Harness's integrity boundary.
 
 Receipt storage, minimal schema, immutable snapshot, and gate semantics are
 normatively defined by
@@ -193,10 +194,10 @@ authority follow the single-direct protocol ADR; late registration never
 recovers already-completed work.
 
 PreToolUse dispatch is selective: plan-first/artifact ownership runs only for
-direct write tools (`Write|Edit|MultiEdit|apply_patch`), while the shell
-mutation guard runs only for `Bash|shell`.
-Read-only, browser, and unrelated tools do not launch either gate. Browser
-delegation has no generic PreToolUse enforcement.
+direct write tools (`Write|Edit|MultiEdit|apply_patch`). Bash/shell mutation is
+not intercepted by Harness. Read-only, browser, shell, and unrelated tools do
+not launch the direct-write gate. Browser delegation has no generic PreToolUse
+enforcement.
 
 Nested repositories and submodules need no source registration for lifecycle
 verification. Crossing a nested Git boundary requires the ancestor Harness

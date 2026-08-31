@@ -130,7 +130,12 @@ class TestWatcherStatusShape(unittest.TestCase):
 
     def test_undeterminable_fields_are_null_not_guessed(self):
         harness_server = _server()
-        status = harness_server._watcher_status(task_dir="", task_id="", run_id="")
+        with mock.patch.object(
+            harness_server, "_diagnostics_for_this_session", return_value={},
+        ):
+            status = harness_server._watcher_status(
+                task_dir="", task_id="", run_id=""
+            )
         self.assertIsNone(status["receipts_writable"])
         self.assertIsNone(status["active_task_id"])
         self.assertIsNone(status["active_run_id"])
@@ -140,9 +145,9 @@ class TestWatcherStatusShape(unittest.TestCase):
             "last_registration_error", "last_watcher_error",
         ):
             self.assertIn(key, status)
-        # These two have no writer at all. Bounding them must preserve None —
-        # an empty string reads as a determined answer, which is exactly the
-        # fabricated "ready" AC-002 forbids.
+        # With no diagnostic observation, bounding must preserve None. An empty
+        # string reads as a determined answer, which is exactly the fabricated
+        # "ready" AC-002 forbids.
         self.assertIsNone(status["root_thread_id"])
         self.assertIsNone(status["rollout_offset"])
 
@@ -1347,6 +1352,252 @@ class TestEvidenceRunSupersededWarning(unittest.TestCase):
         )
 
 
+class TestTaskStartWatcherRegistration(unittest.TestCase):
+    """AC-001/002 — task_start registers the exact marker before routing."""
+
+    session_id = "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000"
+
+    def test_task_start_orders_marker_registration_then_status(self):
+        harness_server = _server()
+        source = Path(harness_server.__file__).read_text(encoding="utf-8")
+        start = source.index("def handle_task_start(")
+        end = source.index("\ndef handle_goal_start(", start)
+        handler = source[start:end]
+        self.assertLess(
+            handler.index("write_active_marker("),
+            handler.index("_register_task_start_watcher("),
+        )
+        self.assertLess(
+            handler.index("_register_task_start_watcher("),
+            handler.index("status = _watcher_status("),
+        )
+
+    @contextlib.contextmanager
+    def _repo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".git").mkdir()
+            manifest = root / "doc/harness/manifest.yaml"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text("version: 5\ntype: library\n", encoding="utf-8")
+            prior_cwd = os.getcwd()
+            os.chdir(tmp)
+            try:
+                yield root
+            finally:
+                os.chdir(prior_cwd)
+
+    def test_exact_published_marker_is_required_and_registration_succeeds(self):
+        harness_server = _server()
+
+        def restore(payload, **kwargs):
+            data = json.loads(payload.decode("utf-8"))
+            self.assertEqual(data["session_id"], self.session_id)
+            self.assertTrue(kwargs["bind_fn"](data["cwd"], self.session_id))
+            kwargs["status_out"].update({
+                "status": harness_server._REGISTRATION_REGISTERED,
+                "reason": "",
+                "thread_id": self.session_id,
+            })
+            return True
+
+        with self._repo() as root:
+            task_dir = root / "doc/harness/tasks/TASK__registration-order"
+            task_dir.mkdir(parents=True)
+            control = {
+                "run_id": "01a0563e-f4c4-7816-b98c-aa0582454037",
+                "execution_mode": "standard",
+                "required_lenses": ["review-code", "qa-cli"],
+                "close_receipt_fingerprint": None,
+            }
+            (task_dir / "TASK.json").write_text(
+                json.dumps(control) + "\n", encoding="utf-8",
+            )
+            sessions = root / "doc/harness/tasks/.active_sessions"
+            sessions.mkdir(parents=True)
+            (sessions / f"{self.session_id}.json").write_text(json.dumps({
+                "session_id": self.session_id,
+                "task_dir": str(task_dir),
+                "task_id": task_dir.name,
+                "run_id": control["run_id"],
+                "updated": "2026-08-31T00:00:00Z",
+            }) + "\n", encoding="utf-8")
+            (root / "doc/harness/.watcher-diagnostics.json").write_text(
+                json.dumps({
+                    "registration_present": False,
+                    "last_registration_error": "earlier same-session failure",
+                    "session_id": self.session_id,
+                    "updated": datetime.now(timezone.utc).isoformat(),
+                }) + "\n",
+                encoding="utf-8",
+            )
+
+            with \
+             mock.patch.object(harness_server, "_server_runtime", return_value="codex"), \
+             mock.patch.object(harness_server, "read_session_hint", return_value=self.session_id), \
+             mock.patch.object(harness_server, "_restore_watcher_registration", side_effect=restore):
+                result = harness_server._register_task_start_watcher(
+                    str(root), str(task_dir), control,
+                )
+            diagnostics = json.loads(
+                (root / "doc/harness/.watcher-diagnostics.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertIs(result["registered"], True)
+        self.assertIs(diagnostics["registration_present"], True)
+        self.assertEqual(diagnostics["last_registration_error"], "")
+
+    def test_failed_registration_keeps_task_open_and_gates_spawn(self):
+        harness_server = _server()
+        unwrap = lambda result: json.loads(result["content"][0]["text"])
+
+        def failed(_payload, **kwargs):
+            kwargs["status_out"].update({
+                "status": "failed",
+                "reason": "rollout registration timed out",
+                "thread_id": self.session_id,
+            })
+            return False
+
+        with self._repo(), \
+             mock.patch.object(harness_server, "_server_runtime", return_value="codex"), \
+             mock.patch.object(harness_server, "read_session_hint", return_value=self.session_id), \
+             mock.patch.object(harness_server, "_restore_watcher_registration", side_effect=failed), \
+             mock.patch.object(harness_server, "receipt_capability_warning", return_value=""), \
+             mock.patch.object(harness_server, "emit_compact_context", return_value={
+                 "next_action": "Spawn the review-code subagent now.",
+             }):
+            started = unwrap(harness_server.handle_task_start({
+                "task_id": "TASK__registration-failure",
+            }))
+            control = harness_server.read_task_control(started["task_dir"])
+            status = harness_server.task_control_status(
+                started["task_dir"], control,
+            )
+
+        self.assertEqual(status, "open")
+        self.assertIs(started["watcher_status"]["receipts_recordable"], False)
+        self.assertNotIn("spawn the review-code", started["next_action"].lower())
+        self.assertIn("do not spawn", started["next_action"].lower())
+        self.assertIn(
+            "RECEIPT_WATCHER_REGISTRATION_FAILED",
+            [item["code"] for item in started["warnings"]],
+        )
+
+    def test_exception_is_a_current_session_failure(self):
+        harness_server = _server()
+        with self._repo() as root, \
+             mock.patch.object(harness_server, "_server_runtime", return_value="codex"), \
+             mock.patch.object(harness_server, "read_session_hint", return_value=self.session_id), \
+             mock.patch.object(
+                 harness_server, "_restore_watcher_registration",
+                 side_effect=RuntimeError("registration exploded"),
+             ):
+            result = harness_server._register_task_start_watcher(
+                str(root), str(root / "doc/harness/tasks/TASK__x"), {},
+            )
+            diagnostics = json.loads(
+                (root / "doc/harness/.watcher-diagnostics.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertIs(result["registered"], False)
+        self.assertIn("RuntimeError: registration exploded", result["reason"])
+        self.assertIs(diagnostics["registration_present"], False)
+
+    def test_failed_diagnostics_write_still_gates_current_response(self):
+        harness_server = _server()
+        status = harness_server._apply_task_start_registration_status(
+            {"receipts_recordable": None, "registration_present": None},
+            {"registered": False, "reason": "diagnostics write failed"},
+            "",
+            "",
+        )
+        self.assertIs(status["registration_present"], False)
+        self.assertIs(status["receipts_recordable"], False)
+        self.assertIn("diagnostics write failed", status["last_registration_error"])
+
+    def test_valid_current_run_receipt_overrides_registration_failure(self):
+        harness_server = _server()
+        original = {"receipts_recordable": True, "registration_present": True}
+        with mock.patch.object(
+            harness_server, "_run_has_receipts", return_value=True,
+        ) as has_receipts:
+            status = harness_server._apply_task_start_registration_status(
+                original,
+                {"registered": False, "reason": "registration timed out"},
+                "/repo/task",
+                "01a0563e-f4c4-7816-b98c-aa0582454037",
+            )
+
+        self.assertIs(status, original)
+        has_receipts.assert_called_once_with(
+            "/repo/task", "01a0563e-f4c4-7816-b98c-aa0582454037"
+        )
+
+    def test_missing_identity_is_failure_after_codex_task_start(self):
+        harness_server = _server()
+        with self._repo() as root, \
+             mock.patch.object(harness_server, "_server_runtime", return_value="codex"), \
+             mock.patch.object(harness_server, "read_session_hint", return_value=""), \
+             mock.patch.dict(os.environ, {"CODEX_THREAD_ID": ""}, clear=False):
+            result = harness_server._register_task_start_watcher(
+                str(root), str(root / "doc/harness/tasks/TASK__x"), {},
+            )
+            diagnostics = json.loads(
+                (root / "doc/harness/.watcher-diagnostics.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+
+        self.assertIs(result["registered"], False)
+        self.assertIn("no Codex thread identity", result["reason"])
+        self.assertIs(diagnostics["registration_present"], False)
+
+    def test_rejected_exact_binding_is_failure_after_task_start(self):
+        harness_server = _server()
+
+        def rejected(_payload, **kwargs):
+            self.assertFalse(kwargs["bind_fn"]("/different/repo", self.session_id))
+            kwargs["status_out"].update({
+                "status": "not_applicable",
+                "reason": "no open task is bound to this session",
+                "thread_id": self.session_id,
+            })
+            return False
+
+        with self._repo() as root, \
+             mock.patch.object(harness_server, "_server_runtime", return_value="codex"), \
+             mock.patch.object(harness_server, "read_session_hint", return_value=self.session_id), \
+             mock.patch.object(harness_server, "_restore_watcher_registration", side_effect=rejected):
+            result = harness_server._register_task_start_watcher(
+                str(root), str(root / "doc/harness/tasks/TASK__x"), {},
+            )
+
+        self.assertIs(result["registered"], False)
+        self.assertIn("not applicable after task_start", result["reason"])
+
+    def test_non_codex_does_not_attempt_or_write_registration(self):
+        harness_server = _server()
+        restore = mock.Mock()
+        with self._repo() as root, \
+             mock.patch.object(harness_server, "_server_runtime", return_value="claude"), \
+             mock.patch.object(harness_server, "_restore_watcher_registration", restore):
+            result = harness_server._register_task_start_watcher(
+                str(root), str(root / "doc/harness/tasks/TASK__x"), {},
+            )
+            diagnostics_exists = (
+                root / "doc/harness/.watcher-diagnostics.json"
+            ).exists()
+
+        self.assertIsNone(result)
+        restore.assert_not_called()
+        self.assertFalse(diagnostics_exists)
+
+
 class TestRegistrationOutcomeIsTriState(unittest.TestCase):
     """The bind branch is the ordinary pre-task spawn, not a fault."""
 
@@ -1485,6 +1736,9 @@ class TestRegistrationOutcomeIsTriState(unittest.TestCase):
         self.assertEqual(status["status"], reg.REGISTRATION_FAILED)
         self.assertNotEqual(status["status"], reg.NOT_APPLICABLE)
         self.assertIn("did not complete", status["reason"])
+        self.assertEqual(
+            status["thread_id"], "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000"
+        )
 
     def test_no_open_task_to_bind_is_not_applicable_not_failed(self):
         sys.path.insert(0, SCRIPTS_DIR)
@@ -1513,17 +1767,25 @@ class TestRegistrationOutcomeIsTriState(unittest.TestCase):
         self.assertEqual(status["status"], reg.NOT_APPLICABLE)
         self.assertNotEqual(status["status"], reg.REGISTRATION_FAILED)
         self.assertIn("no open task", status["reason"])
+        self.assertEqual(
+            status["thread_id"], "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000"
+        )
 
 
 class TestNoReceiptSynthesis(unittest.TestCase):
     """Requirement 7 — no code path may synthesize attestation."""
 
     def test_changed_files_do_not_write_receipts(self):
-        for rel in ("plugin/scripts/hook_pre_tool_use.py",):
+        for rel in (
+            "plugin/mcp/harness_server.py",
+            "plugin/scripts/codex_hook_registration.py",
+            "plugin/scripts/hook_pre_tool_use.py",
+        ):
             source = Path(REPO_ROOT, rel).read_text(encoding="utf-8")
             with self.subTest(path=rel):
                 self.assertNotIn("record_subagent_receipt", source)
-                self.assertNotIn('"RECEIPTS.jsonl"', source)
+                if rel != "plugin/mcp/harness_server.py":
+                    self.assertNotIn('"RECEIPTS.jsonl"', source)
 
 
 if __name__ == "__main__":

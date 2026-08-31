@@ -2,7 +2,7 @@
 
 Imperative checklist for plan-eng-review Section 1 (Architecture review). **MUST be answered** inline in every Architecture review pass — not browsed on demand. Skipping a question is a compression violation unless the "skip if trivially N/A" condition applies (see below).
 
-This rubric is a **plan-time gut-check**. For runtime security depth, invoke an external `/cso`-equivalent security skill separately — this rubric does not replace that. For harness-native primitives cited in each question, see `plugin/scripts/prewrite_gate.py`, `plugin/scripts/mcp_bash_guard.py`, and `CONTRACTS.md` § C-05 / C-13.
+This rubric is a **plan-time gut-check**. For runtime security depth, invoke an external `/cso`-equivalent security skill separately — this rubric does not replace that. For harness-native primitives cited in each question, see `plugin/scripts/prewrite_gate.py` and `CONTRACTS.md` § C-05 / C-13.
 
 ## Security Threat Model (hybrid: 3 STRIDE + 3 harness-native)
 
@@ -12,7 +12,7 @@ Skip if the plan has zero new trust boundaries AND zero new writes (pure prose r
 
 S1. **Spoofing / Auth boundary** — does any new codepath cross a trust boundary (user→service, service→DB, external→internal, LLM-output→executor)? If yes, how is the identity or source verified?
 
-S2. **Tampering / Data integrity** — does any new write mutate a protected artifact (PLAN.md, TASK.json, RECEIPTS.jsonl)? Is the owning skill, MCP tool, or hook the only writer (C-05 enforced by `prewrite_gate.py` and `mcp_bash_guard.py`)? Any Bash pattern that could slip past the guard?
+S2. **Tampering / Data integrity** — does any new direct write mutate a protected artifact (PLAN.md, TASK.json, RECEIPTS.jsonl)? Is the owning skill, MCP tool, or hook the only normal-workflow writer (C-05 enforced by `prewrite_gate.py`)? Bash/shell mutation is outside Harness PreToolUse enforcement and must be modeled explicitly when relevant.
 
 S3. **Information disclosure** — does any new log, error message, prompt, or artifact leak secrets, PII, absolute paths with usernames, internal infra names, or task-specific data that should stay private to the task directory?
 
@@ -22,7 +22,7 @@ H1. **Audit-trail preservation** — does any step risk breaking the PLAN.md →
 
 H2. **Protected-artifact provenance** — does develop/verify touch any file in `PROTECTED_ARTIFACTS` without routing through the owning skill/MCP/hook? Any Bash step that writes PLAN.md or RECEIPTS.jsonl via `sed -i`, `>`, `>>`, `tee`, or `python -c open(...,'w')`?
 
-H3. **Contract-bypass vector** — does the plan assume `HARNESS_SKIP_PREWRITE` or `HARNESS_SKIP_MCP_GUARD` is set as a normal flow? Each bypass must be one-shot, logged as `gate-bypass` in learnings.jsonl, and justified. Flag any session-wide bypass as critical.
+H3. **Contract-bypass vector** — does the plan assume `HARNESS_SKIP_PREWRITE` is set as a normal flow? The bypass must be one-shot, logged as `gate-bypass` in learnings.jsonl, and justified. Flag any session-wide bypass as critical.
 
 ## Rollback depth (plan-level revert-safety)
 

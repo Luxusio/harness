@@ -22,6 +22,13 @@ _CANONICAL_MODULES = {}
 def _load(name: str):
     if name == "codex_hook_registration" and name in _CANONICAL_MODULES:
         return _CANONICAL_MODULES[name]
+    if name == "codex_hook_registration" and name in sys.modules:
+        module = sys.modules[name]
+        if Path(getattr(module, "__file__", "")).resolve() == (
+            SCRIPTS / "codex_hook_registration.py"
+        ).resolve():
+            _CANONICAL_MODULES[name] = module
+            return module
     sys.modules.pop(name, None)
     spec = importlib.util.spec_from_file_location(name, SCRIPTS / f"{name}.py")
     assert spec and spec.loader
@@ -513,9 +520,8 @@ class TestCodexHookWrappers(unittest.TestCase):
             signal.setitimer(signal.ITIMER_REAL, 0.0)
             signal.signal(signal.SIGALRM, original_handler)
 
-    def test_pre_post_prompt_and_stop_wrappers_use_payload_cwd(self):
+    def test_child_dispatching_wrappers_use_payload_cwd(self):
         modules = [
-            ("hook_pre_tool_use", {"tool_name": "Bash"}),
             ("hook_post_tool_use", {"tool_name": "Bash"}),
             ("hook_user_prompt_submit", {}),
             ("hook_stop", {}),
@@ -599,8 +605,8 @@ class TestCodexHookWrappers(unittest.TestCase):
             "Edit": ["prewrite_gate.py"],
             "MultiEdit": ["prewrite_gate.py"],
             "apply_patch": ["prewrite_gate.py"],
-            "Bash": ["mcp_bash_guard.py"],
-            "shell": ["mcp_bash_guard.py"],
+            "Bash": [],
+            "shell": [],
         }
         with tempfile.TemporaryDirectory() as repo:
             for tool_name, child_names in expected.items():
@@ -658,7 +664,7 @@ class TestCodexHookWrappers(unittest.TestCase):
         config = install._codex_hooks_config(REPO_ROOT / "installed")
         self.assertEqual(
             config["hooks"]["PreToolUse"][0]["matcher"],
-            "Write|Edit|MultiEdit|Bash|apply_patch|shell|collaboration\\.spawn_agent",
+            "Write|Edit|MultiEdit|apply_patch|collaboration\\.spawn_agent",
         )
         self.assertEqual(
             config["hooks"]["PostToolUse"][0]["matcher"],

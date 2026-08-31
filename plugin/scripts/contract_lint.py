@@ -24,6 +24,7 @@ Stdlib only. Never blocks a session when invoked via the hook (wrap in
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import os
 import re
 import sys
@@ -34,7 +35,7 @@ MANAGED_END = re.compile(r"<!--\s*harness:managed-end\s*-->")
 CONTRACT_HEADING = re.compile(r"^###\s+(C-\d+)\s*$", re.MULTILINE)
 FIELD_LINE = re.compile(r"^\*\*(Title|When|Enforced by|On violation|Why):\*\*", re.MULTILINE)
 MATRIX_LINK = re.compile(r"\[(C-\d+)\]\(#c-\d+\)")
-PATH_HINT = re.compile(r"`(plugin/[^`\s]+?\.[a-zA-Z]+)`")
+PATH_HINT = re.compile(r"`((?:plugin/|/|\.\.?/)[^`\s]+?\.[a-zA-Z]+)`")
 
 REQUIRED_FIELDS = {"Title", "When", "Enforced by", "On violation", "Why"}
 
@@ -93,6 +94,87 @@ def _missing_fields(body: str) -> set[str]:
 
 def _referenced_paths(body: str) -> list[str]:
     return PATH_HINT.findall(body)
+
+
+CONTRACT_REFERENCE_MATCH_LIMIT = 256
+
+
+def _reference_path_issue(
+    repo_root: str,
+    ref: str,
+    *,
+    match_limit: int = CONTRACT_REFERENCE_MATCH_LIMIT,
+) -> str | None:
+    """Return a bounded diagnostic when a contract path has no safe file match."""
+    if (
+        os.path.isabs(ref)
+        or "\\" in ref
+        or ".." in ref.split("/")
+        or "**" in ref
+    ):
+        return "is unsafe (absolute, parent, recursive, or non-POSIX reference)"
+
+    repo_real = os.path.realpath(repo_root)
+    inspected = 0
+    unsafe = 0
+    valid = 0
+    try:
+        candidates = [repo_real]
+        for component in ref.split("/"):
+            if not component:
+                return "is unsafe (empty path component)"
+            if not any(token in component for token in ("*", "?", "[")):
+                candidates = [os.path.join(base, component) for base in candidates]
+                continue
+
+            expanded = []
+            for base in candidates:
+                if not os.path.exists(base):
+                    if os.path.lexists(base):
+                        unsafe += 1
+                    continue
+                resolved_base = os.path.realpath(base)
+                try:
+                    base_confined = (
+                        os.path.commonpath((repo_real, resolved_base)) == repo_real
+                    )
+                except ValueError:
+                    base_confined = False
+                if not base_confined or not os.path.isdir(base):
+                    unsafe += 1
+                    continue
+                try:
+                    with os.scandir(base) as entries:
+                        for entry in entries:
+                            inspected += 1
+                            if inspected > match_limit:
+                                return f"exceeds bounded match limit ({match_limit})"
+                            if fnmatch.fnmatchcase(entry.name, component):
+                                expanded.append(entry.path)
+                except (FileNotFoundError, NotADirectoryError):
+                    continue
+            candidates = expanded
+            if not candidates:
+                break
+
+        for candidate in candidates:
+            resolved = os.path.realpath(candidate)
+            try:
+                confined = os.path.commonpath((repo_real, resolved)) == repo_real
+            except ValueError:
+                confined = False
+            if not confined or not os.path.isfile(candidate):
+                unsafe += 1
+                continue
+            valid += 1
+    except (OSError, ValueError):
+        return "could not be checked safely"
+
+    if unsafe:
+        return "matches unsafe, escaping, or non-regular entries"
+    if not valid:
+        return "does not match a regular file"
+    return None
 
 
 def lint(path: str, quick: bool = False, repo_root: str = ".") -> LintReport:
@@ -155,9 +237,9 @@ def lint(path: str, quick: bool = False, repo_root: str = ".") -> LintReport:
     # Referenced file paths exist
     for cid in sorted(contracts):
         for ref in _referenced_paths(contracts[cid]):
-            abs_path = os.path.join(repo_root, ref)
-            if not os.path.exists(abs_path):
-                report.soft.append(f"{cid}: referenced path `{ref}` does not exist")
+            issue = _reference_path_issue(repo_root, ref)
+            if issue:
+                report.soft.append(f"{cid}: referenced path `{ref}` {issue}")
 
     report.info.append(f"{len(contracts)} contracts, {len(refs)} matrix refs OK")
     return report

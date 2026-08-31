@@ -15,11 +15,12 @@ updated: 2026-08-28
 
 ## Expected normal behavior
 
-Receipts are hook-owned by contract (C-14): `SubagentStart`/`SubagentStop` run
-`background_hook.py`, the only authorized writer of `RECEIPTS.jsonl`. If the
-tree a session loaded its hooks from does not contain that machinery, then:
+Receipts are lifecycle-owned by contract (C-14). In Claude,
+`SubagentStart`/`SubagentStop` run `background_hook.py`, the authorized writer
+for that runtime; Codex uses `codex_lifecycle_watcher.py`. If the tree a Claude
+session loaded its hooks from does not contain the Claude machinery, then:
 
-1. No receipt can be written for any subagent, ever, in that session.
+1. No Claude receipt can be written for any subagent in that session.
 2. `task_verify` can never reach `runtime_verdict: PASS`.
 3. No standard task can close.
 
@@ -46,18 +47,16 @@ cache must never be presented as evidence that the active Codex watcher is
 unavailable. Explicit inspection of a supplied Claude config directory remains
 supported for diagnostics and tests, regardless of the caller's runtime.
 
-## Why gates deliberately keep firing
+## Why remaining gates deliberately keep firing
 
 The obvious reading of "stop the gates firing while the harness is half-dead" is
-to disable `prewrite_gate.py` / `mcp_bash_guard.py` / `stop_gate.py` when
-receipts are unavailable. That is rejected. It would strip protected-artifact
-enforcement exactly when the harness is least trustworthy, allowing PLAN.md,
-TASK.json, and RECEIPTS.jsonl to be written by the wrong owner with no gate at
-all — a strictly worse state than the one it replaces.
+to disable `prewrite_gate.py` / `stop_gate.py` when receipts are unavailable.
+That is rejected. Direct Write/Edit ownership and open-task warnings remain
+useful independent signals. Bash/shell mutation is outside Harness PreToolUse
+enforcement and is not part of this guarantee.
 
-The defect was never that the gates run. It was that their running was read as
-evidence of health. The fix supplies the missing signal and leaves the
-protection intact.
+The defect was never that the remaining gates run. It was that their running
+was read as evidence of receipt health. The fix supplies the missing signal.
 
 ## The split-tree failure mode
 
