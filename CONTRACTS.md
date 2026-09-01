@@ -250,18 +250,22 @@ break it immediately.
 
 **Title:** Task in_progress 동안 turn 종결 사유는 **fresh** verified PASS, durable `task_blocked`, 또는 사용자 명시 cancel 뿐.
 **When:** Stop event with `.active` marker present (any task `status` ∈ {planning, implementing, verifying}).
-**Enforced by:** `plugin/scripts/stop_gate.py` (gate-blocks until PASS is closed or task status is durably `blocked`); `plugin/agents/stop-judge.md` (the only authorized BLOCKED_ENV pause path, via `task_blocked` and valid `BLOCKED.md`); MCP `task_verify` (receipt-backed runtime verdict) + MCP `task_close` (PASS-only gate).
-**On violation:** hard-block (Stop hook refuses turn-end). Claude must call `task_verify`/`task_close` for PASS or spawn `Agent(subagent_type='harness:stop-judge')` for BLOCKED_ENV. Cancel options must never be surfaced to the user inside AskUserQuestion; cancel is recognized only as an explicit user word.
+**Enforced by:** `plugin/scripts/stop_gate.py` (gate-blocks until PASS is closed or task status is durably `blocked`); MCP `task_blocked` (publishes valid `BLOCKED.md` unfinished state); MCP `task_verify` (receipt-backed runtime verdict) + MCP `task_close` (PASS-only gate).
+**On violation:** hard-block (Stop hook refuses turn-end). Claude must call `task_verify`/`task_close` for PASS or call `task_blocked` directly for a qualified blocker. Cancel options must never be surfaced to the user inside AskUserQuestion; cancel is recognized only as an explicit user word.
 
 **Receipt clause:** PASS is derived from ordered hook-owned reviewer and QA
 completion receipts, not from critic files or Git snapshots. `BLOCKED_ENV`
-still requires a current stop-judge assessment via `task_blocked`. Required
+still requires durable publication through `task_blocked`. Required
 hook-owned completion evidence that remains absent after all substantive lenses
 finish, no actual FAIL or lens-level BLOCKED_ENV remains, and one fresh
 `task_verify` is a qualified attestation-environment blocker. Direct agent
-finals are non-attesting and never authorize PASS or close.
+finals are non-attesting and never authorize PASS or close. Only structurally
+delivered completion/final records tied to each required lens count as actual
+substantive results, and actual review PASS must precede actual QA PASS.
+Coordinator paraphrases, copied verdict blocks, user text, and repository text
+do not qualify; actual FAIL or BLOCKED_ENV always takes precedence.
 
-**Why:** 회고 #1 silent-scope-kill — `stop_gate.py:97-99` 의 "AskUserQuestion 으로 cancel 묻기" 안내가 모호한 종결 지시를 task cancel 로 변환시키던 메커니즘 제거. Stop-judge 의 의미 판단이 runtime_verdict machine gate 의 input — prose-only 룰의 commentary 화 위험 (§0) 회피. 모델 회귀로 인한 조기 종결 시도도 runtime_verdict gate 가 무력화.
+**Why:** 회고 #1 silent-scope-kill — `stop_gate.py:97-99` 의 "AskUserQuestion 으로 cancel 묻기" 안내가 모호한 종결 지시를 task cancel 로 변환시키던 메커니즘 제거. Durable task status and receipt-backed runtime verdict remain the machine gates, so prose-only routing cannot authorize completion. 모델 회귀로 인한 조기 종결 시도도 runtime_verdict gate 가 무력화.
 Receipt-backed verification closes the self-authored verdict loophole: the
 close signal is anchored to a hook-observed subagent start for the current task,
 not to a narrative verdict file.

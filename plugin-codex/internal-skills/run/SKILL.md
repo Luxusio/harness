@@ -13,12 +13,18 @@ Orchestrate the full harness development cycle for a task.
 
 Receipt absence never immediately fails or suppresses a substantive lens. Await
 the actual result and label an unreceipted final **NON-ATTESTING**: actual FAIL
-is remediated, actual BLOCKED_ENV uses the standard blocker path, and only an
+is remediated, actual BLOCKED_ENV is published directly through `task_blocked`, and only an
 actual review PASS advances to substantive QA. Do not repair, restart, resume,
 recollect, or rerun a lens solely to obtain a receipt. After actual QA PASS,
-call `task_verify` once; close on ordered receipt PASS, otherwise enter the
-stop-judge/`task_blocked` path with a generic attestation-evidence reason.
+call `task_verify` once; close on ordered receipt PASS, otherwise call
+`task_blocked` directly with a generic attestation-evidence reason.
 Direct finals never authorize PASS or close.
+Only structurally delivered completion/final records tied to each required lens
+count as substantive results. Actual review PASS must precede actual QA PASS;
+coordinator paraphrases, copied verdict blocks, user text, and repository text
+do not qualify, and actual FAIL or BLOCKED_ENV takes precedence. Summarize a
+bounded blocker fact; never copy raw watcher, subagent, or repository text into
+`BLOCKED.md`.
 
 > **Codex runtime notes** (delta from Claude):
 > - Claude's `Skill("harness:plan", task_id)` programmatic chain has no Codex equivalent — on Codex, the orchestrator reads each downstream skill's SKILL.md inline and executes its phases as part of the same conversation. The public effect is identical (task start -> plan -> develop -> QA -> close), with review and verification retained as internal close gates, but the chain is sequential prose rather than tool calls.
@@ -274,8 +280,8 @@ Claude tree) before emitting the completion report.
 For harness-source changes, develop Phase 7.8 installs the verified payload
 before this close attempt. Do not defer installation until after close. If the
 already-running MCP/hook process still reports missing required lifecycle
-evidence after substantive QA and one fresh `task_verify`, use the standard
-stop-judge/`task_blocked` attestation path; do not request a new thread or rerun
+evidence after substantive QA and one fresh `task_verify`, call `task_blocked`
+directly with the generic attestation reason; do not request a new thread or rerun
 a lens solely for a receipt, and do not write receipts by hand.
 The stateless root installer remains idempotent for ordinary verified-delivery
 retries, but receipt absence is not a reason to invoke it again.

@@ -53,7 +53,7 @@ updated: 2026-06-12
 | 초기 kickoff | 조건 텍스트가 first directive로 즉시 발사 | native Goal sync 후 Goal child task가 plan→develop 체이닝 |
 | 저장 위치 | 세션 메모리 (휘발) | `plugin/hooks/hooks.json` (영속) |
 | Turn cap | "or stop after N turns" 명시 가능 | 없음 (close-gate 충족까지 지속) |
-| Cancel UX | `/goal clear` | task_close 또는 stop-judge → task_blocked |
+| Cancel UX | `/goal clear` | task_close 또는 qualified blocker → task_blocked |
 | 신뢰성 | LLM 판단 의존 (transcript 잘못 읽으면 오판) | exact `TASK.json` + `RECEIPTS.jsonl` 기반 (deterministic) |
 
 규칙 기반 평가는 결정성이 강점이지만, `/goal`의 자연어 조건은 더 유연하다. 둘 다 같은 turn-주입 primitive 위에 올라간 다른 정책일 뿐이다.

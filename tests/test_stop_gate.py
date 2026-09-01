@@ -196,7 +196,8 @@ def test_reason_contains_task_id_and_exits(tmp_path):
     assert "runtime_verdict=PASS" in reason, reason
     assert "task_verify once" in reason, reason
     assert "task_verify until" not in reason, reason
-    assert "harness:stop-judge" in reason, reason
+    assert "task_blocked directly" in reason, reason
+    assert "stop-judge" not in reason, reason
     assert "BLOCKED_ENV" in reason, reason
     assert "cancel the task" not in reason, reason
     assert "AskUserQuestion" not in reason, reason
@@ -374,7 +375,8 @@ def test_missing_receipts_do_not_prescribe_receipt_only_reruns(tmp_path):
     assert "if a required review has not actually completed" in action
     assert "do not rerun review solely for a receipt" in action
     assert "do not rerun either lens" in action
-    assert "stop-judge/task_blocked" in action
+    assert "call task_blocked directly" in action
+    assert "stop-judge" not in action
     assert "generic attestation-blocker reason" in action
 
 
@@ -388,7 +390,8 @@ def test_review_blocked_receipt_does_not_bypass_task_blocked(tmp_path):
     payload = json.loads(result.stdout)
     assert payload["decision"] == "block"
     assert "task_blocked" in payload["reason"]
-    assert "standard blocker assessment path" in payload["next_action_command"]
+    assert "Call task_blocked directly" in payload["next_action_command"]
+    assert "actionable unblock condition" in payload["next_action_command"]
 
 
 def test_qa_blocked_receipt_does_not_bypass_task_blocked(tmp_path):
@@ -404,4 +407,5 @@ def test_qa_blocked_receipt_does_not_bypass_task_blocked(tmp_path):
     payload = json.loads(result.stdout)
     assert payload["decision"] == "block"
     assert "task_blocked" in payload["reason"]
-    assert "standard blocker path" in payload["next_action_command"]
+    assert "Call task_blocked directly" in payload["next_action_command"]
+    assert "actionable unblock condition" in payload["next_action_command"]

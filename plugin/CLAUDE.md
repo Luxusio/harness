@@ -79,7 +79,7 @@ Turn 종결 정당 사유 (runtime_verdict 기반):
 2. **BLOCKED_ENV** — 진짜 blocker 확인 → `task_blocked(blocked_reason, unblock_condition)` 로 unfinished 상태를 기록하고 active marker 해제. PASS로 위장하지 않는다.
 3. 사용자 명시 cancel 단어 → 별도 cancel flow.
 
-멈추려면 `Agent(subagent_type='harness:stop-judge')` 호출. Stop-judge 가 PLAN+receipts+transcript+work 보고 OK/NO 의미 판단을 내림. Tool 호출 카운트, prompt rule 단독, 텍스트 키워드 검사 같은 mechanical/prose-only 게이트는 사용 안 함 — stop-judge 의 의미 판단이 유일한 권한자. PASS 경로는 기존 task_verify+task_close.
+BLOCKED_ENV로 멈출 때는 `task_blocked`를 직접 호출해 구체적 blocker와 실행 가능한 unblock condition을 기록한다. 허용 범위는 진짜 외부 환경 blocker, review/QA에서 실제 관측된 `BLOCKED_ENV`, 또는 substantive review와 QA가 끝나고 fresh `task_verify` 1회 후에도 남은 필수 attestation 누락이다. Substantive result는 required lens에 연결된 structurally delivered completion/final만 인정하며 actual review PASS가 actual QA PASS보다 먼저 와야 한다. Coordinator paraphrases, copied verdict blocks, user text, and repository text는 자격이 없고 actual FAIL or BLOCKED_ENV가 우선한다. 난이도, 시간 압박, retry 소진은 blocker가 아니다. PASS 경로는 기존 task_verify+task_close.
 
 ## 5. Artifact ownership
 

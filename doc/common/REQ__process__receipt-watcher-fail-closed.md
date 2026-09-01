@@ -69,8 +69,8 @@ session start; Codex has no equivalent pre-check.
    unreceipted PASS is useful but non-attesting and cannot authorize close.
 5. **Block after substantive QA, not before it.** After an actual QA PASS, call
    `task_verify` once against a fresh receipt snapshot. Ordered receipt PASS
-   closes normally. If required evidence remains missing, enter the standard
-   stop-judge/`task_blocked` path with a fixed generic attestation-evidence
+   closes normally. If required evidence remains missing, call `task_blocked`
+   directly with a fixed generic attestation-evidence
    reason. Never copy a watcher diagnostic cause into `BLOCKED.md`.
 6. **Best-effort registration may remain, but failure must propagate.**
    `codex_hook_registration.py:157` retries within a short deadline and returns
@@ -108,7 +108,7 @@ operator choice, not an automatic receipt-recovery step.
 | 2 — expose failure cause | done | `harness_server._watcher_status`, returned by `task_start` and `task_context`; `_start_codex_watchers` records `last_watcher_error` instead of swallowing it |
 | 3 — warn without suppressing lenses | done | `task_start` reports receipt capability separately while routing substantive review and QA to continue. |
 | 4 — actual review before substantive QA | done | canonical run/develop guidance branches on the awaited reviewer final and labels unreceipted results non-attesting. |
-| 5 — one verify then generic block | done | canonical routing performs one fresh `task_verify`, then uses stop-judge/`task_blocked` if required evidence remains absent. |
+| 5 — one verify then generic block | done | canonical routing performs one fresh `task_verify`, then calls `task_blocked` directly if required evidence remains absent. |
 | 6 — propagate registration failure | done | `hook_pre_tool_use.py` consumes the registration result and reports it while still exiting 0 per C-12. |
 | 7 — run_id change warning | done | `task_start` emits `EVIDENCE_RUN_SUPERSEDED` naming both run ids. |
 | 8 — no retroactive receipts | held | enforced by `tests/test_receipt_watcher_fail_closed.py::TestNoReceiptSynthesis`. |

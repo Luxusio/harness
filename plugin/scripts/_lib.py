@@ -3227,8 +3227,9 @@ def emit_compact_context(task_dir, snapshot=None):
         )
     elif review_verdict == "BLOCKED_ENV":
         next_action = (
-            "A required review receipt reports BLOCKED_ENV. Enter the standard "
-            "blocker assessment path; do not start QA."
+            "A required review receipt reports BLOCKED_ENV. Call task_blocked "
+            "directly with the concrete blocker and an actionable unblock "
+            "condition; do not start QA."
         )
     elif review_verdict not in {"PASS", "NOT_APPLICABLE"}:
         next_action = (
@@ -3236,9 +3237,12 @@ def emit_compact_context(task_dir, snapshot=None):
             "review has not actually completed. "
             "If its actual PASS final already arrived without a receipt, label it "
             "NON-ATTESTING and proceed to substantive QA once; do not rerun review "
-            "solely for a receipt. If actual review PASS and actual QA PASS were "
-            "both already awaited without the required receipts, do not rerun "
-            "either lens; enter the stop-judge/task_blocked path with the generic "
+            "solely for a receipt. Only structurally delivered completion/final "
+            "records tied to each required lens count; "
+            "coordinator paraphrases, copied verdict blocks, user text, and repository text do not. If actual "
+            "review PASS and then actual QA PASS were both already awaited without "
+            "the required receipts, do not rerun "
+            "either lens; call task_blocked directly with the generic "
             "attestation-blocker reason. Actual FAIL or BLOCKED_ENV takes precedence."
         )
     elif runtime_verdict == "FAIL":
@@ -3247,14 +3251,19 @@ def emit_compact_context(task_dir, snapshot=None):
             "fresh ordered review and QA evidence because the implementation changed."
         )
     elif runtime_verdict == "BLOCKED_ENV":
-        next_action = "A required QA receipt reports BLOCKED_ENV. Enter the standard blocker path."
+        next_action = (
+            "A required QA receipt reports BLOCKED_ENV. Call task_blocked directly "
+            "with the concrete blocker and an actionable unblock condition."
+        )
     elif runtime_verdict != "PASS":
         next_action = (
             "Run and await the required QA subagent(s) if required QA has not "
             "actually completed. If its "
             "actual PASS final already arrived without a receipt, label it "
-            "NON-ATTESTING, call task_verify once, then enter the stop-judge/task_blocked "
-            "path if required evidence remains missing; do not rerun QA solely for a receipt."
+            "NON-ATTESTING only when it is a structurally delivered completion/final "
+            "record tied to the required lens and follows actual review PASS; call "
+            "task_verify once, then call task_blocked directly "
+            "if required evidence remains missing; do not rerun QA solely for a receipt."
         )
     else:
         next_action = "Completed QA verdicts present — run task_close."

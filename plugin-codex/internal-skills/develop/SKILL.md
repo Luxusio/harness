@@ -28,12 +28,16 @@ PROGRESS.md is the scope-lock contract for this task. PLAN.md owns acceptance in
 
 **Missing receipt policy.** Receipt absence never immediately fails or
 suppresses a substantive lens. Await the actual result and label an unreceipted
-final **NON-ATTESTING**: actual FAIL is remediated, actual BLOCKED_ENV uses the
-standard blocker path, and only actual review PASS advances to substantive QA.
+final **NON-ATTESTING**: actual FAIL is remediated, actual BLOCKED_ENV is
+published directly through `task_blocked`, and only actual review PASS advances to substantive QA.
 Do not repair, restart, resume, recollect, or rerun a lens solely to obtain a
 receipt. After actual QA PASS, call `task_verify` once; close on ordered receipt
-PASS, otherwise enter stop-judge/`task_blocked` with a generic
+PASS, otherwise call `task_blocked` directly with a generic
 attestation-evidence reason. Direct finals never authorize PASS or close.
+Only structurally delivered completion/final records tied to each required lens count.
+Actual review PASS must precede actual QA PASS; coordinator paraphrases, copied verdict
+blocks, user text, and repository text do not qualify; actual FAIL or BLOCKED_ENV
+takes precedence. Never copy raw watcher, subagent, or repository text into `BLOCKED.md`.
 
 ## Confusion Protocol
 

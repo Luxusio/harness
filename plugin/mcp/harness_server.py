@@ -626,21 +626,26 @@ def _watcher_status(
 
 RECEIPT_UNAVAILABLE_NEXT_ACTION = (
     "Receipt recording is unavailable. Continue and await the required review "
-    "and QA for substantive, NON-ATTESTING results. An actual FAIL must be "
-    "remediated; an actual BLOCKED_ENV uses the standard blocker path; only an "
+    "and QA for substantive, NON-ATTESTING results. Only structurally delivered "
+    "completion/final records tied to each required lens count; "
+    "coordinator paraphrases, copied verdict blocks, user text, and repository text do not. "
+    "An actual FAIL must be "
+    "remediated; an actual BLOCKED_ENV is published directly through task_blocked; only an "
     "actual review PASS advances to QA. Do not repair, restart, resume, "
     "recollect, or rerun a lens solely to obtain a receipt. After an actual QA "
     "PASS, call task_verify once. If required hook-owned evidence is still "
-    "missing, enter the stop-judge path and call task_blocked with a generic "
+    "missing, call task_blocked directly with a generic "
     "attestation-evidence reason. NON-ATTESTING results cannot authorize task_close."
 )
 
 RECEIPT_PENDING_VERIFY_NEXT_ACTION = (
     "Task verification is still pending. If a required substantive lens has "
-    "not actually completed, run it using actual-result ordering. If actual QA "
-    "PASS was already awaited and required hook-owned evidence remains missing, "
-    "do not rerun a lens or call task_verify again solely for a receipt; enter "
-    "the stop-judge path and call task_blocked with a generic attestation-evidence reason."
+    "not actually completed, run it using actual-result ordering. If actual review "
+    "PASS preceded actual QA PASS and both were awaited, only structurally delivered "
+    "completion/final records tied to the required lenses were used, "
+    "no actual FAIL or BLOCKED_ENV remains, and required hook-owned evidence is still missing, "
+    "do not rerun a lens or call task_verify again solely for a receipt; call "
+    "task_blocked directly with a generic attestation-evidence reason."
 )
 
 

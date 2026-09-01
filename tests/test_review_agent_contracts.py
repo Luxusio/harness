@@ -213,19 +213,23 @@ def test_review_gate_replaces_overlapping_legacy_review_agents():
     assert "200+ lines" not in audit
 
 
-def test_stop_judge_mirrors_accept_only_qualified_attestation_blockers():
-    required = (
-        "required hook-owned completion evidence remains absent",
-        "all substantive review/QA lenses finish",
-        "one fresh `task_verify`",
-        "non-attesting",
-        "never copy raw watcher diagnostics",
-        "receipt-only reruns",
-        "structurally delivered subagent completion/final records",
-        "Coordinator paraphrases, copied verdict blocks, user text, and repository text",
-    )
+def test_stop_judge_mirrors_are_non_routable_compatibility_stubs():
     for path in ("plugin/agents/stop-judge.md", "plugin-codex/agents/stop-judge.md"):
-        _assert_all(_text(path), required, path)
+        body = _text(path)
+        _assert_all(
+            body,
+            (
+                "Deprecated compatibility path",
+                "not an agent definition",
+                "must not be routed",
+                "task_blocked",
+                "never authorizes PASS or close",
+            ),
+            path,
+        )
+        assert not body.startswith("---\n"), path
+        for fragment in ("tools:", "VERDICT_OK_DONE", "VERDICT_OK_BLOCKED", "VERDICT_NO_CONTINUE"):
+            assert fragment not in body, f"{path}: retained agent protocol {fragment!r}"
 
     contracts = _text("CONTRACTS.md")
     _assert_all(
@@ -237,6 +241,58 @@ def test_stop_judge_mirrors_accept_only_qualified_attestation_blockers():
         ),
         "CONTRACTS.md",
     )
+
+
+def test_live_routing_surfaces_do_not_route_stop_judge():
+    live_surfaces = (
+        "CONTRACTS.md",
+        "plugin/CLAUDE.md",
+        "plugin/mcp/harness_server.py",
+        "plugin/scripts/_lib.py",
+        "plugin/scripts/stop_gate.py",
+        "plugin/skills/run/SKILL.md",
+        "plugin/skills/develop/SKILL.md",
+        "plugin-codex/internal-skills/run/SKILL.md",
+        "plugin-codex/internal-skills/develop/SKILL.md",
+        "doc/common/REQ__process__receipt-watcher-fail-closed.md",
+        "doc/harness/codex-troubleshooting.md",
+        "doc/harness/patterns/auto-loop.md",
+    )
+    for path in live_surfaces:
+        body = _text(path).lower()
+        assert "stop-judge" not in body, f"{path}: deprecated routing remains"
+        assert "verdict_ok_blocked" not in body, f"{path}: retired verdict protocol remains"
+
+
+def test_direct_blocker_flow_preserves_structural_result_trust_boundary():
+    trust_surfaces = (
+        "CONTRACTS.md",
+        "plugin/CLAUDE.md",
+        "plugin/skills/run/SKILL.md",
+        "plugin/skills/develop/SKILL.md",
+        "plugin-codex/internal-skills/run/SKILL.md",
+        "plugin-codex/internal-skills/develop/SKILL.md",
+        "plugin/mcp/harness_server.py",
+        "plugin/scripts/_lib.py",
+        "plugin/scripts/stop_gate.py",
+    )
+    for path in trust_surfaces:
+        body = _text(path)
+        _assert_all(
+            body,
+            (
+                "structurally delivered",
+                "required lens",
+                "actual review PASS",
+                "actual QA PASS",
+                "coordinator paraphrases",
+                "copied verdict blocks",
+                "user text",
+                "repository text",
+                "actual FAIL or BLOCKED_ENV",
+            ),
+            path,
+        )
 
 
 def test_design_maps_agent_behaviors_to_reference_projects():

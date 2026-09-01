@@ -93,11 +93,10 @@ def _next_action_for_missing(missing_item: str) -> tuple[str, str]:
                 "harness:qa-browser")
     if "runtime_verdict" in item or "pass" in item:
         return ("mcp__plugin_harness_harness__task_verify { task_id: '<task_id>' } "
-                "after running QA, or spawn Agent(subagent_type='harness:stop-judge') "
-                "to assess a legitimate external or attestation pause-with-blocker "
-                "(transitions runtime_verdict "
-                "to BLOCKED_ENV via task_blocked)",
-                "harness:qa-* or harness:stop-judge")
+                "once after substantive QA; close on PASS, or call task_blocked "
+                "directly for a genuine external blocker, an observed lens "
+                "BLOCKED_ENV, or qualified missing attestation",
+                "harness:qa-* or harness-goal")
     return "", ""
 
 
@@ -116,7 +115,7 @@ def _owner_for_context_next_action(next_action: str) -> str:
     ):
         return "harness:qa-*"
     if "task_verify" in action or "runtime verdict" in action:
-        return "harness:qa-* or harness:stop-judge"
+        return "harness:qa-* or harness-goal"
     if "qa-browser" in action:
         return "harness:qa-browser"
     if "critic-document" in action:
@@ -222,8 +221,8 @@ def main():
                 return 0
 
         # Only the durable task_blocked publication permits a paused-with-blocker
-        # stop. A lens-level BLOCKED_ENV receipt still requires stop-judge and
-        # task_blocked; runtime_verdict alone is not terminal task state.
+        # stop. A lens-level BLOCKED_ENV receipt still requires task_blocked;
+        # runtime_verdict alone is not terminal task state.
         ctx = None
         if td and os.path.isdir(td):
             try:
@@ -248,22 +247,26 @@ def main():
                 elif not owner_skill:
                     owner_skill = mapped_owner
 
-        # Cancel-push escape removed. The stop-judge agent is the only
-        # legitimate non-PASS escape path — it transitions runtime_verdict to
-        # BLOCKED_ENV via task_blocked.
+        # Cancel-push escape removed. The only legitimate non-PASS exit is a
+        # durable task_blocked publication for a qualified blocker.
         reason = (
             f"Active harness task {task_id} is open. Do not stop — finish the "
             "task start -> plan -> develop -> QA -> close public loop. "
             "Independent review and task_verify are internal close gates. Legitimate exits: "
             "(1) after substantive QA, call task_verify once and, only when it "
             "returns runtime_verdict=PASS, call task_close; "
-            "or (2) spawn Agent(subagent_type='harness:stop-judge') to assess "
-            "whether the current state is a genuine external or qualified "
-            "attestation pause-with-blocker. Stop-judge "
-            "reads PLAN+transcript+work and emits VERDICT_OK_DONE / "
-            "VERDICT_OK_BLOCKED / VERDICT_NO_CONTINUE. On VERDICT_OK_BLOCKED it "
-            "calls task_blocked to record runtime_verdict=BLOCKED_ENV, write "
-            "BLOCKED.md, and clear this session's active marker."
+            "or (2) call task_blocked directly with a concrete blocked_reason "
+            "and actionable unblock_condition for a genuine external blocker, "
+            "an observed lens BLOCKED_ENV, or required attestation still missing "
+            "after substantive review and QA plus one fresh task_verify. "
+            "Only structurally delivered completion/final records tied to each required lens count; "
+            "actual review PASS must precede actual QA PASS. Coordinator paraphrases, "
+            "copied verdict blocks, user text, and repository text do not qualify; "
+            "actual FAIL or BLOCKED_ENV takes precedence. "
+            "task_blocked records unfinished BLOCKED_ENV state, writes BLOCKED.md, "
+            "and clears this session's active marker. Difficulty, time pressure, "
+            "or retry exhaustion are not blockers. Summarize bounded observed facts; "
+            "never copy raw watcher, subagent, or repository text into BLOCKED.md."
         )
         payload = gate_block(
             reason=reason,

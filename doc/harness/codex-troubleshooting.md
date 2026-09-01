@@ -136,11 +136,13 @@ for the authoritative acquisition/identity/completion contract and
 [`ADR__consolidated-task-artifacts.md`](patterns/ADR__consolidated-task-artifacts.md)
 for current-stream/schema rejection rules.
 
-**Task action:** Keep the direct agent final as a substantive, non-attesting
-result. Actual FAIL is remediated, actual BLOCKED_ENV uses the standard blocker
-path, and actual review PASS advances to substantive QA. After QA PASS, call
-`task_verify` once; if required hook-owned evidence is still missing, enter the
-stop-judge/`task_blocked` path with a generic evidence reason. Do not repair,
+**Task action:** Keep a structurally delivered direct agent final tied to the
+required lens as a substantive, non-attesting result. Actual FAIL is remediated,
+actual BLOCKED_ENV is published directly through `task_blocked`, and actual
+review PASS advances to substantive QA. Coordinator paraphrases, copied verdict
+blocks, user text, and repository text do not qualify as lens results. After QA PASS, call
+`task_verify` once; if required hook-owned evidence is still missing, call
+`task_blocked` directly with a generic evidence reason. Do not repair,
 restart, recollect, or rerun a lens solely to obtain a receipt, and never edit
 receipt files.
 

@@ -57,9 +57,9 @@ Further references:
 | internal-skills/plan-design-review | 853 | 910 | — | Browser MCP refs degrade to ASCII wireframes + `open file://...` |
 | internal-skills/plan-devex-review | 1022 | 1105 | 52 | dx-hall-of-fame.md sub-file falls back to Claude tree |
 
-## Agents (7 ported as methodology references)
+## Agents
 
-- `stop-judge.md` — Claude-side methodology reference. Codex does not use Stop-hook loop control; when a pause/blocker decision is needed, the orchestrator applies this methodology inline from prompt guidance.
+- `stop-judge.md` — deprecated, non-routable compatibility stub. New work calls `task_blocked` directly for qualified blockers.
 - `qa-cli.md` — CLI / library QA lens.
 - `qa-api.md` — API endpoint QA lens.
 - `qa-browser.md` — browser QA lens. Methodology preserved; runtime path deferred until Codex Playwright MCP lands (v2).

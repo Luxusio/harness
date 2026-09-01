@@ -1,6 +1,6 @@
 """AC-002 regression: stop_gate.py permits a durable task_blocked state.
 
-The stop-judge path publishes a valid BLOCKED.md through task_blocked for a
+The direct blocker path publishes a valid BLOCKED.md through task_blocked for a
 legitimate paused-with-blocker state. Only that durable blocked task status—not
 a lens-level BLOCKED_ENV receipt—permits the next Stop event silently.
 """
@@ -80,8 +80,10 @@ def test_pending_blocks_with_no_cancel_push():
         reason = payload.get("reason", "")
         assert "cancel the task" not in reason, \
             "cancel-push escape leaked back into stop_gate reason"
-        assert "stop-judge" in reason, \
-            "stop-judge agent guidance missing from reason"
+        assert "task_blocked directly" in reason, \
+            "direct task_blocked guidance missing from reason"
+        assert "stop-judge" not in reason, \
+            "deprecated agent routing leaked back into stop_gate reason"
 
 
 if __name__ == "__main__":

@@ -169,10 +169,23 @@ class TestNextActionGate(unittest.TestCase):
         self.assertNotEqual(gated["next_action"], ctx["next_action"])
         self.assertIn("Continue and await", gated["next_action"])
         self.assertIn("NON-ATTESTING", gated["next_action"])
+        self.assertIn("structurally delivered", gated["next_action"])
+        self.assertIn("coordinator paraphrases", gated["next_action"].lower())
+        self.assertIn("actual review PASS advances to QA", gated["next_action"])
         self.assertIn("task_verify once", gated["next_action"])
         self.assertIn("task_blocked", gated["next_action"])
         self.assertNotIn("to repair", gated["next_action"].lower())
         self.assertNotIn("start a new session", gated["next_action"].lower())
+
+    def test_pending_verify_requires_ordered_structural_results_without_negatives(self):
+        harness_server = _server()
+        action = harness_server.RECEIPT_PENDING_VERIFY_NEXT_ACTION
+        self.assertIn("actual review PASS", action)
+        self.assertIn("actual QA PASS", action)
+        self.assertLess(action.index("actual review PASS"), action.index("actual QA PASS"))
+        self.assertIn("structurally delivered", action)
+        self.assertIn("required lenses", action)
+        self.assertIn("no actual FAIL or BLOCKED_ENV remains", action)
 
     def test_instruction_preserved_when_receipts_recordable(self):
         harness_server = _server()
@@ -269,7 +282,7 @@ class TestNextActionGate(unittest.TestCase):
                 ][0]["text"]
             )
 
-        self.assertIn("If actual QA PASS was already awaited", result["next_action"])
+        self.assertIn("actual review PASS preceded actual QA PASS", result["next_action"])
         self.assertIn("do not rerun", result["next_action"])
         self.assertIn("task_blocked", result["next_action"])
 
