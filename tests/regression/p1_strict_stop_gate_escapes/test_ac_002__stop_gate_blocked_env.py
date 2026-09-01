@@ -1,8 +1,8 @@
-"""AC-002 regression: stop_gate.py permits stop when runtime_verdict=BLOCKED_ENV.
+"""AC-002 regression: stop_gate.py permits a durable task_blocked state.
 
-The stop-judge path records runtime_verdict=BLOCKED_ENV for a legitimate
-paused-with-blocker state. The Stop hook must then permit the next stop event
-silently (no block payload on stdout).
+The stop-judge path publishes a valid BLOCKED.md through task_blocked for a
+legitimate paused-with-blocker state. Only that durable blocked task status—not
+a lens-level BLOCKED_ENV receipt—permits the next Stop event silently.
 """
 
 import io
@@ -59,7 +59,7 @@ def _run_stop_gate(repo_root: str) -> tuple[int, str]:
 
 
 def test_blocked_env_silent_allow():
-    """BLOCKED_ENV verdict -> stop_gate emits no block payload (silent allow)."""
+    """Durable blocked task status -> no block payload (silent allow)."""
     with tempfile.TemporaryDirectory() as repo:
         _setup_task_dir(repo, "BLOCKED_ENV")
         code, out = _run_stop_gate(repo)

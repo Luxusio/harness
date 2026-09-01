@@ -162,11 +162,11 @@ def _registers_receipt_events(root: str) -> bool:
     therefore sufficient on its own to indict the tree: the caller requires
     modules AND registration. That is deliberate. A hooks.json we cannot parse
     is a hooks.json whose registration we cannot vouch for, and the cost of
-    being wrong is asymmetric — a false warning is an advisory telling a healthy
-    user to update and restart, while a false silence reproduces the outage this
-    module exists to end. Relaxing to "modules present is enough" would restore
-    that silence for any tree whose hooks.json drifts to a format we cannot
-    read.
+    being wrong is asymmetric — a false warning is bounded advisory data while
+    substantive review/QA still proceeds and a missing attestation eventually
+    uses the generic blocked path; a false silence hides the outage this module
+    exists to expose. Relaxing to "modules present is enough" would restore that
+    silence for any tree whose hooks.json drifts to a format we cannot read.
     """
     for path in _hooks_files(root):
         try:

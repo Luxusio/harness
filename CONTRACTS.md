@@ -248,9 +248,9 @@ break it immediately.
 
 ### C-17
 
-**Title:** Task in_progress 동안 turn 종결 사유는 **fresh** verified runtime_verdict 또는 사용자 명시 cancel 뿐.
+**Title:** Task in_progress 동안 turn 종결 사유는 **fresh** verified PASS, durable `task_blocked`, 또는 사용자 명시 cancel 뿐.
 **When:** Stop event with `.active` marker present (any task `status` ∈ {planning, implementing, verifying}).
-**Enforced by:** `plugin/scripts/stop_gate.py` (gate-blocks unless `runtime_verdict ∈ {PASS, BLOCKED_ENV}`); `plugin/agents/stop-judge.md` (the only authorized BLOCKED_ENV pause path, via `task_blocked`); MCP `task_verify` (receipt-backed runtime verdict) + MCP `task_close` (PASS-only gate).
+**Enforced by:** `plugin/scripts/stop_gate.py` (gate-blocks until PASS is closed or task status is durably `blocked`); `plugin/agents/stop-judge.md` (the only authorized BLOCKED_ENV pause path, via `task_blocked` and valid `BLOCKED.md`); MCP `task_verify` (receipt-backed runtime verdict) + MCP `task_close` (PASS-only gate).
 **On violation:** hard-block (Stop hook refuses turn-end). Claude must call `task_verify`/`task_close` for PASS or spawn `Agent(subagent_type='harness:stop-judge')` for BLOCKED_ENV. Cancel options must never be surfaced to the user inside AskUserQuestion; cancel is recognized only as an explicit user word.
 
 **Receipt clause:** PASS is derived from ordered hook-owned reviewer and QA
