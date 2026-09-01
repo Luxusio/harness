@@ -72,6 +72,8 @@ session start; Codex has no equivalent pre-check.
    closes normally. If required evidence remains missing, call `task_blocked`
    directly with a fixed generic attestation-evidence
    reason. Never copy a watcher diagnostic cause into `BLOCKED.md`.
+   The exact pair is `blocked_reason="Required hook-owned review/QA attestation remains missing after substantive review PASS, QA PASS, and one fresh task_verify."` and
+   `unblock_condition="Run a fresh attested review-then-QA evidence generation when the operator chooses to resume."`; callers never interpolate diagnostics.
 6. **Best-effort registration may remain, but failure must propagate.**
    `codex_hook_registration.py:157` retries within a short deadline and returns
    `False`. The hook must consume that return value and reflect it to the user

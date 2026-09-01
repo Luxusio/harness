@@ -375,9 +375,11 @@ def test_missing_receipts_do_not_prescribe_receipt_only_reruns(tmp_path):
     assert "if a required review has not actually completed" in action
     assert "do not rerun review solely for a receipt" in action
     assert "do not rerun either lens" in action
-    assert "call task_blocked directly" in action
+    assert "call task_blocked with" in action
     assert "stop-judge" not in action
-    assert "generic attestation-blocker reason" in action
+    assert _lib.ATTESTATION_BLOCKED_REASON in action
+    assert _lib.ATTESTATION_UNBLOCK_CONDITION in action
+    assert action.index("task_verify once") < action.index("call task_blocked with")
 
 
 def test_review_blocked_receipt_does_not_bypass_task_blocked(tmp_path):

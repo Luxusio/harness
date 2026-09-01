@@ -263,6 +263,22 @@ def test_live_routing_surfaces_do_not_route_stop_judge():
         assert "stop-judge" not in body, f"{path}: deprecated routing remains"
         assert "verdict_ok_blocked" not in body, f"{path}: retired verdict protocol remains"
 
+    for path in ("plugin-codex/README.md", "doc/harness/runtime-matrix.md"):
+        mentions = [line.lower() for line in _text(path).splitlines() if "stop-judge" in line.lower()]
+        assert mentions, f"{path}: compatibility inventory entry missing"
+        for line in mentions:
+            assert "deprecated" in line and "non-routable" in line, line
+            for forbidden in (
+                "harness:stop-judge",
+                "verdict_ok_",
+                "spawn stop-judge",
+                "invoke stop-judge",
+                "stop-judge owner",
+                "stop-judge authority",
+                "applies this methodology inline",
+            ):
+                assert forbidden not in line, f"{path}: executable routing remains: {line}"
+
 
 def test_direct_blocker_flow_preserves_structural_result_trust_boundary():
     trust_surfaces = (
@@ -293,6 +309,25 @@ def test_direct_blocker_flow_preserves_structural_result_trust_boundary():
             ),
             path,
         )
+
+
+def test_missing_attestation_pair_is_fixed_across_live_policy_surfaces():
+    fixed = (
+        "Required hook-owned review/QA attestation remains missing after substantive "
+        "review PASS, QA PASS, and one fresh task_verify.",
+        "Run a fresh attested review-then-QA evidence generation when the operator chooses to resume.",
+    )
+    for path in (
+        "CONTRACTS.md",
+        "plugin/CLAUDE.md",
+        "plugin/skills/run/SKILL.md",
+        "plugin/skills/develop/SKILL.md",
+        "plugin-codex/internal-skills/run/SKILL.md",
+        "plugin-codex/internal-skills/develop/SKILL.md",
+        "doc/common/REQ__process__receipt-watcher-fail-closed.md",
+        "doc/harness/codex-troubleshooting.md",
+    ):
+        _assert_all(_text(path), fixed, path)
 
 
 def test_design_maps_agent_behaviors_to_reference_projects():

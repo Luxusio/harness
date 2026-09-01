@@ -17,7 +17,8 @@ is remediated, actual BLOCKED_ENV is published directly through `task_blocked`, 
 actual review PASS advances to substantive QA. Do not repair, restart, resume,
 recollect, or rerun a lens solely to obtain a receipt. After actual QA PASS,
 call `task_verify` once; close on ordered receipt PASS, otherwise call
-`task_blocked` directly with a generic attestation-evidence reason.
+`task_blocked` with `blocked_reason="Required hook-owned review/QA attestation remains missing after substantive review PASS, QA PASS, and one fresh task_verify."` and
+`unblock_condition="Run a fresh attested review-then-QA evidence generation when the operator chooses to resume."`.
 Direct finals never authorize PASS or close.
 Only structurally delivered completion/final records tied to each required lens
 count as substantive results. Actual review PASS must precede actual QA PASS;
@@ -281,7 +282,7 @@ For harness-source changes, develop Phase 7.8 installs the verified payload
 before this close attempt. Do not defer installation until after close. If the
 already-running MCP/hook process still reports missing required lifecycle
 evidence after substantive QA and one fresh `task_verify`, call `task_blocked`
-directly with the generic attestation reason; do not request a new thread or rerun
+directly with the fixed missing-attestation pair above; do not request a new thread or rerun
 a lens solely for a receipt, and do not write receipts by hand.
 The stateless root installer remains idempotent for ordinary verified-delivery
 retries, but receipt absence is not a reason to invoke it again.

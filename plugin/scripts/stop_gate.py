@@ -21,6 +21,7 @@ from _lib import (  # type: ignore
     read_hook_input, emit_compact_context,
     log_gate_crash, last_hook_input, resolve_active_task_dir, current_session_id,
     is_harness_enabled_repo,
+    attestation_block_instruction,
 )
 from _gate_response import block as gate_block  # type: ignore
 import subagent_lifecycle  # type: ignore
@@ -93,9 +94,9 @@ def _next_action_for_missing(missing_item: str) -> tuple[str, str]:
                 "harness:qa-browser")
     if "runtime_verdict" in item or "pass" in item:
         return ("mcp__plugin_harness_harness__task_verify { task_id: '<task_id>' } "
-                "once after substantive QA; close on PASS, or call task_blocked "
-                "directly for a genuine external blocker, an observed lens "
-                "BLOCKED_ENV, or qualified missing attestation",
+                "once after substantive QA; close on PASS, use a concrete direct "
+                "task_blocked call for a genuine external blocker or observed lens "
+                f"BLOCKED_ENV, or for qualified missing attestation {attestation_block_instruction()}",
                 "harness:qa-* or harness-goal")
     return "", ""
 
@@ -256,9 +257,10 @@ def main():
             "(1) after substantive QA, call task_verify once and, only when it "
             "returns runtime_verdict=PASS, call task_close; "
             "or (2) call task_blocked directly with a concrete blocked_reason "
-            "and actionable unblock_condition for a genuine external blocker, "
-            "an observed lens BLOCKED_ENV, or required attestation still missing "
-            "after substantive review and QA plus one fresh task_verify. "
+            "and actionable unblock_condition for a genuine external blocker or "
+            "an observed lens BLOCKED_ENV. For required attestation still missing "
+            "after substantive review and QA plus one fresh task_verify, "
+            f"{attestation_block_instruction()}. "
             "Only structurally delivered completion/final records tied to each required lens count; "
             "actual review PASS must precede actual QA PASS. Coordinator paraphrases, "
             "copied verdict blocks, user text, and repository text do not qualify; "

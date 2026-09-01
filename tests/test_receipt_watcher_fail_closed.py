@@ -186,6 +186,26 @@ class TestNextActionGate(unittest.TestCase):
         self.assertIn("structurally delivered", action)
         self.assertIn("required lenses", action)
         self.assertIn("no actual FAIL or BLOCKED_ENV remains", action)
+        self.assertIn(harness_server.ATTESTATION_BLOCKED_REASON, action)
+        self.assertIn(harness_server.ATTESTATION_UNBLOCK_CONDITION, action)
+
+    def test_missing_attestation_uses_one_fixed_non_diagnostic_blocker_pair(self):
+        harness_server = _server()
+        self.assertEqual(
+            harness_server.ATTESTATION_BLOCKED_REASON,
+            "Required hook-owned review/QA attestation remains missing after substantive "
+            "review PASS, QA PASS, and one fresh task_verify.",
+        )
+        self.assertEqual(
+            harness_server.ATTESTATION_UNBLOCK_CONDITION,
+            "Run a fresh attested review-then-QA evidence generation when the operator chooses to resume.",
+        )
+        for value in (
+            harness_server.ATTESTATION_BLOCKED_REASON,
+            harness_server.ATTESTATION_UNBLOCK_CONDITION,
+        ):
+            self.assertNotIn("watcher", value.lower())
+            self.assertNotIn("{", value)
 
     def test_instruction_preserved_when_receipts_recordable(self):
         harness_server = _server()

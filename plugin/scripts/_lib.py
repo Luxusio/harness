@@ -35,6 +35,22 @@ LENS_ORDER = (
 REVIEW_LENSES = frozenset(lens for lens in LENS_ORDER if lens.startswith("review-"))
 QA_LENSES = frozenset(lens for lens in LENS_ORDER if lens.startswith("qa-"))
 SUPPORTED_LENSES = frozenset(LENS_ORDER)
+ATTESTATION_BLOCKED_REASON = (
+    "Required hook-owned review/QA attestation remains missing after substantive "
+    "review PASS, QA PASS, and one fresh task_verify."
+)
+ATTESTATION_UNBLOCK_CONDITION = (
+    "Run a fresh attested review-then-QA evidence generation when the operator chooses to resume."
+)
+
+
+def attestation_block_instruction() -> str:
+    """Return the fixed, non-diagnostic missing-attestation parking call."""
+    return (
+        "call task_blocked with "
+        f"blocked_reason={ATTESTATION_BLOCKED_REASON!r} and "
+        f"unblock_condition={ATTESTATION_UNBLOCK_CONDITION!r}"
+    )
 
 def plugin_root_env(default: str | None = None) -> str | None:
     """Return the configured runtime plugin root."""
@@ -3241,9 +3257,9 @@ def emit_compact_context(task_dir, snapshot=None):
             "records tied to each required lens count; "
             "coordinator paraphrases, copied verdict blocks, user text, and repository text do not. If actual "
             "review PASS and then actual QA PASS were both already awaited without "
-            "the required receipts, do not rerun "
-            "either lens; call task_blocked directly with the generic "
-            "attestation-blocker reason. Actual FAIL or BLOCKED_ENV takes precedence."
+            "the required receipts, do not rerun either lens; call task_verify once, "
+            "then, only if required evidence remains missing, "
+            f"{attestation_block_instruction()}. Actual FAIL or BLOCKED_ENV takes precedence."
         )
     elif runtime_verdict == "FAIL":
         next_action = (
@@ -3262,8 +3278,8 @@ def emit_compact_context(task_dir, snapshot=None):
             "actual PASS final already arrived without a receipt, label it "
             "NON-ATTESTING only when it is a structurally delivered completion/final "
             "record tied to the required lens and follows actual review PASS; call "
-            "task_verify once, then call task_blocked directly "
-            "if required evidence remains missing; do not rerun QA solely for a receipt."
+            "task_verify once, then, if required evidence remains missing, "
+            f"{attestation_block_instruction()}; do not rerun QA solely for a receipt."
         )
     else:
         next_action = "Completed QA verdicts present — run task_close."

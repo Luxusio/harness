@@ -98,6 +98,7 @@ from _lib import (  # type: ignore
     _bind_control_writer,
     _strict_regular_text_snapshot, _restore_text_snapshots, _atomic_text_write as _lib_atomic_text_write,
     LENS_ORDER, SUPPORTED_LENSES, QA_LENSES,
+    ATTESTATION_BLOCKED_REASON, ATTESTATION_UNBLOCK_CONDITION,
     read_current_goal, start_harness_goal, add_goal_task, next_goal_task,
     finish_harness_goal,
 )
@@ -634,8 +635,10 @@ RECEIPT_UNAVAILABLE_NEXT_ACTION = (
     "actual review PASS advances to QA. Do not repair, restart, resume, "
     "recollect, or rerun a lens solely to obtain a receipt. After an actual QA "
     "PASS, call task_verify once. If required hook-owned evidence is still "
-    "missing, call task_blocked directly with a generic "
-    "attestation-evidence reason. NON-ATTESTING results cannot authorize task_close."
+    "missing, call task_blocked directly with "
+    f"blocked_reason={ATTESTATION_BLOCKED_REASON!r} and "
+    f"unblock_condition={ATTESTATION_UNBLOCK_CONDITION!r}. "
+    "NON-ATTESTING results cannot authorize task_close."
 )
 
 RECEIPT_PENDING_VERIFY_NEXT_ACTION = (
@@ -645,7 +648,9 @@ RECEIPT_PENDING_VERIFY_NEXT_ACTION = (
     "completion/final records tied to the required lenses were used, "
     "no actual FAIL or BLOCKED_ENV remains, and required hook-owned evidence is still missing, "
     "do not rerun a lens or call task_verify again solely for a receipt; call "
-    "task_blocked directly with a generic attestation-evidence reason."
+    "task_blocked directly with "
+    f"blocked_reason={ATTESTATION_BLOCKED_REASON!r} and "
+    f"unblock_condition={ATTESTATION_UNBLOCK_CONDITION!r}."
 )
 
 
