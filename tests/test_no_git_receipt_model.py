@@ -272,6 +272,14 @@ def test_terminal_qa_verdict_precedes_missing_review_receipt(tmp_path):
     assert lib.receipt_runtime_verdict(blocked) == "BLOCKED_ENV"
 
 
+def test_orphan_terminal_qa_verdict_does_not_precede_missing_review(tmp_path):
+    for verdict in ("FAIL", "BLOCKED_ENV"):
+        task = _task(tmp_path / verdict.lower())
+        _receipt(task, "qa-cli", "qa-orphan", "completed", verdict)
+        assert lib.receipt_review_verdict(task) == "PENDING"
+        assert lib.receipt_runtime_verdict(task) == "PENDING"
+
+
 def test_receipt_summary_keeps_only_review_contract_and_detail_digest(tmp_path):
     task = _task(tmp_path)
     final = (

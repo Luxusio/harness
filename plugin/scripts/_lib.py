@@ -3126,6 +3126,13 @@ def _completed_qa_by_lens(task_dir, snapshot=None):
             for prior in snapshot.subagents
         ) != 1:
             continue
+        completion_index = snapshot.subagents.index(item)
+        if not any(
+            prior.get("event") == "started"
+            and _receipt_runtime_identity_matches(prior, item)
+            for prior in snapshot.subagents[:completion_index]
+        ):
+            continue
         latest[lens] = item
     return latest
 
