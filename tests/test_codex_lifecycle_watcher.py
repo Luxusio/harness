@@ -1695,6 +1695,7 @@ def test_existing_receipts_rebuild_state_without_write_progress(tmp_path):
     item = watcher.calls[call_id]
     assert item["started"] is True
     assert watcher.receipt_progress == 0
+    assert watcher.replay_recovery_progress == 1
 
     item["root_final"] = (
         "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
@@ -1714,6 +1715,84 @@ def test_existing_receipts_rebuild_state_without_write_progress(tmp_path):
 
     assert item["completed"] is True
     assert watcher.receipt_progress == 0
+    assert watcher.replay_recovery_progress == 2
+
+
+def test_recovering_watch_clears_prior_error_after_exact_receipt_replay(
+    tmp_path, monkeypatch,
+):
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    task_dir = repo / "doc/harness/tasks/TASK__watcher"
+    task_dir.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    _write_task_control(task_dir)
+    binding = _active_binding(task_dir)
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    child_id = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    agent_path = "/root/code_review_replay"
+    task_name = "code_review_replay"
+    call_id = "call_replay_123456"
+    final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+    runtime_id = mod._codex_runtime_id(root_id, call_id, child_id)
+    receipts = [{
+        "source": "codex_session_watcher:collaboration",
+        "event": "started",
+        "agent_id": agent_path,
+        "agent_type": task_name,
+        "lens": "review-code",
+        "task_run_id": binding["run_id"],
+        "summary": "existing start",
+        "runtime_id": runtime_id,
+    }, {
+        "source": "codex_session_watcher:collaboration",
+        "event": "completed",
+        "agent_id": agent_path,
+        "agent_type": task_name,
+        "lens": "review-code",
+        "task_run_id": binding["run_id"],
+        "verdict": "PASS",
+        "summary": final,
+        "runtime_id": runtime_id,
+    }]
+
+    _write_jsonl(
+        _rollout_path(codex_home, child_id),
+        _child_events(root_id, child_id, agent_path, str(repo), final),
+    )
+    rollout = _rollout_path(codex_home, root_id)
+    meta = {"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo),
+        "thread_source": "user",
+    }}
+    _write_jsonl(rollout, [meta])
+    offset = rollout.stat().st_size
+    with rollout.open("a", encoding="utf-8") as handle:
+        for event in _spawn_events(root_id, child_id, task_name, agent_path, call_id):
+            handle.write(json.dumps(event) + "\n")
+        handle.write(json.dumps(_delivery(agent_path, final)) + "\n")
+
+    watcher = mod.Watcher(str(repo), root_id)
+    errors = []
+    with mock.patch.object(mod, "Watcher", return_value=watcher), \
+         mock.patch.object(mod, "_active_task_binding_for_session", return_value=binding), \
+         mock.patch.object(mod, "receipt_snapshot", side_effect=lambda _td: _snapshot(receipts)), \
+         mock.patch.object(
+             mod, "record_subagent_receipt",
+             side_effect=AssertionError("exact replay must not rewrite receipts"),
+         ):
+        assert mod.watch(
+            str(repo), root_id, str(rollout), offset,
+            session_cwd=str(repo), stop_event=mod.threading.Event(),
+            idle_seconds=1.0, on_error=errors.append, recovering=True,
+        ) == 0
+
+    assert watcher.by_agent[agent_path]["completed"] is True
+    assert watcher.receipt_progress == 0
+    assert watcher.replay_recovery_progress == 2
+    assert errors == [""]
 
 
 def test_watch_replays_real_spawn_after_transient_binding_failure(

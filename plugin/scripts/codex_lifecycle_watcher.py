@@ -958,6 +958,10 @@ class Watcher:
         self.calls: dict[str, dict[str, Any]] = {}
         self.by_agent: dict[str, dict[str, Any]] = {}
         self.receipt_progress = 0
+        # State reconstructed from exact, already-persisted receipts during a
+        # restart. This proves replay recovery without pretending a new write
+        # occurred or weakening duplicate-terminal checks.
+        self.replay_recovery_progress = 0
 
     @staticmethod
     def _receipt_agent_id(item: dict[str, Any]) -> str:
@@ -1074,6 +1078,8 @@ class Watcher:
                     "runtime_id": runtime_id,
                 })
             self.receipt_progress += 1
+        else:
+            self.replay_recovery_progress += 1
         item.update({
             "started": True,
             "task_dir": task_dir,
@@ -1107,7 +1113,7 @@ class Watcher:
             self._invalidate(item, "child final did not contain one exact verdict")
             return
         lens = _infer_receipt_lens(item["task_name"])
-        if _exact_receipt(
+        exact_existing = _exact_receipt(
             item["task_dir"],
             item["runtime_id"],
             "completed",
@@ -1116,7 +1122,8 @@ class Watcher:
             lens=lens,
             task_run_id=item["task_run_id"],
             agent_type=item["task_name"],
-        ) is None:
+        )
+        if exact_existing is None:
             record_subagent_receipt(item["task_dir"], {
                 "source": self._receipt_source(item),
                 "event": "completed",
@@ -1129,6 +1136,8 @@ class Watcher:
                 "runtime_id": item["runtime_id"],
             })
             self.receipt_progress += 1
+        else:
+            self.replay_recovery_progress += 1
         item["completed"] = True
 
     def retry(self) -> None:
@@ -1298,12 +1307,19 @@ def watch(
             watcher.calls,
             watcher.by_agent,
             watcher.receipt_progress,
+            getattr(watcher, "replay_recovery_progress", 0),
         ))
         progress_before = watcher.receipt_progress
+        replay_before = getattr(watcher, "replay_recovery_progress", 0)
         try:
             action()
         except Exception as exc:
-            watcher.calls, watcher.by_agent, watcher.receipt_progress = state
+            (
+                watcher.calls,
+                watcher.by_agent,
+                watcher.receipt_progress,
+                watcher.replay_recovery_progress,
+            ) = state
             observation_failed = True
             detail = " ".join(str(exc).split())[:240]
             notify(f"{type(exc).__name__}: {detail}".rstrip())
@@ -1311,7 +1327,10 @@ def watch(
         if (
             observation_failed
             and not discarded_lifecycle_failure
-            and watcher.receipt_progress > progress_before
+            and (
+                watcher.receipt_progress > progress_before
+                or getattr(watcher, "replay_recovery_progress", 0) > replay_before
+            )
         ):
             observation_failed = False
             notify("")
