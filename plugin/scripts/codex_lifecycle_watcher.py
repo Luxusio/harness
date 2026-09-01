@@ -1279,6 +1279,7 @@ def watch(
     rollout_age = max(0.0, time.time() - rollout_info.st_mtime)
     last_data = time.monotonic() - min(rollout_age, idle_seconds)
     observation_failed = bool(recovering)
+    discarded_lifecycle_failure = False
     failed_position: int | None = None
     failed_attempts = 0
 
@@ -1307,7 +1308,11 @@ def watch(
             detail = " ".join(str(exc).split())[:240]
             notify(f"{type(exc).__name__}: {detail}".rstrip())
             return False
-        if observation_failed and watcher.receipt_progress > progress_before:
+        if (
+            observation_failed
+            and not discarded_lifecycle_failure
+            and watcher.receipt_progress > progress_before
+        ):
             observation_failed = False
             notify("")
         return True
@@ -1371,6 +1376,12 @@ def watch(
                     handle.seek(position)
                     stop_event.wait(POLL_SECONDS)
                     continue
+                # Advancing past a valid lifecycle record after exhausting
+                # retries loses information that may have been required to
+                # invalidate earlier evidence. Keep the live failure sticky;
+                # unrelated later receipt progress cannot prove that skipped
+                # record was safely applied.
+                discarded_lifecycle_failure = True
                 failed_position = None
                 failed_attempts = 0
                 continue

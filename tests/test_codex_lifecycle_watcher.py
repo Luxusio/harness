@@ -1618,7 +1618,7 @@ def test_watch_quarantines_persistent_feed_error_and_reads_next_line(
     assert errors[-1] != ""
 
 
-def test_watch_clears_persistent_error_after_later_receipt_progress(
+def test_watch_keeps_discarded_lifecycle_error_after_later_receipt_progress(
     tmp_path, monkeypatch,
 ):
     mod = _load()
@@ -1661,7 +1661,7 @@ def test_watch_clears_persistent_error_after_later_receipt_progress(
         ) == 0
 
     assert sum("permanent receipt integrity failure" in error for error in errors) == 3
-    assert errors[-1] == ""
+    assert errors[-1] != ""
 
 
 def test_existing_receipts_rebuild_state_without_write_progress(tmp_path):
@@ -2018,3 +2018,109 @@ def test_conflicting_delivery_retries_transient_pending_receipt_failure(
     assert pending_attempts == 2
     assert [item.get("verdict") for item in receipts] == [None, "PASS", "PENDING"]
     assert watcher.by_agent[agent_path]["invalid"] is True
+
+
+def test_watch_keeps_failed_invalidation_sticky_after_independent_receipt(
+    tmp_path, monkeypatch,
+):
+    """Later PASS progress cannot repair a discarded conflicting terminal."""
+    mod = _load()
+    codex_home = tmp_path / ".codex"
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+    repo = tmp_path / "repo"
+    task_dir = repo / "doc/harness/tasks/TASK__watcher"
+    task_dir.mkdir(parents=True)
+    (repo / ".git").mkdir()
+    _write_task_control(task_dir)
+    binding = _active_binding(task_dir)
+    run_id = binding["run_id"]
+    root_id = "019f825b-f25f-70c3-8ee8-071f79fa1c42"
+    first_child = "019f82a6-ce64-75a3-b01d-92f7b0b4fe6f"
+    second_child = "019f82a6-ce64-75a3-b01d-92f7b0b4fe70"
+    first_path = "/root/code_review_first"
+    second_path = "/root/security_review_second"
+    first_final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+    conflict_final = "VERDICT: FAIL\nFINDING_COUNTS: FIX_NOW=1 INVESTIGATE=0 OPTIONAL=0"
+    second_final = "VERDICT: PASS\nFINDING_COUNTS: FIX_NOW=0 INVESTIGATE=0 OPTIONAL=0"
+    first_runtime = mod._codex_runtime_id(root_id, "call_first_123456", first_child)
+    second_runtime = mod._codex_runtime_id(root_id, "call_second_123456", second_child)
+
+    receipts = [{
+        "source": "codex_session_watcher:collaboration",
+        "event": "completed",
+        "agent_id": first_path,
+        "agent_type": "code_review_first",
+        "lens": "review-code",
+        "task_run_id": run_id,
+        "verdict": "PASS",
+        "summary": first_final,
+        "runtime_id": first_runtime,
+    }]
+    pending_attempts = 0
+
+    def record(_task_dir, receipt):
+        nonlocal pending_attempts
+        entry = dict(receipt)
+        if entry.get("verdict") == "PENDING":
+            pending_attempts += 1
+            raise RuntimeError("persistent pending receipt failure")
+        receipts.append(entry)
+        return entry
+
+    watcher = mod.Watcher(str(repo), root_id)
+    first_item = {
+        "task_name": "code_review_first",
+        "task_dir": str(task_dir),
+        "task_run_id": run_id,
+        "agent_path": first_path,
+        "child_id": first_child,
+        "runtime_id": first_runtime,
+        "started": True,
+        "completed": True,
+        "root_final": first_final,
+    }
+    second_item = {
+        "task_name": "security_review_second",
+        "task_dir": str(task_dir),
+        "task_run_id": run_id,
+        "agent_path": second_path,
+        "child_id": second_child,
+        "runtime_id": second_runtime,
+        "started": True,
+    }
+    watcher.calls = {"call_first_123456": first_item, "call_second_123456": second_item}
+    watcher.by_agent = {first_path: first_item, second_path: second_item}
+
+    _write_jsonl(
+        _rollout_path(codex_home, second_child),
+        _child_events(root_id, second_child, second_path, str(repo), second_final),
+    )
+    root_rollout = _rollout_path(codex_home, root_id)
+    root_meta = {"type": "session_meta", "payload": {
+        "session_id": root_id, "id": root_id, "cwd": str(repo),
+        "thread_source": "user",
+    }}
+    _write_jsonl(root_rollout, [root_meta])
+    offset = root_rollout.stat().st_size
+    with root_rollout.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_delivery(first_path, conflict_final)) + "\n")
+        handle.write(json.dumps(_delivery(second_path, second_final)) + "\n")
+
+    errors = []
+    with mock.patch.object(mod, "Watcher", return_value=watcher), \
+         mock.patch.object(mod, "_active_task_binding_for_session", return_value=binding), \
+         mock.patch.object(mod, "record_subagent_receipt", side_effect=record), \
+         mock.patch.object(mod, "receipt_snapshot", side_effect=lambda _td: _snapshot(receipts)):
+        assert mod.watch(
+            str(repo), root_id, str(root_rollout), offset,
+            session_cwd=str(repo), stop_event=mod.threading.Event(),
+            idle_seconds=1.0, on_error=errors.append,
+        ) == 0
+
+    assert pending_attempts == mod.MAX_RECORD_OBSERVATION_ATTEMPTS
+    assert any(
+        item.get("agent_id") == second_path and item.get("verdict") == "PASS"
+        for item in receipts
+    )
+    assert not any(item.get("verdict") == "PENDING" for item in receipts)
+    assert errors[-1].endswith("persistent pending receipt failure")
