@@ -1496,10 +1496,15 @@ def test_watch_drains_oversized_non_evidence_record_and_reads_next_line(
 
     # Neither record is lifecycle evidence, so both are rejected locally and
     # the root tail remains available for later independent lifecycle events.
+    # Neither may become a manager worker error: task_context treats that
+    # channel as a proven receipt failure and would suppress the first review.
+    errors = []
     assert mod.watch(
                 str(repo), root_id, str(rollout), len(session_meta) + 1,
                 stop_event=mod.threading.Event(), idle_seconds=0.05,
+                on_error=errors.append,
     ) == 0
+    assert errors == []
 
 
 def test_watch_continues_after_malformed_record_and_transient_feed_error(
@@ -1552,8 +1557,11 @@ def test_watch_continues_after_malformed_record_and_transient_feed_error(
         ) == 0
 
     assert fake.seen == ["first", "first", "second"]
-    assert errors[0].startswith("invalid rollout record at offset ")
-    assert "temporary receipt lock failure" in errors[1]
+    # Malformed non-evidence is quarantined locally. Publishing it as a live
+    # worker error would make task_context suppress the first review spawn,
+    # leaving no receipt progress capable of clearing the error.
+    assert "temporary receipt lock failure" in errors[0]
+    assert all("invalid rollout record" not in error for error in errors)
     assert errors[-1] == ""
 
 

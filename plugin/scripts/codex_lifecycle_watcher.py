@@ -1350,8 +1350,10 @@ def watch(
                 # A malformed record is not lifecycle evidence. Reject only
                 # that record so a corrupt diagnostic/tool-output line cannot
                 # permanently blind the watcher to later independent agents.
-                observation_failed = True
-                notify(f"invalid rollout record at offset {position}")
+                # It is quarantined locally rather than published through the
+                # worker-error channel: that channel gates the first review
+                # spawn, so a harmless non-evidence line there would create a
+                # self-deadlock with no receipt progress available to clear it.
                 last_data = time.monotonic()
                 continue
             last_data = time.monotonic()
